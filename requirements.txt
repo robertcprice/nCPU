@@ -1,0 +1,19 @@
+# KVRM-CPU: Model-Native CPU Emulator
+# Semantic instruction decode via verified registry keys
+
+# Core ML dependencies
+torch>=2.0.0
+transformers>=4.35.0
+peft>=0.6.0
+datasets>=2.14.0
+accelerate>=0.24.0
+
+# UI and demo
+gradio>=4.0.0
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Utilities
+tqdm>=4.66.0
