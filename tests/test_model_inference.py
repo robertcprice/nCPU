@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from kvrm_cpu.decode_llm import DecodeLLM
 
 
-# Path to trained checkpoint
-CHECKPOINT_PATH = Path(__file__).parent.parent / "models" / "decode_llm" / "checkpoint-2500"
+# Path to trained model (fully trained)
+CHECKPOINT_PATH = Path(__file__).parent.parent / "models" / "decode_llm"
 
 
 class TestModelLoading:

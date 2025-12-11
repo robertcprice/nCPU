@@ -57,7 +57,7 @@ print(f"R2 = {result.registers['R2']}")  # R2 = 30
 ```python
 from kvrm_cpu import KVRMCPU
 
-cpu = KVRMCPU(mock_mode=False, model_path="models/decode_llm/checkpoint-2500")
+cpu = KVRMCPU(mock_mode=False, model_path="models/decode_llm")
 cpu.load()  # Loads the trained model
 
 program = """
@@ -82,13 +82,13 @@ result = cpu.load_and_run(program)
 | Training Method | LoRA (r=16, alpha=32) |
 | Trainable Params | 18.5M (1.18% of total) |
 | Training Data | 50K instruction-decode pairs |
-| Checkpoint | models/decode_llm/checkpoint-2500 |
+| Checkpoint | models/decode_llm/ (fully trained) |
 
 ### Performance
 
-At 8% training completion (2500/33750 steps):
+At 100% training completion (33750/33750 steps):
 - **Mock Mode**: 100% accuracy (rule-based)
-- **LLM Mode**: 80% accuracy on extended test suite
+- **LLM Mode**: 100% validation accuracy
 
 See [Training Results](docs/TRAINING_RESULTS.md) for detailed metrics.
 
