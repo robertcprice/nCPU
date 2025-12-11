@@ -31,8 +31,9 @@ class TestRegistryInitialization:
         expected = {
             "OP_MOV_REG_IMM", "OP_MOV_REG_REG",
             "OP_ADD", "OP_SUB", "OP_MUL",
+            "OP_INC", "OP_DEC",
             "OP_CMP",
-            "OP_JMP", "OP_JZ", "OP_JNZ",
+            "OP_JMP", "OP_JZ", "OP_JNZ", "OP_JS", "OP_JNS",
             "OP_HALT", "OP_NOP", "OP_INVALID"
         }
         assert keys == expected
