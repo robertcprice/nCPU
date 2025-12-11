@@ -34,7 +34,8 @@ from datasets import load_dataset
 # Configuration
 # =============================================================================
 
-BASE_MODEL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+# Options: "Qwen/Qwen2.5-Coder-0.5B" (faster) or "Qwen/Qwen2.5-Coder-1.5B" (better)
+BASE_MODEL = "Qwen/Qwen2.5-Coder-1.5B"
 DATA_PATH = Path(__file__).parent.parent / "data" / "cpu_decode_train.jsonl"
 OUTPUT_PATH = Path(__file__).parent.parent / "models" / "decode_llm"
 
@@ -51,7 +52,8 @@ WEIGHT_DECAY = 0.01
 LORA_R = 16
 LORA_ALPHA = 32
 LORA_DROPOUT = 0.05
-TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj"]
+# Qwen2.5 uses same module names as Llama architecture
+TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 
 # =============================================================================
@@ -173,7 +175,7 @@ def prepare_dataset(tokenizer, data_path: Path):
     return tokenized_train, tokenized_val
 
 
-def train(model, tokenizer, train_dataset, val_dataset, output_path: Path):
+def train(model, tokenizer, train_dataset, val_dataset, output_path: Path, epochs: int, batch_size: int, resume: bool = False):
     """Run the training loop.
 
     Args:
@@ -182,6 +184,9 @@ def train(model, tokenizer, train_dataset, val_dataset, output_path: Path):
         train_dataset: Tokenized training data
         val_dataset: Tokenized validation data
         output_path: Where to save the trained model
+        epochs: Number of training epochs
+        batch_size: Batch size per device
+        resume: Whether to resume from latest checkpoint
     """
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
@@ -190,8 +195,8 @@ def train(model, tokenizer, train_dataset, val_dataset, output_path: Path):
 
     training_args = TrainingArguments(
         output_dir=str(output_path),
-        num_train_epochs=EPOCHS,
-        per_device_train_batch_size=BATCH_SIZE,
+        num_train_epochs=epochs,
+        per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION,
         learning_rate=LEARNING_RATE,
         warmup_ratio=WARMUP_RATIO,
@@ -219,7 +224,18 @@ def train(model, tokenizer, train_dataset, val_dataset, output_path: Path):
     print("Starting training...")
     start_time = time.time()
 
-    trainer.train()
+    if resume:
+        # Find the latest checkpoint
+        checkpoints = sorted(output_path.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[1]))
+        if checkpoints:
+            latest_checkpoint = checkpoints[-1]
+            print(f"Resuming from checkpoint: {latest_checkpoint}")
+            trainer.train(resume_from_checkpoint=str(latest_checkpoint))
+        else:
+            print("No checkpoints found, starting fresh")
+            trainer.train()
+    else:
+        trainer.train()
 
     elapsed = time.time() - start_time
     print(f"Training complete! Time: {elapsed:.1f}s ({elapsed/60:.1f} min)")
@@ -326,6 +342,11 @@ def main():
         action="store_true",
         help="Skip validation after training"
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume training from latest checkpoint"
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -363,11 +384,7 @@ def main():
     train_dataset, val_dataset = prepare_dataset(tokenizer, args.data)
 
     # Train
-    global EPOCHS, BATCH_SIZE
-    EPOCHS = args.epochs
-    BATCH_SIZE = args.batch_size
-
-    train(model, tokenizer, train_dataset, val_dataset, args.output)
+    train(model, tokenizer, train_dataset, val_dataset, args.output, args.epochs, args.batch_size, args.resume)
 
     # Validate
     if not args.skip_validation:

@@ -112,10 +112,20 @@ class DecodeLLM:
             # Load tokenizer
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_path)
 
-            # Try loading as PEFT model first
+            # Try loading as PEFT model first (supports both Qwen and TinyLlama adapters)
             try:
+                # Auto-detect base model from adapter config
+                import json
+                adapter_config_path = f"{self.model_path}/adapter_config.json"
+                try:
+                    with open(adapter_config_path) as f:
+                        adapter_config = json.load(f)
+                        base_model_name = adapter_config.get("base_model_name_or_path", "Qwen/Qwen2.5-Coder-1.5B")
+                except FileNotFoundError:
+                    base_model_name = "Qwen/Qwen2.5-Coder-1.5B"
+
                 base_model = AutoModelForCausalLM.from_pretrained(
-                    "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                    base_model_name,
                     torch_dtype=torch.float32,
                     device_map=None
                 )
@@ -505,7 +515,7 @@ class DecodeLLM:
         with torch.no_grad():
             outputs = self._model.generate(
                 **inputs,
-                max_new_tokens=64,
+                max_new_tokens=128,
                 do_sample=False,
                 pad_token_id=self._tokenizer.pad_token_id,
                 eos_token_id=self._tokenizer.eos_token_id,
@@ -522,12 +532,30 @@ class DecodeLLM:
 
         # Parse JSON
         try:
-            # Find JSON object
-            json_match = re.search(r'\{[^}]+\}', key_text)
-            if json_match:
-                result = json.loads(json_match.group())
+            # Find JSON object - handle nested braces by matching balanced pairs
+            # Look for the first complete JSON object
+            start_idx = key_text.find('{')
+            if start_idx != -1:
+                # Count braces to find matching end
+                depth = 0
+                end_idx = start_idx
+                for i, char in enumerate(key_text[start_idx:], start_idx):
+                    if char == '{':
+                        depth += 1
+                    elif char == '}':
+                        depth -= 1
+                        if depth == 0:
+                            end_idx = i + 1
+                            break
+
+                json_str = key_text[start_idx:end_idx]
+                result = json.loads(json_str)
                 key = result.get("key", "OP_INVALID")
-                params = {k: v for k, v in result.items() if k != "key"}
+                # Flatten params if nested, or extract non-key fields
+                if "params" in result:
+                    params = result["params"]
+                else:
+                    params = {k: v for k, v in result.items() if k != "key"}
 
                 # Validate key
                 if key not in self.VALID_KEYS:
