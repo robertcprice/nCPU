@@ -1,0 +1,69 @@
+{
+  "duration_min": 5.0,
+  "cycles": 12372,
+  "improvements": 8453,
+  "best_speedup": 60.58,
+  "proof_chain_length": 8453,
+  "proof_chain_valid": true,
+  "by_target": {
+    "bubble_sort": {
+      "count": 1035,
+      "best": 26.397191806957746
+    },
+    "factorial": {
+      "count": 522,
+      "best": 60.58366412084367
+    },
+    "is_prime": {
+      "count": 1040,
+      "best": 12.079201645721046
+    },
+    "find_max": {
+      "count": 967,
+      "best": 4.5041173564219
+    },
+    "fibonacci": {
+      "count": 636,
+      "best": 13.766472159034715
+    },
+    "reverse_list": {
+      "count": 1062,
+      "best": 8.450803323157432
+    },
+    "sum_list": {
+      "count": 1041,
+      "best": 36.33165095288369
+    },
+    "power": {
+      "count": 1048,
+      "best": 11.663577207887176
+    },
+    "selection_sort": {
+      "count": 1002,
+      "best": 54.470411814115806
+    },
+    "flatten": {
+      "count": 100,
+      "best": 3.5737195037635936
+    }
+  },
+  "by_strategy": {
+    "algorithm_db": 7717,
+    "memoize": 406,
+    "iterative": 99,
+    "sqrt_opt": 1,
+    "comprehension": 100,
+    "early_exit": 26,
+    "builtin": 104
+  },
+  "strategy_scores": {
+    "algorithm_db": 0.4992971330546521,
+    "builtin": 0.030607763541418313,
+    "memoize": 0.30482769350143907,
+    "early_exit": 0.03672931624970197,
+    "sqrt_opt": 0.030607763541418313,
+    "iterative": 0.029957827983279124,
+    "slice": 0.03471412809516858,
+    "comprehension": 0.03325837403292242
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-01-19T02:22:36.537232",
+  "epochs": 4,
+  "overall_accuracy": 97.61333333333333,
+  "per_category": {
+    "ADD": 100.0,
+    "SUB": 99.9,
+    "AND": 100.0,
+    "OR": 100.0,
+    "XOR": 100.0,
+    "MUL": 100.0,
+    "DIV": 100.0,
+    "SHIFT": 100.0,
+    "LOAD": 100.0,
+    "STORE": 100.0,
+    "BRANCH": 99.6,
+    "COMPARE": 100.0,
+    "MOVE": 100.0,
+    "SYSTEM": 100.0,
+    "UNKNOWN": 100.0
+  },
+  "categories_at_100": 15,
+  "total_categories": 15,
+  "samples_per_category": 1000,
+  "kvrm_invalid_rate": 0.0
+}

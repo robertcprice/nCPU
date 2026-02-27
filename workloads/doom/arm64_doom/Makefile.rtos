@@ -1,0 +1,30 @@
+# Neural RTOS Makefile
+# Compiles the ARM64 RTOS kernel for neural CPU execution
+
+CC = aarch64-elf-gcc
+LD = aarch64-elf-ld
+OBJCOPY = aarch64-elf-objcopy
+
+# Flags for bare metal ARM64
+CFLAGS = -O2 -ffreestanding -nostdlib -nostartfiles -mcpu=cortex-a72
+LDFLAGS = -T rtos.ld -nostdlib
+
+# Output files
+RTOS_ELF = neural_rtos.elf
+RTOS_BIN = neural_rtos.bin
+
+all: $(RTOS_ELF)
+
+# Compile RTOS
+$(RTOS_ELF): neural_rtos.c rtos.ld
+	$(CC) $(CFLAGS) -c neural_rtos.c -o neural_rtos.o
+	$(LD) $(LDFLAGS) neural_rtos.o -o $(RTOS_ELF)
+	$(OBJCOPY) -O binary $(RTOS_ELF) $(RTOS_BIN)
+	@echo "Built Neural RTOS:"
+	@ls -la $(RTOS_ELF) $(RTOS_BIN)
+	@aarch64-elf-size $(RTOS_ELF) || true
+
+clean:
+	rm -f *.o $(RTOS_ELF) $(RTOS_BIN)
+
+.PHONY: all clean

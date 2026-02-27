@@ -1,167 +1,100 @@
-# KVRM-CPU
+# nCPU
 
-A model-native CPU emulator demonstrating the KVRM (Key-Value Response Mapping) paradigm at the lowest level of computing.
+`nCPU` is a model-native CPU research project that explores two execution strategies:
 
-## Overview
+1. Full-model execution: learned components are wired directly into execution paths.
+2. Tensor-optimized execution: execution is dominated by tensor operations rather than LLM inference in the hot loop.
 
-KVRM-CPU replaces traditional hardcoded instruction decode logic with a semantic LLM-based decoder that emits verified registry keys. This proves that even the most fundamental computing operations can be handled through the KVRM pattern.
+This repository is organized to be understandable, reproducible, and publishable.
 
-```
-Traditional CPU:  MEMORY → FETCH → DECODE → EXECUTE → STATE
-                                    ↓
-                             [Hardcoded Silicon]
+## What This Project Is
 
-KVRM-CPU:         MEMORY → FETCH → DECODE_LLM → KEY → REGISTRY → EXECUTE → STATE
-                                      ↓          ↓        ↓
-                                [Semantic LLM] [JSON]  [Verified]
-```
+nCPU is not a single script. It is a structured workspace for:
+- CPU/runtime experimentation
+- neural and tensor execution prototypes
+- workload validation (including DOOM and Snake)
+- benchmark tooling and analysis
 
-## Features
+## Core Runtime Variants
 
-- **LLM-Based Decode**: Uses fine-tuned Qwen2.5-Coder-1.5B with LoRA for instruction decoding
-- **Verified Registry**: Only pre-defined operations can execute - no arbitrary code execution
-- **Immutable State**: Functional programming approach with immutable CPU state
-- **Full ISA**: Supports MOV, ADD, SUB, MUL, CMP, JMP, JZ, JNZ, JS, JNS, INC, DEC, HALT, NOP
-- **Dual Mode**: Run with trained LLM or mock (rule-based) decoder
+### Full-Model Runtime
+- Path: `runtimes/full_model/`
+- Entry: `python3 neural_cpu.py`
+- Includes broader learned subsystem integration.
 
-## Installation
+### Tensor-Optimized Runtime
+- Path: `runtimes/tensor_optimized/`
+- Entries:
+  - `python3 neural_cpu_tensor_native.py`
+  - `python3 neural_cpu_tensor_integrated.py`
+- Focuses on tensor-first execution behavior.
+
+## Snake GPU Workload
+
+- Primary demo: `games/snake_gpu_tensor.py`
+- Compatibility entry: `python3 snake_neural.py`
+
+Example headless run:
 
 ```bash
-git clone https://github.com/yourusername/kvrm-cpu.git
-cd kvrm-cpu
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+python3 games/snake_gpu_tensor.py --steps 500 --render-every 0
 ```
+
+## Repository Layout
+
+```text
+nCPU/
+├── src/                    # Core package baseline (kvrm_cpu)
+├── models/                 # Pre-trained models (ALU, 64-bit kernels, decoders)
+├── kernels/                # Metal and Rust optimized MLX CPU kernels
+├── runtimes/               # Runtime implementations by strategy
+├── games/                  # Interactive workloads/demos (snake)
+├── workloads/              # Large domain workloads (doom/linux/neural)
+├── tools/                  # Runners + analysis scripts
+├── artifacts/              # Generated outputs, model blobs, result files
+├── benchmarks/             # Benchmark scripts and related docs
+├── training/               # Training pipelines and experiments
+├── programs/               # Assembly/program fixtures
+├── docs/                   # Architecture and reference documentation
+├── tests/                  # Test suite
+└── archive/                # Non-core/legacy material (git-ignored)
+```
+
+## Backward-Compatible Entrypoints
+
+These root scripts are intentionally kept for convenience:
+- `neural_cpu.py`
+- `neural_cpu_tensor_native.py`
+- `neural_cpu_tensor_integrated.py`
+- `snake_neural.py`
+- `snake_neural_cpu.py`
 
 ## Quick Start
 
-### Mock Mode (No GPU Required)
-
-```python
-from kvrm_cpu import KVRMCPU
-
-cpu = KVRMCPU(mock_mode=True)
-program = """
-    MOV R0, 10
-    MOV R1, 20
-    ADD R2, R0, R1
-    HALT
-"""
-result = cpu.load_and_run(program)
-print(f"R2 = {result.registers['R2']}")  # R2 = 30
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-### Real LLM Mode
+## Testing
 
-```python
-from kvrm_cpu import KVRMCPU
-
-cpu = KVRMCPU(mock_mode=False, model_path="models/decode_llm")
-cpu.load()  # Loads the trained model
-
-program = """
-    MOV R0, 5
-    MOV R1, 1
-loop:
-    SUB R0, R0, R1
-    CMP R0, R1
-    JNZ loop
-    HALT
-"""
-result = cpu.load_and_run(program)
-```
-
-## Trained Model
-
-### Model Details
-
-| Property | Value |
-|----------|-------|
-| Base Model | Qwen/Qwen2.5-Coder-1.5B |
-| Training Method | LoRA (r=16, alpha=32) |
-| Trainable Params | 18.5M (1.18% of total) |
-| Training Data | 50K instruction-decode pairs |
-| Checkpoint | models/decode_llm/ (fully trained) |
-
-### Performance
-
-At 100% training completion (33750/33750 steps):
-- **Mock Mode**: 100% accuracy (rule-based)
-- **LLM Mode**: 100% validation accuracy
-
-See [Training Results](docs/TRAINING_RESULTS.md) for detailed metrics.
-
-## Supported Instructions
-
-| Instruction | Description | Example |
-|-------------|-------------|---------|
-| MOV Rd, imm | Load immediate | MOV R0, 42 |
-| MOV Rd, Rs | Copy register | MOV R1, R0 |
-| ADD Rd, Rs1, Rs2 | Addition | ADD R0, R1, R2 |
-| SUB Rd, Rs1, Rs2 | Subtraction | SUB R3, R4, R5 |
-| MUL Rd, Rs1, Rs2 | Multiplication | MUL R0, R1, R2 |
-| CMP Rs1, Rs2 | Compare (sets flags) | CMP R0, R1 |
-| JMP addr/label | Unconditional jump | JMP loop |
-| JZ addr/label | Jump if zero | JZ done |
-| JNZ addr/label | Jump if not zero | JNZ loop |
-| JS addr/label | Jump if sign | JS negative |
-| JNS addr/label | Jump if not sign | JNS positive |
-| INC Rd | Increment | INC R0 |
-| DEC Rd | Decrement | DEC R1 |
-| HALT | Stop execution | HALT |
-| NOP | No operation | NOP |
-
-## Running Tests
+Fast smoke tests:
 
 ```bash
-# Run all unit tests (mock mode)
-python -m pytest tests/ -v
-
-# Run model inference tests (requires GPU/MPS)
-python -m pytest tests/test_model_inference.py -v
+pytest tests/test_runtime_variants.py -q
 ```
 
-## Training
-
-To train or continue training the decode LLM:
+Broader tests (excluding slow-marked):
 
 ```bash
-# Generate training data (if needed)
-python training/generate_cpu_data.py
-
-# Train the model
-python training/train_decode.py --epochs 3 --batch-size 4
+pytest tests -m "not slow"
 ```
 
-## Project Structure
+Note: Some real-model tests require optional packages and model artifacts (for example `peft`).
 
-```
-kvrm-cpu/
-├── src/kvrm_cpu/
-│   ├── __init__.py
-│   ├── cpu.py          # Main KVRM-CPU class
-│   ├── state.py        # Immutable CPU state
-│   ├── registry.py     # Verified operation registry
-│   └── decode_llm.py   # LLM-based instruction decoder
-├── training/
-│   ├── train_decode.py # Training script
-│   └── generate_cpu_data.py # Data generation
-├── models/
-│   └── decode_llm/     # Trained model checkpoints
-├── programs/
-│   ├── sum.asm         # Sum 1 to N
-│   ├── fibonacci.asm   # Fibonacci sequence
-│   └── multiply.asm    # Multiplication via addition
-├── tests/              # Unit and integration tests
-└── docs/               # Documentation
-```
+## Why The Archive Exists
 
-## Documentation
-
-- [Architecture](docs/architecture.md) - Detailed system design
-- [Training Results](docs/TRAINING_RESULTS.md) - Model training metrics
-
-## License
-
-MIT
+This project had accumulated many ad-hoc scripts and experimental directories at root.
+Those are now moved into `archive/` so the main tree stays clean and easier to maintain.
+The `archive/` folder is excluded from Git via `.gitignore`.

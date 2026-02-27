@@ -1,0 +1,30 @@
+# DOOM Raycaster Makefile for ParallelMetalCPU
+# Compiles ARM64 raycaster for GPU execution
+
+CC = aarch64-elf-gcc
+LD = aarch64-elf-ld
+OBJCOPY = aarch64-elf-objcopy
+
+# Flags for bare metal ARM64
+CFLAGS = -O2 -ffreestanding -nostdlib -nostartfiles -mcpu=cortex-a72 -Wall
+LDFLAGS = -T raycast.ld -nostdlib
+
+# Output files
+RAYCAST_ELF = raycast.elf
+RAYCAST_BIN = raycast.bin
+
+all: $(RAYCAST_BIN)
+
+# Compile raycaster
+$(RAYCAST_ELF): raycast.c raycast.ld
+	$(CC) $(CFLAGS) -c raycast.c -o raycast.o
+	$(LD) $(LDFLAGS) raycast.o -o $(RAYCAST_ELF)
+	$(OBJCOPY) -O binary $(RAYCAST_ELF) $(RAYCAST_BIN)
+	@echo "Built DOOM Raycaster:"
+	@ls -la $(RAYCAST_ELF) $(RAYCAST_BIN)
+	@aarch64-elf-size $(RAYCAST_ELF) || true
+
+clean:
+	rm -f *.o $(RAYCAST_ELF) $(RAYCAST_BIN)
+
+.PHONY: all clean

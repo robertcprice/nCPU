@@ -1,0 +1,22 @@
+{
+  "sequences": [],
+  "metadata": {
+    "total_accesses": 52,
+    "unique_addresses": 52,
+    "patterns": [
+      "strided-48"
+    ],
+    "top_strides": [
+      [
+        48,
+        49
+      ],
+      [
+        4096,
+        2
+      ]
+    ],
+    "load_count": 51,
+    "store_count": 1
+  }
+}

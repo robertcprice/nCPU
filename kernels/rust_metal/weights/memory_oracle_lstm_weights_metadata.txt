@@ -1,0 +1,28 @@
+Memory Oracle LSTM - 271124 params
+Extracted from: /Users/bobbyprice/projects/KVRM/kvrm-cpu/memory_oracle_lstm.pt
+
+Weight tensors (24):
+  [      0:    640] feature_encoder.0.weight
+  [    640:    704] feature_encoder.0.bias
+  [    704:   4800] feature_encoder.2.weight
+  [   4800:   4864] feature_encoder.2.bias
+  [   4864:  37632] lstm.weight_ih_l0
+  [  37632: 103168] lstm.weight_hh_l0
+  [ 103168: 103680] lstm.bias_ih_l0
+  [ 103680: 104192] lstm.bias_hh_l0
+  [ 104192: 169728] lstm.weight_ih_l1
+  [ 169728: 235264] lstm.weight_hh_l1
+  [ 235264: 235776] lstm.bias_ih_l1
+  [ 235776: 236288] lstm.bias_hh_l1
+  [ 236288: 252672] delta_head.0.weight
+  [ 252672: 252800] delta_head.0.bias
+  [ 252800: 253824] delta_head.3.weight
+  [ 253824: 253832] delta_head.3.bias
+  [ 253832: 262024] confidence_head.0.weight
+  [ 262024: 262088] confidence_head.0.bias
+  [ 262088: 262600] confidence_head.2.weight
+  [ 262600: 262608] confidence_head.2.bias
+  [ 262608: 270800] pattern_head.0.weight
+  [ 270800: 270864] pattern_head.0.bias
+  [ 270864: 271120] pattern_head.2.weight
+  [ 271120: 271124] pattern_head.2.bias
