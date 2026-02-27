@@ -1,0 +1,48 @@
+Loop Detector V2 - 1083397 params
+Extracted from: /Users/bobbyprice/projects/KVRM/kvrm-cpu/loop_detector_v2.pt
+
+Weight tensors (44):
+  [      0:   4096] inst_embed.0.weight
+  [   4096:   4224] inst_embed.0.bias
+  [   4224:   4352] inst_embed.1.weight
+  [   4352:   4480] inst_embed.1.bias
+  [   4480:  20864] inst_embed.3.weight
+  [  20864:  20992] inst_embed.3.bias
+  [  20992:  24064] reg_field_extract.weight
+  [  24064:  24160] reg_field_extract.bias
+  [  24160:  89696] seq_encoder.weight_ih_l0
+  [  89696: 155232] seq_encoder.weight_hh_l0
+  [ 155232: 155744] seq_encoder.bias_ih_l0
+  [ 155744: 156256] seq_encoder.bias_hh_l0
+  [ 156256: 221792] seq_encoder.weight_ih_l0_reverse
+  [ 221792: 287328] seq_encoder.weight_hh_l0_reverse
+  [ 287328: 287840] seq_encoder.bias_ih_l0_reverse
+  [ 287840: 288352] seq_encoder.bias_hh_l0_reverse
+  [ 288352: 419424] seq_encoder.weight_ih_l1
+  [ 419424: 484960] seq_encoder.weight_hh_l1
+  [ 484960: 485472] seq_encoder.bias_ih_l1
+  [ 485472: 485984] seq_encoder.bias_hh_l1
+  [ 485984: 617056] seq_encoder.weight_ih_l1_reverse
+  [ 617056: 682592] seq_encoder.weight_hh_l1_reverse
+  [ 682592: 683104] seq_encoder.bias_ih_l1_reverse
+  [ 683104: 683616] seq_encoder.bias_hh_l1_reverse
+  [ 683616: 691808] reg_embed.0.weight
+  [ 691808: 691936] reg_embed.0.bias
+  [ 691936: 692064] reg_embed.1.weight
+  [ 692064: 692192] reg_embed.1.bias
+  [ 692192: 708576] reg_embed.3.weight
+  [ 708576: 708704] reg_embed.3.bias
+  [ 708704: 905312] cross_attn.in_proj_weight
+  [ 905312: 906080] cross_attn.in_proj_bias
+  [ 906080: 971616] cross_attn.out_proj.weight
+  [ 971616: 971872] cross_attn.out_proj.bias
+  [ 971872:1021024] type_head.0.weight
+  [1021024:1021152] type_head.0.bias
+  [1021152:1021664] type_head.3.weight
+  [1021664:1021668] type_head.3.bias
+  [1021668:1029860] counter_attn.weight
+  [1029860:1029892] counter_attn.bias
+  [1029892:1083140] iter_head.0.weight
+  [1083140:1083268] iter_head.0.bias
+  [1083268:1083396] iter_head.2.weight
+  [1083396:1083397] iter_head.2.bias

@@ -1,0 +1,190 @@
+{
+  "tactics": {
+    "tactic_identity_0": {
+      "name": "tactic_identity_0",
+      "trigger_pattern": "identity",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_cube_1": {
+      "name": "tactic_cube_1",
+      "trigger_pattern": "cube",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_cube_4": {
+      "name": "tactic_cube_4",
+      "trigger_pattern": "cube",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_square_5": {
+      "name": "tactic_square_5",
+      "trigger_pattern": "square",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_triple_8": {
+      "name": "tactic_triple_8",
+      "trigger_pattern": "triple",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_square_9": {
+      "name": "tactic_square_9",
+      "trigger_pattern": "square",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_identity_11": {
+      "name": "tactic_identity_11",
+      "trigger_pattern": "identity",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_identity_12": {
+      "name": "tactic_identity_12",
+      "trigger_pattern": "identity",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_cube_17": {
+      "name": "tactic_cube_17",
+      "trigger_pattern": "cube",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_square_19": {
+      "name": "tactic_square_19",
+      "trigger_pattern": "square",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_square_3": {
+      "name": "tactic_square_3",
+      "trigger_pattern": "square",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_square_6": {
+      "name": "tactic_square_6",
+      "trigger_pattern": "square",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_identity_7": {
+      "name": "tactic_identity_7",
+      "trigger_pattern": "identity",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_triple_9": {
+      "name": "tactic_triple_9",
+      "trigger_pattern": "triple",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_triple_13": {
+      "name": "tactic_triple_13",
+      "trigger_pattern": "triple",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    },
+    "tactic_cube_19": {
+      "name": "tactic_cube_19",
+      "trigger_pattern": "cube",
+      "action_sequence": [
+        "exploit_known"
+      ],
+      "success_count": 1,
+      "failure_count": 0,
+      "avg_reward": 1.0
+    }
+  },
+  "pattern_index": {
+    "identity": [
+      "tactic_identity_0",
+      "tactic_identity_11",
+      "tactic_identity_12",
+      "tactic_identity_7"
+    ],
+    "cube": [
+      "tactic_cube_1",
+      "tactic_cube_4",
+      "tactic_cube_17",
+      "tactic_cube_19"
+    ],
+    "square": [
+      "tactic_square_5",
+      "tactic_square_9",
+      "tactic_square_19",
+      "tactic_square_3",
+      "tactic_square_6"
+    ],
+    "triple": [
+      "tactic_triple_8",
+      "tactic_triple_9",
+      "tactic_triple_13"
+    ]
+  }
+}

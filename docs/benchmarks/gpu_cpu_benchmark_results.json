@@ -1,0 +1,208 @@
+{
+  "device": "mps",
+  "pytorch_version": "2.9.1",
+  "timestamp": "2026-01-20 15:55:50",
+  "sync_overhead": {
+    "item_call": {
+      "name": "tensor.item()",
+      "iterations": 1000,
+      "total_time_ms": 102.783976,
+      "ops_per_second": 9729.14299404024,
+      "avg_latency_us": 102.783976,
+      "min_latency_us": 83.125,
+      "max_latency_us": 370.291,
+      "std_dev_us": 20.022979261986713
+    },
+    "individual_32_items": {
+      "name": "32 individual .item()",
+      "iterations": 100,
+      "total_time_ms": 315.898373,
+      "ops_per_second": 316.5575024978049,
+      "avg_latency_us": 3158.98373,
+      "min_latency_us": 2994.042,
+      "max_latency_us": 3393.5,
+      "std_dev_us": 85.56969388299454
+    },
+    "batch_32_sync": {
+      "name": "batch .cpu().numpy()",
+      "iterations": 100,
+      "total_time_ms": 9.9707,
+      "ops_per_second": 10029.386101276741,
+      "avg_latency_us": 99.707,
+      "min_latency_us": 79.416,
+      "max_latency_us": 423.209,
+      "std_dev_us": 35.298806449046864
+    }
+  },
+  "instruction_fetch": {
+    "single_fetch_with_item": {
+      "name": "single fetch (5x .item())",
+      "iterations": 1000,
+      "total_time_ms": 496.638638,
+      "ops_per_second": 2013.5364498160532,
+      "avg_latency_us": 496.63863799999996,
+      "min_latency_us": 404.042,
+      "max_latency_us": 745.708,
+      "std_dev_us": 39.35122010276851
+    },
+    "batch_fetch_64": {
+      "name": "batch fetch (64 insts)",
+      "iterations": 100,
+      "total_time_ms": 78.682837,
+      "ops_per_second": 81339.21251466822,
+      "avg_latency_us": 786.82837,
+      "min_latency_us": 208.875,
+      "max_latency_us": 55114.333,
+      "std_dev_us": 5487.79154662213
+    }
+  },
+  "alu_operations": {
+    "single_add": {
+      "name": "single ADD",
+      "iterations": 10000,
+      "total_time_ms": 1171.66141,
+      "ops_per_second": 8534.888931777654,
+      "avg_latency_us": 117.16614100000001,
+      "min_latency_us": 90.25,
+      "max_latency_us": 728.875,
+      "std_dev_us": 25.44781982777931
+    },
+    "batch_add_1024": {
+      "name": "batch ADD (1024)",
+      "iterations": 1000,
+      "total_time_ms": 119.563854,
+      "ops_per_second": 8564461.296137208,
+      "avg_latency_us": 119.563854,
+      "min_latency_us": 95.084,
+      "max_latency_us": 424.084,
+      "std_dev_us": 27.251005508823447
+    },
+    "alu_chain_5ops": {
+      "name": "ALU chain (5 ops, 1024 wide)",
+      "iterations": 1000,
+      "total_time_ms": 177.611788,
+      "ops_per_second": 28826915.474776935,
+      "avg_latency_us": 177.611788,
+      "min_latency_us": 116.5,
+      "max_latency_us": 35977.0,
+      "std_dev_us": 1133.4649774854754
+    }
+  },
+  "memory_operations": {
+    "single_byte_read": {
+      "name": "single byte read",
+      "iterations": 10000,
+      "total_time_ms": 973.292272,
+      "ops_per_second": 10274.406041929407,
+      "avg_latency_us": 97.32922719999999,
+      "min_latency_us": 78.333,
+      "max_latency_us": 406.833,
+      "std_dev_us": 16.662559800093423
+    },
+    "batch_read_1kb": {
+      "name": "batch read (1KB)",
+      "iterations": 1000,
+      "total_time_ms": 99.638912,
+      "ops_per_second": 10277109.408822129,
+      "avg_latency_us": 99.63891199999999,
+      "min_latency_us": 79.084,
+      "max_latency_us": 1437.5,
+      "std_dev_us": 46.82124474271817
+    },
+    "gather_64": {
+      "name": "gather (64 random)",
+      "iterations": 1000,
+      "total_time_ms": 145.476422,
+      "ops_per_second": 439933.83340153913,
+      "avg_latency_us": 145.47642199999999,
+      "min_latency_us": 109.541,
+      "max_latency_us": 2530.416,
+      "std_dev_us": 80.95471261063055
+    }
+  },
+  "execution_paths": {
+    "cpu_fast_100": {
+      "loop_count": 100,
+      "executed": 310,
+      "time_ms": 8.275624999896536,
+      "ips": 37459.406389713855
+    },
+    "gpu_parallel_100": {
+      "loop_count": 100,
+      "executed": 2,
+      "time_ms": 854.5666250001887,
+      "ips": 2.340367551798034
+    },
+    "gpu_microbatch_100": {
+      "loop_count": 100,
+      "executed": 301,
+      "time_ms": 67.56799999993746,
+      "ips": 4454.7714894665905
+    },
+    "cpu_fast_1000": {
+      "loop_count": 1000,
+      "executed": 3010,
+      "time_ms": 10.127333000127692,
+      "ips": 297215.4662991775
+    },
+    "gpu_parallel_1000": {
+      "loop_count": 1000,
+      "executed": 2,
+      "time_ms": 298.4387500000594,
+      "ips": 6.701542611338515
+    },
+    "gpu_microbatch_1000": {
+      "loop_count": 1000,
+      "executed": 3001,
+      "time_ms": 34.55454100003408,
+      "ips": 86848.20903848905
+    },
+    "cpu_fast_10000": {
+      "loop_count": 10000,
+      "executed": 30010,
+      "time_ms": 45.270000000073196,
+      "ips": 662911.4203656169
+    },
+    "gpu_parallel_10000": {
+      "loop_count": 10000,
+      "executed": 2,
+      "time_ms": 318.3772089996637,
+      "ips": 6.2818566890637975
+    },
+    "gpu_microbatch_10000": {
+      "loop_count": 10000,
+      "executed": 30001,
+      "time_ms": 33.327749999898515,
+      "ips": 900180.7802834382
+    }
+  },
+  "neural_models": {
+    "loop_detector": {
+      "name": "Loop Detector",
+      "iterations": 100,
+      "total_time_ms": 149.057914,
+      "ops_per_second": 670.8801788276737,
+      "avg_latency_us": 1490.5791399999998,
+      "min_latency_us": 763.916,
+      "max_latency_us": 44978.125,
+      "std_dev_us": 4397.601745986962
+    },
+    "memory_oracle": {
+      "name": "Memory Oracle",
+      "iterations": 100,
+      "total_time_ms": 0.120498,
+      "ops_per_second": 829889.2927683446,
+      "avg_latency_us": 1.20498,
+      "min_latency_us": 0.958,
+      "max_latency_us": 9.75,
+      "std_dev_us": 1.0366600796828633
+    }
+  },
+  "bottleneck": {
+    "pc_read_us": 98.096052,
+    "fetch_us": 389.959996,
+    "decode_us": 0.10154,
+    "execute_us": 17.086976,
+    "pc_update_us": 1.441261
+  }
+}

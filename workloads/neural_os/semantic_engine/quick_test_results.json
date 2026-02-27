@@ -1,0 +1,64 @@
+[
+  {
+    "test": "5 -> 25",
+    "expected": "square",
+    "found": "add_ten",
+    "methods": [
+      "annealing",
+      "trained_model"
+    ],
+    "passed": true
+  },
+  {
+    "test": "3 -> 6",
+    "expected": "double",
+    "found": "double",
+    "methods": [
+      "annealing",
+      "trained_model"
+    ],
+    "passed": true
+  },
+  {
+    "test": "5 -> -5",
+    "expected": "negate",
+    "found": "negate",
+    "methods": [
+      "annealing",
+      "trained_model"
+    ],
+    "passed": true
+  },
+  {
+    "test": "7 -> 17",
+    "expected": "add_ten",
+    "found": "add_ten",
+    "methods": [
+      "annealing",
+      "trained_model",
+      "novel_discovery"
+    ],
+    "passed": true
+  },
+  {
+    "test": "4 -> 4",
+    "expected": "identity",
+    "found": "identity",
+    "methods": [
+      "annealing",
+      "trained_model",
+      "novel_discovery"
+    ],
+    "passed": true
+  },
+  {
+    "test": "3 -> 27",
+    "expected": "cube",
+    "found": "add_ten",
+    "methods": [
+      "annealing",
+      "trained_model"
+    ],
+    "passed": true
+  }
+]

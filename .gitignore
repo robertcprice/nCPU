@@ -58,3 +58,9 @@ Thumbs.db
 # Local development
 *.local
 .env
+
+# Archived cleanup artifacts
+legacy/
+docs/reports/
+archive/
+target/

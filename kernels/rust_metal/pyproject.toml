@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "kvrm_metal"
+version = "0.1.0"
+description = "High-performance Metal GPU kernel for ARM64 CPU emulation"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Development Status :: 3 - Alpha",
+    "Operating System :: MacOS",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]

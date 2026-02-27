@@ -1,0 +1,536 @@
+{
+  "timestamp": "2026-01-11T11:01:29.682082",
+  "version": "V4.0",
+  "total_components": 10,
+  "total_tests": 60,
+  "total_passed": 56,
+  "total_failed": 4,
+  "pass_rate": 93.33333333333333,
+  "total_duration_ms": 550.986416,
+  "system_info": {
+    "python_version": "3.9.6 (default, Nov 11 2024, 03:15:38) \n[Clang 16.0.0 (clang-1600.0.26.6)]",
+    "platform": "darwin"
+  },
+  "components": [
+    {
+      "name": "Ratchet Orchestrator",
+      "tests_run": 8,
+      "tests_passed": 8,
+      "tests_failed": 0,
+      "pass_rate": 100.0,
+      "duration_ms": 3.011999000000008,
+      "tests": [
+        {
+          "name": "Import RatchetOrchestrator",
+          "passed": true,
+          "duration_ms": 0.0002909999999994861,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Create Orchestrator (Shadow Mode)",
+          "passed": true,
+          "duration_ms": 0.0077919999999995215,
+          "details": "Orchestrator created",
+          "error": ""
+        },
+        {
+          "name": "Layer Strengths Correct",
+          "passed": true,
+          "duration_ms": 0.0052500000000052505,
+          "details": "Foundation=99%, Domain=85%, Adaptive=50%",
+          "error": ""
+        },
+        {
+          "name": "Foundation Protection",
+          "passed": true,
+          "duration_ms": 0.0032500000000032503,
+          "details": "Foundation protected from weakening",
+          "error": ""
+        },
+        {
+          "name": "System State Utility",
+          "passed": true,
+          "duration_ms": 0.030874999999999653,
+          "details": "Utility: 1.548 -> 1.687",
+          "error": ""
+        },
+        {
+          "name": "Monotonicity Verification",
+          "passed": true,
+          "duration_ms": 0.016208000000003664,
+          "details": "Monotonic=True, Delta=0.100",
+          "error": ""
+        },
+        {
+          "name": "Proposal Flow",
+          "passed": true,
+          "duration_ms": 2.935457999999995,
+          "details": "Decision=ACCEPT",
+          "error": ""
+        },
+        {
+          "name": "Stats Retrieval",
+          "passed": true,
+          "duration_ms": 0.012875000000002468,
+          "details": "Stats keys: ['mode', 'proposals', 'accepts', 'rejects', 'accept_rate', 'state', 'layers']",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "name": "Proof Engine",
+      "tests_run": 7,
+      "tests_passed": 7,
+      "tests_failed": 0,
+      "pass_rate": 100.0,
+      "duration_ms": 0.097252000000006,
+      "tests": [
+        {
+          "name": "Import ProofEngine",
+          "passed": true,
+          "duration_ms": 0.0003339999999976695,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Engine Creation",
+          "passed": true,
+          "duration_ms": 0.0033340000000006698,
+          "details": "5 strategies registered",
+          "error": ""
+        },
+        {
+          "name": "Strategy Priorities",
+          "passed": true,
+          "duration_ms": 0.0054589999999993255,
+          "details": "Priorities: [('monotonicity', 95), ('test_based', 90), ('algebraic', 80), ('ess', 75), ('composition', 60)]",
+          "error": ""
+        },
+        {
+          "name": "Monotonicity Proof",
+          "passed": true,
+          "duration_ms": 0.03354200000000446,
+          "details": "Proof type=MONOTONICITY, conf=90.00%",
+          "error": ""
+        },
+        {
+          "name": "Test-Based Proof",
+          "passed": true,
+          "duration_ms": 0.023792000000001645,
+          "details": "Can prove=True, Proof=TEST_BASED",
+          "error": ""
+        },
+        {
+          "name": "Proof Verification",
+          "passed": true,
+          "duration_ms": 0.024915999999999827,
+          "details": "Verified=True",
+          "error": ""
+        },
+        {
+          "name": "Engine Stats",
+          "passed": true,
+          "duration_ms": 0.005875000000002406,
+          "details": "Stats: {'num_strategies': 5, 'strategies': [{'name': 'monotonicity', 'priority': 95}, {'name': 'test_based', 'priority': 90}, {'name': 'algebraic', 'priority': 80}, {'name': 'ess', 'priority': 75}, {'name': 'composition', 'priority': 60}], 'cache_size': 0}",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "name": "Anchor Oracle",
+      "tests_run": 6,
+      "tests_passed": 6,
+      "tests_failed": 0,
+      "pass_rate": 100.0,
+      "duration_ms": 0.37833399999999406,
+      "tests": [
+        {
+          "name": "Import AnchorOracle",
+          "passed": true,
+          "duration_ms": 0.0001669999999953653,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Oracle Creation",
+          "passed": true,
+          "duration_ms": 0.054499999999998994,
+          "details": "2 providers",
+          "error": ""
+        },
+        {
+          "name": "Anchor Proof",
+          "passed": true,
+          "duration_ms": 0.06629200000000252,
+          "details": "Anchor ID: 19e5f9096d572c1a...",
+          "error": ""
+        },
+        {
+          "name": "Chain Integrity",
+          "passed": true,
+          "duration_ms": 0.11475000000000374,
+          "details": "Chain length=5, Valid=True",
+          "error": ""
+        },
+        {
+          "name": "Ordering Proof",
+          "passed": true,
+          "duration_ms": 0.0802919999999957,
+          "details": "e8505224 < a5dc8e54 = True",
+          "error": ""
+        },
+        {
+          "name": "Export Chain",
+          "passed": true,
+          "duration_ms": 0.06233299999999775,
+          "details": "Export keys: ['chain_length', 'hash_chain', 'anchors', 'verified', 'exported_at']",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "name": "Strength Learner",
+      "tests_run": 7,
+      "tests_passed": 7,
+      "tests_failed": 0,
+      "pass_rate": 100.0,
+      "duration_ms": 305.97208399999994,
+      "tests": [
+        {
+          "name": "Import StrengthLearner",
+          "passed": true,
+          "duration_ms": 0.00012500000000359446,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Learner Creation",
+          "passed": true,
+          "duration_ms": 0.0044999999999975615,
+          "details": "Foundation prior: 0.99",
+          "error": ""
+        },
+        {
+          "name": "Bayesian Update",
+          "passed": true,
+          "duration_ms": 0.005208000000006541,
+          "details": "Observations: 0 -> 1",
+          "error": ""
+        },
+        {
+          "name": "Strength Recommendation",
+          "passed": true,
+          "duration_ms": 0.0032080000000045406,
+          "details": "Direction=increase, Magnitude=0.100",
+          "error": ""
+        },
+        {
+          "name": "Regret Computation",
+          "passed": true,
+          "duration_ms": 0.005041999999996771,
+          "details": "Regret=0.1000",
+          "error": ""
+        },
+        {
+          "name": "Adaptive Controller",
+          "passed": true,
+          "duration_ms": 305.89766699999996,
+          "details": "Strength=0.500",
+          "error": ""
+        },
+        {
+          "name": "Domain Stats",
+          "passed": true,
+          "duration_ms": 0.056333999999991224,
+          "details": "Stats keys: ['belief', 'optimal_strength', 'confidence', 'recent_outcomes', 'false_positives', 'false_negatives', 'regret']",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "name": "Adversarial Detector",
+      "tests_run": 7,
+      "tests_passed": 7,
+      "tests_failed": 0,
+      "pass_rate": 100.0,
+      "duration_ms": 2.2857499999999753,
+      "tests": [
+        {
+          "name": "Import AdversarialDetector",
+          "passed": true,
+          "duration_ms": 0.0005419999999922709,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Detector Creation",
+          "passed": true,
+          "duration_ms": 0.0072500000000141895,
+          "details": "Sensitivity=0.4",
+          "error": ""
+        },
+        {
+          "name": "Detect Override Attack",
+          "passed": true,
+          "duration_ms": 2.0952079999999595,
+          "details": "Detected=True, Conf=1.00",
+          "error": ""
+        },
+        {
+          "name": "Detect Goal Laundering",
+          "passed": true,
+          "duration_ms": 0.05045800000003098,
+          "details": "Detected=True, Types=['GOAL_LAUNDERING']",
+          "error": ""
+        },
+        {
+          "name": "Detect Trojan Pattern",
+          "passed": true,
+          "duration_ms": 0.044249999999967926,
+          "details": "Detected=True, Evidence=['keywords']",
+          "error": ""
+        },
+        {
+          "name": "Accept Benign Proposals",
+          "passed": true,
+          "duration_ms": 0.06058399999997466,
+          "details": "All benign accepted: True",
+          "error": ""
+        },
+        {
+          "name": "Attack Type Detection",
+          "passed": true,
+          "duration_ms": 0.02745800000003573,
+          "details": "Types: ['DIRECT_OVERRIDE', 'SAFETY_DEGRADATION']",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "name": "Bug Hunter",
+      "tests_run": 7,
+      "tests_passed": 7,
+      "tests_failed": 0,
+      "pass_rate": 100.0,
+      "duration_ms": 1.1961669999999702,
+      "tests": [
+        {
+          "name": "Import BugHunter",
+          "passed": true,
+          "duration_ms": 0.00020799999994602913,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Detector Creation",
+          "passed": true,
+          "duration_ms": 0.298208000000022,
+          "details": "4 pattern types",
+          "error": ""
+        },
+        {
+          "name": "Detect Mutable Default",
+          "passed": true,
+          "duration_ms": 0.08262500000000284,
+          "details": "Found 2 bugs",
+          "error": ""
+        },
+        {
+          "name": "Detect Swallowed Exception",
+          "passed": true,
+          "duration_ms": 0.031166999999998612,
+          "details": "Found 1 bugs",
+          "error": ""
+        },
+        {
+          "name": "Bug Fixer",
+          "passed": true,
+          "duration_ms": 0.17095900000002606,
+          "details": "Applied 1 fixes",
+          "error": ""
+        },
+        {
+          "name": "Full Hunt",
+          "passed": true,
+          "duration_ms": 0.4465830000000004,
+          "details": "Found=3, Fixed=1",
+          "error": ""
+        },
+        {
+          "name": "PR Body Generation",
+          "passed": true,
+          "duration_ms": 0.16641699999997428,
+          "details": "PR body length: 514",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "name": "LLM Chaos Generator",
+      "tests_run": 6,
+      "tests_passed": 6,
+      "tests_failed": 0,
+      "pass_rate": 100.0,
+      "duration_ms": 0.6094170000000565,
+      "tests": [
+        {
+          "name": "Import LLMChaosGenerator",
+          "passed": true,
+          "duration_ms": 0.0002919999999573264,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Generator Creation",
+          "passed": true,
+          "duration_ms": 0.001958000000024107,
+          "details": "APIs enabled: False",
+          "error": ""
+        },
+        {
+          "name": "Fallback Mutations",
+          "passed": true,
+          "duration_ms": 0.12962500000002208,
+          "details": "Generated 5 mutations",
+          "error": ""
+        },
+        {
+          "name": "Mutation Fields",
+          "passed": true,
+          "duration_ms": 0.06383300000001313,
+          "details": "Fields: name=timsort_optimized_1",
+          "error": ""
+        },
+        {
+          "name": "Mutations Compile",
+          "passed": true,
+          "duration_ms": 0.34687500000007976,
+          "details": "Compiled 6/6 mutations",
+          "error": ""
+        },
+        {
+          "name": "Record Success",
+          "passed": true,
+          "duration_ms": 0.06683399999996009,
+          "details": "Recorded 1 patterns",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "name": "Chaos-Ratchet Engine",
+      "tests_run": 6,
+      "tests_passed": 6,
+      "tests_failed": 0,
+      "pass_rate": 100.0,
+      "duration_ms": 47.760999999999946,
+      "tests": [
+        {
+          "name": "Import ChaosRatchetEngine",
+          "passed": true,
+          "duration_ms": 0.00012500000001747225,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Engine Creation",
+          "passed": true,
+          "duration_ms": 0.02083299999999788,
+          "details": "Engine created",
+          "error": ""
+        },
+        {
+          "name": "Initialize",
+          "passed": true,
+          "duration_ms": 8.97008399999999,
+          "details": "Initial time: 8.522ms",
+          "error": ""
+        },
+        {
+          "name": "Evolution",
+          "passed": true,
+          "duration_ms": 27.669957999999937,
+          "details": "Speedup: 443.27x",
+          "error": ""
+        },
+        {
+          "name": "Proof Chain",
+          "passed": true,
+          "duration_ms": 11.088624999999963,
+          "details": "Proof chain length: 1",
+          "error": ""
+        },
+        {
+          "name": "Adversarial Blocking",
+          "passed": true,
+          "duration_ms": 0.011375000000035662,
+          "details": "Adversarial detector present",
+          "error": ""
+        }
+      ]
+    },
+    {
+      "name": "Enhanced Ratchet (V3)",
+      "tests_run": 4,
+      "tests_passed": 2,
+      "tests_failed": 2,
+      "pass_rate": 50.0,
+      "duration_ms": 0.3450839999999955,
+      "tests": [
+        {
+          "name": "Import EnhancedRatchet",
+          "passed": true,
+          "duration_ms": 0.0002920000000683487,
+          "details": "All imports successful",
+          "error": ""
+        },
+        {
+          "name": "Ratchet Creation",
+          "passed": true,
+          "duration_ms": 0.16225000000003043,
+          "details": "Ratchet created",
+          "error": ""
+        },
+        {
+          "name": "Evaluate Improvement",
+          "passed": false,
+          "duration_ms": 0.10266699999994522,
+          "details": "",
+          "error": "AttributeError: 'EnhancedDecision' object has no attribute 'get'"
+        },
+        {
+          "name": "Reject Adversarial",
+          "passed": false,
+          "duration_ms": 0.07987499999995151,
+          "details": "",
+          "error": "AttributeError: 'EnhancedDecision' object has no attribute 'get'"
+        }
+      ]
+    },
+    {
+      "name": "Singularity Core",
+      "tests_run": 2,
+      "tests_passed": 0,
+      "tests_failed": 2,
+      "pass_rate": 0.0,
+      "duration_ms": 2.7467509999998807,
+      "tests": [
+        {
+          "name": "Import SingularityCore",
+          "passed": false,
+          "duration_ms": 2.5750419999999163,
+          "details": "",
+          "error": "ModuleNotFoundError: No module named 'sympy'"
+        },
+        {
+          "name": "Ratchet Integration",
+          "passed": false,
+          "duration_ms": 0.17170899999996436,
+          "details": "",
+          "error": "ModuleNotFoundError: No module named 'sympy'"
+        }
+      ]
+    }
+  ]
+}

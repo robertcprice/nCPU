@@ -1,0 +1,58 @@
+{
+  "summary": {
+    "start_time": "2026-01-11T11:33:05.627725",
+    "end_time": "2026-01-11T11:38:24.494252",
+    "total_runtime_hours": 0.08857402940591176,
+    "total_cycles": 712,
+    "successful_improvements": 10,
+    "failed_attempts": 698,
+    "success_rate": 0.014124293785310734,
+    "best_speedup": 1.6512296383668528,
+    "meta_improvements": 70
+  },
+  "targets": [
+    {
+      "name": "bubble_sort",
+      "domain": "sorting",
+      "best_speedup": 1.6512296383668528,
+      "evolution_count": 10
+    },
+    {
+      "name": "fibonacci",
+      "domain": "recursion",
+      "best_speedup": 1.0,
+      "evolution_count": 0
+    },
+    {
+      "name": "string_search",
+      "domain": "strings",
+      "best_speedup": 1.0,
+      "evolution_count": 0
+    },
+    {
+      "name": "matrix_mult",
+      "domain": "linear_algebra",
+      "best_speedup": 1.0,
+      "evolution_count": 0
+    }
+  ],
+  "strategy_effectiveness": {
+    "_strategy_swap_operations": 0.2022699807020888,
+    "_strategy_add_caching": 0.20078492405492693,
+    "_strategy_parallelize": 0.17112196283791373,
+    "_strategy_simplify": 0.20075674524849288,
+    "_strategy_vectorize": 0.22506638715657754
+  },
+  "safety": {
+    "alerts": [],
+    "final_rate": 10
+  },
+  "health": {
+    "is_healthy": true,
+    "memory_usage_mb": 86.15625,
+    "cpu_percent": 0.0,
+    "last_heartbeat": 1768149485.6399722,
+    "consecutive_failures": 0,
+    "error_message": ""
+  }
+}

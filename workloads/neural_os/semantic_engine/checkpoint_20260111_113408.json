@@ -1,0 +1,846 @@
+{
+  "timestamp": "2026-01-11T11:34:08.129845",
+  "metrics": {
+    "total_cycles": 600,
+    "successful_improvements": 9,
+    "failed_attempts": 591,
+    "meta_improvements": 60,
+    "domains_explored": 1,
+    "current_speedup": 1.0,
+    "best_speedup": 1.6512296383668528,
+    "total_runtime_seconds": 0.0,
+    "improvements_this_hour": 9,
+    "hour_start": 1768149185.329524
+  },
+  "targets": [
+    {
+      "name": "bubble_sort",
+      "best_speedup": 1.6512296383668528,
+      "evolution_count": 9
+    },
+    {
+      "name": "fibonacci",
+      "best_speedup": 1.0,
+      "evolution_count": 0
+    },
+    {
+      "name": "string_search",
+      "best_speedup": 1.0,
+      "evolution_count": 0
+    },
+    {
+      "name": "matrix_mult",
+      "best_speedup": 1.0,
+      "evolution_count": 0
+    }
+  ],
+  "strategy_scores": {
+    "_strategy_swap_operations": 0.21113799861060567,
+    "_strategy_add_caching": 0.20348333339291808,
+    "_strategy_parallelize": 0.15750535201545016,
+    "_strategy_simplify": 0.20294613894327196,
+    "_strategy_vectorize": 0.2242550444550568
+  },
+  "evolution_log": [
+    {
+      "timestamp": "2026-01-11T11:33:57.841197",
+      "cycle": 501,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:57.943157",
+      "cycle": 502,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.047547",
+      "cycle": 503,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.153661",
+      "cycle": 504,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.259227",
+      "cycle": 505,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.361038",
+      "cycle": 506,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.466629",
+      "cycle": 507,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.572175",
+      "cycle": 508,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.675997",
+      "cycle": 509,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.781788",
+      "cycle": 510,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.882469",
+      "cycle": 511,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:58.986636",
+      "cycle": 512,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.089171",
+      "cycle": 513,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.194334",
+      "cycle": 514,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.294872",
+      "cycle": 515,
+      "target": "bubble_sort",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.396555",
+      "cycle": 516,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.500124",
+      "cycle": 517,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.605689",
+      "cycle": 518,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.709841",
+      "cycle": 519,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.810411",
+      "cycle": 520,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:33:59.915304",
+      "cycle": 521,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.017366",
+      "cycle": 522,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.120380",
+      "cycle": 523,
+      "target": "bubble_sort",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.221907",
+      "cycle": 524,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.325583",
+      "cycle": 525,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.428701",
+      "cycle": 526,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.534136",
+      "cycle": 527,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.637065",
+      "cycle": 528,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.742725",
+      "cycle": 529,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.848222",
+      "cycle": 530,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:00.949701",
+      "cycle": 531,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.052168",
+      "cycle": 532,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.155037",
+      "cycle": 533,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.259289",
+      "cycle": 534,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.364176",
+      "cycle": 535,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.465267",
+      "cycle": 536,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.571910",
+      "cycle": 537,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.676143",
+      "cycle": 538,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.782558",
+      "cycle": 539,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.884368",
+      "cycle": 540,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:01.986726",
+      "cycle": 541,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.092558",
+      "cycle": 542,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.197059",
+      "cycle": 543,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.298832",
+      "cycle": 544,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.399541",
+      "cycle": 545,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.503071",
+      "cycle": 546,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.606008",
+      "cycle": 547,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.710534",
+      "cycle": 548,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.812270",
+      "cycle": 549,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:02.917432",
+      "cycle": 550,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.022070",
+      "cycle": 551,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.127118",
+      "cycle": 552,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.229903",
+      "cycle": 553,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.334468",
+      "cycle": 554,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.440153",
+      "cycle": 555,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.545847",
+      "cycle": 556,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.652351",
+      "cycle": 557,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.753437",
+      "cycle": 558,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.856620",
+      "cycle": 559,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:03.961549",
+      "cycle": 560,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.068747",
+      "cycle": 561,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.173482",
+      "cycle": 562,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.277553",
+      "cycle": 563,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.378058",
+      "cycle": 564,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.478954",
+      "cycle": 565,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.583643",
+      "cycle": 566,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.687667",
+      "cycle": 567,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.790208",
+      "cycle": 568,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.894494",
+      "cycle": 569,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:04.998045",
+      "cycle": 570,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.103917",
+      "cycle": 571,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.208621",
+      "cycle": 572,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.313495",
+      "cycle": 573,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.418819",
+      "cycle": 574,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.525128",
+      "cycle": 575,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.626169",
+      "cycle": 576,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.731152",
+      "cycle": 577,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.836729",
+      "cycle": 578,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:05.943154",
+      "cycle": 579,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.048961",
+      "cycle": 580,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.155170",
+      "cycle": 581,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.259806",
+      "cycle": 582,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.363186",
+      "cycle": 583,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.469293",
+      "cycle": 584,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.575080",
+      "cycle": 585,
+      "target": "matrix_mult",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.681275",
+      "cycle": 586,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.783074",
+      "cycle": 587,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.884245",
+      "cycle": 588,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:06.985694",
+      "cycle": 589,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.088280",
+      "cycle": 590,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.192621",
+      "cycle": 591,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.298292",
+      "cycle": 592,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.399187",
+      "cycle": 593,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.503901",
+      "cycle": 594,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.610293",
+      "cycle": 595,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.710926",
+      "cycle": 596,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.817244",
+      "cycle": 597,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:07.918513",
+      "cycle": 598,
+      "target": "fibonacci",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:08.024350",
+      "cycle": 599,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    },
+    {
+      "timestamp": "2026-01-11T11:34:08.129797",
+      "cycle": 600,
+      "target": "string_search",
+      "speedup": 1.0,
+      "status": "rejected",
+      "total_improvements": 9
+    }
+  ]
+}

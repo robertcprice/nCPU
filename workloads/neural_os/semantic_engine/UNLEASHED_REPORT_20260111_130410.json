@@ -1,0 +1,100 @@
+{
+  "summary": {
+    "duration_seconds": 60.004794120788574,
+    "duration_hours": 0.016667998366885716,
+    "total_cycles": 5087,
+    "mutations_tried": 43,
+    "improvements_committed": 4,
+    "success_rate": 0.09302325581395349,
+    "best_speedup": 2.568189901801593,
+    "meta_evolutions": 1017,
+    "proof_chain_length": 4,
+    "proof_chain_valid": true
+  },
+  "targets": [
+    {
+      "name": "bubble_sort",
+      "domain": "sorting",
+      "best_speedup": 1.0580633185521295,
+      "evolutions": 1
+    },
+    {
+      "name": "fibonacci",
+      "domain": "recursion",
+      "best_speedup": 1.0,
+      "evolutions": 0
+    },
+    {
+      "name": "find_pattern",
+      "domain": "strings",
+      "best_speedup": 1.0,
+      "evolutions": 0
+    },
+    {
+      "name": "is_prime",
+      "domain": "math",
+      "best_speedup": 2.568189901801593,
+      "evolutions": 1
+    },
+    {
+      "name": "flatten",
+      "domain": "functional",
+      "best_speedup": 1.0,
+      "evolutions": 0
+    },
+    {
+      "name": "gcd",
+      "domain": "math",
+      "best_speedup": 1.0326063299404258,
+      "evolutions": 1
+    },
+    {
+      "name": "binary_search",
+      "domain": "search",
+      "best_speedup": 1.0958881390097344,
+      "evolutions": 1
+    },
+    {
+      "name": "matrix_mult",
+      "domain": "linear_algebra",
+      "best_speedup": 1.0,
+      "evolutions": 0
+    }
+  ],
+  "top_improvements": [
+    {
+      "target": "is_prime",
+      "speedup": 2.568189901801593,
+      "strategy": "optimize_range",
+      "proof_hash": "df93f75562a69a13"
+    },
+    {
+      "target": "binary_search",
+      "speedup": 1.0958881390097344,
+      "strategy": "add_early_exit",
+      "proof_hash": "0a96a30b4f4238a4"
+    },
+    {
+      "target": "bubble_sort",
+      "speedup": 1.0580633185521295,
+      "strategy": "optimize_range",
+      "proof_hash": "74c80148d55a863b"
+    },
+    {
+      "target": "gcd",
+      "speedup": 1.0326063299404258,
+      "strategy": "inline_simple",
+      "proof_hash": "2e4b1f03fe962ebb"
+    }
+  ],
+  "strategy_effectiveness": {
+    "swap_to_builtin": 5.2712451160483495e-43,
+    "add_early_exit": 1.4285234469353632e-114,
+    "unroll_loop": 8.384706395836421e-43,
+    "add_memoization": 3.884560940655414e-43,
+    "use_comprehension": 8.384706395836421e-43,
+    "optimize_range": 1.0,
+    "use_any_all": 8.384706395836421e-43,
+    "inline_simple": 3.3962289588275035e-21
+  }
+}

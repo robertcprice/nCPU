@@ -1,0 +1,72 @@
+{
+  "cycle": 450,
+  "timestamp": "2026-01-11T13:03:15.517807",
+  "metrics": {
+    "total_cycles": 450,
+    "mutations_tried": 43,
+    "improvements_committed": 4,
+    "bugs_found": 0,
+    "bugs_fixed": 0,
+    "meta_evolutions": 90,
+    "total_speedup": 3.0749623440771057,
+    "best_speedup": 2.568189901801593,
+    "domains_explored": 0,
+    "proof_chain_length": 4,
+    "rate_this_hour": 4,
+    "hour_start": 1768154590.233155
+  },
+  "improvements": 4,
+  "proof_chain_valid": true,
+  "strategy_scores": {
+    "swap_to_builtin": 0.00012155283400397025,
+    "add_early_exit": 8.838836758082915e-11,
+    "unroll_loop": 0.0001933480235252609,
+    "add_memoization": 8.957644366797509e-05,
+    "use_comprehension": 0.0001933480235252609,
+    "optimize_range": 0.9813699048253964,
+    "use_any_all": 0.0001933480235252609,
+    "inline_simple": 0.017838921737967403
+  },
+  "targets": [
+    {
+      "name": "bubble_sort",
+      "speedup": 1.0580633185521295,
+      "evolutions": 1
+    },
+    {
+      "name": "fibonacci",
+      "speedup": 1.0,
+      "evolutions": 0
+    },
+    {
+      "name": "find_pattern",
+      "speedup": 1.0,
+      "evolutions": 0
+    },
+    {
+      "name": "is_prime",
+      "speedup": 2.568189901801593,
+      "evolutions": 1
+    },
+    {
+      "name": "flatten",
+      "speedup": 1.0,
+      "evolutions": 0
+    },
+    {
+      "name": "gcd",
+      "speedup": 1.0326063299404258,
+      "evolutions": 1
+    },
+    {
+      "name": "binary_search",
+      "speedup": 1.0958881390097344,
+      "evolutions": 1
+    },
+    {
+      "name": "matrix_mult",
+      "speedup": 1.0,
+      "evolutions": 0
+    }
+  ]
+}

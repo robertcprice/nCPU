@@ -1,0 +1,41 @@
+[package]
+name = "kvrm_metal"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance Metal GPU kernel for ARM64 CPU emulation"
+
+[lib]
+name = "kvrm_metal"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "doom_benchmark"
+path = "bin/doom_benchmark.rs"
+
+# Binary without Python dependencies
+[[bin]]
+name = "doom_native"
+path = "bin/doom_native.rs"
+
+[dependencies]
+# Metal API bindings
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSError", "NSData"] }
+objc2-metal = "0.3"
+
+# Python bindings
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py312"] }
+
+# Error handling
+thiserror = "2.0"
+
+[build-dependencies]
+cc = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[features]
+default = ["pyo3/extension-module"]
