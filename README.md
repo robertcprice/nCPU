@@ -149,13 +149,24 @@ print(cpu.get_register("R2"))  # 42 (computed by neural byte-pair LUT)
 ```
 
 **Fast Mode** (`--fast`) — Same GPU-resident architecture, but ALU uses `torch.add`/`torch.mul`
-instead of model inference. For maximum IPS:
+instead of model inference. Targets **1.35M IPS** at batch_size=32768 on Apple Silicon MPS:
 
 ```python
 from ncpu.neural import NeuralCPU
 cpu = NeuralCPU(fast_mode=True)  # Native GPU tensor ops
 cpu.load_binary(arm64_binary)
 ```
+
+### Metal Compute Kernels
+
+For maximum throughput, the `kernels/` directory contains native Metal GPU implementations
+that run the entire ARM64 fetch-decode-execute loop on GPU with **zero CPU-GPU synchronization**:
+
+- **MLX Metal** (`kernels/mlx/`): Python interface to custom Metal compute kernels via Apple MLX.
+  Full ARM64 decode and execute in Metal Shading Language.
+- **Rust Metal** (`kernels/rust_metal/`): Direct Metal API via `objc2-metal` with PyO3 Python
+  bindings. Includes GPU-side syscall handling, basic block caching, neural dispatch, and
+  out-of-order execution. Ships with a native DOOM benchmark.
 
 ## ISA
 
@@ -199,6 +210,10 @@ nCPU/
 │   │   ├── neural_ops.py # Loads and runs .pt models
 │   │   └── architectures.py  # All model class definitions
 │   └── tensor/           # Tensor-based ARM64 kernel
+├── kernels/
+│   ├── mlx/              # MLX Metal compute kernels (Python + Metal Shading Language)
+│   └── rust_metal/       # Rust Metal GPU kernel (objc2-metal + PyO3 bindings)
+│       └── src/          # Full ARM64 execute loop in Metal, zero GPU-CPU sync
 ├── models/               # 23 trained .pt models
 │   ├── alu/              # arithmetic, carry_combine, multiply, divide, logical, compare
 │   ├── shifts/           # lsl, lsr, asr, rol
@@ -208,7 +223,7 @@ nCPU/
 ├── demos/                # DOOM raycaster and other demos
 ├── programs/             # Assembly programs (.asm)
 ├── tests/                # 347 tests
-├── docs/                 # Architecture docs, model reference
+├── docs/                 # Architecture docs (neural mode + tensor mode)
 ├── benchmarks/           # Performance benchmarks
 ├── paper/                # Research paper
 └── main.py               # CLI entry point
