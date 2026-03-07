@@ -3239,8 +3239,11 @@ static void parse_global_decl(void) {
 static void emit_startup(void) {
     /* _start: set up stack, call main, exit */
 
-    /* MOV SP, #STACK_TOP */
-    emit_li(SP, STACK_TOP);
+    /* Set SP = STACK_TOP.
+     * Cannot use emit_li(SP, ...) because MOVZ/MOVK treat reg 31 as XZR.
+     * Load into X0 first, then MOV SP, X0 (which uses ADD SP, X0, #0). */
+    emit_li(0, STACK_TOP);
+    emit_mov(SP, 0);
 
     /* BL main */
     struct Symbol *main_fn = find_symbol("main");
