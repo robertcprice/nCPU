@@ -103,13 +103,19 @@ class MLXKernelCPUv2:
         # Condition Flags [N, Z, C, V]
         self.flags = mx.zeros(4, dtype=mx.float32)
 
+        # SIMD/FP registers V0-V31 (128-bit each, stored as hi:lo int64 pairs)
+        self.vreg_lo = mx.zeros(32, dtype=mx.int64)
+        self.vreg_hi = mx.zeros(32, dtype=mx.int64)
+
         # Compile the V2 kernel with memory_out support
         self._kernel = mx.fast.metal_kernel(
             name="arm64_cpu_execute_v2",
             input_names=["memory_in", "registers_in", "pc_in", "flags_in",
-                        "max_cycles_in", "memory_size_in"],
+                        "max_cycles_in", "memory_size_in",
+                        "vreg_lo_in", "vreg_hi_in"],
             output_names=["memory_out", "registers_out", "pc_out", "flags_out",
-                         "cycles_out", "stop_reason_out"],
+                         "cycles_out", "stop_reason_out",
+                         "vreg_lo_out", "vreg_hi_out"],
             source=KERNEL_SOURCE_V2,
             header=KERNEL_HEADER_V2,
             ensure_row_contiguous=True,
@@ -224,7 +230,8 @@ class MLXKernelCPUv2:
         # Execute kernel - memory_out is a new buffer that kernel writes to
         outputs = self._kernel(
             inputs=[self.memory, self.registers, pc_array, self.flags,
-                   max_cycles_array, memory_size_array],
+                   max_cycles_array, memory_size_array,
+                   self.vreg_lo, self.vreg_hi],
             output_shapes=[
                 (self.memory_size,),  # memory_out - FULL MEMORY OUTPUT
                 (32,),                 # registers_out
@@ -232,6 +239,8 @@ class MLXKernelCPUv2:
                 (4,),                  # flags_out
                 (1,),                  # cycles_out
                 (1,),                  # stop_reason_out
+                (32,),                 # vreg_lo_out
+                (32,),                 # vreg_hi_out
             ],
             output_dtypes=[
                 mx.uint8,   # memory_out
@@ -240,6 +249,8 @@ class MLXKernelCPUv2:
                 mx.float32, # flags_out
                 mx.uint32,  # cycles_out
                 mx.uint8,   # stop_reason_out
+                mx.int64,   # vreg_lo_out
+                mx.int64,   # vreg_hi_out
             ],
             grid=(1, 1, 1),
             threadgroup=(1, 1, 1),
@@ -250,13 +261,16 @@ class MLXKernelCPUv2:
         mx.eval(outputs)
 
         # Unpack outputs
-        memory_out, registers_out, pc_out, flags_out, cycles_out, stop_reason_out = outputs
+        (memory_out, registers_out, pc_out, flags_out, cycles_out, stop_reason_out,
+         vreg_lo_out, vreg_hi_out) = outputs
 
         # Update state - SWAP memory buffer!
         self.memory = memory_out  # memory_out becomes the new memory
         self.registers = registers_out
         self._pc = int(pc_out[0].item())
         self.flags = flags_out
+        self.vreg_lo = vreg_lo_out
+        self.vreg_hi = vreg_hi_out
         cycles = int(cycles_out[0].item())
         stop_reason = StopReasonV2(int(stop_reason_out[0].item()))
 

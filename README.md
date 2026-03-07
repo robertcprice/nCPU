@@ -3,14 +3,12 @@
 </p>
 
 <p align="center">
-  <strong>A CPU where every arithmetic operation is a trained neural network.</strong><br>
-  Addition uses Kogge-Stone carry-lookahead. Multiplication uses a learned byte-pair lookup table.<br>
-  Bitwise ops use neural truth tables. Shifts use attention-based bit routing. No hardcoded arithmetic.<br>
-  All state lives on GPU as tensors. All computation stays on-device.
+  <strong>An end-to-end AI computer. Every layer --- from arithmetic to OS to compiler --- is either a trained neural network or runs entirely on GPU.</strong><br>
+  The AI doesn't run <em>on</em> a computer. The AI <em>is</em> the computer.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-850%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-939%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/models-24%20trained-blue" alt="Models">
   <img src="https://img.shields.io/badge/accuracy-100%25%20integer-green" alt="Accuracy">
   <img src="https://img.shields.io/badge/verified-exhaustive-blueviolet" alt="Verified">
@@ -19,16 +17,19 @@
 
 ---
 
-## Why?
+## Three Big Ideas
 
-**Can neural networks perform exact integer arithmetic?**
+### 1. A Fully Differentiable CPU
 
-Prior systems (Neural GPUs, NALU, Neural Turing Machines) achieve *approximate* results. nCPU demonstrates they can be *exact* --- 100% accurate on 32-bit integers --- when you decompose operations into sub-problems with exhaustively trainable input spaces.
+Every ALU operation is a trained neural network --- addition, subtraction, multiplication, bitwise, shifts, division. Because the entire computation graph is differentiable, this opens the door to **optimizing programs via gradient descent**: backpropagating through execution to discover better algorithms, instruction schedules, or hardware configurations. No conventional CPU can do this.
 
-This yields several novel findings:
-- **Multiplication is 12x faster than addition** --- inverting the conventional CPU hierarchy
-- **Classical hardware algorithms transfer to neural architectures** --- Kogge-Stone CLA works in neural nets
-- **Memorization-by-decomposition** --- a general principle for exact neural computation
+### 2. A Complete AI Computer
+
+Not "AI running on a computer" --- an AI that **is** the computer, end to end. The neural ALU computes. The neural OS (neurOS) manages memory, schedules processes, compiles code. The GPU executes compiled C programs, boots a UNIX shell, runs a self-hosting compiler, serves HTTP, plays games, runs VMs. From the silicon to the inference layer, every component is either learned or GPU-native. This is what a complete AI computational apparatus looks like.
+
+### 3. GPU as Self-Sufficient Computer
+
+A single GPU chip running an entire computer --- no CPU required beyond initial bootstrap. The Metal compute shader executes ARM64 natively at 4M+ IPS, boots a multi-process UNIX OS with fork/pipe/wait, compiles C, loads and runs real Linux ELF binaries (BusyBox), and even runs a 2-instruction Turing-complete VM (MUXLEQ) that boots eForth. The GPU isn't an accelerator here. It's the whole machine.
 
 > See the [research paper](paper/ncpu_paper.md) and [wiki](../../wiki) for detailed analysis.
 
@@ -40,23 +41,30 @@ pip install -e ".[dev]"
 # Neural mode --- all arithmetic through trained neural networks
 python main.py --program programs/fibonacci.asm
 
-# GPU compute mode --- qemu-style Metal shader, ~4M IPS
+# GPU compute mode --- Metal shader, ~4M IPS
 python main.py --program programs/fibonacci.asm --compute
 
 # GPU UNIX OS --- 25-command shell with fork/pipe/wait on Metal
 python ncpu/os/gpu/demo.py --multiproc
+
+# Run real BusyBox on the GPU
+python demos/busybox_gpu_demo.py
 ```
 
-## Three Execution Tiers
+## The Stack
 
-| Tier | ALU Backend | IPS | What It Demonstrates |
-|------|-------------|-----|---------------------|
-| **Neural** | Trained `.pt` models | ~5K | Exact neural arithmetic (the research contribution) |
-| **Fast** | Native tensor ops | ~60K | GPU-resident state with `torch.add`/`torch.mul` |
-| **Compute** | Metal compute shaders | ~4M+ | qemu-style GPU execution, zero CPU-GPU sync |
+| Layer | Implementation | What It Proves |
+|-------|---------------|----------------|
+| **ALU** | 13 trained `.pt` models | Neural nets do exact integer arithmetic (exhaustively verified) |
+| **OS** | 11 neural models (neurOS) | Learned MMU, TLB, cache, scheduler, compiler --- zero fallbacks |
+| **Compute** | Metal shader (135+ ARM64 insns) | GPU executes arbitrary programs at ~4M IPS, no CPU needed |
+| **UNIX OS** | Compiled C on Metal | Fork/pipe/wait, 25-command shell, 28 syscalls |
+| **Compiler** | cc.c self-hosting on GPU | GPU hosts a complete software development toolchain |
+| **ELF Loader** | Real Linux binaries on GPU | BusyBox (264KB, 30+ applets) runs on Metal |
+| **MUXLEQ** | 2-instruction Turing-complete VM | If neural nets handle 2 instructions exactly, the principle is universal |
 
 ```python
-# Neural mode
+# Neural mode --- every operation is a trained model
 from ncpu.model import CPU
 cpu = CPU(neural_execution=True)
 cpu.load_program("MOV R0, 7\nMOV R1, 6\nMUL R2, R0, R1\nHALT")
@@ -70,11 +78,11 @@ kernel.load_program_from_asm("MOV R0, 7\nMOV R1, 6\nMUL R2, R0, R1\nHALT")
 result = kernel.execute()  # ~4M IPS on Metal
 ```
 
-## What's Inside
+## What's Running on the GPU
 
 ### GPU-Native Multi-Process UNIX OS
 
-A 25-command UNIX shell running as compiled C on Apple Silicon Metal GPU with full multi-process support:
+A 25-command UNIX shell running as compiled C on Apple Silicon Metal with full multi-process support:
 
 ```
 gpu:/home/user$ ls | grep .c | sort
@@ -93,9 +101,47 @@ Child exited, parent done
 - **28 syscalls**, freestanding C runtime with malloc/printf/fork/pipe/qsort/strtol
 - **Robustness**: fork bomb protection, SIGTERM/SIGKILL, orphan reparenting, per-process resource limits
 
-### neurOS: Neural Operating System
+### Self-Hosting C Compiler on Metal GPU
 
-Every OS component is a neural network --- 11 trained models, zero fallbacks:
+A ~3,500-line self-hosting C compiler (`cc.c`) that compiles C source into ARM64 machine code **entirely on the Metal GPU**, then executes the result on the same GPU:
+
+```
+Host GCC compiles cc.c -> compiler₀
+  GPU runs compiler₀, self-compiles cc.c -> compiler₁
+    GPU runs compiler₁, compiles test.c -> binary
+      GPU runs test binary -> correct result
+```
+
+Supports: structs (`.`/`->`), pointers, arrays, recursion, for/while/do-while, ternary, sizeof, compound assignment, bitwise ops, short-circuit `&&`/`||`, `enum`, `typedef`, `switch`/`case`/`default`, `#ifdef`/`#ifndef`/`#endif`, global initializers, function pointers, `union`. **40/40 test programs verified, 14 bugs fixed, self-compilation verified.**
+
+### BusyBox on Metal GPU
+
+Real BusyBox (Alpine Linux core utils, 264KB static binary) running on the Metal GPU shader via an ELF64 loader:
+
+- Cross-compiled with `aarch64-linux-musl-gcc -static`
+- ELF64 parser loads PT_LOAD segments, sets up Linux stack (argc/argv/envp/auxv)
+- 28+ Linux syscalls handled: exit, read, write, brk, mmap, ioctl, writev, uname, etc.
+- 30+ applets: echo, uname, basename, dirname, cat, ls, grep, printf
+- GPUFilesystem wired via syscalls --- `cat /etc/motd` reads from Python-side filesystem
+
+### 13+ Compiled C Applications on Metal
+
+| Category | Programs |
+|----------|----------|
+| **Crypto** | SHA-256, AES-128 ECB+CBC (6/6 FIPS pass), password vault |
+| **Games** | Tetris, Snake, roguelike dungeon crawler, text adventure |
+| **VMs** | Brainfuck interpreter, Forth REPL, CHIP-8 emulator |
+| **Networking** | HTTP/1.0 server (TCP via Python proxy) |
+| **Neural net** | MNIST classifier (Q8.8 fixed-point, 784->128->10) |
+| **Tools** | ed line editor, Game of Life, self-hosting compiler |
+
+### MUXLEQ: Turing-Complete in 2 Instructions
+
+A minimal proof of universality: SUBLEQ + MUX running on nCPU in three modes (neural, fast, compute). Loads `.dec` images, boots eForth. If neural nets exactly execute a 2-instruction OISC, the principle extends to any instruction set.
+
+### neurOS: Fully Neural Operating System
+
+Every OS component is a trained neural network --- 11 models, zero fallbacks:
 
 | Component | Accuracy | Component | Accuracy |
 |-----------|----------|-----------|----------|
@@ -105,55 +151,13 @@ Every OS component is a neural network --- 11 trained models, zero fallbacks:
 | Scheduler | 99.2% | Watchdog | 100% |
 | Prefetch | 97.8% | Block allocator | 98.4% |
 
-Self-compilation verified: nsl source -> neural compiler -> neural assembler -> neural CPU -> correct results (8/8).
-
-### Self-Hosting C Compiler on Metal GPU
-
-A ~3,500-line self-hosting C compiler (`cc.c`) that compiles C source into ARM64 machine code **entirely on the Metal GPU**, then executes the result on the same GPU. Four layers deep:
-
-```
-Host GCC compiles cc.c -> compiler₀
-  GPU runs compiler₀, self-compiles cc.c -> compiler₁
-    GPU runs compiler₁, compiles test.c -> binary
-      GPU runs test binary -> correct result
-```
-
-| Test Program | Binary | Cycles | Result |
-|-------------|--------|--------|--------|
-| arithmetic (42+13) | 100 B | 81K | 55 PASS |
-| fibonacci (iterative) | 280 B | 100K | 55 PASS |
-| factorial (recursive) | 208 B | 85K | 120 PASS |
-| bubble sort (5-elem) | 1,292 B | 133K | 12345 PASS |
-| enum, typedef, switch | 92-224 B | 82-94K | All PASS |
-| funcptr, union, #ifdef | 88-184 B | 77-84K | All PASS |
-| i++/++i/i--/--i ops | 140-152 B | 85K | All PASS |
-| large stack (>512B) | varies | varies | PASS |
-| ...and 24 more | 88-1,292 B | 77-133K | **All PASS** |
-
-Supports: structs (`.`/`->`), pointers, arrays, recursion, for/while/do-while, ternary, sizeof, compound assignment, bitwise ops, short-circuit `&&`/`||`, type casts, `enum`, `typedef`, `switch`/`case`/`default`, `#ifdef`/`#ifndef`/`#endif`, global initializers, function pointers, `union`, `#include`, `__syscall()` intrinsics. **40/40 test programs verified, 14 bugs fixed, self-compilation verified.**
-
-```bash
-python ncpu/os/gpu/programs/tools/cc_demo.py
-```
-
-### Compiled C on GPU
-
-Full pipeline: C source -> `aarch64-elf-gcc -O2` -> raw binary -> Metal GPU kernel -> Python I/O.
-
-| Demo | Description |
-|------|-------------|
-| **Crypto** | SHA-256, AES-128 ECB+CBC (6/6 FIPS pass), password vault |
-| **Games** | Tetris, Snake, roguelike dungeon crawler, text adventure |
-| **VMs** | Brainfuck interpreter, Forth REPL, CHIP-8 emulator |
-| **Networking** | HTTP/1.0 server (TCP via Python proxy) |
-| **Neural net** | MNIST classifier (Q8.8 fixed-point, 784->128->10) |
-| **Tools** | ed line editor, Game of Life, interactive shell |
+Self-compilation verified: nsl source -> neural compiler -> neural assembler -> neural CPU -> correct results.
 
 ### Timing Side-Channel Immunity
 
 GPU execution produces **zero cycle-count variance** (sigma=0.0 across 270 runs). Same code on native Apple Silicon shows 47-73% timing variance. AES-128 T-table attacks are structurally impossible --- no data cache, no cache lines, no cache-miss penalty.
 
-## Neural Arithmetic at a Glance
+## Neural Arithmetic
 
 | Instruction | Neural Model | Strategy | Latency |
 |-------------|-------------|----------|---------|
@@ -163,15 +167,38 @@ GPU execution produces **zero cycle-count variance** (sigma=0.0 across 270 runs)
 | SHL/SHR | lsl.pt / lsr.pt | Attention-based bit routing | 434 us |
 | DIV | arithmetic.pt | Restoring division (neural subtraction) | varies |
 
-All sub-components **exhaustively verified** --- every possible input tested, not a sample. This is a mathematical proof, not a statistical argument.
+**Multiplication is 12x faster than addition** --- inverting the conventional CPU hierarchy. Addition requires a sequential carry chain (Kogge-Stone CLA, 8 neural passes). Multiplication decomposes into parallel byte-pair lookups (one pass). Classical hardware algorithms transfer to neural architectures, but the performance hierarchy flips.
+
+All sub-components **exhaustively verified** --- every possible input tested, not sampled.
+
+## Project Structure
+
+```
+ncpu/
+  os/
+    neuros/     # Neural OS: 17 modules (MMU, TLB, cache, scheduler, compiler, ...)
+    gpu/        # GPU UNIX OS: runner, filesystem, shell, ELF loader
+      src/      # C source (shell, libc, syscalls, linker script)
+      programs/ # Compiled C apps (crypto, games, vms, net, nn, tools, graphics)
+  neural/       # NeuralCPU: 12K-line CPU with neural ALU bridge
+  model/        # Model-based CPU (neural_ops, assembler, architectures)
+  tensor/       # Tensor-based ARM64 emulator
+kernels/mlx/    # Metal compute kernels (ARM64 V2 + nCPU ISA + MUXLEQ)
+models/         # 24 trained .pt models (alu, shifts, math, os, decode)
+programs/       # 62 assembly programs
+tests/          # 939 tests across 17 files
+benchmarks/     # Neural, neurOS, compute, ARM64, side-channel, multi-process
+demos/          # Standalone demos (BusyBox, DOOM raycaster, pipeline, meta-compilation)
+paper/          # Research paper
+```
 
 ## Tests
 
 ```bash
-pytest tests/ -v   # 850 tests passing
+pytest tests/ -v   # 939 tests passing
 ```
 
-850 tests across 15 files: exhaustive formal verification, neural ops, neurOS (258), compute mode (138), multi-process (41), and more.
+939 tests across 17 files: exhaustive formal verification, neural ops, neurOS (258), compute mode (138), multi-process (41), MUXLEQ (32), BusyBox (23), and more.
 
 ## Documentation
 

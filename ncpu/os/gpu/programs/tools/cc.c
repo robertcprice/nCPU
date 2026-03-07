@@ -779,9 +779,7 @@ static void lex(void) {
     }
 
     /* EOF token */
-    printf("[cc] lex: T_EOF=%d, n_tokens=%d\n", T_EOF, n_tokens);
     tokens[n_tokens].type = T_EOF;
-    printf("[cc] lex: after set, tokens[%d].type = %ld\n", n_tokens, tokens[n_tokens].type);
     tokens[n_tokens].line = line;
     tokens[n_tokens].name[0] = '\0';
 }
@@ -1980,8 +1978,8 @@ static int parse_postfix(void) {
             emit_add(r, r, idx);
             free_reg(idx);
 
-            if (types[elem_type].kind == TY_STRUCT) {
-                /* For struct elements, keep address for . or -> access */
+            if (types[elem_type].kind == TY_STRUCT || types[elem_type].kind == TY_ARRAY) {
+                /* For struct/array elements, keep address for chained access */
                 expr_type = elem_type;
             } else {
                 /* Save address for potential assignment (avoids reparse side effects) */
@@ -2017,12 +2015,18 @@ static int parse_postfix(void) {
             for (int i = 0; i < structs[sid].n_fields; i++) {
                 if (!strcmp(structs[sid].fields[i].name, fname)) {
                     int off = structs[sid].fields[i].offset;
+                    int ft = structs[sid].fields[i].type;
                     if (off > 0) emit_add_imm(r, r, off);
-                    int rd = alloc_reg();
-                    emit_load_indirect(rd, r, structs[sid].fields[i].type);
-                    free_reg(r);
-                    r = rd;
-                    expr_type = structs[sid].fields[i].type;
+                    if (types[ft].kind == TY_STRUCT || types[ft].kind == TY_ARRAY) {
+                        /* Struct/array field: keep address for chained access */
+                        expr_type = ft;
+                    } else {
+                        int rd = alloc_reg();
+                        emit_load_indirect(rd, r, ft);
+                        free_reg(r);
+                        r = rd;
+                        expr_type = ft;
+                    }
                     found = 1;
                     break;
                 }
@@ -2052,12 +2056,18 @@ static int parse_postfix(void) {
             for (int i = 0; i < structs[sid].n_fields; i++) {
                 if (!strcmp(structs[sid].fields[i].name, fname)) {
                     int off = structs[sid].fields[i].offset;
+                    int ft = structs[sid].fields[i].type;
                     if (off > 0) emit_add_imm(r, r, off);
-                    int rd = alloc_reg();
-                    emit_load_indirect(rd, r, structs[sid].fields[i].type);
-                    free_reg(r);
-                    r = rd;
-                    expr_type = structs[sid].fields[i].type;
+                    if (types[ft].kind == TY_STRUCT || types[ft].kind == TY_ARRAY) {
+                        /* Struct/array field: keep address for chained access */
+                        expr_type = ft;
+                    } else {
+                        int rd = alloc_reg();
+                        emit_load_indirect(rd, r, ft);
+                        free_reg(r);
+                        r = rd;
+                        expr_type = ft;
+                    }
                     found = 1;
                     break;
                 }
@@ -2432,122 +2442,101 @@ static int parse_assign(void) {
             struct Symbol *sym = find_symbol(name);
             if (!sym) { error("undefined variable"); tok_pos = old_pos; return alloc_reg(); }
 
-            /* Check for array subscript */
-            if (match(T_LBRACKET)) {
-                int idx_r = parse_assign();
-                expect(T_RBRACKET);
-                tok_pos = old_pos;
-
-                /* Get rvalue */
-                int rval = parse_assign();
-
-                /* Calculate address */
+            /* Check for compound lvalue: arr[idx], var.field, var->field,
+             * and any chain thereof (e.g. arr[i].field[j].name[k] = val) */
+            if (check(T_LBRACKET) || check(T_DOT) || check(T_ARROW)) {
                 int addr = alloc_reg();
+                int cur_type = sym->type;
+
+                /* Always load the base address of the variable.
+                 * The loop below handles all dereferences. */
                 if (sym->kind == SYM_LOCAL || sym->kind == SYM_PARAM) {
-                    emit_li(addr, (long)sym->offset);
-                    emit_add(addr, FP, addr);
+                    int off = sym->offset;
+                    if (off < 0) {
+                        emit_li(addr, (long)off);
+                        emit_add(addr, FP, addr);
+                    } else {
+                        emit_add_imm(addr, FP, off);
+                    }
                 } else {
                     emit_load_global_addr(addr, sym->offset);
                 }
 
-                int elem_type = types[sym->type].ptr_to;
-                int elem_size = type_size(elem_type);
-                if (elem_size > 1) {
-                    int tmp = alloc_reg();
-                    emit_li(tmp, elem_size);
-                    emit_mul(idx_r, idx_r, tmp);
-                    free_reg(tmp);
-                }
-                emit_add(addr, addr, idx_r);
-                free_reg(idx_r);
+                /* Walk the access chain: [idx], .field, ->field */
+                while (1) {
+                    if (match(T_LBRACKET)) {
+                        int idx_r = parse_assign();
+                        expect(T_RBRACKET);
+                        int elem = types[cur_type].ptr_to;
+                        int esz = type_size(elem);
+                        if (esz > 1) {
+                            int tmp = alloc_reg();
+                            emit_li(tmp, esz);
+                            emit_mul(idx_r, idx_r, tmp);
+                            free_reg(tmp);
+                        }
+                        emit_add(addr, addr, idx_r);
+                        free_reg(idx_r);
+                        cur_type = elem;
+                        continue;
+                    }
+                    {
+                        int is_d = match(T_DOT);
+                        int is_a = !is_d && match(T_ARROW);
+                        if (is_d || is_a) {
+                            if (!check(T_IDENT)) { error("expected field name"); tok_pos = old_pos; free_reg(addr); return alloc_reg(); }
+                            char fn2[32];
+                            strncpy(fn2, peek()->name, 31);
+                            fn2[31] = '\0';
+                            advance();
 
-                emit_store_indirect(rval, addr, elem_type);
+                            if (is_a) {
+                                int tmp2 = alloc_reg();
+                                emit_load_indirect(tmp2, addr, cur_type);
+                                free_reg(addr);
+                                addr = tmp2;
+                                if (types[cur_type].kind == TY_PTR)
+                                    cur_type = types[cur_type].ptr_to;
+                            }
+
+                            if (types[cur_type].kind != TY_STRUCT) {
+                                error("not a struct");
+                                tok_pos = old_pos;
+                                free_reg(addr);
+                                return alloc_reg();
+                            }
+                            int sid = types[cur_type].struct_id;
+                            int foff = -1;
+                            int ftyp = ty_int;
+                            for (int i = 0; i < structs[sid].n_fields; i++) {
+                                if (!strcmp(structs[sid].fields[i].name, fn2)) {
+                                    foff = structs[sid].fields[i].offset;
+                                    ftyp = structs[sid].fields[i].type;
+                                    break;
+                                }
+                            }
+                            if (foff < 0) {
+                                error("unknown field");
+                                tok_pos = old_pos;
+                                free_reg(addr);
+                                return alloc_reg();
+                            }
+                            if (foff > 0)
+                                emit_add_imm(addr, addr, foff);
+                            cur_type = ftyp;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                /* Parse rvalue */
+                tok_pos = old_pos;
+                int rval = parse_assign();
+
+                emit_store_indirect(rval, addr, cur_type);
                 free_reg(addr);
                 return rval;
-            }
-
-            /* Check for struct member assignment: p.x = val or pp->field = val */
-            {
-                int is_dot = match(T_DOT);
-                int is_arrow = !is_dot && match(T_ARROW);
-                if (is_dot || is_arrow) {
-                    if (!check(T_IDENT)) { error("expected field name"); tok_pos = old_pos; return alloc_reg(); }
-                    char fname[32];
-                    strncpy(fname, peek()->name, 31);
-                    fname[31] = '\0';
-                    advance();
-
-                    /* Compute base address of struct */
-                    int addr = alloc_reg();
-                    if (is_arrow) {
-                        /* Arrow: load pointer value, then use as address */
-                        if (sym->kind == SYM_LOCAL || sym->kind == SYM_PARAM) {
-                            emit_load_local(addr, sym->offset, sym->type);
-                        } else {
-                            int ta = alloc_reg();
-                            emit_load_global_addr(ta, sym->offset);
-                            emit_load_indirect(addr, ta, sym->type);
-                            free_reg(ta);
-                        }
-                    } else {
-                        /* Dot: load struct address (FP + offset) */
-                        if (sym->kind == SYM_LOCAL || sym->kind == SYM_PARAM) {
-                            int off = sym->offset;
-                            if (off < 0) {
-                                emit_li(addr, (long)off);
-                                emit_add(addr, FP, addr);
-                            } else {
-                                emit_add_imm(addr, FP, off);
-                            }
-                        } else {
-                            emit_load_global_addr(addr, sym->offset);
-                        }
-                    }
-
-                    /* Find struct type */
-                    int struct_type = sym->type;
-                    if (is_arrow && types[struct_type].kind == TY_PTR) {
-                        struct_type = types[struct_type].ptr_to;
-                    }
-                    if (types[struct_type].kind != TY_STRUCT) {
-                        error("not a struct");
-                        tok_pos = old_pos;
-                        free_reg(addr);
-                        return alloc_reg();
-                    }
-                    int sid = types[struct_type].struct_id;
-
-                    /* Find field */
-                    int field_offset = -1;
-                    int field_type = ty_int;
-                    for (int i = 0; i < structs[sid].n_fields; i++) {
-                        if (!strcmp(structs[sid].fields[i].name, fname)) {
-                            field_offset = structs[sid].fields[i].offset;
-                            field_type = structs[sid].fields[i].type;
-                            break;
-                        }
-                    }
-                    if (field_offset < 0) {
-                        error("unknown field");
-                        tok_pos = old_pos;
-                        free_reg(addr);
-                        return alloc_reg();
-                    }
-
-                    /* Add field offset */
-                    if (field_offset > 0) {
-                        emit_add_imm(addr, addr, field_offset);
-                    }
-
-                    /* Parse rvalue */
-                    tok_pos = old_pos;
-                    int rval = parse_assign();
-
-                    /* Store to struct member address */
-                    emit_store_indirect(rval, addr, field_type);
-                    free_reg(addr);
-                    return rval;
-                }
             }
 
             /* Check for pointer deref on left side: *p = ... handled below */
@@ -3365,7 +3354,6 @@ static void compile(void) {
     tok_pos = 0;
 
     printf("[cc] Lexed %d tokens\n", n_tokens);
-    printf("[cc] EOF check: tokens[%d].type = %ld\n", n_tokens, tokens[n_tokens].type);
 
     /* Emit startup code first (BL main will be a forward fixup) */
     int main_label = new_label();
@@ -3382,8 +3370,6 @@ static void compile(void) {
     emit_svc();
 
     /* Parse all top-level declarations */
-    printf("[cc] Pre-parse: tokens[%d].type = %ld, check(EOF)=%d\n",
-           n_tokens, tokens[n_tokens].type, check(T_EOF));
     while (!check(T_EOF) && !had_error) {
         parse_global_decl();
     }

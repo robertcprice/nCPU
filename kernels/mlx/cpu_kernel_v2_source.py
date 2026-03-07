@@ -282,10 +282,10 @@ KERNEL_SOURCE_V2 = """
     float flag_v = flags_in[3];
 
     // SIMD/FP registers V0-V31 (128-bit each, stored as hi:lo int64 pairs)
-    // Needed for musl va_list save/restore (no FP arithmetic, just load/store)
+    // Persisted across kernel invocations for musl va_list save/restore
     int64_t vreg_lo[32];
     int64_t vreg_hi[32];
-    for (int i = 0; i < 32; i++) { vreg_lo[i] = 0; vreg_hi[i] = 0; }
+    for (int i = 0; i < 32; i++) { vreg_lo[i] = vreg_lo_in[i]; vreg_hi[i] = vreg_hi_in[i]; }
 
     // ════════════════════════════════════════════════════════════════════════
     // MAIN EXECUTION LOOP - Full ARM64 ISA on GPU
@@ -2550,7 +2550,13 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        default: { // Unknown instruction - NOP
+        default: {
+            // Track unknown instructions at memory addresses 0-19
+            uint32_t unk_count = load32(memory_out, 0);
+            unk_count++;
+            store32(memory_out, 0, int64_t(unk_count));
+            store64(memory_out, 8, int64_t(pc));   // Last unknown PC
+            store32(memory_out, 16, int64_t(inst)); // Last unknown inst
             break;
         }
 
@@ -2569,6 +2575,8 @@ KERNEL_SOURCE_V2 = """
     // ════════════════════════════════════════════════════════════════════════
     for (int i = 0; i < 32; i++) {
         registers_out[i] = regs[i];
+        vreg_lo_out[i] = vreg_lo[i];
+        vreg_hi_out[i] = vreg_hi[i];
     }
     pc_out[0] = pc;
     flags_out[0] = flag_n;

@@ -673,6 +673,100 @@ int main(void) {
 """,
         "expected": 189,
     },
+
+    "struct_array_field": {
+        "source": """\
+struct Item {
+    long type;
+    long val;
+    long line;
+};
+
+int main(void) {
+    struct Item items[4];
+    int i;
+    for (i = 0; i < 4; i++) {
+        items[i].type = i * 10;
+        items[i].val = i * 20;
+        items[i].line = i * 30;
+    }
+    /* items[2].type=20, items[2].val=40, items[2].line=60 */
+    int r = items[2].type + items[2].line;
+    return r;  /* 20 + 60 = 80 */
+}
+""",
+        "expected": 80,
+    },
+
+    "struct_field_subscript": {
+        "source": """\
+struct Buf {
+    char data[16];
+    int len;
+};
+
+int main(void) {
+    struct Buf b;
+    b.data[0] = 72;
+    b.data[1] = 101;
+    b.data[2] = 0;
+    b.len = 2;
+    return b.data[0] + b.len;  /* 72 + 2 = 74 */
+}
+""",
+        "expected": 74,
+    },
+
+    "arrow_field_subscript": {
+        "source": """\
+struct Sym {
+    char name[64];
+    int kind;
+};
+
+void set_name(struct Sym *s) {
+    s->name[0] = 65;  /* 'A' */
+    s->name[1] = 66;  /* 'B' */
+    s->name[2] = 0;
+    s->kind = 42;
+}
+
+int main(void) {
+    struct Sym sym;
+    set_name(&sym);
+    return sym.name[0] + sym.kind;  /* 65 + 42 = 107 */
+}
+""",
+        "expected": 107,
+    },
+
+    "deep_nested_lvalue": {
+        "source": """\
+struct Entry {
+    char name[8];
+    int val;
+};
+
+struct Table {
+    struct Entry entries[4];
+    int count;
+};
+
+int main(void) {
+    struct Table t;
+    t.count = 0;
+    t.entries[0].name[0] = 72;
+    t.entries[0].name[1] = 0;
+    t.entries[0].val = 10;
+    t.entries[1].name[0] = 87;
+    t.entries[1].val = 20;
+    t.count = 2;
+    return t.entries[0].name[0] + t.entries[1].val + t.count;
+    /* 72 + 20 + 2 = 94 */
+}
+""",
+        "expected": 94,
+    },
 }
 
 
