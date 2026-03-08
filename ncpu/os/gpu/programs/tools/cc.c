@@ -1766,6 +1766,71 @@ static int add_string(const char *s, int len) {
 }
 
 /* ======================================================================== */
+/* COMPILE-TIME CONSTANT EXPRESSION EVALUATOR                               */
+/* ======================================================================== */
+
+/*
+ * Evaluate a constant integer expression from the token stream.
+ * Supports: integer literals, +, -, *, /, %, <<, >>, &, |, ^, ~, (),
+ *           unary -, sizeof, and identifier lookup for enum constants.
+ * Used for array dimensions, #if expressions, enum values, etc.
+ */
+static long const_primary(void) {
+    if (match(T_LPAREN)) {
+        long v = 0;
+        /* Recursive: evaluate inner expression */
+        long left = const_primary();
+        /* Simple: handle binary ops inside parens */
+        while (1) {
+            if (match(T_PLUS)) { left += const_primary(); }
+            else if (match(T_MINUS)) { left -= const_primary(); }
+            else if (match(T_STAR)) { left *= const_primary(); }
+            else if (match(T_SLASH)) { long r = const_primary(); if (r) left /= r; }
+            else if (match(T_PERCENT)) { long r = const_primary(); if (r) left %= r; }
+            else if (match(T_SHL)) { left <<= const_primary(); }
+            else if (match(T_SHR)) { left >>= const_primary(); }
+            else if (match(T_AMP)) { left &= const_primary(); }
+            else if (match(T_PIPE)) { left |= const_primary(); }
+            else if (match(T_CARET)) { left ^= const_primary(); }
+            else break;
+        }
+        expect(T_RPAREN);
+        return left;
+    }
+    if (match(T_MINUS)) { return -const_primary(); }
+    if (match(T_TILDE)) { return ~const_primary(); }
+    if (check(T_NUM)) { long v = peek()->val; advance(); return v; }
+    if (check(T_CHAR_LIT)) { long v = peek()->val; advance(); return v; }
+    if (check(T_IDENT)) {
+        /* Check for enum constants or sizeof */
+        struct Symbol *sym = find_symbol(peek()->name);
+        if (sym && sym->kind == SYM_ENUM) { advance(); return sym->offset; }
+        advance();
+        return 0;
+    }
+    /* Unknown token — return 0 */
+    return 0;
+}
+
+static long parse_const_expr(void) {
+    long left = const_primary();
+    while (1) {
+        if (match(T_PLUS)) { left += const_primary(); }
+        else if (match(T_MINUS)) { left -= const_primary(); }
+        else if (match(T_STAR)) { left *= const_primary(); }
+        else if (match(T_SLASH)) { long r = const_primary(); if (r) left /= r; }
+        else if (match(T_PERCENT)) { long r = const_primary(); if (r) left %= r; }
+        else if (match(T_SHL)) { left <<= const_primary(); }
+        else if (match(T_SHR)) { left >>= const_primary(); }
+        else if (match(T_AMP)) { left &= const_primary(); }
+        else if (match(T_PIPE)) { left |= const_primary(); }
+        else if (match(T_CARET)) { left ^= const_primary(); }
+        else break;
+    }
+    return left;
+}
+
+/* ======================================================================== */
 /* FORWARD DECLARATIONS FOR RECURSIVE DESCENT                               */
 /* ======================================================================== */
 
@@ -3385,7 +3450,7 @@ static void parse_stmt(void) {
                 int dims[8]; int ndims = 0;
                 while (match(T_LBRACKET) && ndims < 8) {
                     dims[ndims] = 0;
-                    if (check(T_NUM)) { dims[ndims] = (int)peek()->val; advance(); }
+                    if (!check(T_RBRACKET)) { dims[ndims] = (int)parse_const_expr(); }
                     expect(T_RBRACKET);
                     ndims++;
                 }
@@ -3686,7 +3751,7 @@ static void parse_global_decl(void) {
         int dims[8]; int ndims = 0;
         while (match(T_LBRACKET) && ndims < 8) {
             dims[ndims] = 0;
-            if (check(T_NUM)) { dims[ndims] = (int)peek()->val; advance(); }
+            if (!check(T_RBRACKET)) { dims[ndims] = (int)parse_const_expr(); }
             expect(T_RBRACKET);
             ndims++;
         }

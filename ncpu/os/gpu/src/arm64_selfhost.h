@@ -465,8 +465,9 @@ void putchar(char c) {
 }
 
 void puts(const char *s) {
-    print(s);
-    putchar('\n');
+    int len = strlen(s);
+    write(1, s, len);
+    write(1, "\n", 1);
 }
 
 void print_int(long n) {
@@ -514,6 +515,10 @@ static void print_unsigned(unsigned long n) {
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 int printf(const char *fmt, long a0, long a1, long a2, long a3, long a4) {
+    /* Buffered printf — accumulates output in buf[], flushes once at end.
+       This reduces SVC syscalls from O(strlen) to O(1). */
+    char buf[1024];
+    int bp = 0;
     long args[6];
     args[0] = a0;
     args[1] = a1;
@@ -526,6 +531,9 @@ int printf(const char *fmt, long a0, long a1, long a2, long a3, long a4) {
     int fi = 0;
 
     while (fmt[fi]) {
+        /* Flush if near full */
+        if (bp > 900) { write(1, buf, bp); bp = 0; }
+
         if (fmt[fi] == '%' && fmt[fi + 1]) {
             fi++;
 
@@ -541,108 +549,80 @@ int printf(const char *fmt, long a0, long a1, long a2, long a3, long a4) {
             /* Skip 'l' modifier */
             if (fmt[fi] == 'l') fi++;
             if (fmt[fi] == 'd') {
-                if (width > 0 && zero_pad) {
-                    /* Zero-padded decimal */
-                    char tmp[21];
-                    int ti = 0;
-                    long v = args[ai];
-                    int is_neg = 0;
-                    if (v < 0) { is_neg = 1; v = -v; }
-                    if (v == 0) tmp[ti++] = '0';
-                    else { while (v > 0) { tmp[ti++] = '0' + (int)(v % 10); v = v / 10; } }
-                    char out[21];
-                    int oi = 0;
-                    if (is_neg) out[oi++] = '-';
-                    int pad = width - ti - is_neg;
-                    while (pad > 0) { out[oi++] = '0'; pad--; }
-                    int k;
-                    for (k = ti - 1; k >= 0; k--) out[oi++] = tmp[k];
-                    write(1, out, oi);
-                } else {
-                    print_int(args[ai]);
-                }
-                ai++;
+                long v = args[ai]; ai++;
+                char tmp[21];
+                int ti = 0;
+                int is_neg = 0;
+                if (v < 0) { is_neg = 1; v = -v; }
+                if (v == 0) tmp[ti++] = '0';
+                else { while (v > 0) { tmp[ti++] = '0' + (int)(v % 10); v = v / 10; } }
+                if (is_neg) buf[bp++] = '-';
+                int pad = width - ti - is_neg;
+                while (pad > 0 && zero_pad) { buf[bp++] = '0'; pad--; }
+                int k;
+                for (k = ti - 1; k >= 0; k--) buf[bp++] = tmp[k];
             } else if (fmt[fi] == 'u') {
-                print_unsigned((unsigned long)args[ai]);
-                ai++;
+                unsigned long v = (unsigned long)args[ai]; ai++;
+                char tmp[21];
+                int ti = 0;
+                if (v == 0) tmp[ti++] = '0';
+                else { while (v > 0) { tmp[ti++] = '0' + (int)(v % 10); v = v / 10; } }
+                int k;
+                for (k = ti - 1; k >= 0; k--) buf[bp++] = tmp[k];
             } else if (fmt[fi] == 's') {
-                char *s = (char *)args[ai];
-                if (s) print(s);
-                ai++;
+                char *s = (char *)args[ai]; ai++;
+                if (s) { while (*s) { buf[bp++] = *s++; if (bp > 900) { write(1, buf, bp); bp = 0; } } }
             } else if (fmt[fi] == 'x') {
-                /* Hex output */
-                long v = args[ai];
-                ai++;
-                char hex[17];
-                int hi = 0;
-                if (v == 0) { hex[hi++] = '0'; }
+                unsigned long uv = (unsigned long)args[ai]; ai++;
+                char tmp[17];
+                int ti = 0;
+                if (uv == 0) tmp[ti++] = '0';
                 else {
-                    char tmp[17];
-                    int ti = 0;
-                    unsigned long uv = (unsigned long)v;
                     while (uv > 0) {
                         int d = (int)(uv & 15);
                         if (d < 10) tmp[ti++] = '0' + d;
                         else tmp[ti++] = 'a' + d - 10;
                         uv = uv >> 4;
                     }
-                    /* Pad with zeros if width specified */
-                    if (width > 0 && zero_pad) {
-                        while (ti + hi < width) { hex[hi++] = '0'; width--; }
-                    }
-                    while (ti > 0) hex[hi++] = tmp[--ti];
                 }
-                /* Pad remaining if needed */
-                if (width > 0 && zero_pad && hi < width) {
-                    /* Shift digits right, pad left with '0' */
-                    char padded[17];
-                    int pi = 0;
-                    while (pi + hi < width) { padded[pi++] = '0'; }
-                    int k;
-                    for (k = 0; k < hi; k++) padded[pi++] = hex[k];
-                    write(1, padded, pi);
-                } else {
-                    write(1, hex, hi);
-                }
+                int pad = width - ti;
+                while (pad > 0 && zero_pad) { buf[bp++] = '0'; pad--; }
+                int k;
+                for (k = ti - 1; k >= 0; k--) buf[bp++] = tmp[k];
             } else if (fmt[fi] == 'p') {
-                /* Pointer: 0x... */
-                putchar('0');
-                putchar('x');
-                unsigned long v = (unsigned long)args[ai];
-                ai++;
-                char hex[17];
-                int hi = 0;
-                if (v == 0) { hex[hi++] = '0'; }
+                buf[bp++] = '0';
+                buf[bp++] = 'x';
+                unsigned long v = (unsigned long)args[ai]; ai++;
+                char tmp[17];
+                int ti = 0;
+                if (v == 0) tmp[ti++] = '0';
                 else {
-                    char tmp[17];
-                    int ti = 0;
                     while (v > 0) {
                         int d = (int)(v & 15);
                         if (d < 10) tmp[ti++] = '0' + d;
                         else tmp[ti++] = 'a' + d - 10;
                         v = v >> 4;
                     }
-                    while (ti > 0) hex[hi++] = tmp[--ti];
                 }
-                write(1, hex, hi);
+                int k;
+                for (k = ti - 1; k >= 0; k--) buf[bp++] = tmp[k];
             } else if (fmt[fi] == 'c') {
-                char ch = (char)args[ai];
-                ai++;
-                putchar(ch);
+                buf[bp++] = (char)args[ai]; ai++;
             } else if (fmt[fi] == '%') {
-                putchar('%');
+                buf[bp++] = '%';
             } else {
-                /* Unknown format: print raw */
-                putchar('%');
-                putchar(fmt[fi]);
+                buf[bp++] = '%';
+                buf[bp++] = fmt[fi];
             }
             fi++;
         } else {
-            putchar(fmt[fi]);
+            buf[bp++] = fmt[fi];
             fi++;
         }
         total++;
     }
+    /* Final flush */
+    if (bp > 0) write(1, buf, bp);
     return total;
 }
 

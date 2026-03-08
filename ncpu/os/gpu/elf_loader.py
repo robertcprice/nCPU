@@ -441,6 +441,9 @@ def load_and_run_elf(
         print(f"IPS: {results['ips']:,.0f}")
         print(f"Stop: {results['stop_reason']}")
 
+    # Attach CPU object for post-execution inspection (GPU superpowers)
+    results["_cpu"] = cpu
+
     return results
 
 
