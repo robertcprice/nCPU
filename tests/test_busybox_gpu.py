@@ -2945,6 +2945,32 @@ class TestExtendedBusyBoxCommands:
         _, results, _ = self._run(['false'])
         assert results['total_cycles'] < 5000
 
+    # --- find ---
+    def test_find_name(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['find', '/etc', '-name', 'hostname'], fs)
+        assert 'hostname' in output
+
+    # --- tee ---
+    def test_tee_writes_file(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['tee', '/tmp/tee_out'], fs,
+                                  stdin_data=b'tee test data\n')
+        assert 'tee test data' in output
+        assert '/tmp/tee_out' in fs.files
+
+    # --- env ---
+    def test_env_output(self):
+        output, _, _ = self._run(['env'])
+        assert 'PATH=' in output
+
+    # --- printf ---
+    def test_printf_format(self):
+        output, _, _ = self._run(['printf', '%d %s\\n', '42', 'test'])
+        assert '42 test' in output
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # UTIMENSAT FIX TESTS

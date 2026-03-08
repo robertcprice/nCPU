@@ -12,7 +12,7 @@ We present nCPU, an end-to-end AI computer in which every layer of the computati
 
 The neural ALU achieves 100% accuracy on 32-bit integer arithmetic via memorization-by-decomposition: operations are broken into sub-problems with exhaustively trainable input spaces. This yields a counterintuitive finding: neural multiplication (21 us) is 12x faster than neural addition (248 us), inverting the conventional performance hierarchy. The neural OS (neurOS) implements 11 components --- MMU, TLB, cache, scheduler, assembler, compiler, watchdog --- as trained models with 93.7-100% accuracy and zero fallback paths. The GPU compute layer executes 135+ ARM64 instructions at ~4M IPS via Metal shaders, hosts a 25-command UNIX shell with fork/wait/pipe/dup2 multi-process support, runs a ~3,500-line self-hosting C compiler (40/40 test programs, self-compilation verified), loads real BusyBox (321KB, 30+ applets) and boots Alpine Linux v3.20 on the GPU with GPU-side syscall buffering for performance, and proves Turing completeness via a 2-instruction MUXLEQ VM running eForth with neural arithmetic.
 
-The system comprises 24 trained models, 1,180 tests across 17 files with exhaustive formal verification, and demonstrates that a single GPU can host a complete, self-contained computational stack from silicon to shell.
+The system comprises 24 trained models, 1,184 tests across 17 files with exhaustive formal verification, and demonstrates that a single GPU can host a complete, self-contained computational stack from silicon to shell.
 
 ## 1. Introduction
 
@@ -1331,13 +1331,13 @@ The ELF loader's syscall handler implements 50+ Linux syscalls sufficient for Bu
 
 ### 12.4 Verified Applets
 
-The following 28 BusyBox applets produce correct output on the Metal GPU:
+The following 30 BusyBox applets produce correct output on the Metal GPU:
 
 | Category | Applets | Status |
 |----------|---------|--------|
-| Core I/O | echo, cat, printf | PASS |
+| Core I/O | echo, cat, printf, tee | PASS |
 | System | uname, hostname, id, whoami, date, env | PASS |
-| File Info | ls, stat, basename, dirname, wc | PASS |
+| File Info | ls, stat, basename, dirname, wc, find | PASS |
 | File Ops | cp, touch, mkdir, rmdir, rm, mv, chmod, sleep | PASS |
 | Text Processing | head, tail, sort, uniq, cut, grep -F, expr, tr | PASS |
 | Utility | true, false | PASS |
@@ -1425,7 +1425,7 @@ The automated demo suite runs 35+ commands across 9 categories (System Identity,
 
 ### 12.7 Significance
 
-Running a real Alpine Linux distribution on a Metal GPU shader demonstrates that the ARM64 kernel is a standards-compliant execution environment, not a toy emulator. With 29 verified BusyBox commands spanning file I/O, text processing, system queries, and file management, plus a comprehensive POSIX-like shell with scripting, variables, and 11 GPU superpower commands, the system goes beyond what normal Linux provides. Multi-command pipelines like `cat /etc/passwd | grep -F root | cut -d: -f1` execute across three separate GPU invocations with stdin injection, demonstrating that the system supports the compositional tool philosophy fundamental to UNIX. The shell scripting engine supports `for`/`while`/`if`/`case` control flow, variable expansion, command substitution, and glob matching --- sufficient to execute real `.sh` scripts. GPU superpowers exploit the deterministic GPU execution model for capabilities fundamentally impossible on CPU-based operating systems: post-execution register forensics (gpu-xray), deterministic replay with zero-variance proof (gpu-replay), cross-execution state differentials (gpu-diff), hardware-level state freezing (gpu-freeze/thaw), and zero-overhead syscall tracing (gpu-strace). These are not convenience wrappers --- they are structurally impossible on CPUs because the OS destroys register state after process exit, non-deterministic microarchitectural features (branch prediction, caching, scheduling) prevent exact replay, and instrumentation always perturbs the observed execution. The ELF loader, 50+ Linux syscalls, comprehensive rootfs (109 files, 61 directories), and ARM64 instruction coverage are sufficient to bootstrap real software compiled with a real C library (musl). The four-session BIC debugging journey illustrates the depth of ISA correctness required --- a single missing bit-invert in one instruction handler cascades through the entire C runtime memory allocator.
+Running a real Alpine Linux distribution on a Metal GPU shader demonstrates that the ARM64 kernel is a standards-compliant execution environment, not a toy emulator. With 30 verified BusyBox commands spanning file I/O, text processing, system queries, and file management, plus a comprehensive POSIX-like shell with scripting, variables, and 11 GPU superpower commands, the system goes beyond what normal Linux provides. Multi-command pipelines like `cat /etc/passwd | grep -F root | cut -d: -f1` execute across three separate GPU invocations with stdin injection, demonstrating that the system supports the compositional tool philosophy fundamental to UNIX. The shell scripting engine supports `for`/`while`/`if`/`case` control flow, variable expansion, command substitution, and glob matching --- sufficient to execute real `.sh` scripts. GPU superpowers exploit the deterministic GPU execution model for capabilities fundamentally impossible on CPU-based operating systems: post-execution register forensics (gpu-xray), deterministic replay with zero-variance proof (gpu-replay), cross-execution state differentials (gpu-diff), hardware-level state freezing (gpu-freeze/thaw), and zero-overhead syscall tracing (gpu-strace). These are not convenience wrappers --- they are structurally impossible on CPUs because the OS destroys register state after process exit, non-deterministic microarchitectural features (branch prediction, caching, scheduling) prevent exact replay, and instrumentation always perturbs the observed execution. The ELF loader, 50+ Linux syscalls, comprehensive rootfs (109 files, 61 directories), and ARM64 instruction coverage are sufficient to bootstrap real software compiled with a real C library (musl). The four-session BIC debugging journey illustrates the depth of ISA correctness required --- a single missing bit-invert in one instruction handler cascades through the entire C runtime memory allocator.
 
 ---
 
