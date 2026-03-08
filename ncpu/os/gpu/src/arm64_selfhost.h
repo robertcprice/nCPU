@@ -812,7 +812,7 @@ void *realloc(void *ptr, long size) {
 /* SORTING (insertion sort — safe for small GPU stack)                       */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
-void qsort(void *base, int nmemb, int size, void *compar) {
+void qsort(void *base, int nmemb, int size, int (*compar)(const void *, const void *)) {
     char *arr = (char *)base;
     char tmp[256];
     if (size > 256) return;
@@ -821,7 +821,7 @@ void qsort(void *base, int nmemb, int size, void *compar) {
         memcpy(tmp, arr + i * size, size);
         int j = i;
         while (j > 0) {
-            int cmp = compar((void *)(arr + (j - 1) * size), (void *)tmp);
+            int cmp = compar((const void *)(arr + (j - 1) * size), (const void *)tmp);
             if (cmp <= 0) break;
             memcpy(arr + j * size, arr + (j - 1) * size, size);
             j--;
