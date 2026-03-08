@@ -27,7 +27,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from ncpu.os.gpu.runner import compile_c, run, make_syscall_handler
 from ncpu.os.gpu.filesystem import GPUFilesystem
-from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+
+# Use Rust Metal runner (290x faster) if available, fall back to Python MLX
+try:
+    from kernels.mlx.rust_runner import RustMetalCPU as MLXKernelCPUv2
+except ImportError:
+    from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
 
 
 # Test programs to compile ON the GPU
@@ -1019,6 +1024,200 @@ int main(void) {
 }
 """,
         "expected": 10,
+    },
+
+    # ── ADVANCED TESTS: Features needed for self-compilation ──────────────
+
+    "static_global": {
+        "source": """\
+static int counter;
+static int add(int a, int b) { return a + b; }
+int main(void) {
+    counter = add(30, 12);
+    return counter;
+}
+""",
+        "expected": 42,
+    },
+
+    "const_qualifier": {
+        "source": """\
+int main(void) {
+    const int x = 10;
+    const int y = 20;
+    const int *p = &x;
+    return *p + y;
+}
+""",
+        "expected": 30,
+    },
+
+    "cast_expression": {
+        "source": """\
+int main(void) {
+    int x = -1;
+    unsigned int u = (unsigned int)x;
+    int y = (int)(u >> 24);
+    return y;  /* 255 */
+}
+""",
+        "expected": 255,
+    },
+
+    "nested_ternary": {
+        "source": """\
+int classify(int x) {
+    return x > 0 ? (x > 100 ? 3 : 2) : (x == 0 ? 1 : 0);
+}
+int main(void) {
+    return classify(50) * 10 + classify(0);  /* 21 */
+}
+""",
+        "expected": 21,
+    },
+
+    "complex_while": {
+        "source": """\
+int main(void) {
+    int sum = 0;
+    int i = 1;
+    while (i <= 100) {
+        if (i % 2 == 0)
+            sum = sum + i;
+        i = i + 1;
+    }
+    return sum / 100;  /* 2550/100 = 25 (int div) */
+}
+""",
+        "expected": 25,
+    },
+
+    "array_of_structs": {
+        "source": """\
+struct Point { int x; int y; };
+int main(void) {
+    struct Point pts[3];
+    pts[0].x = 1; pts[0].y = 2;
+    pts[1].x = 3; pts[1].y = 4;
+    pts[2].x = 5; pts[2].y = 6;
+    int sum = 0;
+    int i;
+    for (i = 0; i < 3; i++)
+        sum = sum + pts[i].x + pts[i].y;
+    return sum;  /* 21 */
+}
+""",
+        "expected": 21,
+    },
+
+    "string_length": {
+        "source": """\
+int strlen_manual(char *s) {
+    int len = 0;
+    while (s[len]) len++;
+    return len;
+}
+int main(void) {
+    char *msg = "Hello GPU!";
+    return strlen_manual(msg);  /* 10 */
+}
+""",
+        "expected": 10,
+    },
+
+    "recursive_struct": {
+        "source": """\
+struct Node { int val; struct Node *next; };
+int sum_list(struct Node *n) {
+    if (n == 0) return 0;
+    return n->val + sum_list(n->next);
+}
+int main(void) {
+    struct Node c; c.val = 3; c.next = 0;
+    struct Node b; b.val = 2; b.next = &c;
+    struct Node a; a.val = 1; a.next = &b;
+    return sum_list(&a);  /* 6 */
+}
+""",
+        "expected": 6,
+    },
+
+    "bitfield_operations": {
+        "source": """\
+int main(void) {
+    int flags = 0;
+    flags = flags | (1 << 0);   /* bit 0 */
+    flags = flags | (1 << 3);   /* bit 3 */
+    flags = flags | (1 << 7);   /* bit 7 */
+    int count = 0;
+    int i;
+    for (i = 0; i < 8; i++) {
+        if (flags & (1 << i))
+            count++;
+    }
+    return count;  /* 3 */
+}
+""",
+        "expected": 3,
+    },
+
+    "strcmp_manual": {
+        "source": """\
+int strcmp_m(char *a, char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a - *b;
+}
+int main(void) {
+    char *s1 = "hello";
+    char *s2 = "hello";
+    char *s3 = "help";
+    int eq = (strcmp_m(s1, s2) == 0) ? 10 : 0;
+    int ne = (strcmp_m(s1, s3) != 0) ? 5 : 0;
+    return eq + ne;  /* 15 */
+}
+""",
+        "expected": 15,
+    },
+
+    "multi_return_paths": {
+        "source": """\
+int classify(int x) {
+    if (x < 0) return -1;
+    if (x == 0) return 0;
+    if (x < 10) return 1;
+    if (x < 100) return 2;
+    return 3;
+}
+int main(void) {
+    int sum = 0;
+    sum = sum + classify(-5);   /* -1 */
+    sum = sum + classify(0);    /* 0 */
+    sum = sum + classify(5);    /* 1 */
+    sum = sum + classify(50);   /* 2 */
+    sum = sum + classify(200);  /* 3 */
+    return sum + 1;  /* 6 */
+}
+""",
+        "expected": 6,
+    },
+
+    "double_pointer": {
+        "source": """\
+void swap(int **a, int **b) {
+    int *tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+int main(void) {
+    int x = 10;
+    int y = 42;
+    int *px = &x;
+    int *py = &y;
+    swap(&px, &py);
+    return *px;  /* 42 */
+}
+""",
+        "expected": 42,
     },
 }
 
