@@ -10,7 +10,11 @@
  *          -o /tmp/httpd.elf
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 /* ======================================================================== */
 /* CONFIGURATION                                                            */

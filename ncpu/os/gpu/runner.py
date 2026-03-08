@@ -324,8 +324,8 @@ def make_syscall_handler(
                     data = (line + "\n").encode('ascii')[:max_len]
                     cpu.write_memory(buf_addr, data)
                     cpu.set_register(0, len(data))
-                except EOFError:
-                    cpu.set_register(0, 0)
+                except (EOFError, OSError):
+                    cpu.set_register(0, 0)  # EOF
             else:
                 cpu.set_register(0, 0)
 

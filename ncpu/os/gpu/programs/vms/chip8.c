@@ -15,7 +15,11 @@
  *     -o /tmp/chip8.elf
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 /* ======================================================================== */
 /* CHIP-8 CONSTANTS                                                         */

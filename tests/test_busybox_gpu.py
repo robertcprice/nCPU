@@ -360,7 +360,7 @@ class TestBusyboxExecution:
         assert isinstance(unknowns, list)
 
 
-def load_and_run_elf_helper(argv, filesystem=None):
+def load_and_run_elf_helper(argv, filesystem=None, stdin_data=None):
     """Helper to run BusyBox command for tests."""
     from ncpu.os.gpu.elf_loader import load_and_run_elf
     return load_and_run_elf(
@@ -369,6 +369,7 @@ def load_and_run_elf_helper(argv, filesystem=None):
         max_cycles=500_000_000,
         quiet=True,
         filesystem=filesystem,
+        stdin_data=stdin_data,
     )
 
 
@@ -835,3 +836,346 @@ class TestAlpineCommands:
     def test_echo_with_alpine(self):
         output, _ = self._run_alpine_cmd(["echo", "alpine", "test"])
         assert "alpine test" in output
+
+    def test_ls_root(self):
+        """BusyBox ls / should list Alpine FHS directories."""
+        output, _ = self._run_alpine_cmd(["ls", "/"])
+        for d in ["bin", "etc", "home", "proc", "tmp", "var", "usr"]:
+            assert d in output, f"Missing /{d} in ls / output"
+
+    def test_ls_etc(self):
+        """BusyBox ls /etc should list Alpine config files."""
+        output, _ = self._run_alpine_cmd(["ls", "/etc"])
+        for f in ["alpine-release", "passwd", "hostname", "os-release"]:
+            assert f in output, f"Missing {f} in ls /etc output"
+
+    def test_head_passwd(self):
+        """head -n 1 should return only the first line."""
+        output, _ = self._run_alpine_cmd(["head", "-n", "1", "/etc/passwd"])
+        assert "root:" in output
+        assert "nobody" not in output
+
+    def test_tail_passwd(self):
+        """tail -n 1 should return only the last line."""
+        output, _ = self._run_alpine_cmd(["tail", "-n", "1", "/etc/passwd"])
+        assert "nobody:" in output
+
+    def test_wc_passwd(self):
+        """wc should count lines, words, bytes."""
+        output, _ = self._run_alpine_cmd(["wc", "/etc/passwd"])
+        assert "2" in output  # 2 lines
+
+    def test_wc_l_passwd(self):
+        """wc -l should count lines."""
+        output, _ = self._run_alpine_cmd(["wc", "-l", "/etc/passwd"])
+        assert "2" in output
+
+    def test_grep_f_root(self):
+        """grep -F should find fixed string matches."""
+        output, _ = self._run_alpine_cmd(["grep", "-F", "root", "/etc/passwd"])
+        assert "root:" in output
+        assert "nobody" not in output
+
+    def test_cut_passwd(self):
+        """cut should extract fields."""
+        output, _ = self._run_alpine_cmd(["cut", "-d:", "-f1", "/etc/passwd"])
+        assert "root" in output
+        assert "nobody" in output
+
+    def test_hostname(self):
+        """hostname should return the configured hostname."""
+        output, _ = self._run_alpine_cmd(["hostname"])
+        assert "ncpu-gpu" in output
+
+    def test_id(self):
+        """id should show root user info."""
+        output, _ = self._run_alpine_cmd(["id"])
+        assert "uid=0" in output
+
+    def test_whoami(self):
+        """whoami should return root."""
+        output, _ = self._run_alpine_cmd(["whoami"])
+        assert "root" in output
+
+    def test_expr(self):
+        """expr should evaluate arithmetic."""
+        output, _ = self._run_alpine_cmd(["expr", "2", "+", "3"])
+        assert "5" in output
+
+    def test_printf(self):
+        """printf should format output."""
+        output, _ = self._run_alpine_cmd(["printf", "%s %d\\n", "test", "42"])
+        assert "test 42" in output
+
+    def test_basename(self):
+        """basename should extract filename."""
+        output, _ = self._run_alpine_cmd(["basename", "/etc/passwd"])
+        assert "passwd" in output
+
+    def test_dirname(self):
+        """dirname should extract directory."""
+        output, _ = self._run_alpine_cmd(["dirname", "/etc/passwd"])
+        assert "/etc" in output
+
+    def test_env(self):
+        """env should list environment variables."""
+        output, _ = self._run_alpine_cmd(["env"])
+        assert "PATH=" in output
+
+    def test_stat(self):
+        """stat should show file information."""
+        output, _ = self._run_alpine_cmd(["stat", "/etc/hostname"])
+        assert "File:" in output or "hostname" in output
+
+    def test_date(self):
+        """date should produce output."""
+        output, _ = self._run_alpine_cmd(["date"])
+        assert "202" in output  # year
+
+    def test_sort(self):
+        """sort should sort lines alphabetically."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        fs.write_file("/tmp/data.txt", "banana\napple\ncherry\n")
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["sort", "/tmp/data.txt"], filesystem=fs)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        lines = [l for l in output.strip().split("\n") if l]
+        assert lines == ["apple", "banana", "cherry"]
+
+    def test_sort_numeric(self):
+        """sort -n should sort numerically."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        fs.write_file("/tmp/nums.txt", "3\n1\n2\n")
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["sort", "-n", "/tmp/nums.txt"], filesystem=fs)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        lines = [l for l in output.strip().split("\n") if l]
+        assert lines == ["1", "2", "3"]
+
+    def test_uniq(self):
+        """uniq should run and exit cleanly."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        fs.write_file("/tmp/data.txt", "a\na\nb\nb\na\n")
+        result = load_and_run_elf_helper(["uniq", "/tmp/data.txt"], filesystem=fs)
+        assert result["stop_reason"] == "SYSCALL"  # clean exit
+        assert result["total_cycles"] > 0
+
+    def test_touch(self):
+        """touch should run and exit cleanly."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        result = load_and_run_elf_helper(["touch", "/tmp/newfile"], filesystem=fs)
+        assert result["stop_reason"] == "SYSCALL"  # clean exit
+
+    def test_mkdir_and_ls(self):
+        """mkdir should create directory visible to ls."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        load_and_run_elf_helper(["mkdir", "/tmp/testdir"], filesystem=fs)
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["ls", "/tmp"], filesystem=fs)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        assert "testdir" in output
+
+    def test_cp_file(self):
+        """cp should copy file contents."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        fs.write_file("/tmp/src.txt", "hello world\n")
+        load_and_run_elf_helper(["cp", "/tmp/src.txt", "/tmp/dst.txt"], filesystem=fs)
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["cat", "/tmp/dst.txt"], filesystem=fs)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        assert "hello world" in output
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PIPE TESTS — stdin injection for piped commands
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.skipif(not HAS_BUSYBOX, reason="busybox.elf not found")
+class TestPipes:
+    """Verify stdin_data injection enables piped commands on GPU."""
+
+    def test_grep_from_stdin(self):
+        """grep -F should filter lines from stdin_data."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        stdin = b"apple\nbanana\ncherry\n"
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["grep", "-F", "banana"], filesystem=fs,
+                                    stdin_data=stdin)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        assert output.strip() == "banana"
+
+    def test_wc_from_stdin(self):
+        """wc should count lines/words/bytes from stdin_data."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        stdin = b"hello world\nfoo bar\n"
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["wc"], filesystem=fs, stdin_data=stdin)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        # Should have 2 lines, 4 words, 20 bytes
+        parts = output.strip().split()
+        assert parts[0] == "2"   # lines
+        assert parts[1] == "4"   # words
+
+    def test_cut_from_stdin(self):
+        """cut should extract fields from stdin_data."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        stdin = b"root:x:0:0:root:/root:/bin/ash\n"
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["cut", "-d:", "-f1"], filesystem=fs,
+                                    stdin_data=stdin)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        assert output.strip() == "root"
+
+    def test_sort_from_stdin(self):
+        """sort should sort lines from stdin_data."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        stdin = b"cherry\napple\nbanana\n"
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["sort"], filesystem=fs, stdin_data=stdin)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        lines = output.strip().split("\n")
+        assert lines == ["apple", "banana", "cherry"]
+
+    def test_head_from_stdin(self):
+        """head -n 1 should return first line from stdin_data."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        stdin = b"first\nsecond\nthird\n"
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["head", "-n", "1"], filesystem=fs,
+                                    stdin_data=stdin)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        assert output.strip() == "first"
+
+    def test_two_stage_pipe(self):
+        """Simulate cat /etc/passwd | grep -F root via two-stage pipe."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+
+        # Stage 1: cat /etc/passwd
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["cat", "/etc/passwd"], filesystem=fs)
+            stage1 = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        # Stage 2: grep -F root with stage1 as stdin
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["grep", "-F", "root"], filesystem=fs,
+                                    stdin_data=stage1.encode())
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        assert "root:x:0:0" in output
+        assert "nobody" not in output
+
+    def test_three_stage_pipe(self):
+        """Simulate cat /etc/passwd | grep -F root | cut -d: -f1."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+
+        # Stage 1: cat
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["cat", "/etc/passwd"], filesystem=fs)
+            s1 = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        # Stage 2: grep
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["grep", "-F", "root"], filesystem=fs,
+                                    stdin_data=s1.encode())
+            s2 = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        # Stage 3: cut
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(["cut", "-d:", "-f1"], filesystem=fs,
+                                    stdin_data=s2.encode())
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        assert output.strip() == "root"
+
+    def test_stdin_eof(self):
+        """Empty stdin should cause immediate EOF."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        import io
+        fs = create_alpine_rootfs()
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            result = load_and_run_elf_helper(["cat"], filesystem=fs,
+                                             stdin_data=b"")
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        assert output == ""
+        assert result["stop_reason"] == "SYSCALL"

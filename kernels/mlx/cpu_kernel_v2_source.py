@@ -333,15 +333,17 @@ KERNEL_SOURCE_V2 = """
         // ════════════════════════════════════════════════════════════════════
         switch (op_byte) {
 
-        case 0x0A: { // AND register 32-bit
+        case 0x0A: { // AND/BIC register 32-bit (N=0: AND, N=1: BIC)
             uint8_t stype = (inst >> 22) & 0x3;
             uint8_t samt = (inst >> 10) & 0x3F;
+            uint8_t N = (inst >> 21) & 1;
             int64_t rn_val = (rn == 31) ? 0 : regs[rn];
             int64_t rm_val = (rm == 31) ? 0 : regs[rm];
             if (stype == 0) rm_val = rm_val << samt;
             else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
             else if (stype == 2) rm_val = rm_val >> samt;
             else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (32 - samt))) & 0xFFFFFFFF;
+            if (N) rm_val = ~rm_val;
             if (rd != 31) regs[rd] = (rn_val & rm_val) & 0xFFFFFFFF;
             break;
         }
@@ -579,15 +581,17 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x2A: { // ORR register 32-bit
+        case 0x2A: { // ORR/ORN register 32-bit (N=0: ORR, N=1: ORN)
             uint8_t stype = (inst >> 22) & 0x3;
             uint8_t samt = (inst >> 10) & 0x3F;
+            uint8_t N = (inst >> 21) & 1;
             int64_t rn_val = (rn == 31) ? 0 : regs[rn];
             int64_t rm_val = (rm == 31) ? 0 : regs[rm];
             if (stype == 0) rm_val = rm_val << samt;
             else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
             else if (stype == 2) rm_val = rm_val >> samt;
             else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (32 - samt))) & 0xFFFFFFFF;
+            if (N) rm_val = ~rm_val;
             if (rd != 31) regs[rd] = (rn_val | rm_val) & 0xFFFFFFFF;
             break;
         }
@@ -1279,15 +1283,17 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x4A: { // EOR register 32-bit
+        case 0x4A: { // EOR/EON register 32-bit (N=0: EOR, N=1: EON)
             uint8_t stype = (inst >> 22) & 0x3;
             uint8_t samt = (inst >> 10) & 0x3F;
+            uint8_t N = (inst >> 21) & 1;
             int64_t rn_val = (rn == 31) ? 0 : regs[rn];
             int64_t rm_val = (rm == 31) ? 0 : regs[rm];
             if (stype == 0) rm_val = rm_val << samt;
             else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
             else if (stype == 2) rm_val = rm_val >> samt;
             else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (32 - samt))) & 0xFFFFFFFF;
+            if (N) rm_val = ~rm_val;
             if (rd != 31) regs[rd] = (rn_val ^ rm_val) & 0xFFFFFFFF;
             break;
         }
@@ -1400,23 +1406,20 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x6A: { // ANDS register 32-bit with shift
+        case 0x6A: { // ANDS/BICS register 32-bit with shift (N=0: ANDS, N=1: BICS)
             uint8_t stype = (inst >> 22) & 0x3;
             uint8_t samt = (inst >> 10) & 0x3F;
+            uint8_t N = (inst >> 21) & 1;
             int64_t rn_val = (rn == 31) ? 0 : regs[rn];
             int64_t rm_val = (rm == 31) ? 0 : regs[rm];
-            if (op_byte == 0x6A) { rn_val &= 0xFFFFFFFF; rm_val &= 0xFFFFFFFF; }
+            rn_val &= 0xFFFFFFFF; rm_val &= 0xFFFFFFFF;
             if (stype == 0) rm_val = rm_val << samt;
             else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
-            else if (stype == 2) rm_val = (op_byte == 0x6A) ? int64_t(int32_t(rm_val) >> samt) : (rm_val >> samt);
-            int64_t result = rn_val & rm_val;
-            if (op_byte == 0x6A) result &= 0xFFFFFFFF;
+            else if (stype == 2) rm_val = int64_t(int32_t(rm_val) >> samt);
+            if (N) rm_val = ~rm_val;
+            int64_t result = (rn_val & rm_val) & 0xFFFFFFFF;
             if (rd != 31) regs[rd] = result;
-            if (op_byte == 0x6A) {
-                flag_n = (result & 0x80000000) ? 1.0f : 0.0f;
-            } else {
-                flag_n = (result < 0) ? 1.0f : 0.0f;
-            }
+            flag_n = (result & 0x80000000) ? 1.0f : 0.0f;
             flag_z = (result == 0) ? 1.0f : 0.0f;
             flag_c = 0.0f;
             flag_v = 0.0f;
@@ -1594,23 +1597,18 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x8A: { // BIC / AND register 64-bit
-            if ((inst & 0xFFE00000) == 0x8A200000) {
-                // BIC - AND NOT: Xd = Xn & ~Xm
-                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
-                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
-                if (rd != 31) regs[rd] = rn_val & (~rm_val);
-            } else {
-                uint8_t stype = (inst >> 22) & 0x3;
-                uint8_t samt = (inst >> 10) & 0x3F;
-                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
-                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
-                if (stype == 0) rm_val = rm_val << samt;
-                else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
-                else if (stype == 2) rm_val = rm_val >> samt;
-                else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (64 - samt)));
-                if (rd != 31) regs[rd] = rn_val & rm_val;
-            }
+        case 0x8A: { // AND/BIC register 64-bit (N=0: AND, N=1: BIC)
+            uint8_t stype = (inst >> 22) & 0x3;
+            uint8_t samt = (inst >> 10) & 0x3F;
+            uint8_t N = (inst >> 21) & 1;
+            int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+            int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+            if (stype == 0) rm_val = rm_val << samt;
+            else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
+            else if (stype == 2) rm_val = rm_val >> samt;
+            else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (64 - samt)));
+            if (N) rm_val = ~rm_val;
+            if (rd != 31) regs[rd] = rn_val & rm_val;
             break;
         }
 
@@ -2164,15 +2162,17 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0xCA: { // EOR register 64-bit
+        case 0xCA: { // EOR/EON register 64-bit (N=0: EOR, N=1: EON)
             uint8_t stype = (inst >> 22) & 0x3;
             uint8_t samt = (inst >> 10) & 0x3F;
+            uint8_t N = (inst >> 21) & 1;
             int64_t rn_val = (rn == 31) ? 0 : regs[rn];
             int64_t rm_val = (rm == 31) ? 0 : regs[rm];
             if (stype == 0) rm_val = rm_val << samt;
             else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
             else if (stype == 2) rm_val = rm_val >> samt;
             else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (64 - samt)));
+            if (N) rm_val = ~rm_val;
             if (rd != 31) regs[rd] = rn_val ^ rm_val;
             break;
         }
@@ -2366,41 +2366,23 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0xEA: { // TST register / ANDS register 64-bit with shift
-            if ((inst & 0xFFE0001F) == 0xEA00001F) {
-                // TST register 64-bit - ANDS with Rd=XZR, with optional shift
-                uint8_t stype = (inst >> 22) & 0x3;
-                uint8_t samt = (inst >> 10) & 0x3F;
-                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
-                if (stype == 0) rm_val = rm_val << samt;
-                else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
-                else if (stype == 2) rm_val = rm_val >> samt;
-                int64_t result = regs[rn] & rm_val;
-                flag_n = (result < 0) ? 1.0f : 0.0f;
-                flag_z = (result == 0) ? 1.0f : 0.0f;
-                flag_c = 0.0f;
-                flag_v = 0.0f;
-            } else {
-                uint8_t stype = (inst >> 22) & 0x3;
-                uint8_t samt = (inst >> 10) & 0x3F;
-                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
-                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
-                if (op_byte == 0x6A) { rn_val &= 0xFFFFFFFF; rm_val &= 0xFFFFFFFF; }
-                if (stype == 0) rm_val = rm_val << samt;
-                else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
-                else if (stype == 2) rm_val = (op_byte == 0x6A) ? int64_t(int32_t(rm_val) >> samt) : (rm_val >> samt);
-                int64_t result = rn_val & rm_val;
-                if (op_byte == 0x6A) result &= 0xFFFFFFFF;
-                if (rd != 31) regs[rd] = result;
-                if (op_byte == 0x6A) {
-                    flag_n = (result & 0x80000000) ? 1.0f : 0.0f;
-                } else {
-                    flag_n = (result < 0) ? 1.0f : 0.0f;
-                }
-                flag_z = (result == 0) ? 1.0f : 0.0f;
-                flag_c = 0.0f;
-                flag_v = 0.0f;
-            }
+        case 0xEA: { // ANDS/BICS register 64-bit with shift (N=0: ANDS, N=1: BICS)
+            uint8_t stype = (inst >> 22) & 0x3;
+            uint8_t samt = (inst >> 10) & 0x3F;
+            uint8_t N = (inst >> 21) & 1;
+            int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+            int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+            if (stype == 0) rm_val = rm_val << samt;
+            else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
+            else if (stype == 2) rm_val = rm_val >> samt;
+            else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (64 - samt)));
+            if (N) rm_val = ~rm_val;
+            int64_t result = rn_val & rm_val;
+            if (rd != 31) regs[rd] = result;
+            flag_n = (result < 0) ? 1.0f : 0.0f;
+            flag_z = (result == 0) ? 1.0f : 0.0f;
+            flag_c = 0.0f;
+            flag_v = 0.0f;
             break;
         }
 

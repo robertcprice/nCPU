@@ -87,7 +87,7 @@ class MLXKernelCPUv2:
     After execution, memory_out becomes the new memory for the next call.
     """
 
-    def __init__(self, memory_size: int = 16 * 1024 * 1024):
+    def __init__(self, memory_size: int = 16 * 1024 * 1024, quiet: bool = False):
         """Initialize CPU with given memory size."""
         self.memory_size = memory_size
 
@@ -126,9 +126,10 @@ class MLXKernelCPUv2:
         self.total_instructions = 0
         self.total_syscalls = 0
 
-        print(f"[MLXKernelCPUv2] Initialized with {memory_size:,} bytes memory")
-        print(f"[MLXKernelCPUv2] Double-buffer memory architecture enabled")
-        print(f"[MLXKernelCPUv2] STR/STRB memory writes SUPPORTED!")
+        if not quiet:
+            print(f"[MLXKernelCPUv2] Initialized with {memory_size:,} bytes memory")
+            print(f"[MLXKernelCPUv2] Double-buffer memory architecture enabled")
+            print(f"[MLXKernelCPUv2] STR/STRB memory writes SUPPORTED!")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # PROPERTY ACCESSORS

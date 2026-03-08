@@ -23,7 +23,11 @@
  *            NIST SP 800-38A (Block Cipher Modes of Operation)
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 /* =========================================================================
  * CONSTANTS

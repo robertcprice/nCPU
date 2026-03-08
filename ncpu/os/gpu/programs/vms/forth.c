@@ -17,7 +17,11 @@
  * All I/O via SVC syscalls routed through the Python GPU OS layer.
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 /* =========================================================================
  * CONFIGURATION

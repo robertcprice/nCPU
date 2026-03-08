@@ -10,7 +10,11 @@
  * Reference: FIPS 180-4 (Secure Hash Standard)
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
 /* BIT MANIPULATION PRIMITIVES                                               */

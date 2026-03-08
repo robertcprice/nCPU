@@ -14,7 +14,11 @@
  *       -o /tmp/mnist.elf
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 /* ======================================================================== */
 /* Q8.8 FIXED-POINT ARITHMETIC                                              */

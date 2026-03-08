@@ -17,7 +17,11 @@
  *          -o /tmp/vault.elf
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 /* =========================================================================== */
 /* SHA-256 CONSTANTS                                                           */

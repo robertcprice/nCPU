@@ -767,6 +767,179 @@ int main(void) {
 """,
         "expected": 94,
     },
+
+    # ======================== NEW PHASE 3 TESTS ========================
+
+    "func_macro": {
+        "source": """\
+#define ADD(a,b) ((a)+(b))
+#define MUL(a,b) ((a)*(b))
+#define SQUARE(x) MUL(x,x)
+int main(void) {
+    int a = ADD(3, 4);       /* 7 */
+    int b = MUL(5, 6);       /* 30 */
+    int c = SQUARE(3);        /* 9 */
+    int d = ADD(MUL(2,3), 4); /* 10 */
+    return a + b + c + d;     /* 7 + 30 + 9 + 10 = 56 */
+}
+""",
+        "expected": 56,
+    },
+
+    "func_macro_multi_arg": {
+        "source": """\
+#define MAX(a,b) ((a)>(b)?(a):(b))
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#define CLAMP(x,lo,hi) MIN(MAX(x,lo),hi)
+int main(void) {
+    int a = MAX(10, 20);      /* 20 */
+    int b = MIN(10, 20);      /* 10 */
+    int c = CLAMP(50, 0, 30); /* 30 */
+    int d = CLAMP(-5, 0, 30); /* 0 */
+    return a + b + c + d;     /* 20 + 10 + 30 + 0 = 60 */
+}
+""",
+        "expected": 60,
+    },
+
+    "object_macro_chain": {
+        "source": """\
+#define BASE 10
+#define DOUBLED (BASE * 2)
+#define TRIPLED (DOUBLED + BASE)
+int main(void) {
+    return TRIPLED;  /* 20 + 10 = 30 */
+}
+""",
+        "expected": 30,
+    },
+
+    "short_type": {
+        "source": """\
+int main(void) {
+    short a = 100;
+    short b = -50;
+    int c = a + b;   /* 50 */
+    short d = 200;
+    return c + d;     /* 250 */
+}
+""",
+        "expected": 250,
+    },
+
+    "goto_basic": {
+        "source": """\
+int main(void) {
+    int x = 0;
+    goto skip;
+    x = 100;
+skip:
+    x = x + 42;
+    return x;  /* 42 */
+}
+""",
+        "expected": 42,
+    },
+
+    "goto_loop": {
+        "source": """\
+int main(void) {
+    int sum = 0;
+    int i = 1;
+loop:
+    sum = sum + i;
+    i = i + 1;
+    if (i <= 10) goto loop;
+    return sum;  /* 1+2+...+10 = 55 */
+}
+""",
+        "expected": 55,
+    },
+
+    "multi_dim_array": {
+        "source": """\
+int main(void) {
+    int a[3][3];
+    a[0][0] = 1;
+    a[0][1] = 2;
+    a[0][2] = 3;
+    a[1][0] = 4;
+    a[1][1] = 5;
+    a[1][2] = 6;
+    a[2][0] = 7;
+    a[2][1] = 8;
+    a[2][2] = 9;
+    /* diagonal: 1 + 5 + 9 = 15 */
+    return a[0][0] + a[1][1] + a[2][2];
+}
+""",
+        "expected": 15,
+    },
+
+    "if_directive": {
+        "source": """\
+#define USE_FAST 1
+int main(void) {
+    int x = 0;
+#if USE_FAST
+    x = 42;
+#endif
+#if 0
+    x = 99;
+#endif
+    return x;  /* 42 */
+}
+""",
+        "expected": 42,
+    },
+
+    "elif_directive": {
+        "source": """\
+#define MODE 2
+int main(void) {
+    int x = 0;
+#if MODE == 1
+    x = 10;
+#elif 1
+    x = 20;
+#else
+    x = 30;
+#endif
+    return x;  /* 20 — MODE != 1 so first branch skipped, #elif 1 taken */
+}
+""",
+        "expected": 20,
+    },
+
+    "ignore_keywords": {
+        "source": """\
+static inline int add(int a, int b) {
+    return a + b;
+}
+extern int unused_decl(void);
+int main(void) {
+    volatile int x = 10;
+    register int y = 20;
+    return add(x, y);  /* 30 */
+}
+""",
+        "expected": 30,
+    },
+
+    "string_concat": {
+        "source": """\
+int my_strlen(char *s) {
+    int n = 0;
+    while (s[n]) n++;
+    return n;
+}
+int main(void) {
+    char *msg = "hello" " " "world";
+    return my_strlen(msg);  /* 11 */
+}
+""",
+        "expected": 11,
+    },
 }
 
 

@@ -34,7 +34,11 @@
  *          -o /tmp/ed.elf
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 #define MAX_LINES 1000
 #define LINE_LEN  256

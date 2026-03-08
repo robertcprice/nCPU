@@ -390,6 +390,7 @@ def load_and_run_elf(
     max_cycles: int = 500_000_000,
     quiet: bool = False,
     filesystem=None,
+    stdin_data: Optional[bytes] = None,
 ) -> dict:
     """Load an ELF binary and run it on the Metal GPU.
 
@@ -401,6 +402,7 @@ def load_and_run_elf(
         max_cycles: Maximum cycles
         quiet: Suppress output
         filesystem: GPUFilesystem instance
+        stdin_data: Bytes to serve as stdin (for piped input)
 
     Returns:
         Execution results dict
@@ -408,7 +410,7 @@ def load_and_run_elf(
     from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
     from ncpu.os.gpu.runner import make_syscall_handler, run
 
-    cpu = MLXKernelCPUv2()
+    cpu = MLXKernelCPUv2(quiet=quiet)
 
     entry = load_elf_into_memory(
         cpu, elf_path, argv=argv, envp=envp, quiet=quiet
@@ -423,7 +425,8 @@ def load_and_run_elf(
 
     if handler is None:
         handler = make_busybox_syscall_handler(
-            filesystem=filesystem, heap_base=heap_base
+            filesystem=filesystem, heap_base=heap_base,
+            stdin_data=stdin_data,
         )
 
     if not quiet:
@@ -489,7 +492,7 @@ def _pack_stat64(info: dict) -> bytes:
     )
 
 
-def make_busybox_syscall_handler(filesystem=None, heap_base=None):
+def make_busybox_syscall_handler(filesystem=None, heap_base=None, stdin_data=None):
     """Create a syscall handler with additional syscalls needed by musl/busybox.
 
     This extends the standard handler with:
@@ -512,6 +515,22 @@ def make_busybox_syscall_handler(filesystem=None, heap_base=None):
         SYS_GETDENTS64, SYS_DUP3, SYS_PIPE2,
         SYS_GETPID, SYS_GETPPID,
     )
+
+    # Build stdin reader if stdin_data is provided (for piped input)
+    stdin_reader = None
+    if stdin_data is not None:
+        stdin_buf = bytearray(stdin_data)
+        stdin_offset = [0]  # mutable ref
+
+        def stdin_reader(fd, max_len):
+            if fd != 0:
+                return None
+            remaining = len(stdin_buf) - stdin_offset[0]
+            if remaining <= 0:
+                return b""  # EOF
+            chunk = bytes(stdin_buf[stdin_offset[0]:stdin_offset[0] + max_len])
+            stdin_offset[0] += len(chunk)
+            return chunk
 
     # Additional Linux/aarch64 syscall numbers
     SYS_EXIT_GROUP = 94
@@ -547,13 +566,22 @@ def make_busybox_syscall_handler(filesystem=None, heap_base=None):
     SYS_PWRITE64 = 68
     SYS_UTIMENSAT = 88
     SYS_SYSINFO = 179
+    SYS_SYMLINKAT = 36
+    SYS_FCHMODAT = 53
+    SYS_NANOSLEEP = 101
+    SYS_CLOCK_NANOSLEEP = 115
+    SYS_SCHED_GETAFFINITY = 123
+    SYS_TIMER_SETTIME = 110
+    SYS_CLOCK_GETTIME = 113
+    SYS_CLOCK_GETRES = 114
+    SYS_GETCWD = 17
 
     _heap_base = heap_base if heap_base else HEAP_BASE
     heap_break = _heap_base
     mmap_next = _heap_base + 0x100000  # mmap region 1MB above heap start
 
     # Get the base syscall handler
-    base_handler = make_syscall_handler(filesystem=filesystem)
+    base_handler = make_syscall_handler(filesystem=filesystem, on_read=stdin_reader)
 
     def handler(cpu) -> bool:
         nonlocal heap_break, mmap_next
@@ -933,6 +961,59 @@ def make_busybox_syscall_handler(filesystem=None, heap_base=None):
         elif syscall_num == SYS_CLONE:
             # Don't support clone/fork in busybox mode
             cpu.set_register(0, -38)  # -ENOSYS
+            return True
+
+        # ═══════════════════════════════════════════════════════════
+        # ADDITIONAL POSIX SYSCALLS
+        # ═══════════════════════════════════════════════════════════
+
+        elif syscall_num == SYS_FCHMODAT:
+            # fchmodat(dirfd, path, mode) — stub success
+            cpu.set_register(0, 0)
+            return True
+
+        elif syscall_num == SYS_SYMLINKAT:
+            # symlinkat(target, newdirfd, linkpath) — stub EPERM
+            cpu.set_register(0, -1)  # -EPERM
+            return True
+
+        elif syscall_num in (SYS_NANOSLEEP, SYS_CLOCK_NANOSLEEP):
+            # nanosleep/clock_nanosleep — return immediately
+            cpu.set_register(0, 0)
+            return True
+
+        elif syscall_num == SYS_CLOCK_GETTIME:
+            # clock_gettime(clockid, timespec*)
+            # Write current time as struct timespec {tv_sec, tv_nsec}
+            import time as _time
+            ts_addr = x1
+            now = _time.time()
+            tv_sec = int(now)
+            tv_nsec = int((now - tv_sec) * 1e9)
+            cpu.write_memory(ts_addr, struct.pack('<qq', tv_sec, tv_nsec))
+            cpu.set_register(0, 0)
+            return True
+
+        elif syscall_num == SYS_CLOCK_GETRES:
+            # clock_getres(clockid, timespec*)
+            ts_addr = x1
+            if ts_addr != 0:
+                cpu.write_memory(ts_addr, struct.pack('<qq', 0, 1000000))  # 1ms
+            cpu.set_register(0, 0)
+            return True
+
+        elif syscall_num in (SYS_SCHED_GETAFFINITY, SYS_TIMER_SETTIME, 122, 158):
+            # sched_getaffinity/sched_setaffinity/timer stubs — return success
+            cpu.set_register(0, 0)
+            return True
+
+        elif syscall_num == SYS_GETCWD:
+            # getcwd(buf, size)
+            buf_addr = x0
+            buf_size = x1
+            cwd = b'/\x00'
+            cpu.write_memory(buf_addr, cwd)
+            cpu.set_register(0, buf_addr)
             return True
 
         # ═══════════════════════════════════════════════════════════

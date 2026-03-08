@@ -37,14 +37,14 @@
 #define MAX_TOKENS     32768
 #define MAX_SOURCE     262144
 #define MAX_OUTPUT     131072
-#define MAX_SYMBOLS    1024
-#define MAX_STRINGS    256
+#define MAX_SYMBOLS    2048
+#define MAX_STRINGS    512
 #define MAX_LOCALS     128
 #define MAX_BREAKS     64
 #define MAX_CONTS      64
-#define MAX_STRUCT_FIELDS 32
-#define MAX_STRUCTS    32
-#define MAX_DEFINES    128
+#define MAX_STRUCT_FIELDS 64
+#define MAX_STRUCTS    128
+#define MAX_DEFINES    256
 #define MAX_INCLUDE_BUF 65536
 
 /* ARM64 code generation target addresses */
@@ -64,6 +64,8 @@ enum {
     T_IF, T_ELSE, T_WHILE, T_FOR, T_DO, T_RETURN,
     T_BREAK, T_CONTINUE, T_SIZEOF, T_STRUCT, T_CONST,
     T_ENUM, T_TYPEDEF, T_SWITCH, T_CASE, T_DEFAULT, T_UNION,
+    T_GOTO, T_SHORT,
+    T_INLINE, T_VOLATILE, T_REGISTER, T_EXTERN,
     /* Operators */
     T_PLUS, T_MINUS, T_STAR, T_SLASH, T_PERCENT,
     T_AMP, T_PIPE, T_CARET, T_TILDE, T_BANG,
@@ -84,7 +86,7 @@ enum {
 /* ======================================================================== */
 
 enum {
-    TY_VOID = 0, TY_CHAR, TY_INT, TY_LONG, TY_PTR, TY_ARRAY, TY_STRUCT,
+    TY_VOID = 0, TY_CHAR, TY_INT, TY_LONG, TY_SHORT, TY_PTR, TY_ARRAY, TY_STRUCT,
 };
 
 struct Type {
@@ -96,12 +98,13 @@ struct Type {
     int is_unsigned;
 };
 
-#define MAX_TYPES 256
+#define MAX_TYPES 512
 static struct Type types[MAX_TYPES];
 static int n_types;
 
 static int ty_void;
 static int ty_char;
+static int ty_short;
 static int ty_int;
 static int ty_long;
 
@@ -214,6 +217,10 @@ static int n_strings;
 struct Define {
     char name[64];
     char value[128];
+    /* Function-like macro support */
+    char params[8][32];  /* parameter names */
+    int n_params;        /* -1 = object-like, 0+ = function-like */
+    char body[512];      /* raw body text for function-like macros */
 };
 
 static struct Define defines[MAX_DEFINES];
@@ -260,6 +267,15 @@ static int n_fixups;
 /* Label positions (code offset for each label) */
 #define MAX_LABELS 8192
 static int label_pos[MAX_LABELS];
+
+/* Goto labels: user-defined label names → internal label IDs */
+#define MAX_GOTO_LABELS 64
+struct GotoLabel {
+    char name[64];
+    int label;
+};
+static struct GotoLabel goto_labels[MAX_GOTO_LABELS];
+static int n_goto_labels;
 
 /* Source buffer */
 static char source[MAX_SOURCE];
@@ -339,6 +355,12 @@ static int keyword(const char *s) {
     if (!strcmp(s, "case"))     return T_CASE;
     if (!strcmp(s, "default"))  return T_DEFAULT;
     if (!strcmp(s, "union"))    return T_UNION;
+    if (!strcmp(s, "goto"))     return T_GOTO;
+    if (!strcmp(s, "short"))    return T_SHORT;
+    if (!strcmp(s, "inline"))   return T_INLINE;
+    if (!strcmp(s, "volatile")) return T_VOLATILE;
+    if (!strcmp(s, "register")) return T_REGISTER;
+    if (!strcmp(s, "extern"))   return T_EXTERN;
     return 0;
 }
 
@@ -431,6 +453,171 @@ static void lex(void) {
                 }
                 continue;
             }
+            /* #if — evaluate simple constant expression (integers, defined(X)) */
+            if (i + 2 <= src_len && !strncmp(source + i, "if", 2) && !is_alnum(source[i+2])) {
+                i += 2;
+                while (i < src_len && source[i] == ' ') i++;
+                long if_val = 0;
+                if (ifdef_active) {
+                    /* Parse expression: supports integers, defined(X), !defined(X), &&, || */
+                    if (i + 7 < src_len && !strncmp(source + i, "defined", 7)) {
+                        i += 7;
+                        while (i < src_len && source[i] == ' ') i++;
+                        int has_paren = 0;
+                        if (i < src_len && source[i] == '(') { has_paren = 1; i++; }
+                        while (i < src_len && source[i] == ' ') i++;
+                        char mname[64]; int ns = 0;
+                        while (i < src_len && is_alnum(source[i]) && ns < 63) mname[ns++] = source[i++];
+                        mname[ns] = '\0';
+                        if_val = (find_define(mname) >= 0) ? 1 : 0;
+                        if (has_paren) { while (i < src_len && source[i] == ' ') i++; if (i < src_len && source[i] == ')') i++; }
+                    } else if (i < src_len && source[i] == '!') {
+                        i++;
+                        while (i < src_len && source[i] == ' ') i++;
+                        if (i + 7 < src_len && !strncmp(source + i, "defined", 7)) {
+                            i += 7;
+                            while (i < src_len && source[i] == ' ') i++;
+                            int has_paren = 0;
+                            if (i < src_len && source[i] == '(') { has_paren = 1; i++; }
+                            while (i < src_len && source[i] == ' ') i++;
+                            char mname[64]; int ns = 0;
+                            while (i < src_len && is_alnum(source[i]) && ns < 63) mname[ns++] = source[i++];
+                            mname[ns] = '\0';
+                            if_val = (find_define(mname) >= 0) ? 0 : 1;
+                            if (has_paren) { while (i < src_len && source[i] == ' ') i++; if (i < src_len && source[i] == ')') i++; }
+                        } else {
+                            /* !EXPR — parse number */
+                            long v = 0;
+                            while (i < src_len && source[i] >= '0' && source[i] <= '9') v = v * 10 + (source[i++] - '0');
+                            if_val = !v;
+                        }
+                    } else {
+                        /* Integer constant or macro name, with optional == or != */
+                        int neg = 0;
+                        if (i < src_len && source[i] == '-') { neg = 1; i++; }
+                        long v = 0;
+                        if (i < src_len && is_alpha(source[i])) {
+                            /* Identifier — look up as macro */
+                            char mname[64]; int ns = 0;
+                            while (i < src_len && is_alnum(source[i]) && ns < 63) mname[ns++] = source[i++];
+                            mname[ns] = '\0';
+                            int di = find_define(mname);
+                            if (di >= 0) {
+                                v = strtol(defines[di].value, 0, 0);
+                            } else {
+                                v = 0; /* undefined macro = 0 in #if */
+                            }
+                        } else if (i + 2 < src_len && source[i] == '0' && (source[i+1] == 'x' || source[i+1] == 'X')) {
+                            i += 2;
+                            while (i < src_len && ((source[i] >= '0' && source[i] <= '9') || (source[i] >= 'a' && source[i] <= 'f') || (source[i] >= 'A' && source[i] <= 'F'))) {
+                                if (source[i] >= '0' && source[i] <= '9') v = v * 16 + (source[i] - '0');
+                                else if (source[i] >= 'a' && source[i] <= 'f') v = v * 16 + (source[i] - 'a' + 10);
+                                else v = v * 16 + (source[i] - 'A' + 10);
+                                i++;
+                            }
+                        } else {
+                            while (i < src_len && source[i] >= '0' && source[i] <= '9') v = v * 10 + (source[i++] - '0');
+                        }
+                        if (neg) v = -v;
+                        /* Check for == or != comparison */
+                        while (i < src_len && source[i] == ' ') i++;
+                        if (i + 1 < src_len && source[i] == '=' && source[i+1] == '=') {
+                            i += 2;
+                            while (i < src_len && source[i] == ' ') i++;
+                            int rneg = 0;
+                            if (i < src_len && source[i] == '-') { rneg = 1; i++; }
+                            long rv = 0;
+                            if (i < src_len && is_alpha(source[i])) {
+                                char rm[64]; int rn = 0;
+                                while (i < src_len && is_alnum(source[i]) && rn < 63) rm[rn++] = source[i++];
+                                rm[rn] = '\0';
+                                int rdi = find_define(rm);
+                                if (rdi >= 0) rv = strtol(defines[rdi].value, 0, 0);
+                            } else {
+                                while (i < src_len && source[i] >= '0' && source[i] <= '9') rv = rv * 10 + (source[i++] - '0');
+                            }
+                            if (rneg) rv = -rv;
+                            v = (v == rv) ? 1 : 0;
+                        } else if (i + 1 < src_len && source[i] == '!' && source[i+1] == '=') {
+                            i += 2;
+                            while (i < src_len && source[i] == ' ') i++;
+                            int rneg = 0;
+                            if (i < src_len && source[i] == '-') { rneg = 1; i++; }
+                            long rv = 0;
+                            while (i < src_len && source[i] >= '0' && source[i] <= '9') rv = rv * 10 + (source[i++] - '0');
+                            if (rneg) rv = -rv;
+                            v = (v != rv) ? 1 : 0;
+                        } else if (i + 1 < src_len && source[i] == '>' && source[i+1] == '=') {
+                            i += 2;
+                            while (i < src_len && source[i] == ' ') i++;
+                            long rv = 0;
+                            while (i < src_len && source[i] >= '0' && source[i] <= '9') rv = rv * 10 + (source[i++] - '0');
+                            v = (v >= rv) ? 1 : 0;
+                        } else if (i < src_len && source[i] == '>') {
+                            i++;
+                            while (i < src_len && source[i] == ' ') i++;
+                            long rv = 0;
+                            while (i < src_len && source[i] >= '0' && source[i] <= '9') rv = rv * 10 + (source[i++] - '0');
+                            v = (v > rv) ? 1 : 0;
+                        } else if (i + 1 < src_len && source[i] == '<' && source[i+1] == '=') {
+                            i += 2;
+                            while (i < src_len && source[i] == ' ') i++;
+                            long rv = 0;
+                            while (i < src_len && source[i] >= '0' && source[i] <= '9') rv = rv * 10 + (source[i++] - '0');
+                            v = (v <= rv) ? 1 : 0;
+                        } else if (i < src_len && source[i] == '<') {
+                            i++;
+                            while (i < src_len && source[i] == ' ') i++;
+                            long rv = 0;
+                            while (i < src_len && source[i] >= '0' && source[i] <= '9') rv = rv * 10 + (source[i++] - '0');
+                            v = (v < rv) ? 1 : 0;
+                        }
+                        if_val = v;
+                    }
+                }
+                while (i < src_len && source[i] != '\n') i++;
+                if (ifdef_depth < 15) {
+                    ifdef_stack[ifdef_depth++] = ifdef_active;
+                    if (ifdef_active) ifdef_active = if_val ? 1 : 0;
+                }
+                continue;
+            }
+            /* #elif */
+            if (i + 4 <= src_len && !strncmp(source + i, "elif", 4) && !is_alnum(source[i+4])) {
+                i += 4;
+                while (i < src_len && source[i] == ' ') i++;
+                long elif_val = 0;
+                /* Only evaluate if parent was active and current branch hasn't been taken */
+                int parent_active = (ifdef_depth > 0) ? ifdef_stack[ifdef_depth - 1] : 1;
+                if (parent_active && !ifdef_active) {
+                    /* Parse same as #if */
+                    if (i + 7 < src_len && !strncmp(source + i, "defined", 7)) {
+                        i += 7;
+                        while (i < src_len && source[i] == ' ') i++;
+                        int has_paren = 0;
+                        if (i < src_len && source[i] == '(') { has_paren = 1; i++; }
+                        while (i < src_len && source[i] == ' ') i++;
+                        char mname[64]; int ns = 0;
+                        while (i < src_len && is_alnum(source[i]) && ns < 63) mname[ns++] = source[i++];
+                        mname[ns] = '\0';
+                        elif_val = (find_define(mname) >= 0) ? 1 : 0;
+                        if (has_paren) { while (i < src_len && source[i] == ' ') i++; if (i < src_len && source[i] == ')') i++; }
+                    } else {
+                        int neg = 0;
+                        if (i < src_len && source[i] == '-') { neg = 1; i++; }
+                        long v = 0;
+                        while (i < src_len && source[i] >= '0' && source[i] <= '9') v = v * 10 + (source[i++] - '0');
+                        if (neg) v = -v;
+                        elif_val = v;
+                    }
+                    ifdef_active = elif_val ? 1 : 0;
+                } else if (parent_active && ifdef_active) {
+                    /* Previous branch was taken — skip this and all subsequent branches */
+                    ifdef_active = 0;
+                }
+                while (i < src_len && source[i] != '\n') i++;
+                continue;
+            }
             /* #undef */
             if (i + 5 <= src_len && !strncmp(source + i, "undef", 5) && !is_alnum(source[i+5])) {
                 i += 5;
@@ -469,12 +656,40 @@ static void lex(void) {
                 }
                 dname[ns] = '\0';
 
+                /* Check for function-like macro: '(' immediately after name (no space) */
+                int is_funclike = 0;
+                int fn_nparams = 0;
+                char fn_params[8][32];
+
+                if (i < src_len && source[i] == '(') {
+                    is_funclike = 1;
+                    i++; /* skip '(' */
+                    while (i < src_len && source[i] != ')' && fn_nparams < 8) {
+                        while (i < src_len && source[i] == ' ') i++;
+                        int pn = 0;
+                        while (i < src_len && is_alnum(source[i]) && pn < 31)
+                            fn_params[fn_nparams][pn++] = source[i++];
+                        fn_params[fn_nparams][pn] = '\0';
+                        if (pn > 0) fn_nparams++;
+                        while (i < src_len && source[i] == ' ') i++;
+                        if (i < src_len && source[i] == ',') i++;
+                    }
+                    if (i < src_len && source[i] == ')') i++;
+                }
+
                 while (i < src_len && source[i] == ' ') i++;
 
-                /* macro value (rest of line) */
+                /* macro value/body (rest of line, with line continuation support) */
                 int vs = 0;
-                char dval[128];
-                while (i < src_len && source[i] != '\n' && vs < 127) {
+                char dval[512];
+                while (i < src_len && vs < 511) {
+                    if (source[i] == '\\' && i + 1 < src_len && source[i+1] == '\n') {
+                        /* Line continuation */
+                        i += 2;
+                        if (i < src_len && source[i] == '\n') line++;
+                        continue;
+                    }
+                    if (source[i] == '\n') break;
                     dval[vs++] = source[i++];
                 }
                 /* trim trailing whitespace */
@@ -483,7 +698,18 @@ static void lex(void) {
 
                 if (n_defines < MAX_DEFINES) {
                     strcpy(defines[n_defines].name, dname);
-                    strcpy(defines[n_defines].value, dval);
+                    if (is_funclike) {
+                        defines[n_defines].value[0] = '\0';
+                        defines[n_defines].n_params = fn_nparams;
+                        strcpy(defines[n_defines].body, dval);
+                        int pi;
+                        for (pi = 0; pi < fn_nparams; pi++)
+                            strcpy(defines[n_defines].params[pi], fn_params[pi]);
+                    } else {
+                        strcpy(defines[n_defines].value, dval);
+                        defines[n_defines].n_params = -1;
+                        defines[n_defines].body[0] = '\0';
+                    }
                     n_defines++;
                 }
                 continue;
@@ -658,7 +884,110 @@ static void lex(void) {
             /* Check for #define expansion */
             int di = find_define(t->name);
             if (di >= 0) {
-                /* Parse the define value as a number if possible */
+                /* Function-like macro: requires '(' after name */
+                if (defines[di].n_params >= 0) {
+                    /* Skip whitespace to check for '(' */
+                    int si = i;
+                    while (si < src_len && source[si] == ' ') si++;
+                    if (si < src_len && source[si] == '(') {
+                        /* Parse arguments from source */
+                        si++; /* skip '(' */
+                        char mac_args[8][256];
+                        int n_mac_args = 0;
+                        int paren_depth = 1;
+                        int ai = 0;
+                        while (si < src_len && paren_depth > 0 && n_mac_args < 8) {
+                            if (source[si] == '(') paren_depth++;
+                            else if (source[si] == ')') {
+                                paren_depth--;
+                                if (paren_depth == 0) break;
+                            } else if (source[si] == ',' && paren_depth == 1) {
+                                mac_args[n_mac_args][ai] = '\0';
+                                n_mac_args++;
+                                ai = 0;
+                                si++;
+                                /* Skip leading whitespace in next arg */
+                                while (si < src_len && source[si] == ' ') si++;
+                                continue;
+                            }
+                            if (ai < 255) mac_args[n_mac_args][ai++] = source[si];
+                            si++;
+                        }
+                        mac_args[n_mac_args][ai] = '\0';
+                        if (ai > 0 || n_mac_args > 0) n_mac_args++;
+                        if (si < src_len && source[si] == ')') si++;
+
+                        /* Substitute params in body text */
+                        const char *body = defines[di].body;
+                        char expanded[2048];
+                        int ei = 0;
+                        int bi = 0;
+                        while (body[bi] && ei < 2040) {
+                            if (is_alpha(body[bi])) {
+                                /* Extract identifier from body */
+                                char id[64];
+                                int id_len = 0;
+                                while (is_alnum(body[bi]) && id_len < 63)
+                                    id[id_len++] = body[bi++];
+                                id[id_len] = '\0';
+                                /* Check if it matches a parameter */
+                                int found_param = 0;
+                                int pk;
+                                for (pk = 0; pk < defines[di].n_params; pk++) {
+                                    if (!strcmp(id, defines[di].params[pk])) {
+                                        /* Replace with argument text */
+                                        const char *arg = mac_args[pk];
+                                        while (*arg && ei < 2040)
+                                            expanded[ei++] = *arg++;
+                                        found_param = 1;
+                                        break;
+                                    }
+                                }
+                                if (!found_param) {
+                                    int k;
+                                    for (k = 0; k < id_len && ei < 2040; k++)
+                                        expanded[ei++] = id[k];
+                                }
+                            } else {
+                                expanded[ei++] = body[bi++];
+                            }
+                        }
+                        expanded[ei] = '\0';
+
+                        /* Insert expanded text into source buffer for re-lexing */
+                        int exp_len = ei;
+                        int consumed = si - i; /* chars consumed from source */
+                        if (exp_len <= consumed) {
+                            /* Fits in place: copy expanded, shift rest left */
+                            int k;
+                            for (k = 0; k < exp_len; k++) source[i + k] = expanded[k];
+                            int shift = consumed - exp_len;
+                            if (shift > 0) {
+                                int j;
+                                for (j = i + exp_len; j + shift <= src_len; j++)
+                                    source[j] = source[j + shift];
+                                src_len -= shift;
+                            }
+                        } else {
+                            /* Need to shift source right */
+                            int shift = exp_len - consumed;
+                            if (src_len + shift < MAX_SOURCE) {
+                                int j;
+                                for (j = src_len; j >= si; j--)
+                                    source[j + shift] = source[j];
+                                src_len += shift;
+                                int k;
+                                for (k = 0; k < exp_len; k++) source[i + k] = expanded[k];
+                            }
+                        }
+                        source[src_len] = '\0';
+                        /* Don't advance i — re-lex from expanded text */
+                        continue;
+                    }
+                    /* No '(' follows — treat as regular identifier */
+                }
+
+                /* Object-like macro: parse as number or expand */
                 const char *dv = defines[di].value;
                 /* Skip parens if present */
                 while (*dv == '(' || *dv == ' ') dv++;
@@ -675,7 +1004,23 @@ static void lex(void) {
                 /* Otherwise check if it's another define/keyword */
                 int kw = keyword(defines[di].value);
                 if (kw) { t->type = kw; n_tokens++; continue; }
-                /* Treat as identifier with define name */
+                /* Check if it resolves to another define */
+                if (defines[di].value[0]) {
+                    /* Insert the value text into source for re-lexing */
+                    int vlen = strlen(defines[di].value);
+                    if (src_len + vlen < MAX_SOURCE) {
+                        int j;
+                        for (j = src_len - 1; j >= i; j--)
+                            source[j + vlen] = source[j];
+                        int k;
+                        for (k = 0; k < vlen; k++)
+                            source[i + k] = defines[di].value[k];
+                        src_len += vlen;
+                        source[src_len] = '\0';
+                        continue;
+                    }
+                }
+                /* Treat as identifier with define value */
                 strcpy(t->name, defines[di].value);
                 t->type = T_IDENT;
                 n_tokens++;
@@ -1050,6 +1395,18 @@ static void emit_ldrb(int rt, int rn, int offset) {
     emit(0x39400000 | ((offset & 0xFFF) << 10) | (rn << 5) | rt);
 }
 
+/* STRH Wd, [Xn, #imm] (half-word store, scaled by 2) */
+static void emit_strh(int rt, int rn, int offset) {
+    int imm12 = (offset / 2) & 0xFFF;
+    emit(0x79000000 | (imm12 << 10) | (rn << 5) | rt);
+}
+
+/* LDRSH Xd, [Xn, #imm] (half-word load, sign-extend to 64-bit, scaled by 2) */
+static void emit_ldrsh(int rt, int rn, int offset) {
+    int imm12 = (offset / 2) & 0xFFF;
+    emit(0x79800000 | (imm12 << 10) | (rn << 5) | rt);
+}
+
 /* STR Wd, [Xn, #imm] (32-bit store, scaled by 4) */
 static void emit_str32(int rt, int rn, int offset) {
     int imm12 = (offset / 4) & 0xFFF;
@@ -1265,8 +1622,11 @@ static void emit_prologue(int local_size) {
     local_size = (local_size + 15) & ~15;
     func_stack_size = local_size + 16;  /* +16 for FP/LR */
 
-    /* SUB SP, SP, #frame (placeholder — will be fixed up with actual size) */
-    emit_sub_imm(SP, SP, func_stack_size);
+    /* Two-instruction frame allocation (supports frames > 4095 bytes) */
+    /* SUB SP, SP, #hi, LSL #12 (placeholder — will be fixed up) */
+    emit(0xD1400000 | (SP << 5) | SP);
+    /* SUB SP, SP, #lo (placeholder — will be fixed up) */
+    emit(0xD1000000 | (SP << 5) | SP);
     /* STP x29, x30, [SP, #0] (signed-offset, zero displacement) */
     emit(0xA9000000 | (LR << 10) | (SP << 5) | FP);
     /* MOV x29, SP */
@@ -1281,8 +1641,11 @@ static void emit_epilogue(void) {
     emit_mov(SP, FP);
     /* LDP x29, x30, [SP, #0] (signed-offset, zero displacement) */
     emit(0xA9400000 | (LR << 10) | (SP << 5) | FP);
-    /* ADD SP, SP, #frame (placeholder — will be fixed up with actual size) */
-    emit_add_imm(SP, SP, func_stack_size);
+    /* Two-instruction frame deallocation (supports frames > 4095 bytes) */
+    /* ADD SP, SP, #lo (placeholder — will be fixed up) */
+    emit(0x91000000 | (SP << 5) | SP);
+    /* ADD SP, SP, #hi, LSL #12 (placeholder — will be fixed up) */
+    emit(0x91400000 | (SP << 5) | SP);
     emit_ret();
 }
 
@@ -1299,25 +1662,50 @@ static int alloc_local(int size) {
     return off;  /* positive offset from FP */
 }
 
+/* Forward declarations for indirect load/store (used by large-offset paths) */
+static void emit_load_indirect(int rd, int raddr, int type);
+static void emit_store_indirect(int rs, int raddr, int type);
+
 /* Load local variable into register (unsigned offset, supports large frames) */
 static void emit_load_local(int rd, int offset, int type) {
-    if (types[type].kind == TY_CHAR) {
-        emit_ldrb(rd, FP, offset);
-    } else if (types[type].size == 4) {
-        emit_ldrsw(rd, FP, offset);
+    /* Max unsigned offset: LDRB=4095, LDRSH=8190, LDRSW=16380, LDR=32760 */
+    int max_off;
+    if (types[type].kind == TY_CHAR) max_off = 4095;
+    else if (types[type].kind == TY_SHORT) max_off = 8190;
+    else if (types[type].size == 4) max_off = 16380;
+    else max_off = 32760;
+
+    if (offset <= max_off) {
+        if (types[type].kind == TY_CHAR) emit_ldrb(rd, FP, offset);
+        else if (types[type].kind == TY_SHORT) emit_ldrsh(rd, FP, offset);
+        else if (types[type].size == 4) emit_ldrsw(rd, FP, offset);
+        else emit_ldr(rd, FP, offset);
     } else {
-        emit_ldr(rd, FP, offset);
+        /* Large offset: use X16 scratch to compute address */
+        emit_li(16, (long)offset);
+        emit_add(16, FP, 16);
+        emit_load_indirect(rd, 16, type);
     }
 }
 
 /* Store register to local variable (unsigned offset, supports large frames) */
 static void emit_store_local(int rs, int offset, int type) {
-    if (types[type].kind == TY_CHAR) {
-        emit_strb(rs, FP, offset);
-    } else if (types[type].size == 4) {
-        emit_str32(rs, FP, offset);
+    int max_off;
+    if (types[type].kind == TY_CHAR) max_off = 4095;
+    else if (types[type].kind == TY_SHORT) max_off = 8190;
+    else if (types[type].size == 4) max_off = 16380;
+    else max_off = 32760;
+
+    if (offset <= max_off) {
+        if (types[type].kind == TY_CHAR) emit_strb(rs, FP, offset);
+        else if (types[type].kind == TY_SHORT) emit_strh(rs, FP, offset);
+        else if (types[type].size == 4) emit_str32(rs, FP, offset);
+        else emit_str(rs, FP, offset);
     } else {
-        emit_str(rs, FP, offset);
+        /* Large offset: use X16 scratch to compute address */
+        emit_li(16, (long)offset);
+        emit_add(16, FP, 16);
+        emit_store_indirect(rs, 16, type);
     }
 }
 
@@ -1325,6 +1713,8 @@ static void emit_store_local(int rs, int offset, int type) {
 static void emit_load_indirect(int rd, int raddr, int type) {
     if (types[type].kind == TY_CHAR) {
         emit_ldrb(rd, raddr, 0);
+    } else if (types[type].kind == TY_SHORT) {
+        emit_ldrsh(rd, raddr, 0);
     } else if (types[type].size == 4) {
         emit_ldrsw(rd, raddr, 0);
     } else {
@@ -1336,6 +1726,8 @@ static void emit_load_indirect(int rd, int raddr, int type) {
 static void emit_store_indirect(int rs, int raddr, int type) {
     if (types[type].kind == TY_CHAR) {
         emit_strb(rs, raddr, 0);
+    } else if (types[type].kind == TY_SHORT) {
+        emit_strh(rs, raddr, 0);
     } else if (types[type].size == 4) {
         emit_str32(rs, raddr, 0);
     } else {
@@ -1388,7 +1780,8 @@ static int parse_unary(void);
 static int is_type_start(void) {
     if (check(T_INT) || check(T_LONG) || check(T_CHAR) || check(T_VOID) ||
         check(T_UNSIGNED) || check(T_SIGNED) || check(T_STRUCT) || check(T_CONST) ||
-        check(T_STATIC) || check(T_ENUM) || check(T_UNION)) return 1;
+        check(T_STATIC) || check(T_ENUM) || check(T_UNION) || check(T_SHORT) ||
+        check(T_INLINE) || check(T_EXTERN) || check(T_VOLATILE) || check(T_REGISTER)) return 1;
     /* Check for typedef names */
     if (check(T_IDENT)) {
         struct Symbol *sym = find_symbol(peek()->name);
@@ -1416,25 +1809,35 @@ static int parse_type(void) {
     int is_unsigned = 0;
     int is_const = 0;
 
+    /* Skip storage class specifiers and type qualifiers */
     if (match(T_CONST)) is_const = 1;
-    if (match(T_STATIC)) { /* ignore static for now */ }
+    if (match(T_STATIC)) { /* ignore */ }
+    if (match(T_EXTERN)) { /* ignore */ }
+    if (match(T_INLINE)) { /* ignore */ }
+    if (match(T_VOLATILE)) { /* ignore */ }
+    if (match(T_REGISTER)) { /* ignore */ }
     if (match(T_CONST)) is_const = 1;
 
     if (match(T_UNSIGNED)) {
         is_unsigned = 1;
         if (match(T_LONG)) t = ty_long;
         else if (match(T_INT)) t = ty_int;
+        else if (match(T_SHORT)) t = ty_short;
         else if (match(T_CHAR)) t = ty_char;
         else t = ty_int;
     } else if (match(T_SIGNED)) {
         if (match(T_LONG)) t = ty_long;
         else if (match(T_INT)) t = ty_int;
+        else if (match(T_SHORT)) t = ty_short;
         else if (match(T_CHAR)) t = ty_char;
         else t = ty_int;
     } else if (match(T_VOID)) {
         t = ty_void;
     } else if (match(T_CHAR)) {
         t = ty_char;
+    } else if (match(T_SHORT)) {
+        t = ty_short;
+        if (match(T_INT)) { /* short int = short */ }
     } else if (match(T_INT)) {
         t = ty_int;
     } else if (match(T_LONG)) {
@@ -1705,9 +2108,22 @@ static int parse_primary(void) {
             while (match(T_STAR)) t = type_ptr(t);
         } else {
             /* sizeof(expr) — evaluate type but discard */
-            int r = parse_assign();
-            t = expr_type;
-            free_reg(r);
+            /* Special case: sizeof(array_var) must not decay to pointer */
+            if (check(T_IDENT)) {
+                struct Symbol *sym = find_symbol(peek()->name);
+                if (sym && types[sym->type].kind == TY_ARRAY) {
+                    t = sym->type;
+                    advance();
+                } else {
+                    int r = parse_assign();
+                    t = expr_type;
+                    free_reg(r);
+                }
+            } else {
+                int r = parse_assign();
+                t = expr_type;
+                free_reg(r);
+            }
         }
         expect(T_RPAREN);
         int r = alloc_reg();
@@ -1898,7 +2314,7 @@ static int parse_primary(void) {
             if (types[sym->type].kind == TY_ARRAY) {
                 /* Array decays to pointer — load address */
                 int off = sym->offset;
-                if (off < 0) {
+                if (off < 0 || off > 4095) {
                     emit_li(r, (long)off);
                     emit_add(r, FP, r);
                 } else {
@@ -1908,7 +2324,7 @@ static int parse_primary(void) {
             } else if (types[sym->type].kind == TY_STRUCT) {
                 /* Struct — load address for member access */
                 int off = sym->offset;
-                if (off < 0) {
+                if (off < 0 || off > 4095) {
                     emit_li(r, (long)off);
                     emit_add(r, FP, r);
                 } else {
@@ -2082,8 +2498,14 @@ static int parse_postfix(void) {
             int rd = alloc_reg();
             emit_mov(rd, r);
             emit_add_imm(r, r, 1);
-            /* Store incremented value back to variable */
-            if (last_lval_kind == SYM_LOCAL || last_lval_kind == SYM_PARAM) {
+            /* Store incremented value back */
+            if (last_subscript_addr_off >= 0) {
+                int sa = alloc_reg();
+                emit_load_local(sa, last_subscript_addr_off, ty_long);
+                emit_store_indirect(r, sa, last_subscript_elem_type);
+                free_reg(sa);
+                last_subscript_addr_off = -1;
+            } else if (last_lval_kind == SYM_LOCAL || last_lval_kind == SYM_PARAM) {
                 emit_store_local(r, last_lval_offset, last_lval_type);
             } else if (last_lval_kind == SYM_GLOBAL) {
                 int ta = alloc_reg();
@@ -2102,8 +2524,14 @@ static int parse_postfix(void) {
             int rd = alloc_reg();
             emit_mov(rd, r);
             emit_sub_imm(r, r, 1);
-            /* Store decremented value back to variable */
-            if (last_lval_kind == SYM_LOCAL || last_lval_kind == SYM_PARAM) {
+            /* Store decremented value back */
+            if (last_subscript_addr_off >= 0) {
+                int sa = alloc_reg();
+                emit_load_local(sa, last_subscript_addr_off, ty_long);
+                emit_store_indirect(r, sa, last_subscript_elem_type);
+                free_reg(sa);
+                last_subscript_addr_off = -1;
+            } else if (last_lval_kind == SYM_LOCAL || last_lval_kind == SYM_PARAM) {
                 emit_store_local(r, last_lval_offset, last_lval_type);
             } else if (last_lval_kind == SYM_GLOBAL) {
                 int ta = alloc_reg();
@@ -2183,8 +2611,14 @@ static int parse_unary(void) {
         /* Pre-increment: ++var — increment then return new value */
         int r = parse_unary();
         emit_add_imm(r, r, 1);
-        /* Store back to variable */
-        if (last_lval_kind == SYM_LOCAL || last_lval_kind == SYM_PARAM) {
+        /* Store back */
+        if (last_subscript_addr_off >= 0) {
+            int sa = alloc_reg();
+            emit_load_local(sa, last_subscript_addr_off, ty_long);
+            emit_store_indirect(r, sa, last_subscript_elem_type);
+            free_reg(sa);
+            last_subscript_addr_off = -1;
+        } else if (last_lval_kind == SYM_LOCAL || last_lval_kind == SYM_PARAM) {
             emit_store_local(r, last_lval_offset, last_lval_type);
         } else if (last_lval_kind == SYM_GLOBAL) {
             int ta = alloc_reg();
@@ -2199,8 +2633,14 @@ static int parse_unary(void) {
         /* Pre-decrement: --var — decrement then return new value */
         int r = parse_unary();
         emit_sub_imm(r, r, 1);
-        /* Store back to variable */
-        if (last_lval_kind == SYM_LOCAL || last_lval_kind == SYM_PARAM) {
+        /* Store back */
+        if (last_subscript_addr_off >= 0) {
+            int sa = alloc_reg();
+            emit_load_local(sa, last_subscript_addr_off, ty_long);
+            emit_store_indirect(r, sa, last_subscript_elem_type);
+            free_reg(sa);
+            last_subscript_addr_off = -1;
+        } else if (last_lval_kind == SYM_LOCAL || last_lval_kind == SYM_PARAM) {
             emit_store_local(r, last_lval_offset, last_lval_type);
         } else if (last_lval_kind == SYM_GLOBAL) {
             int ta = alloc_reg();
@@ -2452,7 +2892,7 @@ static int parse_assign(void) {
                  * The loop below handles all dereferences. */
                 if (sym->kind == SYM_LOCAL || sym->kind == SYM_PARAM) {
                     int off = sym->offset;
-                    if (off < 0) {
+                    if (off < 0 || off > 4095) {
                         emit_li(addr, (long)off);
                         emit_add(addr, FP, addr);
                     } else {
@@ -2940,12 +3380,19 @@ static void parse_stmt(void) {
             strcpy(vname, peek()->name);
             advance();
 
-            /* Array? */
-            if (match(T_LBRACKET)) {
-                int arr_len = 0;
-                if (check(T_NUM)) { arr_len = (int)peek()->val; advance(); }
-                expect(T_RBRACKET);
-                if (arr_len > 0) cur_type = type_array(cur_type, arr_len);
+            /* Array? (supports multi-dimensional: int a[3][4]) */
+            {
+                int dims[8]; int ndims = 0;
+                while (match(T_LBRACKET) && ndims < 8) {
+                    dims[ndims] = 0;
+                    if (check(T_NUM)) { dims[ndims] = (int)peek()->val; advance(); }
+                    expect(T_RBRACKET);
+                    ndims++;
+                }
+                /* Build type from innermost dimension outward */
+                for (int di = ndims - 1; di >= 0; di--) {
+                    if (dims[di] > 0) cur_type = type_array(cur_type, dims[di]);
+                }
             }
 
             int off = alloc_local(type_size(cur_type));
@@ -2983,6 +3430,54 @@ static void parse_stmt(void) {
         } while (match(T_COMMA));
 
         expect(T_SEMICOLON);
+        return;
+    }
+
+    /* Goto */
+    if (match(T_GOTO)) {
+        if (check(T_IDENT)) {
+            char lname[64];
+            strcpy(lname, peek()->name);
+            advance();
+            /* Find or create label */
+            int li;
+            int found = 0;
+            for (li = 0; li < n_goto_labels; li++) {
+                if (!strcmp(goto_labels[li].name, lname)) { found = 1; break; }
+            }
+            if (!found) {
+                li = n_goto_labels++;
+                strcpy(goto_labels[li].name, lname);
+                goto_labels[li].label = new_label();
+            }
+            emit_b(goto_labels[li].label);
+        } else {
+            error("expected label name after goto");
+        }
+        expect(T_SEMICOLON);
+        return;
+    }
+
+    /* Label: IDENT ':' (but not inside ternary — labels are at statement level) */
+    if (check(T_IDENT) && tok_pos + 1 < n_tokens && tokens[tok_pos + 1].type == T_COLON) {
+        char lname[64];
+        strcpy(lname, peek()->name);
+        advance(); /* skip ident */
+        advance(); /* skip colon */
+        /* Find or create label and mark it here */
+        int li;
+        int found = 0;
+        for (li = 0; li < n_goto_labels; li++) {
+            if (!strcmp(goto_labels[li].name, lname)) { found = 1; break; }
+        }
+        if (!found) {
+            li = n_goto_labels++;
+            strcpy(goto_labels[li].name, lname);
+            goto_labels[li].label = new_label();
+        }
+        mark_label(goto_labels[li].label);
+        /* Parse the statement after the label */
+        parse_stmt();
         return;
     }
 
@@ -3144,22 +3639,41 @@ static void parse_global_decl(void) {
         int actual_stack = (stack_offset + 15) & ~15;
         func_stack_size = actual_stack;
 
-        /* Rewrite prologue SUB SP, SP, #frame instruction */
-        unsigned int sub_inst = 0xD1000000 | ((func_stack_size & 0xFFF) << 10) | (SP << 5) | SP;
-        output[prologue_pos]     = sub_inst & 0xFF;
-        output[prologue_pos + 1] = (sub_inst >> 8) & 0xFF;
-        output[prologue_pos + 2] = (sub_inst >> 16) & 0xFF;
-        output[prologue_pos + 3] = (sub_inst >> 24) & 0xFF;
+        /* Rewrite prologue: 2-instruction SUB SP, SP, #frame */
+        {
+            int hi = (func_stack_size >> 12) & 0xFFF;
+            int lo = func_stack_size & 0xFFF;
+            /* SUB SP, SP, #hi, LSL #12 at prologue_pos */
+            unsigned int sub_hi = 0xD1400000 | (hi << 10) | (SP << 5) | SP;
+            output[prologue_pos]     = sub_hi & 0xFF;
+            output[prologue_pos + 1] = (sub_hi >> 8) & 0xFF;
+            output[prologue_pos + 2] = (sub_hi >> 16) & 0xFF;
+            output[prologue_pos + 3] = (sub_hi >> 24) & 0xFF;
+            /* SUB SP, SP, #lo at prologue_pos + 4 */
+            unsigned int sub_lo = 0xD1000000 | (lo << 10) | (SP << 5) | SP;
+            output[prologue_pos + 4] = sub_lo & 0xFF;
+            output[prologue_pos + 5] = (sub_lo >> 8) & 0xFF;
+            output[prologue_pos + 6] = (sub_lo >> 16) & 0xFF;
+            output[prologue_pos + 7] = (sub_lo >> 24) & 0xFF;
+        }
 
         /* Also fix ADD SP, SP, #frame in epilogue */
         int ep_pos = label_pos[func_ret_label];
         if (ep_pos >= 0) {
-            /* MOV SP, FP at ep_pos, LDP at ep_pos+4, ADD SP at ep_pos+8 */
-            unsigned int add_inst = 0x91000000 | ((func_stack_size & 0xFFF) << 10) | (SP << 5) | SP;
-            output[ep_pos + 8] = add_inst & 0xFF;
-            output[ep_pos + 9] = (add_inst >> 8) & 0xFF;
-            output[ep_pos + 10] = (add_inst >> 16) & 0xFF;
-            output[ep_pos + 11] = (add_inst >> 24) & 0xFF;
+            int hi = (func_stack_size >> 12) & 0xFFF;
+            int lo = func_stack_size & 0xFFF;
+            /* MOV SP, FP at ep_pos, LDP at ep_pos+4 */
+            /* ADD SP, SP, #lo at ep_pos+8, ADD SP, SP, #hi, LSL #12 at ep_pos+12 */
+            unsigned int add_lo = 0x91000000 | (lo << 10) | (SP << 5) | SP;
+            output[ep_pos + 8] = add_lo & 0xFF;
+            output[ep_pos + 9] = (add_lo >> 8) & 0xFF;
+            output[ep_pos + 10] = (add_lo >> 16) & 0xFF;
+            output[ep_pos + 11] = (add_lo >> 24) & 0xFF;
+            unsigned int add_hi = 0x91400000 | (hi << 10) | (SP << 5) | SP;
+            output[ep_pos + 12] = add_hi & 0xFF;
+            output[ep_pos + 13] = (add_hi >> 8) & 0xFF;
+            output[ep_pos + 14] = (add_hi >> 16) & 0xFF;
+            output[ep_pos + 15] = (add_hi >> 24) & 0xFF;
         }
 
         leave_scope();
@@ -3167,12 +3681,18 @@ static void parse_global_decl(void) {
         return;
     }
 
-    /* Global variable */
-    if (match(T_LBRACKET)) {
-        int arr_len = 0;
-        if (check(T_NUM)) { arr_len = (int)peek()->val; advance(); }
-        expect(T_RBRACKET);
-        if (arr_len > 0) rt = type_array(rt, arr_len);
+    /* Global variable (supports multi-dimensional arrays) */
+    {
+        int dims[8]; int ndims = 0;
+        while (match(T_LBRACKET) && ndims < 8) {
+            dims[ndims] = 0;
+            if (check(T_NUM)) { dims[ndims] = (int)peek()->val; advance(); }
+            expect(T_RBRACKET);
+            ndims++;
+        }
+        for (int di = ndims - 1; di >= 0; di--) {
+            rt = type_array(rt, dims[di]);
+        }
     }
 
     int off = data_pos;
@@ -3217,15 +3737,47 @@ static void parse_global_decl(void) {
             }
             expect(T_RBRACE);
         } else if (check(T_STR)) {
-            /* String initializer: char *p = "hello" */
+            /* String initializer: char *p = "hello" or "a" "b" */
             int sid = add_string(peek()->name, (int)peek()->val);
             advance();
-            /* Store pointer to string in data section */
-            long str_addr = DATA_BASE + strings[sid].data_offset;
-            if (off + 8 <= MAX_INIT_DATA) {
-                for (int b = 0; b < 8; b++)
-                    init_data[off+b] = (unsigned char)((str_addr >> (b*8)) & 0xFF);
-                init_data_used = 1;
+            /* Concatenate adjacent string literals */
+            while (check(T_STR)) {
+                int slen = strings[sid].len;
+                int addlen = (int)peek()->val;
+                if (slen + addlen < 255) {
+                    memcpy(strings[sid].data + slen, peek()->name, addlen);
+                    strings[sid].data[slen + addlen] = '\0';
+                    strings[sid].len = slen + addlen;
+                }
+                advance();
+            }
+            /* Update data_pos for concatenated string (string table entry grew) */
+            {
+                int needed = (strings[sid].len + 1 + 7) & ~7;
+                int string_end = strings[sid].data_offset + needed;
+                if (string_end > data_pos) data_pos = string_end;
+            }
+            if (types[rt].kind == TY_ARRAY) {
+                /* Char array: copy string data directly into data section */
+                int slen = strings[sid].len;
+                if (types[rt].array_len == 0) {
+                    /* Unsized array: set size from string length */
+                    types[rt].array_len = slen + 1;
+                    data_pos = off + ((slen + 1 + 7) & ~7);
+                }
+                if (off + slen + 1 <= MAX_INIT_DATA) {
+                    memcpy(init_data + off, strings[sid].data, slen);
+                    init_data[off + slen] = '\0';
+                    init_data_used = 1;
+                }
+            } else {
+                /* Pointer: store address of string in data section */
+                long str_addr = DATA_BASE + strings[sid].data_offset;
+                if (off + 8 <= MAX_INIT_DATA) {
+                    for (int b = 0; b < 8; b++)
+                        init_data[off+b] = (unsigned char)((str_addr >> (b*8)) & 0xFF);
+                    init_data_used = 1;
+                }
             }
         } else {
             /* Simple constant: int x = 42; or int x = -1; */
@@ -3316,10 +3868,11 @@ static void emit_data_section(unsigned char *out, int max_size) {
 
 static void init_types(void) {
     n_types = 0;
-    ty_void = type_new(TY_VOID, 0);
-    ty_char = type_new(TY_CHAR, 1);
-    ty_int  = type_new(TY_INT, 4);
-    ty_long = type_new(TY_LONG, 8);
+    ty_void  = type_new(TY_VOID, 0);
+    ty_char  = type_new(TY_CHAR, 1);
+    ty_short = type_new(TY_SHORT, 2);
+    ty_int   = type_new(TY_INT, 4);
+    ty_long  = type_new(TY_LONG, 8);
 }
 
 static void compile(void) {
@@ -3329,9 +3882,11 @@ static void compile(void) {
     n_strings = 0;
     n_structs = 0;
     n_defines = 0;
+    n_goto_labels = 0;
     /* Pre-define __CCGPU__ so compiled programs can detect this compiler */
     strcpy(defines[n_defines].name, "__CCGPU__");
     strcpy(defines[n_defines].value, "1");
+    defines[n_defines].n_params = -1;
     n_defines++;
     scope_depth = 0;
     code_pos = 0;

@@ -10,7 +10,11 @@
  *          -I demos -e _start demos/arm64_start.S demos/graphics/mandelbrot.c
  */
 
+#ifdef __CCGPU__
+#include "arm64_selfhost.h"
+#else
 #include "arm64_libc.h"
+#endif
 
 /* ======================================================================== */
 /* CONFIGURATION                                                            */
