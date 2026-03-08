@@ -782,12 +782,32 @@ def run(
         Dict with total_cycles, elapsed, ips, stop_reason
     """
     import time
+    import sys as _sys
     total_cycles = 0
     start = time.perf_counter()
+
+    # Initialize GPU-side SVC write buffer (if memory large enough)
+    if cpu.memory_size > cpu.SVC_BUF_BASE + 0x10000:
+        cpu.init_svc_buffer()
+
+    def _drain_gpu_writes():
+        """Drain GPU-buffered SYS_WRITE entries to stdout/stderr."""
+        if cpu.memory_size <= cpu.SVC_BUF_BASE:
+            return
+        for fd, data in cpu.drain_svc_buffer():
+            try:
+                text = data.decode('ascii', errors='replace')
+                _sys.stdout.write(text)
+            except Exception:
+                pass
+        _sys.stdout.flush()
 
     while total_cycles < max_cycles:
         result = cpu.execute(max_cycles=batch_size)
         total_cycles += result.cycles
+
+        # Drain GPU-buffered writes after every dispatch
+        _drain_gpu_writes()
 
         if result.stop_reason == StopReasonV2.HALT:
             break

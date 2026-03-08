@@ -1678,7 +1678,10 @@ static void emit_load_local(int rd, int offset, int type) {
     if (offset <= max_off) {
         if (types[type].kind == TY_CHAR) emit_ldrb(rd, FP, offset);
         else if (types[type].kind == TY_SHORT) emit_ldrsh(rd, FP, offset);
-        else if (types[type].size == 4) emit_ldrsw(rd, FP, offset);
+        else if (types[type].size == 4) {
+            if (types[type].is_unsigned) emit_ldr32(rd, FP, offset);
+            else emit_ldrsw(rd, FP, offset);
+        }
         else emit_ldr(rd, FP, offset);
     } else {
         /* Large offset: use X16 scratch to compute address */
@@ -1716,7 +1719,11 @@ static void emit_load_indirect(int rd, int raddr, int type) {
     } else if (types[type].kind == TY_SHORT) {
         emit_ldrsh(rd, raddr, 0);
     } else if (types[type].size == 4) {
-        emit_ldrsw(rd, raddr, 0);
+        if (types[type].is_unsigned) {
+            emit_ldr32(rd, raddr, 0);  /* LDR Wt — zero-extend to 64-bit */
+        } else {
+            emit_ldrsw(rd, raddr, 0);  /* LDRSW — sign-extend to 64-bit */
+        }
     } else {
         emit_ldr(rd, raddr, 0);
     }
@@ -2502,6 +2509,11 @@ static int parse_postfix(void) {
                         /* Struct/array field: keep address for chained access */
                         expr_type = ft;
                     } else {
+                        /* Save field address for post-inc/dec store-back */
+                        int addr_off = alloc_local(8);
+                        emit_store_local(r, addr_off, ty_long);
+                        last_subscript_addr_off = addr_off;
+                        last_subscript_elem_type = ft;
                         int rd = alloc_reg();
                         emit_load_indirect(rd, r, ft);
                         free_reg(r);
@@ -2543,6 +2555,11 @@ static int parse_postfix(void) {
                         /* Struct/array field: keep address for chained access */
                         expr_type = ft;
                     } else {
+                        /* Save field address for post-inc/dec store-back */
+                        int addr_off = alloc_local(8);
+                        emit_store_local(r, addr_off, ty_long);
+                        last_subscript_addr_off = addr_off;
+                        last_subscript_elem_type = ft;
                         int rd = alloc_reg();
                         emit_load_indirect(rd, r, ft);
                         free_reg(r);
@@ -2953,15 +2970,21 @@ static int parse_assign(void) {
                 int addr = alloc_reg();
                 int cur_type = sym->type;
 
-                /* Always load the base address of the variable.
-                 * The loop below handles all dereferences. */
+                /* Load the base address of the variable.
+                 * For pointer types with subscript, load the pointer value.
+                 * For array/struct types, use the stack address directly. */
                 if (sym->kind == SYM_LOCAL || sym->kind == SYM_PARAM) {
                     int off = sym->offset;
-                    if (off < 0 || off > 4095) {
-                        emit_li(addr, (long)off);
-                        emit_add(addr, FP, addr);
+                    if (types[cur_type].kind == TY_PTR && check(T_LBRACKET)) {
+                        /* Pointer variable: load the pointer value (not its stack address) */
+                        emit_load_local(addr, off, ty_long);
                     } else {
-                        emit_add_imm(addr, FP, off);
+                        if (off < 0 || off > 4095) {
+                            emit_li(addr, (long)off);
+                            emit_add(addr, FP, addr);
+                        } else {
+                            emit_add_imm(addr, FP, off);
+                        }
                     }
                 } else {
                     emit_load_global_addr(addr, sym->offset);
@@ -3038,6 +3061,31 @@ static int parse_assign(void) {
                 /* Parse rvalue */
                 tok_pos = old_pos;
                 int rval = parse_assign();
+
+                /* Handle compound assignment (+=, -=, etc.) on compound lvalue */
+                if (op == T_PLUS_EQ || op == T_MINUS_EQ || op == T_STAR_EQ ||
+                    op == T_SLASH_EQ || op == T_PERCENT_EQ ||
+                    op == T_AMP_EQ || op == T_PIPE_EQ || op == T_CARET_EQ ||
+                    op == T_SHL_EQ || op == T_SHR_EQ) {
+                    int cur = alloc_reg();
+                    emit_load_indirect(cur, addr, cur_type);
+                    if (op == T_PLUS_EQ)         emit_add(rval, cur, rval);
+                    else if (op == T_MINUS_EQ)   emit_sub(rval, cur, rval);
+                    else if (op == T_STAR_EQ)    emit_mul(rval, cur, rval);
+                    else if (op == T_SLASH_EQ)   emit_sdiv(rval, cur, rval);
+                    else if (op == T_PERCENT_EQ) {
+                        int tmp = alloc_reg();
+                        emit_sdiv(tmp, cur, rval);
+                        emit_msub(rval, tmp, rval, cur);
+                        free_reg(tmp);
+                    }
+                    else if (op == T_AMP_EQ)     emit_and(rval, cur, rval);
+                    else if (op == T_PIPE_EQ)    emit_orr(rval, cur, rval);
+                    else if (op == T_CARET_EQ)   emit_eor(rval, cur, rval);
+                    else if (op == T_SHL_EQ)     emit_lsl(rval, cur, rval);
+                    else if (op == T_SHR_EQ)     emit_lsr(rval, cur, rval);
+                    free_reg(cur);
+                }
 
                 emit_store_indirect(rval, addr, cur_type);
                 free_reg(addr);
@@ -4140,9 +4188,7 @@ int main(void) {
 
         /* Build data section in unused high memory (0x800000 = 8MB mark,
          * well above BSS and below stack at 0xF00000), then write all
-         * at once. This avoids hundreds of small write SVCs — each SVC
-         * round-trips 16MB through Metal, so one big write is much faster
-         * than hundreds of 4KB writes. */
+         * at once. This avoids hundreds of small write SVCs. */
         {
             unsigned char *dsec = (unsigned char *)0x800000;
             int dsz = (data_pos + 7) & ~7;

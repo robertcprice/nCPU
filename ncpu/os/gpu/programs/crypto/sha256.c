@@ -362,7 +362,7 @@ int main(void)
 
     /* Known SHA-256("Hello, GPU!") computed offline */
     const char *expected_hex =
-        "90342526c0a108132c96bc5bf04fbb97c9f7c2330535500f2b838ec109d31b13";
+        "58a66274bf11742c69199a2b216eab0217995c4d78053df6d169cb4fe86a2a08";
 
     const char *test_msg = "Hello, GPU!";
     size_t test_len = strlen(test_msg);

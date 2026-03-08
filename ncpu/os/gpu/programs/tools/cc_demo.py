@@ -940,6 +940,86 @@ int main(void) {
 """,
         "expected": 11,
     },
+
+    "dot_postinc": {
+        "source": """\
+struct counter { int val; };
+int main(void) {
+    struct counter c;
+    c.val = 10;
+    int a = c.val++;
+    int b = c.val++;
+    return a + b + c.val;  /* 10 + 11 + 12 = 33 */
+}
+""",
+        "expected": 33,
+    },
+
+    "arrow_postinc": {
+        "source": """\
+struct counter { int val; int other; };
+int main(void) {
+    struct counter c;
+    c.val = 5;
+    c.other = 100;
+    struct counter *p = &c;
+    int a = p->val++;
+    int b = p->val++;
+    return a + b + p->val;  /* 5 + 6 + 7 = 18 */
+}
+""",
+        "expected": 18,
+    },
+
+    "compound_lvalue_assign": {
+        "source": """\
+int main(void) {
+    int arr[4];
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[0] += 5;
+    arr[1] -= 3;
+    arr[2] *= 2;
+    return arr[0] + arr[1] + arr[2];  /* 15 + 17 + 60 = 92 */
+}
+""",
+        "expected": 92,
+    },
+
+    "ptr_compound_assign": {
+        "source": """\
+void add_to_array(int *arr, int n) {
+    int i;
+    for (i = 0; i < n; i++)
+        arr[i] += 100;
+}
+int main(void) {
+    int data[3];
+    data[0] = 1;
+    data[1] = 2;
+    data[2] = 3;
+    add_to_array(data, 3);
+    return data[0] + data[1] + data[2];  /* 101 + 102 + 103 = 306 */
+}
+""",
+        "expected": 306,
+    },
+
+    "struct_member_loop": {
+        "source": """\
+struct buf { char data[64]; int len; };
+int main(void) {
+    struct buf b;
+    b.len = 0;
+    int i;
+    for (i = 0; i < 10; i++)
+        b.data[b.len++] = 'A' + i;
+    return b.len;  /* 10 */
+}
+""",
+        "expected": 10,
+    },
 }
 
 
@@ -1012,7 +1092,7 @@ def main():
 
         # --- PHASE A: Run the compiler on the GPU ---
         print(f"\n  [A] Compiling {name}.c on GPU...")
-        cpu = MLXKernelCPUv2()
+        cpu = MLXKernelCPUv2(quiet=True)
         cpu.load_program(cc_binary, address=0x10000)
         cpu.set_pc(0x10000)
 
@@ -1044,7 +1124,7 @@ def main():
 
         # --- PHASE B: Execute the GPU-compiled program on the GPU ---
         print(f"\n  [B] Executing {name} on GPU...")
-        cpu2 = MLXKernelCPUv2()
+        cpu2 = MLXKernelCPUv2(quiet=True)
 
         # Check for compact binary format: code + NCCD header + data
         # The NCCD header marks where data section begins

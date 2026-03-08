@@ -2699,3 +2699,304 @@ class TestApkStub:
         shell_builtin(['apk', 'version'], state)
         out = capsys.readouterr().out
         assert '2.14' in out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GPU SVC BUFFER TESTS — verify GPU-side syscall handling
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGPUSVCBuffer:
+    """Test GPU-side SVC buffer (SYS_WRITE/SYS_BRK/SYS_CLOSE handled on-GPU)."""
+
+    def test_svc_buffer_init(self):
+        """SVC buffer should initialize with zero header."""
+        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        cpu = MLXKernelCPUv2(quiet=True)
+        cpu.init_svc_buffer()
+        # Read header: write_pos=0, entry_count=0
+        header = cpu.read_memory(cpu.SVC_BUF_BASE, 16)
+        assert header == b'\x00' * 16
+
+    def test_svc_buffer_drain_empty(self):
+        """Draining empty SVC buffer should return empty list."""
+        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        cpu = MLXKernelCPUv2(quiet=True)
+        cpu.init_svc_buffer()
+        entries = cpu.drain_svc_buffer()
+        assert entries == []
+
+    def test_shadow_numpy_registers(self):
+        """Shadow numpy should accelerate register access."""
+        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        cpu = MLXKernelCPUv2(quiet=True)
+        cpu.set_register(0, 42)
+        assert cpu.get_register(0) == 42
+        cpu.set_register(15, -1)
+        assert cpu.get_register(15) == -1
+        # XZR always 0
+        cpu.set_register(31, 999)
+        assert cpu.get_register(31) == 0
+
+    def test_shadow_numpy_memory(self):
+        """Shadow numpy should accelerate memory read/write."""
+        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        cpu = MLXKernelCPUv2(quiet=True)
+        cpu.write_memory(0x1000, b'hello')
+        assert cpu.read_memory(0x1000, 5) == b'hello'
+        cpu.write_memory(0x1000, b'world')
+        assert cpu.read_memory(0x1000, 5) == b'world'
+
+    def test_shadow_numpy_flags(self):
+        """Shadow numpy should accelerate flag access."""
+        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        cpu = MLXKernelCPUv2(quiet=True)
+        cpu.set_flags(True, False, True, False)
+        n, z, c, v = cpu.get_flags()
+        assert bool(n) is True
+        assert bool(z) is False
+        assert bool(c) is True
+        assert bool(v) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EXTENDED BUSYBOX COMMAND TESTS (require busybox.elf)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.skipif(not HAS_BUSYBOX, reason="busybox.elf not found")
+class TestExtendedBusyBoxCommands:
+    """Test additional BusyBox commands with GPU SVC buffering."""
+
+    def _run(self, argv, fs=None, stdin_data=None):
+        """Run BusyBox command and capture output."""
+        if fs is None:
+            from ncpu.os.gpu.alpine import create_alpine_rootfs
+            fs = create_alpine_rootfs()
+        import io
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            results = load_and_run_elf_helper(argv, filesystem=fs,
+                                               stdin_data=stdin_data)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        return output, results, fs
+
+    # --- sort ---
+    def test_sort_file(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['sort', '/etc/passwd'], fs)
+        lines = output.strip().split('\n')
+        assert lines == sorted(lines)
+
+    def test_sort_stdin(self):
+        output, _, _ = self._run(['sort'], stdin_data=b'ccc\naaa\nbbb\n')
+        assert output.strip() == 'aaa\nbbb\nccc'
+
+    # --- uniq ---
+    def test_uniq_stdin(self):
+        output, _, _ = self._run(['uniq'], stdin_data=b'aaa\naaa\nbbb\naaa\n')
+        assert output.strip() == 'aaa\nbbb\naaa'
+
+    # --- tr ---
+    def test_tr_uppercase(self):
+        output, _, _ = self._run(['tr', 'a-z', 'A-Z'], stdin_data=b'hello\n')
+        assert output.strip() == 'HELLO'
+
+    # --- cut ---
+    def test_cut_field(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['cut', '-d:', '-f1', '/etc/passwd'], fs)
+        lines = output.strip().split('\n')
+        assert 'root' in lines
+
+    # --- head/tail ---
+    def test_head_n(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['head', '-n', '1', '/etc/passwd'], fs)
+        assert output.strip().startswith('root:')
+
+    def test_tail_n(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['tail', '-n', '1', '/etc/passwd'], fs)
+        lines = output.strip().split('\n')
+        assert len(lines) == 1
+
+    # --- expr ---
+    def test_expr_arithmetic(self):
+        output, _, _ = self._run(['expr', '7', '+', '3'])
+        assert output.strip() == '10'
+
+    def test_expr_multiply(self):
+        output, _, _ = self._run(['expr', '6', '*', '7'])
+        assert output.strip() == '42'
+
+    # --- id/whoami ---
+    def test_id_root(self):
+        output, _, _ = self._run(['id'])
+        assert 'uid=0' in output
+        assert 'root' in output
+
+    def test_whoami_root(self):
+        output, _, _ = self._run(['whoami'])
+        assert output.strip() == 'root'
+
+    # --- hostname ---
+    def test_hostname(self):
+        output, _, _ = self._run(['hostname'])
+        assert 'ncpu-gpu' in output
+
+    # --- date ---
+    def test_date_year(self):
+        output, _, _ = self._run(['date', '+%Y'])
+        year = output.strip()
+        assert year.isdigit()
+        assert int(year) >= 2024
+
+    # --- basename/dirname ---
+    def test_basename_path(self):
+        output, _, _ = self._run(['basename', '/etc/passwd'])
+        assert output.strip() == 'passwd'
+
+    def test_dirname_path(self):
+        output, _, _ = self._run(['dirname', '/etc/passwd'])
+        assert output.strip() == '/etc'
+
+    # --- wc ---
+    def test_wc_file(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['wc', '-l', '/etc/passwd'], fs)
+        parts = output.strip().split()
+        assert int(parts[0]) > 0
+
+    # --- stat ---
+    def test_stat_file(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['stat', '/etc/hostname'], fs)
+        assert '/etc/hostname' in output or 'File:' in output
+
+    # --- grep -F ---
+    def test_grep_fixed(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['grep', '-F', 'root', '/etc/passwd'], fs)
+        assert 'root' in output
+
+    # --- touch + mv + cp + rm ---
+    def test_touch_creates_file(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        self._run(['touch', '/tmp/newfile'], fs)
+        assert '/tmp/newfile' in fs.files
+
+    def test_mv_renames_file(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        fs.write_file('/tmp/src', b'data')
+        self._run(['mv', '/tmp/src', '/tmp/dst'], fs)
+        assert '/tmp/dst' in fs.files
+        assert '/tmp/src' not in fs.files
+
+    def test_cp_copies_file(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        self._run(['cp', '/etc/hostname', '/tmp/hostname_copy'], fs)
+        assert '/tmp/hostname_copy' in fs.files
+
+    def test_rm_removes_file(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        fs.write_file('/tmp/rmme', b'delete me')
+        self._run(['rm', '/tmp/rmme'], fs)
+        assert '/tmp/rmme' not in fs.files
+
+    # --- mkdir + rmdir ---
+    def test_mkdir_creates_dir(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        self._run(['mkdir', '/tmp/newdir'], fs)
+        assert '/tmp/newdir' in fs.directories
+
+    def test_rmdir_removes_dir(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        fs.mkdir('/tmp/rmdir_test')
+        self._run(['rmdir', '/tmp/rmdir_test'], fs)
+        assert '/tmp/rmdir_test' not in fs.directories
+
+    # --- sleep ---
+    def test_sleep_zero(self):
+        """sleep 0 should exit immediately."""
+        _, results, _ = self._run(['sleep', '0'])
+        assert results['total_cycles'] < 50000
+
+    # --- true/false ---
+    def test_true(self):
+        _, results, _ = self._run(['true'])
+        assert results['total_cycles'] < 5000
+
+    def test_false(self):
+        _, results, _ = self._run(['false'])
+        assert results['total_cycles'] < 5000
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# UTIMENSAT FIX TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestUtimensatFix:
+    """Test that utimensat returns ENOENT for non-existent files."""
+
+    def test_utimensat_existing(self):
+        """utimensat on existing file should return 0."""
+        from ncpu.os.gpu.elf_loader import make_busybox_syscall_handler
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+
+        fs = create_alpine_rootfs()
+        cpu = MLXKernelCPUv2(quiet=True)
+        handler = make_busybox_syscall_handler(filesystem=fs)
+
+        # Write path to memory
+        path = b'/etc/hostname\x00'
+        cpu.write_memory(0x10000, path)
+
+        # Set up: x8=88(utimensat), x0=AT_FDCWD, x1=path, x2=0, x3=0
+        cpu.set_register(8, 88)
+        cpu.set_register(0, -100)  # AT_FDCWD
+        cpu.set_register(1, 0x10000)
+        cpu.set_register(2, 0)
+        cpu.set_register(3, 0)
+
+        result = handler(cpu)
+        assert result is True
+        assert cpu.get_register(0) == 0  # Success
+
+    def test_utimensat_nonexistent(self):
+        """utimensat on non-existent file should return -ENOENT."""
+        from ncpu.os.gpu.elf_loader import make_busybox_syscall_handler
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+
+        fs = create_alpine_rootfs()
+        cpu = MLXKernelCPUv2(quiet=True)
+        handler = make_busybox_syscall_handler(filesystem=fs)
+
+        path = b'/tmp/nonexistent\x00'
+        cpu.write_memory(0x10000, path)
+
+        cpu.set_register(8, 88)
+        cpu.set_register(0, -100)
+        cpu.set_register(1, 0x10000)
+        cpu.set_register(2, 0)
+        cpu.set_register(3, 0)
+
+        result = handler(cpu)
+        assert result is True
+        assert cpu.get_register(0) == -2  # -ENOENT

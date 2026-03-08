@@ -91,17 +91,25 @@ class MLXKernelCPUv2:
         """Initialize CPU with given memory size."""
         self.memory_size = memory_size
 
-        # Memory (double-buffered)
-        self.memory = mx.zeros(memory_size, dtype=mx.uint8)
+        # ── Shadow numpy arrays (Python-side fast path) ──
+        # All Python-side reads/writes go through numpy. Only sync to MLX
+        # at execute() boundaries. This eliminates per-SVC 16MB round-trips.
+        # Lazy sync: GPU→numpy memory transfer is deferred until first read.
+        self._memory_np = np.zeros(memory_size, dtype=np.uint8)
+        self._registers_np = np.zeros(32, dtype=np.int64)
+        self._flags_np = np.zeros(4, dtype=np.float32)
+        self._memory_dirty = True    # numpy has changes not yet synced to MLX
+        self._memory_np_stale = False # numpy doesn't have GPU's latest memory
+        self._registers_dirty = True
+        self._flags_dirty = True
 
-        # Registers (x0-x30, x31=XZR)
-        self.registers = mx.zeros(32, dtype=mx.int64)
+        # MLX arrays (GPU-side, synced lazily from numpy at execute() time)
+        self.memory = mx.array(self._memory_np, dtype=mx.uint8)
+        self.registers = mx.array(self._registers_np, dtype=mx.int64)
+        self.flags = mx.array(self._flags_np, dtype=mx.float32)
 
         # Program Counter
         self._pc = 0
-
-        # Condition Flags [N, Z, C, V]
-        self.flags = mx.zeros(4, dtype=mx.float32)
 
         # SIMD/FP registers V0-V31 (128-bit each, stored as hi:lo int64 pairs)
         self.vreg_lo = mx.zeros(32, dtype=mx.int64)
@@ -128,7 +136,7 @@ class MLXKernelCPUv2:
 
         if not quiet:
             print(f"[MLXKernelCPUv2] Initialized with {memory_size:,} bytes memory")
-            print(f"[MLXKernelCPUv2] Double-buffer memory architecture enabled")
+            print(f"[MLXKernelCPUv2] Shadow numpy acceleration enabled")
             print(f"[MLXKernelCPUv2] STR/STRB memory writes SUPPORTED!")
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -145,49 +153,52 @@ class MLXKernelCPUv2:
     def get_register(self, reg: int) -> int:
         if reg == 31:
             return 0
-        return int(self.registers[reg].item())
+        return int(self._registers_np[reg])
 
     def set_register(self, reg: int, value: int) -> None:
         if reg == 31:
             return
-        # MLX array.at[].add() doesn't support int64 on GPU — use numpy roundtrip
-        regs_np = np.array(self.registers)
-        regs_np[reg] = value
-        self.registers = mx.array(regs_np, dtype=mx.int64)
-        mx.eval(self.registers)
+        self._registers_np[reg] = value
+        self._registers_dirty = True
 
     def get_registers_numpy(self) -> np.ndarray:
-        return np.array(self.registers)
+        return self._registers_np.copy()
 
     def set_registers_numpy(self, values: np.ndarray) -> None:
-        self.registers = mx.array(values, dtype=mx.int64)
-        mx.eval(self.registers)
+        self._registers_np[:] = values
+        self._registers_dirty = True
 
     def get_flags(self) -> tuple[bool, bool, bool, bool]:
-        f = np.array(self.flags)
+        f = self._flags_np
         return (f[0] > 0.5, f[1] > 0.5, f[2] > 0.5, f[3] > 0.5)
 
     def set_flags(self, n: bool, z: bool, c: bool, v: bool) -> None:
-        self.flags = mx.array([
-            1.0 if n else 0.0, 1.0 if z else 0.0,
-            1.0 if c else 0.0, 1.0 if v else 0.0,
-        ], dtype=mx.float32)
-        mx.eval(self.flags)
+        self._flags_np[0] = 1.0 if n else 0.0
+        self._flags_np[1] = 1.0 if z else 0.0
+        self._flags_np[2] = 1.0 if c else 0.0
+        self._flags_np[3] = 1.0 if v else 0.0
+        self._flags_dirty = True
 
     # ═══════════════════════════════════════════════════════════════════════════
     # MEMORY OPERATIONS
     # ═══════════════════════════════════════════════════════════════════════════
 
+    def _ensure_memory_synced(self) -> None:
+        """Lazy sync: pull GPU memory to numpy if stale."""
+        if self._memory_np_stale:
+            self._memory_np = np.array(self.memory)
+            self._memory_np_stale = False
+
     def read_memory(self, address: int, size: int) -> bytes:
+        self._ensure_memory_synced()
         end = min(address + size, self.memory_size)
-        return bytes(np.array(self.memory[address:end]))
+        return bytes(self._memory_np[address:end])
 
     def write_memory(self, address: int, data: bytes) -> None:
+        self._ensure_memory_synced()
         data_array = np.frombuffer(data, dtype=np.uint8)
-        mem_np = np.array(self.memory)
-        mem_np[address:address + len(data)] = data_array
-        self.memory = mx.array(mem_np, dtype=mx.uint8)
-        mx.eval(self.memory)
+        self._memory_np[address:address + len(data)] = data_array
+        self._memory_dirty = True
 
     def load_program(self, program: Union[bytes, list[int]], address: int = 0) -> None:
         if isinstance(program, list):
@@ -199,8 +210,9 @@ class MLXKernelCPUv2:
         print(f"[MLXKernelCPUv2] Loaded {len(program):,} bytes at 0x{address:X}")
 
     def clear_memory(self) -> None:
-        self.memory = mx.zeros(self.memory_size, dtype=mx.uint8)
-        mx.eval(self.memory)
+        self._memory_np = np.zeros(self.memory_size, dtype=np.uint8)
+        self._memory_np_stale = False
+        self._memory_dirty = True
 
     def read_memory_64(self, address: int) -> int:
         """Read 64-bit value from memory (little-endian)."""
@@ -212,6 +224,54 @@ class MLXKernelCPUv2:
         self.write_memory(address, value.to_bytes(8, 'little'))
 
     # ═══════════════════════════════════════════════════════════════════════════
+    # GPU-SIDE SVC BUFFER
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    SVC_BUF_BASE = 0x3F0000
+    SVC_BUF_HDR = 16
+    SVC_BUF_DATA = SVC_BUF_BASE + SVC_BUF_HDR
+
+    def init_svc_buffer(self) -> None:
+        """Initialize the GPU-side SVC write buffer. Call before first execute()."""
+        # Zero the header: write_pos=0, entry_count=0, brk_addr=0
+        self._memory_np[self.SVC_BUF_BASE:self.SVC_BUF_BASE + self.SVC_BUF_HDR] = 0
+        self._memory_dirty = True
+
+    def drain_svc_buffer(self) -> list[tuple[int, bytes]]:
+        """
+        Drain buffered SYS_WRITE entries from GPU memory.
+
+        Returns list of (fd, data) tuples. Resets buffer for next execute().
+        Uses targeted MLX read to avoid full 16MB memory sync when buffer empty.
+        """
+        # Quick check: read just the 8-byte header from MLX (avoids full sync)
+        hdr = np.array(self.memory[self.SVC_BUF_BASE:self.SVC_BUF_BASE + 8])
+        entry_count = int(hdr[4]) | (int(hdr[5]) << 8) | (int(hdr[6]) << 16) | (int(hdr[7]) << 24)
+
+        if entry_count == 0:
+            return []
+
+        # Has entries — read the buffer data region from MLX
+        write_pos = int(hdr[0]) | (int(hdr[1]) << 8) | (int(hdr[2]) << 16) | (int(hdr[3]) << 24)
+        buf_data = np.array(self.memory[self.SVC_BUF_DATA:self.SVC_BUF_DATA + write_pos])
+
+        entries = []
+        offset = 0
+        for _ in range(entry_count):
+            fd = int(buf_data[offset])
+            length = int(buf_data[offset + 1]) | (int(buf_data[offset + 2]) << 8)
+            data = bytes(buf_data[offset + 3:offset + 3 + length])
+            entries.append((fd, data))
+            offset += 3 + length
+
+        # Reset buffer header in numpy (will be synced at next execute)
+        self._ensure_memory_synced()
+        self._memory_np[self.SVC_BUF_BASE:self.SVC_BUF_BASE + 8] = 0
+        self._memory_dirty = True
+
+        return entries
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # EXECUTION
     # ═══════════════════════════════════════════════════════════════════════════
 
@@ -220,8 +280,21 @@ class MLXKernelCPUv2:
         Execute instructions using Metal kernel V2.
 
         The kernel runs entirely on GPU with full memory read/write support.
+        Numpy shadow arrays are synced to MLX only at dispatch boundaries,
+        eliminating per-SVC 16MB round-trips.
         """
         start_time = time.perf_counter()
+
+        # ── Sync dirty numpy shadows → MLX (only if Python modified state) ──
+        if self._memory_dirty:
+            self.memory = mx.array(self._memory_np, dtype=mx.uint8)
+            self._memory_dirty = False
+        if self._registers_dirty:
+            self.registers = mx.array(self._registers_np, dtype=mx.int64)
+            self._registers_dirty = False
+        if self._flags_dirty:
+            self.flags = mx.array(self._flags_np, dtype=mx.float32)
+            self._flags_dirty = False
 
         # Prepare inputs
         pc_array = mx.array([self._pc], dtype=mx.uint64)
@@ -265,11 +338,22 @@ class MLXKernelCPUv2:
         (memory_out, registers_out, pc_out, flags_out, cycles_out, stop_reason_out,
          vreg_lo_out, vreg_hi_out) = outputs
 
-        # Update state - SWAP memory buffer!
-        self.memory = memory_out  # memory_out becomes the new memory
+        # ── Sync MLX outputs → numpy shadows ──
+        # Memory: LAZY sync — defer 16MB GPU→numpy until Python reads memory.
+        # Registers/flags: sync immediately (small, always needed for SVC args).
+        self.memory = memory_out
+        self._memory_np_stale = True  # Will sync on first read_memory() call
+        self._memory_dirty = False
+
         self.registers = registers_out
-        self._pc = int(pc_out[0].item())
+        self._registers_np = np.array(registers_out)
+        self._registers_dirty = False
+
         self.flags = flags_out
+        self._flags_np = np.array(flags_out)
+        self._flags_dirty = False
+
+        self._pc = int(pc_out[0].item())
         self.vreg_lo = vreg_lo_out
         self.vreg_hi = vreg_hi_out
         cycles = int(cycles_out[0].item())
@@ -295,16 +379,17 @@ class MLXKernelCPUv2:
 
     def reset(self) -> None:
         """Reset CPU state."""
-        self.registers = mx.zeros(32, dtype=mx.int64)
+        self._registers_np[:] = 0
+        self._registers_dirty = True
         self._pc = 0
-        self.flags = mx.zeros(4, dtype=mx.float32)
+        self._flags_np[:] = 0.0
+        self._flags_dirty = True
         self.total_instructions = 0
         self.total_syscalls = 0
-        mx.eval(self.registers, self.flags)
 
     def dump_registers(self) -> str:
         """Get formatted register dump."""
-        regs = np.array(self.registers)
+        regs = self._registers_np
         lines = [f"PC:  0x{self._pc:016X}", ""]
         for i in range(0, 32, 4):
             parts = []

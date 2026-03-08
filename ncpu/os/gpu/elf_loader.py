@@ -898,8 +898,17 @@ def make_busybox_syscall_handler(filesystem=None, heap_base=None, stdin_data=Non
             return True
 
         elif syscall_num == SYS_UTIMENSAT:
-            # utimensat(dirfd, path, times, flags) — stub
-            cpu.set_register(0, 0)
+            # utimensat(dirfd, path, times, flags)
+            path_addr = x1
+            if path_addr and filesystem:
+                path = read_string_from_gpu(cpu, path_addr)
+                resolved = filesystem.resolve_path(path)
+                if resolved in filesystem.files or resolved in filesystem.directories:
+                    cpu.set_register(0, 0)  # Success
+                else:
+                    cpu.set_register(0, -2)  # -ENOENT
+            else:
+                cpu.set_register(0, 0)  # No path = fstat-like, success
             return True
 
         elif syscall_num == SYS_STATFS:

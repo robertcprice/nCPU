@@ -59,9 +59,44 @@ constant uint8_t STOP_MAX_CYCLES = 3;
 
 constant uint32_t MEMORY_SIZE = 4 * 1024 * 1024;  // 4MB
 
+// ── GPU-SIDE SVC BUFFER ──
+// Buffers SYS_WRITE(stdout/stderr) on GPU to avoid Python round-trips.
+// Layout at SVC_BUF_BASE:
+//   [0..3]   uint32_t write_pos   (offset into data area)
+//   [4..7]   uint32_t entry_count (number of buffered entries)
+//   [8..15]  uint64_t brk_addr    (heap break for SYS_BRK)
+//   [16..]   entry data: [1B fd][2B len LE][len bytes data]
+constant uint32_t SVC_BUF_BASE     = 0x3F0000;
+constant uint32_t SVC_BUF_HDR      = 16;
+constant uint32_t SVC_BUF_DATA     = SVC_BUF_BASE + SVC_BUF_HDR;
+constant uint32_t SVC_BUF_CAPACITY = 0xFFF0;  // ~64KB data area
+constant uint32_t SVC_HEAP_BASE    = 0x60000;  // must match runner.py HEAP_BASE
+// Linux syscall numbers
+constant int64_t SVC_SYS_WRITE = 64;
+constant int64_t SVC_SYS_CLOSE = 57;
+constant int64_t SVC_SYS_BRK   = 214;
+
 // ════════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
 // ════════════════════════════════════════════════════════════════════════════
+
+inline uint32_t read_u32_le(device uint8_t* mem, uint32_t addr) {
+    return uint32_t(mem[addr]) | (uint32_t(mem[addr+1]) << 8) |
+           (uint32_t(mem[addr+2]) << 16) | (uint32_t(mem[addr+3]) << 24);
+}
+inline void write_u32_le(device uint8_t* mem, uint32_t addr, uint32_t val) {
+    mem[addr]   = uint8_t(val & 0xFF);
+    mem[addr+1] = uint8_t((val >> 8) & 0xFF);
+    mem[addr+2] = uint8_t((val >> 16) & 0xFF);
+    mem[addr+3] = uint8_t((val >> 24) & 0xFF);
+}
+inline uint64_t read_u64_le(device uint8_t* mem, uint32_t addr) {
+    return uint64_t(read_u32_le(mem, addr)) | (uint64_t(read_u32_le(mem, addr+4)) << 32);
+}
+inline void write_u64_le(device uint8_t* mem, uint32_t addr, uint64_t val) {
+    write_u32_le(mem, addr, uint32_t(val & 0xFFFFFFFF));
+    write_u32_le(mem, addr+4, uint32_t(val >> 32));
+}
 
 inline uint32_t fetch_instruction(device uint8_t* memory, uint64_t pc) {
     return uint32_t(memory[pc]) |
@@ -314,8 +349,63 @@ KERNEL_SOURCE_V2 = """
             reason = STOP_HALT;
             break;
         }
-        // CHECK SVC
+        // CHECK SVC — handle hot syscalls on GPU, trap the rest to Python
         if ((inst & 0xFFE0001F) == 0xD4000001) {
+            int64_t svc_num = regs[8];  // X8 = syscall number
+
+            // ── SYS_WRITE(stdout/stderr): buffer on GPU ──
+            if (svc_num == SVC_SYS_WRITE && (regs[0] == 1 || regs[0] == 2)) {
+                uint32_t buf_pos = read_u32_le(memory_out, SVC_BUF_BASE);
+                int64_t src_addr = regs[1];
+                int64_t write_len = regs[2];
+                uint32_t entry_size = 3 + uint32_t(write_len);  // fd + len16 + data
+                if (write_len > 0 && buf_pos + entry_size <= SVC_BUF_CAPACITY) {
+                    uint32_t base = SVC_BUF_DATA + buf_pos;
+                    memory_out[base] = uint8_t(regs[0]);  // fd
+                    memory_out[base + 1] = uint8_t(write_len & 0xFF);
+                    memory_out[base + 2] = uint8_t((write_len >> 8) & 0xFF);
+                    for (int64_t i = 0; i < write_len && i < 8192; i++) {
+                        memory_out[base + 3 + uint32_t(i)] = memory_out[uint64_t(src_addr + i)];
+                    }
+                    buf_pos += entry_size;
+                    uint32_t cnt = read_u32_le(memory_out, SVC_BUF_BASE + 4);
+                    write_u32_le(memory_out, SVC_BUF_BASE, buf_pos);
+                    write_u32_le(memory_out, SVC_BUF_BASE + 4, cnt + 1);
+                    regs[0] = write_len;  // return value = bytes written
+                    pc += 4;
+                    cycles++;
+                    continue;  // next instruction — NO Python trap!
+                }
+                // Buffer full — fall through to Python trap
+            }
+
+            // ── SYS_BRK: handle heap break on GPU ──
+            if (svc_num == SVC_SYS_BRK) {
+                uint64_t brk = read_u64_le(memory_out, SVC_BUF_BASE + 8);
+                if (brk == 0) brk = SVC_HEAP_BASE;  // first call: init
+                if (regs[0] == 0) {
+                    regs[0] = int64_t(brk);
+                } else if (uint64_t(regs[0]) >= SVC_HEAP_BASE) {
+                    brk = uint64_t(regs[0]);
+                    regs[0] = int64_t(brk);
+                } else {
+                    regs[0] = int64_t(brk);
+                }
+                write_u64_le(memory_out, SVC_BUF_BASE + 8, brk);
+                pc += 4;
+                cycles++;
+                continue;
+            }
+
+            // ── SYS_CLOSE(fd <= 2): no-op on GPU ──
+            if (svc_num == SVC_SYS_CLOSE && regs[0] <= 2) {
+                regs[0] = 0;  // success
+                pc += 4;
+                cycles++;
+                continue;
+            }
+
+            // All other SVCs: trap to Python
             reason = STOP_SYSCALL;
             break;
         }
