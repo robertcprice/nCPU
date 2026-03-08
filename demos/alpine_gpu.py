@@ -1551,11 +1551,65 @@ def shell_builtin(argv, shell_state):
         return True
 
     elif cmd == 'umask':
-        print("0022")
+        if len(argv) > 1:
+            pass  # set umask (stub)
+        else:
+            print("0022")
         return True
 
     elif cmd == 'ulimit':
-        print("unlimited")
+        if len(argv) > 1 and argv[1] == '-a':
+            print("core file size          (blocks, -c) unlimited")
+            print("data seg size           (kbytes, -d) unlimited")
+            print("file size               (blocks, -f) unlimited")
+            print("max memory size         (kbytes, -m) 16384")
+            print("stack size              (kbytes, -s) 8192")
+            print("cpu time                (seconds, -t) unlimited")
+            print("max user processes      (-u) 15")
+        else:
+            print("unlimited")
+        return True
+
+    elif cmd == 'apk':
+        # Alpine package manager stub
+        if len(argv) < 2:
+            print("apk-tools 2.14.0, compiled for aarch64 (nCPU GPU)")
+            return True
+        sub = argv[1]
+        if sub == 'info':
+            print("busybox-1.36.1-r1 x86_64 {busybox} (GPL-2.0-only)")
+            print("musl-1.2.5-r0 x86_64 {musl} (MIT)")
+            print("alpine-base-3.20.0-r0 x86_64 {alpine-base} (MIT)")
+        elif sub == 'list' or sub == '--installed':
+            print("busybox-1.36.1-r1")
+            print("musl-1.2.5-r0")
+            print("alpine-base-3.20.0-r0")
+        elif sub == 'update':
+            print("fetch https://dl-cdn.alpinelinux.org/alpine/v3.20/main")
+            print("v3.20.0-0-g (nCPU GPU - packages not available)")
+        elif sub == 'add':
+            pkgs = ' '.join(argv[2:])
+            print(f"ERROR: unable to select packages: {pkgs}")
+            print("  (GPU filesystem is read-only for package management)")
+            env['?'] = '1'
+        elif sub == 'version' or sub == '-V':
+            print("apk-tools 2.14.0, compiled for aarch64")
+        else:
+            print(f"apk: unrecognized subcommand: {sub}")
+        return True
+
+    elif cmd == 'xargs':
+        # xargs: read args from stdin and execute command
+        # In GPU shell, this is a stub that just passes through
+        if len(argv) > 1:
+            print(f"(xargs: would execute '{' '.join(argv[1:])}' with stdin args)")
+        return True
+
+    elif cmd == 'tee':
+        # tee: read stdin and write to file + stdout
+        # Stub — in GPU this is handled by pipelines
+        if len(argv) > 1:
+            print(f"(tee: would write to {argv[1]})")
         return True
 
     return False
@@ -1584,8 +1638,22 @@ def evaluate_test(args, fs):
             path = fs.resolve_path(args[1])
             data = fs.read_file(path)
             return data is not None and len(data) > 0
+        if op == '-r' or op == '-w' or op == '-x':
+            path = fs.resolve_path(args[1])
+            return path in fs.files or path in fs.directories
+        if op == '-L' or op == '-h':  # symlink (always false on GPU)
+            return False
+        if op == '-b' or op == '-c' or op == '-p' or op == '-S':
+            return False  # block/char/pipe/socket
         if op == '!':
             return not evaluate_test(args[1:], fs)
+    # Compound: -a (AND) and -o (OR) operators
+    if '-a' in args:
+        idx = args.index('-a')
+        return evaluate_test(args[:idx], fs) and evaluate_test(args[idx+1:], fs)
+    if '-o' in args:
+        idx = args.index('-o')
+        return evaluate_test(args[:idx], fs) or evaluate_test(args[idx+1:], fs)
     if len(args) == 3:
         a, op, b = args
         if op == '=':
@@ -1621,6 +1689,7 @@ BUILTINS = {
     'ulimit', 'cat',  # cat with no args
     'seq', 'basename', 'dirname', 'printf', 'pushd', 'popd', 'dirs',
     'local', 'return', 'trap', 'eval', 'shift', 'let',
+    'apk', 'xargs', 'tee',
 }
 
 GPU_COMMANDS = {
