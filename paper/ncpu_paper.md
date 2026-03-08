@@ -12,7 +12,7 @@ We present nCPU, an end-to-end AI computer in which every layer of the computati
 
 The neural ALU achieves 100% accuracy on 32-bit integer arithmetic via memorization-by-decomposition: operations are broken into sub-problems with exhaustively trainable input spaces. This yields a counterintuitive finding: neural multiplication (21 us) is 12x faster than neural addition (248 us), inverting the conventional performance hierarchy. The neural OS (neurOS) implements 11 components --- MMU, TLB, cache, scheduler, assembler, compiler, watchdog --- as trained models with 93.7-100% accuracy and zero fallback paths. The GPU compute layer executes 135+ ARM64 instructions at ~4M IPS via Metal shaders, hosts a 25-command UNIX shell with fork/wait/pipe/dup2 multi-process support, runs a ~3,500-line self-hosting C compiler (40/40 test programs, self-compilation verified), loads real BusyBox (321KB, 30+ applets) and boots Alpine Linux v3.20 on the GPU, and proves Turing completeness via a 2-instruction MUXLEQ VM running eForth with neural arithmetic.
 
-The system comprises 24 trained models, 1,099 tests across 17 files with exhaustive formal verification, and demonstrates that a single GPU can host a complete, self-contained computational stack from silicon to shell.
+The system comprises 24 trained models, 1,128 tests across 17 files with exhaustive formal verification, and demonstrates that a single GPU can host a complete, self-contained computational stack from silicon to shell.
 
 ## 1. Introduction
 
@@ -1367,7 +1367,13 @@ The `alpine_gpu.py` demo provides an interactive Alpine shell where each command
 - **Command substitution**: `$(cmd)` and `` `cmd` ``
 - **Glob expansion**: `*` and `?` wildcards matched against filesystem
 - **Shell scripting**: `for`/`while`/`if`/`elif`/`else`/`fi`/`case`/`esac`
-- **20+ builtins**: cd, pwd, export, unset, set, echo (-n/-e), true, false, test/[, type, which, source, sh, read, history, alias, clear, jobs, umask, ulimit
+- **Parameter expansion**: `${VAR:-default}`, `${VAR:=assign}`, `${VAR:+alt}`, `${#VAR}`, `${VAR#pat}`, `${VAR##pat}`, `${VAR%pat}`, `${VAR%%pat}`, `${VAR/old/new}`
+- **Brace expansion**: `{1..10}`, `{1..100..5}`, `{a,b,c}`, `file{1..3}.txt`
+- **Here-documents**: `<<EOF ... EOF`, `<<-EOF` (tab-stripping), variable expansion in heredoc body
+- **Shell functions**: `name() { body; }`, multi-line, positional params, `local` variables, `return`
+- **Input redirection**: `cmd < file`, combinable with output redirect `cmd < in > out`
+- **Error handling**: `set -e` (exit on error), `set -x` (trace), `set +x` (disable)
+- **30+ builtins**: cd, pwd, export, unset, set, echo, true, false, test/[, type, which, source, sh, read, history, alias, clear, jobs, umask, ulimit, local, return, seq, basename, dirname, printf, pushd, popd, dirs
 - **Aliases**: `alias ll='ls -l'`, `unalias`, sourced from `/root/.ashrc`
 - **History**: `!!`, `!N` expansion
 - **Script execution**: `sh script.sh`, `source script.sh`, positional params ($0, $1, $#, $@)

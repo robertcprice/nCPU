@@ -1283,27 +1283,27 @@ class TestRedirection:
 
     def test_write_redirect(self):
         from alpine_gpu import extract_redirection
-        tokens, redir, append = extract_redirection(['echo', 'hi', '>', '/tmp/f'])
+        tokens, redir, append, redir_in = extract_redirection(['echo', 'hi', '>', '/tmp/f'])
         assert tokens == ['echo', 'hi']
         assert redir == '/tmp/f'
         assert append is False
 
     def test_append_redirect(self):
         from alpine_gpu import extract_redirection
-        tokens, redir, append = extract_redirection(['echo', 'hi', '>>', '/tmp/f'])
+        tokens, redir, append, redir_in = extract_redirection(['echo', 'hi', '>>', '/tmp/f'])
         assert tokens == ['echo', 'hi']
         assert redir == '/tmp/f'
         assert append is True
 
     def test_no_redirect(self):
         from alpine_gpu import extract_redirection
-        tokens, redir, append = extract_redirection(['ls', '-la'])
+        tokens, redir, append, redir_in = extract_redirection(['ls', '-la'])
         assert tokens == ['ls', '-la']
         assert redir is None
 
     def test_attached_redirect(self):
         from alpine_gpu import extract_redirection
-        tokens, redir, append = extract_redirection(['echo', 'hi', '>/tmp/f'])
+        tokens, redir, append, redir_in = extract_redirection(['echo', 'hi', '>/tmp/f'])
         assert tokens == ['echo', 'hi']
         assert redir == '/tmp/f'
 
@@ -2253,3 +2253,258 @@ class TestAdditionalBuiltins:
         )
         run_script(script, state)
         assert capsys.readouterr().out == '1\n2\n3\n'
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW SHELL FEATURES: Input redirection, parameter expansion, functions,
+# heredocs, brace expansion, set flags
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestInputRedirection:
+    """Test input redirection (< file)."""
+
+    def test_input_redirect_parsing(self):
+        from alpine_gpu import extract_redirection
+        tokens, redir, append, redir_in = extract_redirection(
+            ['wc', '-l', '<', '/etc/passwd'])
+        assert tokens == ['wc', '-l']
+        assert redir is None
+        assert redir_in == '/etc/passwd'
+
+    def test_input_redirect_attached(self):
+        from alpine_gpu import extract_redirection
+        tokens, redir, append, redir_in = extract_redirection(
+            ['wc', '-l', '</etc/passwd'])
+        assert tokens == ['wc', '-l']
+        assert redir_in == '/etc/passwd'
+
+    def test_input_and_output_redirect(self):
+        from alpine_gpu import extract_redirection
+        tokens, redir, append, redir_in = extract_redirection(
+            ['sort', '<', '/tmp/in', '>', '/tmp/out'])
+        assert tokens == ['sort']
+        assert redir == '/tmp/out'
+        assert redir_in == '/tmp/in'
+
+    def test_no_input_redirect(self):
+        from alpine_gpu import extract_redirection
+        tokens, redir, append, redir_in = extract_redirection(['echo', 'hi'])
+        assert redir_in is None
+
+
+class TestParameterExpansion:
+    """Test ${VAR:-default}, ${VAR#pattern}, etc."""
+
+    def test_default_value(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${UNSET:-hello}'], {})
+        assert result == ['hello']
+
+    def test_default_value_with_set_var(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${FOO:-hello}'], {'FOO': 'world'})
+        assert result == ['world']
+
+    def test_assign_default(self):
+        from alpine_gpu import expand_variables
+        env = {}
+        result = expand_variables(['${X:=42}'], env)
+        assert result == ['42']
+        assert env['X'] == '42'
+
+    def test_alternate_value(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${FOO:+yes}'], {'FOO': 'bar'})
+        assert result == ['yes']
+
+    def test_alternate_value_unset(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${FOO:+yes}'], {})
+        assert result == ['']
+
+    def test_string_length(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${#FOO}'], {'FOO': 'hello'})
+        assert result == ['5']
+
+    def test_prefix_strip(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${PATH#*/}'], {'PATH': '/usr/bin:/sbin'})
+        assert result == ['usr/bin:/sbin']
+
+    def test_suffix_strip(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${FILE%.txt}'], {'FILE': 'notes.txt'})
+        assert result == ['notes']
+
+    def test_greedy_suffix_strip(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${PATH%%:*}'], {'PATH': '/usr/bin:/sbin:/bin'})
+        assert result == ['/usr/bin']
+
+    def test_substitution(self):
+        from alpine_gpu import expand_variables
+        result = expand_variables(['${MSG/world/earth}'], {'MSG': 'hello world'})
+        assert result == ['hello earth']
+
+
+class TestShellFunctions:
+    """Test function definition and invocation."""
+
+    def _make_shell_state(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        return {
+            'env': {'HOME': '/root', 'PWD': '/', '?': '0', 'PATH': '/bin:/usr/bin'},
+            'fs': create_alpine_rootfs(),
+            'cwd': '/',
+            'functions': {},
+        }
+
+    def test_single_line_function_def(self, capsys):
+        from alpine_gpu import execute_line
+        state = self._make_shell_state()
+        execute_line('greet() { echo hello; }', state)
+        assert 'greet' in state['functions']
+        execute_line('greet', state)
+        assert capsys.readouterr().out.strip() == 'hello'
+
+    def test_function_with_args(self, capsys):
+        from alpine_gpu import run_script
+        state = self._make_shell_state()
+        script = """
+say() {
+echo $1 $2
+}
+say hello world
+"""
+        run_script(script, state)
+        assert capsys.readouterr().out.strip() == 'hello world'
+
+    def test_function_type(self, capsys):
+        from alpine_gpu import execute_line, shell_builtin
+        state = self._make_shell_state()
+        state['functions']['myfunc'] = 'echo test'
+        shell_builtin(['type', 'myfunc'], state)
+        assert 'function' in capsys.readouterr().out
+
+    def test_function_with_local(self, capsys):
+        from alpine_gpu import run_script
+        state = self._make_shell_state()
+        script = """
+counter() {
+local i=0
+echo $i
+}
+counter
+"""
+        run_script(script, state)
+        assert capsys.readouterr().out.strip() == '0'
+
+
+class TestHeredocs:
+    """Test here-document support."""
+
+    def _make_shell_state(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        return {
+            'env': {'HOME': '/root', 'PWD': '/', '?': '0', 'NAME': 'GPU'},
+            'fs': create_alpine_rootfs(),
+            'cwd': '/',
+            'functions': {},
+        }
+
+    def test_heredoc_with_cat(self, capsys):
+        from alpine_gpu import run_script
+        state = self._make_shell_state()
+        script = """cat <<EOF
+hello world
+EOF"""
+        run_script(script, state)
+        out = capsys.readouterr().out
+        assert 'hello world' in out
+
+    def test_heredoc_variable_expansion(self, capsys):
+        from alpine_gpu import run_script
+        state = self._make_shell_state()
+        script = """cat <<EOF
+Hello $NAME
+EOF"""
+        run_script(script, state)
+        out = capsys.readouterr().out
+        assert 'Hello GPU' in out
+
+
+class TestBraceExpansion:
+    """Test brace expansion ({1..5}, {a,b,c})."""
+
+    def test_numeric_range(self):
+        from alpine_gpu import expand_braces
+        result = expand_braces(['{1..5}'])
+        assert result == ['1', '2', '3', '4', '5']
+
+    def test_numeric_range_with_prefix(self):
+        from alpine_gpu import expand_braces
+        result = expand_braces(['file{1..3}.txt'])
+        assert result == ['file1.txt', 'file2.txt', 'file3.txt']
+
+    def test_comma_expansion(self):
+        from alpine_gpu import expand_braces
+        result = expand_braces(['{a,b,c}'])
+        assert result == ['a', 'b', 'c']
+
+    def test_comma_with_prefix_suffix(self):
+        from alpine_gpu import expand_braces
+        result = expand_braces(['test_{x,y,z}.log'])
+        assert result == ['test_x.log', 'test_y.log', 'test_z.log']
+
+    def test_no_braces(self):
+        from alpine_gpu import expand_braces
+        result = expand_braces(['hello', 'world'])
+        assert result == ['hello', 'world']
+
+    def test_numeric_step(self):
+        from alpine_gpu import expand_braces
+        result = expand_braces(['{0..10..2}'])
+        assert result == ['0', '2', '4', '6', '8', '10']
+
+
+class TestSetFlags:
+    """Test set -e, set -x."""
+
+    def _make_shell_state(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        return {
+            'env': {'HOME': '/root', 'PWD': '/', '?': '0'},
+            'fs': create_alpine_rootfs(),
+            'cwd': '/',
+            'set_flags': set(),
+        }
+
+    def test_set_e_stops_on_error(self, capsys):
+        from alpine_gpu import run_script
+        state = self._make_shell_state()
+        script = """set -e
+false
+echo should not reach here
+"""
+        run_script(script, state)
+        out = capsys.readouterr().out
+        assert 'should not reach here' not in out
+
+    def test_set_x_traces(self, capsys):
+        from alpine_gpu import run_script
+        state = self._make_shell_state()
+        script = """set -x
+echo hello
+"""
+        run_script(script, state)
+        err = capsys.readouterr().err
+        assert '+ echo hello' in err
+
+    def test_set_plus_disables(self):
+        from alpine_gpu import execute_line
+        state = self._make_shell_state()
+        execute_line('set -x', state)
+        assert 'x' in state['set_flags']
+        execute_line('set +x', state)
+        assert 'x' not in state['set_flags']

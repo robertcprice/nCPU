@@ -181,9 +181,10 @@ def split_chains(line):
 
 
 def extract_redirection(tokens):
-    """Extract output redirection from token list."""
+    """Extract input/output redirection from token list."""
     redir_file = None
     redir_append = False
+    redir_input = None
     filtered = []
 
     i = 0
@@ -199,6 +200,10 @@ def extract_redirection(tokens):
             redir_append = False
             i += 2
             continue
+        elif tok == "<" and i + 1 < len(tokens):
+            redir_input = tokens[i + 1]
+            i += 2
+            continue
         elif tok.startswith(">>") and len(tok) > 2:
             redir_file = tok[2:]
             redir_append = True
@@ -209,10 +214,14 @@ def extract_redirection(tokens):
             redir_append = False
             i += 1
             continue
+        elif tok.startswith("<") and len(tok) > 1:
+            redir_input = tok[1:]
+            i += 1
+            continue
         filtered.append(tok)
         i += 1
 
-    return filtered, redir_file, redir_append
+    return filtered, redir_file, redir_append, redir_input
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -220,13 +229,92 @@ def extract_redirection(tokens):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def expand_variables(tokens, env):
-    """Expand $VAR and ${VAR} in tokens using environment dict."""
+    """Expand $VAR, ${VAR}, and ${VAR:-default}/${VAR#pat}/${VAR%pat} in tokens."""
     expanded = []
     for tok in tokens:
         result = tok
-        # Expand ${VAR} first
-        result = re.sub(r'\$\{(\w+)\}', lambda m: env.get(m.group(1), ''), result)
-        # Expand $VAR (but not $$, $?, $!, etc. — handle those specially)
+        # Parameter expansion: ${VAR:-default}, ${VAR:=default}, ${VAR:+alt},
+        # ${VAR:?error}, ${#VAR}, ${VAR#pattern}, ${VAR##pattern},
+        # ${VAR%pattern}, ${VAR%%pattern}, ${VAR/old/new}
+        def _param_expand(m):
+            inner = m.group(1)
+            # ${#VAR} — string length
+            if inner.startswith('#'):
+                var = inner[1:]
+                return str(len(env.get(var, '')))
+            # ${VAR:-default}
+            if ':-' in inner:
+                var, default = inner.split(':-', 1)
+                val = env.get(var, '')
+                return val if val else default
+            # ${VAR:=default}
+            if ':=' in inner:
+                var, default = inner.split(':=', 1)
+                val = env.get(var, '')
+                if not val:
+                    env[var] = default
+                    return default
+                return val
+            # ${VAR:+alternate}
+            if ':+' in inner:
+                var, alt = inner.split(':+', 1)
+                val = env.get(var, '')
+                return alt if val else ''
+            # ${VAR:?error}
+            if ':?' in inner:
+                var, err = inner.split(':?', 1)
+                val = env.get(var, '')
+                if not val:
+                    print(f"ash: {var}: {err}")
+                return val
+            # ${VAR##pattern} — greedy prefix strip
+            if '##' in inner:
+                var, pat = inner.split('##', 1)
+                val = env.get(var, '')
+                for i in range(len(val), -1, -1):
+                    if fnmatch.fnmatch(val[:i], pat):
+                        return val[i:]
+                return val
+            # ${VAR#pattern} — shortest prefix strip
+            if '#' in inner:
+                var, pat = inner.split('#', 1)
+                val = env.get(var, '')
+                for i in range(len(val) + 1):
+                    if fnmatch.fnmatch(val[:i], pat):
+                        return val[i:]
+                return val
+            # ${VAR%%pattern} — greedy suffix strip
+            if '%%' in inner:
+                var, pat = inner.split('%%', 1)
+                val = env.get(var, '')
+                for i in range(len(val) + 1):
+                    if fnmatch.fnmatch(val[i:], pat):
+                        return val[:i]
+                return val
+            # ${VAR%pattern} — shortest suffix strip
+            if '%' in inner:
+                var, pat = inner.split('%', 1)
+                val = env.get(var, '')
+                for i in range(len(val), -1, -1):
+                    if fnmatch.fnmatch(val[i:], pat):
+                        return val[:i]
+                return val
+            # ${VAR/old/new} — substitution (check AFTER #/% to avoid
+            # mismatching patterns like ${VAR#*/} as substitution)
+            if '/' in inner and not inner.startswith('/'):
+                parts = inner.split('/', 2)
+                if len(parts) == 3:
+                    var, old, new = parts
+                    val = env.get(var, '')
+                    return val.replace(old, new, 1)
+                elif len(parts) == 2:
+                    var, old = parts
+                    val = env.get(var, '')
+                    return val.replace(old, '', 1)
+            # Plain ${VAR}
+            return env.get(inner, '')
+        result = re.sub(r'\$\{([^}]+)\}', _param_expand, result)
+        # Expand $VAR (but not $$, $?, $!, etc.)
         result = re.sub(r'\$(\w+)', lambda m: env.get(m.group(1), ''), result)
         # Special variables
         result = result.replace('$$', str(os.getpid()))
@@ -1052,11 +1140,16 @@ def gpu_builtin(argv, shell_state):
         print(f"{CYAN}Shell Features:{RESET}")
         print(f"  Pipes:         cmd1 | cmd2 | cmd3")
         print(f"  Chaining:      cmd1 ; cmd2 && cmd3 || cmd4")
-        print(f"  Redirection:   cmd > file  cmd >> file")
-        print(f"  Variables:     VAR=value  echo $VAR  ${'{VAR}'}")
-        print(f"  Substitution:  echo $(cmd)  echo `cmd`")
+        print(f"  Redirection:   cmd > file  cmd >> file  cmd < file")
+        print(f"  Variables:     VAR=value  $VAR  ${'{VAR:-default}'}")
+        print(f"  Param expn:    ${'{#VAR}'}  ${'{VAR#pat}'}  ${'{VAR%pat}'}  ${'{VAR/old/new}'}")
+        print(f"  Substitution:  echo $(cmd)  echo `cmd`  echo $((1+2))")
+        print(f"  Braces:        file{'{1..5}'}.txt  {'{a,b,c}'}")
+        print(f"  Heredocs:      cat <<EOF ... EOF")
+        print(f"  Functions:     name() {'{ body; }'}")
         print(f"  Globbing:      ls /etc/*.conf  ls /tmp/*")
         print(f"  Scripts:       sh script.sh  source script.sh")
+        print(f"  Error modes:   set -e (exit on error)  set -x (trace)")
         print(f"  Control flow:  for/while/if/elif/else/fi/case/esac")
         print()
         print(f"{CYAN}Linux Utilities:{RESET}")
@@ -1132,6 +1225,29 @@ def shell_builtin(argv, shell_state):
         if len(argv) == 1:
             for k, v in sorted(env.items()):
                 print(f"{k}={v}")
+        else:
+            flags = shell_state.setdefault('set_flags', set())
+            for arg in argv[1:]:
+                if arg.startswith('-'):
+                    for ch in arg[1:]:
+                        flags.add(ch)
+                elif arg.startswith('+'):
+                    for ch in arg[1:]:
+                        flags.discard(ch)
+        return True
+
+    elif cmd == 'local':
+        # local VAR=val — set variable in local scope (just set it in env)
+        for arg in argv[1:]:
+            if '=' in arg:
+                key, val = arg.split('=', 1)
+                env[key] = val
+            else:
+                env.setdefault(arg, '')
+        return True
+
+    elif cmd == 'return':
+        env['?'] = argv[1] if len(argv) > 1 else '0'
         return True
 
     elif cmd == 'echo':
@@ -1173,8 +1289,11 @@ def shell_builtin(argv, shell_state):
         return True
 
     elif cmd == 'type' or cmd == 'which':
+        functions = shell_state.get('functions', {})
         for name in argv[1:]:
-            if name in BUILTINS:
+            if name in functions:
+                print(f"{name} is a function")
+            elif name in BUILTINS:
                 print(f"{name} is a shell builtin")
             elif name in GPU_COMMANDS:
                 print(f"{name} is a GPU superpower command")
@@ -1424,6 +1543,7 @@ BUILTINS = {
     'read', 'history', 'alias', 'unalias', 'clear', 'jobs', 'umask',
     'ulimit', 'cat',  # cat with no args
     'seq', 'basename', 'dirname', 'printf', 'pushd', 'popd', 'dirs',
+    'local', 'return',
 }
 
 GPU_COMMANDS = {
@@ -1442,6 +1562,32 @@ GPU_COMMANDS = {
 # ═══════════════════════════════════════════════════════════════════════════════
 # SHELL SCRIPT EXECUTION
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def expand_braces(tokens):
+    """Expand brace expressions like {1..5}, {a,b,c} in tokens."""
+    expanded = []
+    for tok in tokens:
+        # Numeric range: {1..10} or {1..10..2}
+        m = re.match(r'^(.*)\{(\d+)\.\.(\d+)(?:\.\.(\d+))?\}(.*)$', tok)
+        if m:
+            prefix, start, end, step, suffix = m.groups()
+            start, end = int(start), int(end)
+            step = int(step) if step else (1 if start <= end else -1)
+            if step > 0:
+                vals = range(start, end + 1, step)
+            else:
+                vals = range(start, end - 1, step)
+            expanded.extend(f"{prefix}{v}{suffix}" for v in vals)
+            continue
+        # Comma-separated: {a,b,c}
+        m = re.match(r'^(.*)\{([^.{}]+(?:,[^.{}]+)+)\}(.*)$', tok)
+        if m:
+            prefix, items, suffix = m.groups()
+            expanded.extend(f"{prefix}{item}{suffix}" for item in items.split(','))
+            continue
+        expanded.append(tok)
+    return expanded
+
 
 def run_script(script_text, shell_state, script_args=None):
     """Execute a shell script line by line."""
@@ -1468,6 +1614,76 @@ def run_script(script_text, shell_state, script_args=None):
         if not line or line.startswith('#'):
             continue
 
+        # set -x: trace commands
+        flags = shell_state.get('set_flags', set())
+        if 'x' in flags:
+            print(f"+ {line}", file=sys.stderr)
+
+        # Function definition: name() { ... }
+        func_match = re.match(r'^(\w+)\s*\(\)\s*\{?\s*$', line)
+        if func_match:
+            func_name = func_match.group(1)
+            body_lines = []
+            brace_depth = 1 if '{' in line else 0
+            if brace_depth == 0:
+                # Next line should be {
+                while i < len(lines):
+                    fl = lines[i].strip()
+                    i += 1
+                    if fl == '{':
+                        brace_depth = 1
+                        break
+            while i < len(lines) and brace_depth > 0:
+                fl = lines[i].strip()
+                i += 1
+                if fl == '}':
+                    brace_depth -= 1
+                    if brace_depth == 0:
+                        break
+                if '{' in fl:
+                    brace_depth += fl.count('{') - fl.count('}')
+                body_lines.append(fl)
+            shell_state.setdefault('functions', {})[func_name] = '\n'.join(body_lines)
+            continue
+
+        # Heredoc detection: cmd <<EOF or cmd <<'EOF' or cmd <<-EOF
+        if '<<' in line:
+            heredoc_match = re.search(r'<<-?\s*[\'"]?(\w+)[\'"]?', line)
+            if heredoc_match:
+                delimiter = heredoc_match.group(1)
+                strip_tabs = '<<-' in line
+                cmd_part = line[:line.index('<<')].strip()
+                heredoc_lines = []
+                while i < len(lines):
+                    hl = lines[i]
+                    i += 1
+                    if hl.strip() == delimiter:
+                        break
+                    if strip_tabs:
+                        hl = hl.lstrip('\t')
+                    heredoc_lines.append(hl)
+                heredoc_content = '\n'.join(heredoc_lines) + '\n'
+                # Expand variables in heredoc (unless delimiter was quoted)
+                if "'" not in line.split('<<')[1].split()[0]:
+                    heredoc_content = expand_command_substitution(heredoc_content, shell_state)
+                    for key, val in env.items():
+                        if key.isalnum() or key == '_':
+                            heredoc_content = heredoc_content.replace(f'${key}', val)
+                            heredoc_content = heredoc_content.replace(f'${{{key}}}', val)
+                if cmd_part:
+                    # For simple commands like cat, just print the heredoc
+                    cmd_tokens = cmd_part.strip().split()
+                    if cmd_tokens and cmd_tokens[0] == 'cat' and len(cmd_tokens) == 1:
+                        print(heredoc_content, end='')
+                    else:
+                        # Write heredoc to temp file and use input redirection
+                        fs = shell_state['fs']
+                        tmp_path = '/tmp/_heredoc_tmp'
+                        fs.write_file(tmp_path, heredoc_content.encode('utf-8'))
+                        execute_line(f"{cmd_part} < {tmp_path}", shell_state)
+                        fs.unlink(tmp_path)
+                continue
+
         # Handle for loops
         if line.startswith('for '):
             i = handle_for_loop(lines, i - 1, shell_state)
@@ -1490,6 +1706,10 @@ def run_script(script_text, shell_state, script_args=None):
 
         # Normal command
         execute_line(line, shell_state)
+
+        # set -e: exit on error
+        if 'e' in flags and env.get('?', '0') != '0':
+            break
 
 
 def handle_for_loop(lines, start, shell_state):
@@ -1766,6 +1986,14 @@ def execute_line(line, shell_state):
     if not line or line.startswith('#'):
         return
 
+    # Function definition (single-line): name() { body; }
+    func_match = re.match(r'^(\w+)\s*\(\)\s*\{\s*(.*?)\s*;?\s*\}\s*$', line)
+    if func_match:
+        func_name = func_match.group(1)
+        func_body = func_match.group(2)
+        shell_state.setdefault('functions', {})[func_name] = func_body
+        return
+
     # Command substitution
     line = expand_command_substitution(line, shell_state)
 
@@ -1790,6 +2018,9 @@ def execute_line(line, shell_state):
         # Variable expansion
         tokens = expand_variables(tokens, env)
 
+        # Brace expansion
+        tokens = expand_braces(tokens)
+
         # Glob expansion
         tokens = expand_glob(tokens, fs)
 
@@ -1804,13 +2035,38 @@ def execute_line(line, shell_state):
             tokens = alias_tokens + tokens[1:]
 
         # Extract redirection
-        tokens, redir_file, redir_append = extract_redirection(tokens)
+        tokens, redir_file, redir_append, redir_input = extract_redirection(tokens)
         if not tokens:
             continue
 
         cmd = tokens[0]
 
-        # Try shell builtins first
+        # Try shell functions first
+        functions = shell_state.get('functions', {})
+        if cmd in functions:
+            func_body = functions[cmd]
+            # Set positional params for function
+            old_params = {k: env.get(k) for k in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '#', '@']}
+            env['0'] = cmd
+            for fi, farg in enumerate(tokens[1:], 1):
+                env[str(fi)] = farg
+            env['#'] = str(len(tokens) - 1)
+            env['@'] = ' '.join(tokens[1:])
+            run_script(func_body, shell_state)
+            # Restore positional params
+            for k, v in old_params.items():
+                if v is not None:
+                    env[k] = v
+                else:
+                    env.pop(k, None)
+            last_success = env.get('?', '0') == '0'
+            if operator == "&&" and not last_success:
+                break
+            if operator == "||" and last_success:
+                break
+            continue
+
+        # Try shell builtins
         if shell_builtin(tokens, shell_state):
             last_success = env.get('?', '0') == '0'
             if operator == "&&" and not last_success:
@@ -1829,13 +2085,26 @@ def execute_line(line, shell_state):
                 break
             continue
 
+        # Read stdin from file if input redirection specified
+        stdin_data = None
+        if redir_input:
+            input_path = fs.resolve_path(redir_input)
+            data = fs.read_file(input_path)
+            if data is None:
+                print(f"ash: {redir_input}: No such file or directory")
+                env['?'] = '1'
+                last_success = False
+                continue
+            stdin_data = data
+
         # Split on pipes
         pipeline = split_pipeline(tokens)
 
         try:
             if redir_file:
                 if len(pipeline) == 1:
-                    output, _ = run_and_capture(pipeline[0], fs)
+                    output, _ = run_and_capture(pipeline[0], fs,
+                                                stdin_data=stdin_data)
                 else:
                     output, _ = run_pipeline_and_capture(pipeline, fs)
 
@@ -1846,7 +2115,7 @@ def execute_line(line, shell_state):
                 else:
                     fs.write_file(path, output.encode("utf-8", errors="replace"))
             elif len(pipeline) == 1:
-                run_command(pipeline[0], fs, quiet=True)
+                run_command(pipeline[0], fs, quiet=True, stdin_data=stdin_data)
             else:
                 run_pipeline(pipeline, fs)
 
@@ -2065,6 +2334,9 @@ def demo_suite():
         ('NAME="Alpine Linux"', "Variable assignment"),
         ('echo "Running: $NAME on GPU"', "Variable expansion"),
         ('echo "2 + 3 = $((2 + 3))"', "Arithmetic expansion"),
+        ('echo "Name length: ${#NAME}"', "String length expansion"),
+        ('echo "${NAME:-fallback}"', "Default value expansion"),
+        ('echo file{1..3}.txt', "Brace expansion (range)"),
         ('[ -f /etc/passwd ] && echo "passwd exists"', "test + chaining"),
         ('for f in /etc/passwd /etc/hostname; do echo "File: $f"; done',
          "For loop (builtin)"),
