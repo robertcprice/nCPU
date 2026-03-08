@@ -2508,3 +2508,110 @@ echo hello
         assert 'x' in state['set_flags']
         execute_line('set +x', state)
         assert 'x' not in state['set_flags']
+
+
+class TestTrapEvalShiftLet:
+    """Test trap, eval, shift, and let builtins."""
+
+    def _make_shell_state(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        return {
+            'env': {'HOME': '/root', 'PWD': '/', '?': '0', 'PATH': '/bin:/usr/bin'},
+            'fs': create_alpine_rootfs(),
+            'cwd': '/',
+            'functions': {},
+            'set_flags': set(),
+        }
+
+    def test_trap_set_and_list(self, capsys):
+        from alpine_gpu import shell_builtin
+        state = self._make_shell_state()
+        shell_builtin(['trap', 'echo bye', 'EXIT'], state)
+        assert state['traps']['EXIT'] == 'echo bye'
+        shell_builtin(['trap'], state)
+        out = capsys.readouterr().out
+        assert 'EXIT' in out
+
+    def test_trap_remove(self):
+        from alpine_gpu import shell_builtin
+        state = self._make_shell_state()
+        state['traps'] = {'EXIT': 'echo bye'}
+        shell_builtin(['trap', '-', 'EXIT'], state)
+        assert 'EXIT' not in state.get('traps', {})
+
+    def test_eval_executes(self, capsys):
+        from alpine_gpu import execute_line
+        state = self._make_shell_state()
+        state['env']['CMD'] = 'echo hello'
+        execute_line('eval $CMD', state)
+        out = capsys.readouterr().out
+        assert 'hello' in out
+
+    def test_shift(self, capsys):
+        from alpine_gpu import run_script
+        state = self._make_shell_state()
+        script = """
+echo $1 $2 $3
+shift
+echo $1 $2
+"""
+        run_script(script, state, script_args=['a', 'b', 'c'])
+        out = capsys.readouterr().out.strip().split('\n')
+        assert out[0] == 'a b c'
+        assert out[1] == 'b c'
+
+    def test_let_arithmetic(self):
+        from alpine_gpu import shell_builtin
+        state = self._make_shell_state()
+        state['env']['X'] = '10'
+        shell_builtin(['let', 'X+5'], state)
+        # let returns 0 if result is non-zero
+        assert state['env']['?'] == '0'
+
+    def test_let_zero_returns_failure(self):
+        from alpine_gpu import shell_builtin
+        state = self._make_shell_state()
+        shell_builtin(['let', '0'], state)
+        assert state['env']['?'] == '1'
+
+    def test_read_with_prompt(self, monkeypatch):
+        from alpine_gpu import shell_builtin
+        state = self._make_shell_state()
+        monkeypatch.setattr('builtins.input', lambda: 'test_value')
+        shell_builtin(['read', '-p', 'Enter:', 'MY_VAR'], state)
+        assert state['env']['MY_VAR'] == 'test_value'
+
+    def test_read_multiple_vars(self, monkeypatch):
+        from alpine_gpu import shell_builtin
+        state = self._make_shell_state()
+        monkeypatch.setattr('builtins.input', lambda: 'hello world extra')
+        shell_builtin(['read', 'A', 'B', 'C'], state)
+        assert state['env']['A'] == 'hello'
+        assert state['env']['B'] == 'world'
+        assert state['env']['C'] == 'extra'
+
+
+class TestInputRedirectionGPU:
+    """Test input redirection with actual GPU execution (if available)."""
+
+    def _make_shell_state(self):
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        return {
+            'env': {'HOME': '/root', 'PWD': '/', '?': '0', 'PATH': '/bin:/usr/bin'},
+            'fs': fs,
+            'cwd': '/',
+            'functions': {},
+            'set_flags': set(),
+            'history': [],
+            'aliases': {},
+        }
+
+    def test_input_redirect_with_builtin(self, capsys):
+        from alpine_gpu import execute_line
+        state = self._make_shell_state()
+        state['fs'].write_file('/tmp/test.txt', b'hello\nworld\nfoo\n')
+        execute_line('wc -l < /tmp/test.txt', state)
+        # wc output should show 3 lines
+        out = capsys.readouterr().out.strip()
+        assert '3' in out

@@ -1333,13 +1333,90 @@ def shell_builtin(argv, shell_state):
         return True
 
     elif cmd == 'read':
-        # Read a line from stdin into a variable
-        var_name = argv[1] if len(argv) > 1 else 'REPLY'
+        # read [-p prompt] [-r] [-s] [-t timeout] var1 [var2 ...]
+        args = argv[1:]
+        prompt = ''
+        raw_mode = False
+        i = 0
+        while i < len(args):
+            if args[i] == '-p' and i + 1 < len(args):
+                prompt = args[i + 1]
+                i += 2
+            elif args[i] == '-r':
+                raw_mode = True
+                i += 1
+            elif args[i] == '-s':
+                i += 1  # silent mode (just skip)
+            elif args[i] == '-t':
+                i += 2  # timeout (skip, not supported in GPU)
+            else:
+                break
+        var_names = args[i:] if i < len(args) else ['REPLY']
         try:
+            if prompt:
+                print(prompt, end='', flush=True)
             val = input()
-            env[var_name] = val
+            if len(var_names) == 1:
+                env[var_names[0]] = val
+            else:
+                # Split on IFS (default: space/tab/newline)
+                parts = val.split(None, len(var_names) - 1)
+                for j, vn in enumerate(var_names):
+                    env[vn] = parts[j] if j < len(parts) else ''
         except (EOFError, OSError):
             env['?'] = '1'
+        return True
+
+    elif cmd == 'trap':
+        # trap 'command' SIGNAL — store trap handlers
+        traps = shell_state.setdefault('traps', {})
+        if len(argv) == 1:
+            for sig, handler in traps.items():
+                print(f"trap -- '{handler}' {sig}")
+        elif len(argv) >= 3:
+            handler = argv[1]
+            for sig in argv[2:]:
+                if handler == '-':
+                    traps.pop(sig, None)
+                else:
+                    traps[sig] = handler
+        elif len(argv) == 2 and argv[1] == '-l':
+            print("EXIT HUP INT QUIT TERM USR1 USR2")
+        return True
+
+    elif cmd == 'eval':
+        if len(argv) > 1:
+            execute_line(' '.join(argv[1:]), shell_state)
+        return True
+
+    elif cmd == 'shift':
+        n = int(argv[1]) if len(argv) > 1 else 1
+        total = int(env.get('#', '0'))
+        for _ in range(n):
+            if total > 0:
+                for j in range(1, total):
+                    env[str(j)] = env.get(str(j + 1), '')
+                env.pop(str(total), None)
+                total -= 1
+        env['#'] = str(total)
+        args_list = [env.get(str(j), '') for j in range(1, total + 1)]
+        env['@'] = ' '.join(args_list)
+        return True
+
+    elif cmd == 'let':
+        # let expr — arithmetic evaluation
+        if len(argv) > 1:
+            expr_str = ' '.join(argv[1:])
+            # Expand variables
+            expr_str = re.sub(r'\$\{(\w+)\}', lambda m: env.get(m.group(1), '0'), expr_str)
+            expr_str = re.sub(r'\$(\w+)', lambda m: env.get(m.group(1), '0'), expr_str)
+            expr_str = re.sub(r'\b([A-Za-z_]\w*)\b', lambda m: env.get(m.group(1), m.group(0))
+                              if m.group(0) not in ('abs', 'int') else m.group(0), expr_str)
+            try:
+                result = eval(expr_str, {"__builtins__": {}}, {"abs": abs, "int": int})
+                env['?'] = '0' if result else '1'
+            except Exception:
+                env['?'] = '1'
         return True
 
     elif cmd == 'history':
@@ -1543,7 +1620,7 @@ BUILTINS = {
     'read', 'history', 'alias', 'unalias', 'clear', 'jobs', 'umask',
     'ulimit', 'cat',  # cat with no args
     'seq', 'basename', 'dirname', 'printf', 'pushd', 'popd', 'dirs',
-    'local', 'return',
+    'local', 'return', 'trap', 'eval', 'shift', 'let',
 }
 
 GPU_COMMANDS = {
