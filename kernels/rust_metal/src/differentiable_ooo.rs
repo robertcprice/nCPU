@@ -12,15 +12,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Fully Differentiable OoO shader with speculative execution
 const DIFF_OOO_SHADER_SOURCE: &str = r#"
@@ -564,7 +563,7 @@ kernel void cpu_execute_diff_ooo(
 }
 "#;
 
-const NUM_WEIGHTS: usize = 20;  // 4 hazard + 16 type interaction
+const NUM_WEIGHTS: usize = 20; // 4 hazard + 16 type interaction
 
 /// Differentiable OoO result
 #[pyclass]
@@ -589,8 +588,10 @@ pub struct DiffOoOResult {
 #[pymethods]
 impl DiffOoOResult {
     fn __repr__(&self) -> String {
-        format!("DiffOoOResult(cycles={}, ips={:.0}, spec_branches={})",
-                self.total_cycles, self.ips, self.speculative_branches)
+        format!(
+            "DiffOoOResult(cycles={}, ips={:.0}, spec_branches={})",
+            self.total_cycles, self.ips, self.speculative_branches
+        )
     }
 }
 
@@ -635,39 +636,54 @@ impl DiffOoOCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let func_name = NSString::from_str("cpu_execute_diff_ooo");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| MetalError::ShaderCompilationFailed("Function not found".to_string()))?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| MetalError::PipelineCreationFailed(format!("{:?}", e)))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options(32 * 4, opts)  // float registers
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 4, opts) // float registers
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let cycles_per_batch_buf = device.newBufferWithLength_options(4, opts)
+        let cycles_per_batch_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let mem_size_buf = device.newBufferWithLength_options(4, opts)
+        let mem_size_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let total_cycles_buf = device.newBufferWithLength_options(4, opts)
+        let total_cycles_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let batch_count_buf = device.newBufferWithLength_options(4, opts)
+        let batch_count_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stats_buf = device.newBufferWithLength_options(4 * 4, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(4 * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let weights_buf = device.newBufferWithLength_options(NUM_WEIGHTS * 4, opts)
+        let weights_buf = device
+            .newBufferWithLength_options(NUM_WEIGHTS * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let gradients_buf = device.newBufferWithLength_options(NUM_WEIGHTS * 4, opts)
+        let gradients_buf = device
+            .newBufferWithLength_options(NUM_WEIGHTS * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let temperature_buf = device.newBufferWithLength_options(4, opts)
+        let temperature_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         unsafe {
@@ -678,11 +694,11 @@ impl DiffOoOCPU {
 
             // Initialize weights
             let weights = weights_buf.contents().as_ptr() as *mut f32;
-            *weights.add(0) = 5.0;   // RAW
-            *weights.add(1) = 3.0;   // WAW
-            *weights.add(2) = 5.0;   // FLAG
-            *weights.add(3) = -2.0;  // BIAS
-            // Type interaction matrix (4x4) - initialized to small values
+            *weights.add(0) = 5.0; // RAW
+            *weights.add(1) = 3.0; // WAW
+            *weights.add(2) = 5.0; // FLAG
+            *weights.add(3) = -2.0; // BIAS
+                                    // Type interaction matrix (4x4) - initialized to small values
             for i in 4..20 {
                 *weights.add(i) = 0.1;
             }
@@ -691,12 +707,21 @@ impl DiffOoOCPU {
             let temp = temperature_buf.contents().as_ptr() as *mut f32;
             *temp = 1.0;
 
-            std::ptr::write_bytes(gradients_buf.contents().as_ptr() as *mut u8, 0, NUM_WEIGHTS * 4);
+            std::ptr::write_bytes(
+                gradients_buf.contents().as_ptr() as *mut u8,
+                0,
+                NUM_WEIGHTS * 4,
+            );
             std::ptr::write_bytes(registers_buf.contents().as_ptr() as *mut u8, 0, 32 * 4);
         }
 
-        println!("[DiffOoOCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
-        println!("[DiffOoOCPU] Features: 100% Differentiable, Gumbel-Softmax, Speculative Execution");
+        println!(
+            "[DiffOoOCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
+        println!(
+            "[DiffOoOCPU] Features: 100% Differentiable, Gumbel-Softmax, Speculative Execution"
+        );
         println!("[DiffOoOCPU] Weights: {} learnable parameters", NUM_WEIGHTS);
 
         Ok(Self {
@@ -727,14 +752,24 @@ impl DiffOoOCPU {
         }
         unsafe {
             let mem = self.memory_buf.contents().as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(program.as_ptr(), mem.add(address as usize), program.len());
+            std::ptr::copy_nonoverlapping(
+                program.as_ptr(),
+                mem.add(address as usize),
+                program.len(),
+            );
         }
-        println!("[DiffOoOCPU] Loaded {} bytes at 0x{:x}", program.len(), address);
+        println!(
+            "[DiffOoOCPU] Loaded {} bytes at 0x{:x}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
     fn set_pc(&self, pc: u64) {
-        unsafe { *(self.pc_buf.contents().as_ptr() as *mut u64) = pc; }
+        unsafe {
+            *(self.pc_buf.contents().as_ptr() as *mut u64) = pc;
+        }
     }
 
     fn get_pc(&self) -> u64 {
@@ -742,13 +777,19 @@ impl DiffOoOCPU {
     }
 
     fn set_register(&self, reg: usize, value: f32) -> PyResult<()> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
-        unsafe { *(self.registers_buf.contents().as_ptr() as *mut f32).add(reg) = value; }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
+        unsafe {
+            *(self.registers_buf.contents().as_ptr() as *mut f32).add(reg) = value;
+        }
         Ok(())
     }
 
     fn get_register(&self, reg: usize) -> PyResult<f32> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe { Ok(*(self.registers_buf.contents().as_ptr() as *const f32).add(reg)) }
     }
 
@@ -756,7 +797,9 @@ impl DiffOoOCPU {
     fn load_weights(&self, weights: Vec<f32>) -> PyResult<()> {
         if weights.len() != NUM_WEIGHTS {
             return Err(PyRuntimeError::new_err(format!(
-                "Expected {} weights, got {}", NUM_WEIGHTS, weights.len()
+                "Expected {} weights, got {}",
+                NUM_WEIGHTS,
+                weights.len()
             )));
         }
         unsafe {
@@ -785,13 +828,19 @@ impl DiffOoOCPU {
     /// Reset gradients
     fn zero_gradients(&self) {
         unsafe {
-            std::ptr::write_bytes(self.gradients_buf.contents().as_ptr() as *mut u8, 0, NUM_WEIGHTS * 4);
+            std::ptr::write_bytes(
+                self.gradients_buf.contents().as_ptr() as *mut u8,
+                0,
+                NUM_WEIGHTS * 4,
+            );
         }
     }
 
     /// Set Gumbel-softmax temperature
     fn set_temperature(&self, temp: f32) {
-        unsafe { *(self.temperature_buf.contents().as_ptr() as *mut f32) = temp; }
+        unsafe {
+            *(self.temperature_buf.contents().as_ptr() as *mut f32) = temp;
+        }
     }
 
     /// Get temperature
@@ -820,12 +869,17 @@ impl DiffOoOCPU {
 
         let mut batch = 0u32;
         while batch < max_batches {
-            if start.elapsed().as_secs_f64() > timeout_seconds { break; }
+            if start.elapsed().as_secs_f64() > timeout_seconds {
+                break;
+            }
 
-            let cmd = self.command_queue.commandBuffer()
+            let cmd = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
 
-            let encoder = cmd.computeCommandEncoder()
+            let encoder = cmd
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -844,8 +898,16 @@ impl DiffOoOCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.gradients_buf), 0, 11);
                 encoder.setBuffer_offset_atIndex(Some(&self.temperature_buf), 0, 12);
 
-                let grid = MTLSize { width: 1, height: 1, depth: 1 };
-                let tg = MTLSize { width: 1, height: 1, depth: 1 };
+                let grid = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                let tg = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
                 encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, tg);
             }
             encoder.endEncoding();
@@ -853,9 +915,13 @@ impl DiffOoOCPU {
             cmd.waitUntilCompleted();
 
             let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
-            if signal == 1 || signal == 2 { break; }
+            if signal == 1 || signal == 2 {
+                break;
+            }
 
-            unsafe { *(self.signal_buf.contents().as_ptr() as *mut u32) = 0; }
+            unsafe {
+                *(self.signal_buf.contents().as_ptr() as *mut u32) = 0;
+            }
             batch += 1;
         }
 
@@ -864,11 +930,17 @@ impl DiffOoOCPU {
         let batch_count = unsafe { *(self.batch_count_buf.contents().as_ptr() as *const u32) };
         let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
 
-        let stats = unsafe { std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 4) };
+        let stats = unsafe {
+            std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 4)
+        };
         let spec_branches = stats[0];
         let soft_commits = stats[1];
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
 
         Ok(DiffOoOResult {
             total_cycles,

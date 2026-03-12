@@ -6,15 +6,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Minimal test shader - just sets some values
 const MINIMAL_TEST_SHADER: &str = r#"
@@ -113,7 +112,8 @@ impl MinimalTestCPU {
         println!("[MinimalTestCPU] Using device: {:?}", device.name());
         println!("[MinimalTestCPU] Compiling minimal test shader...");
 
-        let command_queue = device.newCommandQueue()
+        let command_queue = device
+            .newCommandQueue()
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create command queue"))?;
 
         let source = NSString::from_str(MINIMAL_TEST_SHADER);
@@ -128,44 +128,56 @@ impl MinimalTestCPU {
         println!("[MinimalTestCPU] Shader compiled successfully!");
 
         let func_name = NSString::from_str("minimal_test_execute");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| MetalError::ShaderCompilationFailed("Function not found".to_string()))?;
 
         println!("[MinimalTestCPU] Function found!");
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| MetalError::PipelineCreationFailed(format!("{:?}", e)))?;
 
         println!("[MinimalTestCPU] Pipeline created!");
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options(32 * 4, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let config_buf = device.newBufferWithLength_options(12, opts)
+        let config_buf = device
+            .newBufferWithLength_options(12, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stats_buf = device.newBufferWithLength_options(20, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(20, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let weights_buf = device.newBufferWithLength_options(4 * 4, opts)
+        let weights_buf = device
+            .newBufferWithLength_options(4 * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let gradients_buf = device.newBufferWithLength_options(64 * 4, opts)
+        let gradients_buf = device
+            .newBufferWithLength_options(64 * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let temperature_buf = device.newBufferWithLength_options(4, opts)
+        let temperature_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         unsafe {
             let cfg = config_buf.contents().as_ptr() as *mut u32;
-            *cfg.add(0) = 256;  // cycles_per_batch
+            *cfg.add(0) = 256; // cycles_per_batch
             *cfg.add(1) = memory_size as u32;
-            *cfg.add(2) = 100;  // jit_threshold (unused)
+            *cfg.add(2) = 100; // jit_threshold (unused)
 
             let temp = temperature_buf.contents().as_ptr() as *mut f32;
             *temp = 1.0;
@@ -174,7 +186,10 @@ impl MinimalTestCPU {
             std::ptr::write_bytes(gradients_buf.contents().as_ptr() as *mut u8, 0, 64 * 4);
         }
 
-        println!("[MinimalTestCPU] Initialized with {} bytes memory", memory_size);
+        println!(
+            "[MinimalTestCPU] Initialized with {} bytes memory",
+            memory_size
+        );
 
         Ok(Self {
             command_queue,
@@ -199,14 +214,24 @@ impl MinimalTestCPU {
         }
         unsafe {
             let mem = self.memory_buf.contents().as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(program.as_ptr(), mem.add(address as usize), program.len());
+            std::ptr::copy_nonoverlapping(
+                program.as_ptr(),
+                mem.add(address as usize),
+                program.len(),
+            );
         }
-        println!("[MinimalTestCPU] Loaded {} bytes at 0x{:x}", program.len(), address);
+        println!(
+            "[MinimalTestCPU] Loaded {} bytes at 0x{:x}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
     fn set_pc(&self, pc: u64) {
-        unsafe { *(self.pc_buf.contents().as_ptr() as *mut u64) = pc; }
+        unsafe {
+            *(self.pc_buf.contents().as_ptr() as *mut u64) = pc;
+        }
     }
 
     fn get_pc(&self) -> u64 {
@@ -214,7 +239,9 @@ impl MinimalTestCPU {
     }
 
     fn get_register(&self, reg: usize) -> PyResult<f32> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe { Ok(*(self.registers_buf.contents().as_ptr() as *const f32).add(reg)) }
     }
 
@@ -246,12 +273,15 @@ impl MinimalTestCPU {
         println!("[MinimalTestCPU] Pre-execute X30 = {}", pre_x30);
 
         // Create command buffer
-        let cmd = self.command_queue.commandBuffer()
+        let cmd = self
+            .command_queue
+            .commandBuffer()
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
         println!("[MinimalTestCPU] Command buffer created");
 
         // Create encoder
-        let encoder = cmd.computeCommandEncoder()
+        let encoder = cmd
+            .computeCommandEncoder()
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
         println!("[MinimalTestCPU] Encoder created");
 
@@ -273,10 +303,21 @@ impl MinimalTestCPU {
             encoder.setBuffer_offset_atIndex(Some(&self.temperature_buf), 0, 9);
             println!("[MinimalTestCPU] Buffers bound");
 
-            let grid = MTLSize { width: 1, height: 1, depth: 1 };
-            let tg = MTLSize { width: 1, height: 1, depth: 1 };
+            let grid = MTLSize {
+                width: 1,
+                height: 1,
+                depth: 1,
+            };
+            let tg = MTLSize {
+                width: 1,
+                height: 1,
+                depth: 1,
+            };
             encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, tg);
-            println!("[MinimalTestCPU] Dispatch submitted: grid={:?}, tg={:?}", grid, tg);
+            println!(
+                "[MinimalTestCPU] Dispatch submitted: grid={:?}, tg={:?}",
+                grid, tg
+            );
         }
 
         encoder.endEncoding();
@@ -291,7 +332,10 @@ impl MinimalTestCPU {
         // Debug: show post-execute state
         let post_x30 = unsafe { *(self.registers_buf.contents().as_ptr() as *const f32).add(30) };
         let post_signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
-        println!("[MinimalTestCPU] Post-execute X30 = {}, signal = {}", post_x30, post_signal);
+        println!(
+            "[MinimalTestCPU] Post-execute X30 = {}, signal = {}",
+            post_x30, post_signal
+        );
 
         Ok(())
     }

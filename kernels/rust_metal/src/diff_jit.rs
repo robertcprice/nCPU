@@ -15,15 +15,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Differentiable JIT Shader
 ///
@@ -524,8 +523,8 @@ kernel void diff_jit_execute(
 const EMBED_DIM: usize = 8;
 const NUM_TEMPLATES: usize = 4;
 const WINDOW_SIZE: usize = 4;
-const ENCODER_WEIGHTS_SIZE: usize = WINDOW_SIZE * 32 * EMBED_DIM;  // 1024 floats
-const TEMPLATE_WEIGHTS_SIZE: usize = NUM_TEMPLATES * EMBED_DIM;    // 32 floats
+const ENCODER_WEIGHTS_SIZE: usize = WINDOW_SIZE * 32 * EMBED_DIM; // 1024 floats
+const TEMPLATE_WEIGHTS_SIZE: usize = NUM_TEMPLATES * EMBED_DIM; // 32 floats
 
 /// Differentiable JIT Result
 #[pyclass]
@@ -552,9 +551,14 @@ pub struct DiffJITResult {
 #[pymethods]
 impl DiffJITResult {
     fn __repr__(&self) -> String {
-        format!("DiffJITResult(cycles={}, jit={}, interp={}, jit_ratio={:.1}%, ips={:.0})",
-                self.total_cycles, self.jit_executions, self.interp_executions,
-                self.jit_ratio * 100.0, self.ips)
+        format!(
+            "DiffJITResult(cycles={}, jit={}, interp={}, jit_ratio={:.1}%, ips={:.0})",
+            self.total_cycles,
+            self.jit_executions,
+            self.interp_executions,
+            self.jit_ratio * 100.0,
+            self.ips
+        )
     }
 }
 
@@ -597,35 +601,48 @@ impl DiffJITCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let func_name = NSString::from_str("diff_jit_execute");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| MetalError::ShaderCompilationFailed("Function not found".to_string()))?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| MetalError::PipelineCreationFailed(format!("{:?}", e)))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options(32 * 8, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let config_buf = device.newBufferWithLength_options(12, opts)
+        let config_buf = device
+            .newBufferWithLength_options(12, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stats_buf = device.newBufferWithLength_options(28, opts)  // 7 stats
+        let stats_buf = device
+            .newBufferWithLength_options(28, opts) // 7 stats
             .ok_or(MetalError::BufferCreationFailed)?;
-        let encoder_weights_buf = device.newBufferWithLength_options(ENCODER_WEIGHTS_SIZE * 4, opts)
+        let encoder_weights_buf = device
+            .newBufferWithLength_options(ENCODER_WEIGHTS_SIZE * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let template_embeddings_buf = device.newBufferWithLength_options(TEMPLATE_WEIGHTS_SIZE * 4, opts)
+        let template_embeddings_buf = device
+            .newBufferWithLength_options(TEMPLATE_WEIGHTS_SIZE * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let gradients_buf = device.newBufferWithLength_options(TEMPLATE_WEIGHTS_SIZE * 4, opts)
+        let gradients_buf = device
+            .newBufferWithLength_options(TEMPLATE_WEIGHTS_SIZE * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let temperature_buf = device.newBufferWithLength_options(4, opts)
+        let temperature_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         // Initialize config
@@ -668,13 +685,23 @@ impl DiffJITCPU {
             }
 
             // Zero gradients
-            std::ptr::write_bytes(gradients_buf.contents().as_ptr() as *mut u8, 0, TEMPLATE_WEIGHTS_SIZE * 4);
+            std::ptr::write_bytes(
+                gradients_buf.contents().as_ptr() as *mut u8,
+                0,
+                TEMPLATE_WEIGHTS_SIZE * 4,
+            );
         }
 
-        println!("[DiffJITCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
-        println!("[DiffJITCPU] Learnable parameters: {} (encoder) + {} (templates) = {}",
-                 ENCODER_WEIGHTS_SIZE, TEMPLATE_WEIGHTS_SIZE,
-                 ENCODER_WEIGHTS_SIZE + TEMPLATE_WEIGHTS_SIZE);
+        println!(
+            "[DiffJITCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
+        println!(
+            "[DiffJITCPU] Learnable parameters: {} (encoder) + {} (templates) = {}",
+            ENCODER_WEIGHTS_SIZE,
+            TEMPLATE_WEIGHTS_SIZE,
+            ENCODER_WEIGHTS_SIZE + TEMPLATE_WEIGHTS_SIZE
+        );
         println!("[DiffJITCPU] Features: Learned Pattern Matching, Soft Template Selection, Gradient Flow");
 
         Ok(Self {
@@ -703,14 +730,24 @@ impl DiffJITCPU {
         }
         unsafe {
             let mem = self.memory_buf.contents().as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(program.as_ptr(), mem.add(address as usize), program.len());
+            std::ptr::copy_nonoverlapping(
+                program.as_ptr(),
+                mem.add(address as usize),
+                program.len(),
+            );
         }
-        println!("[DiffJITCPU] Loaded {} bytes at 0x{:x}", program.len(), address);
+        println!(
+            "[DiffJITCPU] Loaded {} bytes at 0x{:x}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
     fn set_pc(&self, pc: u64) {
-        unsafe { *(self.pc_buf.contents().as_ptr() as *mut u64) = pc; }
+        unsafe {
+            *(self.pc_buf.contents().as_ptr() as *mut u64) = pc;
+        }
     }
 
     fn get_pc(&self) -> u64 {
@@ -718,18 +755,26 @@ impl DiffJITCPU {
     }
 
     fn set_register(&self, reg: usize, value: i64) -> PyResult<()> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
-        unsafe { *(self.registers_buf.contents().as_ptr() as *mut i64).add(reg) = value; }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
+        unsafe {
+            *(self.registers_buf.contents().as_ptr() as *mut i64).add(reg) = value;
+        }
         Ok(())
     }
 
     fn get_register(&self, reg: usize) -> PyResult<i64> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe { Ok(*(self.registers_buf.contents().as_ptr() as *const i64).add(reg)) }
     }
 
     fn set_temperature(&self, temp: f32) {
-        unsafe { *(self.temperature_buf.contents().as_ptr() as *mut f32) = temp; }
+        unsafe {
+            *(self.temperature_buf.contents().as_ptr() as *mut f32) = temp;
+        }
     }
 
     fn get_temperature(&self) -> f32 {
@@ -747,7 +792,11 @@ impl DiffJITCPU {
     /// Zero gradients
     fn zero_gradients(&self) {
         unsafe {
-            std::ptr::write_bytes(self.gradients_buf.contents().as_ptr() as *mut u8, 0, TEMPLATE_WEIGHTS_SIZE * 4);
+            std::ptr::write_bytes(
+                self.gradients_buf.contents().as_ptr() as *mut u8,
+                0,
+                TEMPLATE_WEIGHTS_SIZE * 4,
+            );
         }
     }
 
@@ -763,7 +812,9 @@ impl DiffJITCPU {
     fn set_template_embeddings(&self, embeddings: Vec<f32>) -> PyResult<()> {
         if embeddings.len() != TEMPLATE_WEIGHTS_SIZE {
             return Err(PyRuntimeError::new_err(format!(
-                "Expected {} embeddings, got {}", TEMPLATE_WEIGHTS_SIZE, embeddings.len()
+                "Expected {} embeddings, got {}",
+                TEMPLATE_WEIGHTS_SIZE,
+                embeddings.len()
             )));
         }
         unsafe {
@@ -792,12 +843,17 @@ impl DiffJITCPU {
 
         let mut batch = 0u32;
         while batch < max_batches {
-            if start.elapsed().as_secs_f64() > timeout_seconds { break; }
+            if start.elapsed().as_secs_f64() > timeout_seconds {
+                break;
+            }
 
-            let cmd = self.command_queue.commandBuffer()
+            let cmd = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
 
-            let encoder = cmd.computeCommandEncoder()
+            let encoder = cmd
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -814,8 +870,16 @@ impl DiffJITCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.gradients_buf), 0, 9);
                 encoder.setBuffer_offset_atIndex(Some(&self.temperature_buf), 0, 10);
 
-                let grid = MTLSize { width: 1, height: 1, depth: 1 };
-                let tg = MTLSize { width: 1, height: 1, depth: 1 };
+                let grid = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                let tg = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
                 encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, tg);
             }
             encoder.endEncoding();
@@ -823,25 +887,37 @@ impl DiffJITCPU {
             cmd.waitUntilCompleted();
 
             let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
-            if signal == 1 { break; }  // HALT
+            if signal == 1 {
+                break;
+            } // HALT
 
-            unsafe { *(self.signal_buf.contents().as_ptr() as *mut u32) = 0; }
+            unsafe {
+                *(self.signal_buf.contents().as_ptr() as *mut u32) = 0;
+            }
             batch += 1;
         }
 
         let elapsed = start.elapsed().as_secs_f64();
 
-        let stats = unsafe { std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 7) };
+        let stats = unsafe {
+            std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 7)
+        };
         let total_cycles = stats[0];
         let jit_execs = stats[1];
         let interp_execs = stats[2];
         let template_hits = vec![stats[3], stats[4], stats[5], stats[6]];
         let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
         let jit_ratio = if jit_execs + interp_execs > 0 {
             jit_execs as f64 / (jit_execs + interp_execs) as f64
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         Ok(DiffJITResult {
             total_cycles,

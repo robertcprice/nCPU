@@ -1,5 +1,5 @@
 Memory Oracle LSTM - 271124 params
-Extracted from: /Users/bobbyprice/projects/KVRM/kvrm-cpu/memory_oracle_lstm.pt
+Extracted from legacy source path during the nCPU rename migration.
 
 Weight tensors (24):
   [      0:    640] feature_encoder.0.weight

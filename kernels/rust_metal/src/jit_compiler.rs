@@ -14,16 +14,15 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
-use std::time::Instant;
+use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// JIT-compiled counting loop kernel
 /// Pattern: X0 = N; while (X0 > 0) { X0--; }
@@ -482,8 +481,13 @@ pub struct JITResult {
 #[pymethods]
 impl JITResult {
     fn __repr__(&self) -> String {
-        format!("JITResult(cycles={}, jit_hits={}, jit_ratio={:.1}%, ips={:.0})",
-                self.total_cycles, self.jit_hits, self.jit_ratio * 100.0, self.ips)
+        format!(
+            "JITResult(cycles={}, jit_hits={}, jit_ratio={:.1}%, ips={:.0})",
+            self.total_cycles,
+            self.jit_hits,
+            self.jit_ratio * 100.0,
+            self.ips
+        )
     }
 }
 
@@ -523,27 +527,36 @@ impl JITCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let func_name = NSString::from_str("jit_execute");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| MetalError::ShaderCompilationFailed("Function not found".to_string()))?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| MetalError::PipelineCreationFailed(format!("{:?}", e)))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options(32 * 8, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let config_buf = device.newBufferWithLength_options(12, opts)
+        let config_buf = device
+            .newBufferWithLength_options(12, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stats_buf = device.newBufferWithLength_options(16, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         // Initialize config
@@ -554,7 +567,10 @@ impl JITCPU {
             *ptr.add(2) = jit_threshold;
         }
 
-        println!("[JITCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
+        println!(
+            "[JITCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
         println!("[JITCPU] JIT threshold: {} iterations", jit_threshold);
         println!("[JITCPU] Patterns: COUNTING_LOOP, MEMCPY, SUM");
 
@@ -581,14 +597,20 @@ impl JITCPU {
         }
         unsafe {
             let mem = self.memory_buf.contents().as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(program.as_ptr(), mem.add(address as usize), program.len());
+            std::ptr::copy_nonoverlapping(
+                program.as_ptr(),
+                mem.add(address as usize),
+                program.len(),
+            );
         }
         println!("[JITCPU] Loaded {} bytes at 0x{:x}", program.len(), address);
         Ok(())
     }
 
     fn set_pc(&self, pc: u64) {
-        unsafe { *(self.pc_buf.contents().as_ptr() as *mut u64) = pc; }
+        unsafe {
+            *(self.pc_buf.contents().as_ptr() as *mut u64) = pc;
+        }
     }
 
     fn get_pc(&self) -> u64 {
@@ -596,18 +618,26 @@ impl JITCPU {
     }
 
     fn set_register(&self, reg: usize, value: i64) -> PyResult<()> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
-        unsafe { *(self.registers_buf.contents().as_ptr() as *mut i64).add(reg) = value; }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
+        unsafe {
+            *(self.registers_buf.contents().as_ptr() as *mut i64).add(reg) = value;
+        }
         Ok(())
     }
 
     fn get_register(&self, reg: usize) -> PyResult<i64> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe { Ok(*(self.registers_buf.contents().as_ptr() as *const i64).add(reg)) }
     }
 
     fn set_jit_threshold(&self, threshold: u32) {
-        unsafe { *(self.config_buf.contents().as_ptr() as *mut u32).add(2) = threshold; }
+        unsafe {
+            *(self.config_buf.contents().as_ptr() as *mut u32).add(2) = threshold;
+        }
     }
 
     fn reset(&self) {
@@ -629,12 +659,17 @@ impl JITCPU {
 
         let mut batch = 0u32;
         while batch < max_batches {
-            if start.elapsed().as_secs_f64() > timeout_seconds { break; }
+            if start.elapsed().as_secs_f64() > timeout_seconds {
+                break;
+            }
 
-            let cmd = self.command_queue.commandBuffer()
+            let cmd = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
 
-            let encoder = cmd.computeCommandEncoder()
+            let encoder = cmd
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -647,8 +682,16 @@ impl JITCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.signal_buf), 0, 5);
                 encoder.setBuffer_offset_atIndex(Some(&self.stats_buf), 0, 6);
 
-                let grid = MTLSize { width: 1, height: 1, depth: 1 };
-                let tg = MTLSize { width: 1, height: 1, depth: 1 };
+                let grid = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                let tg = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
                 encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, tg);
             }
             encoder.endEncoding();
@@ -656,25 +699,37 @@ impl JITCPU {
             cmd.waitUntilCompleted();
 
             let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
-            if signal == 1 { break; }  // HALT
+            if signal == 1 {
+                break;
+            } // HALT
 
-            unsafe { *(self.signal_buf.contents().as_ptr() as *mut u32) = 0; }
+            unsafe {
+                *(self.signal_buf.contents().as_ptr() as *mut u32) = 0;
+            }
             batch += 1;
         }
 
         let elapsed = start.elapsed().as_secs_f64();
 
-        let stats = unsafe { std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 4) };
+        let stats = unsafe {
+            std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 4)
+        };
         let total_cycles = stats[0];
         let jit_hits = stats[1];
         let jit_misses = stats[2];
         let patterns_detected = stats[3];
         let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
         let jit_ratio = if jit_hits + jit_misses > 0 {
             jit_hits as f64 / (jit_hits + jit_misses) as f64
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         Ok(JITResult {
             total_cycles,

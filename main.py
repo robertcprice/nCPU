@@ -76,7 +76,7 @@ def run_compute(args):
 
     if args.binary:
         # ARM64 binary → use full 125-instruction MLX ARM64 kernel V2
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         cpu = MLXKernelCPUv2()
         binary_data = Path(args.binary).read_bytes()
         cpu.load_program(binary_data, address=0)

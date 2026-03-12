@@ -62,7 +62,7 @@ This module can be used alongside PyTorch neural networks:
         # Periodically check for loop patterns (optional)
         # ...
 
-Author: KVRM Project
+Author: nCPU Project
 Date: 2024
 """
 

@@ -29,10 +29,7 @@ from ncpu.os.gpu.runner import compile_c, run, make_syscall_handler
 from ncpu.os.gpu.filesystem import GPUFilesystem
 
 # Use Rust Metal runner (290x faster) if available, fall back to Python MLX
-try:
-    from kernels.mlx.rust_runner import RustMetalCPU as MLXKernelCPUv2
-except ImportError:
-    from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
 
 
 # Test programs to compile ON the GPU

@@ -9,15 +9,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Optimized Metal shader with threadgroup memory for registers
 const OPTIMIZED_SHADER_SOURCE: &str = r#"
@@ -1076,7 +1075,10 @@ impl OptimizedMetalCPU {
             *ptr = memory_size as u32;
         }
 
-        println!("[OptimizedMetalCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
+        println!(
+            "[OptimizedMetalCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
         println!("[OptimizedMetalCPU] Using switch-based dispatch + aligned memory access");
 
         Ok(OptimizedMetalCPU {
@@ -1124,7 +1126,9 @@ impl OptimizedMetalCPU {
     }
 
     fn set_register(&self, reg: usize, value: i64) {
-        if reg >= 32 { return; }
+        if reg >= 32 {
+            return;
+        }
         unsafe {
             let ptr = self.registers_buffer.contents().as_ptr() as *mut i64;
             *ptr.add(reg) = value;
@@ -1132,7 +1136,9 @@ impl OptimizedMetalCPU {
     }
 
     fn get_register(&self, reg: usize) -> i64 {
-        if reg >= 32 { return 0; }
+        if reg >= 32 {
+            return 0;
+        }
         unsafe {
             let ptr = self.registers_buffer.contents().as_ptr() as *const i64;
             *ptr.add(reg)
@@ -1179,8 +1185,16 @@ impl OptimizedMetalCPU {
             encoder.setBuffer_offset_atIndex(Some(&self.batch_count_buffer), 0, 8);
 
             encoder.dispatchThreads_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
         encoder.endEncoding();

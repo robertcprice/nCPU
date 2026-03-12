@@ -33,6 +33,7 @@ STOP_RUNNING = 0
 STOP_HALT = 1
 STOP_SYSCALL = 2
 STOP_MAX_CYCLES = 3
+STOP_BREAKPOINT = 4
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # METAL KERNEL HEADER (V2 - Full ARM64 ISA)
@@ -56,6 +57,7 @@ constant uint8_t STOP_RUNNING = 0;
 constant uint8_t STOP_HALT = 1;
 constant uint8_t STOP_SYSCALL = 2;
 constant uint8_t STOP_MAX_CYCLES = 3;
+constant uint8_t STOP_BREAKPOINT = 4;
 
 constant uint32_t MEMORY_SIZE = 4 * 1024 * 1024;  // 4MB
 
@@ -75,6 +77,21 @@ constant uint32_t SVC_HEAP_BASE    = 0x60000;  // must match runner.py HEAP_BASE
 constant int64_t SVC_SYS_WRITE = 64;
 constant int64_t SVC_SYS_CLOSE = 57;
 constant int64_t SVC_SYS_BRK   = 214;
+
+// ── GPU-SIDE INSTRUCTION TRACE BUFFER ──
+// Circular buffer for debugging instruction execution.
+// Layout at TRACE_BUF_BASE:
+//   [0..3]   uint32_t trace_pos   (next write position, wraps)
+//   [4..7]   uint32_t trace_count (total instructions traced, 0xFFFFFFFF = disabled)
+//   [8..]    trace entries: [8B PC][4B inst][8B x0][8B x1][8B x2][8B x3] = 44 bytes each
+constant uint32_t TRACE_BUF_BASE    = 0x3B0000;  // Below SVC_BUF
+constant uint32_t TRACE_BUF_HDR     = 8;
+constant uint32_t TRACE_ENTRY_SIZE  = 56;        // PC(8)+inst(4)+x0-x3(32)+flags(4)+SP(8) = 56B
+constant uint32_t TRACE_MAX_ENTRIES = 4096;      // 4096*56+8 = 229,384 bytes (~224KB)
+
+// ── GPU-SIDE DEBUG CONTROL BLOCK ──
+constant uint32_t DBG_CTRL_BASE = 0x3A0000;  // Below trace buffer
+constant uint8_t STOP_BREAKPOINT_VAL = 4;
 
 // ════════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
@@ -330,6 +347,47 @@ KERNEL_SOURCE_V2 = """
         // FETCH
         uint32_t inst = fetch_instruction(memory_out, pc);
 
+        // TRACE: record instruction before execution (if enabled)
+        {
+            uint32_t trace_count = read_u32_le(memory_out, TRACE_BUF_BASE + 4);
+            if (trace_count != 0xFFFFFFFF) {  // tracing enabled
+                uint32_t trace_pos = read_u32_le(memory_out, TRACE_BUF_BASE);
+                uint32_t entry_base = TRACE_BUF_BASE + TRACE_BUF_HDR + trace_pos * TRACE_ENTRY_SIZE;
+                write_u64_le(memory_out, entry_base, pc);             // PC (8B)
+                write_u32_le(memory_out, entry_base + 8, inst);       // instruction (4B)
+                write_u64_le(memory_out, entry_base + 12, regs[0]);   // x0 (8B)
+                write_u64_le(memory_out, entry_base + 20, regs[1]);   // x1 (8B)
+                write_u64_le(memory_out, entry_base + 28, regs[2]);   // x2 (8B)
+                write_u64_le(memory_out, entry_base + 36, regs[3]);   // x3 (8B)
+                // Extended trace fields
+                uint32_t nzcv = (uint32_t(flag_n != 0.0f) << 3) |
+                                (uint32_t(flag_z != 0.0f) << 2) |
+                                (uint32_t(flag_c != 0.0f) << 1) |
+                                uint32_t(flag_v != 0.0f);
+                write_u32_le(memory_out, entry_base + 44, nzcv);      // NZCV flags (4B)
+                write_u64_le(memory_out, entry_base + 48, uint64_t(regs[31])); // SP (8B)
+                trace_pos = (trace_pos + 1) % TRACE_MAX_ENTRIES;
+                write_u32_le(memory_out, TRACE_BUF_BASE, trace_pos);
+                write_u32_le(memory_out, TRACE_BUF_BASE + 4, trace_count + 1);
+            }
+        }
+
+        // BREAKPOINT CHECK
+        {
+            uint32_t num_bp = read_u32_le(memory_out, DBG_CTRL_BASE);
+            if (num_bp > 0) {
+                bool hit = false;
+                for (uint32_t bp_i = 0; bp_i < num_bp && bp_i < 4; bp_i++) {
+                    uint64_t bp_pc = read_u64_le(memory_out, DBG_CTRL_BASE + 4 + bp_i * 8);
+                    if (pc == bp_pc) { hit = true; break; }
+                }
+                if (hit) {
+                    reason = STOP_BREAKPOINT_VAL;
+                    break;
+                }
+            }
+        }
+
         // DECODE common fields
         uint8_t op_byte = (inst >> 24) & 0xFF;
         uint8_t rd = inst & 0x1F;
@@ -498,7 +556,22 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x13: { // SBFM 32-bit
+        case 0x13: { // SBFM 32-bit / EXTR 32-bit
+            if ((inst >> 23) & 1) {
+                // EXTR 32-bit (also ROR immediate when Rm==Rn)
+                uint8_t rm_ex = (inst >> 16) & 0x1F;
+                uint8_t lsb = (inst >> 10) & 0x3F;
+                uint32_t val_n = uint32_t(regs[rn] & 0xFFFFFFFF);
+                uint32_t val_m = uint32_t(((rm_ex == 31) ? 0 : regs[rm_ex]) & 0xFFFFFFFF);
+                uint32_t result;
+                if (lsb == 0) {
+                    result = val_m;
+                } else {
+                    result = (val_m >> lsb) | (val_n << (32 - lsb));
+                }
+                if (rd != 31) regs[rd] = int64_t(result);
+                break;
+            }
             // SBFM 32-bit (also handles ASR_IMM 32-bit, SBFX 32-bit, SXTB, SXTH)
             uint8_t immr = (inst >> 16) & 0x3F;
             uint8_t imms = (inst >> 10) & 0x3F;
@@ -548,8 +621,15 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x1A: { // Data processing 2-source 32-bit + CSEL/CSINC 32-bit
-            if ((inst & 0xFFE0FC00) == 0x1AC00800) {
+        case 0x1A: { // Data processing 2-source 32-bit + ADC + CSEL/CSINC 32-bit
+            if ((inst & 0xFFE0FC00) == 0x1A000000) {
+                // ADC Wd, Wn, Wm — add with carry (32-bit)
+                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+                uint32_t carry = (flag_c > 0.5f) ? 1 : 0;
+                uint32_t result = uint32_t(rn_val) + uint32_t(rm_val) + carry;
+                if (rd != 31) regs[rd] = int64_t(result);
+            } else if ((inst & 0xFFE0FC00) == 0x1AC00800) {
                 // UDIV W — unsigned divide 32-bit
                 uint32_t divisor = uint32_t(regs[rm] & 0xFFFFFFFF);
                 if (divisor != 0) {
@@ -605,10 +685,18 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x1B: { // MADD 32-bit
-            // MADD 32-bit
+        case 0x1B: { // MADD/MSUB 32-bit
             int64_t ra_val = (ra == 31) ? 0 : regs[ra];
-            int64_t result = (ra_val + regs[rn] * regs[rm]) & 0xFFFFFFFF;
+            int64_t rn_val = regs[rn] & 0xFFFFFFFF;
+            int64_t rm_val = regs[rm] & 0xFFFFFFFF;
+            int64_t result;
+            if ((inst >> 15) & 1) {
+                // MSUB 32-bit: Rd = Ra - Rn * Rm
+                result = (ra_val - rn_val * rm_val) & 0xFFFFFFFF;
+            } else {
+                // MADD 32-bit: Rd = Ra + Rn * Rm (MUL when Ra=WZR)
+                result = (ra_val + rn_val * rm_val) & 0xFFFFFFFF;
+            }
             if (rd != 31) regs[rd] = result;
             break;
         }
@@ -871,8 +959,56 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x3A: case 0x7A: case 0xBA: case 0xFA: { // CCMP/CCMN
-            if ((inst & 0x3FE00410) == 0x3A400000) {
+        case 0x3A: case 0x7A: case 0xBA: case 0xFA: { // ADCS/SBCS/CCMP/CCMN
+            if ((inst & 0x7FE0FC00) == 0x3A000000) {
+                // ADCS 32-bit: add with carry, set flags
+                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+                uint32_t a32 = uint32_t(rn_val), b32 = uint32_t(rm_val);
+                uint32_t carry = (flag_c > 0.5f) ? 1 : 0;
+                uint64_t full = uint64_t(a32) + uint64_t(b32) + carry;
+                uint32_t r32 = uint32_t(full);
+                if (rd != 31) regs[rd] = int64_t(r32);
+                flag_n = ((r32 & 0x80000000u) != 0) ? 1.0f : 0.0f;
+                flag_z = (r32 == 0) ? 1.0f : 0.0f;
+                flag_c = (full > 0xFFFFFFFFu) ? 1.0f : 0.0f;
+                flag_v = ((~(a32 ^ b32)) & (a32 ^ r32) & 0x80000000u) ? 1.0f : 0.0f;
+            } else if ((inst & 0x7FE0FC00) == 0x7A000000) {
+                // SBCS 32-bit: subtract with carry, set flags
+                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+                uint32_t a32 = uint32_t(rn_val), b32 = uint32_t(rm_val);
+                uint32_t carry = (flag_c > 0.5f) ? 1 : 0;
+                uint32_t r32 = a32 - b32 - (1 - carry);
+                if (rd != 31) regs[rd] = int64_t(r32);
+                flag_n = ((r32 & 0x80000000u) != 0) ? 1.0f : 0.0f;
+                flag_z = (r32 == 0) ? 1.0f : 0.0f;
+                flag_c = (uint64_t(a32) >= uint64_t(b32) + (1 - carry)) ? 1.0f : 0.0f;
+                flag_v = ((a32 ^ b32) & (a32 ^ r32) & 0x80000000u) ? 1.0f : 0.0f;
+            } else if ((inst & 0x7FE0FC00) == 0xBA000000) {
+                // ADCS 64-bit: add with carry, set flags
+                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+                uint64_t carry = (flag_c > 0.5f) ? 1 : 0;
+                uint64_t result = uint64_t(rn_val) + uint64_t(rm_val) + carry;
+                if (rd != 31) regs[rd] = int64_t(result);
+                flag_n = (int64_t(result) < 0) ? 1.0f : 0.0f;
+                flag_z = (result == 0) ? 1.0f : 0.0f;
+                // Carry: overflow from unsigned addition
+                flag_c = (result < uint64_t(rn_val) || (carry && result == uint64_t(rn_val))) ? 1.0f : 0.0f;
+                flag_v = ((rn_val ^ int64_t(result)) & ~(rn_val ^ rm_val) & (int64_t(1) << 63)) ? 1.0f : 0.0f;
+            } else if ((inst & 0x7FE0FC00) == 0xFA000000) {
+                // SBCS 64-bit: subtract with carry, set flags
+                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+                uint64_t carry = (flag_c > 0.5f) ? 1 : 0;
+                int64_t result = int64_t(uint64_t(rn_val) - uint64_t(rm_val) - (1 - carry));
+                if (rd != 31) regs[rd] = result;
+                flag_n = (result < 0) ? 1.0f : 0.0f;
+                flag_z = (result == 0) ? 1.0f : 0.0f;
+                flag_c = (uint64_t(rn_val) >= uint64_t(rm_val) + (1 - carry)) ? 1.0f : 0.0f;
+                flag_v = ((rn_val ^ rm_val) & (rn_val ^ result) & (int64_t(1) << 63)) ? 1.0f : 0.0f;
+            } else if ((inst & 0x3FE00410) == 0x3A400000) {
                 // CCMP (bit30=1): if cond then CMP(Rn, op2) else flags=nzcv
                 // CCMN (bit30=0): if cond then CMN(Rn, op2) else flags=nzcv
                 // bit 11: 0=register, 1=immediate
@@ -1002,16 +1138,16 @@ KERNEL_SOURCE_V2 = """
 
         case 0x1E: { // FP data processing / FMOV
             uint8_t rt = inst & 0x1F;
-            if ((inst & 0xFFE0FC00) == 0x1E260000) {
+            if ((inst & 0xFFFFFC00) == 0x1E260000) {
                 // FMOV Wd, Sn — move bottom 32 bits of SIMD to GPR
                 uint32_t val = uint32_t(vreg_lo[rn] & 0xFFFFFFFF);
                 if (rt != 31) regs[rt] = int64_t(val);
-            } else if ((inst & 0xFFE0FC00) == 0x1E270000) {
+            } else if ((inst & 0xFFFFFC00) == 0x1E270000) {
                 // FMOV Sd, Wn — move GPR to bottom 32 bits of SIMD
                 int64_t val = (rn == 31) ? 0 : regs[rn];
                 vreg_lo[rt] = int64_t(uint32_t(val & 0xFFFFFFFF));
                 vreg_hi[rt] = 0;
-            } else if ((inst & 0xFFE0FC00) == 0x1E204000) {
+            } else if ((inst & 0xFFFFFC00) == 0x1E204000) {
                 // FMOV Sd, Sn — copy single-precision between FP registers
                 vreg_lo[rt] = vreg_lo[rn] & 0xFFFFFFFF;
                 vreg_hi[rt] = 0;
@@ -1033,27 +1169,54 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x2F: case 0x4F: { // MOVI SIMD vector immediate
-            // Used to zero vector registers: MOVI Vd.xS, #0
+        case 0x2F: case 0x4F: { // MOVI/MVNI SIMD vector immediate
             uint8_t rt = inst & 0x1F;
-            // For MOVI #0 patterns (0x2F00041D, 0x4F00041F), just zero the register
             uint8_t cmode = (inst >> 12) & 0xF;
-            uint8_t op_bit = (inst >> 29) & 0x1;
-            uint8_t abc = ((inst >> 16) & 0x7) | (((inst >> 5) & 0x1F) << 3);
-            // Extract immediate
+            uint8_t op_bit = (inst >> 29) & 0x1;  // 0=MOVI, 1=MVNI
+            uint8_t Q = (inst >> 30) & 0x1;       // 0=64-bit, 1=128-bit
+            // Extract 8-bit immediate
             uint8_t a = (inst >> 18) & 1;
             uint8_t bcdefgh = ((inst >> 16) & 0x7) | (((inst >> 5) & 0x1F) << 3);
             uint8_t imm8_val = (a << 7) | (bcdefgh & 0x7F);
-            // For simplicity, handle the zero case (most common in musl)
-            if (imm8_val == 0 && cmode == 0) {
-                vreg_lo[rt] = 0;
-                vreg_hi[rt] = 0;
+
+            uint64_t element = 0;
+            uint8_t cmode_hi3 = (cmode >> 1) & 0x7;
+            if (cmode_hi3 <= 3) {
+                // 32-bit element, shifted immediate (LSL #0/#8/#16/#24)
+                uint32_t shift = cmode_hi3 * 8;
+                uint32_t word = uint32_t(imm8_val) << shift;
+                if (op_bit) word = ~word;  // MVNI
+                element = uint64_t(word) | (uint64_t(word) << 32);
+            } else if (cmode_hi3 == 4 || cmode_hi3 == 5) {
+                // 16-bit element, shifted immediate (LSL #0/#8)
+                uint32_t shift = (cmode_hi3 - 4) * 8;
+                uint16_t hw = uint16_t(imm8_val) << shift;
+                if (op_bit) hw = ~hw;  // MVNI
+                element = uint64_t(hw) | (uint64_t(hw) << 16) | (uint64_t(hw) << 32) | (uint64_t(hw) << 48);
+            } else if (cmode_hi3 == 6) {
+                // 32-bit element, MSL (modified shift left with ones)
+                uint32_t shift = (cmode & 1) ? 16 : 8;
+                uint32_t ones = (1u << shift) - 1;
+                uint32_t word = (uint32_t(imm8_val) << shift) | ones;
+                if (op_bit) word = ~word;  // MVNI
+                element = uint64_t(word) | (uint64_t(word) << 32);
             } else {
-                // General MOVI: replicate immediate based on cmode
-                // For now, handle as zero (conservative)
-                vreg_lo[rt] = 0;
-                vreg_hi[rt] = 0;
+                // cmode_hi3 == 7: cmode 1110 or 1111
+                if ((cmode & 1) == 0) {
+                    if (op_bit == 0) {
+                        // MOVI Vd.xB, #imm8 — replicate byte to all lanes
+                        for (int i = 0; i < 8; i++) element |= (uint64_t(imm8_val) << (i * 8));
+                    } else {
+                        // MOVI Vd.xD, #imm64 — each bit of imm8 → 0xFF or 0x00 byte
+                        for (int i = 0; i < 8; i++) {
+                            if (imm8_val & (1 << i)) element |= (uint64_t(0xFF) << (i * 8));
+                        }
+                    }
+                }
+                // cmode=1111: FMOV — leave as 0 (not needed for integer ops)
             }
+            vreg_lo[rt] = int64_t(element);
+            vreg_hi[rt] = Q ? int64_t(element) : 0;
             break;
         }
 
@@ -1208,42 +1371,90 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x6F: { // MOVI V.2D / MVNI V.4S
+        case 0x6F: { // MOVI/MVNI Q=1, op=1 (MVNI V.4S / MOVI V.2D)
             uint8_t rt = inst & 0x1F;
             uint8_t cmode = (inst >> 12) & 0xF;
-            uint8_t op_bit = (inst >> 29) & 0x1;
-            if (cmode == 0xE && op_bit == 1) {
-                // MOVI Vd.2D, #0 (or MOVI Vd.2D, #imm)
-                // Extract imm8
-                uint8_t a = (inst >> 18) & 1;
-                uint8_t b_val = (inst >> 17) & 1;
-                uint8_t c = (inst >> 16) & 1;
-                uint8_t d = (inst >> 9) & 1;
-                uint8_t e = (inst >> 8) & 1;
-                uint8_t f = (inst >> 7) & 1;
-                uint8_t g = (inst >> 6) & 1;
-                uint8_t h = (inst >> 5) & 1;
-                uint8_t imm8 = (a<<7)|(b_val<<6)|(c<<5)|(d<<4)|(e<<3)|(f<<2)|(g<<1)|h;
-                // Expand: each bit of imm8 -> a full byte (0xFF or 0x00)
-                uint64_t val = 0;
-                for (int i = 0; i < 8; i++) {
-                    if (imm8 & (1 << i)) val |= (uint64_t(0xFF) << (i*8));
-                }
-                vreg_lo[rt] = int64_t(val);
-                vreg_hi[rt] = int64_t(val);
+            uint8_t op_bit = (inst >> 29) & 0x1;  // always 1 for 0x6F
+            // Extract 8-bit immediate
+            uint8_t a = (inst >> 18) & 1;
+            uint8_t bcdefgh = ((inst >> 16) & 0x7) | (((inst >> 5) & 0x1F) << 3);
+            uint8_t imm8_val = (a << 7) | (bcdefgh & 0x7F);
+
+            uint64_t element = 0;
+            uint8_t cmode_hi3 = (cmode >> 1) & 0x7;
+            if (cmode_hi3 <= 3) {
+                // 32-bit element, shifted immediate
+                uint32_t shift = cmode_hi3 * 8;
+                uint32_t word = uint32_t(imm8_val) << shift;
+                if (op_bit) word = ~word;  // MVNI
+                element = uint64_t(word) | (uint64_t(word) << 32);
+            } else if (cmode_hi3 == 4 || cmode_hi3 == 5) {
+                // 16-bit element
+                uint32_t shift = (cmode_hi3 - 4) * 8;
+                uint16_t hw = uint16_t(imm8_val) << shift;
+                if (op_bit) hw = ~hw;
+                element = uint64_t(hw) | (uint64_t(hw) << 16) | (uint64_t(hw) << 32) | (uint64_t(hw) << 48);
+            } else if (cmode_hi3 == 6) {
+                // 32-bit MSL
+                uint32_t shift = (cmode & 1) ? 16 : 8;
+                uint32_t ones = (1u << shift) - 1;
+                uint32_t word = (uint32_t(imm8_val) << shift) | ones;
+                if (op_bit) word = ~word;
+                element = uint64_t(word) | (uint64_t(word) << 32);
             } else {
-                // MVNI or other — just zero for safety
-                vreg_lo[rt] = 0;
-                vreg_hi[rt] = 0;
+                // cmode 1110/1111
+                if ((cmode & 1) == 0 && op_bit == 1) {
+                    // MOVI Vd.2D, #imm64 — each bit of imm8 → 0xFF or 0x00
+                    for (int i = 0; i < 8; i++) {
+                        if (imm8_val & (1 << i)) element |= (uint64_t(0xFF) << (i * 8));
+                    }
+                } else if ((cmode & 1) == 0 && op_bit == 0) {
+                    // MOVI Vd.16B, #imm8 — replicate byte
+                    for (int i = 0; i < 8; i++) element |= (uint64_t(imm8_val) << (i * 8));
+                }
             }
+            vreg_lo[rt] = int64_t(element);
+            vreg_hi[rt] = int64_t(element);  // Q=1 for 0x6F
             break;
         }
 
         case 0x0F: { // SIMD shift by immediate / MOVI (8B arrangement)
             uint8_t rt = inst & 0x1F;
-            // For SXTL-like and MOVI V.2S cases, handle conservatively
-            vreg_lo[rt] = 0;
-            vreg_hi[rt] = 0;
+            uint8_t cmode = (inst >> 12) & 0xF;
+            uint8_t op_bit = (inst >> 29) & 0x1;  // always 0 for 0x0F
+            // Check if this is MOVI (immh field = 0, bits 22:19)
+            uint8_t immh = (inst >> 19) & 0xF;
+            if (immh == 0) {
+                // MOVI: extract immediate and expand
+                uint8_t a = (inst >> 18) & 1;
+                uint8_t bcdefgh = ((inst >> 16) & 0x7) | (((inst >> 5) & 0x1F) << 3);
+                uint8_t imm8_val = (a << 7) | (bcdefgh & 0x7F);
+                uint64_t element = 0;
+                uint8_t cmode_hi3 = (cmode >> 1) & 0x7;
+                if (cmode_hi3 <= 3) {
+                    uint32_t shift = cmode_hi3 * 8;
+                    uint32_t word = uint32_t(imm8_val) << shift;
+                    element = uint64_t(word) | (uint64_t(word) << 32);
+                } else if (cmode_hi3 == 4 || cmode_hi3 == 5) {
+                    uint32_t shift = (cmode_hi3 - 4) * 8;
+                    uint16_t hw = uint16_t(imm8_val) << shift;
+                    element = uint64_t(hw) | (uint64_t(hw) << 16) | (uint64_t(hw) << 32) | (uint64_t(hw) << 48);
+                } else if ((cmode & 0xE) == 0xE) {
+                    // MOVI Vd.8B, #imm8
+                    for (int i = 0; i < 8; i++) element |= (uint64_t(imm8_val) << (i * 8));
+                }
+                vreg_lo[rt] = int64_t(element);
+                vreg_hi[rt] = 0;  // Q=0 for 0x0F
+            } else if ((inst & 0xFF80FC00) == 0x0F00A400) {
+                // SSHLL Vd.2D, Vn.2S, #0 — widen the low two signed 32-bit lanes to 64-bit.
+                uint64_t src = uint64_t(vreg_lo[rn]);
+                vreg_lo[rt] = int64_t(int32_t(src & 0xFFFFFFFF));
+                vreg_hi[rt] = int64_t(int32_t((src >> 32) & 0xFFFFFFFF));
+            } else {
+                // SIMD shift by immediate — handle conservatively
+                vreg_lo[rt] = 0;
+                vreg_hi[rt] = 0;
+            }
             break;
         }
 
@@ -1450,8 +1661,25 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x5A: { // RBIT/CLZ/REV 32-bit + CSINV/CSNEG 32-bit
-            if ((inst & 0xFFFFFC00) == 0x5AC00000) {
+        case 0x5A: { // SBC + RBIT/CLZ/CLS/REV 32-bit + CSINV/CSNEG 32-bit
+            if ((inst & 0xFFE0FC00) == 0x5A000000) {
+                // SBC Wd, Wn, Wm — subtract with carry (32-bit)
+                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+                uint32_t carry = (flag_c > 0.5f) ? 1 : 0;
+                uint32_t result = uint32_t(rn_val) - uint32_t(rm_val) - (1 - carry);
+                if (rd != 31) regs[rd] = int64_t(result);
+            } else if ((inst & 0xFFFFFC00) == 0x5AC01400) {
+                // CLS Wd, Wn — count leading sign bits (32-bit)
+                uint32_t val = uint32_t(regs[rn] & 0xFFFFFFFF);
+                bool sign = (val >> 31) & 1;
+                int64_t count = 0;
+                for (int i = 30; i >= 0; i--) {
+                    if (((val >> i) & 1) == sign) count++;
+                    else break;
+                }
+                if (rd != 31) regs[rd] = count;
+            } else if ((inst & 0xFFFFFC00) == 0x5AC00000) {
                 // RBIT W - Reverse bits 32-bit
                 uint32_t val = uint32_t(regs[rn] & 0xFFFFFFFF);
                 uint32_t result = 0;
@@ -1813,8 +2041,15 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0x9A: { // Shift registers / Division / CSEL / CSINC 64-bit
-            if ((inst & 0xFFE0FC00) == 0x9AC02000) {
+        case 0x9A: { // ADC + Shift registers / Division / CSEL / CSINC 64-bit
+            if ((inst & 0xFFE0FC00) == 0x9A000000) {
+                // ADC Xd, Xn, Xm — add with carry (64-bit)
+                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+                uint64_t carry = (flag_c > 0.5f) ? 1 : 0;
+                uint64_t result = uint64_t(rn_val) + uint64_t(rm_val) + carry;
+                if (rd != 31) regs[rd] = int64_t(result);
+            } else if ((inst & 0xFFE0FC00) == 0x9AC02000) {
                 // LSL register
                 int64_t shift = regs[rm] & 63;
                 if (rd != 31) regs[rd] = regs[rn] << shift;
@@ -1996,21 +2231,18 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0xAA: { // MVN / ORR register 64-bit
-            if ((inst & 0xFFE0FFE0) == 0xAA2003E0) {
-                // MVN - Bitwise NOT: ORN Xd, XZR, Xm
-                if (rd != 31) regs[rd] = ~regs[rm];
-            } else {
-                uint8_t stype = (inst >> 22) & 0x3;
-                uint8_t samt = (inst >> 10) & 0x3F;
-                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
-                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
-                if (stype == 0) rm_val = rm_val << samt;
-                else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
-                else if (stype == 2) rm_val = rm_val >> samt;
-                else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (64 - samt)));
-                if (rd != 31) regs[rd] = rn_val | rm_val;
-            }
+        case 0xAA: { // ORR/ORN register 64-bit (N=0: ORR, N=1: ORN) / MVN
+            uint8_t stype = (inst >> 22) & 0x3;
+            uint8_t samt = (inst >> 10) & 0x3F;
+            uint8_t N = (inst >> 21) & 1;
+            int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+            int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+            if (stype == 0) rm_val = rm_val << samt;
+            else if (stype == 1) rm_val = int64_t(uint64_t(rm_val) >> samt);
+            else if (stype == 2) rm_val = rm_val >> samt;
+            else if (stype == 3) rm_val = int64_t((uint64_t(rm_val) >> samt) | (uint64_t(rm_val) << (64 - samt)));
+            if (N) rm_val = ~rm_val;
+            if (rd != 31) regs[rd] = rn_val | rm_val;
             break;
         }
 
@@ -2389,8 +2621,25 @@ KERNEL_SOURCE_V2 = """
             break;
         }
 
-        case 0xDA: { // Bit manipulation / CSINV / CSNEG 64-bit
-            if ((inst & 0xFFFFFC00) == 0xDAC01000) {
+        case 0xDA: { // SBC + Bit manipulation / CSINV / CSNEG 64-bit
+            if ((inst & 0xFFE0FC00) == 0xDA000000) {
+                // SBC Xd, Xn, Xm — subtract with carry (64-bit)
+                int64_t rn_val = (rn == 31) ? 0 : regs[rn];
+                int64_t rm_val = (rm == 31) ? 0 : regs[rm];
+                uint64_t carry = (flag_c > 0.5f) ? 1 : 0;
+                uint64_t result = uint64_t(rn_val) - uint64_t(rm_val) - (1 - carry);
+                if (rd != 31) regs[rd] = int64_t(result);
+            } else if ((inst & 0xFFFFFC00) == 0xDAC01400) {
+                // CLS Xd, Xn — count leading sign bits (64-bit)
+                uint64_t val = uint64_t(regs[rn]);
+                bool sign = (val >> 63) & 1;
+                int64_t count = 0;
+                for (int i = 62; i >= 0; i--) {
+                    if (((val >> i) & 1) == sign) count++;
+                    else break;
+                }
+                if (rd != 31) regs[rd] = count;
+            } else if ((inst & 0xFFFFFC00) == 0xDAC01000) {
                 // CLZ - Count leading zeros
                 uint64_t val = uint64_t(regs[rn]) ;
                 int64_t count = 64;
@@ -2546,10 +2795,17 @@ KERNEL_SOURCE_V2 = """
             uint8_t opt_bits = (inst >> 10) & 0x3;
 
             if (opt_bits == 0x2) {
-                // Register offset: LDR/STR Xt, [Xn, Xm, LSL #shift]
-                uint8_t shift_bit = (inst >> 12) & 0x1;
+                // Register offset: LDR/STR Xt, [Xn, Rm, extend #shift]
+                uint8_t S_bit = (inst >> 12) & 0x1;
+                uint8_t option = (inst >> 13) & 0x7;
                 int64_t base = regs[rn];  // rn=31 is SP
-                int64_t offset = ((rm == 31) ? 0 : regs[rm]) << (shift_bit ? 3 : 0);
+                int64_t offset = (rm == 31) ? 0 : regs[rm];
+                if (option == 6) {  // SXTW
+                    offset = int64_t(int32_t(offset & 0xFFFFFFFF));
+                } else if (option == 2) {  // UXTW
+                    offset = offset & 0xFFFFFFFF;
+                }
+                if (S_bit) offset <<= 3;  // Scale by 8 (doubleword)
                 uint64_t addr = uint64_t(base + offset);
                 if (opc_bit) {
                     if (rd != 31) regs[rd] = load64(memory_out, addr);

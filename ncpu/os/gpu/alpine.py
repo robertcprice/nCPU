@@ -1261,6 +1261,21 @@ def create_alpine_rootfs() -> GPUFilesystem:
 
     fs.write_file("/etc/TZ", "UTC\n")
 
+    # /etc/localtime — TZif v2 binary for UTC timezone
+    # musl libc reads this for localtime_r/strftime (required by ls -l, date, etc.)
+    # Minimal valid TZif2 file: magic + header + v2 header + POSIX TZ string
+    import struct as _struct
+    # TZif v1 header (44 bytes magic+header + no data = points to v2)
+    tzif_v1_header = b'TZif2' + b'\x00' * 15  # magic (20 bytes)
+    tzif_v1_header += _struct.pack('>6I', 0, 0, 0, 0, 0, 0)  # 6 counts = 0 (24 bytes)
+    # TZif v2 header
+    tzif_v2_header = b'TZif2' + b'\x00' * 15  # magic (20 bytes)
+    tzif_v2_header += _struct.pack('>6I', 0, 0, 0, 0, 0, 0)  # 6 counts = 0 (24 bytes)
+    # POSIX TZ string after v2 data: newline + "UTC0" + newline
+    posix_tz = b'\nUTC0\n'
+    tzif_data = tzif_v1_header + tzif_v2_header + posix_tz
+    fs.write_file("/etc/localtime", tzif_data)
+
     fs.write_file("/etc/modules", (
         "# /etc/modules -- kernel modules to load at boot\n"
     ))

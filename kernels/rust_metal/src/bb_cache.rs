@@ -10,15 +10,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Basic Block Cache shader with fusion
 const BB_CACHE_SHADER_SOURCE: &str = r#"
@@ -736,11 +735,22 @@ impl BBCacheMetalCPU {
             *ptr = memory_size as u32;
 
             // Clear cache
-            std::ptr::write_bytes(bb_cache_buffer.contents().as_ptr() as *mut u8, 0, CACHE_SIZE * CACHE_ENTRY_SIZE);
+            std::ptr::write_bytes(
+                bb_cache_buffer.contents().as_ptr() as *mut u8,
+                0,
+                CACHE_SIZE * CACHE_ENTRY_SIZE,
+            );
         }
 
-        println!("[BBCacheMetalCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
-        println!("[BBCacheMetalCPU] BB Cache: {} entries, {} bytes", CACHE_SIZE, CACHE_SIZE * CACHE_ENTRY_SIZE);
+        println!(
+            "[BBCacheMetalCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
+        println!(
+            "[BBCacheMetalCPU] BB Cache: {} entries, {} bytes",
+            CACHE_SIZE,
+            CACHE_SIZE * CACHE_ENTRY_SIZE
+        );
         println!("[BBCacheMetalCPU] Fusion + BB Cache enabled");
 
         Ok(Self {
@@ -773,7 +783,11 @@ impl BBCacheMetalCPU {
             let ptr = self.memory_buffer.contents().as_ptr() as *mut u8;
             std::ptr::copy_nonoverlapping(program.as_ptr(), ptr.add(address), program.len());
         }
-        println!("[BBCacheMetalCPU] Loaded {} bytes at 0x{:X}", program.len(), address);
+        println!(
+            "[BBCacheMetalCPU] Loaded {} bytes at 0x{:X}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
@@ -789,7 +803,9 @@ impl BBCacheMetalCPU {
     }
 
     pub fn set_register(&self, index: usize, value: i64) {
-        if index >= 32 { return; }
+        if index >= 32 {
+            return;
+        }
         unsafe {
             let ptr = self.registers_buffer.contents().as_ptr() as *mut i64;
             *ptr.add(index) = value;
@@ -797,13 +813,19 @@ impl BBCacheMetalCPU {
     }
 
     pub fn get_register(&self, index: usize) -> i64 {
-        if index >= 32 { return 0; }
+        if index >= 32 {
+            return 0;
+        }
         unsafe { *(self.registers_buffer.contents().as_ptr() as *const i64).add(index) }
     }
 
     pub fn clear_cache(&self) {
         unsafe {
-            std::ptr::write_bytes(self.bb_cache_buffer.contents().as_ptr() as *mut u8, 0, CACHE_SIZE * CACHE_ENTRY_SIZE);
+            std::ptr::write_bytes(
+                self.bb_cache_buffer.contents().as_ptr() as *mut u8,
+                0,
+                CACHE_SIZE * CACHE_ENTRY_SIZE,
+            );
         }
     }
 
@@ -823,11 +845,16 @@ impl BBCacheMetalCPU {
         let mut batches = 0u32;
 
         while batches < max_batches && start.elapsed() < timeout {
-            unsafe { *(self.signal_buffer.contents().as_ptr() as *mut u32) = 0; }
+            unsafe {
+                *(self.signal_buffer.contents().as_ptr() as *mut u32) = 0;
+            }
 
-            let cmd_buffer = self.command_queue.commandBuffer()
+            let cmd_buffer = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
-            let encoder = cmd_buffer.computeCommandEncoder()
+            let encoder = cmd_buffer
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -847,8 +874,16 @@ impl BBCacheMetalCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.bb_cache_buffer), 0, 12);
 
                 encoder.dispatchThreads_threadsPerThreadgroup(
-                    MTLSize { width: 1, height: 1, depth: 1 },
-                    MTLSize { width: 1, height: 1, depth: 1 },
+                    MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
+                    MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
                 );
             }
             encoder.endEncoding();
@@ -857,7 +892,9 @@ impl BBCacheMetalCPU {
 
             batches += 1;
             let signal = unsafe { *(self.signal_buffer.contents().as_ptr() as *const u32) };
-            if signal == 1 || signal == 2 { break; }
+            if signal == 1 || signal == 2 {
+                break;
+            }
         }
 
         let elapsed = start.elapsed().as_secs_f64();
@@ -868,9 +905,17 @@ impl BBCacheMetalCPU {
         let fused_count = unsafe { *(self.fused_count_buffer.contents().as_ptr() as *const u32) };
         let signal = unsafe { *(self.signal_buffer.contents().as_ptr() as *const u32) };
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
         let total_accesses = cache_hits + cache_misses;
-        let cache_hit_rate = if total_accesses > 0 { cache_hits as f64 / total_accesses as f64 * 100.0 } else { 0.0 };
+        let cache_hit_rate = if total_accesses > 0 {
+            cache_hits as f64 / total_accesses as f64 * 100.0
+        } else {
+            0.0
+        };
 
         Ok(BBCacheResult {
             total_cycles,
@@ -887,7 +932,11 @@ impl BBCacheMetalCPU {
 
     pub fn reset(&self) {
         unsafe {
-            std::ptr::write_bytes(self.registers_buffer.contents().as_ptr() as *mut u8, 0, 32 * 8);
+            std::ptr::write_bytes(
+                self.registers_buffer.contents().as_ptr() as *mut u8,
+                0,
+                32 * 8,
+            );
             std::ptr::write_bytes(self.pc_buffer.contents().as_ptr() as *mut u8, 0, 8);
             std::ptr::write_bytes(self.flags_buffer.contents().as_ptr() as *mut u8, 0, 16);
         }

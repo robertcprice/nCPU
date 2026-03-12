@@ -15,7 +15,7 @@ Run tests:
     # or
     pytest mlx_kernel/test_kernel.py -v
 
-Author: KVRM Project
+Author: nCPU Project
 Date: 2024
 """
 

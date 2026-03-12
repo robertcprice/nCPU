@@ -2,6 +2,10 @@
 """
 MLX Metal Kernel V2 - Double-Buffer Memory Architecture.
 
+LEGACY: This module is superseded by kernels.mlx.rust_runner (RustMetalCPU)
+which uses Rust + Metal with StorageModeShared for ~500x faster compilation.
+Use RustMetalCPU for new code. This module is retained for backwards compatibility.
+
 This version adds FULL MEMORY WRITE SUPPORT via double-buffering:
 - memory_in: Read-only input (initial state)
 - memory_out: Writable output (copied from input, then modified)
@@ -15,7 +19,7 @@ Target: Same ~2M IPS as V1, but with memory write capability.
 The 4MB memory copy at kernel start is GPU-to-GPU (~0.4ms),
 amortized over millions of cycles = negligible per-instruction cost.
 
-Author: KVRM Project
+Author: nCPU Project
 Date: 2024
 """
 
@@ -26,6 +30,10 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Optional, Union
 
+from .instruction_coverage import (
+    analyze_instruction_coverage as analyze_instruction_coverage_impl,
+    is_known_instruction,
+)
 from .cpu_kernel_v2_source import (
     KERNEL_HEADER_V2,
     KERNEL_SOURCE_V2,
@@ -33,6 +41,7 @@ from .cpu_kernel_v2_source import (
     STOP_HALT,
     STOP_SYSCALL,
     STOP_MAX_CYCLES,
+    STOP_BREAKPOINT,
 )
 
 
@@ -46,10 +55,11 @@ class StopReasonV2(IntEnum):
     HALT = STOP_HALT
     SYSCALL = STOP_SYSCALL
     MAX_CYCLES = STOP_MAX_CYCLES
+    BREAKPOINT = STOP_BREAKPOINT
 
     @property
     def name_str(self) -> str:
-        return ["RUNNING", "HALT", "SYSCALL", "MAX_CYCLES"][self]
+        return ["RUNNING", "HALT", "SYSCALL", "MAX_CYCLES", "BREAKPOINT"][self]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -272,6 +282,110 @@ class MLXKernelCPUv2:
         return entries
 
     # ═══════════════════════════════════════════════════════════════════════════
+    # GPU-SIDE INSTRUCTION TRACE BUFFER
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    TRACE_BUF_BASE = 0x3B0000
+    TRACE_BUF_HDR = 8
+    TRACE_ENTRY_SIZE = 56
+    TRACE_MAX_ENTRIES = 4096
+    DBG_CTRL_BASE = 0x3A0000
+
+    def enable_trace(self) -> None:
+        """Enable instruction tracing (set trace_count = 0)."""
+        self._ensure_memory_synced()
+        self._memory_np[self.TRACE_BUF_BASE:self.TRACE_BUF_BASE + self.TRACE_BUF_HDR] = 0
+        self._memory_dirty = True
+
+    def disable_trace(self) -> None:
+        """Disable instruction tracing (set trace_count = 0xFFFFFFFF)."""
+        self._ensure_memory_synced()
+        # Set trace_count = 0xFFFFFFFF to disable
+        self._memory_np[self.TRACE_BUF_BASE:self.TRACE_BUF_BASE + 4] = 0  # pos = 0
+        self._memory_np[self.TRACE_BUF_BASE + 4:self.TRACE_BUF_BASE + 8] = 0xFF  # count = -1
+        self._memory_dirty = True
+
+    def read_trace(self) -> list[tuple[int, int, int, int, int, int, int, int]]:
+        """
+        Read trace buffer entries from GPU memory.
+
+        Returns list of (pc, inst, x0, x1, x2, x3, flags, sp) tuples.
+        flags is a uint32 packed as NZCV in bits [3:0].
+        sp is the stack pointer value.
+        Tracing must have been enabled before execution.
+        """
+        # Sync MLX→numpy so we see post-execution GPU writes,
+        # and also respect any numpy-side changes (clear_trace, enable_trace)
+        self._ensure_memory_synced()
+        trace_data = self._memory_np
+
+        hdr = trace_data[self.TRACE_BUF_BASE:self.TRACE_BUF_BASE + 8]
+        trace_pos = int(hdr[0]) | (int(hdr[1]) << 8) | (int(hdr[2]) << 16) | (int(hdr[3]) << 24)
+        trace_count = int(hdr[4]) | (int(hdr[5]) << 8) | (int(hdr[6]) << 16) | (int(hdr[7]) << 24)
+
+        if trace_count == 0xFFFFFFFF or trace_count == 0:
+            return []  # tracing disabled or empty
+
+        # Calculate entries to read
+        num_entries = min(trace_count, self.TRACE_MAX_ENTRIES)
+
+        entries = []
+        # If buffer wrapped, start from trace_pos; otherwise from 0
+        start_idx = trace_pos if trace_count > self.TRACE_MAX_ENTRIES else 0
+
+        for i in range(num_entries):
+            idx = (start_idx + i) % self.TRACE_MAX_ENTRIES
+            base = self.TRACE_BUF_BASE + self.TRACE_BUF_HDR + idx * self.TRACE_ENTRY_SIZE
+
+            pc = int(trace_data[base]) | (int(trace_data[base+1]) << 8) | \
+                 (int(trace_data[base+2]) << 16) | (int(trace_data[base+3]) << 24) | \
+                 (int(trace_data[base+4]) << 32) | (int(trace_data[base+5]) << 40) | \
+                 (int(trace_data[base+6]) << 48) | (int(trace_data[base+7]) << 56)
+
+            inst = int(trace_data[base+8]) | (int(trace_data[base+9]) << 8) | \
+                   (int(trace_data[base+10]) << 16) | (int(trace_data[base+11]) << 24)
+
+            x0 = int.from_bytes(bytes(trace_data[base+12:base+20]), 'little', signed=True)
+            x1 = int.from_bytes(bytes(trace_data[base+20:base+28]), 'little', signed=True)
+            x2 = int.from_bytes(bytes(trace_data[base+28:base+36]), 'little', signed=True)
+            x3 = int.from_bytes(bytes(trace_data[base+36:base+44]), 'little', signed=True)
+
+            flags = int(trace_data[base+44]) | (int(trace_data[base+45]) << 8) | \
+                    (int(trace_data[base+46]) << 16) | (int(trace_data[base+47]) << 24)
+
+            sp = int.from_bytes(bytes(trace_data[base+48:base+56]), 'little', signed=True)
+
+            entries.append((pc, inst, x0, x1, x2, x3, flags, sp))
+
+        return entries
+
+    def clear_trace(self) -> None:
+        """Clear the trace buffer (reset pos and count to 0)."""
+        self._ensure_memory_synced()
+        self._memory_np[self.TRACE_BUF_BASE:self.TRACE_BUF_BASE + self.TRACE_BUF_HDR] = 0
+        self._memory_dirty = True
+
+    def set_breakpoint(self, index: int, pc: int) -> None:
+        """Set breakpoint at index (0-3) to fire at given PC."""
+        self._ensure_memory_synced()
+        import struct
+        bp_offset = self.DBG_CTRL_BASE + 4 + index * 8
+        pc_bytes = struct.pack('<Q', pc)
+        self._memory_np[bp_offset:bp_offset + 8] = list(pc_bytes)
+        # Update count if needed
+        current = int.from_bytes(bytes(self._memory_np[self.DBG_CTRL_BASE:self.DBG_CTRL_BASE + 4]), 'little')
+        if index + 1 > current:
+            count_bytes = struct.pack('<I', index + 1)
+            self._memory_np[self.DBG_CTRL_BASE:self.DBG_CTRL_BASE + 4] = list(count_bytes)
+        self._memory_dirty = True
+
+    def clear_breakpoints(self) -> None:
+        """Remove all breakpoints."""
+        self._ensure_memory_synced()
+        self._memory_np[self.DBG_CTRL_BASE:self.DBG_CTRL_BASE + 36] = 0
+        self._memory_dirty = True
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # EXECUTION
     # ═══════════════════════════════════════════════════════════════════════════
 
@@ -405,146 +519,13 @@ class MLXKernelCPUv2:
         return "\n".join(lines)
 
     def analyze_instruction_coverage(self, text_base: int, text_size: int) -> list[dict]:
-        """Analyze a code region for instruction coverage gaps.
-
-        Reads instructions from memory[text_base:text_base+text_size] and
-        classifies each one as known/unknown based on the Metal kernel's
-        decode table. Returns list of unique unknown instruction classes.
-
-        Args:
-            text_base: Start address of .text segment
-            text_size: Size of .text segment in bytes
-
-        Returns:
-            List of dicts with 'opcode', 'pc', 'opcode_hex', 'top_byte' keys.
-        """
-        data = self.read_memory(text_base, text_size)
-        unknowns = {}
-
-        for off in range(0, len(data) - 3, 4):
-            inst = int.from_bytes(data[off:off+4], 'little')
-            if inst == 0:
-                continue  # Skip zero-fill
-
-            top = (inst >> 24) & 0xFF
-            class_key = inst >> 21
-
-            if not self._is_known_instruction(inst, top):
-                if class_key not in unknowns:
-                    unknowns[class_key] = {
-                        'opcode': inst,
-                        'pc': text_base + off,
-                        'opcode_hex': f'0x{inst:08X}',
-                        'top_byte': f'0x{top:02X}',
-                        'class_bits': f'0x{class_key:03X}',
-                    }
-
-        return list(unknowns.values())
+        """Analyze a code region for instruction coverage gaps."""
+        return analyze_instruction_coverage_impl(self.read_memory, text_base, text_size)
 
     @staticmethod
     def _is_known_instruction(inst: int, top: int) -> bool:
         """Check if an instruction is handled by the Metal kernel's decode table."""
-        # Top-level instruction categories from the Metal kernel
-        op0 = (inst >> 25) & 0xF
-
-        # HLT
-        if (inst & 0xFFE0001F) == 0xD4400000:
-            return True
-        # SVC
-        if (inst & 0xFFE0001F) == 0xD4000001:
-            return True
-        # NOP, DMB, DSB, ISB, CLREX
-        if inst in (0xD503201F, 0xD50330BF, 0xD5033F9F, 0xD5033FDF, 0xD503305F):
-            return True
-
-        # Data processing — immediate
-        if top in (0xD2, 0xD3, 0xF2, 0xF3, 0x52, 0x72):  # MOVZ, MOVK
-            return True
-        if top in (0x92, 0x12):  # MOVN
-            return True
-        if top in (0x91, 0x11, 0xB1, 0x31):  # ADD/ADDS imm
-            return True
-        if top in (0xD1, 0x51, 0xF1, 0x71):  # SUB/SUBS imm
-            return True
-        if top in (0x92, 0x12, 0xB2, 0x32):  # AND/ANDS imm (logical imm)
-            return True
-        if top in (0xD3, 0x53):  # UBFM/SBFM/BFM
-            return True
-        if top == 0x93:  # SBFM 64-bit / EXTR
-            return True
-        if top == 0x33:  # BFM 32-bit
-            return True
-
-        # Branches
-        if top in (0x14, 0x15, 0x16, 0x17):  # B
-            return True
-        if top in (0x94, 0x95, 0x96, 0x97):  # BL
-            return True
-        if top in (0x54,):  # B.cond
-            return True
-        if (inst & 0xFF000000) in (0xB4000000, 0xB5000000, 0x34000000, 0x35000000):  # CBZ/CBNZ
-            return True
-        if (inst & 0x7F000000) in (0x36000000, 0x37000000):  # TBZ/TBNZ
-            return True
-        if (inst & 0xFFFFFC1F) in (0xD61F0000, 0xD63F0000, 0xD65F0000):  # BR/BLR/RET
-            return True
-
-        # Load/Store
-        if top in (0xF9, 0xB9, 0x39, 0x79):  # LDR/STR unsigned imm
-            return True
-        if top in (0xF8, 0xB8, 0x38, 0x78):  # LDR/STR reg offset / pre/post index
-            return True
-        if top in (0xA9, 0xA8, 0x29, 0x28):  # STP/LDP
-            return True
-        if top in (0x18, 0x1C, 0x58, 0x98, 0x9C, 0xD8):  # LDR literal / PRFM literal
-            return True
-
-        # Data processing — register
-        if top in (0x8B, 0x0B, 0xAB, 0x2B):  # ADD reg
-            return True
-        if top in (0xCB, 0x4B, 0xEB, 0x6B):  # SUB/SUBS reg
-            return True
-        if top in (0x8A, 0x0A, 0xAA, 0x2A):  # AND/ORR reg
-            return True
-        if top in (0xCA, 0x4A, 0xEA, 0x6A):  # EOR/ANDS reg
-            return True
-        if top in (0x9A, 0x1A, 0xDA, 0x5A):  # CSEL/ADC/SBC
-            return True
-        if top in (0x9B, 0x1B):  # MUL/MADD/MSUB/SMULH/UMULH
-            return True
-
-        # Division
-        if (inst & 0xFF200000) in (0x9AC00000, 0x1AC00000):  # SDIV/UDIV
-            return True
-
-        # Shifts
-        if (inst & 0xFF200000) in (0x9AC00000, 0x1AC00000):  # shift reg
-            return True
-
-        # Bit manipulation
-        if (inst & 0xFF200000) == 0xDAC00000:  # CLZ/RBIT/REV
-            return True
-        if (inst & 0x7F200000) == 0x5AC00000:  # 32-bit bit ops
-            return True
-
-        # ADR/ADRP
-        if (inst & 0x9F000000) in (0x10000000, 0x90000000):
-            return True
-
-        # MRS/MSR
-        if (inst & 0xFFF00000) in (0xD5300000, 0xD5100000):
-            return True
-
-        # LDXR/STXR
-        if (inst & 0xFF200000) in (0xC8400000, 0xC8000000, 0x88400000, 0x88000000):
-            return True
-
-        # Extension ops (SXTW, UXTB, etc.) — covered by SBFM/UBFM
-        # SIMD load/store pair
-        if (inst & 0xFFC00000) in (0xAD000000, 0xAD400000, 0x6D000000, 0x6D400000):
-            return True
-
-        return False
+        return is_known_instruction(inst, top)
 
     def print_unknown_instructions(self, text_base: int = 0x10000, text_size: int = 0x40000):
         """Analyze and print unknown instructions in the loaded binary."""

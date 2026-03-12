@@ -24,18 +24,15 @@ import sys
 from pathlib import Path
 
 import pytest
+from kernels.mlx.availability import has_gpu_backend
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-try:
-    import mlx.core as mx
-    HAS_MLX = True
-except ImportError:
-    HAS_MLX = False
+HAS_GPU_BACKEND = has_gpu_backend()
 
-pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+pytestmark = pytest.mark.skipif(not HAS_GPU_BACKEND, reason="GPU backend not available")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -290,9 +287,9 @@ def build_binary(insts):
 
 @pytest.fixture
 def cpu():
-    """Create a fresh MLXKernelCPUv2 with 64KB memory."""
-    from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
-    return MLXKernelCPUv2(memory_size=64 * 1024)
+    """Create a fresh GPU backend CPU with 64KB memory."""
+    from kernels.mlx.gpu_cpu import GPUKernelCPU
+    return GPUKernelCPU(memory_size=64 * 1024, quiet=True)
 
 
 def run(cpu, insts, max_cycles=200):
@@ -921,6 +918,77 @@ class TestPrograms:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Performance Smoke Test
 # ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSIMDImmediate:
+    """MOVI/MVNI SIMD immediate tests — verifies the MVNI fix for grep regex."""
+
+    def test_mvni_2s_zero(self, cpu):
+        """MVNI V15.2S, #0 → V15 = 0xFFFFFFFF_FFFFFFFF, then STR to memory, read back."""
+        # MVNI v15.2s, #0  → 0x2F00040F (set v15 to all-ones)
+        # STR D15, [X0]    → 0xFD00000F (store 8 bytes to [X0], Rn=0 Rt=15)
+        # LDR X1, [X0]     → 0xF9400001 (load 8 bytes to X1)
+        addr = 0x8000
+        run(cpu, [
+            movz(0, addr),      # X0 = address for store
+            0x2F00040F,          # MVNI V15.2S, #0
+            0xFD00000F,          # STR D15, [X0]
+            0xF9400001,          # LDR X1, [X0]
+            HLT,
+        ])
+        # X1 should contain 0xFFFFFFFF_FFFFFFFF = -1
+        val = cpu.get_register(1)
+        assert val == -1, f"Expected -1, got {val} (0x{val & 0xFFFFFFFFFFFFFFFF:016X})"
+
+    def test_movi_2s_zero(self, cpu):
+        """MOVI V15.2S, #0 → V15 = 0, then STR to memory, read back."""
+        addr = 0x8000
+        # First set memory to non-zero
+        cpu.write_memory(addr, b'\xFF' * 8)
+        run(cpu, [
+            movz(0, addr),
+            0x0F00040F,          # MOVI V15.2S, #0 (op_byte 0x0F, Q=0, op=0, Rd=15)
+            0xFD00000F,          # STR D15, [X0]
+            0xF9400001,          # LDR X1, [X0]
+            HLT,
+        ])
+        assert cpu.get_register(1) == 0, f"Expected 0, got {cpu.get_register(1)}"
+
+    def test_mvni_store_sentinel(self, cpu):
+        """Reproduce the grep sentinel pattern: MVNI + STR D pre-index."""
+        base_addr = 0x8000
+        run(cpu, [
+            movz(0, base_addr),    # X0 = base address
+            0x2F00040F,            # MVNI V15.2S, #0 (all-ones)
+            # STR D15, [X0, #56]! → pre-index: store at X0+56, update X0
+            0xFC038C0F,            # STR D15, [X0, #56]!
+            HLT,
+        ])
+        # X0 should be updated to base_addr + 56
+        assert cpu.get_register(0) == base_addr + 56
+        # Memory at base_addr + 56 should be all-ones
+        data = cpu.read_memory(base_addr + 56, 8)
+        val = int.from_bytes(data, 'little', signed=True)
+        assert val == -1, f"Expected -1 at sentinel, got {val}"
+
+    def test_fmov_ins_sshll_constructor_pattern(self, cpu):
+        """Reproduce the grep literal constructor: FMOV + INS + SSHLL + STR Q."""
+        addr = 0x8000
+        run(cpu, [
+            movz(0, addr),
+            movz_w(1, 0x72),       # W1 = 'r'
+            movz_w(2, 0x72),       # W2 = 'r'
+            0x1E27003F,            # FMOV S31, W1
+            0x4E0C1C5F,            # MOV V31.S[1], W2
+            0x0F20A7FF,            # SSHLL V31.2D, V31.2S, #0
+            0x3D80001F,            # STR Q31, [X0]
+            HLT,
+        ])
+        data = cpu.read_memory(addr, 16)
+        lo = int.from_bytes(data[:8], 'little', signed=False)
+        hi = int.from_bytes(data[8:], 'little', signed=False)
+        assert lo == 0x72, f"Expected widened low lane 'r', got {lo} (0x{lo:016X})"
+        assert hi == 0x72, f"Expected sign-extended 'r' lane, got {hi} (0x{hi:016X})"
+
 
 class TestPerformance:
 

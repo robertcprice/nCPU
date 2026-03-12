@@ -6,7 +6,7 @@ use objc2_foundation::NSString;
 use objc2_metal::*;
 use pyo3::prelude::*;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 const HYPER_OPTIMIZED_SHADER: &str = r#"
 #include <metal_stdlib>
@@ -338,27 +338,36 @@ impl HyperOptimizedMetalCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let func_name = NSString::from_str("hyper_cpu_execute");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| MetalError::ShaderCompilationFailed("Function not found".to_string()))?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| MetalError::PipelineCreationFailed(format!("{:?}", e)))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options(32 * 8, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let config_buf = device.newBufferWithLength_options(16, opts)
+        let config_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stats_buf = device.newBufferWithLength_options(32, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(32, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         unsafe {
@@ -370,7 +379,10 @@ impl HyperOptimizedMetalCPU {
             *sig = 0;
         }
 
-        println!("[HyperOptimizedMetalCPU] Initialized with {} MB memory", memory_size / (1024 * 1024));
+        println!(
+            "[HyperOptimizedMetalCPU] Initialized with {} MB memory",
+            memory_size / (1024 * 1024)
+        );
 
         Ok(Self {
             device,
@@ -416,8 +428,16 @@ impl HyperOptimizedMetalCPU {
             encoder.setBuffer_offset_atIndex(Some(&self.stats_buf), 0, 6);
 
             encoder.dispatchThreads_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
 

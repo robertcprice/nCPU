@@ -1,5 +1,5 @@
 Loop Detector V2 - 1083397 params
-Extracted from: /Users/bobbyprice/projects/KVRM/kvrm-cpu/loop_detector_v2.pt
+Extracted from legacy source path during the nCPU rename migration.
 
 Weight tensors (44):
   [      0:   4096] inst_embed.0.weight

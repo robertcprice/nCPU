@@ -698,7 +698,7 @@ class NeuralExecutionEngine(nn.Module):
     2. TENSOR MEMORY: One-hot addressing with gather/scatter ops
     3. DIFFERENTIABLE: End-to-end gradient flow for training
 
-    This is the KVRM approach to CPU execution!
+    This is the nCPU approach to CPU execution.
     """
 
     def __init__(self, num_ops: int = 64, state_dim: int = 64, num_regs: int = 32, device=None):

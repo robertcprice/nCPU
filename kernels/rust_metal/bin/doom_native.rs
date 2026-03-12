@@ -7,9 +7,9 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::*;
-use std::time::Instant;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 /// Optimized Metal shader for ARM64 DOOM execution
 const DOOM_SHADER: &str = r#"
@@ -167,34 +167,40 @@ struct NativeDoomCPU {
 
 impl NativeDoomCPU {
     fn new(memory_size: usize) -> Result<Self, String> {
-        let device = MTLCreateSystemDefaultDevice()
-            .ok_or("No Metal device")?;
+        let device = MTLCreateSystemDefaultDevice().ok_or("No Metal device")?;
 
         println!("Using device: {:?}", device.name());
 
-        let command_queue = device.newCommandQueue()
-            .ok_or("No command queue")?;
+        let command_queue = device.newCommandQueue().ok_or("No command queue")?;
 
         let source = NSString::from_str(DOOM_SHADER);
-        let library = device.newLibraryWithSource_options_error(&source, None)
+        let library = device
+            .newLibraryWithSource_options_error(&source, None)
             .map_err(|e| format!("Shader error: {:?}", e))?;
 
-        let func = library.newFunctionWithName(&NSString::from_str("doom_execute"))
+        let func = library
+            .newFunctionWithName(&NSString::from_str("doom_execute"))
             .ok_or("Function not found")?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&func)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&func)
             .map_err(|e| format!("Pipeline error: {:?}", e))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or("No memory buffer")?;
-        let registers_buf = device.newBufferWithLength_options(256, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(256, opts)
             .ok_or("No registers buffer")?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or("No PC buffer")?;
-        let config_buf = device.newBufferWithLength_options(16, opts)
+        let config_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or("No config buffer")?;
-        let cycles_buf = device.newBufferWithLength_options(4, opts)
+        let cycles_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or("No cycles buffer")?;
 
         unsafe {
@@ -255,8 +261,16 @@ impl NativeDoomCPU {
             enc.setBuffer_offset_atIndex(Some(&self.cycles_buf), 0, 4);
 
             enc.dispatchThreads_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
 
@@ -277,15 +291,15 @@ fn load_elf(cpu: &NativeDoomCPU, path: &Path) -> Result<(), String> {
 
     for i in 0..e_phnum {
         let off = (e_phoff + i as u64 * e_phentsize as u64) as usize;
-        let p_type = u32::from_le_bytes(data[off..off+4].try_into().unwrap());
+        let p_type = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
 
         if p_type == 1 {
-            let p_offset = u64::from_le_bytes(data[off+8..off+16].try_into().unwrap());
-            let p_paddr = u64::from_le_bytes(data[off+24..off+32].try_into().unwrap());
-            let p_filesz = u64::from_le_bytes(data[off+32..off+40].try_into().unwrap());
-            let p_memsz = u64::from_le_bytes(data[off+40..off+48].try_into().unwrap());
+            let p_offset = u64::from_le_bytes(data[off + 8..off + 16].try_into().unwrap());
+            let p_paddr = u64::from_le_bytes(data[off + 24..off + 32].try_into().unwrap());
+            let p_filesz = u64::from_le_bytes(data[off + 32..off + 40].try_into().unwrap());
+            let p_memsz = u64::from_le_bytes(data[off + 40..off + 48].try_into().unwrap());
 
-            let segment = &data[p_offset as usize..(p_offset+p_filesz) as usize];
+            let segment = &data[p_offset as usize..(p_offset + p_filesz) as usize];
             for (j, &b) in segment.iter().enumerate() {
                 cpu.write_memory(p_paddr + j as u64, &[b]);
             }
@@ -357,10 +371,10 @@ fn main() {
     println!("═══════════════════════════════════════════════════");
     println!("RESULTS");
     println!("═══════════════════════════════════════════════════");
-    println!("Cycles:  {:,}", total);
+    println!("Cycles:  {}", total);
     println!("Time:    {:.2}s", elapsed);
-    println!("IPS:     {:,.0}", ips);
+    println!("IPS:     {:.0}", ips);
     println!("Target:  5,000,000");
-    println!("Gap:     {:,.0}", 5_000_000.0 - ips);
+    println!("Gap:     {:.0}", 5_000_000.0 - ips);
     println!("═══════════════════════════════════════════════════");
 }

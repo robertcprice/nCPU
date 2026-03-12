@@ -13,16 +13,15 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::{MetalError, StopReason, ExecutionResult, get_default_device};
+use crate::{get_default_device, ExecutionResult, MetalError, StopReason};
 
 /// Metal shader for continuous execution with atomic signaling
 const CONTINUOUS_SHADER_SOURCE: &str = r#"
@@ -773,6 +772,8 @@ pub enum Signal {
     Halt = 1,
     Syscall = 2,
     Checkpoint = 3,
+    Breakpoint = 4,
+    Watchpoint = 5,
 }
 
 impl From<u32> for Signal {
@@ -782,6 +783,8 @@ impl From<u32> for Signal {
             1 => Signal::Halt,
             2 => Signal::Syscall,
             3 => Signal::Checkpoint,
+            4 => Signal::Breakpoint,
+            5 => Signal::Watchpoint,
             _ => Signal::Running,
         }
     }
@@ -812,6 +815,8 @@ impl ContinuousResult {
             Signal::Halt => "HALT",
             Signal::Syscall => "SYSCALL",
             Signal::Checkpoint => "CHECKPOINT",
+            Signal::Breakpoint => "BREAKPOINT",
+            Signal::Watchpoint => "WATCHPOINT",
         }
     }
 
@@ -925,8 +930,14 @@ impl ContinuousMetalCPU {
             *ptr = cycles_per_batch;
         }
 
-        println!("[ContinuousMetalCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
-        println!("[ContinuousMetalCPU] Cycles per batch: {}", cycles_per_batch);
+        println!(
+            "[ContinuousMetalCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
+        println!(
+            "[ContinuousMetalCPU] Cycles per batch: {}",
+            cycles_per_batch
+        );
         println!("[ContinuousMetalCPU] Continuous execution with atomic signaling enabled");
 
         Ok(ContinuousMetalCPU {
@@ -957,7 +968,11 @@ impl ContinuousMetalCPU {
             std::ptr::copy_nonoverlapping(program.as_ptr(), ptr.add(address), program.len());
         }
 
-        println!("[ContinuousMetalCPU] Loaded {} bytes at 0x{:X}", program.len(), address);
+        println!(
+            "[ContinuousMetalCPU] Loaded {} bytes at 0x{:X}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
@@ -976,7 +991,9 @@ impl ContinuousMetalCPU {
     }
 
     fn set_register(&self, reg: usize, value: i64) {
-        if reg >= 32 { return; }
+        if reg >= 32 {
+            return;
+        }
         unsafe {
             let ptr = self.registers_buffer.contents().as_ptr() as *mut i64;
             *ptr.add(reg) = value;
@@ -984,7 +1001,9 @@ impl ContinuousMetalCPU {
     }
 
     fn get_register(&self, reg: usize) -> i64 {
-        if reg >= 32 { return 0; }
+        if reg >= 32 {
+            return 0;
+        }
         unsafe {
             let ptr = self.registers_buffer.contents().as_ptr() as *const i64;
             *ptr.add(reg)
@@ -1058,8 +1077,16 @@ impl ContinuousMetalCPU {
             encoder.setBuffer_offset_atIndex(Some(&self.batch_count_buffer), 0, 8);
 
             encoder.dispatchThreads_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
         encoder.endEncoding();
@@ -1095,7 +1122,11 @@ impl ContinuousMetalCPU {
 
     /// Execute continuously until halt, syscall, or timeout
     #[pyo3(signature = (max_batches = 1000, timeout_seconds = 60.0))]
-    fn execute_continuous(&self, max_batches: u32, timeout_seconds: f64) -> PyResult<ContinuousResult> {
+    fn execute_continuous(
+        &self,
+        max_batches: u32,
+        timeout_seconds: f64,
+    ) -> PyResult<ContinuousResult> {
         let start = Instant::now();
         let timeout = Duration::from_secs_f64(timeout_seconds);
 
@@ -1142,8 +1173,16 @@ impl ContinuousMetalCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.batch_count_buffer), 0, 8);
 
                 encoder.dispatchThreads_threadsPerThreadgroup(
-                    MTLSize { width: 1, height: 1, depth: 1 },
-                    MTLSize { width: 1, height: 1, depth: 1 },
+                    MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
+                    MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
                 );
             }
             encoder.endEncoding();
@@ -1160,7 +1199,11 @@ impl ContinuousMetalCPU {
             };
 
             // Stop if halt or syscall
-            if signal == Signal::Halt || signal == Signal::Syscall {
+            if signal == Signal::Halt
+                || signal == Signal::Syscall
+                || signal == Signal::Breakpoint
+                || signal == Signal::Watchpoint
+            {
                 break;
             }
         }

@@ -66,14 +66,27 @@ class PipeBuffer:
 
 
 class GPUFilesystem:
-    """In-memory filesystem for GPU programs."""
+    """In-memory filesystem for GPU programs with LRU caching and neural prefetching."""
 
-    def __init__(self):
+    def __init__(self, cache_size: int = 64, enable_prefetch: bool = True):
         # Core storage
         self.files: dict[str, bytes] = {}         # path → content
         self.directories: set[str] = set()         # directory paths
         self.fd_table: dict[int, dict] = {}        # fd → {path, offset, flags, ...}
         self.cwd: str = "/"
+
+        # ── LRU Cache ───────────────────────────────────────────────────────
+        self._cache: dict[str, bytes] = {}        # LRU cache for file reads
+        self._cache_order: list[str] = []          # Access order for LRU
+        self._cache_size = cache_size
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+        # ── Neural Prefetching ───────────────────────────────────────────
+        self._enable_prefetch = enable_prefetch
+        self._access_history: list[str] = []       # Recent file access pattern
+        self._history_len = 32                     # Track last N accesses
+        self._prefetch_predictions: list[str] = [] # Predicted next files
 
         # Bootstrap standard directories
         self._bootstrap()
@@ -227,7 +240,10 @@ class GPUFilesystem:
         return 0
 
     def read(self, fd: int, count: int) -> Optional[bytes]:
-        """Read from fd (pipe-aware), return bytes or None on error."""
+        """Read from fd (pipe-aware), return bytes or None on error.
+
+        Includes LRU caching and neural prefetching for performance.
+        """
         if fd not in self.fd_table:
             return None
         entry = self.fd_table[fd]
@@ -248,11 +264,88 @@ class GPUFilesystem:
         if mode == self.O_WRONLY:
             return None  # EBADF (write-only fd)
 
-        data = self.files.get(entry["path"], b"")
+        path = entry["path"]
+
+        # ── LRU Cache Lookup ─────────────────────────────────────────────
+        if path in self._cache:
+            # Cache hit
+            self._cache_hits += 1
+            data = self._cache[path]
+            # Move to front of access order
+            if path in self._cache_order:
+                self._cache_order.remove(path)
+            self._cache_order.insert(0, path)
+        else:
+            # Cache miss - read from files and populate cache
+            self._cache_misses += 1
+            data = self.files.get(path, b"")
+            # Add to cache if small enough
+            if len(data) < 1024 * 1024:  # Cache files < 1MB
+                self._put_in_cache(path, data)
+
+        # Record access for prefetching
+        self._record_access(path)
+
         offset = entry["offset"]
         result = data[offset:offset + count]
         entry["offset"] += len(result)
         return result
+
+    def _put_in_cache(self, path: str, data: bytes):
+        """Add file to LRU cache, evicting oldest if necessary."""
+        # Evict if cache is full
+        while len(self._cache) >= self._cache_size and self._cache_order:
+            oldest = self._cache_order.pop()
+            if oldest in self._cache:
+                del self._cache[oldest]
+
+        # Add to cache
+        self._cache[path] = data
+        if path in self._cache_order:
+            self._cache_order.remove(path)
+        self._cache_order.insert(0, path)
+
+    def _record_access(self, path: str):
+        """Record file access for neural prefetching."""
+        if not self._enable_prefetch:
+            return
+
+        self._access_history.append(path)
+        if len(self._access_history) > self._history_len:
+            self._access_history.pop(0)
+
+        # Simple pattern prediction: repeat last few accesses
+        if len(self._access_history) >= 4:
+            # Look for repeating patterns
+            last_2 = self._access_history[-2:]
+            for i in range(len(self._access_history) - 4, -1, -1):
+                if self._access_history[i:i+2] == last_2:
+                    # Found pattern, predict next
+                    next_idx = i + 2
+                    if next_idx < len(self._access_history):
+                        pred = self._access_history[next_idx]
+                        if pred not in self._prefetch_predictions:
+                            self._prefetch_predictions.append(pred)
+                    break
+
+    def get_cache_stats(self) -> dict:
+        """Get cache performance statistics."""
+        total = self._cache_hits + self._cache_misses
+        hit_rate = self._cache_hits / total if total > 0 else 0.0
+        return {
+            'hits': self._cache_hits,
+            'misses': self._cache_misses,
+            'hit_rate': hit_rate,
+            'cached_files': len(self._cache),
+            'predictions': self._prefetch_predictions[:5],
+        }
+
+    def clear_cache(self):
+        """Clear the LRU cache."""
+        self._cache.clear()
+        self._cache_order.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     def write(self, fd: int, data: bytes) -> int:
         """Write to fd (pipe-aware), return bytes written or -1."""
@@ -291,6 +384,13 @@ class GPUFilesystem:
         # Write data at offset
         content = content[:offset] + data + content[offset + len(data):]
         self.files[path] = content
+
+        # Invalidate cache on write
+        if path in self._cache:
+            del self._cache[path]
+            if path in self._cache_order:
+                self._cache_order.remove(path)
+
         entry["offset"] = offset + len(data)
         return len(data)
 
@@ -395,6 +495,9 @@ class GPUFilesystem:
             for entry in self.fd_table.values():
                 if entry.get("path") == old_path:
                     entry["path"] = new_path
+            # Invalidate cache
+            if old_path in self._cache:
+                del self._cache[old_path]
             return 0
         elif old_path in self.directories:
             # Rename directory and all children
@@ -413,6 +516,58 @@ class GPUFilesystem:
                 self.directories.add(new_path + d[len(old_path):])
             return 0
         return -1  # ENOENT
+
+    def link(self, old_path: str, new_path: str) -> int:
+        """Create a hard link (old_path -> new_path). Returns 0 or -1."""
+        old_path = self.resolve_path(old_path)
+        new_path = self.resolve_path(new_path)
+
+        # Source must exist and be a file
+        if old_path not in self.files:
+            return -1  # ENOENT
+
+        # Target must not exist
+        if new_path in self.files or new_path in self.directories:
+            return -1  # EEXIST
+
+        # Target parent must exist
+        new_parent = self._parent_dir(new_path)
+        if new_parent != "/" and new_parent not in self.directories:
+            return -1  # ENOENT
+
+        # Create hard link - same inode (we use same content)
+        self.files[new_path] = self.files[old_path]
+        return 0
+
+    def ftruncate(self, fd: int, length: int) -> int:
+        """Truncate file to specified length. Returns 0 or -1."""
+        if fd not in self.fd_table:
+            return -1  # EBADF
+
+        entry = self.fd_table[fd]
+        path = entry.get("path")
+        if not path or path not in self.files:
+            return -1  # EBADF
+
+        # Check write permission
+        mode = self._access_mode(entry.get("flags", 0))
+        if mode == self.O_RDONLY:
+            return -1  # EBADF
+
+        # Truncate or extend
+        content = self.files[path]
+        if length < len(content):
+            self.files[path] = content[:length]
+        else:
+            self.files[path] = content + b'\x00' * (length - len(content))
+
+        return 0
+
+    def fsync(self, fd: int) -> int:
+        """Sync file to storage (no-op in memory FS). Returns 0 or -1."""
+        if fd not in self.fd_table:
+            return -1  # EBADF
+        return 0  # Always succeeds for memory FS
 
     def getcwd(self) -> str:
         return self.cwd

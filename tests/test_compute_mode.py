@@ -11,19 +11,16 @@ import sys
 from pathlib import Path
 
 import pytest
+from kernels.mlx.availability import is_mlx_usable
 
 # Ensure project root is importable
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-try:
-    import mlx.core as mx
-    HAS_MLX = True
-except ImportError:
-    HAS_MLX = False
+HAS_MLX = is_mlx_usable()
 
-pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX backend not available")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

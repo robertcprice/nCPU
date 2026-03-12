@@ -11,15 +11,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Streamlined Ultra shader - optimized for compilation speed and runtime performance
 const ULTRA_SHADER_SOURCE: &str = r#"
@@ -464,46 +463,59 @@ impl UltraMetalCPU {
         let device_name = device.name();
         println!("[UltraMetalCPU] Using device: {:?}", device_name);
 
-        let command_queue = device.newCommandQueue()
+        let command_queue = device
+            .newCommandQueue()
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create command queue"))?;
 
         // Compile shader
         let source = NSString::from_str(ULTRA_SHADER_SOURCE);
-        let library = unsafe {
-            device.newLibraryWithSource_options_error(&source, None)
-        }.map_err(|e| PyRuntimeError::new_err(format!("Shader compilation failed: {}", e)))?;
+        let library = unsafe { device.newLibraryWithSource_options_error(&source, None) }
+            .map_err(|e| PyRuntimeError::new_err(format!("Shader compilation failed: {}", e)))?;
 
         let func_name = NSString::from_str("cpu_execute_ultra");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| PyRuntimeError::new_err("Function not found"))?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| PyRuntimeError::new_err(format!("Pipeline creation failed: {}", e)))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
         let cycles_per_batch: u32 = 10_000_000;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create memory buffer"))?;
-        let registers_buf = device.newBufferWithLength_options(32 * 8, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 8, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create registers buffer"))?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create PC buffer"))?;
-        let flags_buf = device.newBufferWithLength_options(4 * 4, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(4 * 4, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create flags buffer"))?;
-        let cycles_per_batch_buf = device.newBufferWithLength_options(4, opts)
+        let cycles_per_batch_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create cycles buffer"))?;
-        let mem_size_buf = device.newBufferWithLength_options(4, opts)
+        let mem_size_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create mem_size buffer"))?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create signal buffer"))?;
-        let total_cycles_buf = device.newBufferWithLength_options(4, opts)
+        let total_cycles_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create total_cycles buffer"))?;
-        let batch_count_buf = device.newBufferWithLength_options(4, opts)
+        let batch_count_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create batch_count buffer"))?;
-        let stats_buf = device.newBufferWithLength_options(5 * 4, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(5 * 4, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create stats buffer"))?;
-        let cache_buf = device.newBufferWithLength_options(CACHE_SIZE * CACHE_ENTRY_SIZE, opts)
+        let cache_buf = device
+            .newBufferWithLength_options(CACHE_SIZE * CACHE_ENTRY_SIZE, opts)
             .ok_or_else(|| PyRuntimeError::new_err("Failed to create cache buffer"))?;
 
         // Initialize buffers
@@ -514,8 +526,15 @@ impl UltraMetalCPU {
             *ms = memory_size as u32;
         }
 
-        println!("[UltraMetalCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
-        println!("[UltraMetalCPU] Cache: {} entries, {} bytes", CACHE_SIZE, CACHE_SIZE * CACHE_ENTRY_SIZE);
+        println!(
+            "[UltraMetalCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
+        println!(
+            "[UltraMetalCPU] Cache: {} entries, {} bytes",
+            CACHE_SIZE,
+            CACHE_SIZE * CACHE_ENTRY_SIZE
+        );
         println!("[UltraMetalCPU] Features: Super Block Cache, Prefetch, Extended Fusion");
 
         Ok(Self {
@@ -544,9 +563,17 @@ impl UltraMetalCPU {
         }
         unsafe {
             let mem = self.memory_buf.contents().as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(program.as_ptr(), mem.add(address as usize), program.len());
+            std::ptr::copy_nonoverlapping(
+                program.as_ptr(),
+                mem.add(address as usize),
+                program.len(),
+            );
         }
-        println!("[UltraMetalCPU] Loaded {} bytes at 0x{:x}", program.len(), address);
+        println!(
+            "[UltraMetalCPU] Loaded {} bytes at 0x{:x}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
@@ -562,7 +589,9 @@ impl UltraMetalCPU {
     }
 
     fn set_register(&self, reg: usize, value: i64) -> PyResult<()> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe {
             let regs = self.registers_buf.contents().as_ptr() as *mut i64;
             *regs.add(reg) = value;
@@ -571,7 +600,9 @@ impl UltraMetalCPU {
     }
 
     fn get_register(&self, reg: usize) -> PyResult<i64> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe { Ok(*(self.registers_buf.contents().as_ptr() as *const i64).add(reg)) }
     }
 
@@ -579,14 +610,22 @@ impl UltraMetalCPU {
         unsafe {
             std::ptr::write_bytes(self.registers_buf.contents().as_ptr() as *mut u8, 0, 32 * 8);
             std::ptr::write_bytes(self.flags_buf.contents().as_ptr() as *mut u8, 0, 16);
-            std::ptr::write_bytes(self.cache_buf.contents().as_ptr() as *mut u8, 0, CACHE_SIZE * CACHE_ENTRY_SIZE);
+            std::ptr::write_bytes(
+                self.cache_buf.contents().as_ptr() as *mut u8,
+                0,
+                CACHE_SIZE * CACHE_ENTRY_SIZE,
+            );
             *(self.pc_buf.contents().as_ptr() as *mut u64) = 0;
         }
     }
 
     fn clear_cache(&self) {
         unsafe {
-            std::ptr::write_bytes(self.cache_buf.contents().as_ptr() as *mut u8, 0, CACHE_SIZE * CACHE_ENTRY_SIZE);
+            std::ptr::write_bytes(
+                self.cache_buf.contents().as_ptr() as *mut u8,
+                0,
+                CACHE_SIZE * CACHE_ENTRY_SIZE,
+            );
         }
     }
 
@@ -604,12 +643,17 @@ impl UltraMetalCPU {
 
         let mut batch = 0u32;
         while batch < max_batches {
-            if start.elapsed().as_secs_f64() > timeout_seconds { break; }
+            if start.elapsed().as_secs_f64() > timeout_seconds {
+                break;
+            }
 
-            let cmd = self.command_queue.commandBuffer()
+            let cmd = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
 
-            let encoder = cmd.computeCommandEncoder()
+            let encoder = cmd
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -626,8 +670,16 @@ impl UltraMetalCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.stats_buf), 0, 9);
                 encoder.setBuffer_offset_atIndex(Some(&self.cache_buf), 0, 10);
 
-                let grid = MTLSize { width: 1, height: 1, depth: 1 };
-                let tg = MTLSize { width: 1, height: 1, depth: 1 };
+                let grid = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                let tg = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
                 encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, tg);
             }
             encoder.endEncoding();
@@ -636,10 +688,14 @@ impl UltraMetalCPU {
             cmd.waitUntilCompleted();
 
             let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
-            if signal == 1 || signal == 2 { break; }
+            if signal == 1 || signal == 2 {
+                break;
+            }
 
             // Reset signal for next batch
-            unsafe { *(self.signal_buf.contents().as_ptr() as *mut u32) = 0; }
+            unsafe {
+                *(self.signal_buf.contents().as_ptr() as *mut u32) = 0;
+            }
             batch += 1;
         }
 
@@ -648,16 +704,24 @@ impl UltraMetalCPU {
         let batch_count = unsafe { *(self.batch_count_buf.contents().as_ptr() as *const u32) };
         let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
 
-        let stats = unsafe { std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 5) };
+        let stats = unsafe {
+            std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 5)
+        };
         let cache_hits = stats[0];
         let cache_misses = stats[1];
         let fusions = stats[2];
         let prefetch_hits = stats[3];
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
         let cache_hit_rate = if cache_hits + cache_misses > 0 {
             cache_hits as f64 / (cache_hits + cache_misses) as f64 * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         Ok(UltraResult {
             total_cycles,

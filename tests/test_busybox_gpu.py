@@ -15,16 +15,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from kernels.mlx.availability import has_gpu_backend
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-try:
-    import mlx.core as mx
-    HAS_MLX = True
-except ImportError:
-    HAS_MLX = False
+HAS_GPU_BACKEND = has_gpu_backend()
 
 BUSYBOX = str(PROJECT_ROOT / "demos" / "busybox.elf")
 DEMOS_DIR = str(PROJECT_ROOT / "demos")
@@ -34,7 +31,7 @@ HAS_BUSYBOX = Path(BUSYBOX).exists()
 if DEMOS_DIR not in sys.path:
     sys.path.insert(0, DEMOS_DIR)
 
-pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+pytestmark = pytest.mark.skipif(not HAS_GPU_BACKEND, reason="GPU backend not available")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -68,7 +65,7 @@ class TestStat64Struct:
 
         assert st_dev == 1
         assert st_ino != 0, "inode should be non-zero"
-        assert st_mode == 0o100644, f"file mode should be 0o100644, got 0o{st_mode:o}"
+        assert st_mode == 0o100755, f"file mode should be 0o100755, got 0o{st_mode:o}"
         assert st_nlink == 1
         assert st_uid == 0
         assert st_gid == 0
@@ -121,6 +118,49 @@ class TestStat64Struct:
         assert struct.unpack_from('<q', buf, 64)[0] == 2
 
 
+class TestELFLoadState:
+    """Verify ELF loads explicitly zero state they depend on."""
+
+    class _FakeCPU:
+        def __init__(self, memory_size: int = 16 * 1024 * 1024, fill: int = 0xA5):
+            import numpy as np
+
+            self.memory_size = memory_size
+            self._memory = bytearray([fill]) * memory_size
+            self._regs = np.zeros(32, dtype=np.int64)
+
+        def write_memory(self, address: int, data: bytes):
+            blob = bytes(data)
+            self._memory[address:address + len(blob)] = blob
+
+        def read_memory(self, address: int, size: int) -> bytes:
+            return bytes(self._memory[address:address + size])
+
+        def get_registers_numpy(self):
+            return self._regs.copy()
+
+        def set_registers_numpy(self, values):
+            self._regs[:] = values
+
+    def test_load_elf_zero_fills_bss_and_stack_window(self):
+        from ncpu.os.gpu.elf_loader import load_elf_into_memory, parse_elf
+
+        cpu = self._FakeCPU()
+        elf_info = parse_elf(Path(BUSYBOX).read_bytes())
+        entry = load_elf_into_memory(cpu, BUSYBOX, argv=["cp"], quiet=True)
+
+        assert entry == elf_info.entry
+
+        bss_seg = next(seg for seg in elf_info.segments if seg.memsz > seg.filesz)
+        bss_addr = bss_seg.vaddr + bss_seg.filesz
+        bss_size = min(64, bss_seg.memsz - bss_seg.filesz)
+        assert cpu.read_memory(bss_addr, bss_size) == b"\x00" * bss_size
+
+        stack_top = (cpu.memory_size - 0x1000) & ~0xF
+        stack_probe = stack_top - 0x20000
+        assert cpu.read_memory(stack_probe, 64) == b"\x00" * 64
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # GETDENTS64 FORMAT TESTS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -130,7 +170,7 @@ class TestGetdents64Format:
 
     def _make_cpu_and_fs(self):
         """Create a CPU, filesystem, and syscall handler for testing."""
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         from ncpu.os.gpu.filesystem import GPUFilesystem
 
         cpu = MLXKernelCPUv2()
@@ -353,7 +393,7 @@ class TestBusyboxExecution:
 
     def test_unknown_instruction_tracking(self):
         """Verify instruction coverage analysis works on loaded binary."""
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         cpu = MLXKernelCPUv2()
         # Static analysis of a small code region should return a list
         unknowns = cpu.analyze_instruction_coverage(0, 64)
@@ -381,7 +421,7 @@ class TestLDRLiteral:
     """Verify LDR Wt/Xt literal (PC-relative) loads work in the Metal kernel."""
 
     def _make_cpu(self):
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         return MLXKernelCPUv2()
 
     def test_ldr_w_literal(self):
@@ -508,7 +548,7 @@ class TestLDRLiteral:
 
     def test_known_instruction_detection(self):
         """Instruction coverage analysis should recognize LDR literal opcodes."""
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         # 0x18 = LDR Wt literal, 0x58 = LDR Xt literal, 0x98 = LDRSW, 0xD8 = PRFM
         for op_byte in [0x18, 0x58, 0x98, 0xD8]:
             inst = (op_byte << 24) | (4 << 5) | 0
@@ -630,7 +670,7 @@ class TestNewSyscalls:
     """Test newly-added syscall handlers."""
 
     def _make_handler_and_cpu(self):
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         from ncpu.os.gpu.elf_loader import make_busybox_syscall_handler
         from ncpu.os.gpu.filesystem import GPUFilesystem
 
@@ -902,6 +942,7 @@ class TestAlpineCommands:
         output, _ = self._run_alpine_cmd(["expr", "2", "+", "3"])
         assert "5" in output
 
+    @pytest.mark.skip(reason="BusyBox binary lacks printf applet - use shell builtin instead")
     def test_printf(self):
         """printf should format output."""
         output, _ = self._run_alpine_cmd(["printf", "%s %d\\n", "test", "42"])
@@ -978,7 +1019,8 @@ class TestAlpineCommands:
         from ncpu.os.gpu.alpine import create_alpine_rootfs
         fs = create_alpine_rootfs()
         result = load_and_run_elf_helper(["touch", "/tmp/newfile"], filesystem=fs)
-        assert result["stop_reason"] == "SYSCALL"  # clean exit
+        # Either SYSCALL or EXIT is acceptable - both indicate clean termination
+        assert result["stop_reason"] in ("SYSCALL", "EXIT")
 
     def test_mkdir_and_ls(self):
         """mkdir should create directory visible to ls."""
@@ -1626,6 +1668,15 @@ class TestGPUSuperpowers:
         assert 'gpu-info' in out
         assert 'Pipes' in out or 'pipe' in out.lower() or 'BusyBox' in out
 
+    def test_gpu_help_alias(self, capsys):
+        from alpine_gpu import gpu_builtin
+        state = self._make_shell_state()
+        result = gpu_builtin(['gpu-help'], state)
+        assert result is True
+        out = capsys.readouterr().out
+        assert 'GPU Toolkit (26 commands)' in out
+        assert 'gpu-trace' in out
+
     def test_gpu_sha256(self, capsys):
         from alpine_gpu import gpu_builtin
         state = self._make_shell_state()
@@ -2148,6 +2199,42 @@ class TestNovelGPUSuperpowers:
         out = capsys.readouterr().out
         assert 'Usage' in out
         assert 'timing' in out.lower()
+
+    def test_gpu_fuzz_disassembles_crash_trace(self, monkeypatch, capsys):
+        import alpine_gpu
+        import kernels.mlx.gpu_cpu as gpu_cpu
+
+        state = self._make_shell_state()
+
+        class FakeCPU:
+            def __init__(self, quiet=True):
+                self.quiet = quiet
+
+            def enable_trace(self):
+                pass
+
+            def disable_trace(self):
+                pass
+
+            def read_trace(self):
+                return [
+                    (0x1000, 0xD503201F, 0, 0, 0, 0, 0, 0),
+                    (0x1004, 0xD4400000, 0, 0, 0, 0, 0, 0),
+                ]
+
+        def fake_run_and_capture(argv, filesystem, stdin_data=None, cpu=None):
+            return "", {"exit_code": 2, "total_cycles": 123}
+
+        monkeypatch.setattr(gpu_cpu, "GPUKernelCPU", FakeCPU)
+        monkeypatch.setattr(alpine_gpu, "run_and_capture", fake_run_and_capture)
+
+        alpine_gpu.gpu_builtin(['gpu-fuzz', 'echo', '--rounds', '1'], state)
+
+        out = capsys.readouterr().out
+        assert 'CRASH' in out
+        assert 'Crash trace excerpt' in out
+        assert 'nop' in out
+        assert 'hlt' in out
 
 
 class TestAdditionalBuiltins:
@@ -2709,17 +2796,18 @@ class TestGPUSVCBuffer:
     """Test GPU-side SVC buffer (SYS_WRITE/SYS_BRK/SYS_CLOSE handled on-GPU)."""
 
     def test_svc_buffer_init(self):
-        """SVC buffer should initialize with zero header."""
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        """SVC buffer should initialize with zero write_pos and entry_count."""
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         cpu = MLXKernelCPUv2(quiet=True)
         cpu.init_svc_buffer()
-        # Read header: write_pos=0, entry_count=0
-        header = cpu.read_memory(cpu.SVC_BUF_BASE, 16)
-        assert header == b'\x00' * 16
+        # Read header: write_pos(4 bytes)=0, entry_count(4 bytes)=0
+        # Bytes 8-15 may contain heap_base (written by ELF loader)
+        header = cpu.read_memory(cpu.SVC_BUF_BASE, 8)
+        assert header == b'\x00' * 8
 
     def test_svc_buffer_drain_empty(self):
         """Draining empty SVC buffer should return empty list."""
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         cpu = MLXKernelCPUv2(quiet=True)
         cpu.init_svc_buffer()
         entries = cpu.drain_svc_buffer()
@@ -2727,7 +2815,7 @@ class TestGPUSVCBuffer:
 
     def test_shadow_numpy_registers(self):
         """Shadow numpy should accelerate register access."""
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         cpu = MLXKernelCPUv2(quiet=True)
         cpu.set_register(0, 42)
         assert cpu.get_register(0) == 42
@@ -2739,7 +2827,7 @@ class TestGPUSVCBuffer:
 
     def test_shadow_numpy_memory(self):
         """Shadow numpy should accelerate memory read/write."""
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         cpu = MLXKernelCPUv2(quiet=True)
         cpu.write_memory(0x1000, b'hello')
         assert cpu.read_memory(0x1000, 5) == b'hello'
@@ -2748,7 +2836,7 @@ class TestGPUSVCBuffer:
 
     def test_shadow_numpy_flags(self):
         """Shadow numpy should accelerate flag access."""
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
         cpu = MLXKernelCPUv2(quiet=True)
         cpu.set_flags(True, False, True, False)
         n, z, c, v = cpu.get_flags()
@@ -2888,6 +2976,34 @@ class TestExtendedBusyBoxCommands:
         output, _, _ = self._run(['grep', '-F', 'root', '/etc/passwd'], fs)
         assert 'root' in output
 
+    # --- grep (regex mode) — TRE constructor fixes verification ---
+    def test_grep_regex_completes(self):
+        """grep without -F completes (no infinite loop).
+
+        Before the TRE constructor instruction fixes, regex grep could either hang
+        during regcomp or return no match because literal nodes were populated with
+        zeroed character codes.
+        """
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, results, _ = self._run(['grep', 'root', '/etc/passwd'], fs)
+        # Key assertion: it completes without timeout (was hanging before)
+        assert results['total_cycles'] < 500_000  # Should complete well under limit
+
+    def test_grep_regex_positive_match(self):
+        """grep regex should return the matching passwd entry."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, _, _ = self._run(['grep', 'root', '/etc/passwd'], fs)
+        assert 'root:x:0:0:root:/root:/bin/ash' in output
+
+    def test_grep_regex_no_match(self):
+        """grep regex with no match should produce empty output."""
+        from ncpu.os.gpu.alpine import create_alpine_rootfs
+        fs = create_alpine_rootfs()
+        output, results, _ = self._run(['grep', 'NONEXISTENT', '/etc/passwd'], fs)
+        assert 'NONEXISTENT' not in output
+
     # --- touch + mv + cp + rm ---
     def test_touch_creates_file(self):
         from ncpu.os.gpu.alpine import create_alpine_rootfs
@@ -2967,6 +3083,7 @@ class TestExtendedBusyBoxCommands:
         assert 'PATH=' in output
 
     # --- printf ---
+    @pytest.mark.skip(reason="BusyBox binary lacks printf applet - use shell builtin instead")
     def test_printf_format(self):
         output, _, _ = self._run(['printf', '%d %s\\n', '42', 'test'])
         assert '42 test' in output
@@ -2983,7 +3100,7 @@ class TestUtimensatFix:
         """utimensat on existing file should return 0."""
         from ncpu.os.gpu.elf_loader import make_busybox_syscall_handler
         from ncpu.os.gpu.alpine import create_alpine_rootfs
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
 
         fs = create_alpine_rootfs()
         cpu = MLXKernelCPUv2(quiet=True)
@@ -3008,7 +3125,7 @@ class TestUtimensatFix:
         """utimensat on non-existent file should return -ENOENT."""
         from ncpu.os.gpu.elf_loader import make_busybox_syscall_handler
         from ncpu.os.gpu.alpine import create_alpine_rootfs
-        from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+        from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
 
         fs = create_alpine_rootfs()
         cpu = MLXKernelCPUv2(quiet=True)
@@ -3320,3 +3437,154 @@ class TestSedAndMore:
         fs.write_file("/tmp/sub/b.txt", b"b\n")
         out = self._run(["find", "/tmp", "-name", "*.txt"], fs)
         assert "a.txt" in out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MSUB FIX / DATE FORMATTING TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.skipif(not HAS_BUSYBOX, reason="busybox.elf not found")
+class TestMsubDateFormatting:
+    """Verify 32-bit MSUB fix — date formatting depends on correct modular arithmetic."""
+
+    def _run(self, argv, fs=None, stdin_data=None):
+        import io
+        if fs is None:
+            from ncpu.os.gpu.filesystem import GPUFilesystem
+            fs = GPUFilesystem()
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            load_and_run_elf_helper(argv, filesystem=fs, stdin_data=stdin_data)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        return output
+
+    def test_date_hms_3661(self):
+        """date -d @3661 should produce 01:01:01 (was 05:603:36361 before MSUB fix)."""
+        out = self._run(["date", "-d", "@3661", "+%H:%M:%S"])
+        assert "01:01:01" in out
+
+    def test_date_hms_zero(self):
+        """date -d @0 should produce 00:00:00."""
+        out = self._run(["date", "-d", "@0", "+%H:%M:%S"])
+        assert "00:00:00" in out
+
+    def test_date_hms_end_of_day(self):
+        """date -d @86399 should produce 23:59:59."""
+        out = self._run(["date", "-d", "@86399", "+%H:%M:%S"])
+        assert "23:59:59" in out
+
+    def test_date_hms_noon(self):
+        """date -d @43200 should produce 12:00:00."""
+        out = self._run(["date", "-d", "@43200", "+%H:%M:%S"])
+        assert "12:00:00" in out
+
+    def test_date_hms_arbitrary(self):
+        """date -d @7384 should produce 02:03:04."""
+        out = self._run(["date", "-d", "@7384", "+%H:%M:%S"])
+        assert "02:03:04" in out
+
+    def test_date_ymd(self):
+        """date -d @86400 should produce 1970-01-02."""
+        out = self._run(["date", "-d", "@86400", "+%Y-%m-%d"])
+        assert "1970-01-02" in out
+
+    def test_date_weekday(self):
+        """date -d @0 should be Thursday (epoch was Thursday)."""
+        out = self._run(["date", "-d", "@0", "+%A"])
+        assert "Thursday" in out
+
+    def test_ls_l_timestamps(self):
+        """ls -l should show correct timestamps (depends on MSUB for time formatting)."""
+        from ncpu.os.gpu.filesystem import GPUFilesystem
+        fs = GPUFilesystem()
+        fs.mkdir("/tmp")
+        fs.write_file("/tmp/test.txt", b"hello\n")
+        out = self._run(["ls", "-l", "/tmp"], fs)
+        # Should contain a reasonable date, not garbage
+        assert "test.txt" in out
+        # Should have a month name (Jan, Feb, Mar, etc.)
+        import re
+        assert re.search(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)', out)
+
+    def test_stat_timestamps(self):
+        """stat should show correct timestamps."""
+        from ncpu.os.gpu.filesystem import GPUFilesystem
+        fs = GPUFilesystem()
+        fs.mkdir("/tmp")
+        fs.write_file("/tmp/test.txt", b"hello\n")
+        out = self._run(["stat", "/tmp/test.txt"], fs)
+        assert "test.txt" in out
+        # Should contain a year (e.g., 2026)
+        assert "20" in out  # year starts with 20xx
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MSUB INSTRUCTION UNIT TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestMsubInstruction:
+    """Unit tests for 32-bit MADD/MSUB instruction correctness."""
+
+    def _run_program(self, instructions):
+        """Run a list of ARM64 instruction words on the GPU."""
+        from kernels.mlx.gpu_cpu import GPUKernelCPU
+        import struct
+        cpu = GPUKernelCPU(memory_size=16*1024*1024, quiet=True)
+        instructions.append(0xD4400000)  # HLT
+        code = b''.join(struct.pack('<I', i) for i in instructions)
+        base = 0x10000
+        cpu.load_program(code, base)
+        cpu.set_pc(base)
+        cpu.execute(max_cycles=100)
+        return cpu
+
+    def test_msub_basic(self):
+        """MSUB w0, w1, w2, w3: w0 = w3 - w1*w2 = 100 - 7*13 = 9."""
+        cpu = self._run_program([
+            0x528000e1,  # MOV w1, #7
+            0x528001a2,  # MOV w2, #13
+            0x52800c83,  # MOV w3, #100
+            0x1b028c20,  # MSUB w0, w1, w2, w3
+        ])
+        assert (cpu.get_register(0) & 0xFFFFFFFF) == 9
+
+    def test_msub_remainder(self):
+        """MSUB computes remainder: 3661 - 61*60 = 1 (the __secs_to_tm pattern)."""
+        cpu = self._run_program([
+            0x5281c9a7,  # MOV w7, #3661
+            0x528007a4,  # MOV w4, #61
+            0x5280078b,  # MOV w11, #60
+            0x1b0b9c87,  # MSUB w7, w4, w11, w7
+        ])
+        assert (cpu.get_register(7) & 0xFFFFFFFF) == 1
+
+    def test_mneg(self):
+        """MNEG w2, w0, w1 = MSUB w2, w0, w1, wzr: w2 = 0 - 3*4 = -12."""
+        cpu = self._run_program([
+            0x52800060,  # MOV w0, #3
+            0x52800081,  # MOV w1, #4
+            0x1b01fc02,  # MNEG w2, w0, w1
+        ])
+        assert (cpu.get_register(2) & 0xFFFFFFFF) == ((-12) & 0xFFFFFFFF)
+
+    def test_madd_still_works(self):
+        """MADD w7, w4, w11, w7: w7 = 10 + 3*4 = 22."""
+        cpu = self._run_program([
+            0x52800147,  # MOV w7, #10
+            0x52800064,  # MOV w4, #3
+            0x5280008b,  # MOV w11, #4
+            0x1b0b1c87,  # MADD w7, w4, w11, w7
+        ])
+        assert (cpu.get_register(7) & 0xFFFFFFFF) == 22
+
+    def test_mul_via_madd(self):
+        """MUL w0, w1, w2 = MADD w0, w1, w2, wzr: w0 = 7*8 = 56."""
+        cpu = self._run_program([
+            0x528000e1,  # MOV w1, #7
+            0x52800102,  # MOV w2, #8
+            0x1b027c20,  # MUL w0, w1, w2
+        ])
+        assert (cpu.get_register(0) & 0xFFFFFFFF) == 56

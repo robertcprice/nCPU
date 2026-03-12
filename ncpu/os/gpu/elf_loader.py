@@ -30,6 +30,7 @@ Date: 2026
 """
 
 import struct
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -178,6 +179,125 @@ def parse_elf(data: bytes) -> ELFInfo:
     return info
 
 
+def parse_elf_function_symbols(elf_path: str | Path) -> dict[int, tuple[str, int]]:
+    """Extract ELF function symbols for address→name mapping.
+
+    Returns a mapping of symbol start address to ``(name, size)``. If the ELF
+    is stripped or lacks a symbol table, an empty mapping is returned.
+    """
+    path = Path(elf_path)
+    if not path.exists():
+        return {}
+
+    data = path.read_bytes()
+    if len(data) < 64 or data[:4] != ELF_MAGIC:
+        return {}
+    if data[4] != ELFCLASS64 or data[5] != ELFDATA2LSB:
+        return {}
+
+    e_shoff = struct.unpack_from('<Q', data, 40)[0]
+    e_shentsize = struct.unpack_from('<H', data, 58)[0]
+    e_shnum = struct.unpack_from('<H', data, 60)[0]
+
+    if e_shoff == 0 or e_shentsize == 0 or e_shnum == 0:
+        return {}
+
+    data_len = len(data)
+    symbols: dict[int, tuple[str, int]] = {}
+
+    for i in range(e_shnum):
+        sh_off = e_shoff + i * e_shentsize
+        if sh_off + e_shentsize > data_len:
+            break
+
+        sh_type = struct.unpack_from('<I', data, sh_off + 4)[0]
+        if sh_type not in (2, 11):  # SHT_SYMTAB, SHT_DYNSYM
+            continue
+
+        sh_offset = struct.unpack_from('<Q', data, sh_off + 24)[0]
+        sh_size = struct.unpack_from('<Q', data, sh_off + 32)[0]
+        sh_link = struct.unpack_from('<I', data, sh_off + 40)[0]
+        sh_entsize = struct.unpack_from('<Q', data, sh_off + 56)[0]
+
+        if sh_entsize == 0 or sh_offset + sh_size > data_len:
+            continue
+
+        strtab_off = e_shoff + sh_link * e_shentsize
+        if strtab_off + e_shentsize > data_len:
+            continue
+
+        str_offset = struct.unpack_from('<Q', data, strtab_off + 24)[0]
+        str_size = struct.unpack_from('<Q', data, strtab_off + 32)[0]
+        if str_size == 0 or str_offset + str_size > data_len:
+            continue
+
+        num_syms = sh_size // sh_entsize
+        for j in range(num_syms):
+            sym_off = sh_offset + j * sh_entsize
+            if sym_off + sh_entsize > data_len:
+                break
+
+            st_name = struct.unpack_from('<I', data, sym_off)[0]
+            st_info = data[sym_off + 4]
+            st_value = struct.unpack_from('<Q', data, sym_off + 8)[0]
+            st_size = struct.unpack_from('<Q', data, sym_off + 16)[0]
+
+            sym_type = st_info & 0xF
+            if sym_type != 2 or st_value == 0:  # STT_FUNC
+                continue
+            if st_name >= str_size:
+                continue
+
+            name_start = str_offset + st_name
+            name_end = data.find(b'\x00', name_start, str_offset + str_size)
+            if name_end == -1:
+                continue
+
+            name = data[name_start:name_end].decode('utf-8', errors='replace')
+            if name:
+                symbols[st_value] = (name, st_size)
+
+    return symbols
+
+
+def lookup_function_symbol(
+    pc: int,
+    symbols: dict[int, tuple[str, int]],
+) -> Optional[tuple[str, int]]:
+    """Resolve a PC to the nearest containing function symbol.
+
+    Returns ``(name, offset)`` or ``None`` when no symbol applies.
+    """
+    best_addr = None
+    best_name = None
+
+    for addr, (name, size) in symbols.items():
+        if addr > pc:
+            continue
+        if size and pc >= addr + size:
+            continue
+        if best_addr is None or addr > best_addr:
+            best_addr = addr
+            best_name = name
+
+    if best_addr is None or best_name is None:
+        return None
+
+    return best_name, pc - best_addr
+
+
+def format_symbolized_address(pc: int, symbols: dict[int, tuple[str, int]]) -> str:
+    """Format a PC with an optional function name annotation."""
+    match = lookup_function_symbol(pc, symbols)
+    if match is None:
+        return f"0x{pc:08X}"
+
+    name, offset = match
+    if offset:
+        return f"{name}+0x{offset:X} (0x{pc:08X})"
+    return f"{name} (0x{pc:08X})"
+
+
 def load_elf_into_memory(
     cpu,
     elf_path: str,
@@ -212,10 +332,12 @@ def load_elf_into_memory(
         argv = [path.name]
     if envp is None:
         envp = {
-            "PATH": "/bin:/usr/bin",
-            "HOME": "/",
+            "PATH": "/bin:/usr/bin:/sbin:/usr/sbin",
+            "HOME": "/root",
             "TERM": "dumb",
             "USER": "root",
+            "TZ": "UTC",
+            "LOGNAME": "root",
         }
 
     # Auto-detect memory layout from segments
@@ -232,6 +354,25 @@ def load_elf_into_memory(
             print(f"[elf] Auto layout: segments end 0x{max_seg_end:X}, "
                   f"heap 0x{heap_start:X}, stack 0x{stack_top:X}")
 
+    # Linux gives a new process zeroed stack pages. Make that explicit here so
+    # argv/env/auxv setup and early libc code do not inherit stale backend data.
+    stack_clear = min(0x40000, stack_top)
+    if stack_clear > 0:
+        cpu.write_memory(stack_top - stack_clear, bytes(stack_clear))
+
+    # Fresh process images start from zero-filled pages across the whole mapped
+    # span, not only the bytes covered by each PT_LOAD segment. This keeps gaps
+    # between loadable segments deterministic on the Rust backend as well.
+    image_spans = []
+    for seg in info.segments:
+        if seg.vaddr >= memory_limit:
+            continue
+        image_spans.append((seg.vaddr, min(seg.vaddr + seg.memsz, memory_limit)))
+    if image_spans:
+        image_lo = min(start for start, _ in image_spans)
+        image_hi = max(end for _, end in image_spans)
+        cpu.write_memory(image_lo, bytes(image_hi - image_lo))
+
     # Load PT_LOAD segments into GPU memory
     for seg in info.segments:
         if seg.vaddr + seg.memsz > memory_limit:
@@ -242,15 +383,15 @@ def load_elf_into_memory(
             avail = memory_limit - seg.vaddr
             if avail <= 0:
                 continue
+            memsz = avail
             filesz = min(seg.filesz, avail)
         else:
+            memsz = seg.memsz
             filesz = seg.filesz
 
         # Load file data
         seg_data = data[seg.offset:seg.offset + filesz]
         cpu.write_memory(seg.vaddr, seg_data)
-
-        # BSS: zero-fill memsz - filesz (already zero in fresh memory)
 
         if not quiet:
             flags_str = ""
@@ -382,6 +523,67 @@ def load_elf_into_memory(
     return info.entry
 
 
+# Keep a few internally-created CPU objects alive across ELF invocations.
+#
+# Rapid create/destroy cycles on the native Metal backend can produce
+# order-dependent BusyBox failures during test runs even though the filesystem
+# and loaded binary are fresh. Retaining a small ring of recent CPU instances
+# avoids premature native teardown while preserving per-run postmortem access to
+# results["_cpu"].
+_RECENT_ELF_CPUS: deque = deque(maxlen=8)
+
+# Try to import Rust launcher for fast path
+_RUST_LAUNCHER_AVAILABLE = False
+try:
+    import ncpu_metal
+    _RUST_LAUNCHER_AVAILABLE = True
+except ImportError:
+    ncpu_metal = None
+
+
+def _convert_filesystem_to_rust(filesystem) -> tuple:
+    """Convert Python GPUFilesystem to Rust VFS format.
+
+    Returns (files, directories) lists.
+    """
+    files = []
+    directories = []
+
+    if filesystem is None:
+        return files, directories
+
+    # Get symlinks set to filter out from files
+    symlink_paths = set()
+    if hasattr(filesystem, 'symlinks'):
+        symlink_paths = set(filesystem.symlinks.keys())
+
+    # Add directories - can be set or dict
+    dirs = getattr(filesystem, 'directories', None)
+    if dirs is not None:
+        if isinstance(dirs, dict):
+            for d in dirs.keys():
+                directories.append(d)
+        elif isinstance(dirs, set):
+            for d in dirs:
+                directories.append(d)
+
+    # Add files - expected as dict, but exclude symlinks (they're passed separately)
+    file_data = getattr(filesystem, 'files', None)
+    if file_data is not None:
+        for path, content in file_data.items():
+            # Skip symlinks - they'll be passed via symlinks parameter
+            if path in symlink_paths:
+                continue
+            if isinstance(content, bytes):
+                files.append((path, list(content)))
+            elif isinstance(content, str):
+                files.append((path, list(content.encode())))
+            else:
+                files.append((path, []))
+
+    return files, directories
+
+
 def load_and_run_elf(
     elf_path: str,
     argv: Optional[list[str]] = None,
@@ -391,6 +593,8 @@ def load_and_run_elf(
     quiet: bool = False,
     filesystem=None,
     stdin_data: Optional[bytes] = None,
+    cpu=None,
+    use_rust: Optional[bool] = None,
 ) -> dict:
     """Load an ELF binary and run it on the Metal GPU.
 
@@ -403,14 +607,185 @@ def load_and_run_elf(
         quiet: Suppress output
         filesystem: GPUFilesystem instance
         stdin_data: Bytes to serve as stdin (for piped input)
+        cpu: Optional pre-existing CPU instance (for tracing)
+        use_rust: If True, force Rust launcher. If False, force Python path.
+                  If None (default), use Rust if available.
 
     Returns:
         Execution results dict
     """
-    from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+    # Determine whether to use Rust launcher
+    if use_rust is None:
+        use_rust = _RUST_LAUNCHER_AVAILABLE
+
+    # Try Rust path first if available and no special Python-only options are used
+    if use_rust and handler is None and cpu is None:
+        try:
+            result = _load_and_run_elf_rust(
+                elf_path, argv, envp, max_cycles, quiet, filesystem, stdin_data
+            )
+            if not quiet:
+                print(f"[elf_loader] Using Rust launcher")
+            return result
+        except Exception as e:
+            if not quiet:
+                print(f"[elf_loader] Rust launcher failed: {e}, falling back to Python")
+            else:
+                # Print even in quiet mode if there's an error
+                import sys as _sys
+                _sys.stderr.write(f"[elf_loader] Rust launcher failed: {e}, falling back to Python\n")
+
+    # Python path (original implementation)
+    return _load_and_run_elf_python(
+        elf_path, argv, envp, handler, max_cycles, quiet, filesystem, stdin_data, cpu
+    )
+
+
+def _load_and_run_elf_rust(
+    elf_path: str,
+    argv: Optional[list[str]] = None,
+    envp: Optional[dict[str, str]] = None,
+    max_cycles: int = 500_000_000,
+    quiet: bool = False,
+    filesystem=None,
+    stdin_data: Optional[bytes] = None,
+) -> dict:
+    """Run ELF using Rust launcher."""
+    # Convert filesystem to Rust format
+    files, directories = _convert_filesystem_to_rust(filesystem)
+
+    # Convert symlinks from filesystem
+    symlinks = None
+    if filesystem is not None and hasattr(filesystem, 'symlinks'):
+        symlinks = list(filesystem.symlinks.items())
+
+    # Add standard files if no filesystem provided (mimics --rootfs behavior)
+    if not files:
+        files = [
+            ("/etc/passwd", b"root:x:0:0:root:/root:/bin/sh\n"),
+            ("/etc/group", b"root:x:0:\n"),
+            ("/etc/hostname", b"ncpu-gpu\n"),
+            ("/etc/resolv.conf", b"nameserver 8.8.8.8\n"),
+            ("/bin/sh", b""),  # Placeholder for shell
+        ]
+
+    # Convert envp to list format
+    env_list = None
+    if envp:
+        env_list = [f"{k}={v}" for k, v in envp.items()]
+
+    # Call Rust launcher
+    result = ncpu_metal.run_elf(
+        elf_path,
+        argv=argv,
+        envp=env_list,
+        max_cycles=max_cycles,
+        quiet=quiet,
+        stdin_data=list(stdin_data) if stdin_data else None,
+        files=files if files else None,
+        directories=directories if directories else None,
+        symlinks=symlinks if symlinks else None,
+    )
+
+    # Apply VFS changes back to filesystem for persistence
+    if filesystem is not None:
+        vfs_files = result.get('vfs_files', {})
+        vfs_dirs = result.get('vfs_directories', [])
+        vfs_symlinks = result.get('vfs_symlinks', {})
+
+        # Apply files - replace entirely to capture deletions
+        if hasattr(filesystem, 'files'):
+            # Get original file paths to detect deletions
+            original_files = set(filesystem.files.keys())
+            # Replace with Rust VFS state
+            filesystem.files.clear()
+            for path, content in vfs_files.items():
+                filesystem.files[path] = content
+            # Files not in vfs_files are considered deleted
+
+        # Apply directories - replace entirely to capture deletions
+        if hasattr(filesystem, 'directories'):
+            if isinstance(filesystem.directories, set):
+                filesystem.directories.clear()
+                for d in vfs_dirs:
+                    filesystem.directories.add(d)
+            elif isinstance(filesystem.directories, dict):
+                filesystem.directories.clear()
+                for d in vfs_dirs:
+                    filesystem.directories.setdefault(d, None)
+
+        # Apply symlinks - replace entirely to capture deletions
+        if hasattr(filesystem, 'symlinks'):
+            filesystem.symlinks.clear()
+            for path, target in vfs_symlinks.items():
+                filesystem.symlinks[path] = target
+        elif vfs_symlinks:
+            # Create symlinks dict if needed
+            filesystem.symlinks = dict(vfs_symlinks)
+
+    # Always print output to stdout/stderr (matching Python path behavior)
+    # This ensures backward compatibility with tests that capture sys.stdout
+    import sys as _sys
+    if result.get('stdout'):
+        _sys.stdout.write(result['stdout'])
+        _sys.stdout.flush()
+    if result.get('stderr'):
+        _sys.stderr.write(result['stderr'])
+        _sys.stderr.flush()
+
+    # Convert result to match Python API format
+    # Normalize stop_reason: Rust returns EXIT for clean exit, Python returns SYSCALL
+    stop_reason = result.get('stop_reason', 'UNKNOWN')
+    if stop_reason == 'EXIT' and result.get('exit_code', 0) == 0:
+        stop_reason = 'SYSCALL'  # Match Python behavior for clean exit
+
+    return {
+        'stdout': result.get('stdout', ''),
+        'stderr': result.get('stderr', ''),
+        'exit_code': result.get('exit_code', 0),
+        'total_cycles': result.get('total_cycles', 0),
+        'elapsed': result.get('elapsed_secs', 0),
+        'stop_reason': stop_reason,
+        'ips': result.get('total_cycles', 0) / max(result.get('elapsed_secs', 0.001), 0.001),
+        '_rust': True,  # Mark as Rust execution
+        '_cpu': None,   # Placeholder for GPU superpowers (not available in Rust path yet)
+    }
+
+
+def _load_and_run_elf_python(
+    elf_path: str,
+    argv: Optional[list[str]] = None,
+    envp: Optional[dict[str, str]] = None,
+    handler=None,
+    max_cycles: int = 500_000_000,
+    quiet: bool = False,
+    filesystem=None,
+    stdin_data: Optional[bytes] = None,
+    cpu=None,
+) -> dict:
+    """Run ELF using Python path (original implementation)."""
+    from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
     from ncpu.os.gpu.runner import make_syscall_handler, run
 
-    cpu = MLXKernelCPUv2(quiet=quiet)
+    created_cpu = False
+    if cpu is None:
+        cpu = MLXKernelCPUv2(quiet=quiet)
+        created_cpu = True
+
+    # Some backends reuse device-side resources aggressively. Make the initial
+    # state explicit for standalone ELF runs so prior traces/debug state cannot
+    # leak into a fresh BusyBox execution.
+    if created_cpu:
+        if hasattr(cpu, "full_reset"):
+            cpu.full_reset()
+        elif hasattr(cpu, "reset"):
+            cpu.reset()
+        if hasattr(cpu, "clear_all_debug"):
+            cpu.clear_all_debug()
+        if hasattr(cpu, "disable_trace"):
+            cpu.disable_trace()
+        if hasattr(cpu, "clear_trace"):
+            cpu.clear_trace()
 
     entry = load_elf_into_memory(
         cpu, elf_path, argv=argv, envp=envp, quiet=quiet
@@ -422,6 +797,18 @@ def load_and_run_elf(
     elf_info = parse_elf(elf_data)
     max_seg_end = max(s.vaddr + s.memsz for s in elf_info.segments)
     heap_base = (max_seg_end + 0xFFFF) & ~0xFFFF
+
+    # Match the normal runner path: clear the GPU-side SVC buffer header and
+    # seed BRK state before user code executes.
+    if hasattr(cpu, "init_svc_buffer"):
+        cpu.init_svc_buffer()
+
+    # Write correct heap_base into SVC buffer for GPU-side BRK handler.
+    # The Metal shader reads brk from SVC_BUF_BASE+8 on first BRK call.
+    # Without this, it defaults to SVC_HEAP_BASE=0x60000 which is wrong
+    # for binaries loaded at higher addresses (like BusyBox at 0x400000+).
+    SVC_BUF_BASE = 0x3F0000
+    cpu.write_memory(SVC_BUF_BASE + 8, struct.pack('<Q', heap_base))
 
     if handler is None:
         handler = make_busybox_syscall_handler(
@@ -443,6 +830,9 @@ def load_and_run_elf(
 
     # Attach CPU object for post-execution inspection (GPU superpowers)
     results["_cpu"] = cpu
+
+    if created_cpu:
+        _RECENT_ELF_CPUS.append(cpu)
 
     return results
 
@@ -589,7 +979,7 @@ def make_busybox_syscall_handler(filesystem=None, heap_base=None, stdin_data=Non
 
     _heap_base = heap_base if heap_base else HEAP_BASE
     heap_break = _heap_base
-    mmap_next = _heap_base + 0x100000  # mmap region 1MB above heap start
+    mmap_next = _heap_base + 0x400000  # mmap region 4MB above heap start
 
     # Get the base syscall handler
     base_handler = make_syscall_handler(filesystem=filesystem, on_read=stdin_reader)

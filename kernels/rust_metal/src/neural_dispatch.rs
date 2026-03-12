@@ -1,6 +1,6 @@
 //! Neural-driven GPU execution - ALL neural models run on GPU
 //!
-//! This is the REAL KVRM vision - multiple neural models working together:
+//! This is the full nCPU vision - multiple neural models working together:
 //! - Neural Dispatcher: predicts which kernel to use (no CPU switch!)
 //! - Loop Detector V2: accelerates loop bodies
 //! - Memory Oracle: predicts memory accesses for prefetching
@@ -10,15 +10,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState,
-    MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device, ExecutionResult};
+use crate::{get_default_device, ExecutionResult, MetalError};
 
 use pyo3::types::PyModule;
 
@@ -1082,7 +1081,7 @@ pub struct NeuralMetalCPU {
 
     num_lanes: u32,
     memory_size: u64,
-    use_embedding: bool,  // Flag to use 100% accurate embedding dispatch
+    use_embedding: bool, // Flag to use 100% accurate embedding dispatch
 
     // Buffers
     memory_buf: Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -1096,8 +1095,8 @@ pub struct NeuralMetalCPU {
     handled_buf: Retained<ProtocolObject<dyn MTLBuffer>>,
 
     // Neural model buffers
-    dispatch_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,  // Simple network (135 weights)
-    embedding_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,  // Embedding network (10279 weights)
+    dispatch_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>, // Simple network (135 weights)
+    embedding_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>, // Embedding network (10279 weights)
     loop_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,
     memory_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,
     kernel_prediction_buf: Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -1107,10 +1106,14 @@ pub struct NeuralMetalCPU {
 
 impl NeuralMetalCPU {
     pub fn new(num_lanes: u32, memory_size: u64) -> Result<Self, MetalError> {
-        Self::new_with_config(num_lanes, memory_size, true)  // Use embedding by default
+        Self::new_with_config(num_lanes, memory_size, true) // Use embedding by default
     }
 
-    pub fn new_with_config(num_lanes: u32, memory_size: u64, use_embedding: bool) -> Result<Self, MetalError> {
+    pub fn new_with_config(
+        num_lanes: u32,
+        memory_size: u64,
+        use_embedding: bool,
+    ) -> Result<Self, MetalError> {
         let device = get_default_device().ok_or(MetalError::NoDevice)?;
 
         println!("[NeuralMetalCPU] Using device: {:?}", device.name());
@@ -1128,9 +1131,9 @@ impl NeuralMetalCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let fn_name = NSString::from_str("neural_execute");
-        let fn_handle = library
-            .newFunctionWithName(&fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("neural_execute not found".to_string()))?;
+        let fn_handle = library.newFunctionWithName(&fn_name).ok_or_else(|| {
+            MetalError::ShaderCompilationFailed("neural_execute not found".to_string())
+        })?;
 
         let pipeline = device
             .newComputePipelineStateWithFunction_error(&fn_handle)
@@ -1144,33 +1147,41 @@ impl NeuralMetalCPU {
 
         // Create buffers
         let shared_options = MTLResourceOptions::StorageModeShared;
-        let memory_buf = device.newBufferWithLength_options(memory_size as usize, shared_options)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options((num_lanes * 32 * 8) as usize, shared_options)
+        let registers_buf = device
+            .newBufferWithLength_options((num_lanes * 32 * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
+        let pc_buf = device
+            .newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
-        let inst_buf = device.newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
+        let inst_buf = device
+            .newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_out_buf = device.newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
+        let pc_out_buf = device
+            .newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let handled_buf = device.newBufferWithLength_options((num_lanes) as usize, shared_options)
+        let handled_buf = device
+            .newBufferWithLength_options((num_lanes) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         // Condition flags (NZCV) - one byte per lane (N:bit7, Z:bit6, C:bit5, V:bit4)
-        let flags_buf = device.newBufferWithLength_options((num_lanes) as usize, shared_options)
+        let flags_buf = device
+            .newBufferWithLength_options((num_lanes) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
         unsafe {
             let ptr = flags_buf.contents().as_ptr() as *mut u8;
             for i in 0..num_lanes {
-                *ptr.add(i as usize) = 0;  // Initialize flags to 0
+                *ptr.add(i as usize) = 0; // Initialize flags to 0
             }
         }
 
         // Simple dispatch weights (135 weights) - for backwards compatibility
         let dispatch_weights = vec![0.0f32; 135];
-        let dispatch_weights_buf = device.newBufferWithLength_options(135 * 4, shared_options)
+        let dispatch_weights_buf = device
+            .newBufferWithLength_options(135 * 4, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
         unsafe {
             let ptr = dispatch_weights_buf.contents().as_ptr() as *mut f32;
@@ -1181,7 +1192,8 @@ impl NeuralMetalCPU {
 
         // Embedding dispatch weights (10,279 weights) - 100% ACCURATE
         let embedding_weights = vec![0.0f32; 10279];
-        let embedding_weights_buf = device.newBufferWithLength_options(10279 * 4, shared_options)
+        let embedding_weights_buf = device
+            .newBufferWithLength_options(10279 * 4, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
         unsafe {
             let ptr = embedding_weights_buf.contents().as_ptr() as *mut f32;
@@ -1192,19 +1204,24 @@ impl NeuralMetalCPU {
         println!("[NeuralMetalCPU] ✅ Embedding weights buffer created (10,279 floats)");
 
         // Loop detector weights (1.08M params from trained model)
-        let loop_weights_buf = device.newBufferWithLength_options(1_100_000 * 4, shared_options)
+        let loop_weights_buf = device
+            .newBufferWithLength_options(1_100_000 * 4, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         // Memory oracle weights (271K params from trained model)
-        let memory_weights_buf = device.newBufferWithLength_options(280_000 * 4, shared_options)
+        let memory_weights_buf = device
+            .newBufferWithLength_options(280_000 * 4, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         // Prediction output buffers
-        let kernel_prediction_buf = device.newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
+        let kernel_prediction_buf = device
+            .newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let loop_probability_buf = device.newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
+        let loop_probability_buf = device
+            .newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let prefetch_addr_buf = device.newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
+        let prefetch_addr_buf = device
+            .newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         println!("✅ NeuralMetalCPU initialized with NEURAL models:");
@@ -1282,9 +1299,12 @@ impl NeuralMetalCPU {
             // DEBUG: Read register values before GPU execution
             let x0_before = unsafe {
                 let reg_ptr = self.registers_buf.contents().as_ptr() as *const i64;
-                *reg_ptr.add(0)  // Lane 0, X0
+                *reg_ptr.add(0) // Lane 0, X0
             };
-            println!("[DEBUG] Before GPU: PC=0x{:X} inst=0x{:08X} X0={}", pcs[0], instructions[0], x0_before);
+            println!(
+                "[DEBUG] Before GPU: PC=0x{:X} inst=0x{:08X} X0={}",
+                pcs[0], instructions[0], x0_before
+            );
 
             unsafe {
                 let inst_ptr = self.inst_buf.contents().as_ptr() as *mut u32;
@@ -1385,7 +1405,7 @@ impl NeuralMetalCPU {
             // DEBUG: Read register values after GPU execution
             let x0_after = unsafe {
                 let reg_ptr = self.registers_buf.contents().as_ptr() as *const i64;
-                *reg_ptr.add(0)  // Lane 0, X0
+                *reg_ptr.add(0) // Lane 0, X0
             };
             println!("[DEBUG] After GPU: X0={}", x0_after);
 
@@ -1395,8 +1415,10 @@ impl NeuralMetalCPU {
             }
 
             // Debug: print predictions (every cycle for debugging)
-            println!("[Neural Dispatch] Cycle {}: neural_pred={}, final_pc=0x{:X}, handled={}",
-                total_cycles, kernel_preds[0], pcs[0], any_handled);
+            println!(
+                "[Neural Dispatch] Cycle {}: neural_pred={}, final_pc=0x{:X}, handled={}",
+                total_cycles, kernel_preds[0], pcs[0], any_handled
+            );
 
             // Safety break - increased for DOOM (needs 16000 iterations for framebuffer clear)
             if total_cycles >= 20000 {
@@ -1581,42 +1603,50 @@ impl PyNeuralMetalCPU {
     }
 
     fn execute(&self, max_cycles: u64) -> PyResult<ExecutionResult> {
-        self.inner.execute(max_cycles)
+        self.inner
+            .execute(max_cycles)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn write_memory_u32(&mut self, address: u64, value: u32) -> PyResult<()> {
-        self.inner.write_memory_u32(address, value)
+        self.inner
+            .write_memory_u32(address, value)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn write_memory(&mut self, address: u64, data: Vec<u8>) -> PyResult<()> {
-        self.inner.write_memory(address, data)
+        self.inner
+            .write_memory(address, data)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn read_memory(&self, address: u64, length: u64) -> PyResult<Vec<u8>> {
-        self.inner.read_memory(address as usize, length as usize)
+        self.inner
+            .read_memory(address as usize, length as usize)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn set_register(&mut self, lane_id: u32, reg_id: u32, value: i64) -> PyResult<()> {
-        self.inner.set_register(lane_id, reg_id, value)
+        self.inner
+            .set_register(lane_id, reg_id, value)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn get_register(&self, lane_id: u32, reg_id: u32) -> PyResult<i64> {
-        self.inner.get_register(lane_id, reg_id)
+        self.inner
+            .get_register(lane_id, reg_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn set_pc(&mut self, lane_id: u32, pc: u64) -> PyResult<()> {
-        self.inner.set_pc(lane_id, pc)
+        self.inner
+            .set_pc(lane_id, pc)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn get_pc(&self, lane_id: u32) -> PyResult<u64> {
-        self.inner.get_pc(lane_id)
+        self.inner
+            .get_pc(lane_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -1626,25 +1656,29 @@ impl PyNeuralMetalCPU {
 
     /// Load dispatch neural network weights from Python (numpy array or list)
     fn load_dispatch_weights(&mut self, weights: Vec<f32>) -> PyResult<()> {
-        self.inner.load_dispatch_weights(&weights)
+        self.inner
+            .load_dispatch_weights(&weights)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Load loop detector weights from Python
     fn load_loop_weights(&mut self, weights: Vec<f32>) -> PyResult<()> {
-        self.inner.load_loop_weights(&weights)
+        self.inner
+            .load_loop_weights(&weights)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Load memory oracle weights from Python
     fn load_memory_weights(&mut self, weights: Vec<f32>) -> PyResult<()> {
-        self.inner.load_memory_weights(&weights)
+        self.inner
+            .load_memory_weights(&weights)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Load embedding-based dispatch weights (100% accurate - 10,279 params)
     fn load_embedding_weights(&mut self, weights: Vec<f32>) -> PyResult<()> {
-        self.inner.load_embedding_weights(&weights)
+        self.inner
+            .load_embedding_weights(&weights)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 }

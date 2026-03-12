@@ -12,15 +12,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Simplified Neural OoO Execution shader - fast to compile
 /// Focuses on learned dependency prediction with core ARM64 instructions
@@ -625,7 +624,7 @@ const NEURAL_WEIGHT_COUNT: usize = 4; // RAW, WAW, FLAG, BIAS
 // Cache size: 64 entries * ~512 bytes per entry = 32KB
 // CachedBlock layout: pc(8) + insts[8](128) + deps[8][8](256) + count(4) + valid(4) + padding
 const DEP_CACHE_ENTRIES: usize = 64;
-const CACHED_BLOCK_SIZE: usize = 512;  // Conservative estimate with padding
+const CACHED_BLOCK_SIZE: usize = 512; // Conservative estimate with padding
 const DEP_CACHE_SIZE: usize = DEP_CACHE_ENTRIES * CACHED_BLOCK_SIZE;
 
 /// Neural OoO execution result
@@ -653,8 +652,12 @@ pub struct NeuralOoOResult {
 #[pymethods]
 impl NeuralOoOResult {
     fn __repr__(&self) -> String {
-        format!("NeuralOoOResult(cycles={}, ips={:.0}, parallelism={:.1}%)",
-                self.total_cycles, self.ips, self.parallelism_ratio * 100.0)
+        format!(
+            "NeuralOoOResult(cycles={}, ips={:.0}, parallelism={:.1}%)",
+            self.total_cycles,
+            self.ips,
+            self.parallelism_ratio * 100.0
+        )
     }
 }
 
@@ -699,39 +702,54 @@ impl NeuralOoOCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let func_name = NSString::from_str("cpu_execute_neural_ooo");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| MetalError::ShaderCompilationFailed("Function not found".to_string()))?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| MetalError::PipelineCreationFailed(format!("{:?}", e)))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options(32 * 8, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let cycles_per_batch_buf = device.newBufferWithLength_options(4, opts)
+        let cycles_per_batch_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let mem_size_buf = device.newBufferWithLength_options(4, opts)
+        let mem_size_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let total_cycles_buf = device.newBufferWithLength_options(4, opts)
+        let total_cycles_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let batch_count_buf = device.newBufferWithLength_options(4, opts)
+        let batch_count_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stats_buf = device.newBufferWithLength_options(4 * 4, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(4 * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let weights_buf = device.newBufferWithLength_options(NEURAL_WEIGHT_COUNT * 4, opts)
+        let weights_buf = device
+            .newBufferWithLength_options(NEURAL_WEIGHT_COUNT * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let grad_buf = device.newBufferWithLength_options(NEURAL_WEIGHT_COUNT * 4, opts)
+        let grad_buf = device
+            .newBufferWithLength_options(NEURAL_WEIGHT_COUNT * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let cache_buf = device.newBufferWithLength_options(DEP_CACHE_SIZE, opts)
+        let cache_buf = device
+            .newBufferWithLength_options(DEP_CACHE_SIZE, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         // Initialize cache to invalid
@@ -748,16 +766,26 @@ impl NeuralOoOCPU {
 
             // Initialize learned hazard weights: RAW=5.0, WAW=3.0, FLAG=5.0, BIAS=-2.0
             let weights = weights_buf.contents().as_ptr() as *mut f32;
-            *weights.add(0) = 5.0;   // RAW weight
-            *weights.add(1) = 3.0;   // WAW weight
-            *weights.add(2) = 5.0;   // FLAG weight
-            *weights.add(3) = -2.0;  // Bias
+            *weights.add(0) = 5.0; // RAW weight
+            *weights.add(1) = 3.0; // WAW weight
+            *weights.add(2) = 5.0; // FLAG weight
+            *weights.add(3) = -2.0; // Bias
 
-            std::ptr::write_bytes(grad_buf.contents().as_ptr() as *mut u8, 0, NEURAL_WEIGHT_COUNT * 4);
+            std::ptr::write_bytes(
+                grad_buf.contents().as_ptr() as *mut u8,
+                0,
+                NEURAL_WEIGHT_COUNT * 4,
+            );
         }
 
-        println!("[NeuralOoOCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
-        println!("[NeuralOoOCPU] Neural weights: {} parameters (RAW, WAW, FLAG, BIAS)", NEURAL_WEIGHT_COUNT);
+        println!(
+            "[NeuralOoOCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
+        println!(
+            "[NeuralOoOCPU] Neural weights: {} parameters (RAW, WAW, FLAG, BIAS)",
+            NEURAL_WEIGHT_COUNT
+        );
         println!("[NeuralOoOCPU] Features: Learned Dependency Prediction, Soft Scheduling, Differentiable");
 
         Ok(Self {
@@ -788,14 +816,24 @@ impl NeuralOoOCPU {
         }
         unsafe {
             let mem = self.memory_buf.contents().as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(program.as_ptr(), mem.add(address as usize), program.len());
+            std::ptr::copy_nonoverlapping(
+                program.as_ptr(),
+                mem.add(address as usize),
+                program.len(),
+            );
         }
-        println!("[NeuralOoOCPU] Loaded {} bytes at 0x{:x}", program.len(), address);
+        println!(
+            "[NeuralOoOCPU] Loaded {} bytes at 0x{:x}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
     fn set_pc(&self, pc: u64) {
-        unsafe { *(self.pc_buf.contents().as_ptr() as *mut u64) = pc; }
+        unsafe {
+            *(self.pc_buf.contents().as_ptr() as *mut u64) = pc;
+        }
     }
 
     fn get_pc(&self) -> u64 {
@@ -803,13 +841,19 @@ impl NeuralOoOCPU {
     }
 
     fn set_register(&self, reg: usize, value: i64) -> PyResult<()> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
-        unsafe { *(self.registers_buf.contents().as_ptr() as *mut i64).add(reg) = value; }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
+        unsafe {
+            *(self.registers_buf.contents().as_ptr() as *mut i64).add(reg) = value;
+        }
         Ok(())
     }
 
     fn get_register(&self, reg: usize) -> PyResult<i64> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe { Ok(*(self.registers_buf.contents().as_ptr() as *const i64).add(reg)) }
     }
 
@@ -817,7 +861,9 @@ impl NeuralOoOCPU {
     fn load_weights(&self, weights: Vec<f32>) -> PyResult<()> {
         if weights.len() != NEURAL_WEIGHT_COUNT {
             return Err(PyRuntimeError::new_err(format!(
-                "Expected {} weights, got {}", NEURAL_WEIGHT_COUNT, weights.len()
+                "Expected {} weights, got {}",
+                NEURAL_WEIGHT_COUNT,
+                weights.len()
             )));
         }
         unsafe {
@@ -856,12 +902,17 @@ impl NeuralOoOCPU {
 
         let mut batch = 0u32;
         while batch < max_batches {
-            if start.elapsed().as_secs_f64() > timeout_seconds { break; }
+            if start.elapsed().as_secs_f64() > timeout_seconds {
+                break;
+            }
 
-            let cmd = self.command_queue.commandBuffer()
+            let cmd = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
 
-            let encoder = cmd.computeCommandEncoder()
+            let encoder = cmd
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -880,8 +931,16 @@ impl NeuralOoOCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.grad_buf), 0, 11);
                 encoder.setBuffer_offset_atIndex(Some(&self.cache_buf), 0, 12);
 
-                let grid = MTLSize { width: 1, height: 1, depth: 1 };
-                let tg = MTLSize { width: 1, height: 1, depth: 1 };
+                let grid = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                let tg = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
                 encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, tg);
             }
             encoder.endEncoding();
@@ -889,9 +948,13 @@ impl NeuralOoOCPU {
             cmd.waitUntilCompleted();
 
             let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
-            if signal == 1 || signal == 2 { break; }
+            if signal == 1 || signal == 2 {
+                break;
+            }
 
-            unsafe { *(self.signal_buf.contents().as_ptr() as *mut u32) = 0; }
+            unsafe {
+                *(self.signal_buf.contents().as_ptr() as *mut u32) = 0;
+            }
             batch += 1;
         }
 
@@ -900,15 +963,23 @@ impl NeuralOoOCPU {
         let batch_count = unsafe { *(self.batch_count_buf.contents().as_ptr() as *const u32) };
         let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
 
-        let stats = unsafe { std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 4) };
+        let stats = unsafe {
+            std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 4)
+        };
         let parallel_executions = stats[0];
         let serial_executions = stats[1];
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
         let total_execs = parallel_executions + serial_executions;
         let parallelism_ratio = if total_execs > 0 {
             parallel_executions as f64 / total_execs as f64
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         Ok(NeuralOoOResult {
             total_cycles,

@@ -73,7 +73,7 @@ Target: 10M-100M+ IPS on Apple Silicon
 - Single-threaded (parallel execution planned for Phase 2)
 - Local register copy for faster access
 
-Author: KVRM Project
+Author: nCPU Project
 Date: 2024
 """
 

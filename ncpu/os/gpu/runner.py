@@ -35,7 +35,10 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2, StopReasonV2
+from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2, StopReasonV2
+from ncpu.os.gpu.compile_cache import CompileCache
+
+_compile_cache = CompileCache()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -83,6 +86,26 @@ def compile_c(c_file: str, bin_path: str, extra_flags: list[str] = None, quiet: 
         print(f"Error: source file not found: {c_file}")
         return False
 
+    # Check compilation cache. The binary depends on more than the C file:
+    # startup assembly, the linker script, and the freestanding headers all
+    # affect codegen and syscall ABI.
+    source_bytes = c_file.read_bytes()
+    flags_str = " ".join(extra_flags) if extra_flags else ""
+    cache_material = bytearray(source_bytes)
+    cache_material.extend(STARTUP_ASM.read_bytes())
+    cache_material.extend(LINKER_SCRIPT.read_bytes())
+    for header in sorted(SRC_DIR.glob("*.h")):
+        cache_material.extend(header.name.encode("ascii"))
+        cache_material.extend(header.read_bytes())
+    cache_key = _compile_cache.cache_key(bytes(cache_material), flags_str)
+    cached = _compile_cache.get(cache_key)
+    if cached is not None:
+        bin_path.parent.mkdir(parents=True, exist_ok=True)
+        bin_path.write_bytes(cached)
+        if not quiet:
+            print(f"Cache hit: {c_file.name} ({len(cached):,} bytes)")
+        return True
+
     # Create temp dir for intermediate files
     with tempfile.TemporaryDirectory() as tmpdir:
         elf_path = Path(tmpdir) / "output.elf"
@@ -108,9 +131,12 @@ def compile_c(c_file: str, bin_path: str, extra_flags: list[str] = None, quiet: 
             print(f"objcopy failed:\n{result.stderr}")
             return False
 
+        size = bin_path.stat().st_size
         if not quiet:
-            size = bin_path.stat().st_size
             print(f"Binary: {bin_path} ({size:,} bytes)")
+
+        # Store in cache
+        _compile_cache.put(cache_key, bin_path.read_bytes())
 
     return True
 
@@ -189,6 +215,14 @@ SYS_FLUSH_FB = 313
 SYS_KILL     = 314
 SYS_GETENV   = 315
 SYS_SETENV   = 316
+SYS_LINK     = 37     # Hard link (linkat with AT_FDCWD)
+SYS_SYMLINKAT = 36   # Symlink
+SYS_RENAMEAT = 38    # Rename
+SYS_FTRUNCATE = 46   # Truncate file by fd
+SYS_FSYNC = 74       # Sync file to storage
+SYS_ACCESS = 48      # Check file access permissions
+SYS_DUP = 23        # Duplicate fd
+SYS_DUP3 = 24       # Duplicate fd with flags
 
 # Signal numbers
 SIGTERM = 15
@@ -400,6 +434,72 @@ def make_syscall_handler(
             else:
                 result = filesystem.unlink(path)
             cpu.set_register(0, result if result >= 0 else (-1))
+            return True
+
+        elif syscall_num == SYS_LINK and filesystem:
+            # link(oldpath, newpath) - hard link
+            old_path = read_string_from_gpu(cpu, x0)
+            new_path = read_string_from_gpu(cpu, x1)
+            result = filesystem.link(old_path, new_path)
+            cpu.set_register(0, result if result >= 0 else (-1))
+            return True
+
+        elif syscall_num == SYS_SYMLINKAT and filesystem:
+            # symlinkat(target, fd, link_path) - symlink
+            target = read_string_from_gpu(cpu, x0)
+            # x1 is dirfd (unused, use AT_FDCWD = -100)
+            link_path = read_string_from_gpu(cpu, x2)
+            result = filesystem.symlink(target, link_path)
+            cpu.set_register(0, result if result >= 0 else (-1))
+            return True
+
+        elif syscall_num == SYS_RENAMEAT and filesystem:
+            # renameat(oldfd, oldpath, newfd, newpath)
+            old_path = read_string_from_gpu(cpu, x1)
+            new_path = read_string_from_gpu(cpu, x3)
+            result = filesystem.rename(old_path, new_path)
+            cpu.set_register(0, result if result >= 0 else (-1))
+            return True
+
+        elif syscall_num == SYS_FTRUNCATE and filesystem:
+            # ftruncate(fd, length)
+            fd = x0
+            length = x1
+            result = filesystem.ftruncate(fd, length)
+            cpu.set_register(0, result if result >= 0 else (-1))
+            return True
+
+        elif syscall_num == SYS_FSYNC and filesystem:
+            # fsync(fd)
+            fd = x0
+            result = filesystem.fsync(fd)
+            cpu.set_register(0, result if result >= 0 else (-1))
+            return True
+
+        elif syscall_num == SYS_ACCESS and filesystem:
+            # access(path, mode) - check file permissions
+            path = read_string_from_gpu(cpu, x0)
+            mode = x1  # R_OK=4, W_OK=2, X_OK=1, F_OK=0
+            resolved = filesystem.resolve_path(path)
+            if resolved in filesystem.files:
+                cpu.set_register(0, 0)  # File exists
+            elif resolved in filesystem.directories:
+                cpu.set_register(0, 0)  # Directory exists
+            else:
+                cpu.set_register(0, -1)  # ENOENT
+            return True
+
+        elif syscall_num == SYS_DUP and filesystem:
+            # dup(fd) - duplicate fd
+            old_fd = x0
+            if old_fd not in filesystem.fd_table:
+                cpu.set_register(0, -1)
+                return True
+            # Allocate new fd
+            new_fd = filesystem._allocate_fd()
+            entry = filesystem.fd_table[old_fd].copy()
+            filesystem.fd_table[new_fd] = entry
+            cpu.set_register(0, new_fd)
             return True
 
         elif syscall_num == SYS_GETCWD and filesystem:
@@ -962,6 +1062,11 @@ class ProcessManager:
         proc.registers[31] = 0  # XZR — SP is set by _start code
 
         self.processes[pid] = proc
+
+        # A new process should start with zeroed anonymous memory, not whatever
+        # happens to be left in the backend buffer. Clearing the active
+        # workspace here keeps Rust/Metal and MLX process startup deterministic.
+        self.cpu.write_memory(ACTIVE_BASE, bytes(ACTIVE_SIZE))
 
         # Load binary into active workspace
         self.cpu.load_program(binary, address=0x10000)

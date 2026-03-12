@@ -23,15 +23,12 @@ import time
 import struct
 
 import pytest
+from kernels.mlx.availability import has_gpu_backend
 
 # Path setup: project root
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-try:
-    import mlx.core as mx
-    HAS_MLX = True
-except ImportError:
-    HAS_MLX = False
+HAS_GPU_BACKEND = has_gpu_backend()
 
 try:
     from ncpu.os.gpu.runner import (
@@ -40,14 +37,14 @@ try:
         SIGTERM, SIGKILL,
     )
     from ncpu.os.gpu.filesystem import GPUFilesystem, PipeBuffer
-    from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+    from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
     HAS_RUNNER = True
-except ImportError:
+except Exception:
     HAS_RUNNER = False
 
 pytestmark = pytest.mark.skipif(
-    not (HAS_MLX and HAS_RUNNER),
-    reason="MLX or arm64_runner not available",
+    not (HAS_GPU_BACKEND and HAS_RUNNER),
+    reason="GPU backend or arm64 runner not available",
 )
 
 

@@ -13,15 +13,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Advanced parallel shader with threadgroup memory
 ///
@@ -563,7 +562,7 @@ pub struct ParallelMetalCPU {
     // Configuration
     num_lanes: u32,
     memory_size: usize,
-    using_managed_memory: bool,  // Track if using StorageModeManaged
+    using_managed_memory: bool, // Track if using StorageModeManaged
 }
 
 #[pymethods]
@@ -595,7 +594,10 @@ impl ParallelMetalCPU {
         // Create memory buffers
         // Use Managed mode for large buffers (>256MB), Shared for small buffers
         let memory_mode = if memory_size > 256 * 1024 * 1024 {
-            println!("[ParallelMetalCPU] Using StorageModeManaged for {}MB memory buffer", memory_size / 1024 / 1024);
+            println!(
+                "[ParallelMetalCPU] Using StorageModeManaged for {}MB memory buffer",
+                memory_size / 1024 / 1024
+            );
             MTLResourceOptions::StorageModeManaged
         } else {
             MTLResourceOptions::StorageModeShared
@@ -648,7 +650,10 @@ impl ParallelMetalCPU {
             *memory_size_ptr = memory_size as u32;
         }
 
-        println!("[ParallelMetalCPU] Initialized with {} parallel ARM64 CPUs on GPU", num_lanes);
+        println!(
+            "[ParallelMetalCPU] Initialized with {} parallel ARM64 CPUs on GPU",
+            num_lanes
+        );
         println!("[ParallelMetalCPU] Threadgroup memory: ENABLED (fast register access)");
         println!("[ParallelMetalCPU] Zero-copy buffers: ON (no memory overhead)");
         println!("[ParallelMetalCPU] Switch-based dispatch: ON (O(1) instruction lookup)");
@@ -759,7 +764,9 @@ impl ParallelMetalCPU {
         if address + data.len() > self.memory_size {
             return Err(PyRuntimeError::new_err(format!(
                 "Memory write out of bounds: address={}, length={}, memory_size={}",
-                address, data.len(), self.memory_size
+                address,
+                data.len(),
+                self.memory_size
             )));
         }
         unsafe {
@@ -834,10 +841,8 @@ impl ParallelMetalCPU {
         };
 
         unsafe {
-            encoder.dispatchThreads_threadsPerThreadgroup(
-                threads_per_grid,
-                threads_per_threadgroup,
-            );
+            encoder
+                .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
         }
 
         encoder.endEncoding();

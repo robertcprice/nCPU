@@ -1,4 +1,4 @@
-//! KVRM Metal - High-performance Metal GPU kernel for ARM64 CPU emulation
+//! nCPU Metal - High-performance Metal GPU kernel for ARM64 CPU emulation
 //!
 //! This crate provides direct Metal API access via objc2-metal for:
 //! - Zero-copy shared memory between CPU and GPU
@@ -7,38 +7,76 @@
 //!
 //! Exposed to Python via PyO3.
 
-mod continuous;
+use std::cell::RefCell;
+
 mod async_gpu;
-mod parallel;
-mod multi_kernel;
-mod neural_dispatch;
-mod neural_weights;
-mod pure_gpu;
-mod optimized;
-mod ultra_optimized;
-mod fusion;
 mod bb_cache;
-mod ultra;
-mod trace_jit;
-mod ooo_exec;
-mod neural_ooo;
-mod neural_hybrid;
-mod differentiable_ooo;
-mod jit_compiler;
+pub mod bb_cache_runtime;
+pub mod boot_image;
+mod continuous;
 mod diff_jit;
+mod differentiable_ooo;
+pub mod elf_loader;
+mod full_arm64;
+mod fusion;
+mod jit_compiler;
+pub mod launcher;
+pub mod micro_op;
+pub mod microkernel;
+pub mod gpu_optimizer;
+mod multi_kernel;
+pub mod native_abi;
+mod neural_dispatch;
+mod neural_hybrid;
+mod neural_ooo;
+mod neural_weights;
+mod ooo_exec;
+mod optimized;
+
+// Thread-local storage for framebuffer callback
+thread_local! {
+    static ON_FRAMEBUFFER: RefCell<Option<pyo3::Py<pyo3::PyAny>>> = const { RefCell::new(None) };
+}
+
+/// Set the framebuffer callback (called from Python before run_elf)
+pub fn set_framebuffer_callback(callback: Option<pyo3::Py<pyo3::PyAny>>) {
+    ON_FRAMEBUFFER.with(|cb| {
+        *cb.borrow_mut() = callback;
+    });
+}
+
+/// Call the framebuffer callback if set
+pub fn call_framebuffer_callback(width: u32, height: u32, data: &[u8]) {
+    ON_FRAMEBUFFER.with(|cb| {
+        if let Some(ref callback) = *cb.borrow() {
+            let _ = pyo3::Python::with_gil(|py| {
+                let data_vec = data.to_vec();
+                let _ = callback.call1(py, (width, height, data_vec));
+            });
+        }
+    });
+}
+mod parallel;
+pub mod process;
+mod pure_gpu;
+pub mod rootfs;
+mod trace_jit;
+mod ultra;
+mod ultra_optimized;
 mod unified_diff_cpu;
 mod unified_test_kernel;
+pub mod vfs;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use thiserror::Error;
 
 /// Metal shader source for ARM64 CPU emulation kernel
@@ -1205,11 +1243,11 @@ pub struct MetalCPU {
     memory_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
 
     // Registers with explicit staging buffer for reliable CPU-GPU sync
-    registers_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,      // GPU-side (Managed)
-    registers_staging: Retained<ProtocolObject<dyn MTLBuffer>>,    // CPU-side (Shared)
+    registers_buffer: Retained<ProtocolObject<dyn MTLBuffer>>, // GPU-side (Managed)
+    registers_staging: Retained<ProtocolObject<dyn MTLBuffer>>, // CPU-side (Shared)
 
-    pc_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,            // GPU-side (Managed)
-    pc_staging: Retained<ProtocolObject<dyn MTLBuffer>>,           // CPU-side (Shared)
+    pc_buffer: Retained<ProtocolObject<dyn MTLBuffer>>, // GPU-side (Managed)
+    pc_staging: Retained<ProtocolObject<dyn MTLBuffer>>, // CPU-side (Shared)
 
     flags_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
 
@@ -1222,9 +1260,9 @@ pub struct MetalCPU {
     stop_reason_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
 
     // Syscall buffers for GPU-side syscall handling
-    syscall_write_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,      // GPU->CPU: write() output
-    syscall_read_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,       // CPU->GPU: read() input
-    syscall_info_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,       // Syscall metadata [num, fd, buf, count, result, key_state]
+    syscall_write_buffer: Retained<ProtocolObject<dyn MTLBuffer>>, // GPU->CPU: write() output
+    syscall_read_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,  // CPU->GPU: read() input
+    syscall_info_buffer: Retained<ProtocolObject<dyn MTLBuffer>>, // Syscall metadata [num, fd, buf, count, result, key_state]
 
     memory_size: usize,
     total_instructions: u64,
@@ -1368,7 +1406,11 @@ impl MetalCPU {
             std::ptr::copy_nonoverlapping(program.as_ptr(), ptr.add(address), program.len());
         }
 
-        println!("[MetalCPU] Loaded {} bytes at 0x{:X}", program.len(), address);
+        println!(
+            "[MetalCPU] Loaded {} bytes at 0x{:X}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
@@ -1542,7 +1584,8 @@ impl MetalCPU {
         };
 
         unsafe {
-            encoder.dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
+            encoder
+                .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
         }
         encoder.endEncoding();
 
@@ -1643,12 +1686,12 @@ impl MetalCPU {
         unsafe {
             let ptr = self.syscall_info_buffer.contents().as_ptr() as *const u64;
             Ok(vec![
-                *ptr,         // syscall_num
-                *ptr.add(1),  // fd
-                *ptr.add(2),  // buf
-                *ptr.add(3),  // count
-                *ptr.add(4),  // result
-                *ptr.add(5),  // key_state
+                *ptr,        // syscall_num
+                *ptr.add(1), // fd
+                *ptr.add(2), // buf
+                *ptr.add(3), // count
+                *ptr.add(4), // result
+                *ptr.add(5), // key_state
             ])
         }
     }
@@ -1667,11 +1710,235 @@ pub fn get_default_device() -> Option<Retained<ProtocolObject<dyn MTLDevice>>> {
     objc2_metal::MTLCreateSystemDefaultDevice()
 }
 
+/// Run an ELF binary on the GPU using the Rust launcher.
+///
+/// This provides a Python API to the Rust-native GpuLauncher, bridging
+/// between Python callers and the high-performance Rust execution path.
+///
+/// Args:
+///     elf_path: Path to the ELF binary
+///     argv: Command-line arguments (default: [binary name])
+///     envp: Environment variables (default: standard Linux env)
+///     max_cycles: Maximum cycles to run (default: 500_000_000)
+///     memory_mb: Memory size in MB (default: 16)
+///     quiet: Suppress output (default: false)
+///
+/// Returns:
+///     Dict with: stdout, stderr, exit_code, total_cycles, elapsed_secs,
+///                stop_reason, total_forks, total_context_switches, processes_created
+#[pyfunction]
+#[pyo3(signature = (elf_path, argv=None, envp=None, max_cycles=None, memory_mb=None, timeout=None, quiet=None, stdin_data=None, files=None, directories=None, symlinks=None, on_framebuffer=None))]
+fn run_elf(
+    elf_path: &str,
+    argv: Option<Vec<String>>,
+    envp: Option<Vec<String>>,
+    max_cycles: Option<u64>,
+    memory_mb: Option<usize>,
+    timeout: Option<f64>,
+    quiet: Option<bool>,
+    stdin_data: Option<Vec<u8>>,
+    files: Option<Vec<(String, Vec<u8>)>>,
+    directories: Option<Vec<String>>,
+    symlinks: Option<Vec<(String, String)>>,
+    on_framebuffer: Option<Py<PyAny>>,
+    py: Python<'_>,
+) -> PyResult<Py<PyAny>> {
+    use std::fs;
+    use launcher::GpuLauncher;
+    use elf_loader::{prepare_elf, DEFAULT_ENVP};
+    use rootfs::create_standard_dirs;
+    use vfs::GpuVfs;
+
+    // Set the framebuffer callback if provided
+    set_framebuffer_callback(on_framebuffer);
+
+    let max_cycles = max_cycles.unwrap_or(500_000_000);
+    let memory_mb = memory_mb.unwrap_or(16);
+    let timeout = timeout.unwrap_or(30.0);
+    let quiet = quiet.unwrap_or(false);
+    let memory_size = memory_mb * 1024 * 1024;
+
+    // Read ELF file
+    let elf_data = fs::read(elf_path)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to read ELF: {}", e)))?;
+
+    // Prepare argv
+    let binary_name = std::path::Path::new(elf_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| elf_path.to_string());
+
+    let argv = argv.unwrap_or_else(|| vec![binary_name.clone()]);
+    let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+
+    // Prepare envp - use default if not provided
+    let envp_refs: Vec<(&str, &str)> = if let Some(ref user_env) = envp {
+        // Parse "KEY=value" strings into tuples
+        user_env.iter()
+            .filter_map(|s| {
+                let parts: Vec<&str> = s.splitn(2, '=').collect();
+                if parts.len() == 2 {
+                    Some((parts[0], parts[1]))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else {
+        DEFAULT_ENVP.to_vec()
+    };
+
+    // Create launcher
+    let launcher = GpuLauncher::new(memory_size, 10_000_000)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create launcher: {}", e)))?;
+
+    // Prepare ELF
+    let prepared = prepare_elf(&elf_data, &argv_refs, &envp_refs, memory_size as u64)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to prepare ELF: {:?}", e)))?;
+
+    if !quiet {
+        eprintln!(
+            "[run_elf] ELF loaded: entry=0x{:X}, SP=0x{:X}, heap=0x{:X}",
+            prepared.entry_pc, prepared.stack_pointer, prepared.heap_base
+        );
+    }
+
+    // Load ELF into GPU
+    launcher.load_prepared_elf(&prepared);
+
+    // Create VFS and populate with provided files/directories
+    let mut vfs = GpuVfs::new();
+    create_standard_dirs(&mut vfs);
+
+    // Add user-provided directories
+    if let Some(dirs) = directories {
+        for dir in dirs {
+            vfs.add_directory(&dir);
+        }
+    }
+
+    // Add user-provided files
+    if let Some(file_list) = files {
+        for (path, content) in file_list {
+            vfs.add_file(&path, content);
+        }
+    }
+
+    // Add user-provided symlinks
+    if let Some(symlink_list) = symlinks {
+        for (link_path, target) in symlink_list {
+            vfs.symlink(&target, &link_path);
+        }
+    }
+
+    // Set stdin data if provided
+    if let Some(stdin) = stdin_data {
+        vfs.set_stdin(stdin);
+    }
+
+    // Run
+    let mut vfs_opt = Some(vfs);
+    let result = launcher
+        .run(&mut vfs_opt, max_cycles, timeout, quiet)
+        .map_err(|e| PyRuntimeError::new_err(format!("Execution failed: {}", e)))?;
+
+    // Convert result to Python dict
+    let dict = PyDict::new(py);
+
+    dict.set_item("stdout", String::from_utf8_lossy(&result.stdout).to_string())?;
+    dict.set_item("stderr", String::from_utf8_lossy(&result.stderr).to_string())?;
+    dict.set_item("exit_code", result.exit_code)?;
+    dict.set_item("total_cycles", result.total_cycles)?;
+    dict.set_item("elapsed_secs", result.elapsed_secs)?;
+    dict.set_item("stop_reason", result.stop_reason)?;
+    dict.set_item("total_forks", result.total_forks)?;
+    dict.set_item("total_context_switches", result.total_context_switches)?;
+    dict.set_item("processes_created", result.processes_created)?;
+
+    // Include VFS snapshot for persistence - as simple dict
+    if let Some(snapshot) = result.vfs_snapshot {
+        let files_dict = PyDict::new(py);
+        for (path, content) in snapshot.files {
+            files_dict.set_item(path, content)?;
+        }
+        dict.set_item("vfs_files", files_dict)?;
+
+        let dirs_list: Vec<&str> = snapshot.directories.iter().map(|s| s.as_str()).collect();
+        dict.set_item("vfs_directories", dirs_list)?;
+
+        let symlinks_dict = PyDict::new(py);
+        for (path, target) in snapshot.symlinks {
+            symlinks_dict.set_item(path, target)?;
+        }
+        dict.set_item("vfs_symlinks", symlinks_dict)?;
+    }
+
+    Ok(dict.into())
+}
+
+/// Run a program using the GPU microkernel (pure GPU-native OS)
+#[pyfunction]
+fn run_microkernel(
+    program: &str,
+    argv: Option<Vec<String>>,
+    envp: Option<Vec<String>>,
+    max_ticks: Option<u64>,
+    py: Python<'_>,
+) -> PyResult<Py<PyAny>> {
+    use microkernel::GpuMicrokernel;
+    use pyo3::types::PyDict;
+
+    let max_ticks = max_ticks.unwrap_or(1_000_000);
+
+    // Default argv
+    let argv = argv.unwrap_or_else(|| vec![program.to_string()]);
+
+    // Default envp
+    let envp = envp.unwrap_or_else(|| vec![
+        "PATH=/bin:/usr/bin".to_string(),
+        "HOME=/".to_string(),
+        "PWD=/".to_string(),
+    ]);
+
+    // Create microkernel
+    let mut kernel = GpuMicrokernel::new();
+
+    // For now, we'll just run a simple simulation
+    // The entry point 0x1000 is a placeholder
+    // In a full implementation, we'd parse the ELF and load it
+    let entry: u64 = 0x1000;
+    let pid = kernel.spawn(entry, argv, envp);
+
+    // Run the kernel
+    let (final_pid, exit_code) = kernel.run(max_ticks);
+
+    // Build result dict
+    let dict = PyDict::new(py);
+    dict.set_item("pid", final_pid)?;
+    dict.set_item("exit_code", exit_code)?;
+    dict.set_item("ticks", kernel.ticks)?;
+    dict.set_item("spawned_pid", pid)?;
+
+    // Include VFS state
+    let vfs_dict = PyDict::new(py);
+    for (path, content) in &kernel.vfs.files {
+        vfs_dict.set_item(path, content.as_slice())?;
+    }
+    dict.set_item("vfs_files", vfs_dict)?;
+
+    let dirs_list: Vec<&str> = kernel.vfs.directories.iter().map(|s| s.as_str()).collect();
+    dict.set_item("vfs_directories", dirs_list)?;
+
+    Ok(dict.into())
+}
+
 /// Python module
 #[pymodule]
-fn kvrm_metal(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn ncpu_metal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MetalCPU>()?;
     m.add_class::<ExecutionResult>()?;
+    m.add_function(wrap_pyfunction!(run_elf, m)?)?;
+    m.add_function(wrap_pyfunction!(run_microkernel, m)?)?;
     continuous::register_continuous(m)?;
     async_gpu::register_async(m)?;
     parallel::register_parallel(m)?;
@@ -1693,6 +1960,8 @@ fn kvrm_metal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     diff_jit::register_diff_jit(m)?;
     unified_diff_cpu::register_unified_diff_cpu(m)?;
     unified_test_kernel::register_minimal_test_cpu(m)?;
+    full_arm64::register_full_arm64(m)?;
+    gpu_optimizer::register_gpu_optimizer(m)?;
     Ok(())
 }
 

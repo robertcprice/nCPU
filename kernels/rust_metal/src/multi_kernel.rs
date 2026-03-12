@@ -7,55 +7,44 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState,
-    MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device, ExecutionResult};
+use crate::{get_default_device, ExecutionResult, MetalError};
 
 // Import PyModule type for the registration function
 use pyo3::types::PyModule;
 
 /// Arithmetic instruction opcodes
-const ARITHMETIC_OPS: &[u8] = &[
-    0x91, 0x11, 0xD1, 0x51, 0xD2, 0xF2, 0x92, 0x8B, 0xCB, 0x0B,
-];
+const ARITHMETIC_OPS: &[u8] = &[0x91, 0x11, 0xD1, 0x51, 0xD2, 0xF2, 0x92, 0x8B, 0xCB, 0x0B];
 
 /// Logical instruction opcodes
-const LOGICAL_OPS: &[u8] = &[
-    0x0A, 0xAA, 0x4A, 0x72, 0x52, 0x32,
-];
+const LOGICAL_OPS: &[u8] = &[0x0A, 0xAA, 0x4A, 0x72, 0x52, 0x32];
 
 /// Load/Store instruction opcodes
 const LOADSTORE_OPS: &[u8] = &[
-    0xF9, 0xB9, 0x39, 0x29, 0x69, 0xF8, 0xB8, 0x78, 0x38, 0x28, 0x68,
-    0x88, 0x48, 0xA8, 0xA9, 0xA4, 0xA0,
+    0xF9, 0xB9, 0x39, 0x29, 0x69, 0xF8, 0xB8, 0x78, 0x38, 0x28, 0x68, 0x88, 0x48, 0xA8, 0xA9, 0xA4,
+    0xA0,
 ];
 
 /// Branch instruction opcodes
-const BRANCH_OPS: &[u8] = &[
-    0x14, 0x34, 0x54, 0x17, 0x97, 0xD6, 0xD7,
-];
+const BRANCH_OPS: &[u8] = &[0x14, 0x34, 0x54, 0x17, 0x97, 0xD6, 0xD7];
 
 /// Multiply/Divide instruction opcodes
-const MULDIV_OPS: &[u8] = &[
-    0x9B, 0x1B, 0x5B, 0xDB,
-];
+const MULDIV_OPS: &[u8] = &[0x9B, 0x1B, 0x5B, 0xDB];
 
 /// Extend/Shift/Bit instruction opcodes
 const EXTEND_SHIFT_OPS: &[u8] = &[
-    0x13, 0x53, 0x73, 0x33, 0x34, 0x14, 0x54, 0x74, 0x94, 0xB4, 0xD4,
-    0x00, 0x08, 0x29, 0x49, 0x69, 0x0A, 0x4A, 0x5A, 0x2B, 0x6B, 0xAB, 0x4B,
+    0x13, 0x53, 0x73, 0x33, 0x34, 0x14, 0x54, 0x74, 0x94, 0xB4, 0xD4, 0x00, 0x08, 0x29, 0x49, 0x69,
+    0x0A, 0x4A, 0x5A, 0x2B, 0x6B, 0xAB, 0x4B,
 ];
 
 /// System instruction opcodes
-const SYSTEM_OPS: &[u8] = &[
-    0xD4, 0xD5, 0x03, 0x6B, 0xEB, 0x1B,
-];
+const SYSTEM_OPS: &[u8] = &[0xD4, 0xD5, 0x03, 0x6B, 0xEB, 0x1B];
 
 /// Check if an opcode belongs to a category
 fn opcode_in_category(op: u8, category_ops: &[u8]) -> bool {
@@ -644,7 +633,9 @@ impl MultiKernelMetalCPU {
         let arithmetic_fn_name = NSString::from_str("execute_arithmetic");
         let arithmetic_fn = arithmetic_library
             .newFunctionWithName(&arithmetic_fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("execute_arithmetic not found".to_string()))?;
+            .ok_or_else(|| {
+                MetalError::ShaderCompilationFailed("execute_arithmetic not found".to_string())
+            })?;
 
         let arithmetic_pipeline = device
             .newComputePipelineStateWithFunction_error(&arithmetic_fn)
@@ -661,7 +652,9 @@ impl MultiKernelMetalCPU {
         let logical_fn_name = NSString::from_str("execute_logical");
         let logical_fn = logical_library
             .newFunctionWithName(&logical_fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("execute_logical not found".to_string()))?;
+            .ok_or_else(|| {
+                MetalError::ShaderCompilationFailed("execute_logical not found".to_string())
+            })?;
 
         let logical_pipeline = device
             .newComputePipelineStateWithFunction_error(&logical_fn)
@@ -678,7 +671,9 @@ impl MultiKernelMetalCPU {
         let loadstore_fn_name = NSString::from_str("execute_loadstore");
         let loadstore_fn = loadstore_library
             .newFunctionWithName(&loadstore_fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("execute_loadstore not found".to_string()))?;
+            .ok_or_else(|| {
+                MetalError::ShaderCompilationFailed("execute_loadstore not found".to_string())
+            })?;
 
         let loadstore_pipeline = device
             .newComputePipelineStateWithFunction_error(&loadstore_fn)
@@ -695,7 +690,9 @@ impl MultiKernelMetalCPU {
         let branch_fn_name = NSString::from_str("execute_branch");
         let branch_fn = branch_library
             .newFunctionWithName(&branch_fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("execute_branch not found".to_string()))?;
+            .ok_or_else(|| {
+                MetalError::ShaderCompilationFailed("execute_branch not found".to_string())
+            })?;
 
         let branch_pipeline = device
             .newComputePipelineStateWithFunction_error(&branch_fn)
@@ -712,7 +709,9 @@ impl MultiKernelMetalCPU {
         let muldiv_fn_name = NSString::from_str("execute_muldiv");
         let muldiv_fn = muldiv_library
             .newFunctionWithName(&muldiv_fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("execute_muldiv not found".to_string()))?;
+            .ok_or_else(|| {
+                MetalError::ShaderCompilationFailed("execute_muldiv not found".to_string())
+            })?;
 
         let muldiv_pipeline = device
             .newComputePipelineStateWithFunction_error(&muldiv_fn)
@@ -729,7 +728,9 @@ impl MultiKernelMetalCPU {
         let extend_shift_fn_name = NSString::from_str("execute_extend_shift");
         let extend_shift_fn = extend_shift_library
             .newFunctionWithName(&extend_shift_fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("execute_extend_shift not found".to_string()))?;
+            .ok_or_else(|| {
+                MetalError::ShaderCompilationFailed("execute_extend_shift not found".to_string())
+            })?;
 
         let extend_shift_pipeline = device
             .newComputePipelineStateWithFunction_error(&extend_shift_fn)
@@ -746,7 +747,9 @@ impl MultiKernelMetalCPU {
         let system_fn_name = NSString::from_str("execute_system");
         let system_fn = system_library
             .newFunctionWithName(&system_fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("execute_system not found".to_string()))?;
+            .ok_or_else(|| {
+                MetalError::ShaderCompilationFailed("execute_system not found".to_string())
+            })?;
 
         let system_pipeline = device
             .newComputePipelineStateWithFunction_error(&system_fn)
@@ -756,25 +759,34 @@ impl MultiKernelMetalCPU {
 
         // Create buffers (same as before)
         let shared_options = MTLResourceOptions::StorageModeShared;
-        let memory_buf = device.newBufferWithLength_options(memory_size as usize, shared_options)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options((num_lanes * 32 * 8) as usize, shared_options)
+        let registers_buf = device
+            .newBufferWithLength_options((num_lanes * 32 * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
+        let pc_buf = device
+            .newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options((num_lanes * 4 * 4) as usize, shared_options)
+        let flags_buf = device
+            .newBufferWithLength_options((num_lanes * 4 * 4) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let cycles_buf = device.newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
+        let cycles_buf = device
+            .newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stop_reason_buf = device.newBufferWithLength_options((num_lanes) as usize, shared_options)
+        let stop_reason_buf = device
+            .newBufferWithLength_options((num_lanes) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         // Temporary buffers for single-instruction execution
-        let inst_buf = device.newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
+        let inst_buf = device
+            .newBufferWithLength_options((num_lanes * 4) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_out_buf = device.newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
+        let pc_out_buf = device
+            .newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let handled_buf = device.newBufferWithLength_options((num_lanes) as usize, shared_options)
+        let handled_buf = device
+            .newBufferWithLength_options((num_lanes) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         Ok(Self {
@@ -1096,49 +1108,57 @@ impl PyMultiKernelMetalCPU {
     }
 
     fn execute(&self, max_cycles: u64) -> PyResult<ExecutionResult> {
-        self.inner.execute(max_cycles)
+        self.inner
+            .execute(max_cycles)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Write a single 32-bit value to memory
     fn write_memory_u32(&mut self, address: u64, value: u32) -> PyResult<()> {
-        self.inner.write_memory_u32(address, value)
+        self.inner
+            .write_memory_u32(address, value)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Write bytes to memory
     fn write_memory(&mut self, address: u64, data: Vec<u8>) -> PyResult<()> {
-        self.inner.write_memory(address, data)
+        self.inner
+            .write_memory(address, data)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Read bytes from memory
     fn read_memory(&self, address: u64, length: u64) -> PyResult<Vec<u8>> {
-        self.inner.read_memory(address as usize, length as usize)
+        self.inner
+            .read_memory(address as usize, length as usize)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Set a register value for a specific lane
     fn set_register(&mut self, lane_id: u32, reg_id: u32, value: i64) -> PyResult<()> {
-        self.inner.set_register(lane_id, reg_id, value)
+        self.inner
+            .set_register(lane_id, reg_id, value)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Get a register value for a specific lane
     fn get_register(&self, lane_id: u32, reg_id: u32) -> PyResult<i64> {
-        self.inner.get_register(lane_id, reg_id)
+        self.inner
+            .get_register(lane_id, reg_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Set PC for a specific lane
     fn set_pc(&mut self, lane_id: u32, pc: u64) -> PyResult<()> {
-        self.inner.set_pc(lane_id, pc)
+        self.inner
+            .set_pc(lane_id, pc)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Get PC for a specific lane
     fn get_pc(&self, lane_id: u32) -> PyResult<u64> {
-        self.inner.get_pc(lane_id)
+        self.inner
+            .get_pc(lane_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 

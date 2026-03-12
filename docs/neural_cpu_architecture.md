@@ -2,7 +2,7 @@
 
 ## Overview
 
-The KVRM (Key-Value Register Machine) Neural CPU is a proof-of-concept ARM64 CPU emulator where traditional digital logic is replaced with neural network components. The system achieves **1.06 MIPS** (Million Instructions Per Second) running entirely on Apple Silicon GPU via Metal shaders.
+The nCPU neural backend is a proof-of-concept ARM64 CPU emulator where traditional digital logic is replaced with neural network components. The system achieves **1.06 MIPS** (Million Instructions Per Second) running entirely on Apple Silicon GPU via Metal shaders.
 
 ## Key Innovation
 
@@ -14,17 +14,17 @@ The KVRM (Key-Value Register Machine) Neural CPU is a proof-of-concept ARM64 CPU
 
 ## Architecture Components
 
-### 1. Neural ALU (arithmetickvrm64.pt)
+### 1. Neural ALU (legacy weight file: `arithmetickvrm64.pt`)
 - **Parameters**: 8,898
 - **Structure**: Multi-layer full adder network
 - Implements: ADD, SUB with carry propagation learned via neural networks
 
-### 2. Neural Logical Unit (logicalkvrm64.pt)
+### 2. Neural Logical Unit (legacy weight file: `logicalkvrm64.pt`)
 - **Parameters**: 28
 - **Structure**: Learned truth tables
 - Implements: AND, OR, XOR, NOT via neural lookup
 
-### 3. Neural Multiplier (multiplykvrm64.pt)
+### 3. Neural Multiplier (legacy weight file: `multiplykvrm64.pt`)
 - **Parameters**: 2,402
 - **Structure**: Neural full adder cascade
 - Implements: 64-bit multiplication
@@ -96,7 +96,7 @@ Address Space: 0x00000000 - 0x003FFFFF (4MB)
 |-----------|------|------|
 | Intel 8086 | 1978 | 0.33 |
 | ARM2 | 1986 | 4 |
-| **KVRM Neural CPU** | 2024 | **1.06** |
+| **nCPU Neural CPU** | 2024 | **1.06** |
 | Intel 486 | 1989 | 20 |
 
 ## Neural Weight Integration
@@ -105,12 +105,12 @@ Address Space: 0x00000000 - 0x003FFFFF (4MB)
 The neural networks are converted to constant lookup tables embedded in the Metal shader:
 
 ```metal
-// Neural logical operation LUT (from logicalkvrm64.pt)
+// Neural logical operation LUT (from legacy logicalkvrm64.pt)
 constant uint8_t NEURAL_AND_LUT[256] = { ... };
 constant uint8_t NEURAL_OR_LUT[256] = { ... };
 constant uint8_t NEURAL_XOR_LUT[256] = { ... };
 
-// Neural ALU output (from arithmetickvrm64.pt)
+// Neural ALU output (from legacy arithmetickvrm64.pt)
 constant float NEURAL_ADD_WEIGHTS[8898] = { ... };
 ```
 
@@ -124,16 +124,16 @@ Each instruction execution performs neural inference:
 ## Files Structure
 
 ```
-kvrm-cpu/
+nCPU/
 ├── rust_metal/
 │   └── src/
 │       ├── lib.rs              # MetalCPU with GPU shader
 │       └── continuous.rs       # ContinuousMetalCPU (main)
 ├── trained_models/
 │   └── 64bit/
-│       ├── arithmetickvrm64.pt # Neural ALU weights
-│       ├── logicalkvrm64.pt    # Neural logical LUT
-│       ├── multiplykvrm64.pt   # Neural multiplier
+│       ├── arithmetickvrm64.pt # Legacy neural ALU weights
+│       ├── logicalkvrm64.pt    # Legacy neural logical LUT
+│       ├── multiplykvrm64.pt   # Legacy neural multiplier
 │       └── arm64_decoder*.pt   # Instruction decoder
 ├── neural_cpu.py               # Python CPU implementation
 ├── metal_shell.py              # Interactive ARM64 shell on GPU
@@ -183,6 +183,6 @@ test 123
 
 ## Conclusion
 
-The KVRM Neural CPU demonstrates that a functional ARM64 CPU can be implemented using neural networks instead of traditional digital logic. While current performance is ~1 MIPS, this serves as a proof-of-concept that neural computation can replace transistor-based logic gates.
+The nCPU neural CPU demonstrates that a functional ARM64 CPU can be implemented using neural networks instead of traditional digital logic. While current performance is ~1 MIPS, this serves as a proof-of-concept that neural computation can replace transistor-based logic gates.
 
 The key breakthrough is achieving this performance entirely on GPU without the typical PyTorch/CPU synchronization bottlenecks, enabling practical neural CPU emulation.

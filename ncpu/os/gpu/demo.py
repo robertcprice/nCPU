@@ -42,7 +42,7 @@ from ncpu.os.gpu.runner import (
     ProcessManager, run_multiprocess, HEAP_BASE,
 )
 from ncpu.os.gpu.filesystem import GPUFilesystem
-from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

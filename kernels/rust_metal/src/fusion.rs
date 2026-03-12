@@ -10,15 +10,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Fusion-optimized Metal shader
 const FUSION_SHADER_SOURCE: &str = r#"
@@ -534,7 +533,10 @@ impl FusionMetalCPU {
             *ptr = memory_size as u32;
         }
 
-        println!("[FusionMetalCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
+        println!(
+            "[FusionMetalCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
         println!("[FusionMetalCPU] Cycles per batch: {}", cycles_per_batch);
         println!("[FusionMetalCPU] Fusion-optimized execution enabled");
 
@@ -569,7 +571,11 @@ impl FusionMetalCPU {
             std::ptr::copy_nonoverlapping(program.as_ptr(), ptr.add(address), program.len());
         }
 
-        println!("[FusionMetalCPU] Loaded {} bytes at 0x{:X}", program.len(), address);
+        println!(
+            "[FusionMetalCPU] Loaded {} bytes at 0x{:X}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
@@ -591,7 +597,9 @@ impl FusionMetalCPU {
 
     /// Set register value
     pub fn set_register(&self, index: usize, value: i64) {
-        if index >= 32 { return; }
+        if index >= 32 {
+            return;
+        }
         unsafe {
             let ptr = self.registers_buffer.contents().as_ptr() as *mut i64;
             *ptr.add(index) = value;
@@ -600,7 +608,9 @@ impl FusionMetalCPU {
 
     /// Get register value
     pub fn get_register(&self, index: usize) -> i64 {
-        if index >= 32 { return 0; }
+        if index >= 32 {
+            return 0;
+        }
         unsafe {
             let ptr = self.registers_buffer.contents().as_ptr() as *const i64;
             *ptr.add(index)
@@ -631,10 +641,13 @@ impl FusionMetalCPU {
             }
 
             // Create command buffer
-            let cmd_buffer = self.command_queue.commandBuffer()
+            let cmd_buffer = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
 
-            let encoder = cmd_buffer.computeCommandEncoder()
+            let encoder = cmd_buffer
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -652,8 +665,16 @@ impl FusionMetalCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.loop_accel_buffer), 0, 10);
 
                 encoder.dispatchThreads_threadsPerThreadgroup(
-                    MTLSize { width: 1, height: 1, depth: 1 },
-                    MTLSize { width: 1, height: 1, depth: 1 },
+                    MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
+                    MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
                 );
             }
             encoder.endEncoding();
@@ -677,8 +698,16 @@ impl FusionMetalCPU {
         let loop_accel = unsafe { *(self.loop_accel_buffer.contents().as_ptr() as *const u32) };
         let signal = unsafe { *(self.signal_buffer.contents().as_ptr() as *const u32) };
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
-        let fusion_rate = if total_cycles > 0 { fused_count as f64 / total_cycles as f64 * 100.0 } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
+        let fusion_rate = if total_cycles > 0 {
+            fused_count as f64 / total_cycles as f64 * 100.0
+        } else {
+            0.0
+        };
 
         Ok(FusionResult {
             total_cycles,
@@ -695,7 +724,11 @@ impl FusionMetalCPU {
     /// Reset CPU state
     pub fn reset(&self) {
         unsafe {
-            std::ptr::write_bytes(self.registers_buffer.contents().as_ptr() as *mut u8, 0, 32 * 8);
+            std::ptr::write_bytes(
+                self.registers_buffer.contents().as_ptr() as *mut u8,
+                0,
+                32 * 8,
+            );
             std::ptr::write_bytes(self.pc_buffer.contents().as_ptr() as *mut u8, 0, 8);
             std::ptr::write_bytes(self.flags_buffer.contents().as_ptr() as *mut u8, 0, 16);
         }

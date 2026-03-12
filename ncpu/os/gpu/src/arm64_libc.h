@@ -583,9 +583,9 @@ static inline ssize_t recv(int fd, void *buf, size_t len) {
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 static inline int fork(void) {
-    register long x0 __asm__("x0");
+    register long x0 __asm__("x0") = 0;
     register long x8 __asm__("x8") = SYS_FORK;
-    __asm__ volatile("svc #0" : "=r"(x0) : "r"(x8) : "memory");
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory", "cc");
     return (int)x0;
 }
 
@@ -627,16 +627,16 @@ static inline int dup2(int oldfd, int newfd) {
 }
 
 static inline int getpid(void) {
-    register long x0 __asm__("x0");
+    register long x0 __asm__("x0") = 0;
     register long x8 __asm__("x8") = SYS_GETPID;
-    __asm__ volatile("svc #0" : "=r"(x0) : "r"(x8) : "memory");
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory", "cc");
     return (int)x0;
 }
 
 static inline int getppid(void) {
-    register long x0 __asm__("x0");
+    register long x0 __asm__("x0") = 0;
     register long x8 __asm__("x8") = SYS_GETPPID;
-    __asm__ volatile("svc #0" : "=r"(x0) : "r"(x8) : "memory");
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory", "cc");
     return (int)x0;
 }
 

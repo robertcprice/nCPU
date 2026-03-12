@@ -678,7 +678,7 @@ class MemoryOracle:
         # Look for trained model in same directory as this file
         model_path = Path(__file__).parent / "memory_oracle_lstm.pt"
         if not model_path.exists():
-            # Also check kvrm-cpu directory
+            # Also check the legacy pre-rename project directory
             model_path = Path(__file__).parent.parent / "memory_oracle_lstm.pt"
 
         if model_path.exists():

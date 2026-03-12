@@ -25,7 +25,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ncpu.os.gpu.elf_loader import load_and_run_elf, load_elf_into_memory, parse_elf, make_busybox_syscall_handler
+# Try Rust backend first, fall back to Python implementation
+try:
+    from ncpu.os.gpu.rust_backend import run_elf as load_and_run_elf
+except ImportError:
+    from ncpu.os.gpu.elf_loader import load_and_run_elf
+
+from ncpu.os.gpu.elf_loader import load_elf_into_memory, parse_elf, make_busybox_syscall_handler
 from ncpu.os.gpu.filesystem import GPUFilesystem
 
 BUSYBOX = str(Path(__file__).parent / "busybox.elf")
@@ -231,7 +237,7 @@ def track_unknown_instructions(argv):
     Statically analyzes the .text segment to find ARM64 opcodes
     not handled by the Metal kernel's decode table.
     """
-    from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+    from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
     from ncpu.os.gpu.runner import run
 
     fs = create_filesystem()

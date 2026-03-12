@@ -1,138 +1,67 @@
 """
-MLX Metal Kernel for ARM64 CPU Emulation.
+MLX / GPU backend package.
 
-This package provides a custom Metal GPU kernel for high-performance ARM64
-CPU emulation on Apple Silicon. It eliminates the GPU-CPU synchronization
-bottleneck that limits PyTorch-based execution.
+This package intentionally avoids importing MLX-backed modules at import time.
+Some environments have ``mlx`` installed but unusable, and importing
+``mlx.core`` can abort the interpreter instead of raising ImportError.
 
-QUICK START:
-============
-
-    from mlx_kernel import MLXKernelCPU, StopReason
-
-    # Create CPU
-    cpu = MLXKernelCPU(memory_size=4*1024*1024)
-
-    # Load program
-    program = [0xD2800000, 0x91000400, 0xD4400000]  # MOVZ, ADD, HLT
-    cpu.load_program(program, address=0)
-    cpu.set_pc(0)
-
-    # Execute
-    result = cpu.execute(max_cycles=100000)
-    print(f"Executed {result.cycles} instructions at {result.ips:,.0f} IPS")
-
-PERFORMANCE TARGET:
-===================
-
-10M-100M+ IPS on Apple Silicon (vs ~120K IPS with PyTorch batched execution)
-
-PACKAGE CONTENTS:
-=================
-
-- MLXKernelCPU: Main CPU emulator class
-- StopReason: Enum for execution stop reasons
-- ExecutionResult: Dataclass for execution results
-- create_cpu(): Convenience function to create CPU instance
-- KERNEL_HEADER, KERNEL_SOURCE: Raw Metal shader source code
-- NCPUComputeKernel: nCPU ISA compute kernel (qemu-style GPU execution)
-- ComputeResult: Dataclass for compute kernel results
-
-Author: KVRM Project
-Date: 2024
+Use attribute access (or direct submodule imports) to load the actual backend
+objects lazily.
 """
 
-from .cpu_kernel import (
-    MLXKernelCPU,
-    StopReason,
-    ExecutionResult,
-    create_cpu,
-)
+from __future__ import annotations
 
-from .cpu_kernel_source import (
-    KERNEL_HEADER,
-    KERNEL_SOURCE,
-    STOP_RUNNING,
-    STOP_HALT,
-    STOP_SYSCALL,
-    STOP_MAX_CYCLES,
-    get_kernel_source,
-    get_full_kernel_source,
-)
+import importlib
 
-from .cpu_kernel_v2 import (
-    MLXKernelCPUv2,
-    StopReasonV2,
-    ExecutionResultV2,
-    create_cpu_v2,
-)
 
-from .ncpu_kernel import (
-    NCPUComputeKernel,
-    ComputeResult,
-)
+_EXPORTS = {
+    "MLXKernelCPU": ("kernels.mlx.cpu_kernel", "MLXKernelCPU"),
+    "StopReason": ("kernels.mlx.cpu_kernel", "StopReason"),
+    "ExecutionResult": ("kernels.mlx.cpu_kernel", "ExecutionResult"),
+    "create_cpu": ("kernels.mlx.cpu_kernel", "create_cpu"),
+    "KERNEL_HEADER": ("kernels.mlx.cpu_kernel_source", "KERNEL_HEADER"),
+    "KERNEL_SOURCE": ("kernels.mlx.cpu_kernel_source", "KERNEL_SOURCE"),
+    "STOP_RUNNING": ("kernels.mlx.cpu_kernel_source", "STOP_RUNNING"),
+    "STOP_HALT": ("kernels.mlx.cpu_kernel_source", "STOP_HALT"),
+    "STOP_SYSCALL": ("kernels.mlx.cpu_kernel_source", "STOP_SYSCALL"),
+    "STOP_MAX_CYCLES": ("kernels.mlx.cpu_kernel_source", "STOP_MAX_CYCLES"),
+    "get_kernel_source": ("kernels.mlx.cpu_kernel_source", "get_kernel_source"),
+    "get_full_kernel_source": ("kernels.mlx.cpu_kernel_source", "get_full_kernel_source"),
+    "MLXKernelCPUv2": ("kernels.mlx.cpu_kernel_v2", "MLXKernelCPUv2"),
+    "StopReasonV2": ("kernels.mlx.cpu_kernel_v2", "StopReasonV2"),
+    "ExecutionResultV2": ("kernels.mlx.cpu_kernel_v2", "ExecutionResultV2"),
+    "create_cpu_v2": ("kernels.mlx.cpu_kernel_v2", "create_cpu_v2"),
+    "NCPUComputeKernel": ("kernels.mlx.ncpu_kernel", "NCPUComputeKernel"),
+    "ComputeResult": ("kernels.mlx.ncpu_kernel", "ComputeResult"),
+    "NCPU_KERNEL_HEADER": ("kernels.mlx.ncpu_kernel_source", "NCPU_KERNEL_HEADER"),
+    "NCPU_KERNEL_SOURCE": ("kernels.mlx.ncpu_kernel_source", "NCPU_KERNEL_SOURCE"),
+    "NCPU_STOP_RUNNING": ("kernels.mlx.ncpu_kernel_source", "NCPU_STOP_RUNNING"),
+    "NCPU_STOP_HALT": ("kernels.mlx.ncpu_kernel_source", "NCPU_STOP_HALT"),
+    "NCPU_STOP_MAX_CYCLES": ("kernels.mlx.ncpu_kernel_source", "NCPU_STOP_MAX_CYCLES"),
+    "MuxleqVM": ("kernels.mlx.muxleq_kernel", "MuxleqVM"),
+    "MuxleqResult": ("kernels.mlx.muxleq_kernel", "MuxleqResult"),
+    "MUXLEQ_KERNEL_HEADER": ("kernels.mlx.muxleq_kernel_source", "MUXLEQ_KERNEL_HEADER"),
+    "MUXLEQ_KERNEL_SOURCE": ("kernels.mlx.muxleq_kernel_source", "MUXLEQ_KERNEL_SOURCE"),
+    "MUXLEQ_STOP_RUNNING": ("kernels.mlx.muxleq_kernel_source", "MUXLEQ_STOP_RUNNING"),
+    "MUXLEQ_STOP_HALT": ("kernels.mlx.muxleq_kernel_source", "MUXLEQ_STOP_HALT"),
+    "MUXLEQ_STOP_MAX_CYCLES": ("kernels.mlx.muxleq_kernel_source", "MUXLEQ_STOP_MAX_CYCLES"),
+    "MUXLEQ_STOP_IO_READ": ("kernels.mlx.muxleq_kernel_source", "MUXLEQ_STOP_IO_READ"),
+    "MUXLEQ_STOP_IO_WRITE": ("kernels.mlx.muxleq_kernel_source", "MUXLEQ_STOP_IO_WRITE"),
+}
 
-from .ncpu_kernel_source import (
-    NCPU_KERNEL_HEADER,
-    NCPU_KERNEL_SOURCE,
-    NCPU_STOP_RUNNING,
-    NCPU_STOP_HALT,
-    NCPU_STOP_MAX_CYCLES,
-)
+__all__ = sorted(_EXPORTS)
+__version__ = "1.1.0"
 
-from .muxleq_kernel import (
-    MuxleqVM,
-    MuxleqResult,
-)
 
-from .muxleq_kernel_source import (
-    MUXLEQ_KERNEL_HEADER,
-    MUXLEQ_KERNEL_SOURCE,
-    MUXLEQ_STOP_RUNNING,
-    MUXLEQ_STOP_HALT,
-    MUXLEQ_STOP_MAX_CYCLES,
-    MUXLEQ_STOP_IO_READ,
-    MUXLEQ_STOP_IO_WRITE,
-)
+def __getattr__(name: str):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr_name = _EXPORTS[name]
+    module = importlib.import_module(module_name)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
 
-__all__ = [
-    # ARM64 kernel classes
-    'MLXKernelCPU',
-    'StopReason',
-    'ExecutionResult',
-    'create_cpu',
-    # ARM64 kernel source
-    'KERNEL_HEADER',
-    'KERNEL_SOURCE',
-    'STOP_RUNNING',
-    'STOP_HALT',
-    'STOP_SYSCALL',
-    'STOP_MAX_CYCLES',
-    'get_kernel_source',
-    'get_full_kernel_source',
-    # ARM64 kernel V2 (125-instruction, double-buffer memory)
-    'MLXKernelCPUv2',
-    'StopReasonV2',
-    'ExecutionResultV2',
-    'create_cpu_v2',
-    # nCPU ISA compute kernel
-    'NCPUComputeKernel',
-    'ComputeResult',
-    'NCPU_KERNEL_HEADER',
-    'NCPU_KERNEL_SOURCE',
-    'NCPU_STOP_RUNNING',
-    'NCPU_STOP_HALT',
-    'NCPU_STOP_MAX_CYCLES',
-    # MUXLEQ VM
-    'MuxleqVM',
-    'MuxleqResult',
-    'MUXLEQ_KERNEL_HEADER',
-    'MUXLEQ_KERNEL_SOURCE',
-    'MUXLEQ_STOP_RUNNING',
-    'MUXLEQ_STOP_HALT',
-    'MUXLEQ_STOP_MAX_CYCLES',
-    'MUXLEQ_STOP_IO_READ',
-    'MUXLEQ_STOP_IO_WRITE',
-]
 
-__version__ = '1.1.0'
+def __dir__() -> list[str]:
+    return sorted(list(globals().keys()) + list(__all__))

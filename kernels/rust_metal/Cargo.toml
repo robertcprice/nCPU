@@ -1,11 +1,11 @@
 [package]
-name = "kvrm_metal"
+name = "ncpu_metal"
 version = "0.1.0"
 edition = "2021"
 description = "High-performance Metal GPU kernel for ARM64 CPU emulation"
 
 [lib]
-name = "kvrm_metal"
+name = "ncpu_metal"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
@@ -16,6 +16,11 @@ path = "bin/doom_benchmark.rs"
 [[bin]]
 name = "doom_native"
 path = "bin/doom_native.rs"
+
+# Standalone GPU launcher
+[[bin]]
+name = "ncpu_run"
+path = "bin/ncpu_run.rs"
 
 [dependencies]
 # Metal API bindings

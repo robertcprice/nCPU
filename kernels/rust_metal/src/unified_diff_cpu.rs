@@ -14,15 +14,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Unified Differentiable CPU Shader
 ///
@@ -957,9 +956,14 @@ pub struct UnifiedDiffResult {
 #[pymethods]
 impl UnifiedDiffResult {
     fn __repr__(&self) -> String {
-        format!("UnifiedDiffResult(cycles={}, jit={}, ooo={}, spec={}, ips={:.0})",
-                self.total_cycles, self.jit_executions, self.ooo_executions,
-                self.speculative_branches, self.ips)
+        format!(
+            "UnifiedDiffResult(cycles={}, jit={}, ooo={}, spec={}, ips={:.0})",
+            self.total_cycles,
+            self.jit_executions,
+            self.ooo_executions,
+            self.speculative_branches,
+            self.ips
+        )
     }
 }
 
@@ -1000,33 +1004,45 @@ impl UnifiedDiffCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let func_name = NSString::from_str("unified_diff_cpu_execute");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| MetalError::ShaderCompilationFailed("Function not found".to_string()))?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| MetalError::PipelineCreationFailed(format!("{:?}", e)))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options(32 * 4, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let config_buf = device.newBufferWithLength_options(12, opts)
+        let config_buf = device
+            .newBufferWithLength_options(12, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stats_buf = device.newBufferWithLength_options(20, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(20, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let weights_buf = device.newBufferWithLength_options(TOTAL_WEIGHTS * 4, opts)
+        let weights_buf = device
+            .newBufferWithLength_options(TOTAL_WEIGHTS * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let gradients_buf = device.newBufferWithLength_options(GRADIENT_SIZE * 4, opts)
+        let gradients_buf = device
+            .newBufferWithLength_options(GRADIENT_SIZE * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let temperature_buf = device.newBufferWithLength_options(4, opts)
+        let temperature_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         unsafe {
@@ -1042,21 +1058,31 @@ impl UnifiedDiffCPU {
             let w = weights_buf.contents().as_ptr() as *mut f32;
 
             // OoO weights [0-19]
-            *w.add(0) = 5.0;   // RAW
-            *w.add(1) = 3.0;   // WAW
-            *w.add(2) = 5.0;   // FLAG
-            *w.add(3) = -2.0;  // BIAS
-            for i in 4..20 { *w.add(i) = 0.1; }
+            *w.add(0) = 5.0; // RAW
+            *w.add(1) = 3.0; // WAW
+            *w.add(2) = 5.0; // FLAG
+            *w.add(3) = -2.0; // BIAS
+            for i in 4..20 {
+                *w.add(i) = 0.1;
+            }
 
             // Template embeddings [20-51]
             // Counting: first 2 dims high
-            for i in 0..8 { *w.add(20 + 0 * 8 + i) = if i < 2 { 1.0 } else { 0.0 }; }
+            for i in 0..8 {
+                *w.add(20 + 0 * 8 + i) = if i < 2 { 1.0 } else { 0.0 };
+            }
             // Memcpy: middle dims high
-            for i in 0..8 { *w.add(20 + 1 * 8 + i) = if i >= 2 && i < 4 { 1.0 } else { 0.0 }; }
+            for i in 0..8 {
+                *w.add(20 + 1 * 8 + i) = if i >= 2 && i < 4 { 1.0 } else { 0.0 };
+            }
             // Sum: later dims high
-            for i in 0..8 { *w.add(20 + 2 * 8 + i) = if i >= 4 && i < 6 { 1.0 } else { 0.0 }; }
+            for i in 0..8 {
+                *w.add(20 + 2 * 8 + i) = if i >= 4 && i < 6 { 1.0 } else { 0.0 };
+            }
             // Interpret: uniform
-            for i in 0..8 { *w.add(20 + 3 * 8 + i) = 0.25; }
+            for i in 0..8 {
+                *w.add(20 + 3 * 8 + i) = 0.25;
+            }
 
             // Encoder weights [52+]: random init
             for i in 0..1024 {
@@ -1064,12 +1090,22 @@ impl UnifiedDiffCPU {
                 *w.add(52 + i) = val * 0.1;
             }
 
-            std::ptr::write_bytes(gradients_buf.contents().as_ptr() as *mut u8, 0, GRADIENT_SIZE * 4);
+            std::ptr::write_bytes(
+                gradients_buf.contents().as_ptr() as *mut u8,
+                0,
+                GRADIENT_SIZE * 4,
+            );
             std::ptr::write_bytes(registers_buf.contents().as_ptr() as *mut u8, 0, 32 * 4);
         }
 
-        println!("[UnifiedDiffCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
-        println!("[UnifiedDiffCPU] Total learnable parameters: {}", TOTAL_WEIGHTS);
+        println!(
+            "[UnifiedDiffCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
+        println!(
+            "[UnifiedDiffCPU] Total learnable parameters: {}",
+            TOTAL_WEIGHTS
+        );
         println!("[UnifiedDiffCPU] Architecture: Diff JIT → Diff OoO → Speculative → Soft Commit");
         println!("[UnifiedDiffCPU] Features:");
         println!("  - Learned JIT pattern encoder (1024 params)");
@@ -1104,14 +1140,24 @@ impl UnifiedDiffCPU {
         }
         unsafe {
             let mem = self.memory_buf.contents().as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(program.as_ptr(), mem.add(address as usize), program.len());
+            std::ptr::copy_nonoverlapping(
+                program.as_ptr(),
+                mem.add(address as usize),
+                program.len(),
+            );
         }
-        println!("[UnifiedDiffCPU] Loaded {} bytes at 0x{:x}", program.len(), address);
+        println!(
+            "[UnifiedDiffCPU] Loaded {} bytes at 0x{:x}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
     fn set_pc(&self, pc: u64) {
-        unsafe { *(self.pc_buf.contents().as_ptr() as *mut u64) = pc; }
+        unsafe {
+            *(self.pc_buf.contents().as_ptr() as *mut u64) = pc;
+        }
     }
 
     fn get_pc(&self) -> u64 {
@@ -1119,18 +1165,26 @@ impl UnifiedDiffCPU {
     }
 
     fn set_register(&self, reg: usize, value: f32) -> PyResult<()> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
-        unsafe { *(self.registers_buf.contents().as_ptr() as *mut f32).add(reg) = value; }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
+        unsafe {
+            *(self.registers_buf.contents().as_ptr() as *mut f32).add(reg) = value;
+        }
         Ok(())
     }
 
     fn get_register(&self, reg: usize) -> PyResult<f32> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe { Ok(*(self.registers_buf.contents().as_ptr() as *const f32).add(reg)) }
     }
 
     fn set_temperature(&self, temp: f32) {
-        unsafe { *(self.temperature_buf.contents().as_ptr() as *mut f32) = temp; }
+        unsafe {
+            *(self.temperature_buf.contents().as_ptr() as *mut f32) = temp;
+        }
     }
 
     fn get_temperature(&self) -> f32 {
@@ -1147,7 +1201,9 @@ impl UnifiedDiffCPU {
     fn set_weights(&self, weights: Vec<f32>) -> PyResult<()> {
         if weights.len() != TOTAL_WEIGHTS {
             return Err(PyRuntimeError::new_err(format!(
-                "Expected {} weights, got {}", TOTAL_WEIGHTS, weights.len()
+                "Expected {} weights, got {}",
+                TOTAL_WEIGHTS,
+                weights.len()
             )));
         }
         unsafe {
@@ -1166,7 +1222,11 @@ impl UnifiedDiffCPU {
 
     fn zero_gradients(&self) {
         unsafe {
-            std::ptr::write_bytes(self.gradients_buf.contents().as_ptr() as *mut u8, 0, GRADIENT_SIZE * 4);
+            std::ptr::write_bytes(
+                self.gradients_buf.contents().as_ptr() as *mut u8,
+                0,
+                GRADIENT_SIZE * 4,
+            );
         }
     }
 
@@ -1187,7 +1247,8 @@ impl UnifiedDiffCPU {
         let start = Instant::now();
 
         // DEBUG: Print initial register value
-        let initial_x30 = unsafe { *(self.registers_buf.contents().as_ptr() as *const f32).add(30) };
+        let initial_x30 =
+            unsafe { *(self.registers_buf.contents().as_ptr() as *const f32).add(30) };
         println!("[DEBUG] Before kernel: X30={}", initial_x30);
 
         unsafe {
@@ -1197,12 +1258,17 @@ impl UnifiedDiffCPU {
 
         let mut batch = 0u32;
         while batch < max_batches {
-            if start.elapsed().as_secs_f64() > timeout_seconds { break; }
+            if start.elapsed().as_secs_f64() > timeout_seconds {
+                break;
+            }
 
-            let cmd = self.command_queue.commandBuffer()
+            let cmd = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
 
-            let encoder = cmd.computeCommandEncoder()
+            let encoder = cmd
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -1218,8 +1284,16 @@ impl UnifiedDiffCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.gradients_buf), 0, 8);
                 encoder.setBuffer_offset_atIndex(Some(&self.temperature_buf), 0, 9);
 
-                let grid = MTLSize { width: 1, height: 1, depth: 1 };
-                let tg = MTLSize { width: 1, height: 1, depth: 1 };
+                let grid = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                let tg = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
                 encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, tg);
             }
             encoder.endEncoding();
@@ -1227,19 +1301,29 @@ impl UnifiedDiffCPU {
             cmd.waitUntilCompleted();
 
             // DEBUG: Print after kernel
-            let after_x30 = unsafe { *(self.registers_buf.contents().as_ptr() as *const f32).add(30) };
+            let after_x30 =
+                unsafe { *(self.registers_buf.contents().as_ptr() as *const f32).add(30) };
             let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
-            println!("[DEBUG] After kernel batch {}: X30={}, signal={}", batch, after_x30, signal);
+            println!(
+                "[DEBUG] After kernel batch {}: X30={}, signal={}",
+                batch, after_x30, signal
+            );
 
-            if signal == 1 { break; }
+            if signal == 1 {
+                break;
+            }
 
-            unsafe { *(self.signal_buf.contents().as_ptr() as *mut u32) = 0; }
+            unsafe {
+                *(self.signal_buf.contents().as_ptr() as *mut u32) = 0;
+            }
             batch += 1;
         }
 
         let elapsed = start.elapsed().as_secs_f64();
 
-        let stats = unsafe { std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 5) };
+        let stats = unsafe {
+            std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 5)
+        };
         let total_cycles = stats[0];
         let jit_execs = stats[1];
         let ooo_execs = stats[2];
@@ -1247,7 +1331,11 @@ impl UnifiedDiffCPU {
         let soft_commits = stats[4];
         let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
 
         Ok(UnifiedDiffResult {
             total_cycles,
@@ -1284,7 +1372,10 @@ impl UnifiedDiffCPU {
                     println!("[UnifiedDiffCPU] Performance mode: ULTRA FAST (temp=0.001)");
                 }
                 _ => {
-                    eprintln!("[UnifiedDiffCPU] Invalid performance mode: {}, using default", mode);
+                    eprintln!(
+                        "[UnifiedDiffCPU] Invalid performance mode: {}, using default",
+                        mode
+                    );
                     *(self.temperature_buf.contents().as_ptr() as *mut f32) = 1.0;
                 }
             }

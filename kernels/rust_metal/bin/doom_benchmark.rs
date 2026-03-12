@@ -6,9 +6,9 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::*;
-use std::time::Instant;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 /// Metal shader with DOOM-optimized dispatch
 const DOOM_OPTIMIZED_SHADER: &str = r#"
@@ -206,40 +206,50 @@ struct DoomCPU {
 
 impl DoomCPU {
     fn new(memory_size: usize) -> Result<Self, String> {
-        let device = MTLCreateSystemDefaultDevice()
-            .ok_or("Failed to get Metal device")?;
+        let device = MTLCreateSystemDefaultDevice().ok_or("Failed to get Metal device")?;
 
         println!("[DoomCPU] Using device: {:?}", device.name());
 
-        let command_queue = device.newCommandQueue()
+        let command_queue = device
+            .newCommandQueue()
             .ok_or("Failed to create command queue")?;
 
         let source = NSString::from_str(DOOM_OPTIMIZED_SHADER);
-        let library = device.newLibraryWithSource_options_error(&source, None)
+        let library = device
+            .newLibraryWithSource_options_error(&source, None)
             .map_err(|e| format!("Shader compilation failed: {:?}", e))?;
 
         let func_name = NSString::from_str("doom_cpu_execute");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or("Function not found")?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| format!("Pipeline creation failed: {:?}", e))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or("Failed to create memory buffer")?;
-        let registers_buf = device.newBufferWithLength_options(32 * 8, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 8, opts)
             .ok_or("Failed to create registers buffer")?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or("Failed to create PC buffer")?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or("Failed to create flags buffer")?;
-        let config_buf = device.newBufferWithLength_options(16, opts)
+        let config_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or("Failed to create config buffer")?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or("Failed to create signal buffer")?;
-        let stats_buf = device.newBufferWithLength_options(32, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(32, opts)
             .ok_or("Failed to create stats buffer")?;
 
         unsafe {
@@ -251,7 +261,10 @@ impl DoomCPU {
             *sig = 0;
         }
 
-        println!("[DoomCPU] Initialized with {} MB memory", memory_size / (1024 * 1024));
+        println!(
+            "[DoomCPU] Initialized with {} MB memory",
+            memory_size / (1024 * 1024)
+        );
 
         Ok(Self {
             device,
@@ -304,10 +317,13 @@ impl DoomCPU {
             *sig = 0;
         }
 
-        let command_buffer = self.command_queue.commandBuffer()
+        let command_buffer = self
+            .command_queue
+            .commandBuffer()
             .expect("Failed to create command buffer");
 
-        let encoder = command_buffer.computeCommandEncoder()
+        let encoder = command_buffer
+            .computeCommandEncoder()
             .expect("Failed to create encoder");
 
         encoder.setComputePipelineState(&self.pipeline);
@@ -322,8 +338,16 @@ impl DoomCPU {
             encoder.setBuffer_offset_atIndex(Some(&self.stats_buf), 0, 6);
 
             encoder.dispatchThreads_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
 
@@ -346,8 +370,7 @@ impl DoomCPU {
 
 /// Load ELF file into CPU memory
 fn load_elf(cpu: &DoomCPU, elf_path: &Path) -> Result<(), String> {
-    let data = fs::read(elf_path)
-        .map_err(|e| format!("Failed to read ELF: {}", e))?;
+    let data = fs::read(elf_path).map_err(|e| format!("Failed to read ELF: {}", e))?;
 
     // Parse ELF header (little-endian)
     let e_phoff = u64::from_le_bytes(data[32..40].try_into().unwrap());
@@ -356,14 +379,14 @@ fn load_elf(cpu: &DoomCPU, elf_path: &Path) -> Result<(), String> {
 
     for i in 0..e_phnum {
         let off = e_phoff as usize + i as usize * e_phentsize as usize;
-        let p_type = u32::from_le_bytes(data[off..off+4].try_into().unwrap());
+        let p_type = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
 
         if p_type == 1 {
             // PT_LOAD
-            let p_offset = u64::from_le_bytes(data[off+8..off+16].try_into().unwrap());
-            let p_paddr = u64::from_le_bytes(data[off+24..off+32].try_into().unwrap());
-            let p_filesz = u64::from_le_bytes(data[off+32..off+40].try_into().unwrap());
-            let p_memsz = u64::from_le_bytes(data[off+40..off+48].try_into().unwrap());
+            let p_offset = u64::from_le_bytes(data[off + 8..off + 16].try_into().unwrap());
+            let p_paddr = u64::from_le_bytes(data[off + 24..off + 32].try_into().unwrap());
+            let p_filesz = u64::from_le_bytes(data[off + 32..off + 40].try_into().unwrap());
+            let p_memsz = u64::from_le_bytes(data[off + 40..off + 48].try_into().unwrap());
 
             let segment_data = &data[p_offset as usize..(p_offset + p_filesz) as usize];
             for (j, &byte) in segment_data.iter().enumerate() {
@@ -453,11 +476,11 @@ fn main() {
     println!("════════════════════════════════════════════════════════");
     println!("RESULTS");
     println!("════════════════════════════════════════════════════════");
-    println!("Total cycles:  {:,}", total_cycles);
+    println!("Total cycles:  {}", total_cycles);
     println!("Elapsed time:  {:.2}s", elapsed.as_secs_f64());
-    println!("IPS:          {:,.0}", ips);
+    println!("IPS:          {:.0}", ips);
     println!("Target IPS:   5,000,000");
-    println!("Gap:          {:,.0}", 5_000_000.0 - ips);
+    println!("Gap:          {:.0}", 5_000_000.0 - ips);
 
     let pct = (ips / 5_000_000.0) * 100.0;
     println!("Progress:     {:.1}% of target", pct);

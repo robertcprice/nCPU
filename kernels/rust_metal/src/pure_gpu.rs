@@ -1,6 +1,6 @@
 //! Pure GPU Execution - ENTIRE program runs on GPU with neural acceleration
 //!
-//! This is the REAL KVRM vision:
+//! This is the full nCPU vision:
 //! - ONE GPU kernel call runs the ENTIRE program
 //! - Python only for setup (load weights, load program, trigger)
 //! - ALL neural models run on GPU (dispatch, loop, memory, pattern)
@@ -10,15 +10,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState,
-    MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device, ExecutionResult};
+use crate::{get_default_device, ExecutionResult, MetalError};
 
 use pyo3::types::PyModule;
 
@@ -727,10 +726,10 @@ pub struct PureGPUCPU {
     params_buf: Retained<ProtocolObject<dyn MTLBuffer>>,
 
     // Neural model buffers (all on GPU)
-    dispatch_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,  // 10,279
-    loop_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,      // 1.08M
-    memory_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,    // 271K
-    pattern_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,   // 508K
+    dispatch_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>, // 10,279
+    loop_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,     // 1.08M
+    memory_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,   // 271K
+    pattern_weights_buf: Retained<ProtocolObject<dyn MTLBuffer>>,  // 508K
 }
 
 impl PureGPUCPU {
@@ -747,9 +746,9 @@ impl PureGPUCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let fn_name = NSString::from_str("pure_gpu_execute");
-        let fn_handle = library
-            .newFunctionWithName(&fn_name)
-            .ok_or_else(|| MetalError::ShaderCompilationFailed("pure_gpu_execute not found".to_string()))?;
+        let fn_handle = library.newFunctionWithName(&fn_name).ok_or_else(|| {
+            MetalError::ShaderCompilationFailed("pure_gpu_execute not found".to_string())
+        })?;
 
         let pipeline = device
             .newComputePipelineStateWithFunction_error(&fn_handle)
@@ -766,22 +765,29 @@ impl PureGPUCPU {
         let shared_options = MTLResourceOptions::StorageModeShared;
 
         // Execution buffers
-        let memory_buf = device.newBufferWithLength_options(memory_size as usize, shared_options)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options((num_lanes * 32 * 8) as usize, shared_options)
+        let registers_buf = device
+            .newBufferWithLength_options((num_lanes * 32 * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
+        let pc_buf = device
+            .newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let cycles_out_buf = device.newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
+        let cycles_out_buf = device
+            .newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let final_pc_out_buf = device.newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
+        let final_pc_out_buf = device
+            .newBufferWithLength_options((num_lanes * 8) as usize, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let params_buf = device.newBufferWithLength_options(8, shared_options)
+        let params_buf = device
+            .newBufferWithLength_options(8, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         // Neural model buffers
         let dispatch_weights = vec![0.0f32; 10279];
-        let dispatch_weights_buf = device.newBufferWithLength_options(10279 * 4, shared_options)
+        let dispatch_weights_buf = device
+            .newBufferWithLength_options(10279 * 4, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
         unsafe {
             let ptr = dispatch_weights_buf.contents().as_ptr() as *mut f32;
@@ -790,11 +796,14 @@ impl PureGPUCPU {
             }
         }
 
-        let loop_weights_buf = device.newBufferWithLength_options(1_080_000 * 4, shared_options)
+        let loop_weights_buf = device
+            .newBufferWithLength_options(1_080_000 * 4, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let memory_weights_buf = device.newBufferWithLength_options(271_000 * 4, shared_options)
+        let memory_weights_buf = device
+            .newBufferWithLength_options(271_000 * 4, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pattern_weights_buf = device.newBufferWithLength_options(508_000 * 4, shared_options)
+        let pattern_weights_buf = device
+            .newBufferWithLength_options(508_000 * 4, shared_options)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         println!("✅ PureGPUCPU initialized:");
@@ -874,10 +883,8 @@ impl PureGPUCPU {
         };
 
         unsafe {
-            encoder.dispatchThreads_threadsPerThreadgroup(
-                threads_per_grid,
-                threads_per_threadgroup,
-            );
+            encoder
+                .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
         }
 
         encoder.endEncoding();
@@ -961,7 +968,10 @@ impl PureGPUCPU {
                 *ptr.add(i) = w;
             }
         }
-        println!("[PureGPUCPU] ✅ Loaded {} pattern recognizer weights", copy_size);
+        println!(
+            "[PureGPUCPU] ✅ Loaded {} pattern recognizer weights",
+            copy_size
+        );
         Ok(())
     }
 
@@ -1042,52 +1052,62 @@ impl PyPureGPUCPU {
     }
 
     fn execute(&self, max_cycles: u64) -> PyResult<ExecutionResult> {
-        self.inner.execute(max_cycles)
+        self.inner
+            .execute(max_cycles)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn write_memory(&mut self, address: u64, data: Vec<u8>) -> PyResult<()> {
-        self.inner.write_memory(address, &data)
+        self.inner
+            .write_memory(address, &data)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn set_register(&mut self, lane_id: u32, reg_id: u32, value: i64) -> PyResult<()> {
-        self.inner.set_register(lane_id, reg_id, value)
+        self.inner
+            .set_register(lane_id, reg_id, value)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn set_pc(&mut self, lane_id: u32, pc: u64) -> PyResult<()> {
-        self.inner.set_pc(lane_id, pc)
+        self.inner
+            .set_pc(lane_id, pc)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn get_register(&self, lane_id: u32, reg_id: u32) -> PyResult<i64> {
-        self.inner.get_register(lane_id, reg_id)
+        self.inner
+            .get_register(lane_id, reg_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn get_pc(&self, lane_id: u32) -> PyResult<u64> {
-        self.inner.get_pc(lane_id)
+        self.inner
+            .get_pc(lane_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn load_dispatch_weights(&mut self, weights: Vec<f32>) -> PyResult<()> {
-        self.inner.load_dispatch_weights(&weights)
+        self.inner
+            .load_dispatch_weights(&weights)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn load_loop_weights(&mut self, weights: Vec<f32>) -> PyResult<()> {
-        self.inner.load_loop_weights(&weights)
+        self.inner
+            .load_loop_weights(&weights)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn load_memory_weights(&mut self, weights: Vec<f32>) -> PyResult<()> {
-        self.inner.load_memory_weights(&weights)
+        self.inner
+            .load_memory_weights(&weights)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn load_pattern_weights(&mut self, weights: Vec<f32>) -> PyResult<()> {
-        self.inner.load_pattern_weights(&weights)
+        self.inner
+            .load_pattern_weights(&weights)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 }

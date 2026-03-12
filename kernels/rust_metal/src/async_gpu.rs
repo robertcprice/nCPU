@@ -8,16 +8,16 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions,
+    MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Same optimized shader but designed for async operation
 const ASYNC_SHADER_SOURCE: &str = r#"
@@ -378,21 +378,29 @@ impl AsyncMetalCPU {
 
         let shared = MTLResourceOptions::StorageModeShared;
 
-        let memory_buffer = device.newBufferWithLength_options(memory_size, shared)
+        let memory_buffer = device
+            .newBufferWithLength_options(memory_size, shared)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buffer = device.newBufferWithLength_options(32 * 8, shared)
+        let registers_buffer = device
+            .newBufferWithLength_options(32 * 8, shared)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buffer = device.newBufferWithLength_options(8, shared)
+        let pc_buffer = device
+            .newBufferWithLength_options(8, shared)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buffer = device.newBufferWithLength_options(16, shared)
+        let flags_buffer = device
+            .newBufferWithLength_options(16, shared)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let max_cycles_buffer = device.newBufferWithLength_options(4, shared)
+        let max_cycles_buffer = device
+            .newBufferWithLength_options(4, shared)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let mem_size_buffer = device.newBufferWithLength_options(4, shared)
+        let mem_size_buffer = device
+            .newBufferWithLength_options(4, shared)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buffer = device.newBufferWithLength_options(4, shared)
+        let signal_buffer = device
+            .newBufferWithLength_options(4, shared)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let cycles_buffer = device.newBufferWithLength_options(4, shared)
+        let cycles_buffer = device
+            .newBufferWithLength_options(4, shared)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         unsafe {
@@ -431,7 +439,9 @@ impl AsyncMetalCPU {
     }
 
     fn set_pc(&self, pc: u64) {
-        unsafe { *(self.pc_buffer.contents().as_ptr() as *mut u64) = pc; }
+        unsafe {
+            *(self.pc_buffer.contents().as_ptr() as *mut u64) = pc;
+        }
     }
 
     fn get_pc(&self) -> u64 {
@@ -453,7 +463,9 @@ impl AsyncMetalCPU {
                 let ptr = self.registers_buffer.contents().as_ptr() as *const i64;
                 *ptr.add(reg)
             }
-        } else { 0 }
+        } else {
+            0
+        }
     }
 
     /// Start async execution - returns immediately, GPU runs in background
@@ -469,10 +481,13 @@ impl AsyncMetalCPU {
             *(self.cycles_buffer.contents().as_ptr() as *mut u32) = 0;
         }
 
-        let command_buffer = self.command_queue.commandBuffer()
+        let command_buffer = self
+            .command_queue
+            .commandBuffer()
             .ok_or(MetalError::ExecutionFailed)?;
 
-        let encoder = command_buffer.computeCommandEncoder()
+        let encoder = command_buffer
+            .computeCommandEncoder()
             .ok_or(MetalError::ExecutionFailed)?;
 
         encoder.setComputePipelineState(&self.pipeline);
@@ -487,8 +502,16 @@ impl AsyncMetalCPU {
             encoder.setBuffer_offset_atIndex(Some(&self.cycles_buffer), 0, 7);
 
             encoder.dispatchThreads_threadsPerThreadgroup(
-                MTLSize { width: 1, height: 1, depth: 1 },
-                MTLSize { width: 1, height: 1, depth: 1 },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
             );
         }
         encoder.endEncoding();
@@ -504,12 +527,15 @@ impl AsyncMetalCPU {
 
     /// Poll status without blocking
     fn poll(&self) -> AsyncStatus {
-        let elapsed = self.start_time.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        let elapsed = self
+            .start_time
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         let (is_running, cycles, signal) = if let Some(ref cb) = self.current_command_buffer {
             let status = cb.status();
             let running = status == MTLCommandBufferStatus::Scheduled
-                       || status == MTLCommandBufferStatus::Committed;
+                || status == MTLCommandBufferStatus::Committed;
 
             let cycles = unsafe { *(self.cycles_buffer.contents().as_ptr() as *const u32) };
             let signal = unsafe { *(self.signal_buffer.contents().as_ptr() as *const u32) };

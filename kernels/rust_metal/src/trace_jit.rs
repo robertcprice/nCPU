@@ -10,15 +10,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::time::Instant;
 
-use crate::{MetalError, get_default_device};
+use crate::{get_default_device, MetalError};
 
 /// Trace JIT shader with hot loop unrolling
 const TRACE_JIT_SHADER_SOURCE: &str = r#"
@@ -601,35 +600,48 @@ impl TraceJITMetalCPU {
             .map_err(|e| MetalError::ShaderCompilationFailed(format!("{:?}", e)))?;
 
         let func_name = NSString::from_str("cpu_execute_trace_jit");
-        let function = library.newFunctionWithName(&func_name)
+        let function = library
+            .newFunctionWithName(&func_name)
             .ok_or_else(|| MetalError::ShaderCompilationFailed("Function not found".to_string()))?;
 
-        let pipeline = device.newComputePipelineStateWithFunction_error(&function)
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
             .map_err(|e| MetalError::PipelineCreationFailed(format!("{:?}", e)))?;
 
         let opts = MTLResourceOptions::StorageModeShared;
 
-        let memory_buf = device.newBufferWithLength_options(memory_size, opts)
+        let memory_buf = device
+            .newBufferWithLength_options(memory_size, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let registers_buf = device.newBufferWithLength_options(32 * 8, opts)
+        let registers_buf = device
+            .newBufferWithLength_options(32 * 8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let pc_buf = device.newBufferWithLength_options(8, opts)
+        let pc_buf = device
+            .newBufferWithLength_options(8, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let flags_buf = device.newBufferWithLength_options(16, opts)
+        let flags_buf = device
+            .newBufferWithLength_options(16, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let cycles_per_batch_buf = device.newBufferWithLength_options(4, opts)
+        let cycles_per_batch_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let mem_size_buf = device.newBufferWithLength_options(4, opts)
+        let mem_size_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let signal_buf = device.newBufferWithLength_options(4, opts)
+        let signal_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let total_cycles_buf = device.newBufferWithLength_options(4, opts)
+        let total_cycles_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let batch_count_buf = device.newBufferWithLength_options(4, opts)
+        let batch_count_buf = device
+            .newBufferWithLength_options(4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let stats_buf = device.newBufferWithLength_options(5 * 4, opts)
+        let stats_buf = device
+            .newBufferWithLength_options(5 * 4, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
-        let cache_buf = device.newBufferWithLength_options(CACHE_SIZE * CACHE_ENTRY_SIZE, opts)
+        let cache_buf = device
+            .newBufferWithLength_options(CACHE_SIZE * CACHE_ENTRY_SIZE, opts)
             .ok_or(MetalError::BufferCreationFailed)?;
 
         unsafe {
@@ -637,10 +649,17 @@ impl TraceJITMetalCPU {
             *ptr = cycles_per_batch;
             let ptr = mem_size_buf.contents().as_ptr() as *mut u32;
             *ptr = memory_size as u32;
-            std::ptr::write_bytes(cache_buf.contents().as_ptr() as *mut u8, 0, CACHE_SIZE * CACHE_ENTRY_SIZE);
+            std::ptr::write_bytes(
+                cache_buf.contents().as_ptr() as *mut u8,
+                0,
+                CACHE_SIZE * CACHE_ENTRY_SIZE,
+            );
         }
 
-        println!("[TraceJITMetalCPU] Initialized with {} MB memory", memory_size / 1024 / 1024);
+        println!(
+            "[TraceJITMetalCPU] Initialized with {} MB memory",
+            memory_size / 1024 / 1024
+        );
         println!("[TraceJITMetalCPU] Features: Hot Loop Detection, Loop Unrolling (4x), Fusion");
 
         Ok(Self {
@@ -669,14 +688,24 @@ impl TraceJITMetalCPU {
         }
         unsafe {
             let mem = self.memory_buf.contents().as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(program.as_ptr(), mem.add(address as usize), program.len());
+            std::ptr::copy_nonoverlapping(
+                program.as_ptr(),
+                mem.add(address as usize),
+                program.len(),
+            );
         }
-        println!("[TraceJITMetalCPU] Loaded {} bytes at 0x{:x}", program.len(), address);
+        println!(
+            "[TraceJITMetalCPU] Loaded {} bytes at 0x{:x}",
+            program.len(),
+            address
+        );
         Ok(())
     }
 
     fn set_pc(&self, pc: u64) {
-        unsafe { *(self.pc_buf.contents().as_ptr() as *mut u64) = pc; }
+        unsafe {
+            *(self.pc_buf.contents().as_ptr() as *mut u64) = pc;
+        }
     }
 
     fn get_pc(&self) -> u64 {
@@ -684,13 +713,19 @@ impl TraceJITMetalCPU {
     }
 
     fn set_register(&self, reg: usize, value: i64) -> PyResult<()> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
-        unsafe { *(self.registers_buf.contents().as_ptr() as *mut i64).add(reg) = value; }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
+        unsafe {
+            *(self.registers_buf.contents().as_ptr() as *mut i64).add(reg) = value;
+        }
         Ok(())
     }
 
     fn get_register(&self, reg: usize) -> PyResult<i64> {
-        if reg >= 32 { return Err(PyRuntimeError::new_err("Invalid register")); }
+        if reg >= 32 {
+            return Err(PyRuntimeError::new_err("Invalid register"));
+        }
         unsafe { Ok(*(self.registers_buf.contents().as_ptr() as *const i64).add(reg)) }
     }
 
@@ -698,14 +733,22 @@ impl TraceJITMetalCPU {
         unsafe {
             std::ptr::write_bytes(self.registers_buf.contents().as_ptr() as *mut u8, 0, 32 * 8);
             std::ptr::write_bytes(self.flags_buf.contents().as_ptr() as *mut u8, 0, 16);
-            std::ptr::write_bytes(self.cache_buf.contents().as_ptr() as *mut u8, 0, CACHE_SIZE * CACHE_ENTRY_SIZE);
+            std::ptr::write_bytes(
+                self.cache_buf.contents().as_ptr() as *mut u8,
+                0,
+                CACHE_SIZE * CACHE_ENTRY_SIZE,
+            );
             *(self.pc_buf.contents().as_ptr() as *mut u64) = 0;
         }
     }
 
     fn clear_cache(&self) {
         unsafe {
-            std::ptr::write_bytes(self.cache_buf.contents().as_ptr() as *mut u8, 0, CACHE_SIZE * CACHE_ENTRY_SIZE);
+            std::ptr::write_bytes(
+                self.cache_buf.contents().as_ptr() as *mut u8,
+                0,
+                CACHE_SIZE * CACHE_ENTRY_SIZE,
+            );
         }
     }
 
@@ -722,12 +765,17 @@ impl TraceJITMetalCPU {
 
         let mut batch = 0u32;
         while batch < max_batches {
-            if start.elapsed().as_secs_f64() > timeout_seconds { break; }
+            if start.elapsed().as_secs_f64() > timeout_seconds {
+                break;
+            }
 
-            let cmd = self.command_queue.commandBuffer()
+            let cmd = self
+                .command_queue
+                .commandBuffer()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create command buffer"))?;
 
-            let encoder = cmd.computeCommandEncoder()
+            let encoder = cmd
+                .computeCommandEncoder()
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to create encoder"))?;
 
             encoder.setComputePipelineState(&self.pipeline);
@@ -744,8 +792,16 @@ impl TraceJITMetalCPU {
                 encoder.setBuffer_offset_atIndex(Some(&self.stats_buf), 0, 9);
                 encoder.setBuffer_offset_atIndex(Some(&self.cache_buf), 0, 10);
 
-                let grid = MTLSize { width: 1, height: 1, depth: 1 };
-                let tg = MTLSize { width: 1, height: 1, depth: 1 };
+                let grid = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                let tg = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
                 encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, tg);
             }
             encoder.endEncoding();
@@ -753,9 +809,13 @@ impl TraceJITMetalCPU {
             cmd.waitUntilCompleted();
 
             let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
-            if signal == 1 || signal == 2 { break; }
+            if signal == 1 || signal == 2 {
+                break;
+            }
 
-            unsafe { *(self.signal_buf.contents().as_ptr() as *mut u32) = 0; }
+            unsafe {
+                *(self.signal_buf.contents().as_ptr() as *mut u32) = 0;
+            }
             batch += 1;
         }
 
@@ -764,17 +824,25 @@ impl TraceJITMetalCPU {
         let batch_count = unsafe { *(self.batch_count_buf.contents().as_ptr() as *const u32) };
         let signal = unsafe { *(self.signal_buf.contents().as_ptr() as *const u32) };
 
-        let stats = unsafe { std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 5) };
+        let stats = unsafe {
+            std::slice::from_raw_parts(self.stats_buf.contents().as_ptr() as *const u32, 5)
+        };
         let cache_hits = stats[0];
         let cache_misses = stats[1];
         let fusions = stats[2];
         let hot_executions = stats[3];
         let unrolled_iterations = stats[4];
 
-        let ips = if elapsed > 0.0 { total_cycles as f64 / elapsed } else { 0.0 };
+        let ips = if elapsed > 0.0 {
+            total_cycles as f64 / elapsed
+        } else {
+            0.0
+        };
         let cache_hit_rate = if cache_hits + cache_misses > 0 {
             cache_hits as f64 / (cache_hits + cache_misses) as f64 * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         Ok(TraceJITResult {
             total_cycles,

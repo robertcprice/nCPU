@@ -24,7 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from ncpu.os.gpu.runner import compile_c, run, make_syscall_handler
 from ncpu.os.gpu.filesystem import GPUFilesystem
-from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2
+from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
 
 
 def main():
