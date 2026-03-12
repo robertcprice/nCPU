@@ -59,6 +59,14 @@ benchmarks/evalplus_*.json.progress.jsonl
 benchmarks/*.remote_snapshot
 training/internal_controller_bootstrap/
 training/real_memory_proof_*/
+tmp_benchmark.py
+todo.md
+todo_self_optimizing.md
+docs/DIAGRAM_PROMPT.md
+docs/SOME_ARCH_FULL.png
+docs/SOME_DIAGRAMS.md
+docs/SOME_INFERENCE_DIAGRAM.png
+docs/some_diagram.svg
 
 # Archive (legacy experiments)
 archive/
