@@ -43,5 +43,22 @@ target/
 *.local
 .env
 
+# Debug scripts and recovery files
+tests/debug_*
+ncpu/os/neuros/_recovered_*
+
+# SOME generated artifacts
+benchmarks/internal_trajectories/
+benchmarks/bigcodebench_*_samples_*.jsonl
+benchmarks/bigcodebench_*_eval_results_*.json
+benchmarks/bigcodebench_*_pass_at_k_*.json
+benchmarks/bigcodebench_*_some.json
+benchmarks/bigcodebench_*_some.json.progress.jsonl
+benchmarks/evalplus_*.json
+benchmarks/evalplus_*.json.progress.jsonl
+benchmarks/*.remote_snapshot
+training/internal_controller_bootstrap/
+training/real_memory_proof_*/
+
 # Archive (legacy experiments)
 archive/
