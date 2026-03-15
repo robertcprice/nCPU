@@ -29,15 +29,26 @@ from ncpu.self_optimizing.code_verifier import (
     CODE_PROMPTS,
     FACTORIAL_TESTS,
     FIBONACCI_TESTS,
+    GRAPH_TESTS,
+    HARD_CODE_PROMPTS,
     IS_PRIME_TESTS,
+    LONGEST_SUBSTRING_TESTS,
+    MERGE_INTERVALS_TESTS,
     QUICK_SORT_TESTS,
     CodeVerifier,
+    VerificationResult,
+    verify_lru_cache,
+    verify_topological_sort,
 )
 from ncpu.self_optimizing.controller_runtime import resolve_controller_runtime
 from ncpu.self_optimizing.llm_benchmark import BenchmarkTask, LLMBenchmark, ProviderResponse
 from ncpu.self_optimizing.llm_provider import LLMProviderFactory
 from ncpu.self_optimizing.reasoning_analyzer import ReasoningAnalyzer
 
+
+HUMANEVAL_DATA_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "HumanEval.jsonl"
+)
 
 BENCHMARK_SYSTEM_PROMPT = (
     "You are participating in a deterministic benchmark. "
@@ -237,6 +248,70 @@ def build_coding_tasks(repeats: int = 1) -> list[BenchmarkTask]:
     return tasks
 
 
+def build_hard_coding_tasks(repeats: int = 1) -> list[BenchmarkTask]:
+    """Build hard coding tasks that challenge smaller models."""
+    verifier = CodeVerifier()
+
+    # Function-based tasks using existing test suites
+    function_specs = [
+        ("dijkstra", HARD_CODE_PROMPTS["dijkstra"], GRAPH_TESTS[0]["tests"]),
+        ("merge_intervals", HARD_CODE_PROMPTS["merge_intervals"], MERGE_INTERVALS_TESTS[0]["tests"]),
+        ("longest_substring", HARD_CODE_PROMPTS["longest_substring"], LONGEST_SUBSTRING_TESTS[0]["tests"]),
+    ]
+
+    tasks: list[BenchmarkTask] = []
+    for _ in range(repeats):
+        for name, prompt, tests in function_specs:
+            tasks.append(
+                BenchmarkTask(
+                    name=name,
+                    category="coding",
+                    prompt=(
+                        "Write raw Python only. No markdown, no backticks, no explanation.\n\n"
+                        f"{prompt}"
+                    ),
+                    verify_fn=lambda code, test_cases=tests, local_verifier=verifier: local_verifier.verify(
+                        code,
+                        test_cases,
+                    ),
+                    feedback_builder=build_code_feedback,
+                    response_format="raw Python code",
+                )
+            )
+
+        # LRU cache: class-based, custom verifier
+        tasks.append(
+            BenchmarkTask(
+                name="lru_cache",
+                category="coding",
+                prompt=(
+                    "Write raw Python only. No markdown, no backticks, no explanation.\n\n"
+                    f"{HARD_CODE_PROMPTS['lru_cache']}"
+                ),
+                verify_fn=verify_lru_cache,
+                feedback_builder=build_code_feedback,
+                response_format="raw Python code",
+            )
+        )
+
+        # Topological sort: custom verifier (checks validity, not exact order)
+        tasks.append(
+            BenchmarkTask(
+                name="topological_sort",
+                category="coding",
+                prompt=(
+                    "Write raw Python only. No markdown, no backticks, no explanation.\n\n"
+                    f"{HARD_CODE_PROMPTS['topological_sort']}"
+                ),
+                verify_fn=verify_topological_sort,
+                feedback_builder=build_code_feedback,
+                response_format="raw Python code",
+            )
+        )
+
+    return tasks
+
+
 def build_reasoning_tasks(repeats: int = 1) -> list[BenchmarkTask]:
     specs = [
         ReasoningTaskSpec(
@@ -309,12 +384,230 @@ def build_reasoning_tasks(repeats: int = 1) -> list[BenchmarkTask]:
     return tasks
 
 
-def build_tasks(include_coding: bool = True, include_reasoning: bool = True, repeats: int = 1) -> list[BenchmarkTask]:
+def build_hard_reasoning_tasks(repeats: int = 1) -> list[BenchmarkTask]:
+    """Build hard reasoning tasks where small models struggle."""
+    specs = [
+        ReasoningTaskSpec(
+            name="seating_constraint",
+            prompt=(
+                "Five people A, B, C, D, E sit in seats numbered 1 through 5. "
+                "B is in seat 2. A is in seat 5. D sits immediately to the right of C "
+                "(i.e., D's seat number is exactly one more than C's). "
+                "What seat number is E in?"
+            ),
+            expected_answer=1,
+            normalizer=int,
+        ),
+        ReasoningTaskSpec(
+            name="probability_calc",
+            prompt=(
+                "A bag contains 3 red, 4 blue, and 2 green marbles (9 total). "
+                "Two marbles are drawn without replacement. "
+                "What is the probability that both marbles are the same color? "
+                "Express your answer as a simplified fraction like '5/18'."
+            ),
+            expected_answer="5/18",
+            normalizer=lambda v: str(v).strip(),
+        ),
+        ReasoningTaskSpec(
+            name="modular_arithmetic",
+            prompt=(
+                "What is the remainder when 7^123 is divided by 13? "
+                "Hint: consider Fermat's little theorem."
+            ),
+            expected_answer=5,
+            normalizer=int,
+        ),
+        ReasoningTaskSpec(
+            name="train_meeting",
+            prompt=(
+                "Train A leaves a station at 8:15 AM traveling east at 60 mph. "
+                "Train B leaves the same station at 9:00 AM traveling east at 90 mph. "
+                "At what time does Train B catch up to Train A? "
+                "Return the time in HH:MM format (e.g., '10:30')."
+            ),
+            expected_answer="10:30",
+            normalizer=_normalize_clock,
+        ),
+        ReasoningTaskSpec(
+            name="counting_strings",
+            prompt=(
+                "How many 4-letter strings can be formed from the set {A, B, C} "
+                "such that no two adjacent letters are the same? "
+                "For example, 'ABAB' is valid but 'AABB' is not."
+            ),
+            expected_answer=24,
+            normalizer=int,
+        ),
+    ]
+
     tasks: list[BenchmarkTask] = []
-    if include_coding:
-        tasks.extend(build_coding_tasks(repeats=repeats))
-    if include_reasoning:
-        tasks.extend(build_reasoning_tasks(repeats=repeats))
+    for _ in range(repeats):
+        for spec in specs:
+            tasks.append(
+                BenchmarkTask(
+                    name=spec.name,
+                    category="reasoning",
+                    prompt=(
+                        "Solve the following reasoning task.\n"
+                        "Return JSON only in the format "
+                        '{"answer": <final answer>, "explanation": "<brief visible reasoning summary>"}.\n'
+                        "Do not include markdown or extra text.\n\n"
+                        f"{spec.prompt}"
+                    ),
+                    verify_fn=make_reasoning_verifier(spec),
+                    feedback_builder=build_reasoning_feedback,
+                    response_format="JSON only with keys 'answer' and 'explanation'",
+                )
+            )
+    return tasks
+
+
+def _load_humaneval() -> list[dict[str, Any]]:
+    """Load HumanEval problems from bundled JSONL."""
+    problems = []
+    with open(HUMANEVAL_DATA_PATH, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                problems.append(json.loads(line))
+    return problems
+
+
+def _make_humaneval_verifier(
+    prompt: str, entry_point: str, test_code: str,
+) -> Callable[[str], VerificationResult]:
+    """Build a verify_fn for a single HumanEval problem."""
+    extractor = CodeVerifier()
+
+    def verify(code: str) -> VerificationResult:
+        prepared = extractor.extract_code(code)
+
+        # If model only output the body, prepend the function signature
+        if f"def {entry_point}" not in prepared:
+            prepared = prompt + prepared
+
+        try:
+            compile(prepared, "<generated>", "exec")
+        except SyntaxError as e:
+            return VerificationResult(
+                success=False,
+                error=f"Syntax error at line {e.lineno}: {e.msg}",
+                output=None,
+                test_results=[],
+            )
+
+        try:
+            ns: dict = {}
+            exec(prepared, ns)
+        except Exception as e:
+            return VerificationResult(
+                success=False,
+                error=f"Runtime error: {e}",
+                output=None,
+                test_results=[],
+            )
+
+        if entry_point not in ns:
+            return VerificationResult(
+                success=False,
+                error=f"Function '{entry_point}' not found in generated code",
+                output=None,
+                test_results=[],
+            )
+
+        # Run the HumanEval test suite
+        try:
+            test_ns = dict(ns)
+            exec(test_code, test_ns)
+            test_ns["check"](ns[entry_point])
+            return VerificationResult(
+                success=True,
+                error=None,
+                output=None,
+                test_results=[{"test": "check", "passed": True}],
+            )
+        except AssertionError as e:
+            return VerificationResult(
+                success=False,
+                error=f"Assertion failed: {e}",
+                output=None,
+                test_results=[{"test": "check", "passed": False, "error": str(e)}],
+            )
+        except Exception as e:
+            return VerificationResult(
+                success=False,
+                error=f"Test error: {type(e).__name__}: {e}",
+                output=None,
+                test_results=[{"test": "check", "passed": False, "error": str(e)}],
+            )
+
+    return verify
+
+
+def _humaneval_feedback(original_prompt: str, attempt: dict[str, Any]) -> str:
+    """Feedback builder for HumanEval tasks."""
+    verification = attempt.get("verification") or {}
+    error = attempt.get("error") or verification.get("error") or "test failed"
+    return (
+        f"{original_prompt}\n\n"
+        "Your previous code did not pass the test suite.\n"
+        f"Error: {error}\n"
+        "Return only corrected raw Python code."
+    )
+
+
+def build_humaneval_tasks(repeats: int = 1) -> list[BenchmarkTask]:
+    """Build tasks from OpenAI's HumanEval benchmark (164 problems)."""
+    problems = _load_humaneval()
+
+    tasks: list[BenchmarkTask] = []
+    for _ in range(repeats):
+        for problem in problems:
+            task_id = problem["task_id"]
+            short_name = task_id.replace("HumanEval/", "he_")
+            entry_point = problem["entry_point"]
+            prompt = problem["prompt"]
+            test_code = problem["test"]
+
+            tasks.append(
+                BenchmarkTask(
+                    name=short_name,
+                    category="coding",
+                    prompt=(
+                        "Complete the following Python function. "
+                        "Write raw Python only. No markdown, no backticks, no explanation.\n\n"
+                        f"{prompt}"
+                    ),
+                    verify_fn=_make_humaneval_verifier(prompt, entry_point, test_code),
+                    feedback_builder=_humaneval_feedback,
+                    response_format="raw Python code",
+                )
+            )
+    return tasks
+
+
+def build_tasks(
+    include_coding: bool = True,
+    include_reasoning: bool = True,
+    repeats: int = 1,
+    difficulty: str = "easy",
+    benchmark: str = "custom",
+) -> list[BenchmarkTask]:
+    if benchmark == "humaneval":
+        return build_humaneval_tasks(repeats=repeats)
+
+    tasks: list[BenchmarkTask] = []
+    if difficulty in ("easy", "all"):
+        if include_coding:
+            tasks.extend(build_coding_tasks(repeats=repeats))
+        if include_reasoning:
+            tasks.extend(build_reasoning_tasks(repeats=repeats))
+    if difficulty in ("hard", "all"):
+        if include_coding:
+            tasks.extend(build_hard_coding_tasks(repeats=repeats))
+        if include_reasoning:
+            tasks.extend(build_hard_reasoning_tasks(repeats=repeats))
     return tasks
 
 
@@ -561,11 +854,13 @@ def run_model_benchmark(
     base_url: Optional[str] = "http://localhost:11434",
     request_timeout: float = 240.0,
     trajectory_dir: Optional[str] = None,
+    difficulty: str = "easy",
 ) -> dict[str, Any]:
     tasks = build_tasks(
         include_coding=include_coding,
         include_reasoning=include_reasoning,
         repeats=repeats,
+        difficulty=difficulty,
     )
     runtime = resolve_controller_runtime(
         controller_bundle_path=controller_bundle_path,
@@ -701,6 +996,7 @@ def run_benchmark(
     base_url: Optional[str] = "http://localhost:11434",
     request_timeout: float = 240.0,
     trajectory_root: Optional[str] = None,
+    difficulty: str = "easy",
 ) -> dict[str, Any]:
     model_reports = [
         run_model_benchmark(
@@ -723,6 +1019,7 @@ def run_benchmark(
                 if trajectory_root
                 else None
             ),
+            difficulty=difficulty,
         )
         for model in models
     ]
@@ -891,6 +1188,12 @@ def main() -> None:
         "--trajectory-root",
         help="Optional directory root for SOME hidden trajectory JSONL artifacts",
     )
+    parser.add_argument(
+        "--difficulty",
+        choices=["easy", "hard", "all"],
+        default="easy",
+        help="Task difficulty: easy (original 10 tasks), hard (10 harder tasks), all (20 tasks)",
+    )
 
     args = parser.parse_args()
     requested_tasks = {item.strip().lower() for item in args.tasks.split(",") if item.strip()}
@@ -916,6 +1219,7 @@ def main() -> None:
         base_url=args.base_url,
         request_timeout=args.request_timeout,
         trajectory_root=args.trajectory_root,
+        difficulty=args.difficulty,
     )
 
     print_leaderboard(report)

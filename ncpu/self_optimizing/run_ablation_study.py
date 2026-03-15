@@ -329,12 +329,17 @@ def run_ablation_study(
     request_timeout: float = 240.0,
     temperature: float = 0.0,
     conditions: Optional[list[str]] = None,
+    difficulty: str = "easy",
+    benchmark: str = "custom",
 ) -> dict[str, Any]:
     """Run the full ablation study."""
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    tasks = build_tasks(include_coding=True, include_reasoning=True, repeats=repeats)
+    tasks = build_tasks(
+        include_coding=True, include_reasoning=True,
+        repeats=repeats, difficulty=difficulty, benchmark=benchmark,
+    )
 
     provider = build_provider(
         provider_name=provider_name,
@@ -477,6 +482,18 @@ def main() -> int:
         nargs="*",
         help="Specific conditions to run (default: all). E.g. 1_baseline 2_verify_only",
     )
+    parser.add_argument(
+        "--difficulty",
+        choices=["easy", "hard", "all"],
+        default="easy",
+        help="Task difficulty: easy (original 10), hard (10 harder), all (20 tasks)",
+    )
+    parser.add_argument(
+        "--benchmark",
+        choices=["custom", "humaneval"],
+        default="custom",
+        help="Benchmark suite: custom (our tasks) or humaneval (OpenAI HumanEval 164)",
+    )
     args = parser.parse_args()
 
     run_ablation_study(
@@ -488,6 +505,8 @@ def main() -> int:
         request_timeout=args.request_timeout,
         temperature=args.temp,
         conditions=args.conditions,
+        difficulty=args.difficulty,
+        benchmark=args.benchmark,
     )
     return 0
 

@@ -784,6 +784,167 @@ class RateLimiter:
 ]
 
 
+def verify_lru_cache(code: str) -> VerificationResult:
+    """Custom verifier for LRU cache class-based task."""
+    extractor = CodeVerifier()
+    prepared = extractor.extract_code(code)
+
+    try:
+        compile(prepared, "<generated>", "exec")
+    except SyntaxError as e:
+        return VerificationResult(
+            success=False, error=f"Syntax error at line {e.lineno}: {e.msg}",
+            output=None, test_results=[],
+        )
+
+    try:
+        ns: dict = {}
+        exec(prepared, ns)
+    except Exception as e:
+        return VerificationResult(
+            success=False, error=f"Runtime error: {e}",
+            output=None, test_results=[],
+        )
+
+    if "LRUCache" not in ns:
+        return VerificationResult(
+            success=False, error="LRUCache class not found in generated code",
+            output=None, test_results=[],
+        )
+
+    cls = ns["LRUCache"]
+    results: list[dict] = []
+
+    # Scenario 1: capacity 2, basic eviction
+    try:
+        c = cls(2)
+        c.put(1, 1)
+        c.put(2, 2)
+        r = c.get(1)
+        results.append({"test": 0, "expected": 1, "actual": r, "passed": r == 1})
+        c.put(3, 3)  # evicts 2
+        r = c.get(2)
+        results.append({"test": 1, "expected": -1, "actual": r, "passed": r == -1})
+        c.put(4, 4)  # evicts 1
+        r = c.get(1)
+        results.append({"test": 2, "expected": -1, "actual": r, "passed": r == -1})
+        r = c.get(3)
+        results.append({"test": 3, "expected": 3, "actual": r, "passed": r == 3})
+        r = c.get(4)
+        results.append({"test": 4, "expected": 4, "actual": r, "passed": r == 4})
+    except Exception as e:
+        results.append({"test": "scenario1", "error": str(e), "passed": False})
+
+    # Scenario 2: capacity 1
+    try:
+        c = cls(1)
+        c.put(1, 1)
+        c.put(2, 2)
+        r = c.get(1)
+        results.append({"test": 5, "expected": -1, "actual": r, "passed": r == -1})
+        r = c.get(2)
+        results.append({"test": 6, "expected": 2, "actual": r, "passed": r == 2})
+    except Exception as e:
+        results.append({"test": "scenario2", "error": str(e), "passed": False})
+
+    # Scenario 3: update existing key
+    try:
+        c = cls(2)
+        c.put(1, 1)
+        c.put(2, 2)
+        c.put(1, 10)
+        r = c.get(1)
+        results.append({"test": 7, "expected": 10, "actual": r, "passed": r == 10})
+        r = c.get(2)
+        results.append({"test": 8, "expected": 2, "actual": r, "passed": r == 2})
+    except Exception as e:
+        results.append({"test": "scenario3", "error": str(e), "passed": False})
+
+    ok = all(t.get("passed", False) for t in results)
+    return VerificationResult(
+        success=ok, error=None if ok else "Some LRU cache tests failed",
+        output=None, test_results=results,
+    )
+
+
+def verify_topological_sort(code: str) -> VerificationResult:
+    """Custom verifier for topological sort — checks validity, not exact order."""
+    extractor = CodeVerifier()
+    prepared = extractor.extract_code(code)
+
+    try:
+        compile(prepared, "<generated>", "exec")
+    except SyntaxError as e:
+        return VerificationResult(
+            success=False, error=f"Syntax error at line {e.lineno}: {e.msg}",
+            output=None, test_results=[],
+        )
+
+    try:
+        ns: dict = {}
+        exec(prepared, ns)
+    except Exception as e:
+        return VerificationResult(
+            success=False, error=f"Runtime error: {e}",
+            output=None, test_results=[],
+        )
+
+    if "topological_sort" not in ns:
+        return VerificationResult(
+            success=False, error="topological_sort function not found",
+            output=None, test_results=[],
+        )
+
+    func = ns["topological_sort"]
+    results: list[dict] = []
+
+    cases = [
+        (4, [(0, 1), (0, 2), (1, 3), (2, 3)]),
+        (2, [(0, 1)]),
+        (1, []),
+        (6, [(5, 2), (5, 0), (4, 0), (4, 1), (2, 3), (3, 1)]),
+    ]
+
+    for i, (n, edges) in enumerate(cases):
+        try:
+            result = func(n, edges)
+            valid = (
+                isinstance(result, list)
+                and sorted(result) == list(range(n))
+                and all(result.index(u) < result.index(v) for u, v in edges)
+            )
+            results.append({
+                "test": i, "expected": "valid topological order",
+                "actual": result, "passed": valid,
+            })
+        except Exception as e:
+            results.append({"test": i, "error": str(e), "passed": False})
+
+    # Cycle detection
+    try:
+        func(3, [(0, 1), (1, 2), (2, 0)])
+        results.append({
+            "test": len(cases), "expected": "ValueError",
+            "actual": "no exception raised", "passed": False,
+        })
+    except ValueError:
+        results.append({
+            "test": len(cases), "expected": "ValueError",
+            "actual": "ValueError", "passed": True,
+        })
+    except Exception as e:
+        results.append({
+            "test": len(cases), "expected": "ValueError",
+            "actual": type(e).__name__, "passed": False,
+        })
+
+    ok = all(t.get("passed", False) for t in results)
+    return VerificationResult(
+        success=ok, error=None if ok else "Some topological sort tests failed",
+        output=None, test_results=results,
+    )
+
+
 def demo():
     """Demo of code verifier"""
     print("=== Code Verifier Demo ===\n")
