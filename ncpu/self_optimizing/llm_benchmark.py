@@ -7,9 +7,11 @@ The benchmark core is deliberately provider-agnostic:
 - Tasks may be plain prompts or prompt objects with custom verifiers.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
 import time
 from typing import Any, Callable, Optional
 
@@ -400,67 +402,80 @@ class LLMBenchmark:
             "committed_verified": workspace.committed_verified,
         }
 
+    def _run_standard_task(
+        self,
+        index: int,
+        task: "BenchmarkTask",
+        total: int,
+    ) -> dict[str, Any]:
+        """Run a single standard task (thread-safe)."""
+        self._emit_progress(
+            {
+                "approach": "standard",
+                "event": "task_start",
+                "task_index": index,
+                "task_total": total,
+                "task_name": task.name,
+            }
+        )
+        attempt = self._run_attempt(task, task.prompt)
+        task_result = {
+            "name": task.name,
+            "category": task.category,
+            "success": attempt["success"],
+            "attempts": 1,
+            "elapsed_seconds": attempt["elapsed_seconds"],
+            "final_error": None if attempt["success"] else self._summarize_error(
+                attempt["error"], attempt["verification"]
+            ),
+            "attempt_details": [attempt],
+        }
+        return task_result
+
     def benchmark_standard(
         self,
         prompts: list[Any],
         max_retries: int = 1,
+        *,
+        max_workers: int = 1,
     ) -> BenchmarkResult:
         """Standard approach: generate once and verify once."""
         del max_retries  # Standard mode is always pass@1.
 
         tasks = self._normalize_tasks(prompts)
-        outcomes: list[bool] = []
-        errors: list[str] = []
         task_results: list[dict[str, Any]] = []
+        errors: list[str] = []
         total_time = 0.0
+        _lock = threading.Lock()
+        _completed = [0]
 
-        for index, task in enumerate(tasks, start=1):
-            self._emit_progress(
-                {
-                    "approach": "standard",
-                    "event": "task_start",
-                    "task_index": index,
-                    "task_total": len(tasks),
-                    "task_name": task.name,
+        if max_workers <= 1:
+            # Sequential (original path)
+            for index, task in enumerate(tasks, start=1):
+                tr = self._run_standard_task(index, task, len(tasks))
+                total_time += tr["elapsed_seconds"]
+                if not tr["success"]:
+                    errors.append((tr.get("final_error") or "unknown")[:200])
+                task_results.append(tr)
+        else:
+            # Parallel execution
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futs = {
+                    pool.submit(self._run_standard_task, i, task, len(tasks)): (i, task)
+                    for i, task in enumerate(tasks, start=1)
                 }
-            )
-            attempt = self._run_attempt(task, task.prompt)
-            total_time += attempt["elapsed_seconds"]
-            outcomes.append(attempt["success"])
+                for fut in as_completed(futs):
+                    tr = fut.result()
+                    with _lock:
+                        _completed[0] += 1
+                        total_time += tr["elapsed_seconds"]
+                        if not tr["success"]:
+                            errors.append((tr.get("final_error") or "unknown")[:200])
+                        task_results.append(tr)
+                        n = _completed[0]
+                    print(f"  [{n}/{len(tasks)}] {tr['name']}: {'OK' if tr['success'] else 'FAIL'} ({tr['elapsed_seconds']:.1f}s)", flush=True)
 
-            if not attempt["success"]:
-                errors.append(self._summarize_error(attempt["error"], attempt["verification"])[:200])
-
-            task_result = {
-                "name": task.name,
-                "category": task.category,
-                "success": attempt["success"],
-                "attempts": 1,
-                "elapsed_seconds": attempt["elapsed_seconds"],
-                "final_error": None if attempt["success"] else self._summarize_error(
-                    attempt["error"], attempt["verification"]
-                ),
-                "attempt_details": [attempt],
-            }
-            task_results.append(task_result)
-            self._emit_progress(
-                {
-                    "approach": "standard",
-                    "event": "task_complete",
-                    "task_index": index,
-                    "task_total": len(tasks),
-                    "task_name": task.name,
-                    "success": attempt["success"],
-                    "attempts": 1,
-                    "elapsed_seconds": attempt["elapsed_seconds"],
-                    "running_success_rate": sum(outcomes) / len(outcomes),
-                    "final_error": None if attempt["success"] else self._summarize_error(
-                        attempt["error"], attempt["verification"]
-                    ),
-                    "task_result": task_result,
-                }
-            )
-
+        outcomes = [tr["success"] for tr in task_results]
         success_rate = sum(outcomes) / len(tasks) if tasks else 0.0
 
         return BenchmarkResult(

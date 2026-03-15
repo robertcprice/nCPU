@@ -624,6 +624,62 @@ def build_provider(
     if provider_name == "local":
         import requests
 
+        # Detect backend: vLLM (port 8000) vs Ollama (port 11434)
+        is_vllm = "8000" in base_url or "vllm" in base_url.lower()
+
+        if is_vllm:
+            import re as _re
+
+            endpoint = f"{base_url.rstrip('/')}/v1/chat/completions"
+
+            def provider(prompt: str) -> ProviderResponse:
+                response = requests.post(
+                    endpoint,
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": BENCHMARK_SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "max_tokens": max_tokens or 2048,
+                        "temperature": temperature,
+                    },
+                    timeout=request_timeout,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                usage = payload.get("usage", {})
+                metadata = {
+                    "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
+                }
+                text = payload["choices"][0]["message"]["content"]
+                # Strip <think>...</think> blocks from thinking models
+                text = _re.sub(r'<think>.*?</think>\s*', '', text, flags=_re.DOTALL)
+                # Strip "Thinking Process:" blocks (Qwen3.5 without think tags)
+                # Find last occurrence of a code block or function def
+                code_match = _re.search(
+                    r'```(?:python)?\s*\n(.*?)```',
+                    text, flags=_re.DOTALL,
+                )
+                if code_match:
+                    text = code_match.group(1)
+                else:
+                    # Try to find the last Python code starting with def/from/import/class
+                    lines = text.split('\n')
+                    code_start = None
+                    for i, line in enumerate(lines):
+                        stripped = line.lstrip()
+                        if stripped.startswith(('def ', 'from ', 'import ', 'class ')):
+                            code_start = i
+                            break
+                    if code_start is not None:
+                        text = '\n'.join(lines[code_start:])
+                text = text.strip()
+                return ProviderResponse(text=text, metadata=metadata)
+
+            return provider
+
         endpoint = f"{base_url.rstrip('/')}/api/generate"
 
         def provider(prompt: str) -> ProviderResponse:
@@ -637,6 +693,7 @@ def build_provider(
                     "options": {
                         "temperature": temperature,
                         "num_predict": max_tokens or 2048,
+                        "num_ctx": 4096,
                     },
                 },
                 timeout=request_timeout,
@@ -655,8 +712,11 @@ def build_provider(
                 )
                 if payload.get(key) is not None
             }
+            import re as _re_ollama
+            text = str(payload.get("response", ""))
+            text = _re_ollama.sub(r'<think>.*?</think>\s*', '', text, flags=_re_ollama.DOTALL)
             return ProviderResponse(
-                text=str(payload.get("response", "")).strip(),
+                text=text.strip(),
                 metadata=metadata,
             )
 

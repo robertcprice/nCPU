@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
@@ -206,14 +207,15 @@ def run_condition(
     benchmark: LLMBenchmark,
     tasks: list[BenchmarkTask],
     output_dir: Path,
+    max_workers: int = 1,
 ) -> dict[str, Any]:
     """Run one ablation condition across all tasks."""
     desc = condition_spec["description"]
     print(f"\n{'─' * 60}")
     print(f"Condition: {condition_name}")
     print(f"  {desc}")
-    print(f"  Tasks: {len(tasks)}")
-    print(f"{'─' * 60}")
+    print(f"  Tasks: {len(tasks)} | Workers: {max_workers}")
+    print(f"{'─' * 60}", flush=True)
 
     traj_dir = str(output_dir / "trajectories" / condition_name)
     Path(traj_dir).mkdir(parents=True, exist_ok=True)
@@ -221,8 +223,8 @@ def run_condition(
     t0 = time.monotonic()
 
     if not condition_spec.get("use_some"):
-        # Baseline: use standard benchmark (single attempt)
-        result = benchmark.benchmark_standard(tasks)
+        # Baseline: use standard benchmark (single attempt), now parallel
+        result = benchmark.benchmark_standard(tasks, max_workers=max_workers)
         summary = summarize_result(result)
         task_results = []
         for tr in result.task_results:
@@ -244,18 +246,44 @@ def run_condition(
         config_kwargs = dict(condition_spec.get("config", {}))
         config = InternalControllerConfig(**config_kwargs)
 
-        task_results = []
-        for i, task in enumerate(tasks, start=1):
-            tr = _run_single_task_some(
-                benchmark=benchmark,
-                task=task,
-                task_index=i,
-                config=config,
-                trajectory_dir=traj_dir,
-            )
-            status = "OK" if tr["success"] else "FAIL"
-            print(f"  [{i}/{len(tasks)}] {task.name}: {status} ({tr['attempts']} attempts, {tr['elapsed_seconds']:.1f}s)")
-            task_results.append(tr)
+        task_results: list[dict[str, Any]] = []
+        completed = 0
+
+        if max_workers <= 1:
+            for i, task in enumerate(tasks, start=1):
+                tr = _run_single_task_some(
+                    benchmark=benchmark,
+                    task=task,
+                    task_index=i,
+                    config=config,
+                    trajectory_dir=traj_dir,
+                )
+                status = "OK" if tr["success"] else "FAIL"
+                print(f"  [{i}/{len(tasks)}] {task.name}: {status} ({tr['attempts']} attempts, {tr['elapsed_seconds']:.1f}s)", flush=True)
+                task_results.append(tr)
+        else:
+            # Parallel execution
+            indexed_tasks = list(enumerate(tasks, start=1))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                future_to_idx = {}
+                for i, task in indexed_tasks:
+                    fut = pool.submit(
+                        _run_single_task_some,
+                        benchmark=benchmark,
+                        task=task,
+                        task_index=i,
+                        config=config,
+                        trajectory_dir=traj_dir,
+                    )
+                    future_to_idx[fut] = (i, task)
+
+                for fut in as_completed(future_to_idx):
+                    i, task = future_to_idx[fut]
+                    tr = fut.result()
+                    completed += 1
+                    status = "OK" if tr["success"] else "FAIL"
+                    print(f"  [{completed}/{len(tasks)}] {task.name}: {status} ({tr['attempts']} attempts, {tr['elapsed_seconds']:.1f}s)", flush=True)
+                    task_results.append(tr)
 
         successes = sum(1 for tr in task_results if tr["success"])
         total_attempts = sum(tr["attempts"] for tr in task_results)
@@ -331,6 +359,7 @@ def run_ablation_study(
     conditions: Optional[list[str]] = None,
     difficulty: str = "easy",
     benchmark: str = "custom",
+    max_workers: int = 1,
 ) -> dict[str, Any]:
     """Run the full ablation study."""
     output_root = Path(output_dir)
@@ -368,6 +397,7 @@ def run_ablation_study(
             benchmark=benchmark,
             tasks=tasks,
             output_dir=output_root,
+            max_workers=max_workers,
         )
         results[cond_name] = cond_result
 
@@ -494,6 +524,12 @@ def main() -> int:
         default="custom",
         help="Benchmark suite: custom (our tasks) or humaneval (OpenAI HumanEval 164)",
     )
+    parser.add_argument(
+        "--parallel", "-j",
+        type=int,
+        default=1,
+        help="Number of parallel workers for task execution (default: 1, try 4-8 for GPU)",
+    )
     args = parser.parse_args()
 
     run_ablation_study(
@@ -507,6 +543,7 @@ def main() -> int:
         conditions=args.conditions,
         difficulty=args.difficulty,
         benchmark=args.benchmark,
+        max_workers=args.parallel,
     )
     return 0
 

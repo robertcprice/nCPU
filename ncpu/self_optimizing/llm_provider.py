@@ -151,6 +151,7 @@ class LLMProviderFactory:
         request_timeout = float(kwargs.get("request_timeout", kwargs.get("timeout", 120)))
 
         def provider(prompt: str) -> str:
+            import re
             import requests
 
             # Check if it's Ollama (default port 11434)
@@ -166,6 +167,7 @@ class LLMProviderFactory:
                         "options": {
                             "temperature": kwargs.get("temperature", 0.3),
                             "num_predict": kwargs.get("max_tokens", 2048),
+                            "num_ctx": kwargs.get("num_ctx", 4096),
                         }
                     },
                     timeout=request_timeout,
@@ -173,11 +175,27 @@ class LLMProviderFactory:
                 response.raise_for_status()
                 result = response.json()
                 code = result.get("response", "")
-                # Strip markdown code blocks
-                import re
-                # Remove opening code block
                 code = re.sub(r'^```\w*\n?', '', code)
-                # Remove closing code block
+                code = re.sub(r'\n?```$', '', code)
+                return code.strip()
+
+            # vLLM / OpenAI-compatible via requests (faster, no openai import)
+            if "8000" in base_url or "vllm" in base_url.lower():
+                full_prompt = f"{system_prompt}\n\n{prompt}"
+                response = requests.post(
+                    f"{base_url}/v1/completions",
+                    json={
+                        "model": model,
+                        "prompt": full_prompt,
+                        "max_tokens": int(kwargs.get("max_tokens", 2048)),
+                        "temperature": float(kwargs.get("temperature", 0.3)),
+                    },
+                    timeout=request_timeout,
+                )
+                response.raise_for_status()
+                result = response.json()
+                code = result["choices"][0]["text"]
+                code = re.sub(r'^```\w*\n?', '', code)
                 code = re.sub(r'\n?```$', '', code)
                 return code.strip()
 
