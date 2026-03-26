@@ -33,6 +33,16 @@ models/research/
 *.log
 training_*.txt
 training/experiments/
+training_results/
+
+# Local benchmark / experiment artifacts
+*.json.progress.jsonl
+*.remote_snapshot
+*_results.json
+*_benchmark*.json
+coprocessor_realworld_*.json
+HumanEval.jsonl
+*.tar.gz
 
 # OS
 .DS_Store

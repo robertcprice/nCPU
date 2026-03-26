@@ -1,9 +1,17 @@
-# nCPU: Neural CPU Emulator
-# Core (model-based CPU works with no dependencies in mock mode)
+# Convenience requirements for a broad local nCPU development environment.
+# Preferred install path for editable work:
+#   pip install -e ".[demo,model,train,dev]"
+# or for the lighter flagship demo surface:
+#   pip install -e ".[demo,dev]"
 
-# ML dependencies (for real-mode decode and tensor CPU)
-torch>=2.0.0
-transformers>=4.35.0
+# Flagship demos / differentiable CPU
+torch>=2.4.0
+torchvision>=0.20.1
+numpy
+tqdm>=4.66.0
+
+# Coprocessor / model training stack
+transformers>=5.3.0
 peft>=0.6.0
 datasets>=2.14.0
 accelerate>=0.24.0
@@ -11,6 +19,3 @@ accelerate>=0.24.0
 # Testing
 pytest>=7.0.0
 pytest-cov>=4.0.0
-
-# Utilities
-tqdm>=4.66.0

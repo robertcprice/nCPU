@@ -18,8 +18,10 @@ Run:
 
 from __future__ import annotations
 
+import json
 import sys
 import time
+from pathlib import Path
 
 import torch
 
@@ -54,6 +56,29 @@ BANNER = r"""
      Gradient descent discovers text transformations as programs.
     ============================================================
 """
+
+HELP_TEXT = """  Commands:
+    cipher <plain> <cipher>   Discover cipher from plain/cipher pair
+    crack <ciphertext>        Crack Caesar cipher (assumes 'the' crib)
+    sequence <text>           Learn and extend a character sequence
+    transform <in> <out>      Discover character transformation
+    apply <text>              Apply last discovered program to new text
+    summary                   Show the last discovered program summary
+    export [path]             Export the last discovered program text
+    save [path]               Save the last discovered program summary as JSON
+    help                      Show this help
+    quit                      Exit
+"""
+
+
+def print_box(title: str, lines: list[str]) -> None:
+    width = max(len(title), *(len(line) for line in lines), 20)
+    print(f"  ┌{'─' * (width + 2)}┐")
+    print(f"  │ {title.ljust(width)} │")
+    print(f"  ├{'─' * (width + 2)}┤")
+    for line in lines:
+        print(f"  │ {line.ljust(width)} │")
+    print(f"  └{'─' * (width + 2)}┘")
 
 
 # ---------------------------------------------------------------------------
@@ -508,23 +533,58 @@ def demo_digit_doubler():
 # Interactive mode
 # ---------------------------------------------------------------------------
 
+def print_result_summary(label: str, result) -> None:
+    if result is None:
+        print("  No discovered program yet.")
+        return
+    print_box(
+        "Last Text Program",
+        [
+            f"Label:    {label}",
+            f"Accuracy: {result.accuracy:.0%}",
+        ],
+    )
+    print("  Program:")
+    for line in result.program_text.split("\n"):
+        print(f"      {line}")
+
+
+def export_program_text(result, path_text: str = "") -> None:
+    if result is None:
+        print("  No discovered program yet. Use cipher/transform/sequence first.")
+        return
+    path = Path(path_text.strip()) if path_text.strip() else Path("exports/text_machine_program.asm")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(result.program_text + "\n")
+    print(f"  Exported program to {path}")
+
+
+def save_result_summary(label: str, result, path_text: str = "") -> None:
+    if result is None:
+        print("  No discovered program yet. Use cipher/transform/sequence first.")
+        return
+    path = Path(path_text.strip()) if path_text.strip() else Path("exports/text_machine_summary.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "label": label,
+        "accuracy": result.accuracy,
+        "program_text": result.program_text,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"  Saved summary to {path}")
+
+
 def interactive_mode():
     """Interactive text processing REPL."""
     print(BANNER)
 
     machine = NeuralTextMachine()
 
-    print("""  Commands:
-    cipher <plain> <cipher>   Discover cipher from plain/cipher pair
-    crack <ciphertext>        Crack Caesar cipher (assumes 'the' crib)
-    sequence <text>           Learn and extend a character sequence
-    transform <in> <out>      Discover character transformation
-    apply <text>              Apply last discovered program to new text
-    help                      Show this help
-    quit                      Exit
-""")
+    print(HELP_TEXT)
 
     last_program = None
+    last_result = None
+    last_label = ""
 
     try:
         import readline  # noqa: F401 — enables arrow key history in input()
@@ -550,20 +610,15 @@ def interactive_mode():
                 break
 
             elif cmd == "help":
-                print("""  Commands:
-    cipher <plain> <cipher>   Discover cipher from plain/cipher pair
-    crack <ciphertext>        Crack Caesar cipher (assumes 'the' crib)
-    sequence <text>           Learn and extend a character sequence
-    transform <in> <out>      Discover character transformation
-    apply <text>              Apply last discovered program to new text
-    help                      Show this help
-    quit                      Exit
-""")
+                print(HELP_TEXT)
 
             elif cmd == "cipher" and len(parts) >= 3:
                 result = machine.discover_cipher(parts[1], parts[2])
                 if result is not None:
                     last_program = result.program
+                    last_result = result
+                    last_label = f"cipher {parts[1]} -> {parts[2]}"
+                    print("  Tip: use 'summary' to review it or 'export [path]' to save it.")
 
             elif cmd == "crack" and len(parts) >= 2:
                 cipher_text = " ".join(parts[1:])
@@ -573,15 +628,21 @@ def interactive_mode():
                 result = machine.learn_sequence(parts[1])
                 if result is not None and result.accuracy > 0.3:
                     last_program = result.program
+                    last_result = result
+                    last_label = f"sequence {parts[1]}"
                     gen = machine.generate_sequence(
                         parts[1][0], result.program, 30,
                     )
                     print(f"  Generated: '{gen}'")
+                    print("  Tip: use 'summary' to review it or 'export [path]' to save it.")
 
             elif cmd == "transform" and len(parts) >= 3:
                 result = machine.discover_transform(parts[1], parts[2])
                 if result is not None:
                     last_program = result.program
+                    last_result = result
+                    last_label = f"transform {parts[1]} -> {parts[2]}"
+                    print("  Tip: use 'summary' to review it or 'export [path]' to save it.")
 
             elif cmd == "apply" and len(parts) >= 2:
                 if last_program is None:
@@ -589,7 +650,22 @@ def interactive_mode():
                 else:
                     text = " ".join(parts[1:])
                     out = machine.apply_program(text, last_program)
-                    print(f"  '{text}' -> '{out}'")
+                    print_box(
+                        "Apply Result",
+                        [
+                            f"Input:  {text}",
+                            f"Output: {out}",
+                        ],
+                    )
+
+            elif cmd == "summary":
+                print_result_summary(last_label or "latest program", last_result)
+
+            elif cmd == "export":
+                export_program_text(last_result, " ".join(parts[1:]))
+
+            elif cmd == "save":
+                save_result_summary(last_label or "latest program", last_result, " ".join(parts[1:]))
 
             else:
                 print(f"  Unknown command: '{cmd}'. Type 'help' for commands.")

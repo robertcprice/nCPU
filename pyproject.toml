@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "ncpu"
@@ -13,25 +13,52 @@ authors = [{name = "Robert Price"}]
 
 dependencies = []
 
+[project.scripts]
+ncpu-lab = "ncpu.lab:main"
+
 [project.optional-dependencies]
-neural = [
-    "torch>=2.0.0",
+demo = [
+    "torch>=2.4.0",
+    "torchvision>=0.20.1",
     "numpy",
+    "tqdm>=4.66.0",
+]
+neural = [
+    "torch>=2.4.0",
+    "torchvision>=0.20.1",
+    "numpy",
+    "tqdm>=4.66.0",
 ]
 model = [
-    "torch>=2.0.0",
-    "transformers>=4.35.0",
+    "torch>=2.4.0",
+    "torchvision>=0.20.1",
+    "transformers>=5.3.0",
     "peft>=0.6.0",
+    "tqdm>=4.66.0",
 ]
 tensor = [
-    "torch>=2.0.0",
+    "torch>=2.4.0",
+    "torchvision>=0.20.1",
+    "numpy",
 ]
 train = [
-    "torch>=2.0.0",
-    "transformers>=4.35.0",
+    "torch>=2.4.0",
+    "torchvision>=0.20.1",
+    "transformers>=5.3.0",
     "peft>=0.6.0",
     "datasets>=2.14.0",
     "accelerate>=0.24.0",
+    "tqdm>=4.66.0",
+]
+full = [
+    "torch>=2.4.0",
+    "torchvision>=0.20.1",
+    "numpy",
+    "transformers>=5.3.0",
+    "peft>=0.6.0",
+    "datasets>=2.14.0",
+    "accelerate>=0.24.0",
+    "tqdm>=4.66.0",
 ]
 dev = [
     "pytest>=7.0.0",

@@ -12,9 +12,11 @@ Run: python demos/interactive_discovery.py
 
 from __future__ import annotations
 
+import json
 import readline  # enables arrow key history in input()
 import sys
 import time
+from pathlib import Path
 
 import torch
 
@@ -55,6 +57,10 @@ Commands:
     e.g.:  test 4, 6               (run with R0=4, R1=6)
 
   show                             Show current examples
+  summary                          Show current program summary
+  export [path]                    Export the last discovered program text
+  save [path]                      Save examples + latest summary as JSON
+  load [path]                      Load examples from a saved JSON session
   clear                            Clear all examples
   preset <name>                    Load a preset example set
     Presets: add, mul, fib, square, double, dot, cube
@@ -68,6 +74,16 @@ Tips:
   - Outputs map to the next registers after inputs
   - More examples = better generalization
 """
+
+
+def print_box(title: str, lines: list[str]) -> None:
+    width = max(len(title), *(len(line) for line in lines), 20)
+    print(f"  ┌{'─' * (width + 2)}┐")
+    print(f"  │ {title.ljust(width)} │")
+    print(f"  ├{'─' * (width + 2)}┤")
+    for line in lines:
+        print(f"  │ {line.ljust(width)} │")
+    print(f"  └{'─' * (width + 2)}┘")
 
 
 class InteractiveDiscovery:
@@ -200,12 +216,18 @@ class InteractiveDiscovery:
         self.last_result = result
 
         print(f"  {'─' * 60}")
-        print(f"\n  Discovered program:")
+        print()
+        print_box(
+            "Discovery Result",
+            [
+                f"Accuracy: {result.accuracy:.0%}",
+                f"Loss:     {result.loss_history[-1]:.4f}",
+                f"Time:     {elapsed:.1f}s",
+            ],
+        )
+        print("\n  Discovered program:")
         for line in result.program_text.split("\n"):
             print(f"    {line}")
-        print(f"\n  Accuracy: {result.accuracy:.0%}")
-        print(f"  Loss: {result.loss_history[-1]:.4f}")
-        print(f"  Time: {elapsed:.1f}s")
 
         if result.accuracy == 1.0:
             print("\n  Program is ready! Use 'test <inputs>' to try it.")
@@ -214,6 +236,82 @@ class InteractiveDiscovery:
                 f"\n  Partial match ({result.accuracy:.0%}). "
                 f"Try more examples or 'synthesize {max_iters * 2} {max_len + 2}'"
             )
+
+        print("  Tip: use 'summary' to review it or 'export [path]' to save it.")
+
+    def show_summary(self):
+        """Show a compact summary of the last discovered program."""
+        if self.last_result is None:
+            print("  No synthesized program yet. Run 'synthesize' first.")
+            return
+
+        print_box(
+            "Last Program Summary",
+            [
+                f"Examples: {len(self.examples)}",
+                f"Inputs:   {self.num_input_regs}",
+                f"Outputs:  {self.num_output_regs}",
+                f"Accuracy: {self.last_result.accuracy:.0%}",
+                f"Loss:     {self.last_result.loss_history[-1]:.4f}",
+            ],
+        )
+        print("  Program:")
+        for line in self.last_result.program_text.split("\n"):
+            print(f"      {line}")
+
+    def export_program(self, path_text: str = ""):
+        """Export the last discovered program text to a file."""
+        if self.last_result is None:
+            print("  No synthesized program yet. Run 'synthesize' first.")
+            return
+
+        path = Path(path_text.strip()) if path_text.strip() else Path("exports/discovered_program.asm")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.last_result.program_text + "\n")
+        print(f"  Exported program to {path}")
+
+    def save_session(self, path_text: str = ""):
+        """Save current examples and latest summary to JSON."""
+        if not self.examples:
+            print("  No examples to save yet.")
+            return
+
+        path = Path(path_text.strip()) if path_text.strip() else Path("exports/discovery_session.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "num_input_regs": self.num_input_regs,
+            "num_output_regs": self.num_output_regs,
+            "examples": [
+                {"inputs": inputs, "outputs": outputs}
+                for inputs, outputs in self.examples
+            ],
+            "last_program_text": self.last_result.program_text if self.last_result is not None else None,
+            "last_accuracy": self.last_result.accuracy if self.last_result is not None else None,
+        }
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+        print(f"  Saved session to {path}")
+
+    def load_session(self, path_text: str):
+        """Load examples from a saved JSON session."""
+        if not path_text.strip():
+            print("  Usage: load <path>")
+            return
+        path = Path(path_text.strip())
+        if not path.exists():
+            print(f"  Session file not found: {path}")
+            return
+        payload = json.loads(path.read_text())
+        self.examples = []
+        for item in payload.get("examples", []):
+            inputs = {int(k): float(v) for k, v in item["inputs"].items()}
+            outputs = {int(k): float(v) for k, v in item["outputs"].items()}
+            self.examples.append((inputs, outputs))
+        self.num_input_regs = int(payload.get("num_input_regs", 0))
+        self.num_output_regs = int(payload.get("num_output_regs", 0))
+        self.last_program = None
+        self.last_result = None
+        print(f"  Loaded {len(self.examples)} examples from {path}")
+        self.show_examples()
 
     def test_program(self, line: str):
         """Test the discovered program on new inputs."""
@@ -243,8 +341,13 @@ class InteractiveDiscovery:
         out_str = ", ".join(
             f"R{i}={result.registers[i].item():.2f}" for i in out_regs
         )
-        print(f"  Input:  [{in_str}]")
-        print(f"  Output: [{out_str}]")
+        print_box(
+            "Test Result",
+            [
+                f"Input:  [{in_str}]",
+                f"Output: [{out_str}]",
+            ],
+        )
 
     def run(self):
         """Main REPL loop."""
@@ -273,9 +376,18 @@ class InteractiveDiscovery:
                 self.add_example(rest)
             elif cmd == "show":
                 self.show_examples()
+            elif cmd == "summary":
+                self.show_summary()
+            elif cmd == "export":
+                self.export_program(rest)
+            elif cmd == "save":
+                self.save_session(rest)
+            elif cmd == "load":
+                self.load_session(rest)
             elif cmd == "clear":
                 self.examples.clear()
                 self.last_program = None
+                self.last_result = None
                 self.num_input_regs = 0
                 self.num_output_regs = 0
                 print("  Cleared all examples.")

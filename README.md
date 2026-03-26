@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-1%2C840%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/interactive-differentiable%20program%20discovery-brightgreen" alt="Interactive discovery">
   <img src="https://img.shields.io/badge/models-24%20trained-blue" alt="Models">
   <img src="https://img.shields.io/badge/accuracy-100%25%20integer-green" alt="Accuracy">
   <img src="https://img.shields.io/badge/verified-exhaustive-blueviolet" alt="Verified">
@@ -17,6 +17,57 @@
 </p>
 
 ---
+
+## Start in 60 Seconds
+
+nCPU is most compelling when you treat it as a program-by-examples and text-by-examples machine first, then explore the deeper GPU and coprocessor stack.
+
+```bash
+# Best first-time install
+pip install -e ".[demo,dev]"
+
+# See the guided demo map
+python -m ncpu.lab demos --verbose
+
+# Flagship interactive experiences
+python -m ncpu.lab discover
+python -m ncpu.lab text --interactive
+```
+
+What works today:
+
+| Experience | Status | Best platform |
+|------------|--------|---------------|
+| Interactive program discovery | Ready now | Cross-platform |
+| Neural text machine | Ready now | Cross-platform |
+| GPU BusyBox / Alpine demos | Ready now | macOS / Apple Silicon |
+| Coprocessor demo | Available with heavier deps | Cross-platform with model stack |
+
+Recommended path:
+1. Discover a program from examples
+2. Discover a text transform or cipher
+3. Try the GPU systems demos
+4. Explore the coprocessor and deeper research modules
+
+Tiny terminal preview:
+
+```text
+$ python -m ncpu.lab discover
+ncpu> preset fib
+ncpu> synthesize
+ncpu> summary
+ncpu> test 13, 21
+
+$ python -m ncpu.lab text --interactive
+text> cipher hello khoor
+text> summary
+text> apply world
+```
+
+Further guides:
+- `demos/README.md` — curated demo map and starter transcripts
+- `docs/REPO_HYGIENE.md` — what should stay in git vs stay local
+- `docs/MAINTAINER_CLEANUP_CHECKLIST.md` — pre-push cleanup checklist
 
 ## Four Big Ideas
 
@@ -70,8 +121,27 @@ All three modes execute the same programs and produce the same results. The neur
 
 ## Quick Start
 
+Install paths:
+
 ```bash
-pip install -e ".[dev]"
+# Best first-time install for the flagship interactive demos
+pip install -e ".[demo,dev]"
+
+# Broader local environment for coprocessor / training work
+pip install -e ".[demo,model,train,dev]"
+```
+
+First commands to try:
+
+```bash
+# Unified launcher
+python -m ncpu.lab demos
+python -m ncpu.lab discover
+python -m ncpu.lab text --interactive
+
+# Direct demo entrypoints
+PYTHONPATH=. python demos/interactive_discovery.py
+PYTHONPATH=. python demos/neural_text_machine.py --interactive
 
 # Neural mode --- all arithmetic through trained neural networks
 python main.py --program programs/fibonacci.asm
@@ -83,7 +153,7 @@ python main.py --program programs/fibonacci.asm --compute
 python ncpu/os/gpu/demo.py --multiproc
 
 # Run real BusyBox on the GPU
-python demos/busybox_gpu_demo.py
+python demos/busybox_gpu_demo.py --interactive
 
 # Alpine Linux on GPU
 python demos/alpine_gpu.py --demo
