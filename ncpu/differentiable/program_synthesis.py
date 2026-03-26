@@ -37,6 +37,7 @@ import torch.nn.functional as F
 
 from ncpu.differentiable.execution import (
     DifferentiableEngine,
+    FixedProgram,
     SoftProgram,
     OPCODES,
     NUM_OPCODES,
@@ -102,6 +103,8 @@ class SynthesisResult:
     converged: bool
     steps: int
     accuracy: float         # Fraction of examples solved (within tolerance)
+    discretization_gap: Optional[float] = None  # soft_accuracy - discrete_accuracy
+    verification: Optional[dict] = None  # Full verify_discrete output
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +289,7 @@ class ProgramSynthesizer:
             skip_bitwise=skip_bitwise, max_exec_steps=max_exec_steps,
         )
 
-        return SynthesisResult(
+        result = SynthesisResult(
             program=program,
             discrete_program=program.extract_discrete_program(),
             program_text=program.format_program(),
@@ -295,6 +298,14 @@ class ProgramSynthesizer:
             steps=step + 1,
             accuracy=accuracy,
         )
+
+        # Discrete verification: run the extracted hard program through
+        # execute_fixed and measure the discretization gap.
+        verification = self.verify_discrete(result, spec)
+        result.discretization_gap = verification["discretization_gap"]
+        result.verification = verification
+
+        return result
 
     def _evaluate_accuracy(
         self,
@@ -337,6 +348,77 @@ class ProgramSynthesizer:
                 if all_close:
                     correct += 1
         return correct / len(spec.examples)
+
+    def verify_discrete(
+        self,
+        result: SynthesisResult,
+        spec: SynthesisSpec,
+        threshold: float = 0.5,
+        max_exec_steps: int = 64,
+    ) -> dict:
+        """Verify the extracted discrete program against the spec.
+
+        After synthesis produces a continuous (soft) program, the most likely
+        discrete program is extracted via argmax over logits. This method
+        runs that discrete program through execute_fixed (hard PC, hard
+        register indexing) and compares against the specification.
+
+        The "discretization gap" measures how much accuracy is lost going
+        from the soft execution (which blends instruction probabilities)
+        to the hard discrete program. A small gap indicates the synthesis
+        successfully converged to a crisp discrete solution; a large gap
+        suggests the soft program is exploiting blending in ways that do
+        not survive discretization.
+
+        Args:
+            result: SynthesisResult from a completed synthesis run.
+            spec: The specification the program was synthesized against.
+            threshold: Maximum absolute error per register to count as
+                correct (same semantics as _evaluate_accuracy).
+            max_exec_steps: Maximum execution steps for execute_fixed.
+
+        Returns:
+            Dictionary with:
+                soft_accuracy: float -- accuracy of the soft program
+                discrete_accuracy: float -- accuracy of the discrete program
+                discretization_gap: float -- soft_accuracy - discrete_accuracy
+                per_example: list of tuples
+                    (inputs, targets, predicted, correct: bool)
+        """
+        discrete_instructions = result.discrete_program
+        fixed_program = FixedProgram(discrete_instructions)
+
+        per_example = []
+        correct = 0
+
+        with torch.no_grad():
+            for inputs, targets in spec.examples:
+                exec_result = self.engine.execute_fixed(
+                    fixed_program, inputs, max_steps=max_exec_steps
+                )
+
+                predicted = {}
+                all_close = True
+                for reg_idx, target_val in targets.items():
+                    pred_val = exec_result.registers[reg_idx].item()
+                    predicted[reg_idx] = pred_val
+                    if abs(pred_val - target_val) > threshold:
+                        all_close = False
+
+                if all_close:
+                    correct += 1
+
+                per_example.append((inputs, targets, predicted, all_close))
+
+        discrete_accuracy = correct / len(spec.examples)
+        soft_accuracy = result.accuracy
+
+        return {
+            "soft_accuracy": soft_accuracy,
+            "discrete_accuracy": discrete_accuracy,
+            "discretization_gap": soft_accuracy - discrete_accuracy,
+            "per_example": per_example,
+        }
 
 
 # ---------------------------------------------------------------------------

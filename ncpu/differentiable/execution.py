@@ -514,6 +514,7 @@ class DifferentiableEngine(nn.Module):
         max_steps: int = 32,
         temperature: float = 1.0,
         skip_bitwise: bool = False,
+        hard_branch_threshold: Optional[float] = None,
     ) -> ExecutionResult:
         """Execute a SoftProgram with full gradient flow through everything.
 
@@ -527,6 +528,13 @@ class DifferentiableEngine(nn.Module):
             max_steps: maximum execution steps
             temperature: Gumbel-softmax temperature (anneal toward 0)
             skip_bitwise: skip expensive bitwise ops for ~10x speedup
+            hard_branch_threshold: When not None and temperature is below
+                this threshold, use Straight-Through Estimator (STE) for
+                hard branch decisions. The forward pass takes the hard
+                argmax path (branch_prob > 0.5), but the backward pass
+                uses the original soft branch_prob for gradient flow.
+                This prevents blended taken/not-taken paths at low
+                temperature, enabling clean branch specialization.
 
         Returns:
             ExecutionResult with differentiable register state
@@ -602,8 +610,19 @@ class DifferentiableEngine(nn.Module):
 
             branch_pc = self._branch_pc(pc, branch_w)
 
-            # Blend normal advance and branch
-            pc = next_pc * (1.0 - branch_prob) + branch_pc * branch_prob
+            # At low temperature, use STE for hard branching.
+            # The forward pass snaps to a hard 0/1 decision, but the
+            # backward pass sees the original soft branch_prob, allowing
+            # gradient flow to continue shaping the branch parameters.
+            if (hard_branch_threshold is not None
+                    and temperature < hard_branch_threshold):
+                branch_taken = (branch_prob > 0.5).float()
+                # STE: forward uses hard value, backward uses soft value
+                branch_taken = branch_prob + (branch_taken - branch_prob).detach()
+                pc = next_pc * (1.0 - branch_taken) + branch_pc * branch_taken
+            else:
+                # Blend normal advance and branch
+                pc = next_pc * (1.0 - branch_prob) + branch_pc * branch_prob
 
             # Halt accumulation
             halt_prob = opcode_w[OPCODES["HALT"]]
@@ -635,6 +654,8 @@ class DifferentiableEngine(nn.Module):
         max_steps: int = 32,
         temperature: float = 1.0,
         skip_bitwise: bool = False,
+        hard_branch_threshold: Optional[float] = None,
+        per_example_pc: bool = False,
     ) -> list[ExecutionResult]:
         """Execute a SoftProgram on multiple input sets simultaneously.
 
@@ -649,7 +670,8 @@ class DifferentiableEngine(nn.Module):
 
         The program parameters (opcode_logits, dst_logits, etc.) are shared
         across the batch -- only register state differs per example. The PC
-        is also shared, with branch decisions averaged across the batch.
+        is also shared (unless per_example_pc is True), with branch decisions
+        averaged across the batch.
 
         Args:
             program: SoftProgram with learnable parameters (shared across batch).
@@ -658,6 +680,16 @@ class DifferentiableEngine(nn.Module):
             max_steps: Maximum execution steps.
             temperature: Gumbel-softmax temperature (anneal toward 0).
             skip_bitwise: Skip expensive bitwise ops for ~10x speedup.
+            hard_branch_threshold: When not None and temperature is below
+                this threshold, use STE for hard branch decisions (see
+                execute_soft for details).
+            per_example_pc: When True, each example in the batch maintains
+                its own PC distribution [B, max_length] instead of a single
+                shared PC [max_length]. This allows different examples to
+                follow different branch paths, enabling synthesis of branching
+                programs at the cost of O(batch * program_len) PC state.
+                When False (default), the PC is shared and branch decisions
+                are averaged across examples.
 
         Returns:
             List of ExecutionResult, one per input example.
@@ -670,9 +702,14 @@ class DifferentiableEngine(nn.Module):
             for idx, val in inputs.items():
                 regs[b, idx] = float(val) if not isinstance(val, torch.Tensor) else val
 
-        # Shared soft PC (same program for all examples): [max_length]
-        pc = torch.zeros(program.max_length)
-        pc[0] = 1.0
+        if per_example_pc:
+            # Per-example PC: [B, max_length]
+            pc = torch.zeros(batch_size, program.max_length)
+            pc[:, 0] = 1.0
+        else:
+            # Shared soft PC (same program for all examples): [max_length]
+            pc = torch.zeros(program.max_length)
+            pc[0] = 1.0
 
         flags = torch.zeros(batch_size, 4)  # [B, 4] N, Z, C, V
         cumulative_halt = torch.zeros(batch_size)  # [B]
@@ -681,9 +718,22 @@ class DifferentiableEngine(nn.Module):
         for step in range(max_steps):
             old_regs = regs.clone()
 
-            # Fetch instruction (shared across batch)
-            (opcode_w, dst_w, src1_w, src2_w, immediate, branch_w) = \
-                program.get_soft_instruction(pc, temperature)
+            if per_example_pc:
+                # With per-example PC, we fetch a soft instruction per example.
+                # Average the per-example PC distributions to get shared
+                # instruction weights (program is still shared), but branch
+                # decisions use per-example flags for per-example PC updates.
+                #
+                # Instruction fetch uses the mean PC across examples so that
+                # gradient flows to all program parameters uniformly, but each
+                # example's PC evolves independently based on its own flags.
+                avg_pc = pc.mean(dim=0)  # [max_length]
+                (opcode_w, dst_w, src1_w, src2_w, immediate, branch_w) = \
+                    program.get_soft_instruction(avg_pc, temperature)
+            else:
+                # Fetch instruction (shared across batch)
+                (opcode_w, dst_w, src1_w, src2_w, immediate, branch_w) = \
+                    program.get_soft_instruction(pc, temperature)
 
             # Batched soft read: [B, num_regs] @ [num_regs] -> [B]
             src1_val = (regs * src1_w.unsqueeze(0)).sum(dim=-1)  # [B]
@@ -770,19 +820,59 @@ class DifferentiableEngine(nn.Module):
             new_flags = torch.stack([n_flag, z_flag, c_flag, v_flag], dim=-1)  # [B, 4]
             flags = flags * (1.0 - cmp_weight) + new_flags * cmp_weight
 
-            # PC update (shared across batch, branch decisions averaged)
-            next_pc = self._advance_pc(pc)
+            if per_example_pc:
+                # Per-example PC update: each example follows its own path.
+                # pc: [B, max_length], branch decisions use per-example flags.
 
-            # Average flags across batch for shared PC decision
-            avg_z = flags[:, 1].mean()
-            avg_n = flags[:, 0].mean()
-            beq_prob = opcode_w[OPCODES["BEQ"]] * avg_z
-            bne_prob = opcode_w[OPCODES["BNE"]] * (1.0 - avg_z)
-            bgt_prob = opcode_w[OPCODES["BGT"]] * (1.0 - avg_n) * (1.0 - avg_z)
-            branch_prob = (beq_prob + bne_prob + bgt_prob).clamp(0.0, 1.0)
+                # Advance each example's PC by rolling right along the
+                # instruction dimension (dim=1).
+                next_pc = torch.roll(pc, 1, dims=1)  # [B, max_length]
 
-            branch_pc = self._branch_pc(pc, branch_w)
-            pc = next_pc * (1.0 - branch_prob) + branch_pc * branch_prob
+                # Per-example branch probability using per-example flags [B]
+                beq_prob = opcode_w[OPCODES["BEQ"]] * flags[:, 1]
+                bne_prob = opcode_w[OPCODES["BNE"]] * (1.0 - flags[:, 1])
+                bgt_prob = (opcode_w[OPCODES["BGT"]]
+                            * (1.0 - flags[:, 0]) * (1.0 - flags[:, 1]))
+                branch_prob = (beq_prob + bne_prob + bgt_prob).clamp(0.0, 1.0)
+                # branch_prob: [B]
+
+                # Branch target is the same for all examples (program is shared).
+                # branch_w: [max_length] -> expand to [B, max_length]
+                branch_pc = branch_w.unsqueeze(0).expand(batch_size, -1)
+
+                # STE hard branching for per-example PC
+                if (hard_branch_threshold is not None
+                        and temperature < hard_branch_threshold):
+                    branch_taken = (branch_prob > 0.5).float()
+                    branch_taken = branch_prob + (branch_taken - branch_prob).detach()
+                    # branch_taken: [B] -> [B, 1] for broadcasting
+                    bt = branch_taken.unsqueeze(1)
+                    pc = next_pc * (1.0 - bt) + branch_pc * bt
+                else:
+                    bp = branch_prob.unsqueeze(1)  # [B, 1]
+                    pc = next_pc * (1.0 - bp) + branch_pc * bp
+            else:
+                # PC update (shared across batch, branch decisions averaged)
+                next_pc = self._advance_pc(pc)
+
+                # Average flags across batch for shared PC decision
+                avg_z = flags[:, 1].mean()
+                avg_n = flags[:, 0].mean()
+                beq_prob = opcode_w[OPCODES["BEQ"]] * avg_z
+                bne_prob = opcode_w[OPCODES["BNE"]] * (1.0 - avg_z)
+                bgt_prob = opcode_w[OPCODES["BGT"]] * (1.0 - avg_n) * (1.0 - avg_z)
+                branch_prob = (beq_prob + bne_prob + bgt_prob).clamp(0.0, 1.0)
+
+                branch_pc = self._branch_pc(pc, branch_w)
+
+                # STE hard branching for shared PC
+                if (hard_branch_threshold is not None
+                        and temperature < hard_branch_threshold):
+                    branch_taken = (branch_prob > 0.5).float()
+                    branch_taken = branch_prob + (branch_taken - branch_prob).detach()
+                    pc = next_pc * (1.0 - branch_taken) + branch_pc * branch_taken
+                else:
+                    pc = next_pc * (1.0 - branch_prob) + branch_pc * branch_prob
 
             # Halt masking per example
             halt_prob = opcode_w[OPCODES["HALT"]]
