@@ -44,6 +44,11 @@ class ProcessDescriptor:
         inputs: Initial register values ``{reg_index: value}``.
         core_affinity: Preferred core id (optional).  Only honoured by the
             AFFINITY policy.
+        device_affinity: Preferred device string (e.g. ``cpu``, ``mps``,
+            ``cuda:0``). When set, the scheduler prefers cores mapped to that
+            device.
+        required_backend: Required backend family (``cpu``, ``mps``, ``cuda``).
+            If set, the scheduler only considers cores on matching backends.
         priority: Higher values run first when the scheduler must break ties.
     """
 
@@ -51,6 +56,8 @@ class ProcessDescriptor:
     program: object  # FixedProgram | SoftProgram
     inputs: dict = field(default_factory=dict)
     core_affinity: Optional[int] = None
+    device_affinity: Optional[str] = None
+    required_backend: Optional[str] = None
     priority: int = 0
 
 
@@ -71,11 +78,15 @@ class DistributedScheduler:
         self,
         num_cores: int,
         policy: SchedulingPolicy = SchedulingPolicy.ROUND_ROBIN,
+        core_devices: Optional[list[str]] = None,
     ) -> None:
         if num_cores < 1:
             raise ValueError("num_cores must be >= 1")
         self.num_cores = num_cores
         self.policy = policy
+        self.core_devices = core_devices or ["cpu"] * num_cores
+        if len(self.core_devices) != num_cores:
+            raise ValueError("core_devices must match num_cores length")
         self.core_loads: list[int] = [0] * num_cores
         self._next_core: int = 0
         self.process_queue: list[ProcessDescriptor] = []
@@ -117,26 +128,57 @@ class DistributedScheduler:
         self.process_queue.clear()
         return assignments
 
-    def _pick_core(self, proc: ProcessDescriptor) -> int:
-        """Select a core for *proc* based on the active policy."""
-        if self.policy == SchedulingPolicy.ROUND_ROBIN:
+    def _eligible_cores(self, proc: ProcessDescriptor) -> list[int]:
+        """Return cores that satisfy the process's device/backend constraints."""
+        eligible = list(range(self.num_cores))
+        if proc.required_backend is not None:
+            backend = proc.required_backend.lower()
+            eligible = [
+                cid for cid in eligible
+                if self.core_devices[cid].split(":")[0].lower() == backend
+            ]
+        if proc.device_affinity is not None:
+            preferred = proc.device_affinity.lower()
+            preferred_cores = [
+                cid for cid in eligible
+                if self.core_devices[cid].lower() == preferred
+            ]
+            if preferred_cores:
+                eligible = preferred_cores
+        return eligible
+
+    def _pick_round_robin_core(self, eligible: list[int]) -> int:
+        for _ in range(self.num_cores):
             core = self._next_core
             self._next_core = (self._next_core + 1) % self.num_cores
-            return core
+            if core in eligible:
+                return core
+        raise RuntimeError("No eligible cores available for round-robin scheduling")
+
+    def _pick_core(self, proc: ProcessDescriptor) -> int:
+        """Select a core for *proc* based on the active policy."""
+        eligible = self._eligible_cores(proc)
+        if not eligible:
+            raise RuntimeError(
+                f"No eligible cores for pid={proc.pid} with "
+                f"device_affinity={proc.device_affinity!r} "
+                f"required_backend={proc.required_backend!r}"
+            )
+
+        if self.policy == SchedulingPolicy.ROUND_ROBIN:
+            return self._pick_round_robin_core(eligible)
 
         if self.policy == SchedulingPolicy.LOAD_BALANCED:
-            return min(range(self.num_cores), key=lambda i: self.core_loads[i])
+            return min(eligible, key=lambda i: self.core_loads[i])
 
         if self.policy == SchedulingPolicy.AFFINITY:
             if (
                 proc.core_affinity is not None
                 and 0 <= proc.core_affinity < self.num_cores
+                and proc.core_affinity in eligible
             ):
                 return proc.core_affinity
-            # Fallback to round-robin when no affinity specified
-            core = self._next_core
-            self._next_core = (self._next_core + 1) % self.num_cores
-            return core
+            return self._pick_round_robin_core(eligible)
 
         # Unreachable unless someone adds a new policy without a handler
         raise ValueError(f"Unknown scheduling policy: {self.policy}")
@@ -168,10 +210,17 @@ class DistributedScheduler:
         self._next_core = 0
         self.process_queue.clear()
 
+    def set_core_devices(self, core_devices: list[str]) -> None:
+        """Update the scheduler's view of core-to-device mapping."""
+        if len(core_devices) != self.num_cores:
+            raise ValueError("core_devices must match num_cores length")
+        self.core_devices = list(core_devices)
+
     def __repr__(self) -> str:
         return (
             f"DistributedScheduler(num_cores={self.num_cores}, "
             f"policy={self.policy.value}, "
             f"queued={len(self.process_queue)}, "
-            f"loads={self.core_loads})"
+            f"loads={self.core_loads}, "
+            f"core_devices={self.core_devices})"
         )

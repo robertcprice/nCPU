@@ -86,6 +86,15 @@ PYTHONPATH=. python demos/neural_text_machine.py --interactive
 
 ## Systems wow demos
 
+### Distributed device dispatch demo
+
+```bash
+PYTHONPATH=. python demos/distributed_device_demo.py
+```
+
+Shows discovered devices, core assignment, scheduler affinity, rebalance behavior,
+and a tiny parallel execution summary.
+
 ### GPU BusyBox shell
 
 ```bash

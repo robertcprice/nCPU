@@ -697,6 +697,43 @@ class TestScheduler:
         assert len(assignments[1]) == 1
         assert assignments[1][0].pid == 1
 
+    def test_device_affinity_prefers_matching_core_device(self):
+        sched = DistributedScheduler(
+            num_cores=3,
+            policy=SchedulingPolicy.LOAD_BALANCED,
+            core_devices=["cpu", "mps", "cuda:0"],
+        )
+        sched.submit(ProcessDescriptor(pid=0, program=_halt_program(), device_affinity="mps"))
+        assignments = sched.schedule()
+        assert len(assignments[1]) == 1
+        assert assignments[1][0].pid == 0
+
+    def test_required_backend_filters_eligible_cores(self):
+        sched = DistributedScheduler(
+            num_cores=4,
+            policy=SchedulingPolicy.ROUND_ROBIN,
+            core_devices=["cpu", "cuda:0", "cpu", "cuda:1"],
+        )
+        sched.submit(ProcessDescriptor(pid=0, program=_halt_program(), required_backend="cuda"))
+        assignments = sched.schedule()
+        assert sum(len(v) for v in assignments.values()) == 1
+        assert len(assignments[1]) + len(assignments[3]) == 1
+
+    def test_affinity_and_required_backend_must_both_match(self):
+        sched = DistributedScheduler(
+            num_cores=3,
+            policy=SchedulingPolicy.AFFINITY,
+            core_devices=["cpu", "mps", "cuda:0"],
+        )
+        sched.submit(ProcessDescriptor(
+            pid=0,
+            program=_halt_program(),
+            core_affinity=2,
+            required_backend="cuda",
+        ))
+        assignments = sched.schedule()
+        assert len(assignments[2]) == 1
+
     def test_affinity_fallback(self):
         """Without affinity set, AFFINITY falls back to round-robin."""
         sched = DistributedScheduler(num_cores=2, policy=SchedulingPolicy.AFFINITY)
@@ -716,6 +753,16 @@ class TestScheduler:
         # pid=1 (priority=10) should be placed first (core 0)
         assert assignments[0][0].pid == 1
 
+    def test_unsatisfiable_backend_requirement_raises(self):
+        sched = DistributedScheduler(
+            num_cores=2,
+            policy=SchedulingPolicy.LOAD_BALANCED,
+            core_devices=["cpu", "cpu"],
+        )
+        sched.submit(ProcessDescriptor(pid=0, program=_halt_program(), required_backend="cuda"))
+        with pytest.raises(RuntimeError):
+            sched.schedule()
+
     def test_submit_batch(self):
         """submit_batch adds multiple processes at once."""
         sched = DistributedScheduler(num_cores=2)
@@ -731,6 +778,11 @@ class TestScheduler:
         sched.submit(ProcessDescriptor(pid=0, program=_halt_program()))
         sched.schedule()
         assert sched.pending_count() == 0
+
+    def test_set_core_devices(self):
+        sched = DistributedScheduler(num_cores=2)
+        sched.set_core_devices(["cpu", "mps"])
+        assert sched.core_devices == ["cpu", "mps"]
 
     def test_reset(self):
         """reset() clears everything."""
