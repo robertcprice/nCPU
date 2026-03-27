@@ -31,7 +31,7 @@ def make_processes() -> list[ProcessDescriptor]:
         ProcessDescriptor(pid=0, program=_program("ADD"), inputs={0: 1.0, 1: 2.0}, priority=2),
         ProcessDescriptor(pid=1, program=_program("MUL"), inputs={0: 3.0, 1: 4.0}, priority=5),
         ProcessDescriptor(pid=2, program=_program("SUB"), inputs={0: 10.0, 1: 3.0}, priority=1),
-        ProcessDescriptor(pid=3, program=_program("ADD"), inputs={0: 7.0, 1: 9.0}, required_backend="cpu"),
+        ProcessDescriptor(pid=3, program=_program("ADD"), inputs={0: 7.0, 1: 9.0}, required_backend="cpu", core_affinity=0),
     ]
 
 
