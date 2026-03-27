@@ -34,6 +34,24 @@ struct BootTaskRuntime {
     vfs: Option<GpuVfs>,
 }
 
+struct RunSummary {
+    input_kind: &'static str,
+    input_path: String,
+    memory_mb: usize,
+    max_cycles: u64,
+    timeout: f64,
+    entry_pc: u64,
+    stack_pointer: u64,
+    heap_base: u64,
+    exit_code: Option<i32>,
+    stop_reason: Option<String>,
+    total_cycles: Option<u64>,
+    elapsed_secs: Option<f64>,
+    processes_created: Option<i32>,
+    total_forks: Option<u32>,
+    total_context_switches: Option<u32>,
+}
+
 fn align_up(value: u64, alignment: u64) -> u64 {
     (value + alignment - 1) & !(alignment - 1)
 }
@@ -139,6 +157,82 @@ fn build_boot_vfs(
     Ok(Some(vfs))
 }
 
+fn json_escape(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+fn print_summary(summary: &RunSummary, json: bool) {
+    if json {
+        let json = format!(
+            "{{\"input_kind\":\"{}\",\"input_path\":\"{}\",\"memory_mb\":{},\"max_cycles\":{},\"timeout\":{},\"entry_pc\":{},\"stack_pointer\":{},\"heap_base\":{},\"exit_code\":{},\"stop_reason\":{},\"total_cycles\":{},\"elapsed_secs\":{},\"processes_created\":{},\"total_forks\":{},\"total_context_switches\":{}}}",
+            summary.input_kind,
+            json_escape(&summary.input_path),
+            summary.memory_mb,
+            summary.max_cycles,
+            summary.timeout,
+            summary.entry_pc,
+            summary.stack_pointer,
+            summary.heap_base,
+            summary
+                .exit_code
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            summary
+                .stop_reason
+                .as_ref()
+                .map(|s| format!("\"{}\"", json_escape(s)))
+                .unwrap_or_else(|| "null".to_string()),
+            summary
+                .total_cycles
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            summary
+                .elapsed_secs
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            summary
+                .processes_created
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            summary
+                .total_forks
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            summary
+                .total_context_switches
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".to_string())
+        );
+        println!("{}", json);
+        return;
+    }
+
+    eprintln!("[ncpu_run] report");
+    eprintln!("  input_kind: {}", summary.input_kind);
+    eprintln!("  input_path: {}", summary.input_path);
+    eprintln!("  memory_mb: {}", summary.memory_mb);
+    eprintln!("  max_cycles: {}", summary.max_cycles);
+    eprintln!("  timeout: {}", summary.timeout);
+    eprintln!("  entry_pc: 0x{:X}", summary.entry_pc);
+    eprintln!("  stack_pointer: 0x{:X}", summary.stack_pointer);
+    eprintln!("  heap_base: 0x{:X}", summary.heap_base);
+    if let Some(exit_code) = summary.exit_code {
+        eprintln!("  exit_code: {}", exit_code);
+    }
+    if let Some(stop_reason) = &summary.stop_reason {
+        eprintln!("  stop_reason: {}", stop_reason);
+    }
+    if let Some(total_cycles) = summary.total_cycles {
+        eprintln!("  total_cycles: {}", total_cycles);
+    }
+    if let Some(elapsed_secs) = summary.elapsed_secs {
+        eprintln!("  elapsed_secs: {:.3}", elapsed_secs);
+    }
+}
+
 fn load_boot_image(
     launcher: &GpuLauncher,
     image: &[u8],
@@ -218,6 +312,8 @@ fn main() {
     let mut quiet = false;
     let mut with_rootfs = false;
     let mut force_elf = false;
+    let mut inspect_only = false;
+    let mut json_report = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -253,6 +349,12 @@ fn main() {
             }
             "--rootfs" => {
                 with_rootfs = true;
+            }
+            "--inspect" => {
+                inspect_only = true;
+            }
+            "--json-report" => {
+                json_report = true;
             }
             "--" => {
                 // Everything after -- is program args
@@ -319,7 +421,7 @@ fn main() {
         }
     };
 
-    let mut vfs = match &input_kind {
+    let (mut vfs, mut summary) = match &input_kind {
         InputKind::BootImage(header) => {
             if !program_args.is_empty() {
                 eprintln!("Error: boot image mode does not yet accept extra CLI args");
@@ -350,14 +452,33 @@ fn main() {
                 runtime.task.stack_top,
                 runtime.heap_base,
             );
-            runtime.vfs
+            (
+                runtime.vfs,
+                RunSummary {
+                    input_kind: "boot_image",
+                    input_path: input_path.clone(),
+                    memory_mb,
+                    max_cycles,
+                    timeout,
+                    entry_pc: runtime.task.entry_pc,
+                    stack_pointer: runtime.task.stack_top,
+                    heap_base: runtime.heap_base,
+                    exit_code: None,
+                    stop_reason: None,
+                    total_cycles: None,
+                    elapsed_secs: None,
+                    processes_created: None,
+                    total_forks: None,
+                    total_context_switches: None,
+                },
+            )
         }
         InputKind::Elf => {
             let binary_name = Path::new(&input_path)
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_else(|| input_path.clone());
-            let mut argv: Vec<String> = vec![binary_name];
+            let mut argv: Vec<String> = vec![binary_name.clone()];
             argv.extend(program_args.clone());
             let argv_refs = argv.iter().map(String::as_str).collect::<Vec<_>>();
 
@@ -387,7 +508,7 @@ fn main() {
 
             launcher.load_prepared_elf(&prepared);
 
-            if with_rootfs {
+            let vfs = if with_rootfs {
                 let mut v = GpuVfs::new();
                 create_standard_dirs(&mut v);
                 v.files
@@ -403,9 +524,35 @@ fn main() {
                 Some(v)
             } else {
                 Some(GpuVfs::new())
-            }
+            };
+
+            (
+                vfs,
+                RunSummary {
+                    input_kind: "elf",
+                    input_path: input_path.clone(),
+                    memory_mb,
+                    max_cycles,
+                    timeout,
+                    entry_pc: prepared.entry_pc,
+                    stack_pointer: prepared.stack_pointer,
+                    heap_base: prepared.heap_base,
+                    exit_code: None,
+                    stop_reason: None,
+                    total_cycles: None,
+                    elapsed_secs: None,
+                    processes_created: None,
+                    total_forks: None,
+                    total_context_switches: None,
+                },
+            )
         }
     };
+
+    if inspect_only {
+        print_summary(&summary, json_report);
+        process::exit(0);
+    }
 
     // Run
     let result = match launcher.run(&mut vfs, max_cycles, timeout, quiet) {
@@ -417,6 +564,14 @@ fn main() {
     };
 
     // Print stdout
+    summary.exit_code = Some(result.exit_code);
+    summary.stop_reason = Some(result.stop_reason.clone());
+    summary.total_cycles = Some(result.total_cycles);
+    summary.elapsed_secs = Some(result.elapsed_secs);
+    summary.processes_created = Some(result.processes_created);
+    summary.total_forks = Some(result.total_forks);
+    summary.total_context_switches = Some(result.total_context_switches);
+
     if !result.stdout.is_empty() {
         let stdout_str = String::from_utf8_lossy(&result.stdout);
         print!("{}", stdout_str);
@@ -443,6 +598,10 @@ fn main() {
             "[ncpu_run] processes={} forks={} context_switches={}",
             result.processes_created, result.total_forks, result.total_context_switches
         );
+    }
+
+    if json_report {
+        print_summary(&summary, true);
     }
 
     process::exit(result.exit_code);

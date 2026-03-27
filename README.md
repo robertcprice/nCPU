@@ -161,6 +161,7 @@ python demos/alpine_gpu.py --demo
 # Rust-native launcher --- standalone Rust path (ELF or boot image)
 cd kernels/rust_metal
 cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --rootfs -- echo hello
+cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --inspect --json-report
 cargo run --bin ncpu_run -- ../../path/to/image.bin
 
 # Differentiable coprocessor --- inject nCPU into a transformer

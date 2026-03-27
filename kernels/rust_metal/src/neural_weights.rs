@@ -233,25 +233,26 @@ impl NeuralWeightCollection {
                 weights.push(f32::from_le_bytes(float_bytes));
             }
 
+            let shape = vec![weights.len()];
             match header {
                 b"DISP" => {
-                    self.dispatch_weights = Some(ModelWeights::new(weights, vec![weights.len()]));
+                    self.dispatch_weights = Some(ModelWeights::new(weights, shape));
                     loaded += 1;
                 }
                 b"EMBD" => {
-                    self.embedding_weights = Some(ModelWeights::new(weights, vec![weights.len()]));
+                    self.embedding_weights = Some(ModelWeights::new(weights, shape));
                     loaded += 1;
                 }
                 b"LOOP" => {
-                    self.loop_detector_weights = Some(ModelWeights::new(weights, vec![weights.len()]));
+                    self.loop_detector_weights = Some(ModelWeights::new(weights, shape));
                     loaded += 1;
                 }
                 b"MEMO" => {
-                    self.memory_oracle_weights = Some(ModelWeights::new(weights, vec![weights.len()]));
+                    self.memory_oracle_weights = Some(ModelWeights::new(weights, shape));
                     loaded += 1;
                 }
                 b"PATT" => {
-                    self.pattern_recognizer_weights = Some(ModelWeights::new(weights, vec![weights.len()]));
+                    self.pattern_recognizer_weights = Some(ModelWeights::new(weights, shape));
                     loaded += 1;
                 }
                 _ => {}
