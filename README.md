@@ -164,6 +164,11 @@ cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --rootfs -- echo hello
 cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --inspect --json-report
 cargo run --bin ncpu_run -- ../../path/to/image.bin
 
+# Benchmark mode --- run 3x with aggregate statistics
+cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --benchmark --rootfs -- echo hello
+# Custom repeat count with JSON aggregate output
+cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --repeat 10 --json-report --rootfs -- echo hello
+
 # Differentiable coprocessor --- inject nCPU into a transformer
 python ncpu/coprocessor/train.py  # Train on synthetic arithmetic + GSM8K
 ```

@@ -3,6 +3,9 @@
 //! Usage:
 //!   ncpu_run --elf <path> [-- arg1 arg2 ...]
 //!   ncpu_run <boot_image.bin>
+//!   ncpu_run --elf <path> --benchmark          # run 3x with aggregate stats
+//!   ncpu_run --elf <path> --repeat 10          # run 10x with aggregate stats
+//!   ncpu_run --elf <path> --benchmark --json-report  # aggregate as JSON
 
 use std::env;
 use std::fs;
@@ -50,6 +53,72 @@ struct RunSummary {
     processes_created: Option<i32>,
     total_forks: Option<u32>,
     total_context_switches: Option<u32>,
+}
+
+struct AggregateStats {
+    runs: u32,
+    mean_cycles: f64,
+    mean_elapsed_secs: f64,
+    mean_ips: f64,
+    min_elapsed_secs: f64,
+    max_elapsed_secs: f64,
+    all_exit_zero: bool,
+}
+
+fn compute_aggregate(summaries: &[RunSummary]) -> AggregateStats {
+    let n = summaries.len() as f64;
+    let mut total_cycles = 0.0f64;
+    let mut total_elapsed = 0.0f64;
+    let mut total_ips = 0.0f64;
+    let mut min_elapsed = f64::MAX;
+    let mut max_elapsed = 0.0f64;
+    let mut all_exit_zero = true;
+
+    for s in summaries {
+        let cyc = s.total_cycles.unwrap_or(0) as f64;
+        let elapsed = s.elapsed_secs.unwrap_or(0.0);
+        let ips = if elapsed > 0.0 { cyc / elapsed } else { 0.0 };
+        total_cycles += cyc;
+        total_elapsed += elapsed;
+        total_ips += ips;
+        if elapsed < min_elapsed {
+            min_elapsed = elapsed;
+        }
+        if elapsed > max_elapsed {
+            max_elapsed = elapsed;
+        }
+        if s.exit_code != Some(0) {
+            all_exit_zero = false;
+        }
+    }
+
+    AggregateStats {
+        runs: summaries.len() as u32,
+        mean_cycles: total_cycles / n,
+        mean_elapsed_secs: total_elapsed / n,
+        mean_ips: total_ips / n,
+        min_elapsed_secs: if min_elapsed == f64::MAX { 0.0 } else { min_elapsed },
+        max_elapsed_secs: max_elapsed,
+        all_exit_zero,
+    }
+}
+
+fn print_aggregate(stats: &AggregateStats, json: bool) {
+    if json {
+        println!(
+            "{{\"aggregate\":true,\"runs\":{},\"mean_cycles\":{:.1},\"mean_elapsed_secs\":{:.6},\"mean_ips\":{:.0},\"min_elapsed_secs\":{:.6},\"max_elapsed_secs\":{:.6},\"all_exit_zero\":{}}}",
+            stats.runs, stats.mean_cycles, stats.mean_elapsed_secs, stats.mean_ips,
+            stats.min_elapsed_secs, stats.max_elapsed_secs, stats.all_exit_zero,
+        );
+    } else {
+        eprintln!("[ncpu_run] aggregate ({} runs)", stats.runs);
+        eprintln!("  mean_cycles:      {:.1}", stats.mean_cycles);
+        eprintln!("  mean_elapsed:     {:.6}s", stats.mean_elapsed_secs);
+        eprintln!("  mean_ips:         {:.0}", stats.mean_ips);
+        eprintln!("  min_elapsed:      {:.6}s", stats.min_elapsed_secs);
+        eprintln!("  max_elapsed:      {:.6}s", stats.max_elapsed_secs);
+        eprintln!("  all_exit_zero:    {}", stats.all_exit_zero);
+    }
 }
 
 fn align_up(value: u64, alignment: u64) -> u64 {
@@ -314,6 +383,8 @@ fn main() {
     let mut force_elf = false;
     let mut inspect_only = false;
     let mut json_report = false;
+    let mut benchmark = false;
+    let mut repeat: u32 = 1;
 
     let mut i = 1;
     while i < args.len() {
@@ -355,6 +426,15 @@ fn main() {
             }
             "--json-report" => {
                 json_report = true;
+            }
+            "--benchmark" => {
+                benchmark = true;
+            }
+            "--repeat" => {
+                i += 1;
+                if i < args.len() {
+                    repeat = args[i].parse().unwrap_or(1).max(1);
+                }
             }
             "--" => {
                 // Everything after -- is program args
@@ -554,55 +634,97 @@ fn main() {
         process::exit(0);
     }
 
-    // Run
-    let result = match launcher.run(&mut vfs, max_cycles, timeout, quiet) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Execution failed: {}", e);
-            process::exit(1);
+    // When --benchmark is set, force --repeat to at least 3 if not overridden
+    if benchmark && repeat < 3 {
+        repeat = 3;
+    }
+
+    let mut all_summaries: Vec<RunSummary> = Vec::with_capacity(repeat as usize);
+    let mut last_exit_code: i32 = 0;
+
+    for iteration in 0..repeat {
+        if repeat > 1 && !quiet {
+            eprintln!("[ncpu_run] --- iteration {}/{} ---", iteration + 1, repeat);
         }
-    };
 
-    // Print stdout
-    summary.exit_code = Some(result.exit_code);
-    summary.stop_reason = Some(result.stop_reason.clone());
-    summary.total_cycles = Some(result.total_cycles);
-    summary.elapsed_secs = Some(result.elapsed_secs);
-    summary.processes_created = Some(result.processes_created);
-    summary.total_forks = Some(result.total_forks);
-    summary.total_context_switches = Some(result.total_context_switches);
-
-    if !result.stdout.is_empty() {
-        let stdout_str = String::from_utf8_lossy(&result.stdout);
-        print!("{}", stdout_str);
-    }
-
-    // Print stderr to stderr
-    if !result.stderr.is_empty() {
-        let stderr_str = String::from_utf8_lossy(&result.stderr);
-        eprint!("{}", stderr_str);
-    }
-
-    if !quiet {
-        let ips = if result.elapsed_secs > 0.0 {
-            result.total_cycles as f64 / result.elapsed_secs
-        } else {
-            0.0
+        // Run
+        let result = match launcher.run(&mut vfs, max_cycles, timeout, quiet) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Execution failed: {}", e);
+                process::exit(1);
+            }
         };
-        eprintln!(
-            "\n[ncpu_run] {} after {} cycles ({:.3}s, {:.0} IPS)",
-            result.stop_reason, result.total_cycles, result.elapsed_secs, ips
-        );
-        eprintln!("[ncpu_run] exit_code={}", result.exit_code);
-        eprintln!(
-            "[ncpu_run] processes={} forks={} context_switches={}",
-            result.processes_created, result.total_forks, result.total_context_switches
-        );
+
+        summary.exit_code = Some(result.exit_code);
+        summary.stop_reason = Some(result.stop_reason.clone());
+        summary.total_cycles = Some(result.total_cycles);
+        summary.elapsed_secs = Some(result.elapsed_secs);
+        summary.processes_created = Some(result.processes_created);
+        summary.total_forks = Some(result.total_forks);
+        summary.total_context_switches = Some(result.total_context_switches);
+        last_exit_code = result.exit_code;
+
+        // Print stdout (only on first iteration for --benchmark, always otherwise)
+        if !result.stdout.is_empty() && (!benchmark || iteration == 0) {
+            let stdout_str = String::from_utf8_lossy(&result.stdout);
+            print!("{}", stdout_str);
+        }
+
+        // Print stderr to stderr
+        if !result.stderr.is_empty() && (!benchmark || iteration == 0) {
+            let stderr_str = String::from_utf8_lossy(&result.stderr);
+            eprint!("{}", stderr_str);
+        }
+
+        if !quiet {
+            let ips = if result.elapsed_secs > 0.0 {
+                result.total_cycles as f64 / result.elapsed_secs
+            } else {
+                0.0
+            };
+            eprintln!(
+                "\n[ncpu_run] {} after {} cycles ({:.3}s, {:.0} IPS)",
+                result.stop_reason, result.total_cycles, result.elapsed_secs, ips
+            );
+            eprintln!("[ncpu_run] exit_code={}", result.exit_code);
+            eprintln!(
+                "[ncpu_run] processes={} forks={} context_switches={}",
+                result.processes_created, result.total_forks, result.total_context_switches
+            );
+        }
+
+        if json_report && !benchmark {
+            print_summary(&summary, true);
+        }
+
+        // Save a copy for aggregate
+        all_summaries.push(RunSummary {
+            input_kind: summary.input_kind,
+            input_path: summary.input_path.clone(),
+            memory_mb: summary.memory_mb,
+            max_cycles: summary.max_cycles,
+            timeout: summary.timeout,
+            entry_pc: summary.entry_pc,
+            stack_pointer: summary.stack_pointer,
+            heap_base: summary.heap_base,
+            exit_code: summary.exit_code,
+            stop_reason: summary.stop_reason.clone(),
+            total_cycles: summary.total_cycles,
+            elapsed_secs: summary.elapsed_secs,
+            processes_created: summary.processes_created,
+            total_forks: summary.total_forks,
+            total_context_switches: summary.total_context_switches,
+        });
     }
 
-    if json_report {
+    // Aggregate reporting for --benchmark or --repeat N>1
+    if all_summaries.len() > 1 {
+        let aggregate = compute_aggregate(&all_summaries);
+        print_aggregate(&aggregate, json_report || benchmark);
+    } else if json_report {
         print_summary(&summary, true);
     }
 
-    process::exit(result.exit_code);
+    process::exit(last_exit_code);
 }
