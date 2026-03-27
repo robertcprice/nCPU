@@ -18,6 +18,8 @@ from ncpu.distributed import (
     CoreConfig,
     CoreState,
     DistributedResult,
+    DeviceInfo,
+    DeviceAssignment,
     SharedMemoryRegion,
     MessageChannel,
     IPCMessage,
@@ -186,6 +188,30 @@ class TestDistributedNCPU:
         for i, core in enumerate(dcpu.cores):
             assert core.core_id == i
 
+    def test_device_discovery_always_includes_cpu(self):
+        devices = DistributedNCPU.discover_devices()
+        assert any(d.name == "cpu" for d in devices)
+        assert all(isinstance(d, DeviceInfo) for d in devices)
+
+    def test_auto_device_assignment_falls_back_safely(self):
+        cfg = CoreConfig(core_id=0, device="auto")
+        dcpu = DistributedNCPU(num_cores=3, core_config=cfg)
+        device_map = dcpu.get_device_map()
+        assert set(device_map.keys()) == {0, 1, 2}
+        assert all(isinstance(v, str) for v in device_map.values())
+
+    def test_explicit_unavailable_device_falls_back_to_cpu(self):
+        dcpu = DistributedNCPU(num_cores=2, devices=["cuda:999"])
+        report = dcpu.get_device_assignment_report()
+        assert all(item["assigned_device"] == "cpu" for item in report)
+        assert "fell back to cpu" in report[0]["reason"]
+
+    def test_rebalance_devices_updates_core_configs(self):
+        dcpu = DistributedNCPU(num_cores=2)
+        dcpu.rebalance_devices(["cpu"], strategy="mirror")
+        assert dcpu.cores[0].config.device == "cpu"
+        assert dcpu.cores[1].config.device == "cpu"
+
     def test_creation_with_config(self):
         """Custom core config propagates to all cores."""
         cfg = CoreConfig(core_id=0, num_registers=16, local_memory_size=2048)
@@ -226,6 +252,7 @@ class TestDistributedNCPU:
         assert abs(result.core_results[2].registers[7].item() - 12.0) < 1e-5
         assert result.all_halted
         assert result.total_steps == 6  # 2 steps x 3 cores
+        assert result.device_assignments[0] == dcpu.cores[0].config.device
 
     def test_parallel_execution_shared_memory_populated(self):
         """After parallel execution, shared memory contains output registers."""

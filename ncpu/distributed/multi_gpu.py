@@ -72,6 +72,26 @@ class CoreConfig:
     device: str = "cpu"
 
 
+@dataclass
+class DeviceInfo:
+    """Description of one execution device visible to the host."""
+
+    name: str
+    kind: str
+    index: Optional[int]
+    available: bool = True
+
+
+@dataclass
+class DeviceAssignment:
+    """Maps a core to the execution device it should use."""
+
+    core_id: int
+    requested_device: str
+    assigned_device: str
+    reason: str
+
+
 # ---------------------------------------------------------------------------
 # Distributed execution result
 # ---------------------------------------------------------------------------
@@ -93,6 +113,7 @@ class DistributedResult:
     messages_exchanged: int
     total_steps: int
     all_halted: bool
+    device_assignments: dict[int, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +237,7 @@ class DistributedNCPU(nn.Module):
       - Pipe: create a communication channel between cores
       - Wait: block until another core completes
       - Pipeline: staged dataflow execution across cores
+      - Device-aware dispatch planning across CPU / MPS / CUDA backends
 
     On Apple Silicon, "multi-GPU" uses the unified memory architecture:
     each core runs a separate DifferentiableEngine, but all share the
@@ -227,18 +249,30 @@ class DistributedNCPU(nn.Module):
         num_cores: int = 4,
         shared_memory_size: int = 4096,
         core_config: Optional[CoreConfig] = None,
+        devices: Optional[list[str]] = None,
+        device_strategy: str = "round_robin",
     ) -> None:
         super().__init__()
         self.num_cores = num_cores
+        self.device_strategy = device_strategy
+        self.available_devices = self.discover_devices()
+        self.device_assignments: list[DeviceAssignment] = []
 
         # Shared memory visible to all cores
         self.shared_memory = SharedMemoryRegion(
             size=shared_memory_size, name="global"
         )
 
+        requested_devices = devices or self._expand_requested_devices(
+            core_config.device if core_config else "cpu"
+        )
+
         # Build individual cores
         self.cores = nn.ModuleList()
         for i in range(num_cores):
+            assigned_device, reason = self._assign_device_for_core(
+                i, requested_devices
+            )
             cfg = CoreConfig(
                 core_id=i,
                 num_registers=(
@@ -247,7 +281,15 @@ class DistributedNCPU(nn.Module):
                 local_memory_size=(
                     core_config.local_memory_size if core_config else 1024
                 ),
-                device=core_config.device if core_config else "cpu",
+                device=assigned_device,
+            )
+            self.device_assignments.append(
+                DeviceAssignment(
+                    core_id=i,
+                    requested_device=requested_devices[i % len(requested_devices)],
+                    assigned_device=assigned_device,
+                    reason=reason,
+                )
             )
             self.cores.append(GPUCore(cfg))
 
@@ -257,6 +299,76 @@ class DistributedNCPU(nn.Module):
         # Pipe registry: tracks active pipes between cores
         self._pipes: list[MessageChannel] = []
         self._pipe_endpoints: list[tuple[int, int]] = []  # (reader, writer)
+
+    # -- device discovery / assignment -------------------------------------
+
+    @staticmethod
+    def discover_devices() -> list[DeviceInfo]:
+        """Discover execution backends visible to PyTorch."""
+        devices = [DeviceInfo(name="cpu", kind="cpu", index=None)]
+        if torch.backends.mps.is_available():
+            devices.append(DeviceInfo(name="mps", kind="mps", index=None))
+        if torch.cuda.is_available():
+            for idx in range(torch.cuda.device_count()):
+                devices.append(DeviceInfo(name=f"cuda:{idx}", kind="cuda", index=idx))
+        return devices
+
+    def _expand_requested_devices(self, requested: str) -> list[str]:
+        if requested == "auto":
+            gpu_devices = [d.name for d in self.available_devices if d.kind in {"cuda", "mps"}]
+            return gpu_devices or ["cpu"]
+        return [requested]
+
+    def _assign_device_for_core(self, core_id: int, requested_devices: list[str]) -> tuple[str, str]:
+        if not requested_devices:
+            return "cpu", "no devices requested; fell back to cpu"
+
+        if self.device_strategy == "mirror":
+            requested = requested_devices[0]
+        else:
+            requested = requested_devices[core_id % len(requested_devices)]
+
+        available_names = {d.name for d in self.available_devices}
+        if requested in available_names:
+            return requested, f"requested device '{requested}' is available"
+
+        if requested == "auto":
+            fallback = self._expand_requested_devices("auto")[0]
+            return fallback, "auto-selected first available accelerator or cpu"
+
+        return "cpu", f"requested device '{requested}' unavailable; fell back to cpu"
+
+    def get_device_map(self) -> dict[int, str]:
+        """Return the assigned device for each core."""
+        return {assignment.core_id: assignment.assigned_device for assignment in self.device_assignments}
+
+    def get_device_assignment_report(self) -> list[dict[str, str | int]]:
+        """Human-readable report for dispatch decisions."""
+        return [
+            {
+                "core_id": assignment.core_id,
+                "requested_device": assignment.requested_device,
+                "assigned_device": assignment.assigned_device,
+                "reason": assignment.reason,
+            }
+            for assignment in self.device_assignments
+        ]
+
+    def rebalance_devices(self, devices: list[str], strategy: str = "round_robin") -> None:
+        """Reassign core devices without rebuilding the controller."""
+        self.device_strategy = strategy
+        self.device_assignments = []
+        for i, core in enumerate(self.cores):
+            assigned_device, reason = self._assign_device_for_core(i, devices)
+            core.config.device = assigned_device
+            self.device_assignments.append(
+                DeviceAssignment(
+                    core_id=i,
+                    requested_device=devices[i % len(devices)],
+                    assigned_device=assigned_device,
+                    reason=reason,
+                )
+            )
 
     # -- program loading ----------------------------------------------------
 
@@ -412,6 +524,7 @@ class DistributedNCPU(nn.Module):
             messages_exchanged=delivered,
             total_steps=sum(r.steps_executed for r in core_results.values()),
             all_halted=all_halted,
+            device_assignments=self.get_device_map(),
         )
 
     # -- pipeline execution -------------------------------------------------
@@ -478,6 +591,7 @@ class DistributedNCPU(nn.Module):
             messages_exchanged=0,
             total_steps=sum(r.steps_executed for r in results.values()),
             all_halted=all(r.halted for r in results.values()),
+            device_assignments=self.get_device_map(),
         )
 
     # -- BSP (Bulk Synchronous Parallel) execution ---------------------------
@@ -597,6 +711,7 @@ class DistributedNCPU(nn.Module):
             messages_exchanged=delivered,
             total_steps=sum(r.steps_executed for r in core_results.values()),
             all_halted=all_halted,
+            device_assignments=self.get_device_map(),
         )
 
     # -- utilities ----------------------------------------------------------
@@ -618,9 +733,10 @@ class DistributedNCPU(nn.Module):
 
     def __repr__(self) -> str:
         states = [c.state.value for c in self.cores]
+        devices = self.get_device_map()
         return (
             f"DistributedNCPU(num_cores={self.num_cores}, "
-            f"states={states})"
+            f"states={states}, devices={devices})"
         )
 
 

@@ -457,7 +457,8 @@ Multiple GPUs as multiple cores of a single neural computer (`ncpu/distributed/`
 - **Fork/pipe**: UNIX process model across GPU boundaries (clone state, create channels)
 - **Shared memory**: inter-core communication with atomic operations (add, compare-and-swap)
 - **Distributed scheduler**: round-robin, load-balanced, and affinity-based policies
-- **74 tests passing** across 9 test classes
+- **Device-aware dispatch**: automatic CPU/MPS/CUDA discovery, round-robin or mirrored core assignment, rebalance/report APIs
+- **78 tests passing** across the distributed execution suite
 
 ## Neural Arithmetic
 

@@ -18,6 +18,8 @@ from .multi_gpu import (
     CoreConfig,
     CoreState,
     DistributedResult,
+    DeviceInfo,
+    DeviceAssignment,
 )
 from .ipc import (
     Barrier,
@@ -38,6 +40,8 @@ __all__ = [
     "CoreConfig",
     "CoreState",
     "DistributedResult",
+    "DeviceInfo",
+    "DeviceAssignment",
     "SharedMemoryRegion",
     "MessageChannel",
     "IPCMessage",

@@ -356,11 +356,37 @@ class DifferentiableEngine(nn.Module):
         n_bits: int = 16,
         bit_temperature: float = 10.0,
         flag_scale: float = 0.1,
+        device: str = "cpu",
     ):
         super().__init__()
         self.num_registers = num_registers
-        self.alu = DifferentiableALU(n_bits, bit_temperature)
         self.flag_scale = flag_scale
+        self.execution_device = self._normalize_device(device)
+        self.alu = DifferentiableALU(n_bits, bit_temperature)
+        self.to(self.execution_device)
+
+    @staticmethod
+    def _normalize_device(device: str) -> str:
+        if device == "auto":
+            if torch.cuda.is_available():
+                return "cuda:0"
+            if torch.backends.mps.is_available():
+                return "mps"
+            return "cpu"
+        if device.startswith("cuda") and not torch.cuda.is_available():
+            return "cpu"
+        if device == "mps" and not torch.backends.mps.is_available():
+            return "cpu"
+        return device
+
+    @property
+    def device(self) -> torch.device:
+        return torch.device(self.execution_device)
+
+    def _to_device_tensor(self, value: torch.Tensor | float) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            return value.to(self.device)
+        return torch.tensor(float(value), device=self.device)
 
     # -- Register access (soft) ------------------------------------------
 
@@ -416,15 +442,14 @@ class DifferentiableEngine(nn.Module):
         Returns:
             ExecutionResult with differentiable register state
         """
-        # Initialize registers
-        regs = torch.zeros(self.num_registers)
-        for idx, val in inputs.items():
-            if isinstance(val, torch.Tensor):
-                regs[idx] = val
-            else:
-                regs[idx] = float(val)
+        program = program.to(self.device)
 
-        flags = torch.zeros(4)  # N, Z, C, V
+        # Initialize registers
+        regs = torch.zeros(self.num_registers, device=self.device)
+        for idx, val in inputs.items():
+            regs[idx] = self._to_device_tensor(val)
+
+        flags = torch.zeros(4, device=self.device)  # N, Z, C, V
         pc = 0  # hard PC for fixed programs
         trace = [regs.clone()]
         halted = False
@@ -539,21 +564,20 @@ class DifferentiableEngine(nn.Module):
         Returns:
             ExecutionResult with differentiable register state
         """
+        program = program.to(self.device)
+
         # Initialize registers
-        regs = torch.zeros(self.num_registers)
+        regs = torch.zeros(self.num_registers, device=self.device)
         for idx, val in inputs.items():
-            if isinstance(val, torch.Tensor):
-                regs[idx] = val
-            else:
-                regs[idx] = float(val)
+            regs[idx] = self._to_device_tensor(val)
 
         # Soft PC: distribution over instruction positions
-        pc = torch.zeros(program.max_length)
+        pc = torch.zeros(program.max_length, device=self.device)
         pc[0] = 1.0  # start at position 0
 
-        flags = torch.zeros(4)
+        flags = torch.zeros(4, device=self.device)
         trace = [regs.clone()]
-        cumulative_halt = torch.tensor(0.0)
+        cumulative_halt = torch.tensor(0.0, device=self.device)
 
         for step in range(max_steps):
             # Save pre-step registers for halt masking
@@ -574,7 +598,7 @@ class DifferentiableEngine(nn.Module):
             )
 
             # Weighted combination by soft opcode
-            result = torch.tensor(0.0)
+            result = torch.tensor(0.0, device=self.device)
             for op_name, op_idx in OPCODES.items():
                 result = result + opcode_w[op_idx] * all_results[op_name]
 
@@ -695,24 +719,25 @@ class DifferentiableEngine(nn.Module):
             List of ExecutionResult, one per input example.
         """
         batch_size = len(batch_inputs)
+        program = program.to(self.device)
 
         # Initialize batched registers: [B, num_registers]
-        regs = torch.zeros(batch_size, self.num_registers)
+        regs = torch.zeros(batch_size, self.num_registers, device=self.device)
         for b, inputs in enumerate(batch_inputs):
             for idx, val in inputs.items():
-                regs[b, idx] = float(val) if not isinstance(val, torch.Tensor) else val
+                regs[b, idx] = self._to_device_tensor(val)
 
         if per_example_pc:
             # Per-example PC: [B, max_length]
-            pc = torch.zeros(batch_size, program.max_length)
+            pc = torch.zeros(batch_size, program.max_length, device=self.device)
             pc[:, 0] = 1.0
         else:
             # Shared soft PC (same program for all examples): [max_length]
-            pc = torch.zeros(program.max_length)
+            pc = torch.zeros(program.max_length, device=self.device)
             pc[0] = 1.0
 
-        flags = torch.zeros(batch_size, 4)  # [B, 4] N, Z, C, V
-        cumulative_halt = torch.zeros(batch_size)  # [B]
+        flags = torch.zeros(batch_size, 4, device=self.device)  # [B, 4] N, Z, C, V
+        cumulative_halt = torch.zeros(batch_size, device=self.device)  # [B]
         step = 0
 
         for step in range(max_steps):
@@ -742,7 +767,7 @@ class DifferentiableEngine(nn.Module):
             # Batched ALU: compute all ops for all examples at once
             # Each result value is [B]
             results: dict[str, torch.Tensor] = {}
-            results["NOP"] = torch.zeros(batch_size)
+            results["NOP"] = torch.zeros(batch_size, device=self.device)
             results["MOV_IMM"] = immediate.expand(batch_size)
             results["MOV_REG"] = src1_val
             results["ADD"] = src1_val + src2_val
@@ -778,18 +803,18 @@ class DifferentiableEngine(nn.Module):
                 )
                 results["XOR"] = soft_bits_to_int(xor_bits).squeeze(-1)
             else:
-                zero = torch.zeros(batch_size)
+                zero = torch.zeros(batch_size, device=self.device)
                 results["AND"] = zero
                 results["OR"] = zero
                 results["XOR"] = zero
 
             # Non-result ops
-            zero = torch.zeros(batch_size)
+            zero = torch.zeros(batch_size, device=self.device)
             for name in ("CMP", "BEQ", "BNE", "BGT", "HALT"):
                 results[name] = zero
 
             # Weighted combination by opcode: [B]
-            result = torch.zeros(batch_size)
+            result = torch.zeros(batch_size, device=self.device)
             for op_name, op_idx in OPCODES.items():
                 result = result + opcode_w[op_idx] * results[op_name]
 
@@ -816,7 +841,7 @@ class DifferentiableEngine(nn.Module):
             n_flag = torch.sigmoid(-diff * (1.0 / self.flag_scale))
             z_flag = torch.exp(-(diff ** 2) / (2 * self.flag_scale ** 2))
             c_flag = torch.sigmoid(diff * (1.0 / self.flag_scale))
-            v_flag = torch.zeros(batch_size)
+            v_flag = torch.zeros(batch_size, device=self.device)
             new_flags = torch.stack([n_flag, z_flag, c_flag, v_flag], dim=-1)  # [B, 4]
             flags = flags * (1.0 - cmp_weight) + new_flags * cmp_weight
 

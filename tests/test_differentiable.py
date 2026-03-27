@@ -39,6 +39,28 @@ from ncpu.differentiable.float_alu import NeuralFloatALU, FloatPrecision
 # =========================================================================
 
 
+class TestEngineDeviceAwareness:
+    """Verify the engine respects configured execution devices."""
+
+    def test_engine_auto_device_resolves_to_available_backend(self):
+        engine = DifferentiableEngine(device="auto")
+        assert engine.execution_device in {"cpu", "mps", "cuda:0"}
+
+    def test_engine_unavailable_device_falls_back_to_cpu(self):
+        engine = DifferentiableEngine(device="cuda:999")
+        assert engine.execution_device == "cpu"
+
+    def test_execute_fixed_returns_tensors_on_engine_device(self):
+        engine = DifferentiableEngine(device="cpu")
+        program = FixedProgram([
+            Instruction(OPCODES["MOV_IMM"], dst=0, immediate=5.0),
+            Instruction(OPCODES["HALT"]),
+        ])
+        result = engine.execute_fixed(program, {})
+        assert result.registers.device.type == engine.device.type
+        assert result.flags.device.type == engine.device.type
+
+
 class TestGradientFlow:
     """Verify that gradients actually flow through differentiable execution."""
 
