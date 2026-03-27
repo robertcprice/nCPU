@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! nCPU Metal - High-performance Metal GPU kernel for ARM64 CPU emulation
 //!
 //! This crate provides direct Metal API access via objc2-metal for:
@@ -1876,6 +1877,7 @@ fn run_elf(
 }
 
 /// Run a program using the GPU microkernel (pure GPU-native OS)
+#[allow(deprecated)]
 #[pyfunction]
 fn run_microkernel(
     program: &str,
@@ -1937,7 +1939,10 @@ fn ncpu_metal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MetalCPU>()?;
     m.add_class::<ExecutionResult>()?;
     m.add_function(wrap_pyfunction!(run_elf, m)?)?;
-    m.add_function(wrap_pyfunction!(run_microkernel, m)?)?;
+    #[allow(deprecated)]
+    {
+        m.add_function(wrap_pyfunction!(run_microkernel, m)?)?;
+    }
     continuous::register_continuous(m)?;
     async_gpu::register_async(m)?;
     parallel::register_parallel(m)?;
