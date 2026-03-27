@@ -43,6 +43,9 @@ training_results/
 coprocessor_realworld_*.json
 HumanEval.jsonl
 *.tar.gz
+.hermes-lab-data/
+.hermes-lab/
+.hermes-codex-lab.json
 
 # OS
 .DS_Store
