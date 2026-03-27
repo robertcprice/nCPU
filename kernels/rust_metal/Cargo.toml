@@ -29,7 +29,7 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSErro
 objc2-metal = "0.3"
 
 # Python bindings
-pyo3 = { version = "0.23", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "0.23", features = ["abi3-py312"] }
 
 # Error handling
 thiserror = "2.0"
@@ -43,4 +43,5 @@ lto = true
 codegen-units = 1
 
 [features]
-default = ["pyo3/extension-module"]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]

@@ -340,10 +340,8 @@ mod tests {
     #[test]
     fn test_neural_scheduler() {
         let scheduler = GpuNeuralScheduler::new();
-        let mut state = HashMap::new();
-        state.insert("priority".to_string(), 1.0);
 
-        let score = scheduler.compute_score(&state);
+        let score = scheduler.compute_score(1.0, 0.5, 0.3, 0.2, 0.1);
         assert!(score > 0.0);
     }
 }
