@@ -663,6 +663,7 @@ impl NeuralOoOResult {
 
 /// Neural Differentiable OoO CPU
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct NeuralOoOCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

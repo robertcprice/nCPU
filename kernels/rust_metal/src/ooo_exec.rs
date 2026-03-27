@@ -697,6 +697,7 @@ impl OoOResult {
 
 /// Out-of-Order Metal CPU
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct OoOMetalCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

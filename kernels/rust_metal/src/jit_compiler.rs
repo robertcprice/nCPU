@@ -19,13 +19,13 @@ use objc2_metal::{
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::{get_default_device, MetalError};
 
 /// JIT-compiled counting loop kernel
 /// Pattern: X0 = N; while (X0 > 0) { X0--; }
+#[allow(dead_code)]
 const JIT_COUNTING_LOOP_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -60,6 +60,7 @@ kernel void jit_counting_loop(
 
 /// JIT-compiled memory copy loop kernel
 /// Pattern: while (count > 0) { *dst++ = *src++; count--; }
+#[allow(dead_code)]
 const JIT_MEMCPY_LOOP_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -88,6 +89,7 @@ kernel void jit_memcpy_loop(
 
 /// JIT-compiled array sum loop kernel
 /// Pattern: sum = 0; for (i = 0; i < n; i++) { sum += arr[i]; }
+#[allow(dead_code)]
 const JIT_SUM_LOOP_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -493,6 +495,7 @@ impl JITResult {
 
 /// JIT-compiled Metal CPU
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct JITCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

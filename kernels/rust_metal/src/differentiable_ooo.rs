@@ -597,6 +597,7 @@ impl DiffOoOResult {
 
 /// Fully Differentiable OoO CPU
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct DiffOoOCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

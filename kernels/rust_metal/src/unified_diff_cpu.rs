@@ -969,6 +969,7 @@ impl UnifiedDiffResult {
 
 /// Unified Differentiable CPU
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct UnifiedDiffCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

@@ -634,6 +634,7 @@ impl BBCacheResult {
         }
     }
 }
+#[allow(dead_code)]
 
 /// BB Cache Metal CPU
 #[pyclass(unsendable)]

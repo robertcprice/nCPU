@@ -439,6 +439,7 @@ impl FusionResult {
         }
     }
 }
+#[allow(dead_code)]
 
 /// Fusion-optimized Metal CPU
 #[pyclass(unsendable)]

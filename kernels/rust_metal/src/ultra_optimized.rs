@@ -296,6 +296,7 @@ kernel void hyper_cpu_execute(
 "#;
 
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct HyperOptimizedMetalCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     _command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

@@ -539,6 +539,7 @@ kernel void parallel_execute_advanced(
 /// - Switch-based instruction dispatch
 /// - Pure GPU execution
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct ParallelMetalCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
@@ -840,10 +841,8 @@ impl ParallelMetalCPU {
             depth: 1,
         };
 
-        unsafe {
-            encoder
-                .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
-        }
+        encoder
+            .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
 
         encoder.endEncoding();
         command_buffer.commit();

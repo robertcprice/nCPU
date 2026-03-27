@@ -20,33 +20,41 @@ use crate::{get_default_device, ExecutionResult, MetalError};
 use pyo3::types::PyModule;
 
 /// Arithmetic instruction opcodes
+#[allow(dead_code)]
 const ARITHMETIC_OPS: &[u8] = &[0x91, 0x11, 0xD1, 0x51, 0xD2, 0xF2, 0x92, 0x8B, 0xCB, 0x0B];
 
 /// Logical instruction opcodes
+#[allow(dead_code)]
 const LOGICAL_OPS: &[u8] = &[0x0A, 0xAA, 0x4A, 0x72, 0x52, 0x32];
 
 /// Load/Store instruction opcodes
+#[allow(dead_code)]
 const LOADSTORE_OPS: &[u8] = &[
     0xF9, 0xB9, 0x39, 0x29, 0x69, 0xF8, 0xB8, 0x78, 0x38, 0x28, 0x68, 0x88, 0x48, 0xA8, 0xA9, 0xA4,
     0xA0,
 ];
 
 /// Branch instruction opcodes
+#[allow(dead_code)]
 const BRANCH_OPS: &[u8] = &[0x14, 0x34, 0x54, 0x17, 0x97, 0xD6, 0xD7];
 
 /// Multiply/Divide instruction opcodes
+#[allow(dead_code)]
 const MULDIV_OPS: &[u8] = &[0x9B, 0x1B, 0x5B, 0xDB];
 
 /// Extend/Shift/Bit instruction opcodes
+#[allow(dead_code)]
 const EXTEND_SHIFT_OPS: &[u8] = &[
     0x13, 0x53, 0x73, 0x33, 0x34, 0x14, 0x54, 0x74, 0x94, 0xB4, 0xD4, 0x00, 0x08, 0x29, 0x49, 0x69,
     0x0A, 0x4A, 0x5A, 0x2B, 0x6B, 0xAB, 0x4B,
 ];
 
 /// System instruction opcodes
+#[allow(dead_code)]
 const SYSTEM_OPS: &[u8] = &[0xD4, 0xD5, 0x03, 0x6B, 0xEB, 0x1B];
 
 /// Check if an opcode belongs to a category
+#[allow(dead_code)]
 fn opcode_in_category(op: u8, category_ops: &[u8]) -> bool {
     category_ops.contains(&op)
 }
@@ -580,6 +588,7 @@ kernel void execute_system(
 "##;
 
 /// Multi-kernel Metal CPU that dispatches to specialized kernels
+#[allow(dead_code)]
 pub struct MultiKernelMetalCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
 
@@ -972,6 +981,7 @@ impl MultiKernelMetalCPU {
             let opcode = (first_inst >> 24) & 0xFF;
 
             // Select appropriate kernel based on opcode
+            #[allow(unreachable_patterns)]
             let pipeline = match opcode {
                 // Arithmetic ops: 0x91, 0x11, 0xD1, 0x51, 0xD2, 0xF2, 0x92, 0x8B, 0xCB, 0x0B
                 0x91 | 0x11 | 0xD1 | 0x51 | 0xD2 | 0xF2 | 0x92 | 0x8B | 0xCB | 0x0B => {
@@ -1018,12 +1028,10 @@ impl MultiKernelMetalCPU {
                 depth: 1,
             };
 
-            unsafe {
-                encoder.dispatchThreads_threadsPerThreadgroup(
-                    threads_per_grid,
-                    threads_per_threadgroup,
-                );
-            }
+            encoder.dispatchThreads_threadsPerThreadgroup(
+                threads_per_grid,
+                threads_per_threadgroup,
+            );
 
             encoder.endEncoding();
             command_buffer.commit();
@@ -1077,7 +1085,7 @@ impl MultiKernelMetalCPU {
             }
         }
 
-        let elapsed = start.elapsed();
+        let _elapsed = start.elapsed();
 
         // Read final PC
         let final_pc = unsafe {

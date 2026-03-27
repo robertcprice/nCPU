@@ -474,6 +474,76 @@ def _load_humaneval() -> list[dict[str, Any]]:
     return problems
 
 
+def _run_code_with_timeout(code_str: str, timeout_sec: int = 10) -> dict:
+    """Run arbitrary code in a subprocess with a hard timeout.
+
+    Returns {"ok": True} on success, or {"ok": False, "error": "..."} on failure.
+    This prevents infinite loops in generated code from hanging the parent.
+    """
+    import subprocess, textwrap, json as _json
+    wrapper = textwrap.dedent(f"""\
+        import json, sys
+        try:
+            ns = {{}}
+            exec({code_str!r}, ns)
+            json.dump({{"ok": True, "ns_keys": list(ns.keys())}}, sys.stdout)
+        except Exception as e:
+            json.dump({{"ok": False, "error": f"{{type(e).__name__}}: {{e}}"}}, sys.stdout)
+    """)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", wrapper],
+            capture_output=True, text=True, timeout=timeout_sec,
+        )
+        if proc.returncode != 0:
+            err = proc.stderr.strip()[-200:] if proc.stderr else "non-zero exit"
+            return {"ok": False, "error": f"Process error: {err}"}
+        return _json.loads(proc.stdout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"Timeout ({timeout_sec}s) — likely infinite loop"}
+    except Exception as e:
+        return {"ok": False, "error": f"Subprocess error: {e}"}
+
+
+def _verify_humaneval_in_subprocess(
+    prepared: str, entry_point: str, test_code: str, timeout_sec: int = 10,
+) -> dict:
+    """Run HumanEval code + test in a subprocess with timeout."""
+    import subprocess, textwrap, json as _json
+    # Build a self-contained script that defines the code, runs the test, reports result
+    script = textwrap.dedent(f"""\
+        import json, sys
+        try:
+            ns = {{}}
+            exec({prepared!r}, ns)
+            entry = ns.get({entry_point!r})
+            if entry is None:
+                json.dump({{"ok": False, "error": "Function '{entry_point}' not found"}}, sys.stdout)
+                sys.exit(0)
+            test_ns = dict(ns)
+            exec({test_code!r}, test_ns)
+            test_ns["check"](entry)
+            json.dump({{"ok": True}}, sys.stdout)
+        except AssertionError as e:
+            json.dump({{"ok": False, "error": f"Assertion failed: {{e}}"}}, sys.stdout)
+        except Exception as e:
+            json.dump({{"ok": False, "error": f"{{type(e).__name__}}: {{e}}"}}, sys.stdout)
+    """)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=timeout_sec,
+        )
+        if proc.returncode != 0:
+            err = proc.stderr.strip()[-200:] if proc.stderr else "non-zero exit"
+            return {"ok": False, "error": f"Process error: {err}"}
+        return _json.loads(proc.stdout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"Timeout ({timeout_sec}s) — likely infinite loop"}
+    except Exception as e:
+        return {"ok": False, "error": f"Subprocess error: {e}"}
+
+
 def _make_humaneval_verifier(
     prompt: str, entry_point: str, test_code: str,
 ) -> Callable[[str], VerificationResult]:
@@ -497,49 +567,21 @@ def _make_humaneval_verifier(
                 test_results=[],
             )
 
-        try:
-            ns: dict = {}
-            exec(prepared, ns)
-        except Exception as e:
-            return VerificationResult(
-                success=False,
-                error=f"Runtime error: {e}",
-                output=None,
-                test_results=[],
-            )
-
-        if entry_point not in ns:
-            return VerificationResult(
-                success=False,
-                error=f"Function '{entry_point}' not found in generated code",
-                output=None,
-                test_results=[],
-            )
-
-        # Run the HumanEval test suite
-        try:
-            test_ns = dict(ns)
-            exec(test_code, test_ns)
-            test_ns["check"](ns[entry_point])
+        # Run code + test in subprocess with 10s timeout to catch infinite loops
+        result = _verify_humaneval_in_subprocess(prepared, entry_point, test_code)
+        if result["ok"]:
             return VerificationResult(
                 success=True,
                 error=None,
                 output=None,
                 test_results=[{"test": "check", "passed": True}],
             )
-        except AssertionError as e:
+        else:
             return VerificationResult(
                 success=False,
-                error=f"Assertion failed: {e}",
+                error=result["error"],
                 output=None,
-                test_results=[{"test": "check", "passed": False, "error": str(e)}],
-            )
-        except Exception as e:
-            return VerificationResult(
-                success=False,
-                error=f"Test error: {type(e).__name__}: {e}",
-                output=None,
-                test_results=[{"test": "check", "passed": False, "error": str(e)}],
+                test_results=[{"test": "check", "passed": False, "error": result["error"]}],
             )
 
     return verify

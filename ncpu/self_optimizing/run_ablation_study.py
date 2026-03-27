@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
@@ -247,43 +246,21 @@ def run_condition(
         config = InternalControllerConfig(**config_kwargs)
 
         task_results: list[dict[str, Any]] = []
-        completed = 0
 
-        if max_workers <= 1:
-            for i, task in enumerate(tasks, start=1):
-                tr = _run_single_task_some(
-                    benchmark=benchmark,
-                    task=task,
-                    task_index=i,
-                    config=config,
-                    trajectory_dir=traj_dir,
-                )
-                status = "OK" if tr["success"] else "FAIL"
-                print(f"  [{i}/{len(tasks)}] {task.name}: {status} ({tr['attempts']} attempts, {tr['elapsed_seconds']:.1f}s)", flush=True)
-                task_results.append(tr)
-        else:
-            # Parallel execution
-            indexed_tasks = list(enumerate(tasks, start=1))
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                future_to_idx = {}
-                for i, task in indexed_tasks:
-                    fut = pool.submit(
-                        _run_single_task_some,
-                        benchmark=benchmark,
-                        task=task,
-                        task_index=i,
-                        config=config,
-                        trajectory_dir=traj_dir,
-                    )
-                    future_to_idx[fut] = (i, task)
-
-                for fut in as_completed(future_to_idx):
-                    i, task = future_to_idx[fut]
-                    tr = fut.result()
-                    completed += 1
-                    status = "OK" if tr["success"] else "FAIL"
-                    print(f"  [{completed}/{len(tasks)}] {task.name}: {status} ({tr['attempts']} attempts, {tr['elapsed_seconds']:.1f}s)", flush=True)
-                    task_results.append(tr)
+        # NOTE: SOME conditions always run sequentially because
+        # BufferedInternalController is not thread-safe (deadlocks
+        # with ThreadPoolExecutor).  Only baseline uses parallel.
+        for i, task in enumerate(tasks, start=1):
+            tr = _run_single_task_some(
+                benchmark=benchmark,
+                task=task,
+                task_index=i,
+                config=config,
+                trajectory_dir=traj_dir,
+            )
+            status = "OK" if tr["success"] else "FAIL"
+            print(f"  [{i}/{len(tasks)}] {task.name}: {status} ({tr['attempts']} attempts, {tr['elapsed_seconds']:.1f}s)", flush=True)
+            task_results.append(tr)
 
         successes = sum(1 for tr in task_results if tr["success"])
         total_attempts = sum(tr["attempts"] for tr in task_results)
@@ -385,11 +362,32 @@ def run_ablation_study(
     print(f"Tasks: {len(tasks)} | Repeats: {repeats}")
 
     selected = conditions or list(ABLATION_CONDITIONS.keys())
+
+    # Resume support: load previously completed conditions
+    # Only trust results with wall_clock > 1s (rejects stale 0-second failures)
+    progress_path = output_root / "ablation_progress.json"
     results: dict[str, Any] = {}
+    if progress_path.exists():
+        try:
+            prev = json.loads(progress_path.read_text(encoding="utf-8"))
+            for k, v in prev.get("conditions", {}).items():
+                wc = v.get("wall_clock_seconds", 0)
+                if wc > 1.0:
+                    results[k] = v
+            if results:
+                print(f"Resuming: {len(results)} conditions already completed")
+                for k in sorted(results):
+                    sr = results[k]["summary"]["success_rate"]
+                    print(f"  {k}: {sr:.1%} (cached)")
+        except Exception:
+            results = {}
 
     for cond_name in selected:
         if cond_name not in ABLATION_CONDITIONS:
             print(f"WARNING: Unknown condition '{cond_name}', skipping")
+            continue
+        if cond_name in results:
+            print(f"SKIP: {cond_name} (already completed)")
             continue
         cond_result = run_condition(
             condition_name=cond_name,
@@ -402,7 +400,6 @@ def run_ablation_study(
         results[cond_name] = cond_result
 
         # Save incremental progress
-        progress_path = output_root / "ablation_progress.json"
         progress_path.write_text(
             json.dumps(
                 {"model": model, "provider": provider_name, "conditions": results},

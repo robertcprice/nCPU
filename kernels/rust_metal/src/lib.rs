@@ -1234,6 +1234,7 @@ impl ExecutionResult {
 /// Metal GPU CPU emulator with zero-copy shared memory
 /// Note: unsendable because Metal objects are not thread-safe
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct MetalCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
@@ -1583,10 +1584,8 @@ impl MetalCPU {
             depth: 1,
         };
 
-        unsafe {
-            encoder
-                .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
-        }
+        encoder
+            .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
         encoder.endEncoding();
 
         // Execute and wait

@@ -92,6 +92,7 @@ enum RuntimeAction {
     Blocked { advance_pc: bool },
     Execed,
 }
+#[allow(dead_code)]
 
 // ── GpuLauncher ──────────────────────────────────────────────────────────
 
@@ -1689,6 +1690,7 @@ impl GpuLauncher {
         _quiet: bool,
     ) -> SyscallResult {
         // Import syscall numbers (Linux aarch64)
+        #[allow(unreachable_patterns)]
         match num {
             // ── Exit ─────────────────────────────────────────
             93 | 94 => {
@@ -2026,7 +2028,7 @@ impl GpuLauncher {
 
             // ── Ioctl ────────────────────────────────────────
             29 => {
-                let fd = x0 as i32;
+                let _fd = x0 as i32;
                 let request = x1 as u64;
                 let argp = x2 as usize;
 
@@ -2121,7 +2123,7 @@ impl GpuLauncher {
             25 => {
                 let fd = x0 as i32;
                 let cmd = x1;
-                let arg = x2;
+                let _arg = x2;
 
                 match cmd {
                     0 => {
@@ -2195,9 +2197,9 @@ impl GpuLauncher {
             157 => {
                 let option = x0 as i32;
                 let arg2 = x1 as u64;
-                let arg3 = x2 as u64;
-                let arg4 = x3 as u64;
-                let arg5 = self.get_register(4) as u64;
+                let _arg3 = x2 as u64;
+                let _arg4 = x3 as u64;
+                let _arg5 = self.get_register(4) as u64;
 
                 match option {
                     0 => {
@@ -2308,7 +2310,7 @@ impl GpuLauncher {
                 // x0 = domain (2 = AF_INET), x1 = type (1 = SOCK_STREAM, 2 = SOCK_DGRAM), x2 = protocol (0)
                 let domain = x0 as i32;
                 let sock_type = x1 as i32;
-                let protocol = x2 as i32;
+                let _protocol = x2 as i32;
 
                 // Accept AF_INET + SOCK_STREAM (TCP) or SOCK_DGRAM (UDP)
                 if domain == 2 {
@@ -2472,7 +2474,7 @@ impl GpuLauncher {
             202 => {
                 // listen(sockfd, backlog)
                 let sockfd = x0 as i32;
-                let backlog = x1 as i32;
+                let _backlog = x1 as i32;
 
                 if let Some(ref vfs) = vfs {
                     if let Some(entry) = vfs.fd_table.get(&sockfd) {
@@ -2548,7 +2550,7 @@ impl GpuLauncher {
             // ── Getsockopt (syscall 205) ───────────────────────
             205 => {
                 // getsockopt(sockfd, level, optname, optval, optlen)
-                let sockfd = x0 as i32;
+                let _sockfd = x0 as i32;
                 let _level = x1 as i32;
                 let _optname = x2 as i32;
                 let _optval_ptr = x3 as usize;
@@ -2579,7 +2581,7 @@ impl GpuLauncher {
                 let optlen_addr = self.get_register(4) as usize;
                 // Return default options
                 if optval_addr > 0 {
-                    let mut optval = [0u8; 4];
+                    let optval = [0u8; 4];
                     self.write_memory(optval_addr, &optval);
                 }
                 if optlen_addr > 0 {
@@ -2611,7 +2613,7 @@ impl GpuLauncher {
                 if let Some(ref mut vfs) = vfs {
                     let fd = x0 as i32;
                     if let Some(entry) = vfs.fd_table.get(&fd) {
-                        let saved = entry.offset;
+                        let _saved = entry.offset;
                         let path = entry.path.clone();
                         if let Some(data) = vfs.files.get(&path) {
                             let pos = x3 as usize;
@@ -2913,7 +2915,7 @@ impl GpuLauncher {
 
             // ── Getrlimit (163) ─────────────────────────────────
             163 => {
-                let resource = x0 as u32;
+                let _resource = x0 as u32;
                 let rlim_addr = x1 as usize;
                 // RLIM_INFINITY = (u64)-1
                 let mut rlim = [0u8; 16];
@@ -2925,7 +2927,7 @@ impl GpuLauncher {
 
             // ── Getrusage (165) ─────────────────────────────────
             165 => {
-                let who = x0 as i32;
+                let _who = x0 as i32;
                 let usage_addr = x1 as usize;
                 // Return mostly zeros with some basic values
                 let mut usage = [0u8; 128];
@@ -2970,7 +2972,7 @@ impl GpuLauncher {
             165 => {
                 // arch_prctl - for TLS setup
                 let code = x0 as i32;
-                let addr = x1 as usize;
+                let _addr = x1 as usize;
                 if code == 0x1002 || code == 0x1003 { // ARCH_GET_FS or ARCH_GET_GS
                     // Just return success
                     SyscallResult::Continue(0)
@@ -3128,7 +3130,7 @@ impl GpuLauncher {
             78 => {
                 let path_addr = x0 as usize;
                 let buf_addr = x1 as usize;
-                let bufsiz = x2 as usize;
+                let _bufsiz = x2 as usize;
                 if path_addr > 0 && buf_addr > 0 {
                     // Read symlink target (we don't track actual symlink targets well)
                     // Just return empty for now
@@ -3146,9 +3148,9 @@ impl GpuLauncher {
 
             // ── Renameat2 (276) ────────────────────────────────
             276 => {
-                let olddirfd = x0 as i32;
+                let _olddirfd = x0 as i32;
                 let old_path = self.read_string(x1 as u64, 256);
-                let newdirfd = x2 as i32;
+                let _newdirfd = x2 as i32;
                 let new_path = self.read_string(x3 as u64, 256);
                 if let Some(ref mut vfs) = vfs {
                     let r = vfs.rename(&old_path, &new_path);
@@ -3216,7 +3218,7 @@ impl GpuLauncher {
             // ── Mkdir (83) ──────────────────────────────────────
             83 => {
                 let path = self.read_string(x0 as u64, 256);
-                let mode = x1 as i32;
+                let _mode = x1 as i32;
                 if let Some(ref mut vfs) = vfs {
                     let r = vfs.mkdir(&path);
                     SyscallResult::Continue(r as i64)
@@ -3246,11 +3248,11 @@ impl GpuLauncher {
             // ── Getitimer (102) ─────────────────────────────────
             // getitimer(which)
             102 => {
-                let which = x0 as i32;
+                let _which = x0 as i32;
                 let addr = x1 as usize;
                 if addr > 0 {
                     // Return zeros (no timer)
-                    let mut itv = [0u8; 32];
+                    let itv = [0u8; 32];
                     self.write_memory(addr, &itv);
                 }
                 SyscallResult::Continue(0)
@@ -3353,7 +3355,7 @@ impl GpuLauncher {
             // ── Sigaltstack (131) ──────────────────────────────
             // sigaltstack(ss, oss)
             131 => {
-                let ss_addr = x0 as usize;
+                let _ss_addr = x0 as usize;
                 let oss_addr = x1 as usize;
                 if oss_addr > 0 {
                     // Return default signal stack (disabled)
@@ -3384,7 +3386,7 @@ impl GpuLauncher {
             // syslog(type, buf, len)
             103 => {
                 let _typ = x0 as i32;
-                let buf_addr = x1 as usize;
+                let _buf_addr = x1 as usize;
                 let _len = x2 as usize;
                 // Just return empty
                 SyscallResult::Continue(0)
@@ -3455,7 +3457,7 @@ impl GpuLauncher {
             224 => {
                 let addr = x1 as usize;
                 if addr > 0 {
-                    let mut itimerspec = [0u8; 32];
+                    let itimerspec = [0u8; 32];
                     self.write_memory(addr, &itimerspec);
                 }
                 SyscallResult::Continue(0)
@@ -3548,9 +3550,9 @@ impl GpuLauncher {
             // ── Bpf (280) ──────────────────────────────────────
             // Berkeley Packet Filter - now used for many things
             280 => {
-                let cmd = x0 as i32;
-                let attr_addr = x1 as usize;
-                let size = x2 as usize;
+                let _cmd = x0 as i32;
+                let _attr_addr = x1 as usize;
+                let _size = x2 as usize;
                 // BPF commands - return error for all
                 // Most programs check for -1 and fall back
                 SyscallResult::Continue(-1)
@@ -3601,13 +3603,14 @@ pub fn handle_microkernel_syscall(
     x0: i64,
     x1: i64,
     x2: i64,
-    x3: i64,
-    stdout_buf: &mut Vec<u8>,
-    stderr_buf: &mut Vec<u8>,
+    _x3: i64,
+    _stdout_buf: &mut Vec<u8>,
+    _stderr_buf: &mut Vec<u8>,
 ) -> SyscallResult {
-    use crate::microkernel::ProcessState;
+    
     use crate::microkernel::FdKind;
 
+    #[allow(unreachable_patterns)]
     match num {
         // Exit
         93 | 94 => {
@@ -3619,7 +3622,7 @@ pub fn handle_microkernel_syscall(
         // Write
         64 => {
             let fd = x0 as i32;
-            let buf_addr = x1 as u64;
+            let _buf_addr = x1 as u64;
             let count = x2 as usize;
 
             if count == 0 {
@@ -3657,7 +3660,7 @@ pub fn handle_microkernel_syscall(
         // Read
         63 => {
             let fd = x0 as i32;
-            let buf_addr = x1 as u64;
+            let _buf_addr = x1 as u64;
             let count = x2 as usize;
 
             if count == 0 {
@@ -3688,7 +3691,7 @@ pub fn handle_microkernel_syscall(
 
         // Fork
         220 => {
-            if let Some((parent_pid, child_pid)) = kernel.fork() {
+            if let Some((_parent_pid, child_pid)) = kernel.fork() {
                 // Parent returns child PID
                 SyscallResult::Continue(child_pid as i64)
             } else {
@@ -3797,7 +3800,7 @@ pub fn handle_microkernel_syscall(
 
         // Uname
         160 => {
-            let addr = x0 as usize;
+            let _addr = x0 as usize;
             // Write a minimal uname structure
             let uname = b"ncpu-gpu\0".to_vec();
             // Pad to 65 bytes (UTSNAME_LENGTH)
@@ -3842,7 +3845,7 @@ pub fn handle_microkernel_syscall(
 
         // Clock gettime
         113 => {
-            let clock_id = x0 as i32;
+            let _clock_id = x0 as i32;
             let timespec_addr = x1 as usize;
 
             if timespec_addr > 0 {
@@ -3874,7 +3877,7 @@ fn read_cstring(_kernel: &crate::microkernel::GpuMicrokernel, _addr: u64, _max_l
     String::new()
 }
 
-enum SyscallResult {
+pub enum SyscallResult {
     Continue(i64), // return value to put in x0
     Exit(i32),     // exit with code
 }

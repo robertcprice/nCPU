@@ -582,6 +582,7 @@ impl NeuralHybridResult {
 
 /// Neural Hybrid CPU - BBCache speed + Neural OoO
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct NeuralHybridCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

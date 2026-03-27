@@ -1074,6 +1074,7 @@ kernel void neural_execute(
 "##;
 
 /// Pure neural-driven GPU CPU
+#[allow(dead_code)]
 pub struct NeuralMetalCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     _library: Retained<ProtocolObject<dyn MTLLibrary>>,
@@ -1257,7 +1258,7 @@ impl NeuralMetalCPU {
 
     /// Execute instructions with NEURAL dispatch (all on GPU!)
     pub fn execute(&self, max_cycles: u64) -> Result<ExecutionResult, MetalError> {
-        let start = Instant::now();
+        let _start = Instant::now();
         println!("[DEBUG] execute() called with max_cycles={}", max_cycles);
 
         // Create command queue
@@ -1353,12 +1354,10 @@ impl NeuralMetalCPU {
                 depth: 1,
             };
 
-            unsafe {
-                encoder.dispatchThreads_threadsPerThreadgroup(
-                    threads_per_grid,
-                    threads_per_threadgroup,
-                );
-            }
+            encoder.dispatchThreads_threadsPerThreadgroup(
+                threads_per_grid,
+                threads_per_threadgroup,
+            );
 
             encoder.endEncoding();
             command_buffer.commit();
@@ -1387,7 +1386,7 @@ impl NeuralMetalCPU {
                     .collect::<Vec<_>>()
             };
 
-            let loop_probs = unsafe {
+            let _loop_probs = unsafe {
                 let ptr = self.loop_probability_buf.contents().as_ptr() as *const f32;
                 (0..self.num_lanes)
                     .map(|i| *ptr.add(i as usize))

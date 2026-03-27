@@ -11,7 +11,6 @@ use objc2_metal::{
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::time::Instant;
 
 use crate::{get_default_device, MetalError};
 

@@ -434,6 +434,7 @@ impl UltraResult {
 
 /// Ultra-optimized Metal CPU
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct UltraMetalCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
@@ -469,7 +470,7 @@ impl UltraMetalCPU {
 
         // Compile shader
         let source = NSString::from_str(ULTRA_SHADER_SOURCE);
-        let library = unsafe { device.newLibraryWithSource_options_error(&source, None) }
+        let library = device.newLibraryWithSource_options_error(&source, None)
             .map_err(|e| PyRuntimeError::new_err(format!("Shader compilation failed: {}", e)))?;
 
         let func_name = NSString::from_str("cpu_execute_ultra");

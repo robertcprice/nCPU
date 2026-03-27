@@ -564,6 +564,7 @@ impl TraceJITResult {
 
 /// Trace JIT Metal CPU
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct TraceJITMetalCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

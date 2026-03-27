@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 /*
  * GPU-Accelerated Optimization Module
  *
@@ -56,6 +57,7 @@ pub struct GpuGeneticOptimizer {
     history: Vec<f32>,
 }
 
+#[allow(deprecated)]
 #[pymethods]
 impl GpuGeneticOptimizer {
     #[new]

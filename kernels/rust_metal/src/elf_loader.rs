@@ -323,7 +323,7 @@ pub fn prepare_elf(
     // 16 random bytes for AT_RANDOM (deterministic zeros for reproducibility in boot image)
     let random_addr = str_ptr;
     writes.push((random_addr, vec![0u8; 16]));
-    str_ptr += 16;
+    let _ = str_ptr + 16;
 
     // Build auxiliary vector
     let phdr_addr = if info.phdr_vaddr != 0 {

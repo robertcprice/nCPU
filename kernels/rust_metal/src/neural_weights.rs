@@ -38,6 +38,7 @@ impl ModelWeights {
 }
 
 /// Creates a GPU buffer from Python-provided weights
+#[allow(dead_code)]
 pub fn create_buffer_from_weights(
     device: &Retained<ProtocolObject<dyn MTLDevice>>,
     weights: &ModelWeights,

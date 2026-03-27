@@ -148,7 +148,7 @@ impl FileCache {
     }
 
     pub fn put(&mut self, path: String, data: Vec<u8>) {
-        let size = data.len();
+        let _size = data.len();
 
         // Evict if necessary
         while self.cache.len() >= self.max_size {
@@ -224,7 +224,7 @@ impl GpuVfs {
 
     /// mmap: map memory or file into address space
     /// Returns the mapped address, or -1 on error
-    pub fn mmap(&mut self, addr: u64, length: u64, prot: i32, flags: i32, fd: i32, offset: u64) -> i64 {
+    pub fn mmap(&mut self, _addr: u64, length: u64, prot: i32, flags: i32, fd: i32, offset: u64) -> i64 {
         let is_anonymous = (flags & 0x20) != 0; // MAP_ANONYMOUS
 
         // For now, only support anonymous mappings or read-only file mappings
@@ -235,7 +235,7 @@ impl GpuVfs {
                 if let FdKind::File = &entry.kind {
                     // Check if file exists and we can read it
                     if let Some(content) = self.files.get(&entry.path) {
-                        let mut region = MmapRegion {
+                        let region = MmapRegion {
                             addr: 0, // Will be assigned by caller
                             length,
                             prot,
@@ -272,7 +272,7 @@ impl GpuVfs {
     }
 
     /// munmap: unmap memory region
-    pub fn munmap(&mut self, addr: u64, length: u64) -> i32 {
+    pub fn munmap(&mut self, addr: u64, _length: u64) -> i32 {
         // Find and remove the region
         let initial_len = self.mmap_regions.len();
         self.mmap_regions.retain(|r| !(r.addr <= addr && r.addr + r.length > addr));
@@ -661,7 +661,7 @@ impl GpuVfs {
             }
             FdKind::HostSocket(socket) => {
                 // Write to TCP stream
-                use std::sync::Mutex;
+                
                 use crate::vfs::HostSocketState;
                 let mut state = socket.lock().unwrap();
                 if let HostSocketState::Stream(stream) = &mut *state {
@@ -1067,7 +1067,7 @@ impl GpuVfs {
         if self.fd_table.contains_key(&new_fd) {
             self.close(new_fd);
         }
-        let mut entry = self.fd_table[&old_fd].clone();
+        let entry = self.fd_table[&old_fd].clone();
         // Increment pipe refcounts
         match &entry.kind {
             FdKind::PipeRead(idx) => {

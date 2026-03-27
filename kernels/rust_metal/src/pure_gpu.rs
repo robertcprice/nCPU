@@ -882,10 +882,8 @@ impl PureGPUCPU {
             depth: 1,
         };
 
-        unsafe {
-            encoder
-                .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
-        }
+        encoder
+            .dispatchThreads_threadsPerThreadgroup(threads_per_grid, threads_per_threadgroup);
 
         encoder.endEncoding();
         command_buffer.commit();

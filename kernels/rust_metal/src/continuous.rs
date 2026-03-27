@@ -18,10 +18,9 @@ use objc2_metal::{
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::{get_default_device, ExecutionResult, MetalError, StopReason};
+use crate::{get_default_device, MetalError};
 
 /// Metal shader for continuous execution with atomic signaling
 const CONTINUOUS_SHADER_SOURCE: &str = r#"
@@ -829,6 +828,7 @@ impl ContinuousResult {
         }
     }
 }
+#[allow(dead_code)]
 
 /// Continuous GPU execution with atomic signaling
 #[pyclass(unsendable)]

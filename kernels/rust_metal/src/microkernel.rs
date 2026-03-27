@@ -718,7 +718,7 @@ impl GpuMicrokernel {
 
             if !has_runnable {
                 // No runnable processes - find exit code of last process
-                let exit_code = self.processes.values()
+                let _exit_code = self.processes.values()
                     .find(|p| p.state == ProcessState::Zombie)
                     .and_then(|p| p.exit_code)
                     .unwrap_or(0);

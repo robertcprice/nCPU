@@ -13,8 +13,6 @@ use objc2_metal::{
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::{get_default_device, MetalError};

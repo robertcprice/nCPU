@@ -564,6 +564,7 @@ impl DiffJITResult {
 
 /// Differentiable JIT CPU - learns what to compile
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct DiffJITCPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,

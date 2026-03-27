@@ -2902,6 +2902,7 @@ const SVC_HEAP_BASE: usize = 0x60000;
 
 /// Full ARM64 GPU CPU with 139-instruction ISA
 #[pyclass(unsendable)]
+#[allow(dead_code)]
 pub struct FullARM64CPU {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
