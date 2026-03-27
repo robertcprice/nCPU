@@ -18,6 +18,7 @@ from .multi_gpu import (
     CoreConfig,
     CoreState,
     DistributedResult,
+    ScheduledExecutionResult,
     DeviceInfo,
     DeviceAssignment,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "CoreConfig",
     "CoreState",
     "DistributedResult",
+    "ScheduledExecutionResult",
     "DeviceInfo",
     "DeviceAssignment",
     "SharedMemoryRegion",

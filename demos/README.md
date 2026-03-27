@@ -95,6 +95,15 @@ PYTHONPATH=. python demos/distributed_device_demo.py
 Shows discovered devices, core assignment, scheduler affinity, rebalance behavior,
 and a tiny parallel execution summary.
 
+### Distributed scheduling benchmark demo
+
+```bash
+PYTHONPATH=. python demos/distributed_benchmark_demo.py
+```
+
+Compares round-robin, load-balanced, and affinity scheduling through the integrated
+schedule-and-run helper.
+
 ### GPU BusyBox shell
 
 ```bash

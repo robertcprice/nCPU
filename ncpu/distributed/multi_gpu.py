@@ -36,6 +36,7 @@ from ncpu.differentiable.execution import (
 )
 
 from .ipc import Barrier, MessageChannel, SharedMemoryRegion
+from .scheduler import DistributedScheduler, ProcessDescriptor
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,17 @@ class DistributedResult:
     total_steps: int
     all_halted: bool
     device_assignments: dict[int, str] = field(default_factory=dict)
+
+
+@dataclass
+class ScheduledExecutionResult:
+    """Result of scheduling processes then executing them on the controller."""
+
+    process_results: dict[int, ExecutionResult]
+    process_to_core: dict[int, int]
+    core_to_pids: dict[int, list[int]]
+    device_assignments: dict[int, str]
+    scheduled_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +475,56 @@ class DistributedNCPU(nn.Module):
                 delivered += 1
         self.message_bus.clear()
         return delivered
+
+    # -- scheduler integration ---------------------------------------------
+
+    def execute_scheduled(
+        self,
+        processes: list[ProcessDescriptor],
+        scheduler: Optional[DistributedScheduler] = None,
+        max_steps: int = 64,
+    ) -> ScheduledExecutionResult:
+        """Schedule processes across cores, then execute them.
+
+        If multiple processes land on the same core, they are executed
+        sequentially in assignment order and returned per pid.
+        """
+        scheduler = scheduler or DistributedScheduler(
+            num_cores=self.num_cores,
+            core_devices=[self.get_device_map()[i] for i in range(self.num_cores)],
+        )
+        scheduler.set_core_devices([self.get_device_map()[i] for i in range(self.num_cores)])
+        scheduler.submit_batch(processes)
+        assignments = scheduler.schedule()
+
+        process_results: dict[int, ExecutionResult] = {}
+        process_to_core: dict[int, int] = {}
+        core_to_pids: dict[int, list[int]] = {cid: [] for cid in range(self.num_cores)}
+
+        for core_id, procs in assignments.items():
+            core = self.cores[core_id]
+            for proc in procs:
+                core.load_program(proc.program)
+                result = core.run(inputs=proc.inputs, max_steps=max_steps)
+                if result is None:
+                    continue
+                process_results[proc.pid] = result
+                process_to_core[proc.pid] = core_id
+                core_to_pids[core_id].append(proc.pid)
+                if result.registers is not None:
+                    num_regs = result.registers.numel()
+                    base = core_id * num_regs
+                    if base + num_regs <= self.shared_memory.size:
+                        self.shared_memory.write(base, result.registers.detach())
+                scheduler.complete(core_id)
+
+        return ScheduledExecutionResult(
+            process_results=process_results,
+            process_to_core=process_to_core,
+            core_to_pids=core_to_pids,
+            device_assignments=self.get_device_map(),
+            scheduled_count=len(process_results),
+        )
 
     # -- parallel execution -------------------------------------------------
 

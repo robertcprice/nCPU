@@ -18,6 +18,7 @@ from ncpu.distributed import (
     CoreConfig,
     CoreState,
     DistributedResult,
+    ScheduledExecutionResult,
     DeviceInfo,
     DeviceAssignment,
     SharedMemoryRegion,
@@ -900,25 +901,30 @@ class TestEndToEnd:
         dcpu = DistributedNCPU(num_cores=3)
         sched = DistributedScheduler(num_cores=3, policy=SchedulingPolicy.ROUND_ROBIN)
 
-        sched.submit(ProcessDescriptor(pid=0, program=_add_program(), inputs={0: 1.0, 1: 2.0}))
-        sched.submit(ProcessDescriptor(pid=1, program=_mul_program(), inputs={0: 3.0, 1: 4.0}))
-        sched.submit(ProcessDescriptor(pid=2, program=_sub_program(), inputs={0: 10.0, 1: 3.0}))
+        result = dcpu.execute_scheduled([
+            ProcessDescriptor(pid=0, program=_add_program(), inputs={0: 1.0, 1: 2.0}),
+            ProcessDescriptor(pid=1, program=_mul_program(), inputs={0: 3.0, 1: 4.0}),
+            ProcessDescriptor(pid=2, program=_sub_program(), inputs={0: 10.0, 1: 3.0}),
+        ], scheduler=sched)
 
-        assignments = sched.schedule()
+        assert isinstance(result, ScheduledExecutionResult)
+        assert result.scheduled_count == 3
+        assert len(result.process_results) == 3
+        assert set(result.process_to_core.keys()) == {0, 1, 2}
 
-        # Execute assigned programs
-        programs = {}
-        inputs = {}
-        for core_id, procs in assignments.items():
-            for proc in procs:
-                programs[core_id] = proc.program
-                inputs[core_id] = proc.inputs
-
-        result = dcpu.execute_parallel(programs, inputs)
-
-        # All 3 cores should have executed
-        assert len(result.core_results) == 3
-        assert result.all_halted
+    def test_execute_scheduled_respects_backend_constraints(self):
+        dcpu = DistributedNCPU(num_cores=3, devices=["cpu", "cpu", "cpu"])
+        sched = DistributedScheduler(
+            num_cores=3,
+            policy=SchedulingPolicy.LOAD_BALANCED,
+            core_devices=["cpu", "cpu", "cpu"],
+        )
+        result = dcpu.execute_scheduled([
+            ProcessDescriptor(pid=10, program=_add_program(), inputs={0: 2.0, 1: 3.0}, required_backend="cpu"),
+            ProcessDescriptor(pid=11, program=_mul_program(), inputs={0: 4.0, 1: 5.0}, device_affinity="cpu"),
+        ], scheduler=sched)
+        assert result.scheduled_count == 2
+        assert all(device == "cpu" for device in result.device_assignments.values())
 
     def test_shared_memory_communication(self):
         """Core 0 writes to shared memory, core 1 reads it back."""
