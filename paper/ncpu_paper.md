@@ -10,7 +10,7 @@
 
 We present nCPU, an end-to-end AI computer in which every layer of the computational stack --- from integer arithmetic to operating system to compiler --- is either a trained neural network or executes entirely on GPU. The system demonstrates three interconnected theses: (1) a **fully differentiable CPU** where every ALU operation is a trained neural network, enabling gradient-based optimization of computation; (2) a **complete AI computer** where trained models implement not just arithmetic but memory management, process scheduling, caching, compilation, and assembly --- an AI that *is* the computer, not AI running *on* a computer; and (3) a **GPU as self-sufficient computer** that boots a multi-process UNIX OS, compiles C, runs a self-hosting compiler, loads real Linux ELF binaries (BusyBox), and executes a Turing-complete VM, all without any CPU beyond initial bootstrap.
 
-The neural ALU achieves 100% accuracy on 32-bit integer arithmetic via memorization-by-decomposition: operations are broken into sub-problems with exhaustively trainable input spaces. This yields a counterintuitive finding: neural multiplication (21 us) is 12x faster than neural addition (248 us), inverting the conventional performance hierarchy. The neural OS (neurOS) implements 11 components --- MMU, TLB, cache, scheduler, assembler, compiler, watchdog --- as trained models with 93.7-100% accuracy and zero fallback paths. The GPU compute layer executes 135+ ARM64 instructions at ~4M IPS via Metal shaders, hosts a 25-command UNIX shell with fork/wait/pipe/dup2 multi-process support, runs a ~4,200-line self-hosting C compiler (73/73 test programs, self-compilation verified), loads real BusyBox (321KB, 34+ applets) and boots Alpine Linux v3.20 on the GPU with GPU-side syscall buffering for performance, and proves Turing completeness via a 2-instruction MUXLEQ VM running eForth with neural arithmetic.
+The neural ALU achieves 100% accuracy on 32-bit integer arithmetic via memorization-by-decomposition: operations are broken into sub-problems with exhaustively trainable input spaces. This yields a counterintuitive finding: neural multiplication (21 us) is 12x faster than neural addition (248 us), inverting the conventional performance hierarchy. The neural OS (neurOS) implements 11 components --- MMU, TLB, cache, scheduler, assembler, compiler, watchdog --- as trained models with 93.7-100% accuracy and zero fallback paths. The GPU compute layer executes ~200 ARM64 instructions (integer + floating-point) at ~4M IPS via Metal shaders, hosts a 25-command UNIX shell with fork/wait/pipe/dup2 multi-process support, runs a ~4,200-line self-hosting C compiler (73/73 test programs, self-compilation verified), loads real BusyBox (264KB, 34+ applets) and boots Alpine Linux v3.20 on the GPU with GPU-side syscall buffering for performance, and proves Turing completeness via a 2-instruction MUXLEQ VM running eForth with neural arithmetic.
 
 The system comprises 24 trained models, 1,341 tests across 21 files with exhaustive formal verification, and demonstrates that a single GPU can host a complete, self-contained computational stack from silicon to shell.
 
@@ -30,11 +30,11 @@ The key insight enabling exact neural arithmetic is architectural decomposition:
 
 3. **Complete neural operating system.** neurOS implements 11 OS components (MMU, TLB, cache, scheduler, assembler, compiler, watchdog) as trained models with zero fallback paths, demonstrating that learned systems can manage computation end to end.
 
-4. **GPU as self-sufficient computer.** A Metal GPU shader executes 135+ ARM64 instructions at ~4M IPS, boots a 25-command multi-process UNIX OS with fork/pipe/wait, and requires no CPU beyond initial bootstrap.
+4. **GPU as self-sufficient computer.** A Metal GPU shader executes ~200 ARM64 instructions (integer + floating-point) at ~4M IPS, boots a 25-command multi-process UNIX OS with fork/pipe/wait, and requires no CPU beyond initial bootstrap.
 
 5. **Self-hosting C compiler on GPU.** A ~3,500-line C compiler compiles C source into ARM64 machine code entirely on the GPU, then executes the result --- 40/40 test programs verified, self-compilation verified.
 
-6. **Alpine Linux on GPU.** An ELF64 loader runs BusyBox (321KB, 34+ applets) on the Metal shader with 50+ Linux syscalls, filesystem integration (109 files, 61 directories), format-string I/O, **pipes**, a comprehensive POSIX shell (scripting, variables, command substitution, 20+ builtins), and **GPU superpower commands** (deterministic cycle counting, memory introspection, ISA analysis, side-channel immunity) --- sufficient to boot a complete Alpine Linux v3.20 environment with 28+ verified commands, multi-stage UNIX pipelines, and capabilities beyond standard Linux.
+6. **Alpine Linux on GPU.** An ELF64 loader runs BusyBox (264KB, 34+ applets) on the Metal shader with 50+ Linux syscalls, filesystem integration (109 files, 61 directories), format-string I/O, **pipes**, a comprehensive POSIX shell (scripting, variables, command substitution, 20+ builtins), and **GPU superpower commands** (deterministic cycle counting, memory introspection, ISA analysis, side-channel immunity) --- sufficient to boot a complete Alpine Linux v3.20 environment with 28+ verified commands, multi-stage UNIX pipelines, and capabilities beyond standard Linux.
 
 7. **Neural Turing completeness proof.** A 2-instruction MUXLEQ VM runs eForth using neural arithmetic (SUB via Kogge-Stone CLA, MUX via neural truth tables), proving the principle extends to any instruction set.
 
@@ -388,7 +388,7 @@ In every case, neural execution produces results identical to Python arithmetic.
 
 ### 5.4 Performance Characteristics
 
-We benchmark all 15 neural operations using 1,000 iterations with 50 warmup iterations on Apple Silicon (M-series, MPS backend, PyTorch 2.10.0). Timing uses `time.perf_counter_ns()` for nanosecond precision. All 22 models load in 60ms.
+We benchmark all 15 neural operations using 1,000 iterations with 50 warmup iterations on Apple Silicon (M-series, MPS backend, PyTorch 2.10.0). Timing uses `time.perf_counter_ns()` for nanosecond precision. All 24 models load in 60ms.
 
 **Per-Operation Latency (1,000 iterations, Apple Silicon MPS):**
 
@@ -523,7 +523,7 @@ Several directions could extend this work:
 2. **Native 64-bit models.** Retrain all models on 64-bit operands, eliminating the bridge narrowing.
 3. **Multi-instance parallel execution.** GPU's strength is parallelism. Running N independent nCPU instances simultaneously on a single GPU could provide throughput scaling for embarrassingly parallel workloads. The batch infrastructure exists in NeuralOps; the remaining work is instruction-level batching across instances.
 4. **Quantized models.** Apply post-training quantization (INT8) to the shift networks and multiplication LUT, reducing the 48 MB model footprint.
-5. **Neural FPU.** Extend exact computation to IEEE 754 floating-point operations, potentially using a decomposed sign/exponent/mantissa architecture.
+5. **Neural FPU.** The GPU kernel now implements hardware floating-point via Metal's native FP unit (FADD, FSUB, FMUL, FDIV, FSQRT, FABS, FNEG, FMADD/FMSUB, FCMP, FCSEL, rounding modes, SCVTF/UCVTF/FCVTZS/FCVTZU, FMOV, FCVT, plus all FP load/store modes). D-register (double) instructions execute at single-precision due to Metal GPU limitations. Extending the *neural* ALU to exact IEEE 754 floating-point --- potentially using a decomposed sign/exponent/mantissa architecture --- remains open.
 6. **Differentiable execution.** Since the entire neural execution pipeline is composed of differentiable operations (neural network forward passes), it may be possible to backpropagate through program execution. This could enable gradient-based program synthesis --- learning instruction sequences via gradient descent instead of search. The Rust Metal kernel includes a differentiable JIT prototype (`diff_jit.rs`, `unified_diff_cpu.rs`) exploring this direction.
 
 ### 6.7 GPU Compute Mode
@@ -576,7 +576,7 @@ Prior neural arithmetic systems target *generalization*: learning arithmetic pat
 
 nCPU demonstrates that trained neural networks can execute 32-bit integer arithmetic with 100% accuracy. The key insight is architectural decomposition: by breaking operations into sub-problems with exhaustively trainable input spaces --- 8-entry truth tables for addition, 16-entry truth tables for carry combining, 65,536-entry lookup tables for multiplication, attention-based bit routing for shifts --- neural networks can memorize exact functions rather than approximating them.
 
-The system comprises 22 trained models totaling approximately 49 MB of weights, implementing a complete ALU with addition, subtraction, multiplication, bitwise logic, shifts, comparison, and experimental transcendental functions. Seven benchmark programs produce results identical to conventional arithmetic on all tested inputs.
+The system comprises 24 trained models totaling approximately 49 MB of weights, implementing a complete ALU with addition, subtraction, multiplication, bitwise logic, shifts, comparison, and experimental transcendental functions. Seven benchmark programs produce results identical to conventional arithmetic on all tested inputs.
 
 Performance benchmarking reveals that neural operation latency is determined by the number of sequential forward passes and their algorithmic structure. Neural multiplication (O(1) LUT lookup, 21 us) is 12x faster than neural addition (O(log n) Kogge-Stone CLA, 248 us), inverting the performance hierarchy of conventional CPUs. The CLA reduced addition latency by 3.3x (from 826 us to 248 us) by replacing 32 sequential ripple-carry passes with 8 parallel-prefix passes through a trained carry-combine network. Combined with shift vectorization (2,833 us to 434 us, 6.5x speedup), these optimizations demonstrate that classical hardware design principles --- carry-lookahead, parallel-prefix trees, vectorized independent computations --- transfer directly to neural architectures.
 
@@ -1150,7 +1150,7 @@ The nCPU differentiable coprocessor represents a fundamentally different approac
 | **Host model** | Standalone 7-layer (d\_model=36) | Injected into production LLMs (0.5B--9B) |
 | **Arithmetic accuracy** | 100% (compiled) | 100% (deterministic mode via STE) |
 | **Learnable routing** | No (always active) | Yes (per-token confidence-aware gating) |
-| **ISA coverage** | WASM subset | 7 ALU ops + full ARM64 (139 instructions) |
+| **ISA coverage** | WASM subset | 7 ALU ops + full ARM64 (~200 instructions) |
 | **Real-world eval** | Sudoku, multi-digit addition | HumanEval, GSM8K, coding, reasoning |
 | **Gradient propagation** | Unproven | Verified through all paths |
 | **Gate control** | None | Adaptive scheduling, per-layer scaling, confidence modulation |
@@ -1163,7 +1163,7 @@ The nCPU differentiable coprocessor represents a fundamentally different approac
 
 3. **Selective activation.** The confidence-aware router learns WHEN computation is needed, staying dormant when the LLM is already confident. Percepta's computation is always-on with no gating mechanism. This is critical for real-world use: aggressive computation replacement degrades code generation (Section 11.9).
 
-4. **Broader computation.** Beyond the 7 ALU operations, the nCPU system includes a full ARM64 ISA (139 instructions), self-hosting C compiler, BusyBox on GPU, and Alpine Linux --- demonstrating that neural computation extends far beyond arithmetic to general-purpose program execution.
+4. **Broader computation.** Beyond the 7 ALU operations, the nCPU system includes a full ARM64 ISA (~200 instructions), self-hosting C compiler, BusyBox on GPU, and Alpine Linux --- demonstrating that neural computation extends far beyond arithmetic to general-purpose program execution.
 
 5. **Trained, not compiled.** The coprocessor learns to extract operands, select operations, and route results through backpropagation. This means the system can adapt to new tasks through fine-tuning, whereas Percepta's compiled weights are fixed and require manual re-engineering for any change.
 
@@ -1193,7 +1193,7 @@ Several directions extend this work:
 
 ### 12.1 Overview
 
-The ARM64 Metal Kernel V2 extends nCPU's compute tier to execute real compiled C programs on GPU. A complete C-to-GPU pipeline compiles freestanding C code with `aarch64-elf-gcc`, extracts raw binary via `objcopy`, and executes it on a ~1,600-line Metal Shading Language kernel implementing 130+ ARM64 instructions. Python mediates I/O through SVC trap handling, while all computation runs on GPU metal.
+The ARM64 Metal Kernel V2 extends nCPU's compute tier to execute real compiled C programs on GPU. A complete C-to-GPU pipeline compiles freestanding C code with `aarch64-elf-gcc`, extracts raw binary via `objcopy`, and executes it on a ~1,600-line Metal Shading Language kernel implementing ~200 ARM64 instructions (integer + floating-point). Python mediates I/O through SVC trap handling, while all computation runs on GPU metal.
 
 ### 12.2 Architecture
 
@@ -1216,6 +1216,7 @@ The kernel covers the instructions GCC emits for freestanding C with `-O2 -mgene
 - **Memory**: LDR/STR (64/32/16/8-bit, unsigned/unscaled/register/pre/post-index for all widths), LDP/STP, LDRSW/LDRSB/LDRSH, SXTW/UXTW extensions
 - **Branches**: B, BL, BR, BLR, RET, B.cond (all 16 conditions), CBZ/CBNZ, TBZ/TBNZ
 - **System**: SVC, HLT, NOP, DMB/DSB/ISB, MRS, MSR
+- **Floating-point**: FADD, FSUB, FMUL, FDIV, FSQRT, FABS, FNEG, FMADD/FMSUB/FNMADD/FNMSUB, FCMP, FCSEL, FRINTN/P/M/Z/A, FMAX, FMIN, SCVTF, UCVTF, FCVTZS, FCVTZU, FMOV (register + immediate), FCVT, FP LDR/STR (all addressing modes). Note: D-register (double) instructions execute at single-precision due to Metal GPU limitation.
 
 ### 12.4 Demos
 
@@ -1765,7 +1766,7 @@ The automated demo suite runs 35+ commands across 9 categories (System Identity,
 
 ### 12.7 Significance
 
-Running a real Alpine Linux distribution on a Metal GPU shader demonstrates that the ARM64 kernel is a standards-compliant execution environment, not a toy emulator. With 34 verified BusyBox commands spanning file I/O, text processing, system queries, and file management, plus a comprehensive POSIX-like shell with scripting, variables, and 26 GPU superpower commands, the system goes beyond what normal Linux provides. Multi-command pipelines like `cat /etc/passwd | grep -F root | cut -d: -f1` execute across three separate GPU invocations with stdin injection, demonstrating that the system supports the compositional tool philosophy fundamental to UNIX. The shell scripting engine supports `for`/`while`/`if`/`case` control flow, variable expansion, command substitution, and glob matching --- sufficient to execute real `.sh` scripts. GPU superpowers exploit the deterministic GPU execution model for capabilities fundamentally impossible on CPU-based operating systems: post-execution forensics, replay/diff, state freeze/thaw, syscall and instruction tracing, breakpoints, watchpoints, time-travel history, taint tracking, bug bisection, profiling, call-stack reconstruction, heatmaps, comparative execution, built-in disassembly, zero-overhead sanitization, crash-preserving fuzzing, reverse data-flow, constant-time verification, memory visualization, and entropy analysis. These are not convenience wrappers --- they are structurally impossible on CPUs because the OS destroys register state after process exit, non-deterministic microarchitectural features (branch prediction, caching, scheduling) prevent exact replay, and instrumentation always perturbs the observed execution. The ELF loader, 50+ Linux syscalls, comprehensive rootfs (109 files, 61 directories), and ARM64 instruction coverage are sufficient to bootstrap real software compiled with a real C library (musl). The four-session BIC debugging journey illustrates the depth of ISA correctness required --- a single missing bit-invert in one instruction handler cascades through the entire C runtime memory allocator.
+Running a real Alpine Linux distribution on a Metal GPU shader demonstrates that the ARM64 kernel is a standards-compliant execution environment, not a toy emulator. With 34 verified BusyBox commands spanning file I/O, text processing, system queries, and file management, plus a comprehensive POSIX-like shell with scripting, variables, and 26 GPU superpower commands, the system goes beyond what normal Linux provides. Multi-command pipelines like `cat /etc/passwd | grep -F root | cut -d: -f1` execute across three separate GPU invocations with stdin injection, demonstrating that the system supports the compositional tool philosophy fundamental to UNIX. The shell scripting engine supports `for`/`while`/`if`/`case` control flow, variable expansion, command substitution, and glob matching --- sufficient to execute real `.sh` scripts. GPU superpowers exploit the deterministic GPU execution model for capabilities fundamentally impossible on CPU-based operating systems: post-execution forensics, replay/diff, state freeze/thaw, syscall and instruction tracing, breakpoints, watchpoints, time-travel history, taint tracking, bug bisection, profiling, call-stack reconstruction, heatmaps, comparative execution, built-in disassembly, zero-overhead sanitization, crash-preserving fuzzing, reverse data-flow, constant-time verification, memory visualization, and entropy analysis. These are not convenience wrappers --- they are structurally impossible on CPUs because the OS destroys register state after process exit, non-deterministic microarchitectural features (branch prediction, caching, scheduling) prevent exact replay, and instrumentation always perturbs the observed execution. The ELF loader, 50+ Linux syscalls, comprehensive rootfs (109 files, 61 directories), and ARM64 instruction coverage are sufficient to bootstrap real software compiled with a real C library (musl). The four-session BIC debugging journey illustrates the depth of ISA correctness required --- a single missing ... [truncated]
 
 ---
 

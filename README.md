@@ -352,7 +352,7 @@ Real BusyBox (Alpine Linux core utils, 264KB static binary) running on the Metal
 
 Full Alpine Linux v3.20 distribution running on Metal GPU compute shader with a comprehensive POSIX shell:
 
-- BusyBox (321 KB, musl libc) as multi-call binary behind every command
+- BusyBox (264KB, musl libc) as multi-call binary behind every command
 - Pipes (`|`), chaining (`;`/`&&`/`||`), redirection (`>`/`>>`), command substitution (`$(cmd)`)
 - Shell scripting: for/while/if/elif/case, functions, local variables, parameter expansion, brace expansion
 - Here-documents, glob expansion, aliases, history, 35+ builtins
@@ -499,6 +499,46 @@ Current evidence:
 
 Docs: [SOME Complete Guide](docs/SOME_COMPLETE_GUIDE.md) | [Architecture](docs/SOME_ARCHITECTURE.md) | [Weight CPU Architecture](docs/WEIGHT_CPU_ARCHITECTURE.md) | [Results](docs/SOME_RESULTS.md)
 
+### 5. Differentiable Execution as a Training Signal for Code Models
+
+The `ncpu/execution_training/` package makes nCPU's differentiable CPU a **training signal source** for language models. Instead of sparse pass/fail rewards from external execution, the model receives dense, per-operation gradient signal from running its code through the differentiable engine.
+
+```python
+# Parse Python → nCPU ISA → execute differentiably → backprop execution error
+from ncpu.execution_training import CodeToISAParser, ExecutionLoss
+from ncpu.differentiable import DifferentiableEngine
+
+parser = CodeToISAParser()
+engine = DifferentiableEngine()
+loss_fn = ExecutionLoss(engine=engine)
+
+result = parser.parse_block("result = a * b + c", arg_names=["a", "b", "c"])
+soft_prog = result.to_soft_program()
+exec_result = loss_fn.compute_soft(soft_prog, inputs={0: 3, 1: 5, 2: 2}, expected={3: 17.0})
+exec_result.total_loss.backward()  # Gradients through every ALU operation!
+```
+
+Three training modes:
+
+| Mode | Method | Gradient Source |
+|------|--------|----------------|
+| **Coprocessor + Execution Loss** | Parse reference code, execute, add to LM loss | Per-operation MSE through differentiable engine |
+| **Differentiable Compilation** | Map LM hidden states → DiffCompiler → execution | End-to-end: execution → compilation → embeddings |
+| **Generated Code Training** | Model generates code, parse, execute, REINFORCE | Execution rewards + optional policy gradient |
+
+96 tests passing across the full pipeline. See [architecture doc](docs/DIFFERENTIABLE_EXECUTION_TRAINING.md) and the [module README](ncpu/execution_training/README.md).
+
+```bash
+# Smoke test (no model needed)
+python -m ncpu.execution_training.train --synthetic-only --steps 200
+
+# Full training
+python -m ncpu.execution_training.train --model Qwen/Qwen3.5-0.8B --steps 2000
+
+# Scaling sweep
+python -m ncpu.execution_training.run_sweep --quick
+```
+
 ## Project Structure
 
 ```
@@ -506,6 +546,7 @@ ncpu/
   differentiable/ # Differentiable execution, program optimization, synthesis,
                   # ISA discovery, float ALU, self-modifying programs, diff compiler
   coprocessor/  # Differentiable coprocessor: inject nCPU into transformer forward passes
+  execution_training/  # Differentiable execution as training signal for code LMs (3 modes, 96 tests)
   crypto/       # Provably constant-time crypto (AES-128 ECB/CBC, timing verification)
   distributed/  # Multi-GPU distributed nCPU (cores, shared memory, scheduler)
   os/
@@ -549,6 +590,8 @@ pytest tests/ -v   # ~1,840 passed
 - **[Weight CPU Architecture](docs/WEIGHT_CPU_ARCHITECTURE.md)** --- the "CPU in the model" roadmap and current prototype boundaries
 - **[SOME Results](docs/SOME_RESULTS.md)** --- benchmark evidence and latent-memory proof summary
 - **[Differentiable Programs](paper/section_differentiable_programs.md)** --- paper section on program optimization, synthesis, ISA discovery
+- **[Differentiable Execution Training](docs/DIFFERENTIABLE_EXECUTION_TRAINING.md)** --- architecture doc for execution-grounded code model training
+- **[Execution Training Paper Section](paper/section_execution_training.md)** --- paper section on dense execution gradients for code LMs
 
 ## License
 

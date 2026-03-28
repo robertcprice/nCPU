@@ -1,6 +1,6 @@
 # nCPU Model Reference
 
-Comprehensive documentation for all 22 trained neural network models.
+Comprehensive documentation for all 24 trained neural network models.
 
 ## 1. Neural Full Adder (`models/alu/arithmetic.pt`)
 

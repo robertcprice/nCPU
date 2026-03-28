@@ -59,7 +59,7 @@ After each GPU dispatch, Python drains the buffer and prints buffered output.
 
 ## ARM64 ISA Coverage
 
-139 instructions fully implemented in the Metal shader:
+~200 instructions fully implemented in the Metal shader (integer + floating-point):
 
 - **Data movement**: MOVZ, MOVN, MOVK (16/32/64-bit), LDR/STR (byte/half/word/double, pre/post-index, register offset, signed/unsigned), LDP/STP, LDXR/STXR (exclusive)
 - **Arithmetic**: ADD, SUB, ADDS, SUBS, ADC, SBC, MUL, SMULL, UMULL, UDIV, SDIV, MADD, MSUB, NEG
@@ -69,6 +69,7 @@ After each GPU dispatch, Python drains the buffer and prints buffered output.
 - **Comparison**: CMP, CMN, CCMP, CSEL, CSINC, CSINV, CSNEG, CSET
 - **System**: NOP, HLT, BRK, SVC, DMB, DSB, ISB, MRS, MSR, CLREX
 - **SIMD**: LDR/STR Q-register (128-bit load/store for musl va_list)
+- **Floating-point**: FADD, FSUB, FMUL, FDIV, FSQRT, FABS, FNEG, FMADD/FMSUB/FNMADD/FNMSUB, FCMP, FCSEL, FRINTN/P/M/Z/A, FMAX, FMIN, SCVTF, UCVTF, FCVTZS, FCVTZU, FMOV (register + immediate), FCVT, FP LDR/STR (all addressing modes). Note: D-register (double) instructions execute at single-precision due to Metal GPU limitation.
 
 ## Build Instructions
 
