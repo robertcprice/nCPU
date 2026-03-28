@@ -115,7 +115,7 @@ nCPU provides three complete execution modes --- each a different point in the d
 
 **Fast mode** skips the trained models and uses native PyTorch tensor operations for the same ISA --- same differentiability guarantees, without the overhead of model inference. Useful for rapid prototyping and as a correctness oracle.
 
-**Compute mode** is the performance path: a Rust + Metal kernel executes 139 ARM64 instructions on the GPU at ~1.9M IPS with zero-copy StorageModeShared memory. This is where the UNIX OS boots, the compiler self-hosts, BusyBox runs, and Alpine Linux comes alive. ~500x faster compilation than the Python path.
+**Compute mode** is the performance path: a Rust + Metal kernel executes ~200 ARM64 instructions (integer + floating-point) on the GPU at ~1.9M IPS with zero-copy StorageModeShared memory. This is where the UNIX OS boots, the compiler self-hosts, BusyBox runs, and Alpine Linux comes alive. ~500x faster compilation than the Python path.
 
 All three modes execute the same programs and produce the same results. The neural and fast modes are fully differentiable; the compute mode trades gradient flow for raw speed.
 
@@ -181,7 +181,7 @@ python ncpu/coprocessor/train.py  # Train on synthetic arithmetic + GSM8K
 |-------|---------------|----------------|
 | **ALU** | 13 trained `.pt` models (neural) or native tensor ops (fast) | Neural nets do exact 32-bit integer arithmetic --- exhaustively verified, 100% accuracy |
 | **OS** | 11 neural models (neurOS), zero fallbacks | Learned MMU, TLB, cache, scheduler, assembler, compiler --- the OS is differentiable |
-| **GPU Compute** | Rust Metal kernel, 139 ARM64 insns | GPU executes arbitrary programs at ~1.9M IPS, zero-copy StorageModeShared |
+| **GPU Compute** | Rust Metal kernel, ~200 ARM64 insns (int + FP) | GPU executes arbitrary programs at ~1.9M IPS, zero-copy StorageModeShared |
 | **UNIX OS** | Compiled C on Metal | Fork/pipe/wait, 25-command shell, 28 syscalls, multi-process |
 | **Compiler** | cc.c, ~4,200 lines, self-hosting on GPU | GPU hosts a complete toolchain; compiler compiles itself then compiles and runs programs |
 | **ELF Loader** | Real Linux binaries on GPU | BusyBox (264KB) and Alpine Linux v3.20 run on Metal |
@@ -363,7 +363,8 @@ Full Alpine Linux v3.20 distribution running on Metal GPU compute shader with a 
 
 The primary execution backend: Rust + Metal with StorageModeShared for zero-copy GPU<->Python communication. [Architecture docs](docs/rust_metal_kernel.md).
 
-- **139 ARM64 instructions**, ~1.9M IPS sustained
+- **~200 ARM64 instructions** (integer + floating-point), ~1.9M IPS sustained
+- **Floating-point support**: single-precision FADD, FSUB, FMUL, FDIV, FSQRT, FABS, FNEG, FMADD, FMSUB, FCMP, FCSEL, FRINT*, FMAX, FMIN, SCVTF, UCVTF, FCVTZS, FCVTZU, FMOV, FCVT, plus all FP load/store addressing modes. Double-precision (D-register) instructions decode and execute but operate at single-precision accuracy — Apple Silicon GPU has no FP64 hardware.
 - **~500x faster compilation** than the Python MLX kernel (~44ms vs ~22s)
 - **Zero-copy SVC handling** via unified memory (no 16MB copies per syscall)
 - GPU-side SVC buffer for SYS_WRITE, SYS_BRK, SYS_CLOSE, SYS_EXIT
