@@ -1390,6 +1390,21 @@ kernel void arm64_execute_full(
                 if (cond_code == 0xF) cond_met = true;
                 vreg_lo[rd_fp] = cond_met ? vreg_lo[rn_fp] : vreg_lo[rm_fp];
                 vreg_hi[rd_fp] = 0;
+
+            // ── FMOV immediate single-precision ──
+            } else if ((inst & 0xFFE01C00) == 0x1E201000) {
+                // FMOV Sd, #imm — VFPExpandImm (single)
+                uint32_t imm8 = (inst >> 13) & 0xFF;
+                uint32_t a = (imm8 >> 7) & 1;
+                uint32_t b = (imm8 >> 6) & 1;
+                uint32_t cd = (imm8 >> 4) & 3;
+                uint32_t efgh = imm8 & 0xF;
+                uint32_t sign = a << 31;
+                // exp8 = NOT(b):bbbbb:cd
+                uint32_t exp8 = b ? (0x7Cu | cd) : (0x80u | cd);
+                uint32_t fbits = sign | (exp8 << 23) | (efgh << 19);
+                vreg_lo[rd_fp] = int64_t(fbits);
+                vreg_hi[rd_fp] = 0;
             }
 
             #undef VREG_S_READ
@@ -1969,9 +1984,31 @@ kernel void arm64_execute_full(
             int32_t simm9 = (inst >> 12) & 0x1FF;
             if (simm9 & 0x100) simm9 -= 0x200;
             int64_t base = (rn == 31) ? regs[31] : regs[rn];
-            uint8_t idx_type = (inst >> 10) & 0x3; // 00=unscaled, 01=post, 11=pre
+            uint8_t idx_type = (inst >> 10) & 0x3; // 00=unscaled, 01=post, 11=pre, 10=register
             uint64_t addr;
-            if (idx_type == 1) {
+            if (idx_type == 2 && ((inst >> 21) & 1)) {
+                // Register offset: STR/LDR Bt/Ht/St/Dt/Qt, [Xn, Xm{, extend {amount}}]
+                uint8_t rm_fp_ls = (inst >> 16) & 0x1F;
+                uint8_t option = (inst >> 13) & 0x7;
+                uint8_t S_bit = (inst >> 12) & 1;
+                int64_t rm_val = (rm_fp_ls == 31) ? 0 : regs[rm_fp_ls];
+                // Determine size shift: 0x7C=1(half), 0xBC=2(single), 0xFC=3(double)
+                uint8_t size_shift = (op_byte == 0xFC) ? 3 : ((op_byte == 0xBC) ? 2 : 1);
+                // Apply extend
+                if (option == 3) {
+                    // LSL / UXTX — use rm_val as-is (64-bit)
+                } else if (option == 2) {
+                    // UXTW — zero-extend 32-bit
+                    rm_val = int64_t(uint32_t(rm_val));
+                } else if (option == 6) {
+                    // SXTW — sign-extend 32-bit
+                    rm_val = int64_t(int32_t(rm_val));
+                } else if (option == 7) {
+                    // SXTX — sign-extend 64-bit (no-op)
+                }
+                int64_t offset = rm_val << (S_bit ? size_shift : 0);
+                addr = uint64_t(base + offset);
+            } else if (idx_type == 1) {
                 // Post-index
                 addr = uint64_t(base);
                 if (rn == 31) regs[31] = base + simm9;
