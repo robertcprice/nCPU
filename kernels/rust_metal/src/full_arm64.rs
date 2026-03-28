@@ -1118,27 +1118,230 @@ kernel void arm64_execute_full(
             break;
         }
 
-        case 0x1E: { // FP data processing / FMOV
-            uint8_t rt = inst & 0x1F;
+        case 0x1E: { // FP data processing: arithmetic, compare, convert, move
+            uint8_t rd_fp = inst & 0x1F;
+            uint8_t rn_fp = (inst >> 5) & 0x1F;
+            uint8_t rm_fp = (inst >> 16) & 0x1F;
+            uint8_t ftype = (inst >> 22) & 0x3; // 0=single, 1=double
+            // Helper: read/write single-precision as float via bitcast
+            #define VREG_S_READ(r) as_type<float>(uint32_t(vreg_lo[(r)] & 0xFFFFFFFF))
+            #define VREG_S_WRITE(r, val) do { vreg_lo[(r)] = int64_t(as_type<uint32_t>((float)(val))); vreg_hi[(r)] = 0; } while(0)
+            // Helper: read/write double-precision via bitcast through int64
+            #define VREG_D_READ(r) as_type<double>(uint64_t(vreg_lo[(r)]))
+            #define VREG_D_WRITE(r, val) do { vreg_lo[(r)] = as_type<int64_t>((double)(val)); vreg_hi[(r)] = 0; } while(0)
+
             if ((inst & 0xFFFFFC00) == 0x1E260000) {
                 // FMOV Wd, Sn — move bottom 32 bits of SIMD to GPR
-                uint32_t val = uint32_t(vreg_lo[rn] & 0xFFFFFFFF);
-                if (rt != 31) regs[rt] = int64_t(val);
+                uint32_t val = uint32_t(vreg_lo[rn_fp] & 0xFFFFFFFF);
+                if (rd_fp != 31) regs[rd_fp] = int64_t(val);
             } else if ((inst & 0xFFFFFC00) == 0x1E270000) {
                 // FMOV Sd, Wn — move GPR to bottom 32 bits of SIMD
-                int64_t val = (rn == 31) ? 0 : regs[rn];
-                vreg_lo[rt] = int64_t(uint32_t(val & 0xFFFFFFFF));
-                vreg_hi[rt] = 0;
+                int64_t val = (rn_fp == 31) ? 0 : regs[rn_fp];
+                vreg_lo[rd_fp] = int64_t(uint32_t(val & 0xFFFFFFFF));
+                vreg_hi[rd_fp] = 0;
             } else if ((inst & 0xFFFFFC00) == 0x1E204000) {
-                // FMOV Sd, Sn — copy single-precision between FP registers
-                vreg_lo[rt] = vreg_lo[rn] & 0xFFFFFFFF;
-                vreg_hi[rt] = 0;
+                // FMOV Sd, Sn — copy single between FP regs
+                vreg_lo[rd_fp] = vreg_lo[rn_fp] & 0xFFFFFFFF;
+                vreg_hi[rd_fp] = 0;
+            } else if ((inst & 0xFFFFFC00) == 0x1E604000) {
+                // FMOV Dd, Dn — copy double between FP regs
+                vreg_lo[rd_fp] = vreg_lo[rn_fp];
+                vreg_hi[rd_fp] = 0;
+
+            // ── Single-precision arithmetic (0x1E2xxxxx) ──
+            } else if ((inst & 0xFF20FC00) == 0x1E202800) {
+                // FADD Sd, Sn, Sm
+                VREG_S_WRITE(rd_fp, VREG_S_READ(rn_fp) + VREG_S_READ(rm_fp));
+            } else if ((inst & 0xFF20FC00) == 0x1E203800) {
+                // FSUB Sd, Sn, Sm
+                VREG_S_WRITE(rd_fp, VREG_S_READ(rn_fp) - VREG_S_READ(rm_fp));
+            } else if ((inst & 0xFF20FC00) == 0x1E200800) {
+                // FMUL Sd, Sn, Sm
+                VREG_S_WRITE(rd_fp, VREG_S_READ(rn_fp) * VREG_S_READ(rm_fp));
+            } else if ((inst & 0xFF20FC00) == 0x1E201800) {
+                // FDIV Sd, Sn, Sm
+                float divisor = VREG_S_READ(rm_fp);
+                VREG_S_WRITE(rd_fp, (divisor != 0.0f) ? (VREG_S_READ(rn_fp) / divisor) : 0.0f);
+            } else if ((inst & 0xFFFFFC00) == 0x1E214000) {
+                // FNEG Sd, Sn
+                VREG_S_WRITE(rd_fp, -VREG_S_READ(rn_fp));
+            } else if ((inst & 0xFFFFFC00) == 0x1E20C000) {
+                // FABS Sd, Sn
+                VREG_S_WRITE(rd_fp, fabs(VREG_S_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E21C000) {
+                // FSQRT Sd, Sn
+                VREG_S_WRITE(rd_fp, sqrt(VREG_S_READ(rn_fp)));
+
+            // ── Double-precision arithmetic (0x1E6xxxxx) ──
+            } else if ((inst & 0xFF20FC00) == 0x1E602800) {
+                // FADD Dd, Dn, Dm
+                VREG_D_WRITE(rd_fp, VREG_D_READ(rn_fp) + VREG_D_READ(rm_fp));
+            } else if ((inst & 0xFF20FC00) == 0x1E603800) {
+                // FSUB Dd, Dn, Dm
+                VREG_D_WRITE(rd_fp, VREG_D_READ(rn_fp) - VREG_D_READ(rm_fp));
+            } else if ((inst & 0xFF20FC00) == 0x1E600800) {
+                // FMUL Dd, Dn, Dm
+                VREG_D_WRITE(rd_fp, VREG_D_READ(rn_fp) * VREG_D_READ(rm_fp));
+            } else if ((inst & 0xFF20FC00) == 0x1E601800) {
+                // FDIV Dd, Dn, Dm
+                double divisor = VREG_D_READ(rm_fp);
+                VREG_D_WRITE(rd_fp, (divisor != 0.0) ? (VREG_D_READ(rn_fp) / divisor) : 0.0);
+            } else if ((inst & 0xFFFFFC00) == 0x1E614000) {
+                // FNEG Dd, Dn
+                VREG_D_WRITE(rd_fp, -VREG_D_READ(rn_fp));
+            } else if ((inst & 0xFFFFFC00) == 0x1E60C000) {
+                // FABS Dd, Dn
+                VREG_D_WRITE(rd_fp, fabs(VREG_D_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E61C000) {
+                // FSQRT Dd, Dn
+                VREG_D_WRITE(rd_fp, sqrt(VREG_D_READ(rn_fp)));
+
+            // ── FCMP single-precision (sets NZCV) ──
+            } else if ((inst & 0xFFE0FC1F) == 0x1E202000) {
+                // FCMP Sn, Sm
+                float a = VREG_S_READ(rn_fp);
+                float b = VREG_S_READ(rm_fp);
+                if (isnan(a) || isnan(b)) {
+                    flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 1.0f; // unordered
+                } else if (a == b) {
+                    flag_n = 0.0f; flag_z = 1.0f; flag_c = 1.0f; flag_v = 0.0f;
+                } else if (a < b) {
+                    flag_n = 1.0f; flag_z = 0.0f; flag_c = 0.0f; flag_v = 0.0f;
+                } else {
+                    flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 0.0f;
+                }
+            } else if ((inst & 0xFFFFFFFF) == 0x1E202008 || (inst & 0xFFE0FC1F) == 0x1E202008) {
+                // FCMP Sn, #0.0
+                float a = VREG_S_READ(rn_fp);
+                if (isnan(a)) {
+                    flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 1.0f;
+                } else if (a == 0.0f) {
+                    flag_n = 0.0f; flag_z = 1.0f; flag_c = 1.0f; flag_v = 0.0f;
+                } else if (a < 0.0f) {
+                    flag_n = 1.0f; flag_z = 0.0f; flag_c = 0.0f; flag_v = 0.0f;
+                } else {
+                    flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 0.0f;
+                }
+
+            // ── FCMP double-precision ──
+            } else if ((inst & 0xFFE0FC1F) == 0x1E602000) {
+                // FCMP Dn, Dm
+                double a = VREG_D_READ(rn_fp);
+                double b = VREG_D_READ(rm_fp);
+                if (isnan(a) || isnan(b)) {
+                    flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 1.0f;
+                } else if (a == b) {
+                    flag_n = 0.0f; flag_z = 1.0f; flag_c = 1.0f; flag_v = 0.0f;
+                } else if (a < b) {
+                    flag_n = 1.0f; flag_z = 0.0f; flag_c = 0.0f; flag_v = 0.0f;
+                } else {
+                    flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 0.0f;
+                }
+            } else if ((inst & 0xFFE0FC1F) == 0x1E602008) {
+                // FCMP Dn, #0.0
+                double a = VREG_D_READ(rn_fp);
+                if (isnan(a)) {
+                    flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 1.0f;
+                } else if (a == 0.0) {
+                    flag_n = 0.0f; flag_z = 1.0f; flag_c = 1.0f; flag_v = 0.0f;
+                } else if (a < 0.0) {
+                    flag_n = 1.0f; flag_z = 0.0f; flag_c = 0.0f; flag_v = 0.0f;
+                } else {
+                    flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 0.0f;
+                }
+
+            // ── FCVT between single and double ──
+            } else if ((inst & 0xFFFFFC00) == 0x1E22C000) {
+                // FCVT Dd, Sn — single to double
+                VREG_D_WRITE(rd_fp, double(VREG_S_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E624000) {
+                // FCVT Sd, Dn — double to single
+                VREG_S_WRITE(rd_fp, float(VREG_D_READ(rn_fp)));
+
+            // ── SCVTF / UCVTF: integer to FP ──
+            } else if ((inst & 0xFFFFFC00) == 0x1E220000) {
+                // SCVTF Sd, Wn — signed 32-bit int to single
+                int32_t ival = int32_t(regs[rn_fp] & 0xFFFFFFFF);
+                VREG_S_WRITE(rd_fp, float(ival));
+            } else if ((inst & 0xFFFFFC00) == 0x1E620000) {
+                // SCVTF Dd, Wn — signed 32-bit int to double
+                int32_t ival = int32_t(regs[rn_fp] & 0xFFFFFFFF);
+                VREG_D_WRITE(rd_fp, double(ival));
+            } else if ((inst & 0xFFFFFC00) == 0x1E210000) {
+                // SCVTF Sd, Xn — signed 64-bit int to single (top8=0x9E actually)
+                // Fallthrough — handled below in 0x9E
+            } else if ((inst & 0xFFFFFC00) == 0x1E230000) {
+                // UCVTF Sd, Wn — unsigned 32-bit int to single
+                uint32_t uval = uint32_t(regs[rn_fp] & 0xFFFFFFFF);
+                VREG_S_WRITE(rd_fp, float(uval));
+            } else if ((inst & 0xFFFFFC00) == 0x1E630000) {
+                // UCVTF Dd, Wn — unsigned 32-bit int to double
+                uint32_t uval = uint32_t(regs[rn_fp] & 0xFFFFFFFF);
+                VREG_D_WRITE(rd_fp, double(uval));
+
+            // ── FCVTZS / FCVTZU: FP to integer (round toward zero) ──
+            } else if ((inst & 0xFFFFFC00) == 0x1E380000) {
+                // FCVTZS Wd, Sn — single to signed 32-bit
+                float fval = VREG_S_READ(rn_fp);
+                int32_t ival = int32_t(fval);
+                if (rd_fp != 31) regs[rd_fp] = int64_t(ival) & 0xFFFFFFFF;
+            } else if ((inst & 0xFFFFFC00) == 0x1E780000) {
+                // FCVTZS Wd, Dn — double to signed 32-bit
+                double dval = VREG_D_READ(rn_fp);
+                int32_t ival = int32_t(dval);
+                if (rd_fp != 31) regs[rd_fp] = int64_t(ival) & 0xFFFFFFFF;
+            } else if ((inst & 0xFFFFFC00) == 0x1E390000) {
+                // FCVTZU Wd, Sn — single to unsigned 32-bit
+                float fval = VREG_S_READ(rn_fp);
+                uint32_t uval = uint32_t(fval);
+                if (rd_fp != 31) regs[rd_fp] = int64_t(uval);
+            } else if ((inst & 0xFFFFFC00) == 0x1E790000) {
+                // FCVTZU Wd, Dn — double to unsigned 32-bit
+                double dval = VREG_D_READ(rn_fp);
+                uint32_t uval = uint32_t(dval);
+                if (rd_fp != 31) regs[rd_fp] = int64_t(uval);
+
+            // ── FMADD / FMSUB single ──
+            } else if ((inst & 0xFF200000) == 0x1F000000) {
+                // FMADD Sd, Sn, Sm, Sa  (inst[31:21] = 0x1F0, inst[15]=0)
+                uint8_t ra = (inst >> 10) & 0x1F;
+                float result = VREG_S_READ(rn_fp) * VREG_S_READ(rm_fp) + VREG_S_READ(ra);
+                VREG_S_WRITE(rd_fp, result);
+
+            // ── FCSEL single ──
+            } else if ((inst & 0xFF200C00) == 0x1E200C00) {
+                // FCSEL Sd, Sn, Sm, cond
+                uint8_t cond_code = (inst >> 12) & 0xF;
+                bool n = flag_n > 0.5f, z = flag_z > 0.5f, c = flag_c > 0.5f, v = flag_v > 0.5f;
+                bool cond_met = false;
+                switch (cond_code >> 1) {
+                    case 0: cond_met = z; break;           // EQ/NE
+                    case 1: cond_met = c; break;           // CS/CC
+                    case 2: cond_met = n; break;           // MI/PL
+                    case 3: cond_met = v; break;           // VS/VC
+                    case 4: cond_met = c && !z; break;     // HI/LS
+                    case 5: cond_met = (n == v); break;    // GE/LT
+                    case 6: cond_met = (n == v) && !z; break; // GT/LE
+                    case 7: cond_met = true; break;        // AL
+                }
+                if (cond_code & 1) cond_met = !cond_met; // invert for odd codes (NE,CC,PL,etc)
+                if (cond_code == 0xF) cond_met = true;    // NV = always
+                vreg_lo[rd_fp] = cond_met ? (vreg_lo[rn_fp] & 0xFFFFFFFF) : (vreg_lo[rm_fp] & 0xFFFFFFFF);
+                vreg_hi[rd_fp] = 0;
             }
+
+            #undef VREG_S_READ
+            #undef VREG_S_WRITE
+            #undef VREG_D_READ
+            #undef VREG_D_WRITE
             break;
         }
 
-        case 0x9E: { // FP/INT transfer
+        case 0x9E: { // FP/INT transfer (64-bit variants)
             uint8_t rt = inst & 0x1F;
+            uint8_t rn_9e = (inst >> 5) & 0x1F;
+            #define VREG_S_RD_9E(r) as_type<float>(uint32_t(vreg_lo[(r)] & 0xFFFFFFFF))
+            #define VREG_D_RD_9E(r) as_type<double>(uint64_t(vreg_lo[(r)]))
             if ((inst & 0xFFE0FC00) == 0x9E660000) {
                 // FMOV Dd, Xn — move GPR to SIMD D register
                 int64_t val = (rn == 31) ? 0 : regs[rn];
@@ -1147,7 +1350,53 @@ kernel void arm64_execute_full(
             } else if ((inst & 0xFFE0FC00) == 0x9E670000) {
                 // FMOV Xd, Dn — move SIMD D register to GPR
                 if (rt != 31) regs[rt] = vreg_lo[rn];
+
+            // ── SCVTF Sd/Dd, Xn — signed 64-bit int to FP ──
+            } else if ((inst & 0xFFFFFC00) == 0x9E220000) {
+                // SCVTF Sd, Xn
+                int64_t ival = (rn_9e == 31) ? 0 : regs[rn_9e];
+                float fval = float(ival);
+                vreg_lo[rt] = int64_t(as_type<uint32_t>(fval));
+                vreg_hi[rt] = 0;
+            } else if ((inst & 0xFFFFFC00) == 0x9E620000) {
+                // SCVTF Dd, Xn
+                int64_t ival = (rn_9e == 31) ? 0 : regs[rn_9e];
+                double dval = double(ival);
+                vreg_lo[rt] = as_type<int64_t>(dval);
+                vreg_hi[rt] = 0;
+            } else if ((inst & 0xFFFFFC00) == 0x9E230000) {
+                // UCVTF Sd, Xn
+                uint64_t uval = (rn_9e == 31) ? 0 : uint64_t(regs[rn_9e]);
+                float fval = float(uval);
+                vreg_lo[rt] = int64_t(as_type<uint32_t>(fval));
+                vreg_hi[rt] = 0;
+            } else if ((inst & 0xFFFFFC00) == 0x9E630000) {
+                // UCVTF Dd, Xn
+                uint64_t uval = (rn_9e == 31) ? 0 : uint64_t(regs[rn_9e]);
+                double dval = double(uval);
+                vreg_lo[rt] = as_type<int64_t>(dval);
+                vreg_hi[rt] = 0;
+
+            // ── FCVTZS/FCVTZU Xd, Sn/Dn — FP to signed/unsigned 64-bit ──
+            } else if ((inst & 0xFFFFFC00) == 0x9E380000) {
+                // FCVTZS Xd, Sn
+                float fval = VREG_S_RD_9E(rn_9e);
+                if (rt != 31) regs[rt] = int64_t(fval);
+            } else if ((inst & 0xFFFFFC00) == 0x9E780000) {
+                // FCVTZS Xd, Dn
+                double dval = VREG_D_RD_9E(rn_9e);
+                if (rt != 31) regs[rt] = int64_t(dval);
+            } else if ((inst & 0xFFFFFC00) == 0x9E390000) {
+                // FCVTZU Xd, Sn
+                float fval = VREG_S_RD_9E(rn_9e);
+                if (rt != 31) regs[rt] = int64_t(uint64_t(fval));
+            } else if ((inst & 0xFFFFFC00) == 0x9E790000) {
+                // FCVTZU Xd, Dn
+                double dval = VREG_D_RD_9E(rn_9e);
+                if (rt != 31) regs[rt] = int64_t(uint64_t(dval));
             }
+            #undef VREG_S_RD_9E
+            #undef VREG_D_RD_9E
             break;
         }
 
