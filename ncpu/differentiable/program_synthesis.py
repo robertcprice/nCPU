@@ -541,15 +541,17 @@ def demo_synthesize_addition() -> SynthesisResult:
     print(f"Accuracy: {result.accuracy:.1%}")
     print()
 
-    # Verify on a few new examples
+    # Verify on a few new examples using the extracted discrete program
+    # (execute_fixed avoids soft-blending artifacts at test time)
     print("--- Verification on new examples ---")
     engine = synthesizer.engine
+    fixed_prog = FixedProgram(result.discrete_program)
     for a, b in [(7, 3), (15, 22), (0, 0), (50, 50)]:
         with torch.no_grad():
-            res = engine.execute_soft(
-                result.program,
+            res = engine.execute_fixed(
+                fixed_prog,
                 {0: float(a), 1: float(b)},
-                temperature=0.1,
+                max_steps=64,
             )
             predicted = res.registers[2].item()
             expected = a + b
@@ -609,15 +611,16 @@ def demo_synthesize_multiply() -> SynthesisResult:
     print(f"Accuracy: {result.accuracy:.1%}")
     print()
 
-    # Verify on new examples
+    # Verify on new examples using the extracted discrete program
     print("--- Verification on new examples ---")
     engine = synthesizer.engine
+    fixed_prog = FixedProgram(result.discrete_program)
     for a, b in [(3, 7), (5, 5), (0, 10), (12, 8)]:
         with torch.no_grad():
-            res = engine.execute_soft(
-                result.program,
+            res = engine.execute_fixed(
+                fixed_prog,
                 {0: float(a), 1: float(b)},
-                temperature=0.1,
+                max_steps=64,
             )
             predicted = res.registers[2].item()
             expected = a * b
@@ -680,15 +683,16 @@ def demo_synthesize_polynomial() -> SynthesisResult:
     print(f"Accuracy: {result.accuracy:.1%}")
     print()
 
-    # Verify on new examples
+    # Verify on new examples using the extracted discrete program
     print("--- Verification on new examples ---")
     engine = synthesizer.engine
+    fixed_prog = FixedProgram(result.discrete_program)
     for x in [0, 1, 5, 10, 20]:
         with torch.no_grad():
-            res = engine.execute_soft(
-                result.program,
+            res = engine.execute_fixed(
+                fixed_prog,
                 {0: float(x)},
-                temperature=0.1,
+                max_steps=64,
             )
             predicted = res.registers[2].item()
             expected = x * x + x

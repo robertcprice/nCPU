@@ -93,6 +93,7 @@ class InteractiveDiscovery:
         self.examples: list[tuple[dict[int, float], dict[int, float]]] = []
         self.engine = DifferentiableEngine()
         self.last_program: SoftProgram | None = None
+        self.last_fixed_program: FixedProgram | None = None
         self.last_result = None
         self.num_input_regs = 0
         self.num_output_regs = 0
@@ -213,6 +214,7 @@ class InteractiveDiscovery:
         elapsed = time.time() - t0
 
         self.last_program = result.program
+        self.last_fixed_program = FixedProgram(result.discrete_program)
         self.last_result = result
 
         print(f"  {'─' * 60}")
@@ -314,8 +316,12 @@ class InteractiveDiscovery:
         self.show_examples()
 
     def test_program(self, line: str):
-        """Test the discovered program on new inputs."""
-        if self.last_program is None:
+        """Test the discovered program on new inputs.
+
+        Uses the extracted discrete (FixedProgram) for exact execution,
+        avoiding soft-blending artifacts that corrupt results at test time.
+        """
+        if self.last_fixed_program is None:
             print("  No program yet. Run 'synthesize' first.")
             return
 
@@ -328,12 +334,10 @@ class InteractiveDiscovery:
         inputs = {i: v for i, v in enumerate(vals)}
 
         with torch.no_grad():
-            result = self.engine.execute_soft(
-                self.last_program,
+            result = self.engine.execute_fixed(
+                self.last_fixed_program,
                 inputs,
-                temperature=0.1,
-                max_steps=16,
-                skip_bitwise=True,
+                max_steps=64,
             )
 
         in_str = ", ".join(f"R{i}={v:.0f}" for i, v in inputs.items())
@@ -387,6 +391,7 @@ class InteractiveDiscovery:
             elif cmd == "clear":
                 self.examples.clear()
                 self.last_program = None
+                self.last_fixed_program = None
                 self.last_result = None
                 self.num_input_regs = 0
                 self.num_output_regs = 0
