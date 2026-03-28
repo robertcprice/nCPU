@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust (check + non-GPU tests)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo check
+        working-directory: kernels/rust_metal
+        run: cargo check --bin ncpu_run
+
+      # Note: Metal GPU tests (fp_*, launcher*) require actual Apple GPU hardware
+      # which is not available in CI. We skip them here.
+      - name: Run non-GPU unit tests
+        working-directory: kernels/rust_metal
+        run: cargo test --lib -- --skip fp_ --skip launcher
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e '.[demo,dev]'
+
+      - name: Run tests
+        run: pytest tests/ -x -q --ignore=tests/test_execution_training.py
+
+      - name: Run differentiable tests
+        run: pytest ncpu/differentiable/ -x -q
