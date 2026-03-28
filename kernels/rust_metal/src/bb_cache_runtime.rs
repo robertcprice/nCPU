@@ -224,7 +224,7 @@ fn classify_instruction(inst: u32) -> OpKind {
             let opc = (inst >> 21) & 0x7;
             match opc {
                 0 => OpKind::Svc, // SVC
-                1 => OpKind::Hlt, // HLT
+                2 => OpKind::Hlt, // HLT
                 _ => OpKind::Unknown,
             }
         }

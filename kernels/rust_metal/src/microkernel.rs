@@ -768,8 +768,8 @@ impl MicroVfs {
     pub fn pipe(&mut self) -> (i32, i32) {
         let idx = self.pipes.len();
         self.pipes.push(PipeBuffer::new(4096));
-        // Return fake file descriptors
-        (-(idx as i32 + 1), idx as i32)
+        // Return fake file descriptors (both map to the same pipe index)
+        (idx as i32, idx as i32)
     }
 
     /// Read from pipe
@@ -903,6 +903,7 @@ mod tests {
         kernel.processes.insert(1, proc);
         kernel.ready_queue.push(1);
         kernel.current_pid = Some(1);
+        kernel.next_pid = 2;
 
         // Fork
         let (parent, child) = kernel.fork().unwrap();
