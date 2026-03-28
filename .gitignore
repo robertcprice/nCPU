@@ -29,6 +29,12 @@ htmlcov/
 # Research models (too large for git)
 models/research/
 
+# Checkpoint weights (binary, too large for git)
+checkpoints/**/*.pt
+
+# Training logs
+train_log.txt
+
 # Training outputs
 *.log
 training_*.txt
