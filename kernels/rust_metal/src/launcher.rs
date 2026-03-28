@@ -4310,4 +4310,135 @@ mod tests {
         let s1 = launcher.get_vreg_f32(1);
         assert!((s1 - 3.14).abs() < 0.01, "FMOV W->S: expected 3.14, got {}", s1);
     }
+
+    #[test]
+    fn fp_edge_fdiv_by_zero() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 20.0);
+        launcher.set_vreg_f32(1, 0.0);
+        // FDIV S2, S0, S1 = 0x1E211802
+        let fdiv_s = 0x1E211802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fdiv_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!(s2 == 0.0, "FDIV by zero: expected 0.0, got {}", s2);
+    }
+
+    #[test]
+    fn fp_edge_fneg_zero() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 0.0);
+        // FNEG S1, S0 = 0x1E214001
+        let fneg_s = 0x1E214001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fneg_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s1 = launcher.get_vreg_f32(1);
+        assert!(s1.to_bits() == (-0.0f32).to_bits(), "FNEG zero: expected -0.0, got {}", s1);
+    }
+
+    #[test]
+    fn fp_edge_fabs_neg_zero() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, -0.0);
+        // FABS S1, S0 = 0x1E20C001
+        let fabs_s = 0x1E20C001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fabs_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s1 = launcher.get_vreg_f32(1);
+        assert!(s1.to_bits() == 0.0f32.to_bits(), "FABS neg zero: expected +0.0, got {} (bits: 0x{:08X})", s1, s1.to_bits());
+    }
+
+    #[test]
+    fn fp_edge_fsqrt_zero() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 0.0);
+        // FSQRT S1, S0 = 0x1E21C001
+        let fsqrt_s = 0x1E21C001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fsqrt_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s1 = launcher.get_vreg_f32(1);
+        assert!(s1 == 0.0, "FSQRT zero: expected 0.0, got {}", s1);
+    }
+
+    #[test]
+    fn fp_edge_fmul_by_zero() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 42.0);
+        launcher.set_vreg_f32(1, 0.0);
+        // FMUL S2, S0, S1 = 0x1E210802
+        let fmul_s = 0x1E210802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fmul_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!(s2 == 0.0, "FMUL by zero: expected 0.0, got {}", s2);
+    }
+
+    #[test]
+    fn fp_edge_fadd_large() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 1e30);
+        launcher.set_vreg_f32(1, 1e30);
+        // FADD S2, S0, S1 = 0x1E212802
+        let fadd_s = 0x1E212802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fadd_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!((s2 - 2e30).abs() < 1e25, "FADD large: expected 2e30, got {}", s2);
+    }
+
+    #[test]
+    fn fp_edge_fmul_small() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 1e-20);
+        launcher.set_vreg_f32(1, 1e-20);
+        // FMUL S2, S0, S1 = 0x1E210802
+        let fmul_s = 0x1E210802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fmul_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        // 1e-20 * 1e-20 = 1e-40, which is below f32 min normal but may flush to zero
+        assert!(s2 >= 0.0 && s2 <= 1e-38, "FMUL small: expected ~1e-40 or 0.0 (denorm flush), got {}", s2);
+    }
 }
