@@ -1,7 +1,7 @@
 """Training loop for differentiable execution-grounded code model training.
 
 This is the main entry point. It:
-1. Loads a pretrained LM (Qwen2.5/3.5, LLaMA, etc.)
+1. Loads a pretrained LM (Qwen3.5, LLaMA, etc.)
 2. Injects the nCPU differentiable coprocessor into MLP sublayers
 3. Generates training data with arithmetic/variable/loop problems
 4. Trains with a combined loss:
@@ -28,7 +28,7 @@ Usage:
 
     # Full training with Qwen
     python -m ncpu.execution_training.train \\
-        --model Qwen/Qwen2.5-0.5B \\
+        --model Qwen/Qwen3.5-0.8B \\
         --steps 2000 \\
         --lr 1e-3 \\
         --batch-size 8 \\
@@ -37,7 +37,7 @@ Usage:
 
     # Mode 2: differentiable compilation
     python -m ncpu.execution_training.train \\
-        --model Qwen/Qwen2.5-0.5B \\
+        --model Qwen/Qwen3.5-0.8B \\
         --mode compilation \\
         --steps 5000
 """
@@ -80,7 +80,7 @@ class ExecutionTrainingConfig:
     """Full training configuration."""
 
     # ── Model ──
-    model_name: str = "Qwen/Qwen2.5-0.5B"
+    model_name: str = "Qwen/Qwen3.5-0.8B"
     layers: List[int] = field(default_factory=lambda: [-1])
 
     # ── Training mode ──
@@ -636,7 +636,7 @@ def main():
     )
 
     # Model
-    parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B", help="HF model name")
+    parser.add_argument("--model", default="Qwen/Qwen3.5-0.8B", help="HF model name")
     parser.add_argument("--layers", nargs="+", type=int, default=[-1],
                        help="Transformer layers to inject coprocessor")
     parser.add_argument("--mode", default="coprocessor",

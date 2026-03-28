@@ -125,35 +125,73 @@ class NCPUDataset(Dataset):
     # Spec encoding
     # ------------------------------------------------------------------
 
+    # Known program families mapped to opcode tokens as hints
+    _NAME_TO_HINT = {
+        "add": [3],      # ADD opcode
+        "add3": [3, 3],  # two ADDs
+        "sub": [4],      # SUB
+        "mul": [5],      # MUL
+        "double": [2, 3],  # MOV_REG + ADD
+        "square": [2, 5],  # MOV_REG + MUL
+        "bitwise_and": [6],
+        "bitwise_or": [7],
+        "bitwise_xor": [8],
+        "abs": [9, 12, 4],  # CMP + BGT + SUB
+        "max": [9, 12],     # CMP + BGT
+        "min": [9, 12],     # CMP + BGT
+        "clamp": [9, 12],   # CMP + BGT
+        "sign": [9, 10],    # CMP + BEQ
+        "relu": [9, 12],    # CMP + BGT
+        "isZero": [9, 10],  # CMP + BEQ
+        "sum_1_to_n": [3, 9, 11],  # ADD + CMP + BNE (loop)
+        "factorial": [5, 9, 11],   # MUL + CMP + BNE
+        "fibonacci": [3, 9, 11],   # ADD + CMP + BNE
+        "power": [5, 9, 11],       # MUL + CMP + BNE
+        "gcd": [9, 10, 4],         # CMP + BEQ + SUB
+        "countDown": [4, 9, 11],   # SUB + CMP + BNE
+        "mulByAdd": [3, 9, 11],    # ADD + CMP + BNE
+        "divBySubtract": [4, 9],   # SUB + CMP
+        "negate": [4],             # SUB (from 0)
+        "isEqual": [9, 10],        # CMP + BEQ
+        "isGreater": [9, 12],      # CMP + BGT
+        "addConst": [3],           # ADD
+        "subConst": [4],           # SUB
+    }
+
     def _encode_spec(self, spec_dict: Dict[str, Any]) -> List[int]:
         """Encode a spec dict into a fixed-length token sequence.
 
-        Format: for each test case, encode input values and expected output
-        as IMM_offset tokens. Pad to spec_len.
-
-        The encoding uses immediate tokens (IMM_0..IMM_255) to represent
-        values, with PAD_TOKEN for unused slots.
+        Format: [name_hint_opcodes...] [test_case_io_values...] [PAD...]
+        
+        The name hint gives the model a strong signal about which opcodes
+        the program should use. Test case I/O values provide concrete examples.
         """
         tokens: List[int] = []
 
-        test_cases = spec_dict.get("test_cases", [])[:MAX_TEST_CASES]
+        # Encode program type as opcode hints (first 4 slots)
+        name = spec_dict.get("name", "")
+        hints = self._NAME_TO_HINT.get(name, [])
+        for h in hints[:4]:
+            tokens.append(h)  # opcode IDs are 0-13
+        while len(tokens) < 4:
+            tokens.append(PAD_TOKEN)
 
+        # Encode test cases
+        test_cases = spec_dict.get("test_cases", [])[:MAX_TEST_CASES]
         for tc in test_cases:
             inputs = tc.get("inputs", {})
             expected = tc.get("expected_output", 0)
 
-            # Encode input values (sorted by key for determinism)
             input_vals = [v for _, v in sorted(inputs.items())]
-            for v in input_vals[:MAX_IO_VALUES - 1]:
-                val = max(0, min(255, int(v)))
+            for v in input_vals[:3]:
+                val = max(0, min(255, int(v) % 256))
                 tokens.append(IMM_OFFSET + val)
 
-            # Pad inputs to MAX_IO_VALUES - 1
-            while len(tokens) % MAX_IO_VALUES != MAX_IO_VALUES - 1:
+            # Pad inputs to 3
+            while (len(tokens) - 4) % 4 != 3:
                 tokens.append(PAD_TOKEN)
 
-            # Encode expected output
-            out_val = max(0, min(255, int(expected)))
+            out_val = max(0, min(255, int(expected) % 256))
             tokens.append(IMM_OFFSET + out_val)
 
         # Pad to spec_len

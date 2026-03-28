@@ -101,6 +101,9 @@ class VariableMap:
     var_to_reg: dict[str, int] = field(default_factory=dict)
     next_reg: int = 0
     _spilled: list[str] = field(default_factory=list)
+    # Temp register pool: reuse freed temp registers instead of leaking slots
+    _temp_free: list[int] = field(default_factory=list)
+    _temp_regs: set[int] = field(default_factory=set)  # all regs that are temps
 
     def allocate(self, name: str) -> int:
         """Allocate a register for a variable. Returns register index."""
@@ -120,6 +123,32 @@ class VariableMap:
         self.var_to_reg[name] = reg
         self.next_reg += 1
         return reg
+
+    def acquire_temp(self) -> int:
+        """Acquire a temporary register from the pool (or allocate a new one)."""
+        if self._temp_free:
+            reg = self._temp_free.pop()
+            self._temp_regs.add(reg)
+            return reg
+        # No free temps — allocate a new register slot
+        if self.next_reg >= NUM_REGISTERS:
+            logger.warning(
+                f"Register spill: temp (>{NUM_REGISTERS} variables). "
+                f"Reusing register {self.next_reg % NUM_REGISTERS}."
+            )
+            reg = self.next_reg % NUM_REGISTERS
+            self._spilled.append(f"__temp_{self.next_reg}")
+        else:
+            reg = self.next_reg
+        self.next_reg += 1
+        self._temp_regs.add(reg)
+        return reg
+
+    def release_temp(self, reg: int) -> None:
+        """Return a temporary register to the pool for reuse."""
+        if reg in self._temp_regs:
+            self._temp_regs.discard(reg)
+            self._temp_free.append(reg)
 
     def get(self, name: str) -> Optional[int]:
         """Get register for a variable, or None if not allocated."""
@@ -439,13 +468,17 @@ class CodeToISAParser:
         insts = []
 
         # Parse the RHS into a temporary register or use directly
-        src2_reg, rhs_insts = self._parse_expr_to_reg_or_temp(
+        src2_reg, rhs_insts, src2_is_temp = self._parse_expr_to_reg_or_temp(
             stmt.value, var_map, existing + insts
         )
         insts.extend(rhs_insts)
 
         # dst = dst op src2
         insts.append(Instruction(opcode=opcode, dst=dst_reg, src1=dst_reg, src2=src2_reg))
+
+        if src2_is_temp:
+            var_map.release_temp(src2_reg)
+
         return insts
 
     def _parse_return(
@@ -714,7 +747,7 @@ class CodeToISAParser:
         elif isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.USub):
             # -x → MOV temp, 0; SUB dst, temp, x
             insts = []
-            src_reg, src_insts = self._parse_expr_to_reg_or_temp(
+            src_reg, src_insts, src_is_temp = self._parse_expr_to_reg_or_temp(
                 expr.operand, var_map, existing
             )
             insts.extend(src_insts)
@@ -725,6 +758,8 @@ class CodeToISAParser:
             insts.append(
                 Instruction(opcode=SUB, dst=dst_reg, src1=dst_reg, src2=src_reg)
             )
+            if src_is_temp:
+                var_map.release_temp(src_reg)
             return insts
 
         elif isinstance(expr, ast.BinOp):
@@ -758,13 +793,13 @@ class CodeToISAParser:
         insts = []
 
         # Parse left operand
-        left_reg, left_insts = self._parse_expr_to_reg_or_temp(
+        left_reg, left_insts, left_is_temp = self._parse_expr_to_reg_or_temp(
             expr.left, var_map, existing
         )
         insts.extend(left_insts)
 
         # Parse right operand
-        right_reg, right_insts = self._parse_expr_to_reg_or_temp(
+        right_reg, right_insts, right_is_temp = self._parse_expr_to_reg_or_temp(
             expr.right, var_map, existing + insts
         )
         insts.extend(right_insts)
@@ -773,6 +808,13 @@ class CodeToISAParser:
         insts.append(
             Instruction(opcode=opcode, dst=dst_reg, src1=left_reg, src2=right_reg)
         )
+
+        # Release temp registers now that the instruction has consumed them
+        if left_is_temp:
+            var_map.release_temp(left_reg)
+        if right_is_temp:
+            var_map.release_temp(right_reg)
+
         return insts
 
     def _parse_divmod(
@@ -797,7 +839,7 @@ class CodeToISAParser:
                 raise ParseError("Division by zero")
 
             insts = []
-            left_reg, left_insts = self._parse_expr_to_reg_or_temp(
+            left_reg, left_insts, left_is_temp = self._parse_expr_to_reg_or_temp(
                 expr.left, var_map, existing
             )
             insts.extend(left_insts)
@@ -830,6 +872,8 @@ class CodeToISAParser:
                 insts.append(
                     Instruction(opcode=MUL, dst=dst_reg, src1=left_reg, src2=dst_reg)
                 )
+            if left_is_temp:
+                var_map.release_temp(left_reg)
             return insts
 
         raise ParseError("Division/modulo requires constant divisor")
@@ -839,29 +883,29 @@ class CodeToISAParser:
         expr: ast.expr,
         var_map: VariableMap,
         existing: list[Instruction],
-    ) -> tuple[int, list[Instruction]]:
-        """Parse expression, returning (register, instructions).
+    ) -> tuple[int, list[Instruction], bool]:
+        """Parse expression, returning (register, instructions, is_temp).
 
         If the expression is already a variable, returns its register with no
-        new instructions. Otherwise allocates a temp register.
+        new instructions. Otherwise acquires a temp register from the pool.
+        The ``is_temp`` flag tells the caller whether the register should be
+        released back to the pool after use.
         """
         if isinstance(expr, ast.Name):
-            return var_map.require(expr.id), []
+            return var_map.require(expr.id), [], False
 
         if isinstance(expr, ast.Constant) and isinstance(expr.value, (int, float)):
             # Need a temp register for the constant
-            temp_name = f"__temp_{len(existing)}"
-            temp_reg = var_map.allocate(temp_name)
+            temp_reg = var_map.acquire_temp()
             inst = Instruction(
                 opcode=MOV_IMM, dst=temp_reg, immediate=float(expr.value)
             )
-            return temp_reg, [inst]
+            return temp_reg, [inst], True
 
-        # Complex expression: allocate temp and parse into it
-        temp_name = f"__temp_{len(existing)}"
-        temp_reg = var_map.allocate(temp_name)
+        # Complex expression: acquire temp and parse into it
+        temp_reg = var_map.acquire_temp()
         insts = self._parse_expr_into_reg(expr, temp_reg, var_map, existing)
-        return temp_reg, insts
+        return temp_reg, insts, True
 
     def _parse_comparison(
         self,
@@ -874,12 +918,12 @@ class CodeToISAParser:
         Returns: (instructions, branch_opcode_for_true, operands_swapped)
         """
         insts = []
-        left_reg, left_insts = self._parse_expr_to_reg_or_temp(
+        left_reg, left_insts, left_is_temp = self._parse_expr_to_reg_or_temp(
             test.left, var_map, existing
         )
         insts.extend(left_insts)
 
-        right_reg, right_insts = self._parse_expr_to_reg_or_temp(
+        right_reg, right_insts, right_is_temp = self._parse_expr_to_reg_or_temp(
             test.comparators[0], var_map, existing + insts
         )
         insts.extend(right_insts)
@@ -916,6 +960,13 @@ class CodeToISAParser:
             raise ParseError(f"Unsupported comparison: {type(op).__name__}")
 
         insts.append(Instruction(opcode=CMP, src1=left_reg, src2=right_reg))
+
+        # Release temp registers after CMP has consumed them
+        if left_is_temp:
+            var_map.release_temp(left_reg)
+        if right_is_temp:
+            var_map.release_temp(right_reg)
+
         return insts, branch, swapped
 
     # ──────────────────────────────────────────────────────────────

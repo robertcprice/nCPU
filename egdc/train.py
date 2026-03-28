@@ -225,7 +225,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--model_size", choices=["small", "medium"], default="small")
+    parser.add_argument("--model_size", choices=["tiny", "small", "medium"], default="small")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/egdc")
     parser.add_argument("--checkpoint_every", type=int, default=500)
     parser.add_argument("--log_every", type=int, default=25)
@@ -237,7 +237,9 @@ def main() -> None:
     args = parser.parse_args()
 
     # Model config
-    if args.model_size == "small":
+    if args.model_size == "tiny":
+        config = ModelConfig.tiny()
+    elif args.model_size == "small":
         config = ModelConfig.small()
     else:
         config = ModelConfig.medium()

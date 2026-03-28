@@ -34,6 +34,10 @@ class ModelConfig:
     timestep_dim: int = 256
 
     @classmethod
+    def tiny(cls) -> "ModelConfig":
+        return cls(hidden_dim=256, num_layers=4, num_heads=4, ff_dim=1024, timestep_dim=64)
+
+    @classmethod
     def small(cls) -> "ModelConfig":
         return cls(hidden_dim=384, num_layers=6, num_heads=6, ff_dim=1536, timestep_dim=128)
 
@@ -106,6 +110,9 @@ class MaskedDiffusionTransformer(nn.Module):
         self.token_embed = nn.Embedding(c.vocab_size, c.hidden_dim)
         self.pos_embed = LearnedPositionalEncoding(c.max_seq_len, c.hidden_dim)
 
+        # Instruction slot embedding: position % 4 -> {opcode, dst, src, imm} slot
+        self.slot_embed = nn.Embedding(4, c.hidden_dim)
+
         # Timestep conditioning
         self.timestep_embed = TimestepEmbedder(c.hidden_dim, c.timestep_dim)
 
@@ -172,6 +179,10 @@ class MaskedDiffusionTransformer(nn.Module):
         code_emb = self.token_embed(token_ids)  # (B, L, H)
         code_emb = code_emb + self.pos_embed(L, device)[:, :L]
         code_emb = code_emb + self.segment_embed(torch.ones(1, dtype=torch.long, device=device))
+
+        # Add instruction slot embeddings (position % 4)
+        slot_ids = torch.arange(L, device=device) % 4
+        code_emb = code_emb + self.slot_embed(slot_ids).unsqueeze(0)
 
         # Add timestep embedding to every position (broadcast)
         t_emb = self.timestep_embed(timesteps)  # (B, H)

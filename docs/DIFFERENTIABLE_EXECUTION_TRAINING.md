@@ -73,7 +73,7 @@ Every arithmetic operation, every register write, every conditional branch provi
 
 ### 2.2 Component Roles
 
-**Code LM (Qwen2.5/3.5 with nCPU coprocessor)**
+**Code LM (Qwen3.5 with nCPU coprocessor)**
 - Generates code tokens given a task prompt
 - Coprocessor layers (NCPUCoprocessorMLP) provide differentiable arithmetic inside the forward pass
 - Backbone frozen; only coprocessor params + optional LoRA update

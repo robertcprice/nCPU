@@ -7,15 +7,15 @@ back into the model's weights — providing dense, per-operation training signal
 Three training modes:
   Mode 1: Coprocessor + Execution Loss (simplest, most practical)
   Mode 2: Differentiable Compilation (end-to-end, most ambitious)
-  Mode 3: Program Optimization Feedback (inference-time constant tuning)
+  Mode 3: Generated Code Training (train on model's own output)
 
 Quick start:
     from ncpu.execution_training import (
         CodeToISAParser,
         ExecutionLoss,
-        ExecutionTrainer,
         ExecutionEvaluator,
         ExecutionTrainingDataset,
+        GeneratedCodeTrainer,
     )
 """
 
@@ -30,6 +30,18 @@ from .data import (
 )
 from .evaluate import ExecutionEvaluator, EvaluationResult
 from .train import train_execution_grounded, ExecutionTrainingConfig
+from .compilation_bridge import (
+    CompilationBridge,
+    CompilationBridgeResult,
+    SequenceAdapter,
+)
+from .generated_code_training import (
+    GeneratedCodeTrainer,
+    GenerationResult,
+    GeneratedTrainingStepResult,
+    create_generated_trainer,
+)
+from .trace_data import TraceGenerator, TraceSample, TraceLossDataset
 
 __all__ = [
     "CodeToISAParser",
@@ -46,4 +58,14 @@ __all__ = [
     "EvaluationResult",
     "train_execution_grounded",
     "ExecutionTrainingConfig",
+    "CompilationBridge",
+    "CompilationBridgeResult",
+    "SequenceAdapter",
+    "GeneratedCodeTrainer",
+    "GenerationResult",
+    "GeneratedTrainingStepResult",
+    "create_generated_trainer",
+    "TraceGenerator",
+    "TraceSample",
+    "TraceLossDataset",
 ]

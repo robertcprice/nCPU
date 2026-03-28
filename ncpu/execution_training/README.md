@@ -18,7 +18,7 @@ python -m ncpu.execution_training.train --synthetic-only --steps 200
 
 # Full training with a real model
 python -m ncpu.execution_training.train \
-    --model Qwen/Qwen2.5-0.5B \
+    --model Qwen/Qwen3.5-0.8B \
     --steps 2000 \
     --exec-loss-weight 1.0 \
     --output-dir training_results/exec_training/

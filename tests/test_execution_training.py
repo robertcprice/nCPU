@@ -11,7 +11,7 @@ Tests cover:
 import pytest
 import torch
 
-from ncpu.differentiable.execution import DifferentiableEngine, OPCODES
+from ncpu.differentiable.execution import DifferentiableEngine, SoftProgram, OPCODES
 from ncpu.execution_training.code_parser import (
     CodeToISAParser,
     ParseError,
@@ -441,6 +441,235 @@ class TestGradientFlow:
         result = engine.execute_fixed(prog, inputs={}, max_steps=10)
         r2_val = result.registers[2].item()
         assert abs(r2_val - 13.0) < 1.0, f"Expected ~13, got {r2_val}"
+
+
+# ════════════════════════════════════════════════════════════════
+# Compilation Bridge Tests (Mode 2)
+# ════════════════════════════════════════════════════════════════
+
+
+from ncpu.execution_training.compilation_bridge import (
+    CompilationBridge,
+    CompilationBridgeResult,
+    SequenceAdapter,
+)
+
+
+class TestSequenceAdapter:
+    """Tests for the sequence length adapter."""
+
+    def test_pool_strategy(self):
+        adapter = SequenceAdapter(strategy="pool", max_source_len=32, d_model=64)
+        x = torch.randn(50, 64)  # 50 tokens, d=64
+        out = adapter(x)
+        assert out.shape == (32, 64)
+
+    def test_truncate_strategy_long(self):
+        adapter = SequenceAdapter(strategy="truncate", max_source_len=32, d_model=64)
+        x = torch.randn(50, 64)
+        out = adapter(x)
+        assert out.shape == (32, 64)
+
+    def test_truncate_strategy_short(self):
+        adapter = SequenceAdapter(strategy="truncate", max_source_len=32, d_model=64)
+        x = torch.randn(10, 64)
+        out = adapter(x)
+        assert out.shape == (32, 64)
+
+    def test_linear_strategy(self):
+        adapter = SequenceAdapter(strategy="linear", max_source_len=32, d_model=64)
+        x = torch.randn(20, 64)
+        out = adapter(x)
+        assert out.shape == (32, 64)
+
+    def test_batched_input(self):
+        adapter = SequenceAdapter(strategy="pool", max_source_len=32, d_model=64)
+        x = torch.randn(2, 50, 64)  # batch=2
+        out = adapter(x)
+        assert out.shape == (2, 32, 64)
+
+
+class TestCompilationBridge:
+    """Tests for the Mode 2 compilation bridge."""
+
+    def setup_method(self):
+        self.bridge = CompilationBridge(
+            lm_hidden_dim=128,  # Small for testing
+            compiler_d_model=64,
+            max_source_len=32,
+            max_program_len=16,
+            entropy_weight=0.01,
+            max_exec_steps=16,
+        )
+
+    def test_bridge_creation(self):
+        """Test that bridge creates with correct dimensions."""
+        assert self.bridge.hidden_proj.in_features == 128
+        assert self.bridge.hidden_proj.out_features == 64
+        assert self.bridge.compiler.d_model == 64
+
+    def test_project_hidden_states(self):
+        """Test projection from LM space to compiler space."""
+        hidden = torch.randn(20, 128)  # 20 tokens, dim 128
+        projected = self.bridge.project_hidden_states(hidden)
+        assert projected.shape == (32, 64)  # max_source_len, d_model
+
+    def test_compile_from_hidden(self):
+        """Test that hidden states compile into a SoftProgram."""
+        hidden = torch.randn(20, 128)
+        program, projected = self.bridge.compile_from_hidden(hidden)
+        assert isinstance(program, SoftProgram)
+        assert program.opcode_logits.shape[0] == 16  # max_program_len
+
+    def test_forward_produces_loss(self):
+        """Test that forward() produces a differentiable loss."""
+        hidden = torch.randn(20, 128, requires_grad=True)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+        ]
+        result = self.bridge(hidden, test_cases)
+
+        assert isinstance(result, CompilationBridgeResult)
+        assert result.total_loss.item() >= 0
+        assert result.num_total == 1
+
+    def test_gradient_flow_to_hidden_states(self):
+        """Critical test: gradients flow from loss back into LM hidden states."""
+        hidden = torch.randn(20, 128, requires_grad=True)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+        ]
+
+        result = self.bridge(hidden, test_cases)
+        result.total_loss.backward()
+
+        assert hidden.grad is not None, "No gradient on LM hidden states!"
+        assert hidden.grad.abs().sum() > 0, "Gradient is all zeros!"
+
+    def test_gradient_flow_to_projection(self):
+        """Test that gradients reach the projection layer."""
+        hidden = torch.randn(20, 128, requires_grad=True)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+        ]
+
+        result = self.bridge(hidden, test_cases)
+        result.total_loss.backward()
+
+        # Check projection layer has gradients
+        assert self.bridge.hidden_proj.weight.grad is not None
+        assert self.bridge.hidden_proj.weight.grad.abs().sum() > 0
+
+    def test_multiple_test_cases(self):
+        """Test with multiple test cases."""
+        hidden = torch.randn(20, 128, requires_grad=True)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+            {"inputs": {0: 7.0, 1: 2.0}, "expected": {2: 9.0}},
+            {"inputs": {0: 1.0, 1: 1.0}, "expected": {2: 2.0}},
+        ]
+
+        result = self.bridge(hidden, test_cases)
+        assert result.num_total == 3
+        assert len(result.per_test_losses) == 3
+        assert len(result.execution_results) == 3
+
+        # Should still have gradient flow
+        result.total_loss.backward()
+        assert hidden.grad is not None
+
+    def test_training_step(self):
+        """Test the training_step convenience method."""
+        hidden = torch.randn(20, 128)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+        ]
+
+        loss = self.bridge.training_step(hidden, test_cases)
+        assert isinstance(loss, torch.Tensor)
+        assert loss.dim() == 0  # scalar
+
+    def test_training_step_with_result(self):
+        """Test training_step with return_result=True."""
+        hidden = torch.randn(20, 128)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+        ]
+
+        loss, result = self.bridge.training_step(
+            hidden, test_cases, return_result=True
+        )
+        assert isinstance(loss, torch.Tensor)
+        assert isinstance(result, CompilationBridgeResult)
+
+    def test_optimizer_can_update(self):
+        """Test that an optimizer can update bridge parameters."""
+        optimizer = torch.optim.Adam(self.bridge.parameters(), lr=0.01)
+
+        hidden = torch.randn(20, 128)
+        test_cases = [
+            {"inputs": {0: 5.0, 1: 3.0}, "expected": {0: 8.0}},
+        ]
+
+        # Record initial weights
+        w_before = self.bridge.hidden_proj.weight.data.clone()
+
+        # Training step
+        optimizer.zero_grad()
+        result = self.bridge(hidden, test_cases)
+        result.total_loss.backward()
+        optimizer.step()
+
+        # Weights should have changed
+        w_after = self.bridge.hidden_proj.weight.data
+        assert not torch.allclose(w_before, w_after), "Weights didn't update!"
+
+    def test_batched_hidden_states(self):
+        """Test that batched [batch, seq, hidden] input works."""
+        hidden = torch.randn(2, 20, 128, requires_grad=True)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+        ]
+
+        result = self.bridge(hidden, test_cases)
+        result.total_loss.backward()
+        assert hidden.grad is not None
+
+    def test_entropy_regularization(self):
+        """Test that entropy loss is computed when weight > 0."""
+        hidden = torch.randn(20, 128)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+        ]
+
+        result = self.bridge(hidden, test_cases)
+        # With entropy_weight=0.01, compilation_loss should be > 0
+        assert result.compilation_loss.item() > 0
+
+    def test_no_entropy_regularization(self):
+        """Test that entropy loss is zero when weight = 0."""
+        bridge = CompilationBridge(
+            lm_hidden_dim=128,
+            compiler_d_model=64,
+            entropy_weight=0.0,
+        )
+        hidden = torch.randn(20, 128)
+        test_cases = [
+            {"inputs": {0: 3.0, 1: 5.0}, "expected": {2: 8.0}},
+        ]
+
+        result = bridge(hidden, test_cases)
+        assert result.compilation_loss.item() == 0.0
+
+    def test_different_lm_dims(self):
+        """Test bridge works with various LM hidden dimensions."""
+        for lm_dim in [64, 256, 512, 896]:
+            bridge = CompilationBridge(lm_hidden_dim=lm_dim, compiler_d_model=64)
+            hidden = torch.randn(20, lm_dim, requires_grad=True)
+            test_cases = [{"inputs": {0: 1.0}, "expected": {0: 2.0}}]
+            result = bridge(hidden, test_cases)
+            result.total_loss.backward()
+            assert hidden.grad is not None
 
 
 if __name__ == "__main__":
