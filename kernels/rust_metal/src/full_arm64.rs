@@ -1210,7 +1210,7 @@ kernel void arm64_execute_full(
                 } else {
                     flag_n = 0.0f; flag_z = 0.0f; flag_c = 1.0f; flag_v = 0.0f;
                 }
-            } else if ((inst & 0xFFFFFFFF) == 0x1E202008 || (inst & 0xFFE0FC1F) == 0x1E202008) {
+            } else if ((inst & 0xFFE0FC1F) == 0x1E202008) {
                 // FCMP Sn, #0.0
                 float a = VREG_S_READ(rn_fp);
                 if (isnan(a)) {
@@ -1301,32 +1301,94 @@ kernel void arm64_execute_full(
                 uint32_t uval = uint32_t(dval);
                 if (rd_fp != 31) regs[rd_fp] = int64_t(uval);
 
-            // ── FMADD / FMSUB single ──
-            } else if ((inst & 0xFF200000) == 0x1F000000) {
-                // FMADD Sd, Sn, Sm, Sa  (inst[31:21] = 0x1F0, inst[15]=0)
-                uint8_t ra = (inst >> 10) & 0x1F;
-                float result = VREG_S_READ(rn_fp) * VREG_S_READ(rm_fp) + VREG_S_READ(ra);
-                VREG_S_WRITE(rd_fp, result);
+            // ── FMAX / FMIN single ──
+            } else if ((inst & 0xFF20FC00) == 0x1E204800) {
+                // FMAX Sd, Sn, Sm
+                VREG_S_WRITE(rd_fp, fmax(VREG_S_READ(rn_fp), VREG_S_READ(rm_fp)));
+            } else if ((inst & 0xFF20FC00) == 0x1E205800) {
+                // FMIN Sd, Sn, Sm
+                VREG_S_WRITE(rd_fp, fmin(VREG_S_READ(rn_fp), VREG_S_READ(rm_fp)));
 
-            // ── FCSEL single ──
-            } else if ((inst & 0xFF200C00) == 0x1E200C00) {
-                // FCSEL Sd, Sn, Sm, cond
+            // ── FMAX / FMIN double ──
+            } else if ((inst & 0xFF20FC00) == 0x1E604800) {
+                // FMAX Dd, Dn, Dm
+                VREG_D_WRITE(rd_fp, fmax(VREG_D_READ(rn_fp), VREG_D_READ(rm_fp)));
+            } else if ((inst & 0xFF20FC00) == 0x1E605800) {
+                // FMIN Dd, Dn, Dm
+                VREG_D_WRITE(rd_fp, fmin(VREG_D_READ(rn_fp), VREG_D_READ(rm_fp)));
+
+            // ── FRINT* single (rounding) ──
+            } else if ((inst & 0xFFFFFC00) == 0x1E244000) {
+                // FRINTN Sd, Sn — round to nearest even
+                VREG_S_WRITE(rd_fp, rint(VREG_S_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E24C000) {
+                // FRINTP Sd, Sn — round toward +inf (ceil)
+                VREG_S_WRITE(rd_fp, ceil(VREG_S_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E254000) {
+                // FRINTM Sd, Sn — round toward -inf (floor)
+                VREG_S_WRITE(rd_fp, floor(VREG_S_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E25C000) {
+                // FRINTZ Sd, Sn — round toward zero (trunc)
+                VREG_S_WRITE(rd_fp, trunc(VREG_S_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E264000) {
+                // FRINTA Sd, Sn — round ties away
+                VREG_S_WRITE(rd_fp, round(VREG_S_READ(rn_fp)));
+
+            // ── FRINT* double (rounding) ──
+            } else if ((inst & 0xFFFFFC00) == 0x1E644000) {
+                // FRINTN Dd, Dn
+                VREG_D_WRITE(rd_fp, rint(VREG_D_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E64C000) {
+                // FRINTP Dd, Dn (ceil)
+                VREG_D_WRITE(rd_fp, ceil(VREG_D_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E654000) {
+                // FRINTM Dd, Dn (floor)
+                VREG_D_WRITE(rd_fp, floor(VREG_D_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E65C000) {
+                // FRINTZ Dd, Dn (trunc)
+                VREG_D_WRITE(rd_fp, trunc(VREG_D_READ(rn_fp)));
+            } else if ((inst & 0xFFFFFC00) == 0x1E664000) {
+                // FRINTA Dd, Dn (round ties away)
+                VREG_D_WRITE(rd_fp, round(VREG_D_READ(rn_fp)));
+
+            // ── FCSEL single and double ──
+            } else if ((inst & 0xFFE00C00) == 0x1E200C00) {
+                // FCSEL Sd, Sn, Sm, cond (ftype=0)
                 uint8_t cond_code = (inst >> 12) & 0xF;
                 bool n = flag_n > 0.5f, z = flag_z > 0.5f, c = flag_c > 0.5f, v = flag_v > 0.5f;
                 bool cond_met = false;
                 switch (cond_code >> 1) {
-                    case 0: cond_met = z; break;           // EQ/NE
-                    case 1: cond_met = c; break;           // CS/CC
-                    case 2: cond_met = n; break;           // MI/PL
-                    case 3: cond_met = v; break;           // VS/VC
-                    case 4: cond_met = c && !z; break;     // HI/LS
-                    case 5: cond_met = (n == v); break;    // GE/LT
-                    case 6: cond_met = (n == v) && !z; break; // GT/LE
-                    case 7: cond_met = true; break;        // AL
+                    case 0: cond_met = z; break;
+                    case 1: cond_met = c; break;
+                    case 2: cond_met = n; break;
+                    case 3: cond_met = v; break;
+                    case 4: cond_met = c && !z; break;
+                    case 5: cond_met = (n == v); break;
+                    case 6: cond_met = (n == v) && !z; break;
+                    case 7: cond_met = true; break;
                 }
-                if (cond_code & 1) cond_met = !cond_met; // invert for odd codes (NE,CC,PL,etc)
-                if (cond_code == 0xF) cond_met = true;    // NV = always
+                if (cond_code & 1) cond_met = !cond_met;
+                if (cond_code == 0xF) cond_met = true;
                 vreg_lo[rd_fp] = cond_met ? (vreg_lo[rn_fp] & 0xFFFFFFFF) : (vreg_lo[rm_fp] & 0xFFFFFFFF);
+                vreg_hi[rd_fp] = 0;
+            } else if ((inst & 0xFFE00C00) == 0x1E600C00) {
+                // FCSEL Dd, Dn, Dm, cond (ftype=1)
+                uint8_t cond_code = (inst >> 12) & 0xF;
+                bool n = flag_n > 0.5f, z = flag_z > 0.5f, c = flag_c > 0.5f, v = flag_v > 0.5f;
+                bool cond_met = false;
+                switch (cond_code >> 1) {
+                    case 0: cond_met = z; break;
+                    case 1: cond_met = c; break;
+                    case 2: cond_met = n; break;
+                    case 3: cond_met = v; break;
+                    case 4: cond_met = c && !z; break;
+                    case 5: cond_met = (n == v); break;
+                    case 6: cond_met = (n == v) && !z; break;
+                    case 7: cond_met = true; break;
+                }
+                if (cond_code & 1) cond_met = !cond_met;
+                if (cond_code == 0xF) cond_met = true;
+                vreg_lo[rd_fp] = cond_met ? vreg_lo[rn_fp] : vreg_lo[rm_fp];
                 vreg_hi[rd_fp] = 0;
             }
 
@@ -1397,6 +1459,141 @@ kernel void arm64_execute_full(
             }
             #undef VREG_S_RD_9E
             #undef VREG_D_RD_9E
+            break;
+        }
+
+        case 0x1C: { // LDR St, PC-relative literal (32-bit FP)
+            uint8_t rt = inst & 0x1F;
+            int32_t imm19 = sign_extend_19((inst >> 5) & 0x7FFFF);
+            uint64_t addr = pc + uint64_t(int64_t(imm19) * 4);
+            vreg_lo[rt] = int64_t(load32(memory, addr));
+            vreg_hi[rt] = 0;
+            break;
+        }
+
+        case 0x1F: { // FMADD / FMSUB / FNMADD / FNMSUB (single and double)
+            uint8_t rd_fm = inst & 0x1F;
+            uint8_t rn_fm = (inst >> 5) & 0x1F;
+            uint8_t ra_fm = (inst >> 10) & 0x1F;
+            uint8_t rm_fm = (inst >> 16) & 0x1F;
+            uint8_t ftype = (inst >> 22) & 0x3;
+            uint8_t o1 = (inst >> 21) & 1;  // 0=FMADD/FNMADD, 1=FMSUB/FNMSUB
+            uint8_t o0 = (inst >> 15) & 1;  // 0=FMADD/FMSUB, 1=FNMADD/FNMSUB
+            if (ftype == 0) {
+                // Single-precision
+                float an = as_type<float>(uint32_t(vreg_lo[rn_fm] & 0xFFFFFFFF));
+                float am = as_type<float>(uint32_t(vreg_lo[rm_fm] & 0xFFFFFFFF));
+                float aa = as_type<float>(uint32_t(vreg_lo[ra_fm] & 0xFFFFFFFF));
+                float result;
+                if (o0 == 0 && o1 == 0) result = aa + an * am;       // FMADD
+                else if (o0 == 0 && o1 == 1) result = aa - an * am;  // FMSUB
+                else if (o0 == 1 && o1 == 0) result = -aa - an * am; // FNMADD
+                else result = -aa + an * am;                          // FNMSUB
+                vreg_lo[rd_fm] = int64_t(as_type<uint32_t>(result));
+                vreg_hi[rd_fm] = 0;
+            } else if (ftype == 1) {
+                // Double-precision
+                double an = as_type<double>(uint64_t(vreg_lo[rn_fm]));
+                double am = as_type<double>(uint64_t(vreg_lo[rm_fm]));
+                double aa = as_type<double>(uint64_t(vreg_lo[ra_fm]));
+                double result;
+                if (o0 == 0 && o1 == 0) result = aa + an * am;       // FMADD
+                else if (o0 == 0 && o1 == 1) result = aa - an * am;  // FMSUB
+                else if (o0 == 1 && o1 == 0) result = -aa - an * am; // FNMADD
+                else result = -aa + an * am;                          // FNMSUB
+                vreg_lo[rd_fm] = as_type<int64_t>(result);
+                vreg_hi[rd_fm] = 0;
+            }
+            break;
+        }
+
+        case 0x2D: { // STP/LDP S-pair (32-bit FP pair)
+            uint8_t rt = inst & 0x1F;
+            uint8_t rt2_v = (inst >> 10) & 0x1F;
+            int32_t offset = sign_extend_7((inst >> 15) & 0x7F) * 4; // scaled by 4 for S
+            int64_t base = regs[rn];
+            if ((inst & 0xFFC00000) == 0x2D000000) {
+                // STP St1, St2, [Xn, #imm]
+                uint64_t addr = uint64_t(base + offset);
+                store32(memory, addr, uint32_t(vreg_lo[rt] & 0xFFFFFFFF));
+                store32(memory, addr + 4, uint32_t(vreg_lo[rt2_v] & 0xFFFFFFFF));
+            } else if ((inst & 0xFFC00000) == 0x2D400000) {
+                // LDP St1, St2, [Xn, #imm]
+                uint64_t addr = uint64_t(base + offset);
+                vreg_lo[rt] = int64_t(load32(memory, addr));
+                vreg_hi[rt] = 0;
+                vreg_lo[rt2_v] = int64_t(load32(memory, addr + 4));
+                vreg_hi[rt2_v] = 0;
+            } else if ((inst & 0xFFC00000) == 0x2D800000) {
+                // STP St1, St2, [Xn, #imm]! (pre-index)
+                base += offset;
+                regs[rn] = base;
+                uint64_t addr = uint64_t(base);
+                store32(memory, addr, uint32_t(vreg_lo[rt] & 0xFFFFFFFF));
+                store32(memory, addr + 4, uint32_t(vreg_lo[rt2_v] & 0xFFFFFFFF));
+            } else if ((inst & 0xFFC00000) == 0x2DC00000) {
+                // LDP St1, St2, [Xn, #imm]! (pre-index)
+                base += offset;
+                regs[rn] = base;
+                uint64_t addr = uint64_t(base);
+                vreg_lo[rt] = int64_t(load32(memory, addr));
+                vreg_hi[rt] = 0;
+                vreg_lo[rt2_v] = int64_t(load32(memory, addr + 4));
+                vreg_hi[rt2_v] = 0;
+            }
+            break;
+        }
+
+        case 0x2C: { // STP/LDP S-pair post-index (32-bit FP pair)
+            uint8_t rt = inst & 0x1F;
+            uint8_t rt2_v = (inst >> 10) & 0x1F;
+            int32_t offset = sign_extend_7((inst >> 15) & 0x7F) * 4;
+            int64_t base = regs[rn];
+            uint64_t addr = uint64_t(base);
+            if ((inst & 0xFFC00000) == 0x2C800000) {
+                // STP St1, St2, [Xn], #imm (post-index)
+                store32(memory, addr, uint32_t(vreg_lo[rt] & 0xFFFFFFFF));
+                store32(memory, addr + 4, uint32_t(vreg_lo[rt2_v] & 0xFFFFFFFF));
+                regs[rn] = base + offset;
+            } else if ((inst & 0xFFC00000) == 0x2CC00000) {
+                // LDP St1, St2, [Xn], #imm (post-index)
+                vreg_lo[rt] = int64_t(load32(memory, addr));
+                vreg_hi[rt] = 0;
+                vreg_lo[rt2_v] = int64_t(load32(memory, addr + 4));
+                vreg_hi[rt2_v] = 0;
+                regs[rn] = base + offset;
+            }
+            break;
+        }
+
+        case 0x5C: { // LDR Dt, PC-relative literal (64-bit FP)
+            uint8_t rt = inst & 0x1F;
+            int32_t imm19 = sign_extend_19((inst >> 5) & 0x7FFFF);
+            uint64_t addr = pc + uint64_t(int64_t(imm19) * 4);
+            vreg_lo[rt] = load64(memory, addr);
+            vreg_hi[rt] = 0;
+            break;
+        }
+
+        case 0x6C: { // STP/LDP D-pair post-index (64-bit FP pair)
+            uint8_t rt = inst & 0x1F;
+            uint8_t rt2_v = (inst >> 10) & 0x1F;
+            int32_t offset = sign_extend_7((inst >> 15) & 0x7F) * 8;
+            int64_t base = regs[rn];
+            uint64_t addr = uint64_t(base);
+            if ((inst & 0xFFC00000) == 0x6C800000) {
+                // STP Dt1, Dt2, [Xn], #imm
+                store64(memory, addr, vreg_lo[rt]);
+                store64(memory, addr + 8, vreg_lo[rt2_v]);
+                regs[rn] = base + offset;
+            } else if ((inst & 0xFFC00000) == 0x6CC00000) {
+                // LDP Dt1, Dt2, [Xn], #imm
+                vreg_lo[rt] = load64(memory, addr);
+                vreg_hi[rt] = 0;
+                vreg_lo[rt2_v] = load64(memory, addr + 8);
+                vreg_hi[rt2_v] = 0;
+                regs[rn] = base + offset;
+            }
             break;
         }
 
@@ -1978,21 +2175,35 @@ kernel void arm64_execute_full(
             break;
         }
 
-        case 0x6D: { // STP/LDP Dn FP pair
+        case 0x6D: { // STP/LDP Dn FP pair (signed-offset and pre-index)
+            uint8_t rt = inst & 0x1F;
+            uint8_t rt2_v = (inst >> 10) & 0x1F;
+            int32_t offset = sign_extend_7((inst >> 15) & 0x7F) * 8;
+            int64_t base = regs[rn];
             if ((inst & 0xFFC00000) == 0x6D000000) {
-                uint8_t rt = inst & 0x1F;
-                uint8_t rt2_v = (inst >> 10) & 0x1F;
-                int32_t offset = sign_extend_7((inst >> 15) & 0x7F) * 8;
-                int64_t base = regs[rn];
+                // STP Dt1, Dt2, [Xn, #imm] (signed offset)
                 uint64_t addr = uint64_t(base + offset);
                 store64(memory, addr, vreg_lo[rt]);
                 store64(memory, addr + 8, vreg_lo[rt2_v]);
             } else if ((inst & 0xFFC00000) == 0x6D400000) {
-                uint8_t rt = inst & 0x1F;
-                uint8_t rt2_v = (inst >> 10) & 0x1F;
-                int32_t offset = sign_extend_7((inst >> 15) & 0x7F) * 8;
-                int64_t base = regs[rn];
+                // LDP Dt1, Dt2, [Xn, #imm] (signed offset)
                 uint64_t addr = uint64_t(base + offset);
+                vreg_lo[rt] = load64(memory, addr);
+                vreg_hi[rt] = 0;
+                vreg_lo[rt2_v] = load64(memory, addr + 8);
+                vreg_hi[rt2_v] = 0;
+            } else if ((inst & 0xFFC00000) == 0x6D800000) {
+                // STP Dt1, Dt2, [Xn, #imm]! (pre-index)
+                base += offset;
+                regs[rn] = base;
+                uint64_t addr = uint64_t(base);
+                store64(memory, addr, vreg_lo[rt]);
+                store64(memory, addr + 8, vreg_lo[rt2_v]);
+            } else if ((inst & 0xFFC00000) == 0x6DC00000) {
+                // LDP Dt1, Dt2, [Xn, #imm]! (pre-index)
+                base += offset;
+                regs[rn] = base;
+                uint64_t addr = uint64_t(base);
                 vreg_lo[rt] = load64(memory, addr);
                 vreg_hi[rt] = 0;
                 vreg_lo[rt2_v] = load64(memory, addr + 8);
