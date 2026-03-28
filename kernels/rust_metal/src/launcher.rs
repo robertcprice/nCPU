@@ -263,6 +263,48 @@ impl GpuLauncher {
         }
     }
 
+    /// Set FP/SIMD register Vn (low 64 bits = Dn)
+    pub fn set_vreg(&self, reg: usize, val: i64) {
+        if reg >= 32 {
+            return;
+        }
+        unsafe {
+            let ptr = self.vreg_lo_buffer.contents().as_ptr() as *mut i64;
+            *ptr.add(reg) = val;
+        }
+    }
+
+    /// Get FP/SIMD register Vn (low 64 bits = Dn)
+    pub fn get_vreg(&self, reg: usize) -> i64 {
+        if reg >= 32 {
+            return 0;
+        }
+        unsafe {
+            let ptr = self.vreg_lo_buffer.contents().as_ptr() as *const i64;
+            *ptr.add(reg)
+        }
+    }
+
+    /// Set FP/SIMD register as f64 (Dn)
+    pub fn set_vreg_f64(&self, reg: usize, val: f64) {
+        self.set_vreg(reg, val.to_bits() as i64);
+    }
+
+    /// Get FP/SIMD register as f64 (Dn)
+    pub fn get_vreg_f64(&self, reg: usize) -> f64 {
+        f64::from_bits(self.get_vreg(reg) as u64)
+    }
+
+    /// Set FP/SIMD register as f32 (Sn) — stores in low 32 bits
+    pub fn set_vreg_f32(&self, reg: usize, val: f32) {
+        self.set_vreg(reg, val.to_bits() as i64);
+    }
+
+    /// Get FP/SIMD register as f32 (Sn) — reads low 32 bits
+    pub fn get_vreg_f32(&self, reg: usize) -> f32 {
+        f32::from_bits((self.get_vreg(reg) & 0xFFFFFFFF) as u32)
+    }
+
     fn get_registers(&self) -> [i64; 32] {
         let mut regs = [0i64; 32];
         unsafe {
@@ -3951,5 +3993,321 @@ mod tests {
         );
         // x0 should still hold 42
         assert_eq!(launcher.get_register(0), 42);
+    }
+
+    // ── Floating-point GPU instruction tests ────────────────────────────
+
+    /// Helper: create a launcher, write instructions at 0x10000, set SP, run, return launcher
+    fn run_fp_program(instructions: &[u32]) -> (GpuLauncher, LaunchResult) {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        for (i, inst) in instructions.iter().enumerate() {
+            launcher.write_memory(0x10000 + i * 4, &inst.to_le_bytes());
+        }
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000); // SP
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        (launcher, result)
+    }
+
+    #[test]
+    fn fp_fadd_single() {
+        // FMOV S0, W0 (0x1E270000) ; FMOV S1, W1 (0x1E270001 — wait, need rn=1)
+        // Simpler: set vregs directly, run FADD, check result
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 3.0);
+        launcher.set_vreg_f32(1, 4.0);
+        // FADD S2, S0, S1 = 0x1E212802
+        // encoding: 0001 1110 001 Rm(00001) 0010 10 Rn(00000) Rd(00010)
+        // = 0x1E212802
+        let fadd_s = 0x1E212802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fadd_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!((s2 - 7.0).abs() < 0.001, "FADD S2=S0+S1: expected 7.0, got {}", s2);
+    }
+
+    #[test]
+    fn fp_fsub_single() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 10.0);
+        launcher.set_vreg_f32(1, 3.5);
+        // FSUB S2, S0, S1 = 0x1E213802
+        let fsub_s = 0x1E213802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fsub_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!((s2 - 6.5).abs() < 0.001, "FSUB: expected 6.5, got {}", s2);
+    }
+
+    #[test]
+    fn fp_fmul_single() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 3.0);
+        launcher.set_vreg_f32(1, 5.0);
+        // FMUL S2, S0, S1 = 0x1E210802
+        let fmul_s = 0x1E210802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fmul_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!((s2 - 15.0).abs() < 0.001, "FMUL: expected 15.0, got {}", s2);
+    }
+
+    #[test]
+    fn fp_fdiv_single() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 20.0);
+        launcher.set_vreg_f32(1, 4.0);
+        // FDIV S2, S0, S1 = 0x1E211802
+        let fdiv_s = 0x1E211802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fdiv_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!((s2 - 5.0).abs() < 0.001, "FDIV: expected 5.0, got {}", s2);
+    }
+
+    #[test]
+    fn fp_fneg_single() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 42.5);
+        // FNEG S1, S0 = 0x1E214001
+        let fneg_s = 0x1E214001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fneg_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s1 = launcher.get_vreg_f32(1);
+        assert!((s1 - (-42.5)).abs() < 0.001, "FNEG: expected -42.5, got {}", s1);
+    }
+
+    #[test]
+    fn fp_fabs_single() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, -7.25);
+        // FABS S1, S0 = 0x1E20C001
+        let fabs_s = 0x1E20C001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fabs_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s1 = launcher.get_vreg_f32(1);
+        assert!((s1 - 7.25).abs() < 0.001, "FABS: expected 7.25, got {}", s1);
+    }
+
+    #[test]
+    fn fp_fsqrt_single() {
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 25.0);
+        // FSQRT S1, S0 = 0x1E21C001
+        let fsqrt_s = 0x1E21C001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fsqrt_s.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s1 = launcher.get_vreg_f32(1);
+        assert!((s1 - 5.0).abs() < 0.001, "FSQRT: expected 5.0, got {}", s1);
+    }
+
+    #[test]
+    fn fp_fadd_double_as_single() {
+        // Metal doesn't support double — D-register ops run at single precision
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        // Store float bits in low 32 of vreg (how the shader reads them)
+        launcher.set_vreg_f32(0, 1.1);
+        launcher.set_vreg_f32(1, 2.2);
+        // FADD D2, D0, D1 = 0x1E612802
+        let fadd_d = 0x1E612802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fadd_d.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!((s2 - 3.3).abs() < 0.01, "FADD D (as single): expected ~3.3, got {}", s2);
+    }
+
+    #[test]
+    fn fp_fmul_double_as_single() {
+        // Metal doesn't support double — D-register ops run at single precision
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 2.5);
+        launcher.set_vreg_f32(1, 4.0);
+        // FMUL D2, D0, D1 = 0x1E610802
+        let fmul_d = 0x1E610802u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fmul_d.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s2 = launcher.get_vreg_f32(2);
+        assert!((s2 - 10.0).abs() < 0.01, "FMUL D (as single): expected 10.0, got {}", s2);
+    }
+
+    #[test]
+    fn fp_scvtf_and_fcvtzs() {
+        // SCVTF S0, W0 = 0x1E220000  (int32 -> float)
+        // FCVTZS W1, S0 = 0x1E380001  (float -> int32)
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_register(0, 42); // W0 = 42
+        let scvtf = 0x1E220000u32;  // SCVTF S0, W0
+        let fcvtzs = 0x1E380021u32; // FCVTZS W1, S1 — wait, need S0->W1
+        // Actually: FCVTZS Wd, Sn: 0x1E380000 | (rn << 5) | rd
+        // FCVTZS W1, S0 = 0x1E380001
+        let fcvtzs = 0x1E380001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &scvtf.to_le_bytes());
+        launcher.write_memory(0x10004, &fcvtzs.to_le_bytes());
+        launcher.write_memory(0x10008, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        // S0 should contain float(42) = 42.0
+        let s0 = launcher.get_vreg_f32(0);
+        assert!((s0 - 42.0).abs() < 0.001, "SCVTF: expected 42.0, got {}", s0);
+        // W1 should contain int(42.0) = 42
+        let w1 = launcher.get_register(1) & 0xFFFFFFFF;
+        assert_eq!(w1, 42, "FCVTZS: expected 42, got {}", w1);
+    }
+
+    #[test]
+    fn fp_fcvt_single_to_double_as_single() {
+        // Metal has no double — FCVT S->D is effectively a copy at single precision
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 3.14);
+        // FCVT D1, S0 = 0x1E22C001
+        let fcvt = 0x1E22C001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fcvt.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        // Read back as f32 since double ops run at single precision on Metal
+        let s1 = launcher.get_vreg_f32(1);
+        assert!((s1 - 3.14).abs() < 0.01, "FCVT S->D (as single): expected ~3.14, got {}", s1);
+    }
+
+    #[test]
+    fn fp_fmadd_single() {
+        // FMADD S3, S0, S1, S2 = result = S2 + S0*S1
+        // Encoding: 0001 1111 000 Rm(00001) 0 Ra(00010) Rn(00000) Rd(00011)
+        // = 0x1F010803
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 3.0);  // Sn
+        launcher.set_vreg_f32(1, 4.0);  // Sm
+        launcher.set_vreg_f32(2, 10.0); // Sa (addend)
+        let fmadd = 0x1F010803u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fmadd.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s3 = launcher.get_vreg_f32(3);
+        // 10.0 + 3.0 * 4.0 = 22.0
+        assert!((s3 - 22.0).abs() < 0.001, "FMADD: expected 22.0, got {}", s3);
+    }
+
+    #[test]
+    fn fp_fcmp_sets_flags() {
+        // FCMP S0, S1 then a conditional branch based on flags
+        // We'll check flags indirectly by using CSEL after FCMP
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        launcher.set_vreg_f32(0, 5.0);
+        launcher.set_vreg_f32(1, 3.0);
+        // FCMP S0, S1: 0x1E212020 (mask check: FFE0FC1F with 1E202000)
+        // = 0x1E21 2020 ... actually encoding: 0001 1110 001 Rm Rn 00000
+        // FCMP Sn, Sm: 0001 1110 pp1 mmmmm 0010 00nn nnn0 0000
+        // FCMP S0, S1: 0x1E212000
+        let fcmp = 0x1E212000u32;
+        // MOVZ X0, #1 = 0xD2800020 (if GT, x0 stays 1)
+        // MOVZ X1, #0 = 0xD2800001
+        // CSEL X2, X0, X1, GT (cond=1100) = 0x9A81C002
+        let mov_x0_1 = 0xD2800020u32;
+        let mov_x1_0 = 0xD2800001u32;
+        let csel_gt = 0x9A81C002u32; // CSEL X2, X0, X1, GT
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fcmp.to_le_bytes());
+        launcher.write_memory(0x10004, &mov_x0_1.to_le_bytes());
+        launcher.write_memory(0x10008, &mov_x1_0.to_le_bytes());
+        launcher.write_memory(0x1000C, &csel_gt.to_le_bytes());
+        launcher.write_memory(0x10010, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        // 5.0 > 3.0, so GT is true, X2 should be X0 (=1)
+        assert_eq!(launcher.get_register(2), 1, "FCMP+CSEL: 5.0>3.0 should select X0=1");
+    }
+
+    #[test]
+    fn fp_fmov_gpr_to_simd() {
+        // FMOV S0, W0 = 0x1E270000
+        // FMOV Dd, Xn = 0x9E660000 | (rn << 5) | rd
+        let launcher = GpuLauncher::new(4 * 1024 * 1024, 10_000_000).unwrap();
+        // Put the bit pattern for 3.14f into W0
+        let pi_bits = 3.14f32.to_bits();
+        launcher.set_register(0, pi_bits as i64);
+        // FMOV S1, W0 = 0x1E270001
+        let fmov = 0x1E270001u32;
+        let hlt = 0xD4400000u32;
+        launcher.write_memory(0x10000, &fmov.to_le_bytes());
+        launcher.write_memory(0x10004, &hlt.to_le_bytes());
+        launcher.set_pc(0x10000);
+        launcher.set_register(31, 0xF0000);
+        let mut vfs = None;
+        let result = launcher.run(&mut vfs, 1_000_000, 5.0, true).unwrap();
+        assert_eq!(result.stop_reason, "HALT");
+        let s1 = launcher.get_vreg_f32(1);
+        assert!((s1 - 3.14).abs() < 0.01, "FMOV W->S: expected 3.14, got {}", s1);
     }
 }
