@@ -42,6 +42,7 @@ from .generated_code_training import (
     create_generated_trainer,
 )
 from .trace_data import TraceGenerator, TraceSample, TraceLossDataset
+from .arithmetic_bench import ArithmeticBench, BenchProblem, BenchResult
 
 __all__ = [
     "CodeToISAParser",
