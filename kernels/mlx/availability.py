@@ -57,7 +57,10 @@ def _run_probe(snippet: str, timeout: float) -> tuple[bool, str | None]:
 @lru_cache(maxsize=16)
 def probe_python_module(module_name: str, timeout: float = _DEFAULT_TIMEOUT) -> tuple[bool, str | None]:
     """Probe whether a Python module can be imported without crashing."""
-    if importlib.util.find_spec(module_name) is None:
+    try:
+        if importlib.util.find_spec(module_name) is None:
+            return False, f"Module {module_name!r} not found"
+    except (ModuleNotFoundError, ValueError):
         return False, f"Module {module_name!r} not found"
 
     return _run_probe(
