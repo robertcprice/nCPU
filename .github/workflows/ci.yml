@@ -52,4 +52,4 @@ jobs:
             -k "not metal and not gpu and not rust"
 
       - name: Run differentiable engine tests
-        run: pytest ncpu/differentiable/ -x -q
+        run: pytest tests/test_differentiable.py tests/test_differentiable_advanced.py -x -q
