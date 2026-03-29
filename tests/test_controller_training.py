@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -114,7 +115,7 @@ class TestControllerTraining(unittest.TestCase):
             script_path = Path(__file__).resolve().parents[1] / "ncpu" / "self_optimizing" / "train_internal_controller.py"
             result = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(script_path),
                     "--trajectory-root",
                     str(root),
