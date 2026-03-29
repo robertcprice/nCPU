@@ -15,6 +15,7 @@ from egdc.sampler import generate
 from egdc.mog_tokenizer import MogCodeTokenizer
 from egdc.mog_dataset import MogDataset, MogProgramGenerator
 from egdc.mog_eval import evaluate_mog_program, evaluate_batch
+from egdc.mog_model import MogMaskedDiffusion, MogDiffusionConfig
 
 __all__ = [
     "NCPUTokenizer",
@@ -32,4 +33,6 @@ __all__ = [
     "MogProgramGenerator",
     "evaluate_mog_program",
     "evaluate_batch",
+    "MogMaskedDiffusion",
+    "MogDiffusionConfig",
 ]
