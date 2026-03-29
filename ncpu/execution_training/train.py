@@ -252,12 +252,27 @@ def train_execution_grounded(config: ExecutionTrainingConfig) -> ExecutionTraini
         max_loop_n=config.max_loop_n,
     )
 
+    def _collate_fn(batch):
+        """Custom collate that handles ExecutionTrainingSample objects."""
+        tensors = {}
+        samples = []
+        for item in batch:
+            for k, v in item.items():
+                if k == "sample":
+                    samples.append(v)
+                else:
+                    tensors.setdefault(k, []).append(v)
+        result = {k: torch.stack(v) for k, v in tensors.items()}
+        result["sample"] = samples
+        return result
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
         drop_last=True,
+        collate_fn=_collate_fn,
     )
 
     # ── 4. Set up execution loss ──
@@ -431,14 +446,25 @@ def train_execution_grounded(config: ExecutionTrainingConfig) -> ExecutionTraini
         if step % config.eval_every == 0:
             logger.info("Running evaluation...")
             evaluator = ExecutionEvaluator(engine=diff_engine, device=device)
-            eval_result = evaluator.evaluate_reference_only(eval_dataset.samples[:50])
+            model.eval()
+            eval_result = evaluator.evaluate(
+                model, tokenizer, eval_dataset.samples[:50],
+                max_new_tokens=128, temperature=0.1,
+            )
+            model.train()
             logger.info(f"Eval: exec_acc={eval_result.exec_accuracy:.1%} "
-                       f"parse_rate={eval_result.parse_rate:.1%}")
+                       f"parse_rate={eval_result.parse_rate:.1%} "
+                       f"code_correct={eval_result.accuracy:.1%}")
 
     # ── 7. Final evaluation ──
     logger.info("Final evaluation...")
     evaluator = ExecutionEvaluator(engine=diff_engine, device=device)
-    final_eval = evaluator.evaluate_reference_only(eval_dataset.samples)
+    model.eval()
+    final_eval = evaluator.evaluate(
+        model, tokenizer, eval_dataset.samples,
+        max_new_tokens=128, temperature=0.1,
+    )
+    model.train()
 
     # ── 8. Save results ──
     output_dir = Path(config.output_dir)
@@ -654,6 +680,7 @@ def main():
     parser.add_argument("--warmup-steps", type=int, default=100)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--eval-every", type=int, default=200)
+    parser.add_argument("--grad-accum-steps", type=int, default=1)
 
     # Loss weights
     parser.add_argument("--exec-loss-weight", type=float, default=1.0)
@@ -705,6 +732,7 @@ def main():
         warmup_steps=args.warmup_steps,
         grad_clip=args.grad_clip,
         eval_every=args.eval_every,
+        grad_accum_steps=args.grad_accum_steps,
         exec_loss_weight=args.exec_loss_weight,
         aux_loss_weight=args.aux_loss_weight,
         trace_loss_weight=args.trace_loss_weight,

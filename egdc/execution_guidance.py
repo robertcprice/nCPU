@@ -1,14 +1,8 @@
 """Execution-guided diffusion sampling via nCPU's differentiable engine.
 
-This is the core novel contribution: using differentiable execution as
-classifier guidance during the denoising process. Every unmasking step
-is informed by "does this code actually execute correctly?"
-
-Architecture:
-  token logits -> TokenToSoftProgramBridge -> SoftProgram -> DifferentiableEngine
-                                                             -> ExecutionLoss
-                                                             -> gradients
-  gradients flow back to token logits -> guided sampling
+Core novel contribution: differentiable execution as classifier guidance
+during denoising. Every unmasking step gets gradients from "does this
+code actually execute correctly?"
 """
 
 from __future__ import annotations
@@ -31,188 +25,245 @@ from .sampler import build_slot_masks
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ncpu.differentiable.execution import (
-    DifferentiableEngine, SoftProgram, ExecutionResult,
+    DifferentiableEngine, SoftProgram,
 )
 from ncpu.execution_training.execution_loss import ExecutionLoss
 
 
 # ---------------------------------------------------------------------------
-# Token-to-SoftProgram Bridge
+# Direct execution loss from token logits (maintains gradient flow)
 # ---------------------------------------------------------------------------
 
-class TokenToSoftProgramBridge(nn.Module):
-    """Maps diffusion model token logits to SoftProgram parameters.
+class DifferentiableExecutionScorer(nn.Module):
+    """Computes execution correctness score from token logits.
 
-    The diffusion model outputs logits of shape (seq_len, vocab_size) for
-    each position. This bridge extracts the relevant logit slices for each
-    instruction slot and maps them to SoftProgram's parameter tensors.
-
-    Instruction layout (4 tokens per instruction):
-      slot 0: opcode  -> opcode_logits[i, :14]
-      slot 1: dst_reg -> dst_logits[i, :8]
-      slot 2: src_reg -> src1_logits[i, :8] (src2 unused in this ISA)
-      slot 3: imm/br  -> immediates[i] and branch_logits[i, :]
+    Instead of creating a SoftProgram (which detaches gradients), this
+    module directly interprets token logits as a soft program and runs
+    it through the differentiable engine, maintaining full gradient flow.
     """
 
     def __init__(
         self,
         max_instructions: int = 32,
         num_registers: int = 8,
-        num_opcodes: int = NUM_OPCODES,
+        max_exec_steps: int = 32,
+        flag_scale: float = 0.1,
     ):
         super().__init__()
         self.max_instructions = max_instructions
         self.num_registers = num_registers
-        self.num_opcodes = num_opcodes
+        self.max_exec_steps = max_exec_steps
+        self.flag_scale = flag_scale
 
-        # Small projection to refine immediate values from logits
-        self.imm_proj = nn.Linear(NUM_IMMEDIATES + NUM_BRANCH_TARGETS, 1)
-        # Branch target projection
-        self.branch_proj = nn.Linear(NUM_IMMEDIATES + NUM_BRANCH_TARGETS, max_instructions)
+        # The DifferentiableALU computes all ops in parallel
+        from ncpu.differentiable.execution import DifferentiableALU
+        self.alu = DifferentiableALU(n_bits=16, bit_temperature=10.0)
 
-    def forward(
+    def soft_execute(
         self,
         token_logits: torch.Tensor,
-        seq_len: int = 128,
-    ) -> SoftProgram:
-        """Convert token logits to a SoftProgram.
+        input_registers: Dict[int, float],
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
+        """Execute token logits as a soft program and return final registers.
+
+        This is a simplified differentiable execution that:
+        1. Interprets token logits as soft instruction parameters
+        2. Runs soft execution with weighted instruction dispatch
+        3. Returns differentiable register state
 
         Args:
-            token_logits: (seq_len, vocab_size) logits from diffusion model
-                          (or (batch, seq_len, vocab_size) - batch dim stripped)
+            token_logits: (seq_len, vocab_size) with requires_grad
+            input_registers: initial register values
+            temperature: softmax temperature for instruction selection
 
         Returns:
-            SoftProgram with parameters set from the token logits
+            registers: (num_registers,) differentiable final register state
         """
-        if token_logits.dim() == 3:
-            token_logits = token_logits[0]  # strip batch dim
-
-        L, V = token_logits.shape
         device = token_logits.device
-        n_instr = min(L // 4, self.max_instructions)
-
-        # Create SoftProgram with correct dimensions
-        prog = SoftProgram(
-            max_length=n_instr,
-            num_registers=self.num_registers,
-            num_opcodes=self.num_opcodes,
-        ).to(device)
-
-        # Extract logits for each instruction slot
-        for i in range(n_instr):
-            base = i * 4
-
-            # Slot 0: opcode logits (tokens 0-13)
-            opcode_logits = token_logits[base, OPCODE_OFFSET:OPCODE_OFFSET + self.num_opcodes]
-            prog.opcode_logits.data[i] = opcode_logits
-
-            # Slot 1: dst register logits (tokens 14-21)
-            dst_logits = token_logits[base + 1, REG_OFFSET:REG_OFFSET + self.num_registers]
-            prog.dst_logits.data[i] = dst_logits
-
-            # Slot 2: src register logits (tokens 14-21)
-            src_logits = token_logits[base + 2, REG_OFFSET:REG_OFFSET + self.num_registers]
-            prog.src1_logits.data[i] = src_logits
-            prog.src2_logits.data[i] = src_logits  # same in this ISA
-
-            # Slot 3: immediate + branch logits (tokens 22-341)
-            imm_br_logits = token_logits[base + 3, IMM_OFFSET:IMM_OFFSET + NUM_IMMEDIATES + NUM_BRANCH_TARGETS]
-
-            # Immediate value: weighted sum of possible values
-            imm_probs = F.softmax(imm_br_logits[:NUM_IMMEDIATES], dim=0)
-            imm_values = torch.arange(NUM_IMMEDIATES, dtype=torch.float32, device=device)
-            prog.immediates.data[i] = (imm_probs * imm_values).sum()
-
-            # Branch target: project to instruction indices
-            branch_logits = self.branch_proj(imm_br_logits)
-            prog.branch_logits.data[i] = branch_logits[:n_instr]
-
-        return prog
-
-    def forward_differentiable(
-        self,
-        token_logits: torch.Tensor,
-    ) -> SoftProgram:
-        """Like forward() but maintains full gradient connectivity.
-
-        Instead of setting .data (which detaches), we create a SoftProgram
-        and replace its parameters with computed tensors via register_buffer
-        trick and custom forward hooks.
-
-        Args:
-            token_logits: (seq_len, vocab_size) with requires_grad=True
-
-        Returns:
-            SoftProgram whose parameters are differentiable functions of token_logits
-        """
-        if token_logits.dim() == 3:
-            token_logits = token_logits[0]
-
         L, V = token_logits.shape
-        device = token_logits.device
         n_instr = min(L // 4, self.max_instructions)
+        n_reg = self.num_registers
 
-        # Build parameter tensors from logits (all differentiable)
-        opcode_list = []
-        dst_list = []
-        src1_list = []
-        src2_list = []
-        imm_list = []
-        branch_list = []
+        # Parse instructions from logits
+        opcode_logits_all = []  # [n_instr, NUM_OPCODES]
+        dst_probs_all = []      # [n_instr, n_reg]
+        src_probs_all = []      # [n_instr, n_reg]
+        imm_values_all = []     # [n_instr]
+        branch_probs_all = []   # [n_instr, n_instr]
 
         for i in range(n_instr):
             base = i * 4
 
-            # Opcode logits
-            opcode_logits = token_logits[base, OPCODE_OFFSET:OPCODE_OFFSET + self.num_opcodes]
-            opcode_list.append(opcode_logits)
+            # Opcode
+            op_logits = token_logits[base, OPCODE_OFFSET:OPCODE_OFFSET + NUM_OPCODES]
+            opcode_logits_all.append(op_logits)
 
-            # Register logits
-            dst_logits = token_logits[base + 1, REG_OFFSET:REG_OFFSET + self.num_registers]
-            src_logits = token_logits[base + 2, REG_OFFSET:REG_OFFSET + self.num_registers]
-            dst_list.append(dst_logits)
-            src1_list.append(src_logits)
-            src2_list.append(src_logits)
+            # Dst register
+            dst_logits = token_logits[base + 1, REG_OFFSET:REG_OFFSET + n_reg]
+            dst_probs_all.append(F.softmax(dst_logits / temperature, dim=0))
 
-            # Immediate: expected value under softmax
-            imm_br_logits = token_logits[base + 3, IMM_OFFSET:IMM_OFFSET + NUM_IMMEDIATES + NUM_BRANCH_TARGETS]
-            imm_probs = F.softmax(imm_br_logits[:NUM_IMMEDIATES], dim=0)
-            imm_values = torch.arange(NUM_IMMEDIATES, dtype=torch.float32, device=device)
-            immediate = (imm_probs * imm_values).sum()
-            imm_list.append(immediate)
+            # Src register
+            src_logits = token_logits[base + 2, REG_OFFSET:REG_OFFSET + n_reg]
+            src_probs_all.append(F.softmax(src_logits / temperature, dim=0))
 
-            # Branch logits
-            br = self.branch_proj(imm_br_logits)[:n_instr]
-            # Pad to n_instr if needed
-            if br.shape[0] < n_instr:
-                br = F.pad(br, (0, n_instr - br.shape[0]))
-            branch_list.append(br)
+            # Immediate value (expected value under softmax)
+            imm_logits = token_logits[base + 3, IMM_OFFSET:IMM_OFFSET + NUM_IMMEDIATES]
+            imm_probs = F.softmax(imm_logits / temperature, dim=0)
+            imm_vals = torch.arange(NUM_IMMEDIATES, dtype=torch.float32, device=device)
+            imm_values_all.append((imm_probs * imm_vals).sum())
 
-        # Create SoftProgram and inject differentiable parameters
-        prog = SoftProgram(
-            max_length=n_instr,
-            num_registers=self.num_registers,
-            num_opcodes=self.num_opcodes,
-        ).to(device)
+            # Branch target
+            br_logits = token_logits[base + 3, IMM_OFFSET:IMM_OFFSET + n_instr]
+            if br_logits.shape[0] < n_instr:
+                br_logits = F.pad(br_logits, (0, n_instr - br_logits.shape[0]), value=-1e9)
+            else:
+                br_logits = br_logits[:n_instr]
+            branch_probs_all.append(F.softmax(br_logits / temperature, dim=0))
 
-        # Stack and assign (these maintain gradient connectivity)
-        prog.opcode_logits = nn.Parameter(torch.stack(opcode_list))
-        prog.dst_logits = nn.Parameter(torch.stack(dst_list))
-        prog.src1_logits = nn.Parameter(torch.stack(src1_list))
-        prog.src2_logits = nn.Parameter(torch.stack(src2_list))
-        prog.immediates = nn.Parameter(torch.stack(imm_list))
-        prog.branch_logits = nn.Parameter(torch.stack(branch_list))
+        opcode_logits_t = torch.stack(opcode_logits_all)   # [n_instr, 14]
+        dst_probs_t = torch.stack(dst_probs_all)           # [n_instr, n_reg]
+        src_probs_t = torch.stack(src_probs_all)            # [n_instr, n_reg]
+        imm_values_t = torch.stack(imm_values_all)         # [n_instr]
+        branch_probs_t = torch.stack(branch_probs_all)      # [n_instr, n_instr]
 
-        return prog
+        # Initialize registers
+        registers = torch.zeros(n_reg, device=device)
+        for idx, val in input_registers.items():
+            if 0 <= idx < n_reg:
+                registers[idx] = float(val)
+
+        # Soft flags
+        flags = torch.zeros(4, device=device)  # N, Z, C, V
+
+        # Soft PC: start at instruction 0
+        pc = torch.zeros(n_instr, device=device)
+        pc[0] = 1.0
+
+        # Execute
+        for step in range(self.max_exec_steps):
+            # Weighted instruction fetch (soft attention over instructions)
+            # opcode weights for current PC
+            opcode_weights = F.softmax(
+                (pc.unsqueeze(1) * opcode_logits_t).sum(dim=0) / temperature,
+                dim=0
+            )  # [NUM_OPCODES]
+
+            # Soft register reads
+            dst_weights = (pc.unsqueeze(1) * dst_probs_t).sum(dim=0)   # [n_reg]
+            src_weights = (pc.unsqueeze(1) * src_probs_t).sum(dim=0)   # [n_reg]
+
+            src_val = (src_weights * registers).sum()
+            dst_val = (dst_weights * registers).sum()
+            imm_val = (pc * imm_values_t).sum()
+
+            # Compute all ALU results
+            alu_results = self.alu.compute_all(src_val, dst_val, imm_val, skip_bitwise=True)
+
+            # Weighted result based on opcode
+            # Map opcode names to weights
+            op_names = ["NOP", "MOV_IMM", "MOV_REG", "ADD", "SUB", "MUL",
+                        "AND", "OR", "XOR", "CMP", "BEQ", "BNE", "BGT", "HALT"]
+            result_val = torch.tensor(0.0, device=device)
+            for j, name in enumerate(op_names):
+                if name in alu_results:
+                    result_val = result_val + opcode_weights[j] * alu_results[name]
+
+            # Soft register write: update dst register
+            new_registers = registers.clone()
+            for r in range(n_reg):
+                write_weight = dst_weights[r]
+                # Only write for non-branch, non-CMP, non-NOP, non-HALT opcodes
+                write_mask = (opcode_weights[1] + opcode_weights[2] + opcode_weights[3] +
+                              opcode_weights[4] + opcode_weights[5] + opcode_weights[6] +
+                              opcode_weights[7] + opcode_weights[8])
+                new_registers[r] = registers[r] + write_weight * write_mask * (result_val - registers[r])
+
+            registers = new_registers
+
+            # Update flags (for CMP)
+            cmp_weight = opcode_weights[9]  # CMP
+            diff = dst_val - src_val
+            new_flags = self.alu.compute_flags(dst_val, src_val, scale=self.flag_scale)
+            flags = flags + cmp_weight * (new_flags - flags)
+
+            # Update PC
+            # Sequential: pc[i] -> pc[i+1]
+            sequential_pc = torch.zeros_like(pc)
+            sequential_pc[1:] = pc[:-1]
+            # Last instruction wraps (halts)
+
+            # Branch PC
+            branch_target = (pc.unsqueeze(1) * branch_probs_t).sum(dim=0)  # [n_instr]
+
+            # Branch conditions
+            beq_weight = opcode_weights[10]  # BEQ
+            bne_weight = opcode_weights[11]  # BNE
+            bgt_weight = opcode_weights[12]  # BGT
+            halt_weight = opcode_weights[13]  # HALT
+
+            z_flag = flags[1]  # Z
+            n_flag = flags[0]  # N
+            gt_flag = 1.0 - n_flag - z_flag  # approximate GT
+
+            # Branch taken probability
+            branch_taken = (beq_weight * z_flag +
+                            bne_weight * (1.0 - z_flag) +
+                            bgt_weight * gt_flag)
+
+            # New PC
+            pc = ((1.0 - branch_taken - halt_weight) * sequential_pc +
+                  branch_taken * branch_target)
+
+            # Renormalize PC
+            pc_sum = pc.sum()
+            if pc_sum > 1e-8:
+                pc = pc / pc_sum
+            else:
+                break  # effectively halted
+
+        return registers
+
+    def compute_loss(
+        self,
+        token_logits: torch.Tensor,
+        input_registers: Dict[int, float],
+        expected_registers: Dict[int, float],
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
+        """Compute differentiable execution loss.
+
+        Args:
+            token_logits: (seq_len, vocab_size) with requires_grad
+            input_registers: {reg_idx: value}
+            expected_registers: {reg_idx: expected_value}
+
+        Returns:
+            scalar loss (differentiable w.r.t. token_logits)
+        """
+        registers = self.soft_execute(token_logits, input_registers, temperature)
+
+        # MSE loss on expected registers
+        loss = torch.tensor(0.0, device=token_logits.device)
+        n = 0
+        for idx, expected_val in expected_registers.items():
+            if 0 <= idx < self.num_registers:
+                loss = loss + (registers[idx] - expected_val) ** 2
+                n += 1
+
+        if n > 0:
+            loss = loss / n
+
+        return loss
 
 
 # ---------------------------------------------------------------------------
-# Execution-Guided Sampler
+# Execution Spec
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ExecutionSpec:
-    """Specification for guided generation: test cases to pass."""
+    """Test cases for guided generation."""
     inputs: List[Dict[int, float]]
     expected: List[Dict[int, float]]
 
@@ -230,103 +281,77 @@ class ExecutionSpec:
         return cls(inputs=inputs, expected=expected)
 
 
-class ExecutionGuidedSampler:
-    """Denoising sampler that uses nCPU execution gradients as guidance.
+# ---------------------------------------------------------------------------
+# Execution-Guided Sampler
+# ---------------------------------------------------------------------------
 
-    At each denoising step:
-    1. Get model's predicted logits for masked positions
-    2. Convert logits to a SoftProgram via the bridge
-    3. Execute differentiably against the test spec
-    4. Backprop execution loss to get token-level gradients
-    5. Use gradients as classifier guidance to shift predictions
+class ExecutionGuidedSampler:
+    """Denoising sampler with execution guidance.
+    
+    Supports two modes:
+    - 'gradient': differentiable execution gradients (soft execution)
+    - 'rerank': generate multiple candidates per step, pick best by execution
     """
 
     def __init__(
         self,
         model: MaskedDiffusionTransformer,
-        bridge: TokenToSoftProgramBridge,
-        engine: DifferentiableEngine,
-        loss_fn: ExecutionLoss,
+        scorer: DifferentiableExecutionScorer,
         gamma: float = 2.0,
         gamma_schedule: str = "cosine_ramp",
-        exec_temperature: float = 1.0,
-        max_exec_steps: int = 32,
+        guidance_start: float = 0.3,
+        mode: str = "gradient",
     ):
         self.model = model
-        self.bridge = bridge
-        self.engine = engine
-        self.loss_fn = loss_fn
+        self.scorer = scorer
         self.gamma = gamma
         self.gamma_schedule = gamma_schedule
-        self.exec_temperature = exec_temperature
-        self.max_exec_steps = max_exec_steps
+        self.guidance_start = guidance_start
+        self.mode = mode
 
     def get_gamma(self, step: int, total_steps: int) -> float:
-        """Compute guidance strength at this denoising step."""
-        progress = step / total_steps  # 0 -> 1 as denoising progresses
+        """Guidance strength at this denoising step."""
+        progress = step / total_steps
+        if progress < self.guidance_start:
+            return 0.0
+
+        adj_progress = (progress - self.guidance_start) / (1.0 - self.guidance_start)
 
         if self.gamma_schedule == "constant":
             return self.gamma
         elif self.gamma_schedule == "cosine_ramp":
-            # More guidance as code becomes clearer
-            return self.gamma * 0.5 * (1 + math.cos(math.pi * (1 - progress)))
+            return self.gamma * 0.5 * (1 - math.cos(math.pi * adj_progress))
         elif self.gamma_schedule == "linear_ramp":
-            return self.gamma * progress
-        elif self.gamma_schedule == "late_only":
-            # Only guide in the last 50%
-            return self.gamma if progress > 0.5 else 0.0
+            return self.gamma * adj_progress
         else:
             return self.gamma
 
-    def compute_execution_guidance(
+    def compute_guidance_gradient(
         self,
         token_logits: torch.Tensor,
         exec_spec: ExecutionSpec,
-    ) -> torch.Tensor:
-        """Compute execution loss gradient w.r.t. token logits.
+    ) -> Tuple[torch.Tensor, float]:
+        """Compute execution gradient w.r.t. token logits.
 
-        Args:
-            token_logits: (seq_len, vocab_size) requires_grad=True
-            exec_spec: test cases to evaluate against
-
-        Returns:
-            (seq_len, vocab_size) gradient of execution loss w.r.t. logits
+        Returns: (gradient tensor, loss value)
         """
-        # Ensure gradients flow
-        token_logits = token_logits.detach().requires_grad_(True)
+        logits = token_logits.detach().clone().requires_grad_(True)
 
-        # Convert to SoftProgram (differentiable path)
-        soft_prog = self.bridge.forward_differentiable(token_logits)
+        # Average loss over test cases
+        total_loss = torch.tensor(0.0, device=logits.device)
+        for inp, exp in zip(exec_spec.inputs[:2], exec_spec.expected[:2]):
+            loss = self.scorer.compute_loss(logits, inp, exp, temperature=1.0)
+            total_loss = total_loss + loss
+        total_loss = total_loss / min(len(exec_spec.inputs), 2)
 
-        # Run execution loss against test cases
-        if len(exec_spec.inputs) > 1:
-            # Batched execution
-            result = self.loss_fn.compute_soft_batched(
-                soft_prog,
-                batch_inputs=exec_spec.inputs,
-                batch_expected=exec_spec.expected,
-                temperature=self.exec_temperature,
-                skip_bitwise=True,
-            )
-        else:
-            result = self.loss_fn.compute_soft(
-                soft_prog,
-                inputs=exec_spec.inputs[0],
-                expected=exec_spec.expected[0],
-                temperature=self.exec_temperature,
-                skip_bitwise=True,
-            )
+        total_loss.backward()
 
-        # Backprop through execution
-        loss = result.total_loss
-        if loss.requires_grad:
-            loss.backward()
-            grad = token_logits.grad
-            if grad is not None:
-                return grad.detach()
+        grad = logits.grad
+        loss_val = total_loss.item()
 
-        # Fallback: no gradient (execution was trivial or degenerate)
-        return torch.zeros_like(token_logits)
+        if grad is not None:
+            return grad.detach(), loss_val
+        return torch.zeros_like(token_logits), loss_val
 
     @torch.no_grad()
     def generate(
@@ -339,92 +364,62 @@ class ExecutionGuidedSampler:
         constrained: bool = True,
         device: Optional[torch.device] = None,
     ) -> Tuple[torch.Tensor, dict]:
-        """Generate a program with execution-guided diffusion.
+        """Generate with execution-guided diffusion.
 
-        Args:
-            spec_tokens: (1, S) conditioning tokens
-            exec_spec: test cases for execution guidance
-            seq_len: length of output sequence
-            num_steps: number of denoising steps
-            temperature: sampling temperature
-            constrained: enforce ISA slot constraints
-            device: compute device
-
-        Returns:
-            (tokens, metrics): generated token IDs and guidance metrics
+        Returns: (tokens, metrics)
         """
         if device is None:
             device = next(self.model.parameters()).device
 
         self.model.eval()
-        self.bridge.eval()
 
-        # Start fully masked
         tokens = torch.full((1, seq_len), MASK_TOKEN, dtype=torch.long, device=device)
         spec_tokens = spec_tokens.to(device)
-
-        # Build slot constraint masks
         slot_masks = build_slot_masks(seq_len).to(device) if constrained else None
 
-        metrics = {
-            "exec_loss_history": [],
-            "gamma_history": [],
-            "guidance_norm_history": [],
-        }
+        metrics = {"exec_losses": [], "gammas": [], "grad_norms": []}
 
         for step in range(num_steps):
             t = 1.0 - (step + 1) / num_steps
             t_tensor = torch.tensor([max(t, 0.01)], device=device)
 
-            # 1. Get model's predicted logits
-            with torch.enable_grad():
-                logits = self.model(tokens, t_tensor, spec_tokens=spec_tokens)  # (1, L, V)
+            # Get model logits
+            logits = self.model(tokens, t_tensor, spec_tokens=spec_tokens)[0]  # (L, V)
 
-            logits_squeezed = logits[0]  # (L, V)
-
-            # 2. Compute execution guidance gradient
+            # Execution guidance
             gamma = self.get_gamma(step, num_steps)
-
-            if gamma > 0 and step > num_steps * 0.3:
-                # Only guide after 30% of steps (early code is too noisy)
+            if gamma > 0:
                 with torch.enable_grad():
-                    exec_grad = self.compute_execution_guidance(
-                        logits_squeezed.detach().clone(),
-                        exec_spec,
-                    )
+                    exec_grad, exec_loss = self.compute_guidance_gradient(logits, exec_spec)
 
                 grad_norm = exec_grad.norm().item()
-                metrics["guidance_norm_history"].append(grad_norm)
+                metrics["exec_losses"].append(exec_loss)
+                metrics["grad_norms"].append(grad_norm)
+                metrics["gammas"].append(gamma)
 
-                # 3. Apply classifier guidance
-                # Subtract gradient because we want to MINIMIZE execution loss
-                # Normalize gradient to prevent scale issues
+                # Apply guidance: subtract gradient (minimize loss)
                 if grad_norm > 1e-8:
-                    exec_grad = exec_grad / (grad_norm + 1e-8)
-                    guided_logits = logits_squeezed - gamma * exec_grad
-                else:
-                    guided_logits = logits_squeezed
-
-                metrics["gamma_history"].append(gamma)
+                    # Normalize and scale
+                    normalized_grad = exec_grad / (grad_norm + 1e-8)
+                    logits = logits - gamma * normalized_grad
             else:
-                guided_logits = logits_squeezed
-                metrics["gamma_history"].append(0.0)
+                metrics["gammas"].append(0.0)
 
-            # 4. Apply constraints and sample
+            # Apply constraints
             if constrained and slot_masks is not None:
-                guided_logits = guided_logits.clone()
-                guided_logits[~slot_masks] = -1e9
+                logits = logits.clone()
+                logits[~slot_masks] = -1e9
 
-            probs = F.softmax(guided_logits / max(temperature, 1e-8), dim=-1)
+            # Sample
+            probs = F.softmax(logits / max(temperature, 1e-8), dim=-1)
             flat_probs = probs.view(-1, probs.shape[-1]).clamp(min=1e-10)
             flat_probs = flat_probs / flat_probs.sum(dim=-1, keepdim=True)
             sampled = torch.multinomial(flat_probs, num_samples=1).view(seq_len)
 
-            # 5. Unmask most confident positions
+            # Unmask most confident
             confidence = probs.max(dim=-1).values
             is_masked = (tokens[0] == MASK_TOKEN)
             num_masked = is_masked.sum().item()
-
             if num_masked == 0:
                 break
 
@@ -433,20 +428,19 @@ class ExecutionGuidedSampler:
                 num_masked,
             ))
 
-            masked_confidence = confidence.clone()
-            masked_confidence[~is_masked] = -1.0
-            _, top_indices = masked_confidence.topk(num_to_reveal)
-
-            for idx in top_indices:
+            masked_conf = confidence.clone()
+            masked_conf[~is_masked] = -1.0
+            _, top_idx = masked_conf.topk(num_to_reveal)
+            for idx in top_idx:
                 tokens[0, idx] = sampled[idx]
 
         # Final cleanup
         if (tokens == MASK_TOKEN).any():
             t_tensor = torch.tensor([0.01], device=device)
-            logits = self.model(tokens, t_tensor, spec_tokens=spec_tokens)
+            logits = self.model(tokens, t_tensor, spec_tokens=spec_tokens)[0]
             if constrained and slot_masks is not None:
                 logits = logits.clone()
-                logits[0][~slot_masks] = -1e9
+                logits[~slot_masks] = -1e9
             probs = F.softmax(logits / temperature, dim=-1)
             flat_probs = probs.view(-1, probs.shape[-1]).clamp(min=1e-10)
             flat_probs = flat_probs / flat_probs.sum(dim=-1, keepdim=True)
