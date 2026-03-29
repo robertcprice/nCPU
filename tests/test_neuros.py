@@ -741,7 +741,7 @@ class TestNeuralFilesystem:
 
     def test_large_file(self, fs):
         # Write more than one block (4096 bytes)
-        data = torch.arange(8000, dtype=torch.uint8, device=fs.device) % 256
+        data = (torch.arange(8000, device=fs.device) % 256).to(torch.uint8)
         fs.write_file("/large.bin", data)
         result = fs.read_file("/large.bin")
         assert result is not None
