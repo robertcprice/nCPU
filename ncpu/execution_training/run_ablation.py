@@ -98,6 +98,7 @@ def run_ablation(
     conditions: Optional[List[Dict]] = None,
     models_dir: Optional[str] = None,
     synthetic_only: bool = False,
+    grad_accum_steps: int = 1,
 ) -> AblationReport:
     """Run full ablation study.
 
@@ -189,6 +190,7 @@ def run_ablation(
             gen_temperature=gen_temperature,
             models_dir=models_dir,
             device=device,
+            grad_accum_steps=grad_accum_steps,
         )
         report.model_results.append(model_result)
 
@@ -214,6 +216,7 @@ def _run_model_ablation(
     gen_temperature: float,
     models_dir: Optional[str],
     device: str,
+    grad_accum_steps: int = 1,
 ) -> AblationModelResult:
     """Run ablation for a single model across all conditions."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -430,10 +433,13 @@ def _run_model_ablation(
             if n_exec > 0 and exec_loss.requires_grad:
                 total_loss = total_loss + exec_weight * exec_loss
 
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            optimizer.zero_grad()
+            scaled_loss = total_loss / grad_accum_steps
+            scaled_loss.backward()
+
+            if (step + 1) % grad_accum_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                optimizer.zero_grad()
 
             step += 1
             cond.train_losses.append(total_loss.item())
@@ -751,6 +757,8 @@ def main():
                         help="Training dataset size")
     parser.add_argument("--batch-size", type=int, default=4,
                         help="Training batch size")
+    parser.add_argument("--grad-accum-steps", type=int, default=1,
+                        help="Gradient accumulation steps")
     parser.add_argument("--lr", type=float, default=1e-3,
                         help="Learning rate")
     parser.add_argument("--max-value", type=int, default=100)
@@ -813,6 +821,7 @@ def main():
         conditions=conditions,
         models_dir=args.models_dir,
         synthetic_only=args.synthetic_only,
+        grad_accum_steps=args.grad_accum_steps,
     )
 
 

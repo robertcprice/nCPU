@@ -442,7 +442,7 @@ _hard = [
       _tc({"a": 5, "b": 5}, 75), _tc({"a": 0, "b": 10}, 100)], "variable_tracking"),
     ("h23", "Compute 2*a*a + 3*b*b + a*b",
      "result = 2 * a * a + 3 * b * b + a * b", ["a", "b"],
-     [_tc({"a": 1, "b": 1}, 6), _tc({"a": 2, "b": 3}, 41), _tc({"a": 3, "b": 2}, 42),
+     [_tc({"a": 1, "b": 1}, 6), _tc({"a": 2, "b": 3}, 41), _tc({"a": 3, "b": 2}, 36),
       _tc({"a": 0, "b": 5}, 75), _tc({"a": 4, "b": 0}, 32)], "multi_op"),
     ("h24", "3^4 via loop",
      "result = 1\nfor i in range(4):\n    result = result * 3", [],
