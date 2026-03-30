@@ -376,7 +376,14 @@ def search_program(
             if cur < 1e-6:
                 break
 
-    # Rename function
+    # --- Discrete verification + local search ---
+    # The soft program may have found the right continuous solution
+    # but argmax discretization can pick the wrong neighbor.
+    # Try small perturbations of the discrete choices to find a better discrete program.
+    best_code, best_loss = _discrete_refinement(
+        prog, arg_names, examples, best_code, best_loss, function_name
+    )
+
     best_code = best_code.replace("fn program(", f"fn {function_name}(")
     success = best_loss < success_threshold
 
@@ -387,3 +394,219 @@ def search_program(
         steps_taken=best_steps,
         metadata={"num_restarts": num_restarts, "num_slots": num_slots},
     )
+
+
+def _eval_discrete(prog: SoftMogProgram, arg_names: Sequence[str],
+                    examples: Sequence[tuple[tuple[float, ...], float]]) -> tuple[str, float]:
+    """Evaluate the current discrete (argmax) program on examples."""
+    code = prog.discretize(arg_names)
+    # Quick Python-side eval of the discrete program
+    loss = _eval_code_on_examples(code, arg_names, examples)
+    return code, loss
+
+
+def _eval_code_on_examples(code: str, arg_names: Sequence[str],
+                           examples: Sequence[tuple[tuple[float, ...], float]]) -> float:
+    """Evaluate discretized Mog code on examples using the interpreter."""
+    try:
+        from egdc.mog_lang import interpret
+
+        total_loss = 0.0
+        for args, target in examples:
+            # Build a main that calls the function and prints the result
+            arg_strs = ", ".join(str(int(a)) for a in args)
+            fn_name_match = code.split("fn ")[1].split("(")[0] if "fn " in code else "program"
+            test_code = code + f"\nfn main() -> i64 {{ println_i64({fn_name_match}({arg_strs})); return 0; }}"
+            result = interpret(test_code)
+            if result.success and result.output.strip():
+                try:
+                    pred = float(result.output.strip().split("\n")[0])
+                    total_loss += (pred - target) ** 2
+                except ValueError:
+                    total_loss += 10000.0
+            else:
+                total_loss += 10000.0
+        return total_loss / max(len(examples), 1)
+    except Exception:
+        return float("inf")
+
+
+def _discrete_refinement(
+    prog: SoftMogProgram,
+    arg_names: Sequence[str],
+    examples: Sequence[tuple[tuple[float, ...], float]],
+    current_best_code: str,
+    current_best_loss: float,
+    function_name: str,
+    max_tweaks: int = 50,
+) -> tuple[str, float]:
+    """Try small perturbations of the discrete program to close the soft-to-hard gap."""
+    import copy
+
+    best_code = current_best_code
+    best_loss = current_best_loss
+
+    # First: evaluate the current argmax discretization with the interpreter
+    code, loss = _eval_discrete(prog, arg_names, examples)
+    code = code.replace("fn program(", f"fn {function_name}(")
+    if loss < best_loss:
+        best_code = code
+        best_loss = loss
+
+    if best_loss < 1e-6:
+        return best_code, best_loss
+
+    # Try flipping individual discrete choices
+    param_names_to_try = [
+        "stmt_logits", "dst_logits", "src1_logits", "src2_logits",
+        "op_logits", "return_src_logits",
+    ]
+
+    state = prog.state_dict()
+    for pname in param_names_to_try:
+        if pname not in state:
+            continue
+        tensor = state[pname]
+        for slot in range(tensor.shape[0]):
+            current_choice = int(torch.argmax(tensor[slot]).item())
+            for alt in range(tensor.shape[1]):
+                if alt == current_choice:
+                    continue
+                # Temporarily boost this alternative
+                saved = tensor[slot].clone()
+                tensor[slot] = torch.full_like(tensor[slot], -10.0)
+                tensor[slot][alt] = 10.0
+                prog.load_state_dict(state)
+
+                code, loss = _eval_discrete(prog, arg_names, examples)
+                code = code.replace("fn program(", f"fn {function_name}(")
+                if loss < best_loss:
+                    best_code = code
+                    best_loss = loss
+                    if best_loss < 1e-6:
+                        # Restore and return early
+                        tensor[slot] = saved
+                        prog.load_state_dict(state)
+                        return best_code, best_loss
+
+                # Restore
+                tensor[slot] = saved
+
+    prog.load_state_dict(state)
+
+    if best_loss < 1e-6:
+        return best_code, best_loss
+
+    if best_loss < 1e-6:
+        return best_code, best_loss
+
+    # --- Phase 1b: Combinatorial search on the first compute slot ---
+    # The most common failure: soft optimization finds the right neighborhood
+    # but argmax picks wrong src/op/dst/return combinations.
+    # Brute-force the first compute slot + last return slot.
+    stmt_t = state["stmt_logits"]
+    src1_t = state["src1_logits"]
+    src2_t = state["src2_logits"]
+    op_t = state["op_logits"]
+    dst_t = state["dst_logits"]
+    ret_t = state["return_src_logits"]
+
+    # Nop out all middle slots (keep slot 0 as compute, last as return)
+    saved_stmts = [stmt_t[i].clone() for i in range(prog.num_slots)]
+    for i in range(1, prog.num_slots - 1):
+        stmt_t[i] = torch.full_like(stmt_t[i], -10.0)
+        stmt_t[i][0] = 10.0  # nop
+    # Force slot 0 = assign_binop, last = return_var
+    stmt_t[0] = torch.full_like(stmt_t[0], -10.0)
+    stmt_t[0][1] = 10.0
+    stmt_t[-1] = torch.full_like(stmt_t[-1], -10.0)
+    stmt_t[-1][-1] = 10.0  # return_var
+
+    saved_s1 = src1_t[0].clone()
+    saved_s2 = src2_t[0].clone()
+    saved_op = op_t[0].clone()
+    saved_dst = dst_t[0].clone()
+    saved_ret = ret_t[-1].clone()
+
+    ns = prog.num_sources
+    for s1 in range(ns):
+        for s2 in range(ns):
+            for op in range(len(OPS)):
+                for dst in range(prog.num_vars):
+                    ret_idx = prog.num_args + dst
+                    # Set choices
+                    src1_t[0] = torch.full_like(src1_t[0], -10.0); src1_t[0][s1] = 10.0
+                    src2_t[0] = torch.full_like(src2_t[0], -10.0); src2_t[0][s2] = 10.0
+                    op_t[0] = torch.full_like(op_t[0], -10.0); op_t[0][op] = 10.0
+                    dst_t[0] = torch.full_like(dst_t[0], -10.0); dst_t[0][dst] = 10.0
+                    ret_t[-1] = torch.full_like(ret_t[-1], -10.0); ret_t[-1][ret_idx] = 10.0
+                    prog.load_state_dict(state)
+                    code, loss = _eval_discrete(prog, arg_names, examples)
+                    code = code.replace("fn program(", f"fn {function_name}(")
+                    if loss < best_loss:
+                        best_code = code
+                        best_loss = loss
+                        if best_loss < 1e-6:
+                            break
+                if best_loss < 1e-6:
+                    break
+            if best_loss < 1e-6:
+                break
+        if best_loss < 1e-6:
+            break
+
+    # Restore
+    for i in range(prog.num_slots):
+        stmt_t[i] = saved_stmts[i]
+    src1_t[0] = saved_s1; src2_t[0] = saved_s2; op_t[0] = saved_op
+    dst_t[0] = saved_dst; ret_t[-1] = saved_ret
+    prog.load_state_dict(state)
+
+    if best_loss < 1e-6:
+        return best_code, best_loss
+
+    # --- Phase 2: Try flipping PAIRS of choices on the same slot ---
+    # This handles cases where the soft solution requires two coordinated changes.
+    critical_pairs = [
+        ("src1_logits", "op_logits"),
+        ("src1_logits", "src2_logits"),
+        ("src2_logits", "op_logits"),
+        ("dst_logits", "return_src_logits"),
+    ]
+    for pname1, pname2 in critical_pairs:
+        if pname1 not in state or pname2 not in state:
+            continue
+        t1, t2 = state[pname1], state[pname2]
+        for slot in range(min(t1.shape[0], t2.shape[0])):
+            cur1 = int(torch.argmax(t1[slot]).item())
+            cur2 = int(torch.argmax(t2[slot]).item())
+            for alt1 in range(t1.shape[1]):
+                if alt1 == cur1:
+                    continue
+                for alt2 in range(t2.shape[1]):
+                    if alt2 == cur2:
+                        continue
+                    saved1 = t1[slot].clone()
+                    saved2 = t2[slot].clone()
+                    t1[slot] = torch.full_like(t1[slot], -10.0)
+                    t1[slot][alt1] = 10.0
+                    t2[slot] = torch.full_like(t2[slot], -10.0)
+                    t2[slot][alt2] = 10.0
+                    prog.load_state_dict(state)
+
+                    code, loss = _eval_discrete(prog, arg_names, examples)
+                    code = code.replace("fn program(", f"fn {function_name}(")
+                    if loss < best_loss:
+                        best_code = code
+                        best_loss = loss
+                        if best_loss < 1e-6:
+                            t1[slot] = saved1
+                            t2[slot] = saved2
+                            prog.load_state_dict(state)
+                            return best_code, best_loss
+
+                    t1[slot] = saved1
+                    t2[slot] = saved2
+
+    prog.load_state_dict(state)
+    return best_code, best_loss
