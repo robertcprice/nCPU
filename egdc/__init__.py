@@ -28,6 +28,7 @@ from egdc.mog_direct_synth import synthesize_expression_program, DirectSynthResu
 from egdc.mog_direct_router import solve_problem_direct, evaluate_direct_solver
 from egdc.mog_pathways import PathwayMemory
 from egdc.mog_adaptive_router import AdaptiveMogRouter
+from egdc.mog_orchestrator import MogOrchestrator
 
 __all__ = [
     "NCPUTokenizer",
@@ -70,4 +71,5 @@ __all__ = [
     "evaluate_direct_solver",
     "PathwayMemory",
     "AdaptiveMogRouter",
+    "MogOrchestrator",
 ]
