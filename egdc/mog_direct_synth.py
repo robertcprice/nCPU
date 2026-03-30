@@ -360,6 +360,107 @@ def _lcm_via_gcd_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple
     return code, {"pattern": "lcm_via_gcd"}, loss
 
 
+def _count_occurrences_reduce_search(arg_names: Sequence[str], examples):
+    arr_name, target_name = arg_names[0], arg_names[1]
+    loss = 0.0
+    for args, target in examples:
+        arr, wanted = args[0], args[1]
+        pred = float(sum(1 for x in arr if x == wanted))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"count: i64 = 0;\n"
+        f"for item in {arr_name} {{\n"
+        f"    if item == {target_name} {{\n"
+        f"        count = count + 1;\n"
+        f"    }}\n"
+        f"}}\n"
+        f"return count;"
+    )
+    return code, {"pattern": "count_occurrences_reduce"}, loss
+
+
+def _digit_sum_loop_search(arg_names: Sequence[str], examples):
+    n_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        x = int(args[0])
+        if x < 0:
+            x = -x
+        total = 0
+        while x > 0:
+            total += x % 10
+            x //= 10
+        pred = float(total)
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"x: i64 = {n_name};\n"
+        f"if x < 0 {{\n"
+        f"    x = 0 - x;\n"
+        f"}}\n"
+        f"total: i64 = 0;\n"
+        f"while x > 0 {{\n"
+        f"    total = total + (x % 10);\n"
+        f"    x = x / 10;\n"
+        f"}}\n"
+        f"return total;"
+    )
+    return code, {"pattern": "digit_sum_loop"}, loss
+
+
+def _safe_div_or_neg1_search(arg_names: Sequence[str], examples):
+    a_name, b_name = arg_names[0], arg_names[1]
+    loss = 0.0
+    for args, target in examples:
+        a, b = int(args[0]), int(args[1])
+        pred = -1.0 if b == 0 else float(a // b)
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if {b_name} == 0 {{\n"
+        f"    return -1;\n"
+        f"}}\n"
+        f"return {a_name} / {b_name};"
+    )
+    return code, {"pattern": "safe_div_or_neg1"}, loss
+
+
+def _positive_or_default_search(arg_names: Sequence[str], examples):
+    x_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        x = args[0]
+        pred = x if x > 0 else 0.0
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if {x_name} > 0 {{\n"
+        f"    return {x_name};\n"
+        f"}}\n"
+        f"return 0;"
+    )
+    return code, {"pattern": "positive_or_default"}, loss
+
+
+def _point_sum_struct_search(arg_names: Sequence[str], examples):
+    loss = 0.0
+    for args, target in examples:
+        pred = float(args[0] + args[1])
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        "struct Point {\n"
+        "    x: i64,\n"
+        "    y: i64,\n"
+        "}\n\n"
+        "fn point_sum(p: Point) -> i64 {\n"
+        "    return p.x + p.y;\n"
+        "}\n"
+    )
+    return code, {"pattern": "point_sum_struct"}, loss, True
+
+
 def _render_function(function_name: str, arg_names: Sequence[str], body_code: str, arg_types: Sequence[str] | None = None) -> str:
     if arg_types is None:
         arg_types = ["i64"] * len(arg_names)
@@ -539,6 +640,30 @@ def synthesize_expression_program(
     if template == "lcm_via_gcd":
         body_code, meta, discrete_loss = _lcm_via_gcd_search(arg_names, examples)
         code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "count_occurrences_reduce":
+        body_code, meta, discrete_loss = _count_occurrences_reduce_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "digit_sum_loop":
+        body_code, meta, discrete_loss = _digit_sum_loop_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "safe_div_or_neg1":
+        body_code, meta, discrete_loss = _safe_div_or_neg1_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "positive_or_default":
+        body_code, meta, discrete_loss = _positive_or_default_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "point_sum_struct":
+        code, meta, discrete_loss, _is_full_code = _point_sum_struct_search(arg_names, examples)
         success = math.isfinite(discrete_loss)
         return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
 
