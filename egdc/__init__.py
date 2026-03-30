@@ -26,6 +26,8 @@ from egdc.mog_completion_dataset import MogBenchmarkCompletionDataset
 from egdc.mog_supervised_dataset import MogBenchmarkSupervisedDataset
 from egdc.mog_direct_synth import synthesize_expression_program, DirectSynthResult
 from egdc.mog_direct_router import solve_problem_direct, evaluate_direct_solver
+from egdc.mog_pathways import PathwayMemory
+from egdc.mog_adaptive_router import AdaptiveMogRouter
 
 __all__ = [
     "NCPUTokenizer",
@@ -66,4 +68,6 @@ __all__ = [
     "DirectSynthResult",
     "solve_problem_direct",
     "evaluate_direct_solver",
+    "PathwayMemory",
+    "AdaptiveMogRouter",
 ]
