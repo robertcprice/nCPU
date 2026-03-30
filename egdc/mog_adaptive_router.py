@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from egdc.mog_benchmark import MogBenchmarkProblem, evaluate_solution, evaluate_solution_with_compiler
-from egdc.mog_direct_router import solve_problem_direct
+from egdc.mog_direct_router import solve_problem_direct, _problem_to_template
 from egdc.mog_pathways import PathwayMemory
 
 
@@ -35,6 +35,34 @@ class AdaptiveMogRouter:
     def __init__(self, memory_root: str | Path = "egdc/pathway_memory"):
         self.memory = PathwayMemory(memory_root)
 
+    def suggest_families(self, problem: MogBenchmarkProblem, top_k: int = 5) -> list[dict[str, Any]]:
+        hits = self.memory.retrieve_similar(problem.description, problem.signature, top_k=top_k)
+        seen = set()
+        suggestions = []
+        for h in hits:
+            fam = h["family"]
+            if fam in seen:
+                continue
+            seen.add(fam)
+            suggestions.append(h)
+        # Ensure the hand-mapped family, if any, is present.
+        try:
+            family, _arg_names, _arg_types, _examples = _problem_to_template(problem)
+            if family not in seen:
+                suggestions.append({
+                    "problem_name": problem.name,
+                    "family": family,
+                    "code": None,
+                    "metadata": {},
+                    "similarity": 0.0,
+                    "family_score": self.memory.family_score(family),
+                    "score": self.memory.family_score(family),
+                })
+        except Exception:
+            pass
+        suggestions.sort(key=lambda x: x["score"], reverse=True)
+        return suggestions[:top_k]
+
     def solve(self, problem: MogBenchmarkProblem, use_real_compiler: bool = True) -> AdaptiveSolveResult:
         synth = solve_problem_direct(problem)
         if synth is None:
@@ -47,11 +75,24 @@ class AdaptiveMogRouter:
         comp = evaluate_solution_with_compiler(problem, synth.code) if use_real_compiler else None
         ok = interp.passed and (comp.passed if comp is not None else True)
 
+        common_meta = {
+            "loss": synth.loss,
+            "description": problem.description,
+            "signature": problem.signature,
+            "category": problem.category,
+        }
         if ok:
-            self.memory.record_success(problem.name, family, synth.code, {"loss": synth.loss})
+            self.memory.record_success(problem.name, family, synth.code, common_meta)
         else:
             err = (comp.error if comp is not None else None) or interp.error or "unknown error"
-            self.memory.record_failure(problem.name, family, "execution", err, {"code": synth.code, "loss": synth.loss})
+            anti_pattern = None
+            if "return return" in (synth.code or ""):
+                anti_pattern = "double_return"
+            elif "empty separator" in err:
+                anti_pattern = "python_split_empty"
+            fail_meta = dict(common_meta)
+            fail_meta.update({"code": synth.code, "anti_pattern": anti_pattern})
+            self.memory.record_failure(problem.name, family, "execution", err, fail_meta)
         self.memory.save()
 
         return AdaptiveSolveResult(

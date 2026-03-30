@@ -13,6 +13,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 import json
 import time
+import re
 from typing import Any
 
 
@@ -87,3 +88,38 @@ class PathwayMemory:
 
     def known_bad_patterns(self, family: str) -> list[str]:
         return [f.error_message for f in self.failures if f.family == family][-20:]
+
+    def anti_patterns(self, family: str) -> list[str]:
+        pats: list[str] = []
+        for f in self.failures:
+            if f.family != family:
+                continue
+            ap = f.metadata.get("anti_pattern")
+            if ap and ap not in pats:
+                pats.append(ap)
+        return pats
+
+    def _tokenize_text(self, text: str) -> set[str]:
+        return set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", text.lower()))
+
+    def retrieve_similar(self, description: str, signature: str, top_k: int = 5) -> list[dict[str, Any]]:
+        query = self._tokenize_text(description + "\n" + signature)
+        scored = []
+        for s in self.successes:
+            basis = str(s.metadata.get("description", "")) + "\n" + str(s.metadata.get("signature", ""))
+            toks = self._tokenize_text(basis)
+            if not toks:
+                sim = 0.0
+            else:
+                sim = len(query & toks) / len(query | toks)
+            scored.append({
+                "problem_name": s.problem_name,
+                "family": s.family,
+                "code": s.code,
+                "metadata": s.metadata,
+                "similarity": sim,
+                "family_score": self.family_score(s.family),
+                "score": sim * 0.7 + self.family_score(s.family) * 0.3,
+            })
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:top_k]
