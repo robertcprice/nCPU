@@ -27,11 +27,40 @@ from egdc.mog_dataset import MogDataset
 from egdc.mog_eval import evaluate_mog_program, evaluate_batch
 
 
-def get_device() -> torch.device:
-    """Select best available device: CUDA > MPS > CPU."""
+def get_device(preferred: str = "auto") -> torch.device:
+    """Select execution device.
+
+    preferred:
+      - 'auto': CUDA > verified MPS > CPU
+      - 'cpu' / 'cuda' / 'mps': explicit request (falls back to cpu on failure)
+
+    Some macOS environments report MPS as available but fail on first real model
+    operation. We use a stronger smoke test than a raw tensor allocation.
+    """
+    preferred = preferred.lower()
+
+    def _verify_mps() -> bool:
+        if not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+            return False
+        try:
+            x = torch.randn(2, 8, device="mps")
+            layer = torch.nn.Linear(8, 4).to("mps")
+            y = layer(x)
+            _ = y.sum().item()
+            return True
+        except Exception:
+            return False
+
+    if preferred == "cpu":
+        return torch.device("cpu")
+    if preferred == "cuda":
+        return torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    if preferred == "mps":
+        return torch.device("mps") if _verify_mps() else torch.device("cpu")
+
     if torch.cuda.is_available():
         return torch.device("cuda")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    if _verify_mps():
         return torch.device("mps")
     return torch.device("cpu")
 
@@ -387,6 +416,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint to resume from")
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto",
+                        help="Execution device preference")
     args = parser.parse_args()
 
     # Model config
@@ -405,7 +436,7 @@ def main() -> None:
     print(f"Synthetic dataset: {args.num_samples} programs")
 
     model = MogMaskedDiffusion(config)
-    device = get_device()
+    device = get_device(args.device)
 
     # Resume from checkpoint
     if args.resume:
