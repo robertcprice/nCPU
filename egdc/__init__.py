@@ -16,6 +16,8 @@ from egdc.mog_tokenizer import MogCodeTokenizer
 from egdc.mog_dataset import MogDataset, MogProgramGenerator
 from egdc.mog_eval import evaluate_mog_program, evaluate_batch
 from egdc.mog_model import MogMaskedDiffusion, MogDiffusionConfig
+from egdc.mog_execute import compile_mog, execute_mog, check_mog_output, evaluate_mog_programs
+from egdc.mog_benchmark import get_benchmark, evaluate_solution, evaluate_solutions_batch
 
 __all__ = [
     "NCPUTokenizer",
@@ -35,4 +37,11 @@ __all__ = [
     "evaluate_batch",
     "MogMaskedDiffusion",
     "MogDiffusionConfig",
+    "compile_mog",
+    "execute_mog",
+    "check_mog_output",
+    "evaluate_mog_programs",
+    "get_benchmark",
+    "evaluate_solution",
+    "evaluate_solutions_batch",
 ]

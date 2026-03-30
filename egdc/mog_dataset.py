@@ -1,787 +1,470 @@
-"""PyTorch Dataset for EGDC diffusion training on Mog programs.
+"""Safe Mog dataset generator for EGDC.
 
-Provides (masked_tokens, mask_positions, original_tokens, spec_tokens, timestep)
-tuples for training a discrete diffusion model on Mog source code.
+This version is constrained to the subset confirmed to compile and run with the
+real Mog compiler (mogc) on macOS/arm64. Every generated sample includes:
 
-Specs are encoded by tokenizing the function signature or first comment line.
+- compiler-safe Mog source code
+- a natural-language spec / function signature string
+- a known expected stdout string produced by main()
+
+The dataset itself still returns the 5-tuple expected by the diffusion trainer:
+    masked_tokens, mask_positions, original_tokens, spec_tokens, timestep
+
+Expected outputs are stored alongside each sample for execution-based eval.
 """
 
 from __future__ import annotations
+
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Tuple
 
 import torch
 from torch.utils.data import Dataset
 
 from egdc.mog_tokenizer import (
-    MogCodeTokenizer, MASK_TOKEN, PAD_TOKEN, BOS_TOKEN, EOS_TOKEN, VOCAB_SIZE,
+    MogCodeTokenizer,
+    MASK_TOKEN,
+    PAD_TOKEN,
+    BOS_TOKEN,
+    EOS_TOKEN,
 )
 
-
-# Spec encoding constants
 SPEC_SEQ_LEN = 64
 
 
-# ---------------------------------------------------------------------------
-# Mog Program Generator
-# ---------------------------------------------------------------------------
-
-# Name pools for variation
-_FUNC_NAMES = [
-    "compute", "process", "transform", "calculate", "evaluate", "parse",
-    "validate", "convert", "encode", "decode", "filter", "accumulate",
-    "merge", "split", "format", "handle", "dispatch", "resolve", "build",
-    "create", "update", "delete", "fetch", "store", "compare", "sort",
-    "search", "collect", "reduce", "expand", "compress", "hash_val",
-    "normalize", "denormalize", "clamp_val", "interpolate", "quantize",
-]
-
-_VAR_NAMES = [
-    "x", "y", "z", "val", "acc", "tmp", "result", "count", "sum", "total",
-    "idx", "item", "elem", "data", "buf", "len", "pos", "cur", "prev", "next_val",
-]
-
-_STRUCT_NAMES = [
-    "Point", "Vector", "Config", "Entry", "Record", "Node", "Pair",
-    "State", "Context", "Metadata", "Header", "Payload", "Frame",
-    "Token", "Symbol", "Range", "Span", "Slot", "Block", "Chunk",
-]
-
-_INT_TYPES = ["int", "i32", "u32", "u64"]
-_FLOAT_TYPES = ["float", "f32", "f16", "bf16"]
-_ALL_TYPES = _INT_TYPES + _FLOAT_TYPES + ["bool", "string"]
-
-_CAP_NAMES = ["fs", "net", "log", "db", "http", "crypto", "time", "env"]
-_IMPORT_NAMES = ["agent", "math", "json", "io", "fmt", "collections"]
+@dataclass
+class MogSample:
+    code: str
+    spec: str
+    expected_output: str
+    name: str
 
 
 class MogProgramGenerator:
-    """Generates diverse synthetic Mog programs for training."""
+    """Generates compiler-safe Mog programs with known outputs.
+
+    Important: this generator intentionally stays inside the subset confirmed by
+    egdc/mog_compiler_compat.md. It does NOT try to cover every Mog feature.
+    """
 
     def __init__(self, seed: int = 42):
         self.rng = random.Random(seed)
         self._templates = [
-            self._gen_simple_fn,
-            self._gen_fn_with_if,
-            self._gen_fn_with_for,
-            self._gen_fn_with_while,
-            self._gen_fn_with_match,
-            self._gen_struct_def,
-            self._gen_struct_with_methods,
-            self._gen_result_fn,
-            self._gen_pub_fn,
-            self._gen_async_fn,
-            self._gen_capability_program,
-            self._gen_array_fn,
-            self._gen_map_fn,
-            self._gen_nested_if,
-            self._gen_for_with_accumulator,
-            self._gen_while_with_break,
-            self._gen_match_result,
-            self._gen_multi_fn_program,
-            self._gen_struct_constructor,
-            self._gen_error_handling,
-            self._gen_string_fn,
-            self._gen_bool_logic,
-            self._gen_float_math,
+            self._gen_add,
+            self._gen_threshold_if,
+            self._gen_sum_for_to,
+            self._gen_sum_range,
+            self._gen_count_while,
+            self._gen_factorial,
+            self._gen_fibonacci,
+            self._gen_result_match,
+            self._gen_optional_match,
+            self._gen_array_sum,
+            self._gen_array_push,
+            self._gen_closure_map,
+            self._gen_struct_sum,
+            self._gen_struct_mutation,
             self._gen_nested_loops,
-            self._gen_recursive_fn,
-            self._gen_pub_struct_program,
-            self._gen_full_capability_program,
-            self._gen_array_map_combo,
-            self._gen_complex_match,
-            self._gen_async_result_fn,
-            self._gen_multi_struct_program,
-            self._gen_pipeline_fn,
-            self._gen_validator_fn,
-            self._gen_converter_fn,
-            self._gen_accumulator_pattern,
+            self._gen_pipeline,
+            self._gen_validator,
+            self._gen_map_iteration,
+            self._gen_string_len,
+            self._gen_match_literal,
         ]
 
-    def _pick(self, lst: list) -> str:
-        return self.rng.choice(lst)
-
-    def _pick_int_type(self) -> str:
-        return self._pick(_INT_TYPES)
-
-    def _pick_float_type(self) -> str:
-        return self._pick(_FLOAT_TYPES)
-
-    def _pick_type(self) -> str:
-        return self._pick(_ALL_TYPES)
-
-    def _pick_func_name(self) -> str:
-        return self._pick(_FUNC_NAMES)
-
-    def _pick_var(self) -> str:
-        return self._pick(_VAR_NAMES)
-
-    def _pick_struct(self) -> str:
-        return self._pick(_STRUCT_NAMES)
-
-    def _pick_cap(self) -> str:
-        return self._pick(_CAP_NAMES)
-
-    def _pick_import(self) -> str:
-        return self._pick(_IMPORT_NAMES)
-
-    def _rand_int(self, lo: int = 0, hi: int = 100) -> int:
+    def _ri(self, lo: int, hi: int) -> int:
         return self.rng.randint(lo, hi)
 
-    # ------------------------------------------------------------------
-    # Templates (35 total)
-    # ------------------------------------------------------------------
+    def _safe_name(self, prefix: str) -> str:
+        return f"{prefix}_{self._ri(1000, 9999)}"
 
-    def _gen_simple_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        a, b = self._pick_var(), self._pick_var()
-        if a == b:
-            b = b + "2"
-        code = (
-            f"// {name}: add two {t} values\n"
-            f"fn {name}({a}: {t}, {b}: {t}) -> {t} {{\n"
-            f"    result := {a} + {b};\n"
-            f"    return result;\n"
-            f"}}\n"
+    def _wrap(self, helper_code: str, main_body: str, spec: str, expected: str, name: str) -> MogSample:
+        code = helper_code.rstrip() + "\n\n" + (
+            "fn main() -> i64 {\n"
+            + main_body.rstrip()
+            + "\n    return 0;\n"
+            + "}\n"
         )
-        spec = f"fn {name}({a}: {t}, {b}: {t}) -> {t}"
-        return code, spec
+        return MogSample(code=code, spec=spec, expected_output=expected, name=name)
 
-    def _gen_fn_with_if(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        v = self._pick_var()
-        threshold = self._rand_int(1, 50)
-        code = (
-            f"// {name}: check if {v} exceeds threshold\n"
-            f"fn {name}({v}: {t}) -> bool {{\n"
-            f"    if {v} > {threshold} {{\n"
-            f"        return true;\n"
+    def _gen_add(self) -> MogSample:
+        a, b = self._ri(1, 50), self._ri(1, 50)
+        name = self._safe_name("add")
+        helper = (
+            f"fn {name}(a: i64, b: i64) -> i64 {{\n"
+            f"    return a + b;\n"
+            f"}}"
+        )
+        main = f"    println_i64({name}({a}, {b}));"
+        return self._wrap(helper, main, f"fn {name}(a: i64, b: i64) -> i64", str(a + b), name)
+
+    def _gen_threshold_if(self) -> MogSample:
+        x = self._ri(0, 100)
+        threshold = self._ri(20, 80)
+        out = 1 if x > threshold else 0
+        name = self._safe_name("gt_threshold")
+        helper = (
+            f"fn {name}(x: i64) -> i64 {{\n"
+            f"    if x > {threshold} {{\n"
+            f"        return 1;\n"
             f"    }} else {{\n"
-            f"        return false;\n"
+            f"        return 0;\n"
             f"    }}\n"
-            f"}}\n"
+            f"}}"
         )
-        spec = f"fn {name}({v}: {t}) -> bool"
-        return code, spec
+        main = f"    println_i64({name}({x}));"
+        return self._wrap(helper, main, f"fn {name}(x: i64) -> i64", str(out), name)
 
-    def _gen_fn_with_for(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        n = self._rand_int(5, 20)
-        code = (
-            f"// {name}: sum integers from 0 to {n}\n"
-            f"fn {name}() -> {t} {{\n"
-            f"    acc := 0;\n"
+    def _gen_sum_for_to(self) -> MogSample:
+        n = self._ri(5, 15)
+        expected = sum(range(0, n))
+        name = self._safe_name("sum_for")
+        helper = (
+            f"fn {name}() -> i64 {{\n"
+            f"    acc: i64 = 0;\n"
             f"    for i := 0 to {n} {{\n"
             f"        acc = acc + i;\n"
             f"    }}\n"
             f"    return acc;\n"
-            f"}}\n"
+            f"}}"
         )
-        spec = f"fn {name}() -> {t}"
-        return code, spec
+        main = f"    println_i64({name}());"
+        return self._wrap(helper, main, f"fn {name}() -> i64", str(expected), name)
 
-    def _gen_fn_with_while(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        limit = self._rand_int(10, 100)
-        code = (
-            f"// {name}: count up to {limit}\n"
-            f"fn {name}() -> {t} {{\n"
-            f"    count := 0;\n"
+    def _gen_sum_range(self) -> MogSample:
+        n = self._ri(5, 15)
+        expected = sum(range(0, n))
+        name = self._safe_name("sum_range")
+        helper = (
+            f"fn {name}() -> i64 {{\n"
+            f"    acc: i64 = 0;\n"
+            f"    for i in 0..{n} {{\n"
+            f"        acc = acc + i;\n"
+            f"    }}\n"
+            f"    return acc;\n"
+            f"}}"
+        )
+        main = f"    println_i64({name}());"
+        return self._wrap(helper, main, f"fn {name}() -> i64", str(expected), name)
+
+    def _gen_count_while(self) -> MogSample:
+        limit = self._ri(3, 20)
+        name = self._safe_name("count_to")
+        helper = (
+            f"fn {name}() -> i64 {{\n"
+            f"    count: i64 = 0;\n"
             f"    while count < {limit} {{\n"
             f"        count = count + 1;\n"
             f"    }}\n"
             f"    return count;\n"
-            f"}}\n"
+            f"}}"
         )
-        spec = f"fn {name}() -> {t}"
-        return code, spec
+        main = f"    println_i64({name}());"
+        return self._wrap(helper, main, f"fn {name}() -> i64", str(limit), name)
 
-    def _gen_fn_with_match(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: classify value via match\n"
-            f"fn {name}(val: {t}) -> string {{\n"
-            f"    result := match val {{\n"
-            f"        0 => \"zero\",\n"
-            f"        1 => \"one\",\n"
-            f"        _ => \"other\",\n"
-            f"    }};\n"
-            f"    return result;\n"
-            f"}}\n"
+    def _gen_factorial(self) -> MogSample:
+        n = self._ri(3, 8)
+        expected = 1
+        for i in range(2, n + 1):
+            expected *= i
+        name = self._safe_name("factorial")
+        helper = (
+            f"fn {name}(n: i64) -> i64 {{\n"
+            f"    if (n <= 1) {{ return 1; }}\n"
+            f"    return n * {name}(n - 1);\n"
+            f"}}"
         )
-        spec = f"fn {name}(val: {t}) -> string"
-        return code, spec
+        main = f"    println_i64({name}({n}));"
+        return self._wrap(helper, main, f"fn {name}(n: i64) -> i64", str(expected), name)
 
-    def _gen_struct_def(self) -> Tuple[str, str]:
-        sname = self._pick_struct()
-        t1, t2 = self._pick_type(), self._pick_type()
-        f1, f2 = "x", "y"
-        code = (
-            f"// struct {sname}\n"
-            f"struct {sname} {{\n"
-            f"    {f1}: {t1},\n"
-            f"    {f2}: {t2},\n"
-            f"}}\n"
-        )
-        spec = f"struct {sname}"
-        return code, spec
-
-    def _gen_struct_with_methods(self) -> Tuple[str, str]:
-        sname = self._pick_struct()
-        t = self._pick_int_type()
-        code = (
-            f"// {sname} with methods\n"
-            f"struct {sname} {{\n"
-            f"    value: {t},\n"
-            f"    label: string,\n"
-            f"}}\n\n"
-            f"fn new_{sname.lower()}(v: {t}, l: string) -> {sname} {{\n"
-            f"    return {sname} {{ value: v, label: l }};\n"
-            f"}}\n\n"
-            f"fn get_value(s: {sname}) -> {t} {{\n"
-            f"    return s.value;\n"
-            f"}}\n"
-        )
-        spec = f"struct {sname} with methods"
-        return code, spec
-
-    def _gen_result_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: division with error handling\n"
-            f"fn {name}(a: {t}, b: {t}) -> Result<{t}> {{\n"
-            f"    if b == 0 {{\n"
-            f"        return err(\"division by zero\");\n"
+    def _gen_fibonacci(self) -> MogSample:
+        n = self._ri(5, 12)
+        a, b = 0, 1
+        for _ in range(n):
+            a, b = b, a + b
+        expected = a
+        name = self._safe_name("fibonacci")
+        helper = (
+            f"fn {name}(n: i64) -> i64 {{\n"
+            f"    if (n <= 0) {{ return 0; }}\n"
+            f"    if (n == 1) {{ return 1; }}\n"
+            f"    a: i64 = 0;\n"
+            f"    b: i64 = 1;\n"
+            f"    i: i64 = 2;\n"
+            f"    while (i <= n) {{\n"
+            f"        tmp := a + b;\n"
+            f"        a = b;\n"
+            f"        b = tmp;\n"
+            f"        i = i + 1;\n"
             f"    }}\n"
+            f"    return b;\n"
+            f"}}"
+        )
+        main = f"    println_i64({name}({n}));"
+        return self._wrap(helper, main, f"fn {name}(n: i64) -> i64", str(expected), name)
+
+    def _gen_result_match(self) -> MogSample:
+        a = self._ri(10, 80)
+        b = self._ri(1, 9)
+        expected = a // b
+        name = self._safe_name("safe_div")
+        helper = (
+            f"fn {name}(a: i64, b: i64) -> Result<i64> {{\n"
+            f"    if (b == 0) {{ return err(\"division by zero\"); }}\n"
             f"    return ok(a / b);\n"
-            f"}}\n"
+            f"}}"
         )
-        spec = f"fn {name}(a: {t}, b: {t}) -> Result<{t}>"
-        return code, spec
-
-    def _gen_pub_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// public {name}\n"
-            f"pub fn {name}(input: {t}) -> {t} {{\n"
-            f"    result := input * 2;\n"
-            f"    return result;\n"
-            f"}}\n"
+        main = (
+            f"    r := {name}({a}, {b});\n"
+            f"    v: i64 = match r {{\n"
+            f"        ok(x) => x,\n"
+            f"        err(e) => -1,\n"
+            f"    }};\n"
+            f"    println_i64(v);"
         )
-        spec = f"pub fn {name}(input: {t}) -> {t}"
-        return code, spec
+        return self._wrap(helper, main, f"fn {name}(a: i64, b: i64) -> Result<i64>", str(expected), name)
 
-    def _gen_async_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        code = (
-            f"// async {name}\n"
-            f"async fn {name}(url: string) -> Result<string> {{\n"
-            f"    data := await fetch(url);\n"
-            f"    if data == \"\" {{\n"
-            f"        return err(\"empty response\");\n"
-            f"    }}\n"
-            f"    return ok(data);\n"
-            f"}}\n"
+    def _gen_optional_match(self) -> MogSample:
+        n = self._ri(-10, 20)
+        expected = n if n > 0 else -1
+        name = self._safe_name("find_positive")
+        helper = (
+            f"fn {name}(n: i64) -> ?i64 {{\n"
+            f"    if (n > 0) {{ return some(n); }}\n"
+            f"    return none;\n"
+            f"}}"
         )
-        spec = f"async fn {name}(url: string) -> Result<string>"
-        return code, spec
-
-    def _gen_capability_program(self) -> Tuple[str, str]:
-        cap = self._pick_cap()
-        name = self._pick_func_name()
-        code = (
-            f"requires {cap};\n\n"
-            f"// {name}: uses {cap} capability\n"
-            f"fn {name}(path: string) -> Result<string> {{\n"
-            f"    data := {cap}.read(path);\n"
-            f"    return ok(data);\n"
-            f"}}\n"
+        main = (
+            f"    r := {name}({n});\n"
+            f"    v: i64 = match r {{\n"
+            f"        some(x) => x,\n"
+            f"        none => -1,\n"
+            f"    }};\n"
+            f"    println_i64(v);"
         )
-        spec = f"requires {cap}; fn {name}"
-        return code, spec
+        return self._wrap(helper, main, f"fn {name}(n: i64) -> ?i64", str(expected), name)
 
-    def _gen_array_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: sum array elements\n"
-            f"fn {name}(arr: []{t}) -> {t} {{\n"
-            f"    total := 0;\n"
-            f"    for i := 0 to len(arr) {{\n"
-            f"        total = total + arr[i];\n"
+    def _gen_array_sum(self) -> MogSample:
+        arr = [self._ri(1, 9) for _ in range(self._ri(3, 6))]
+        arr_code = ", ".join(map(str, arr))
+        expected = sum(arr)
+        name = self._safe_name("sum_array")
+        helper = (
+            f"fn {name}(arr: []i64) -> i64 {{\n"
+            f"    total: i64 = 0;\n"
+            f"    for item in arr {{\n"
+            f"        total = total + item;\n"
             f"    }}\n"
             f"    return total;\n"
-            f"}}\n"
+            f"}}"
         )
-        spec = f"fn {name}(arr: []{t}) -> {t}"
-        return code, spec
+        main = f"    println_i64({name}([{arr_code}]));"
+        return self._wrap(helper, main, f"fn {name}(arr: []i64) -> i64", str(expected), name)
 
-    def _gen_map_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        kt, vt = "string", self._pick_int_type()
-        code = (
-            f"// {name}: lookup in map\n"
-            f"fn {name}(m: [{kt}]{vt}, key: {kt}) -> Result<{vt}> {{\n"
-            f"    if has(m, key) {{\n"
-            f"        return ok(m[key]);\n"
+    def _gen_array_push(self) -> MogSample:
+        arr = [self._ri(1, 9) for _ in range(self._ri(2, 4))]
+        extra = self._ri(1, 9)
+        expected = len(arr) + 1
+        arr_code = ", ".join(map(str, arr))
+        name = self._safe_name("push_and_len")
+        helper = (
+            f"fn {name}() -> i64 {{\n"
+            f"    nums := [{arr_code}];\n"
+            f"    nums.push({extra});\n"
+            f"    return nums.len;\n"
+            f"}}"
+        )
+        main = f"    println_i64({name}());"
+        return self._wrap(helper, main, f"fn {name}() -> i64", str(expected), name)
+
+    def _gen_closure_map(self) -> MogSample:
+        arr = [self._ri(1, 5) for _ in range(3)]
+        mapped = [x * 2 for x in arr]
+        expected = "\n".join(str(x) for x in mapped)
+        arr_code = ", ".join(map(str, arr))
+        name = self._safe_name("double_all")
+        helper = (
+            f"fn {name}() -> i64 {{\n"
+            f"    nums := [{arr_code}];\n"
+            f"    doubled := nums.map(fn(x: i64) -> i64 {{ x * 2 }});\n"
+            f"    for item in doubled {{\n"
+            f"        println_i64(item);\n"
             f"    }}\n"
-            f"    return err(\"key not found\");\n"
-            f"}}\n"
+            f"    return 0;\n"
+            f"}}"
         )
-        spec = f"fn {name}(m: [{kt}]{vt}, key: {kt}) -> Result<{vt}>"
-        return code, spec
+        main = f"    {name}();"
+        return self._wrap(helper, main, f"fn {name}() -> i64", expected, name)
 
-    def _gen_nested_if(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        lo, hi = self._rand_int(0, 10), self._rand_int(50, 100)
-        code = (
-            f"// {name}: nested conditionals\n"
-            f"fn {name}(val: {t}) -> string {{\n"
-            f"    if val < {lo} {{\n"
-            f"        return \"low\";\n"
-            f"    }} else {{\n"
-            f"        if val > {hi} {{\n"
-            f"            return \"high\";\n"
-            f"        }} else {{\n"
-            f"            return \"mid\";\n"
-            f"        }}\n"
-            f"    }}\n"
-            f"}}\n"
-        )
-        spec = f"fn {name}(val: {t}) -> string"
-        return code, spec
-
-    def _gen_for_with_accumulator(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        n = self._rand_int(5, 30)
-        code = (
-            f"// {name}: factorial up to {n}\n"
-            f"fn {name}(n: {t}) -> {t} {{\n"
-            f"    acc := 1;\n"
-            f"    for i := 1 to (n + 1) {{\n"
-            f"        acc = acc * i;\n"
-            f"    }}\n"
-            f"    return acc;\n"
-            f"}}\n"
-        )
-        spec = f"fn {name}(n: {t}) -> {t}"
-        return code, spec
-
-    def _gen_while_with_break(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        target = self._rand_int(10, 50)
-        code = (
-            f"// {name}: search for target {target}\n"
-            f"fn {name}(arr: []{t}) -> {t} {{\n"
-            f"    idx := 0;\n"
-            f"    while idx < len(arr) {{\n"
-            f"        if arr[idx] == {target} {{\n"
-            f"            return idx;\n"
-            f"        }}\n"
-            f"        idx = idx + 1;\n"
-            f"    }}\n"
-            f"    return -1;\n"
-            f"}}\n"
-        )
-        spec = f"fn {name}(arr: []{t}) -> {t}"
-        return code, spec
-
-    def _gen_match_result(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: match on Result\n"
-            f"fn {name}(r: Result<{t}>) -> {t} {{\n"
-            f"    val := match r {{\n"
-            f"        ok(v) => v,\n"
-            f"        err(_) => 0,\n"
-            f"    }};\n"
-            f"    return val;\n"
-            f"}}\n"
-        )
-        spec = f"fn {name}(r: Result<{t}>) -> {t}"
-        return code, spec
-
-    def _gen_multi_fn_program(self) -> Tuple[str, str]:
-        n1, n2 = self._pick_func_name(), self._pick_func_name()
-        if n1 == n2:
-            n2 = n2 + "_alt"
-        t = self._pick_int_type()
-        code = (
-            f"// multi-function program\n"
-            f"fn {n1}(a: {t}, b: {t}) -> {t} {{\n"
-            f"    return a + b;\n"
-            f"}}\n\n"
-            f"fn {n2}(x: {t}) -> {t} {{\n"
-            f"    doubled := {n1}(x, x);\n"
-            f"    return doubled;\n"
-            f"}}\n"
-        )
-        spec = f"fn {n1}, fn {n2}"
-        return code, spec
-
-    def _gen_struct_constructor(self) -> Tuple[str, str]:
-        sname = self._pick_struct()
-        t = self._pick_int_type()
-        code = (
-            f"// {sname} constructor pattern\n"
+    def _gen_struct_sum(self) -> MogSample:
+        x, y = self._ri(1, 20), self._ri(1, 20)
+        expected = x + y
+        sname = self._safe_name("Point").title().replace("_", "")
+        fname = self._safe_name("sum_point")
+        helper = (
             f"struct {sname} {{\n"
-            f"    id: {t},\n"
-            f"    name: string,\n"
-            f"    active: bool,\n"
+            f"    x: i64,\n"
+            f"    y: i64,\n"
             f"}}\n\n"
-            f"fn new_{sname.lower()}(id: {t}, name: string) -> {sname} {{\n"
-            f"    return {sname} {{ id: id, name: name, active: true }};\n"
-            f"}}\n"
+            f"fn {fname}(p: {sname}) -> i64 {{\n"
+            f"    return p.x + p.y;\n"
+            f"}}"
         )
-        spec = f"struct {sname} constructor"
-        return code, spec
-
-    def _gen_error_handling(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: chained error handling\n"
-            f"fn {name}(a: {t}, b: {t}) -> Result<{t}> {{\n"
-            f"    if a < 0 {{\n"
-            f"        return err(\"negative input\");\n"
-            f"    }}\n"
-            f"    if b == 0 {{\n"
-            f"        return err(\"zero divisor\");\n"
-            f"    }}\n"
-            f"    result := a / b;\n"
-            f"    return ok(result);\n"
-            f"}}\n"
+        main = (
+            f"    p := {sname} {{ x: {x}, y: {y} }};\n"
+            f"    println_i64({fname}(p));"
         )
-        spec = f"fn {name}(a: {t}, b: {t}) -> Result<{t}>"
-        return code, spec
+        return self._wrap(helper, main, f"fn {fname}(p: {sname}) -> i64", str(expected), fname)
 
-    def _gen_string_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        code = (
-            f"// {name}: string operation\n"
-            f"fn {name}(s: string, prefix: string) -> bool {{\n"
-            f"    if len(s) == 0 {{\n"
-            f"        return false;\n"
-            f"    }}\n"
-            f"    return starts_with(s, prefix);\n"
-            f"}}\n"
+    def _gen_struct_mutation(self) -> MogSample:
+        x, y = self._ri(1, 10), self._ri(1, 10)
+        inc = self._ri(1, 5)
+        expected = x + inc + y
+        sname = self._safe_name("Counter").title().replace("_", "")
+        helper = (
+            f"struct {sname} {{\n"
+            f"    x: i64,\n"
+            f"    y: i64,\n"
+            f"}}\n\n"
+            f"fn bump(c: {sname}) -> {sname} {{\n"
+            f"    c.x = c.x + {inc};\n"
+            f"    return c;\n"
+            f"}}"
         )
-        spec = f"fn {name}(s: string, prefix: string) -> bool"
-        return code, spec
-
-    def _gen_bool_logic(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        code = (
-            f"// {name}: boolean logic\n"
-            f"fn {name}(a: bool, b: bool, c: bool) -> bool {{\n"
-            f"    result := (a && b) || c;\n"
-            f"    return result;\n"
-            f"}}\n"
+        main = (
+            f"    c := {sname} {{ x: {x}, y: {y} }};\n"
+            f"    c = bump(c);\n"
+            f"    println_i64(c.x + c.y);"
         )
-        spec = f"fn {name}(a: bool, b: bool, c: bool) -> bool"
-        return code, spec
+        return self._wrap(helper, main, f"struct {sname} mutation", str(expected), f"bump_{sname.lower()}")
 
-    def _gen_float_math(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        ft = self._pick_float_type()
-        code = (
-            f"// {name}: floating point math\n"
-            f"fn {name}(x: {ft}, y: {ft}) -> {ft} {{\n"
-            f"    sum := x + y;\n"
-            f"    avg := sum / 2.0;\n"
-            f"    return avg;\n"
-            f"}}\n"
-        )
-        spec = f"fn {name}(x: {ft}, y: {ft}) -> {ft}"
-        return code, spec
-
-    def _gen_nested_loops(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        n = self._rand_int(3, 10)
-        code = (
-            f"// {name}: nested loops\n"
-            f"fn {name}(n: {t}) -> {t} {{\n"
-            f"    total := 0;\n"
+    def _gen_nested_loops(self) -> MogSample:
+        n = self._ri(2, 5)
+        total = sum(i * j for i in range(n) for j in range(n))
+        name = self._safe_name("nested_sum")
+        helper = (
+            f"fn {name}(n: i64) -> i64 {{\n"
+            f"    total: i64 = 0;\n"
             f"    for i := 0 to n {{\n"
             f"        for j := 0 to n {{\n"
             f"            total = total + (i * j);\n"
             f"        }}\n"
             f"    }}\n"
             f"    return total;\n"
-            f"}}\n"
+            f"}}"
         )
-        spec = f"fn {name}(n: {t}) -> {t}"
-        return code, spec
+        main = f"    println_i64({name}({n}));"
+        return self._wrap(helper, main, f"fn {name}(n: i64) -> i64", str(total), name)
 
-    def _gen_recursive_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: recursive computation\n"
-            f"fn {name}(n: {t}) -> {t} {{\n"
-            f"    if n <= 1 {{\n"
-            f"        return n;\n"
-            f"    }}\n"
-            f"    return {name}(n - 1) + {name}(n - 2);\n"
-            f"}}\n"
-        )
-        spec = f"fn {name}(n: {t}) -> {t}"
-        return code, spec
-
-    def _gen_pub_struct_program(self) -> Tuple[str, str]:
-        sname = self._pick_struct()
-        t = self._pick_int_type()
-        code = (
-            f"// public API for {sname}\n"
-            f"struct {sname} {{\n"
-            f"    data: []{t},\n"
-            f"    size: {t},\n"
-            f"}}\n\n"
-            f"pub fn create_{sname.lower()}(capacity: {t}) -> {sname} {{\n"
-            f"    return {sname} {{ data: [], size: 0 }};\n"
-            f"}}\n\n"
-            f"pub fn add_item(s: {sname}, item: {t}) -> {sname} {{\n"
-            f"    new_data := append(s.data, item);\n"
-            f"    return {sname} {{ data: new_data, size: s.size + 1 }};\n"
-            f"}}\n"
-        )
-        spec = f"pub struct {sname} API"
-        return code, spec
-
-    def _gen_full_capability_program(self) -> Tuple[str, str]:
-        cap1 = self._pick_cap()
-        cap2 = self._pick_cap()
-        if cap2 == cap1:
-            cap2 = "log"
-        imp = self._pick_import()
-        name = self._pick_func_name()
-        code = (
-            f"requires {cap1};\n"
-            f"optional {cap2};\n"
-            f"import {imp};\n\n"
-            f"// {name}: full capability program\n"
-            f"pub fn {name}(input: string) -> Result<string> {{\n"
-            f"    data := {cap1}.read(input);\n"
-            f"    if {cap2} != nil {{\n"
-            f"        {cap2}.info(\"processing: \" + input);\n"
-            f"    }}\n"
-            f"    result := {imp}.process(data);\n"
-            f"    return ok(result);\n"
-            f"}}\n"
-        )
-        spec = f"requires {cap1}; optional {cap2}; import {imp}; pub fn {name}"
-        return code, spec
-
-    def _gen_array_map_combo(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: array to map conversion\n"
-            f"fn {name}(keys: []string, values: []{t}) -> [string]{t} {{\n"
-            f"    result := [string]{t}{{}};\n"
-            f"    for i := 0 to len(keys) {{\n"
-            f"        result[keys[i]] = values[i];\n"
-            f"    }}\n"
-            f"    return result;\n"
-            f"}}\n"
-        )
-        spec = f"fn {name}(keys: []string, values: []{t}) -> [string]{t}"
-        return code, spec
-
-    def _gen_complex_match(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: complex pattern matching\n"
-            f"fn {name}(code: {t}) -> string {{\n"
-            f"    msg := match code {{\n"
-            f"        200 => \"ok\",\n"
-            f"        201 => \"created\",\n"
-            f"        400 => \"bad request\",\n"
-            f"        404 => \"not found\",\n"
-            f"        500 => \"internal error\",\n"
-            f"        _ => \"unknown\",\n"
-            f"    }};\n"
-            f"    return msg;\n"
-            f"}}\n"
-        )
-        spec = f"fn {name}(code: {t}) -> string"
-        return code, spec
-
-    def _gen_async_result_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        cap = self._pick_cap()
-        code = (
-            f"requires {cap};\n\n"
-            f"// {name}: async with result\n"
-            f"async fn {name}(id: string) -> Result<int> {{\n"
-            f"    raw := await {cap}.fetch(id);\n"
-            f"    val := match parse_int(raw) {{\n"
-            f"        ok(v) => v,\n"
-            f"        err(e) => return err(e),\n"
-            f"    }};\n"
-            f"    return ok(val);\n"
-            f"}}\n"
-        )
-        spec = f"async fn {name}(id: string) -> Result<int>"
-        return code, spec
-
-    def _gen_multi_struct_program(self) -> Tuple[str, str]:
-        s1, s2 = self._pick_struct(), self._pick_struct()
-        if s1 == s2:
-            s2 = s2 + "Info"
-        t = self._pick_int_type()
-        code = (
-            f"// multi-struct program\n"
-            f"struct {s1} {{\n"
-            f"    id: {t},\n"
-            f"    name: string,\n"
-            f"}}\n\n"
-            f"struct {s2} {{\n"
-            f"    owner: {s1},\n"
-            f"    count: {t},\n"
-            f"}}\n\n"
-            f"fn create_{s2.lower()}(owner_id: {t}, owner_name: string) -> {s2} {{\n"
-            f"    o := {s1} {{ id: owner_id, name: owner_name }};\n"
-            f"    return {s2} {{ owner: o, count: 0 }};\n"
-            f"}}\n"
-        )
-        spec = f"struct {s1}, struct {s2}"
-        return code, spec
-
-    def _gen_pipeline_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: data pipeline\n"
-            f"fn step1(x: {t}) -> {t} {{\n"
-            f"    return x * 2;\n"
-            f"}}\n\n"
-            f"fn step2(x: {t}) -> {t} {{\n"
-            f"    return x + 10;\n"
-            f"}}\n\n"
-            f"fn {name}(input: {t}) -> {t} {{\n"
+    def _gen_pipeline(self) -> MogSample:
+        x = self._ri(1, 20)
+        expected = (x * 2) + 10
+        name = self._safe_name("pipeline")
+        helper = (
+            f"fn step1(x: i64) -> i64 {{ return x * 2; }}\n\n"
+            f"fn step2(x: i64) -> i64 {{ return x + 10; }}\n\n"
+            f"fn {name}(input: i64) -> i64 {{\n"
             f"    a := step1(input);\n"
             f"    b := step2(a);\n"
             f"    return b;\n"
-            f"}}\n"
+            f"}}"
         )
-        spec = f"fn {name}(input: {t}) -> {t} pipeline"
-        return code, spec
+        main = f"    println_i64({name}({x}));"
+        return self._wrap(helper, main, f"fn {name}(input: i64) -> i64", str(expected), name)
 
-    def _gen_validator_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        lo, hi = self._rand_int(0, 10), self._rand_int(90, 200)
-        code = (
-            f"// {name}: input validation\n"
-            f"fn {name}(val: {t}) -> Result<{t}> {{\n"
-            f"    if val < {lo} {{\n"
-            f"        return err(\"too small\");\n"
-            f"    }}\n"
-            f"    if val > {hi} {{\n"
-            f"        return err(\"too large\");\n"
-            f"    }}\n"
+    def _gen_validator(self) -> MogSample:
+        lo = self._ri(0, 10)
+        hi = self._ri(20, 50)
+        val = self._ri(lo, hi)
+        name = self._safe_name("validate")
+        helper = (
+            f"fn {name}(val: i64) -> Result<i64> {{\n"
+            f"    if val < {lo} {{ return err(\"too small\"); }}\n"
+            f"    if val > {hi} {{ return err(\"too large\"); }}\n"
             f"    return ok(val);\n"
-            f"}}\n"
+            f"}}"
         )
-        spec = f"fn {name}(val: {t}) -> Result<{t}>"
-        return code, spec
-
-    def _gen_converter_fn(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        from_t = self._pick_int_type()
-        to_t = self._pick_float_type()
-        code = (
-            f"// {name}: type conversion\n"
-            f"fn {name}(val: {from_t}) -> {to_t} {{\n"
-            f"    result := val as {to_t};\n"
-            f"    return result;\n"
-            f"}}\n"
+        main = (
+            f"    r := {name}({val});\n"
+            f"    out: i64 = match r {{\n"
+            f"        ok(x) => x,\n"
+            f"        err(e) => -1,\n"
+            f"    }};\n"
+            f"    println_i64(out);"
         )
-        spec = f"fn {name}(val: {from_t}) -> {to_t}"
-        return code, spec
+        return self._wrap(helper, main, f"fn {name}(val: i64) -> Result<i64>", str(val), name)
 
-    def _gen_accumulator_pattern(self) -> Tuple[str, str]:
-        name = self._pick_func_name()
-        t = self._pick_int_type()
-        code = (
-            f"// {name}: accumulator with early exit\n"
-            f"fn {name}(arr: []{t}, target: {t}) -> bool {{\n"
-            f"    sum := 0;\n"
-            f"    for i := 0 to len(arr) {{\n"
-            f"        sum = sum + arr[i];\n"
-            f"        if sum >= target {{\n"
-            f"            return true;\n"
-            f"        }}\n"
+    def _gen_map_iteration(self) -> MogSample:
+        a, b = self._ri(1, 9), self._ri(1, 9)
+        expected = a + b
+        name = self._safe_name("sum_map_vals")
+        helper = (
+            f"fn {name}() -> i64 {{\n"
+            f"    m := {{\"a\": {a}, \"b\": {b}}};\n"
+            f"    total: i64 = 0;\n"
+            f"    for key, value in m {{\n"
+            f"        total = total + value;\n"
             f"    }}\n"
-            f"    return false;\n"
-            f"}}\n"
+            f"    return total;\n"
+            f"}}"
         )
-        spec = f"fn {name}(arr: []{t}, target: {t}) -> bool"
-        return code, spec
+        main = f"    println_i64({name}());"
+        return self._wrap(helper, main, f"fn {name}() -> i64", str(expected), name)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    def _gen_string_len(self) -> MogSample:
+        s = self.rng.choice(["mog", "compiler", "diffusion", "interpreter", "hello world"])
+        expected = len(s.strip())
+        name = self._safe_name("string_len")
+        helper = (
+            f"fn {name}(s: string) -> i64 {{\n"
+            f"    trimmed := s.trim();\n"
+            f"    return trimmed.len;\n"
+            f"}}"
+        )
+        main = f'    println_i64({name}(" {s} "));'
+        return self._wrap(helper, main, f"fn {name}(s: string) -> i64", str(expected), name)
 
-    def generate_one(self) -> Tuple[str, str]:
-        """Generate a single (code, spec) pair."""
-        template = self.rng.choice(self._templates)
-        return template()
+    def _gen_match_literal(self) -> MogSample:
+        code_val = self.rng.choice([0, 1, 2, 7])
+        mapping = {0: 100, 1: 200, 2: 300}
+        expected = mapping.get(code_val, 999)
+        name = self._safe_name("classify_code")
+        helper = (
+            f"fn {name}(code: i64) -> i64 {{\n"
+            f"    result: i64 = match code {{\n"
+            f"        0 => 100,\n"
+            f"        1 => 200,\n"
+            f"        2 => 300,\n"
+            f"        _ => 999,\n"
+            f"    }};\n"
+            f"    return result;\n"
+            f"}}"
+        )
+        main = f"    println_i64({name}({code_val}));"
+        return self._wrap(helper, main, f"fn {name}(code: i64) -> i64", str(expected), name)
 
-    def generate_dataset(
-        self, num_samples: int, balanced: bool = True
-    ) -> List[Tuple[str, str]]:
-        """Generate a dataset of (code, spec) pairs.
+    def generate_one(self) -> Tuple[str, str, str]:
+        sample = self.rng.choice(self._templates)()
+        return sample.code, sample.spec, sample.expected_output
 
-        Args:
-            num_samples: Number of programs to generate.
-            balanced: If True, cycle through templates evenly.
+    def generate_sample(self) -> MogSample:
+        return self.rng.choice(self._templates)()
 
-        Returns:
-            List of (mog_code, spec_string) tuples.
-        """
-        data: List[Tuple[str, str]] = []
+    def generate_dataset(self, num_samples: int, balanced: bool = True) -> List[Tuple[str, str, str]]:
+        data: List[Tuple[str, str, str]] = []
         if balanced:
             for i in range(num_samples):
-                template = self._templates[i % len(self._templates)]
-                data.append(template())
+                sample = self._templates[i % len(self._templates)]()
+                data.append((sample.code, sample.spec, sample.expected_output))
         else:
             for _ in range(num_samples):
                 data.append(self.generate_one())
         return data
 
 
-# ---------------------------------------------------------------------------
-# MogDataset
-# ---------------------------------------------------------------------------
-
 class MogDataset(Dataset):
-    """PyTorch Dataset for Mog program diffusion training.
-
-    Each item returns a tuple of tensors:
-        masked_tokens:   (seq_len,) int64 - program with random positions masked
-        mask_positions:  (seq_len,) bool  - True where tokens are masked
-        original_tokens: (seq_len,) int64 - original unmasked program
-        spec_tokens:     (spec_len,) int64 - encoded specification
-        timestep:        scalar float     - diffusion timestep in [0, 1]
-
-    Programs are padded/truncated to seq_len.
-    Specs are encoded to spec_len by tokenizing the function signature.
-    """
+    """PyTorch dataset for compiler-safe Mog program diffusion training."""
 
     def __init__(
         self,
@@ -801,31 +484,26 @@ class MogDataset(Dataset):
 
         gen = MogProgramGenerator(seed=seed)
         raw = gen.generate_dataset(num_samples, balanced=balanced)
-        # Tokenize all programs
-        self.data: List[Tuple[List[int], List[int]]] = []
-        for code, spec in raw:
+        self.data: List[Tuple[List[int], List[int], str, str]] = []
+        for code, spec, expected_output in raw:
             code_tokens = self.tokenizer.encode(code)
             spec_tokens = self.tokenizer.encode(spec, add_bos_eos=False)
-            self.data.append((code_tokens, spec_tokens))
+            self.data.append((code_tokens, spec_tokens, expected_output, code))
 
     def __len__(self) -> int:
         return len(self.data)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, ...]:
-        code_tokens, spec_tokens = self.data[idx]
+        code_tokens, spec_tokens, _expected_output, _code = self.data[idx]
 
-        # --- Program tokens: pad/truncate to seq_len ---
         prog = self.tokenizer.pad(list(code_tokens), self.seq_len)
         original_tokens = torch.tensor(prog, dtype=torch.long)
 
-        # --- Spec tokens: pad/truncate to spec_len ---
         spec = self.tokenizer.pad(list(spec_tokens), self.spec_len)
         spec_tensor = torch.tensor(spec, dtype=torch.long)
 
-        # --- Diffusion masking ---
         t_int = self.rng.randint(0, self.num_diffusion_steps - 1)
         timestep = torch.tensor(t_int / self.num_diffusion_steps, dtype=torch.float32)
-
         mask_prob = t_int / self.num_diffusion_steps
 
         mask_positions = torch.zeros(self.seq_len, dtype=torch.bool)
@@ -838,26 +516,27 @@ class MogDataset(Dataset):
 
         masked_tokens = original_tokens.clone()
         masked_tokens[mask_positions] = MASK_TOKEN
-
         return masked_tokens, mask_positions, original_tokens, spec_tensor, timestep
-
-    # ------------------------------------------------------------------
-    # Utilities
-    # ------------------------------------------------------------------
 
     @property
     def vocab_size(self) -> int:
         return self.tokenizer.vocab_size
 
     def decode_program(self, token_ids: torch.Tensor) -> str:
-        """Decode a token tensor back to Mog source code."""
         return self.tokenizer.decode(token_ids.tolist())
 
+    def get_expected_output(self, idx: int) -> str:
+        return self.data[idx][2]
+
+    def get_code(self, idx: int) -> str:
+        return self.data[idx][3]
+
+    def get_example(self, idx: int) -> MogSample:
+        code_tokens, spec_tokens, expected, code = self.data[idx]
+        spec = self.tokenizer.decode(spec_tokens, skip_special=True)
+        return MogSample(code=code, spec=spec, expected_output=expected, name=f"sample_{idx}")
+
     def get_dataloader(self, batch_size: int = 64, shuffle: bool = True,
-                       num_workers: int = 0, **kwargs) -> "torch.utils.data.DataLoader":
-        """Convenience method to create a DataLoader."""
+                       num_workers: int = 0, **kwargs):
         from torch.utils.data import DataLoader
-        return DataLoader(
-            self, batch_size=batch_size, shuffle=shuffle,
-            num_workers=num_workers, **kwargs,
-        )
+        return DataLoader(self, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, **kwargs)
