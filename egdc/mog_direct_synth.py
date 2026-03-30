@@ -274,6 +274,92 @@ def _array_sum_reduce_search(arg_names: Sequence[str], examples: Sequence[tuple[
     return code, {"pattern": "array_sum_reduce"}, loss
 
 
+def _array_max_reduce_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[tuple[float, ...], ...], float]]):
+    arr_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        arr = args[0]
+        pred = float(max(arr))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"best := {arr_name}[0];\n"
+        f"for item in {arr_name} {{\n"
+        f"    if item > best {{\n"
+        f"        best = item;\n"
+        f"    }}\n"
+        f"}}\n"
+        f"return best;"
+    )
+    return code, {"pattern": "array_max_reduce"}, loss
+
+
+def _count_positive_reduce_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[tuple[float, ...], ...], float]]):
+    arr_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        arr = args[0]
+        pred = float(sum(1 for x in arr if x > 0))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"total: i64 = 0;\n"
+        f"for item in {arr_name} {{\n"
+        f"    if item > 0 {{\n"
+        f"        total = total + 1;\n"
+        f"    }}\n"
+        f"}}\n"
+        f"return total;"
+    )
+    return code, {"pattern": "count_positive_reduce"}, loss
+
+
+def _clamp_0_100_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[float, ...], float]]):
+    x_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        x = args[0]
+        pred = 0.0 if x < 0 else (100.0 if x > 100 else x)
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if ({x_name} < 0) {{\n"
+        f"    return 0;\n"
+        f"}}\n"
+        f"if ({x_name} > 100) {{\n"
+        f"    return 100;\n"
+        f"}}\n"
+        f"return {x_name};"
+    )
+    return code, {"pattern": "clamp_0_100"}, loss
+
+
+def _lcm_via_gcd_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[float, ...], float]]):
+    a_name, b_name = arg_names[0], arg_names[1]
+    def gcd(a: int, b: int) -> int:
+        while b != 0:
+            a, b = b, a % b
+        return a
+    def lcm(a: int, b: int) -> int:
+        return (a * b) // gcd(a, b)
+    loss = 0.0
+    for args, target in examples:
+        pred = float(lcm(int(args[0]), int(args[1])))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"x: i64 = {a_name};\n"
+        f"y: i64 = {b_name};\n"
+        f"while y != 0 {{\n"
+        f"    tmp := y;\n"
+        f"    y = x % y;\n"
+        f"    x = tmp;\n"
+        f"}}\n"
+        f"return ({a_name} * {b_name}) / x;"
+    )
+    return code, {"pattern": "lcm_via_gcd"}, loss
+
+
 def _render_function(function_name: str, arg_names: Sequence[str], body_code: str, arg_types: Sequence[str] | None = None) -> str:
     if arg_types is None:
         arg_types = ["i64"] * len(arg_names)
@@ -432,6 +518,26 @@ def synthesize_expression_program(
         return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
     if template == "array_sum_reduce":
         body_code, meta, discrete_loss = _array_sum_reduce_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "array_max_reduce":
+        body_code, meta, discrete_loss = _array_max_reduce_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "count_positive_reduce":
+        body_code, meta, discrete_loss = _count_positive_reduce_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "clamp_0_100":
+        body_code, meta, discrete_loss = _clamp_0_100_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "lcm_via_gcd":
+        body_code, meta, discrete_loss = _lcm_via_gcd_search(arg_names, examples)
         code = _render_function(function_name, arg_names, body_code, arg_types)
         success = math.isfinite(discrete_loss)
         return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
