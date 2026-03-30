@@ -251,7 +251,7 @@ class MogProgramGenerator:
         expected = sum(arr)
         name = self._safe_name("sum_array")
         helper = (
-            f"fn {name}(arr: []i64) -> i64 {{\n"
+            f"fn {name}(arr: [i64]) -> i64 {{\n"
             f"    total: i64 = 0;\n"
             f"    for item in arr {{\n"
             f"        total = total + item;\n"
@@ -260,7 +260,7 @@ class MogProgramGenerator:
             f"}}"
         )
         main = f"    println_i64({name}([{arr_code}]));"
-        return self._wrap(helper, main, f"fn {name}(arr: []i64) -> i64", str(expected), name)
+        return self._wrap(helper, main, f"fn {name}(arr: [i64]) -> i64", str(expected), name)
 
     def _gen_array_push(self) -> MogSample:
         arr = [self._ri(1, 9) for _ in range(self._ri(2, 4))]

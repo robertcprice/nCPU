@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import random
+import re
 from typing import Any, Callable, Iterable
 
 from egdc.mog_lang import interpret
@@ -69,10 +70,41 @@ class RawCode:
     code: str
 
 
-def _build_wrapper(function_name: str, test_cases: list[tuple[tuple[Any, ...], str]]) -> str:
+def _parse_signature_params(signature: str) -> list[tuple[str, str]]:
+    m = re.search(r"fn\s+\w+\s*\((.*)\)\s*->", signature)
+    if not m:
+        return []
+    body = m.group(1).strip()
+    if not body:
+        return []
+    parts = [p.strip() for p in body.split(",") if p.strip()]
+    out: list[tuple[str, str]] = []
+    for part in parts:
+        name, type_ann = part.split(":", 1)
+        out.append((name.strip(), type_ann.strip()))
+    return out
+
+
+def _build_wrapper(function_name: str, signature: str, test_cases: list[tuple[tuple[Any, ...], str]]) -> str:
+    params = _parse_signature_params(signature)
     lines = ["fn main() -> i64 {"]
-    for args, _expected in test_cases:
-        arg_src = ", ".join(_mog_literal(a) for a in args)
+    for case_idx, (args, _expected) in enumerate(test_cases):
+        call_args: list[str] = []
+        for arg_idx, arg in enumerate(args):
+            param_type = params[arg_idx][1] if arg_idx < len(params) else None
+            # The real Mog compiler is picky about array literals / composite literals
+            # inline in call positions, so bind them to typed locals first.
+            if isinstance(arg, list) and param_type is not None:
+                var_name = f"arg_{case_idx}_{arg_idx}"
+                lines.append(f"    {var_name}: {param_type} = {_mog_literal(arg)};")
+                call_args.append(var_name)
+            elif isinstance(arg, RawCode) and param_type is not None:
+                var_name = f"arg_{case_idx}_{arg_idx}"
+                lines.append(f"    {var_name}: {param_type} = {arg.code};")
+                call_args.append(var_name)
+            else:
+                call_args.append(_mog_literal(arg))
+        arg_src = ", ".join(call_args)
         lines.append(f"    println_i64({function_name}({arg_src}));")
     lines.append("    return 0;")
     lines.append("}")
@@ -143,7 +175,7 @@ def _problem(name: str, category: str, description: str, signature: str,
         description=description,
         signature=signature,
         test_cases=test_cases,
-        wrapper_template=_build_wrapper(fn_name, test_cases),
+        wrapper_template=_build_wrapper(fn_name, signature, test_cases),
         reference_solution=reference_solution.strip() + "\n",
     )
 
@@ -339,10 +371,10 @@ def _make_array_sum(rng: random.Random, variant: int) -> MogBenchmarkProblem:
     return _problem(
         f"array_sum_v{variant}", "arrays",
         "Return the sum of all elements in an array of i64 values.",
-        "fn array_sum(arr: []i64) -> i64",
+        "fn array_sum(arr: [i64]) -> i64",
         tests,
         """
-fn array_sum(arr: []i64) -> i64 {
+fn array_sum(arr: [i64]) -> i64 {
     total: i64 = 0;
     for item in arr {
         total = total + item;
@@ -361,10 +393,10 @@ def _make_array_max(rng: random.Random, variant: int) -> MogBenchmarkProblem:
     return _problem(
         f"array_max_v{variant}", "arrays",
         "Return the largest element in a non-empty array.",
-        "fn array_max(arr: []i64) -> i64",
+        "fn array_max(arr: [i64]) -> i64",
         tests,
         """
-fn array_max(arr: []i64) -> i64 {
+fn array_max(arr: [i64]) -> i64 {
     best := arr[0];
     for item in arr {
         if item > best {
@@ -386,10 +418,10 @@ def _make_count_occurrences(rng: random.Random, variant: int) -> MogBenchmarkPro
     return _problem(
         f"count_occurrences_v{variant}", "arrays",
         "Count how many times target appears in arr.",
-        "fn count_occurrences(arr: []i64, target: i64) -> i64",
+        "fn count_occurrences(arr: [i64], target: i64) -> i64",
         tests,
         """
-fn count_occurrences(arr: []i64, target: i64) -> i64 {
+fn count_occurrences(arr: [i64], target: i64) -> i64 {
     count: i64 = 0;
     for item in arr {
         if item == target {
@@ -605,10 +637,10 @@ def _make_closure_map_sum(rng: random.Random, variant: int) -> MogBenchmarkProbl
     return _problem(
         f"closure_map_sum_v{variant}", "higher_order",
         "Double every array element with .map() and return the sum of the doubled values.",
-        "fn closure_map_sum(arr: []i64) -> i64",
+        "fn closure_map_sum(arr: [i64]) -> i64",
         tests,
         """
-fn closure_map_sum(arr: []i64) -> i64 {
+fn closure_map_sum(arr: [i64]) -> i64 {
     doubled := arr.map(fn(x: i64) -> i64 { x * 2 });
     total: i64 = 0;
     for item in doubled {
@@ -628,10 +660,10 @@ def _make_count_positive(rng: random.Random, variant: int) -> MogBenchmarkProble
     return _problem(
         f"count_positive_v{variant}", "arrays",
         "Count how many elements in the array are greater than zero.",
-        "fn count_positive(arr: []i64) -> i64",
+        "fn count_positive(arr: [i64]) -> i64",
         tests,
         """
-fn count_positive(arr: []i64) -> i64 {
+fn count_positive(arr: [i64]) -> i64 {
     total: i64 = 0;
     for item in arr {
         if item > 0 {

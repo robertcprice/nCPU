@@ -18,6 +18,9 @@ from egdc.mog_eval import evaluate_mog_program, evaluate_batch
 from egdc.mog_model import MogMaskedDiffusion, MogDiffusionConfig
 from egdc.mog_execute import compile_mog, execute_mog, check_mog_output, evaluate_mog_programs
 from egdc.mog_benchmark import get_benchmark, evaluate_solution, evaluate_solutions_batch
+from egdc.mog_differentiable import DifferentiableMogExecutor
+from egdc.mog_execution_guidance import MogExecutionGuidedScorer, execution_guided_generate_mog
+from egdc.mog_grpo import MogRewardModel, MogRewardConfig
 
 __all__ = [
     "NCPUTokenizer",
@@ -44,4 +47,9 @@ __all__ = [
     "get_benchmark",
     "evaluate_solution",
     "evaluate_solutions_batch",
+    "DifferentiableMogExecutor",
+    "MogExecutionGuidedScorer",
+    "execution_guided_generate_mog",
+    "MogRewardModel",
+    "MogRewardConfig",
 ]
