@@ -44,6 +44,14 @@ def main():
             print(f"  {fam}: {score:.3f}")
     print(f"Total pathway successes stored: {summary['total_successes']}")
 
+    if summary.get("induced_patterns"):
+        print(f"\nInduced structural patterns:")
+        for p in summary["induced_patterns"][:10]:
+            print(f"  {p['shared_structure']} (freq={p['frequency']}, members={p['member_functions'][:5]})")
+
+    if summary.get("num_regressions", 0) > 0:
+        print(f"\nAuto-regressions recorded: {summary['num_regressions']}")
+
     failed = [r for r in summary["results"] if not r["success"]]
     if failed:
         print(f"\nFailed ({len(failed)}):")

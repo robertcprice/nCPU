@@ -24,6 +24,8 @@ from typing import Any, Optional
 from egdc.mog_benchmark import MogBenchmarkProblem, evaluate_solution, evaluate_solution_with_compiler
 from egdc.mog_direct_router import solve_problem_direct
 from egdc.mog_pathways import PathwayMemory
+from egdc.mog_regression_bank import RegressionBank
+from egdc.mog_family_inductor import FamilyInductor
 
 
 # Known anti-pattern signatures and the code substrings that trigger them.
@@ -72,6 +74,8 @@ class MogOrchestrator:
         use_real_compiler: bool = True,
     ):
         self.memory = PathwayMemory(memory_root)
+        self.regression_bank = RegressionBank(root=Path(memory_root) / "regressions")
+        self.inductor = FamilyInductor()
         self.completion_checkpoint = completion_checkpoint
         self.use_real_compiler = use_real_compiler
 
@@ -115,6 +119,17 @@ class MogOrchestrator:
             fail_meta = dict(meta)
             fail_meta.update({"code": code, "anti_pattern": anti_pattern})
             self.memory.record_failure(problem.name, family, "execution", error or "unknown", fail_meta)
+            # Auto-add regression entry for this failure.
+            if not self.regression_bank.has_regression_for(problem.name):
+                self.regression_bank.add_regression(
+                    problem_name=problem.name,
+                    description=problem.description,
+                    code=code or "",
+                    error=error or "unknown",
+                    test_input=problem.signature,
+                    expected_output="(from benchmark test cases)",
+                )
+                self.regression_bank.save()
         self.memory.save()
 
     def solve(self, problem: MogBenchmarkProblem) -> OrchestratorResult:
@@ -203,6 +218,10 @@ class MogOrchestrator:
         by_method: dict[str, int] = {}
         for r in results:
             by_method[r.method] = by_method.get(r.method, 0) + 1
+        # Run family induction on all solved codes.
+        solved_codes = [(r.family or "unknown", r.code or "") for r in results if r.success and r.code]
+        induced = self.inductor.detect_patterns(solved_codes)
+
         return {
             "num_problems": len(problems),
             "num_solved": solved,
@@ -210,6 +229,8 @@ class MogOrchestrator:
             "by_method": by_method,
             "family_scores": {fam: self.memory.family_score(fam) for fam in self.memory.successes_by_family().keys()},
             "total_successes": self.memory.total_successes(),
+            "induced_patterns": induced,
+            "num_regressions": len(self.regression_bank.regressions),
             "results": [
                 {
                     "problem": p.name,
