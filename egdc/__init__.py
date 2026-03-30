@@ -21,6 +21,9 @@ from egdc.mog_benchmark import get_benchmark, evaluate_solution, evaluate_soluti
 from egdc.mog_differentiable import DifferentiableMogExecutor
 from egdc.mog_execution_guidance import MogExecutionGuidedScorer, execution_guided_generate_mog
 from egdc.mog_grpo import MogRewardModel, MogRewardConfig
+from egdc.mog_completion import mask_function_bodies, build_completion_tokens, complete_mog_from_initial
+from egdc.mog_completion_dataset import MogBenchmarkCompletionDataset
+from egdc.mog_supervised_dataset import MogBenchmarkSupervisedDataset
 
 __all__ = [
     "NCPUTokenizer",
@@ -52,4 +55,9 @@ __all__ = [
     "execution_guided_generate_mog",
     "MogRewardModel",
     "MogRewardConfig",
+    "mask_function_bodies",
+    "build_completion_tokens",
+    "complete_mog_from_initial",
+    "MogBenchmarkCompletionDataset",
+    "MogBenchmarkSupervisedDataset",
 ]
