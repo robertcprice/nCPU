@@ -162,11 +162,62 @@ def _make_program(template: str, num_args: int) -> nn.Module:
     raise ValueError(f"unknown template: {template}")
 
 
+def _sum_to_n_family_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[float, ...], float]]):
+    # Search a tiny closed-form family around n*(n+c)/d with optional clamp-at-zero.
+    best = None
+    best_loss = float("inf")
+    n_name = arg_names[0]
+    for clamp_zero in [False, True]:
+        for c in range(-2, 4):
+            for d in [1, 2, 3, 4]:
+                loss = 0.0
+                for args, target in examples:
+                    n = args[0]
+                    x = max(n, 0.0) if clamp_zero else n
+                    pred = (x * (x + c)) / d
+                    loss += (pred - target) ** 2
+                loss /= max(len(examples), 1)
+                if loss < best_loss:
+                    best_loss = loss
+                    best = (clamp_zero, c, d)
+    assert best is not None
+    clamp_zero, c, d = best
+    x = n_name
+    prefix = ""
+    if clamp_zero:
+        prefix = (
+            f"if ({n_name} <= 0) {{\n"
+            f"    return 0;\n"
+            f"}}\n"
+        )
+    inner = f"({x} * ({x} + {c})) / {d}"
+    code = prefix + inner if not prefix else prefix + f"return {inner};"
+    return code, {"clamp_zero": clamp_zero, "c": c, "d": d}, best_loss
+
+
+def _mod2_eq0_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[float, ...], float]]):
+    x_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        x = int(args[0])
+        pred = 1.0 if (x % 2) == 0 else 0.0
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if ((({x_name} % 2) == 0)) {{\n"
+        f"    return 1;\n"
+        f"}}\n"
+        f"return 0;"
+    )
+    return code, {"pattern": "mod2_eq0"}, loss
+
+
 def _render_function(function_name: str, arg_names: Sequence[str], body_code: str) -> str:
     params = ", ".join(f"{a}: i64" for a in arg_names)
-    if body_code.strip().startswith("if "):
-        return f"fn {function_name}({params}) -> i64 {{\n    " + body_code.replace("\n", "\n    ") + "\n}\n"
-    return f"fn {function_name}({params}) -> i64 {{\n    return {body_code};\n}}\n"
+    stripped = body_code.strip()
+    if "\n" in stripped or stripped.startswith("if ") or stripped.startswith("if ("):
+        return f"fn {function_name}({params}) -> i64 {{\n    " + stripped.replace("\n", "\n    ") + "\n}\n"
+    return f"fn {function_name}({params}) -> i64 {{\n    return {stripped};\n}}\n"
 
 
 def _eval_discrete_binary(op: str, left_idx: int, right_idx: int, left_const: float, right_const: float, args: tuple[float, ...]) -> float:
@@ -292,6 +343,18 @@ def synthesize_expression_program(
 ) -> DirectSynthResult:
     torch.manual_seed(seed)
     random.seed(seed)
+
+    # Some template families are directly searched over discrete/closed-form structures.
+    if template == "sum_to_n":
+        body_code, meta, discrete_loss = _sum_to_n_family_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "mod2_eq0":
+        body_code, meta, discrete_loss = _mod2_eq0_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
 
     prog = _make_program(template, len(arg_names)).to(device)
     opt = torch.optim.Adam(prog.parameters(), lr=lr)
