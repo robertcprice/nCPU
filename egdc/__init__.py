@@ -25,6 +25,7 @@ from egdc.mog_completion import mask_function_bodies, build_completion_tokens, c
 from egdc.mog_completion_dataset import MogBenchmarkCompletionDataset
 from egdc.mog_supervised_dataset import MogBenchmarkSupervisedDataset
 from egdc.mog_direct_synth import synthesize_expression_program, DirectSynthResult
+from egdc.mog_direct_router import solve_problem_direct, evaluate_direct_solver
 
 __all__ = [
     "NCPUTokenizer",
@@ -63,4 +64,6 @@ __all__ = [
     "MogBenchmarkSupervisedDataset",
     "synthesize_expression_program",
     "DirectSynthResult",
+    "solve_problem_direct",
+    "evaluate_direct_solver",
 ]

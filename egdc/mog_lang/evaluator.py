@@ -584,7 +584,13 @@ class Evaluator:
             if method == "upper": return obj.upper()
             if method == "lower": return obj.lower()
             if method == "trim": return obj.strip()
-            if method == "split": return obj.split(args[0]) if args else obj.split()
+            if method == "split":
+                if args:
+                    sep = args[0]
+                    if sep == "":
+                        return list(obj)
+                    return obj.split(sep)
+                return obj.split()
             if method == "contains": return args[0] in obj
             if method == "starts_with": return obj.startswith(args[0])
             if method == "ends_with": return obj.endswith(args[0])

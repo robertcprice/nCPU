@@ -461,6 +461,165 @@ def _point_sum_struct_search(arg_names: Sequence[str], examples):
     return code, {"pattern": "point_sum_struct"}, loss, True
 
 
+def _rectangle_area_struct_search(arg_names: Sequence[str], examples):
+    loss = 0.0
+    for args, target in examples:
+        pred = float(args[0] * args[1])
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        "struct Rectangle {\n"
+        "    width: i64,\n"
+        "    height: i64,\n"
+        "}\n\n"
+        "fn rectangle_area(r: Rectangle) -> i64 {\n"
+        "    return r.width * r.height;\n"
+        "}\n"
+    )
+    return code, {"pattern": "rectangle_area_struct"}, loss, True
+
+
+def _trimmed_len_search(arg_names: Sequence[str], examples):
+    s_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        pred = float(len(str(args[0]).strip()))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"t := {s_name}.trim();\n"
+        f"return t.len;"
+    )
+    return code, {"pattern": "trimmed_len"}, loss
+
+
+def _starts_with_m_search(arg_names: Sequence[str], examples):
+    s_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        s = str(args[0])
+        pred = 1.0 if s.startswith('m') else 0.0
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if {s_name}.starts_with(\"m\") {{\n"
+        f"    return 1;\n"
+        f"}}\n"
+        f"return 0;"
+    )
+    return code, {"pattern": "starts_with_m"}, loss
+
+
+def _contains_cat_search(arg_names: Sequence[str], examples):
+    s_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        s = str(args[0])
+        pred = 1.0 if 'cat' in s else 0.0
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if {s_name}.contains(\"cat\") {{\n"
+        f"    return 1;\n"
+        f"}}\n"
+        f"return 0;"
+    )
+    return code, {"pattern": "contains_cat"}, loss
+
+
+def _vowel_count_search(arg_names: Sequence[str], examples):
+    s_name = arg_names[0]
+    vowels = set('aeiou')
+    loss = 0.0
+    for args, target in examples:
+        s = str(args[0]).lower()
+        pred = float(sum(1 for ch in s if ch in vowels))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"chars := {s_name}.split(\"\");\n"
+        f"total: i64 = 0;\n"
+        f"for ch in chars {{\n"
+        f"    if ch == \"a\" {{ total = total + 1; }}\n"
+        f"    if ch == \"e\" {{ total = total + 1; }}\n"
+        f"    if ch == \"i\" {{ total = total + 1; }}\n"
+        f"    if ch == \"o\" {{ total = total + 1; }}\n"
+        f"    if ch == \"u\" {{ total = total + 1; }}\n"
+        f"}}\n"
+        f"return total;"
+    )
+    return code, {"pattern": "vowel_count"}, loss
+
+
+def _factorial_search(arg_names: Sequence[str], examples):
+    n_name = arg_names[0]
+    def fact(n: int) -> int:
+        out = 1
+        for i in range(2, n + 1):
+            out *= i
+        return out
+    loss = 0.0
+    for args, target in examples:
+        pred = float(fact(int(args[0])))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if {n_name} <= 1 {{\n"
+        f"    return 1;\n"
+        f"}}\n"
+        f"return {n_name} * factorial({n_name} - 1);"
+    )
+    return code, {"pattern": "factorial"}, loss
+
+
+def _fibonacci_search(arg_names: Sequence[str], examples):
+    n_name = arg_names[0]
+    def fib(n: int) -> int:
+        a, b = 0, 1
+        for _ in range(n):
+            a, b = b, a + b
+        return a
+    loss = 0.0
+    for args, target in examples:
+        pred = float(fib(int(args[0])))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if {n_name} <= 0 {{ return 0; }}\n"
+        f"if {n_name} == 1 {{ return 1; }}\n"
+        f"a: i64 = 0;\n"
+        f"b: i64 = 1;\n"
+        f"i: i64 = 2;\n"
+        f"while i <= {n_name} {{\n"
+        f"    tmp := a + b;\n"
+        f"    a = b;\n"
+        f"    b = tmp;\n"
+        f"    i = i + 1;\n"
+        f"}}\n"
+        f"return b;"
+    )
+    return code, {"pattern": "fibonacci"}, loss
+
+
+def _closure_map_sum_search(arg_names: Sequence[str], examples):
+    arr_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        arr = args[0]
+        pred = float(sum(x * 2 for x in arr))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"doubled := {arr_name}.map(fn(x: i64) -> i64 {{ x * 2 }});\n"
+        f"total: i64 = 0;\n"
+        f"for item in doubled {{\n"
+        f"    total = total + item;\n"
+        f"}}\n"
+        f"return total;"
+    )
+    return code, {"pattern": "closure_map_sum"}, loss
+
+
 def _render_function(function_name: str, arg_names: Sequence[str], body_code: str, arg_types: Sequence[str] | None = None) -> str:
     if arg_types is None:
         arg_types = ["i64"] * len(arg_names)
@@ -664,6 +823,45 @@ def synthesize_expression_program(
         return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
     if template == "point_sum_struct":
         code, meta, discrete_loss, _is_full_code = _point_sum_struct_search(arg_names, examples)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "rectangle_area_struct":
+        code, meta, discrete_loss, _is_full_code = _rectangle_area_struct_search(arg_names, examples)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "trimmed_len":
+        body_code, meta, discrete_loss = _trimmed_len_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "starts_with_m":
+        body_code, meta, discrete_loss = _starts_with_m_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "contains_cat":
+        body_code, meta, discrete_loss = _contains_cat_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "vowel_count":
+        body_code, meta, discrete_loss = _vowel_count_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "factorial":
+        body_code, meta, discrete_loss = _factorial_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "fibonacci":
+        body_code, meta, discrete_loss = _fibonacci_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "closure_map_sum":
+        body_code, meta, discrete_loss = _closure_map_sum_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
         success = math.isfinite(discrete_loss)
         return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
 

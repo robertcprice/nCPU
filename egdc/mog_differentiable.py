@@ -551,7 +551,13 @@ class DifferentiableMogExecutor:
             if method == "trim": return obj.strip()
             if method == "upper": return obj.upper()
             if method == "lower": return obj.lower()
-            if method == "split": return obj.split(args[0]) if args else obj.split()
+            if method == "split":
+                if args:
+                    sep = args[0]
+                    if sep == "":
+                        return list(obj)
+                    return obj.split(sep)
+                return obj.split()
             if method == "contains": return torch.tensor(1.0 if args[0] in obj else 0.0, device=self.device)
             if method == "starts_with": return torch.tensor(1.0 if obj.startswith(args[0]) else 0.0, device=self.device)
             if method == "ends_with": return torch.tensor(1.0 if obj.endswith(args[0]) else 0.0, device=self.device)
