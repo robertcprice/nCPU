@@ -24,6 +24,7 @@ from egdc.mog_grpo import MogRewardModel, MogRewardConfig
 from egdc.mog_completion import mask_function_bodies, build_completion_tokens, complete_mog_from_initial
 from egdc.mog_completion_dataset import MogBenchmarkCompletionDataset
 from egdc.mog_supervised_dataset import MogBenchmarkSupervisedDataset
+from egdc.mog_direct_synth import synthesize_expression_program, DirectSynthResult
 
 __all__ = [
     "NCPUTokenizer",
@@ -60,4 +61,6 @@ __all__ = [
     "complete_mog_from_initial",
     "MogBenchmarkCompletionDataset",
     "MogBenchmarkSupervisedDataset",
+    "synthesize_expression_program",
+    "DirectSynthResult",
 ]
