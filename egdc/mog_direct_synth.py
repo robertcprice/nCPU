@@ -212,8 +212,72 @@ def _mod2_eq0_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[fl
     return code, {"pattern": "mod2_eq0"}, loss
 
 
-def _render_function(function_name: str, arg_names: Sequence[str], body_code: str) -> str:
-    params = ", ".join(f"{a}: i64" for a in arg_names)
+def _sign3_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[float, ...], float]]):
+    x_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        x = args[0]
+        pred = -1.0 if x < 0 else (1.0 if x > 0 else 0.0)
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"if ({x_name} < 0) {{\n"
+        f"    return -1;\n"
+        f"}}\n"
+        f"if ({x_name} > 0) {{\n"
+        f"    return 1;\n"
+        f"}}\n"
+        f"return 0;"
+    )
+    return code, {"pattern": "sign3"}, loss
+
+
+def _gcd_euclid_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[float, ...], float]]):
+    a_name, b_name = arg_names[0], arg_names[1]
+    def gcd(a: int, b: int) -> int:
+        while b != 0:
+            a, b = b, a % b
+        return a
+    loss = 0.0
+    for args, target in examples:
+        pred = float(gcd(int(args[0]), int(args[1])))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"x: i64 = {a_name};\n"
+        f"y: i64 = {b_name};\n"
+        f"while y != 0 {{\n"
+        f"    tmp := y;\n"
+        f"    y = x % y;\n"
+        f"    x = tmp;\n"
+        f"}}\n"
+        f"return x;"
+    )
+    return code, {"pattern": "gcd_euclid"}, loss
+
+
+def _array_sum_reduce_search(arg_names: Sequence[str], examples: Sequence[tuple[tuple[tuple[float, ...], ...], float]]):
+    arr_name = arg_names[0]
+    loss = 0.0
+    for args, target in examples:
+        arr = args[0]
+        pred = float(sum(arr))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+    code = (
+        f"total: i64 = 0;\n"
+        f"for item in {arr_name} {{\n"
+        f"    total = total + item;\n"
+        f"}}\n"
+        f"return total;"
+    )
+    return code, {"pattern": "array_sum_reduce"}, loss
+
+
+def _render_function(function_name: str, arg_names: Sequence[str], body_code: str, arg_types: Sequence[str] | None = None) -> str:
+    if arg_types is None:
+        arg_types = ["i64"] * len(arg_names)
+    params = ", ".join(f"{a}: {t}" for a, t in zip(arg_names, arg_types))
     stripped = body_code.strip()
     if "\n" in stripped or stripped.startswith("if ") or stripped.startswith("if ("):
         return f"fn {function_name}({params}) -> i64 {{\n    " + stripped.replace("\n", "\n    ") + "\n}\n"
@@ -334,12 +398,13 @@ def _if_cmp_family_search(arg_names: Sequence[str], examples: Sequence[tuple[tup
 def synthesize_expression_program(
     function_name: str,
     arg_names: Sequence[str],
-    examples: Sequence[tuple[tuple[float, ...], float]],
+    examples: Sequence,
     template: str = "binary",
     steps: int = 300,
     lr: float = 0.1,
     seed: int = 0,
     device: str = "cpu",
+    arg_types: Sequence[str] | None = None,
 ) -> DirectSynthResult:
     torch.manual_seed(seed)
     random.seed(seed)
@@ -347,12 +412,27 @@ def synthesize_expression_program(
     # Some template families are directly searched over discrete/closed-form structures.
     if template == "sum_to_n":
         body_code, meta, discrete_loss = _sum_to_n_family_search(arg_names, examples)
-        code = _render_function(function_name, arg_names, body_code)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
         success = math.isfinite(discrete_loss)
         return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
     if template == "mod2_eq0":
         body_code, meta, discrete_loss = _mod2_eq0_search(arg_names, examples)
-        code = _render_function(function_name, arg_names, body_code)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "sign3":
+        body_code, meta, discrete_loss = _sign3_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "gcd_euclid":
+        body_code, meta, discrete_loss = _gcd_euclid_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
+        success = math.isfinite(discrete_loss)
+        return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
+    if template == "array_sum_reduce":
+        body_code, meta, discrete_loss = _array_sum_reduce_search(arg_names, examples)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
         success = math.isfinite(discrete_loss)
         return DirectSynthResult(success=success, code=code, loss=discrete_loss, template=template, metadata=meta)
 
@@ -384,10 +464,10 @@ def synthesize_expression_program(
 
     if template == "binary":
         body_expr, meta, discrete_loss = _binary_family_search(arg_names, examples, prog)  # type: ignore[arg-type]
-        code = _render_function(function_name, arg_names, body_expr)
+        code = _render_function(function_name, arg_names, body_expr, arg_types)
     else:
         body_code, meta, discrete_loss = _if_cmp_family_search(arg_names, examples, prog)  # type: ignore[arg-type]
-        code = _render_function(function_name, arg_names, body_code)
+        code = _render_function(function_name, arg_names, body_code, arg_types)
 
     success = math.isfinite(discrete_loss)
     return DirectSynthResult(
