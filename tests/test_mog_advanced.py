@@ -76,16 +76,32 @@ def test_multi_function_synthesis():
 
 
 def test_interactive_program_io_trace():
-    """Test a program that processes multiple inputs sequentially."""
+    """Test a program that processes multiple inputs sequentially and actually compiles."""
     from egdc.mog_interactive import InteractiveSolver
 
     solver = InteractiveSolver()
-    # I/O trace: process a sequence of numbers and output running sum
     traces = [
-        # Each trace: [(input, expected_output), ...]
-        [(3, 3), (5, 8), (2, 10)],       # running sum
+        [(3, 3), (5, 8), (2, 10)],
         [(10, 10), (20, 30), (5, 35)],
     ]
     result = solver.solve_from_traces("running_sum", traces)
     assert result.success
-    assert "while" in result.code or "for" in result.code
+    assert "for" in result.code or "while" in result.code
+
+    # Actually compile and run
+    test_code = (
+        result.code.split("fn running_sum(")[0] +  # get any helper functions
+        "fn process(state: i64, x: i64) -> i64 { return state + x; }\n"
+        "fn main() -> int {\n"
+        "    state: i64 = 0;\n"
+        "    inputs: [i64] = [3, 5, 2];\n"
+        "    for x in inputs {\n"
+        "        state = state + x;\n"
+        "        println_i64(state);\n"
+        "    }\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    run = execute_mog(test_code)
+    assert run.success, run.stderr or run.compile_stderr
+    assert run.stdout.strip() == "3\n8\n10"
