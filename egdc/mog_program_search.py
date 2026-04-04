@@ -892,6 +892,184 @@ def search_program(
     )
 
 
+# ---------------------------------------------------------------------------
+# GCD / while-loop search
+# ---------------------------------------------------------------------------
+
+def _gcd_loop_refinement(arg_names: list[str], examples, function_name: str) -> tuple[str, float]:
+    """Search for Euclidean-style while loops: while y != 0 { tmp=y; y=x%y; x=tmp } return x."""
+    if len(arg_names) < 2:
+        return "", float("inf")
+    a, b = arg_names[0], arg_names[1]
+    params = ", ".join(f"{x}: i64" for x in arg_names)
+
+    def gcd(a: int, b: int) -> int:
+        while b:
+            a, b = b, a % b
+        return a
+
+    loss = 0.0
+    for args, target in examples:
+        pred = float(gcd(int(args[0]), int(args[1])))
+        loss += (pred - target) ** 2
+    loss /= max(len(examples), 1)
+
+    code = (
+        f"fn {function_name}({params}) -> i64 {{\n"
+        f"    x: i64 = {a};\n"
+        f"    y: i64 = {b};\n"
+        f"    while y != 0 {{\n"
+        f"        tmp := y;\n"
+        f"        y = x % y;\n"
+        f"        x = tmp;\n"
+        f"    }}\n"
+        f"    return x;\n"
+        f"}}\n"
+    )
+    return code, loss
+
+
+# ---------------------------------------------------------------------------
+# Robust search with holdout + stress testing
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RobustSearchResult:
+    success: bool
+    code: str
+    loss: float
+    holdout_loss: float
+    stress_test_passed: bool
+    metadata: dict[str, Any]
+
+
+def _auto_stress_test(code: str, arg_names: list[str], fn_name: str,
+                      reference_fn=None, num_tests: int = 50) -> bool:
+    """Run discovered program on random inputs and verify via interpreter."""
+    import random as _rng
+    from egdc.mog_lang import interpret
+
+    _rng.seed(12345)
+    for _ in range(num_tests):
+        args = [_rng.randint(-50, 50) for _ in arg_names]
+        arg_str = ", ".join(str(a) for a in args)
+        test_code = code + f"\nfn main() -> i64 {{ println_i64({fn_name}({arg_str})); return 0; }}"
+        result = interpret(test_code)
+        if not result.success:
+            return False
+        # At minimum, it should not crash. If we have a reference fn, check output.
+        if reference_fn is not None:
+            try:
+                expected = reference_fn(*args)
+                actual = int(result.output.strip().split("\n")[0])
+                if actual != expected:
+                    return False
+            except Exception:
+                return False
+    return True
+
+
+def robust_search_program(
+    arg_names: Sequence[str],
+    train_examples: Sequence[tuple[tuple[float, ...], float]],
+    holdout_examples: Sequence[tuple[tuple[float, ...], float]] = (),
+    function_name: str = "program",
+    auto_stress_test: bool = False,
+    reference_fn=None,
+    seed: int = 0,
+    **kwargs,
+) -> RobustSearchResult:
+    """Search for a program, verify on holdout, optionally stress test."""
+
+    # Try fast structure-specific searches first before expensive general search.
+    best_result: SearchResult | None = None
+
+    # Fast arithmetic: v0 = src1 OP src2; return v0;
+    CONSTS_ARITH = [0, 1, -1, 2, 100]
+    arith_names = list(arg_names) + [str(c) for c in CONSTS_ARITH]
+    for s1 in arith_names:
+        for s2 in arith_names:
+            for op in ["+", "-", "*"]:
+                loss = 0.0
+                for args, target in train_examples:
+                    env = {n: float(v) for n, v in zip(arg_names, args)}
+                    pred = _py_eval_expr(f"{s1} {op} {s2}", env)
+                    loss += (pred - target) ** 2
+                loss /= max(len(train_examples), 1)
+                if loss < (best_result.loss if best_result else float("inf")):
+                    params = ", ".join(f"{a}: i64" for a in arg_names)
+                    best_result = SearchResult(
+                        loss < 0.5,
+                        f"fn {function_name}({params}) -> i64 {{\n    return {s1} {op} {s2};\n}}\n",
+                        loss, 0, {"structure": "arithmetic"})
+                    if loss < 1e-6:
+                        break
+            if best_result and best_result.loss < 1e-6:
+                break
+        if best_result and best_result.loss < 1e-6:
+            break
+
+    # GCD loop
+    gcd_code, gcd_loss = _gcd_loop_refinement(list(arg_names), train_examples, function_name)
+    if gcd_loss < 1e-6:
+        best_result = SearchResult(True, gcd_code, gcd_loss, 0, {"structure": "gcd_loop"})
+
+    # Single-branch (fast — ~1.5s for 2-arg)
+    if best_result is None or best_result.loss > 1e-6:
+        sb_code, sb_loss = _branching_refinement(
+            SoftBranchingProgram(num_args=len(arg_names)),
+            list(arg_names), train_examples, function_name)
+        if sb_loss < (best_result.loss if best_result else float("inf")):
+            best_result = SearchResult(sb_loss < 0.5, sb_code, sb_loss, 0, {"structure": "single_branch"})
+
+    # Loop accumulator (fast — instant)
+    if best_result is None or best_result.loss > 1e-6:
+        la_code, la_loss = _loop_accum_refinement(list(arg_names), train_examples, function_name)
+        if la_loss < (best_result.loss if best_result else float("inf")):
+            best_result = SearchResult(la_loss < 0.5, la_code, la_loss, 0, {"structure": "loop_accum"})
+
+    # Two-branch (slower — only if simpler structures failed)
+    if best_result is None or best_result.loss > 1e-6:
+        tb_code, tb_loss = _two_branch_refinement(list(arg_names), train_examples, function_name)
+        if tb_loss < (best_result.loss if best_result else float("inf")):
+            best_result = SearchResult(tb_loss < 0.5, tb_code, tb_loss, 0, {"structure": "two_branch"})
+
+    # Only run expensive general search if fast searches didn't find an exact solution.
+    if best_result is None or best_result.loss > 1e-6:
+        result = search_program(
+            arg_names=arg_names,
+            examples=train_examples,
+            function_name=function_name,
+            seed=seed,
+            **kwargs,
+        )
+        if best_result is None or result.loss < best_result.loss:
+            best_result = result
+
+    result = best_result
+
+    # Holdout verification
+    holdout_loss = 0.0
+    if holdout_examples:
+        holdout_loss = _eval_code_on_examples(result.code, list(arg_names), holdout_examples)
+
+    # Stress test
+    stress_passed = True
+    if auto_stress_test and result.success:
+        stress_passed = _auto_stress_test(result.code, list(arg_names), function_name, reference_fn)
+
+    overall_success = result.success and holdout_loss < 1.0 and stress_passed
+
+    return RobustSearchResult(
+        success=overall_success,
+        code=result.code,
+        loss=result.loss,
+        holdout_loss=holdout_loss,
+        stress_test_passed=stress_passed,
+        metadata=result.metadata,
+    )
+
+
 def _eval_discrete(prog: SoftMogProgram, arg_names: Sequence[str],
                     examples: Sequence[tuple[tuple[float, ...], float]]) -> tuple[str, float]:
     """Evaluate the current discrete (argmax) program on examples."""
