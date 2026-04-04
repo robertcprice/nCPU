@@ -638,7 +638,11 @@ def _loop_accum_refinement(arg_names: list[str], examples, function_name: str) -
                                     acc = acc + r
                                 elif body_op == "*":
                                     acc = acc * r
-                            loss += (acc - target) ** 2
+                            diff = acc - target
+                            if abs(diff) > 1e12:
+                                loss = float("inf")
+                                break
+                            loss += diff ** 2
                         loss /= max(len(examples), 1)
                         if loss < best_loss:
                             best_loss = loss
@@ -665,7 +669,7 @@ def _py_eval_expr(expr_str: str, env: dict[str, float]) -> float:
         return float(expr_str)
     except ValueError:
         pass
-    for op in [" + ", " - ", " * "]:
+    for op in [" + ", " - ", " * ", " / "]:
         if op in expr_str:
             parts = expr_str.split(op, 1)
             l = _py_eval_expr(parts[0], env)
@@ -673,6 +677,7 @@ def _py_eval_expr(expr_str: str, env: dict[str, float]) -> float:
             if op == " + ": return l + r
             if op == " - ": return l - r
             if op == " * ": return l * r
+            if op == " / ": return l // r if r != 0 else 0.0
     return 0.0
 
 
@@ -724,7 +729,7 @@ def _branching_refinement(prog: SoftBranchingProgram, arg_names: list[str],
     arm_set: list[str] = list(search_names)
     for n1 in arg_names:
         for n2 in arg_names:
-            for op in ["+", "-", "*"]:
+            for op in ["+", "-", "*", "/"]:
                 arm_set.append(f"{n1} {op} {n2}")
     for n1 in arg_names:
         for c in CONSTS:
