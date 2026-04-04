@@ -321,6 +321,297 @@ class SearchResult:
     metadata: dict[str, Any]
 
 
+class SoftBranchingProgram(nn.Module):
+    """A program with: optional compute slots, then if(cond) return X else return Y.
+
+    This is specifically designed for branching programs like max2, abs_diff, sign.
+    The structure is:
+        v0 = src1 OP src2   (optional compute)
+        v1 = src1 OP src2   (optional compute)
+        if (lhs CMP rhs) { return then_val } else { return else_val }
+    """
+
+    def __init__(self, num_args: int, num_compute_slots: int = 2, num_vars: int = 4):
+        super().__init__()
+        self.num_args = num_args
+        self.num_compute_slots = num_compute_slots
+        self.num_vars = num_vars
+        self.num_sources = num_args + num_vars
+
+        # Compute slots
+        self.compute_enable = nn.Parameter(torch.zeros(num_compute_slots))
+        self.compute_src1 = nn.Parameter(torch.zeros(num_compute_slots, self.num_sources))
+        self.compute_src2 = nn.Parameter(torch.zeros(num_compute_slots, self.num_sources))
+        self.compute_op = nn.Parameter(torch.zeros(num_compute_slots, len(OPS)))
+        self.compute_dst = nn.Parameter(torch.zeros(num_compute_slots, num_vars))
+
+        # Branch: if (lhs CMP rhs) { return then_expr } else { return else_expr }
+        # Each arm is a binary expression: src1 OP src2 (with "left" = identity)
+        self.cmp_logits = nn.Parameter(torch.zeros(len(CMP_OPS)))
+        self.lhs_logits = nn.Parameter(torch.zeros(self.num_sources))
+        self.rhs_logits = nn.Parameter(torch.zeros(self.num_sources))
+        # Then arm expression
+        self.then_src1 = nn.Parameter(torch.zeros(self.num_sources))
+        self.then_src2 = nn.Parameter(torch.zeros(self.num_sources))
+        self.then_op = nn.Parameter(torch.zeros(len(OPS) + 1))  # +1 for "identity" (just src1)
+        # Else arm expression
+        self.else_src1 = nn.Parameter(torch.zeros(self.num_sources))
+        self.else_src2 = nn.Parameter(torch.zeros(self.num_sources))
+        self.else_op = nn.Parameter(torch.zeros(len(OPS) + 1))
+
+        # Constants
+        self.const_values = nn.Parameter(torch.zeros(num_compute_slots))
+
+        self._init()
+
+    def _init(self):
+        with torch.no_grad():
+            self.compute_enable[0] = -1.0  # disabled by default
+            self.compute_src1[0, 0] = 1.0
+            if self.num_args > 1:
+                self.compute_src2[0, 1] = 1.0
+            self.compute_dst[0, 0] = 1.0
+            if self.num_args > 1:
+                self.lhs_logits[0] = 1.0
+                self.rhs_logits[1] = 1.0
+                self.then_src1[0] = 1.0  # then returns arg0
+                self.then_op[-1] = 2.0   # identity
+                self.else_src1[1] = 1.0  # else returns arg1
+                self.else_op[-1] = 2.0   # identity
+            self.cmp_logits[0] = 1.0  # >
+
+    def forward(self, args: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
+        device = args.device
+        storage = torch.zeros(self.num_sources, device=device)
+        storage[:self.num_args] = args
+
+        # Execute compute slots
+        for slot in range(self.num_compute_slots):
+            enable = torch.sigmoid(self.compute_enable[slot])
+            src1_w = F.softmax(self.compute_src1[slot] / temperature, dim=0)
+            src2_w = F.softmax(self.compute_src2[slot] / temperature, dim=0)
+            op_w = F.softmax(self.compute_op[slot] / temperature, dim=0)
+            dst_w = F.softmax(self.compute_dst[slot] / temperature, dim=0)
+
+            src1_val = (src1_w * storage).sum()
+            src2_val = (src2_w * storage).sum()
+            safe_src2 = torch.where(torch.abs(src2_val) < 1e-6, torch.ones_like(src2_val), src2_val)
+
+            op_results = torch.stack([
+                src1_val + src2_val,
+                src1_val - src2_val,
+                src1_val * src2_val,
+                src1_val / safe_src2,
+                torch.remainder(torch.round(src1_val), torch.clamp(torch.round(torch.abs(safe_src2)), min=1.0)),
+            ])
+            result = (op_w * op_results).sum()
+
+            new_storage = []
+            for idx in range(self.num_sources):
+                if idx >= self.num_args:
+                    v = idx - self.num_args
+                    w = dst_w[v] * enable
+                    new_storage.append(storage[idx] * (1.0 - w) + result * w)
+                else:
+                    new_storage.append(storage[idx])
+            storage = torch.stack(new_storage)
+
+        # Branch
+        cmp_w = F.softmax(self.cmp_logits / temperature, dim=0)
+        lhs_w = F.softmax(self.lhs_logits / temperature, dim=0)
+        rhs_w = F.softmax(self.rhs_logits / temperature, dim=0)
+
+        lhs = (lhs_w * storage).sum()
+        rhs = (rhs_w * storage).sum()
+
+        # Then arm: expression
+        then_val = self._eval_arm(storage, self.then_src1, self.then_src2, self.then_op, temperature)
+        # Else arm: expression
+        else_val = self._eval_arm(storage, self.else_src1, self.else_src2, self.else_op, temperature)
+
+        diff = lhs - rhs
+        cmp_results = torch.stack([
+            torch.sigmoid(diff / 0.25),                      # >
+            torch.sigmoid(-diff / 0.25),                     # <
+            torch.sigmoid(diff / 0.25),                      # >= (approx)
+            torch.sigmoid(-diff / 0.25),                     # <= (approx)
+            torch.exp(-(diff ** 2) / 0.125),                 # ==
+            1.0 - torch.exp(-(diff ** 2) / 0.125),           # !=
+        ])
+        cond = (cmp_w * cmp_results).sum()
+
+        return cond * then_val + (1.0 - cond) * else_val
+
+    def _eval_arm(self, storage: torch.Tensor, src1_logits: torch.Tensor,
+                   src2_logits: torch.Tensor, op_logits: torch.Tensor,
+                   temperature: float) -> torch.Tensor:
+        """Evaluate a branch arm expression: src1 OP src2, or just src1 (identity)."""
+        src1_w = F.softmax(src1_logits / temperature, dim=0)
+        src2_w = F.softmax(src2_logits / temperature, dim=0)
+        op_w = F.softmax(op_logits / temperature, dim=0)  # [len(OPS) + 1]
+        s1 = (src1_w * storage).sum()
+        s2 = (src2_w * storage).sum()
+        safe_s2 = torch.where(torch.abs(s2) < 1e-6, torch.ones_like(s2), s2)
+        op_results = torch.stack([
+            s1 + s2,
+            s1 - s2,
+            s1 * s2,
+            s1 / safe_s2,
+            torch.remainder(torch.round(s1), torch.clamp(torch.round(torch.abs(safe_s2)), min=1.0)),
+            s1,  # identity
+        ])
+        return (op_w * op_results).sum()
+
+    def _discretize_arm(self, src1_logits: torch.Tensor, src2_logits: torch.Tensor,
+                        op_logits: torch.Tensor, all_names: list[str]) -> str:
+        s1_idx = int(torch.argmax(src1_logits).item())
+        s2_idx = int(torch.argmax(src2_logits).item())
+        op_idx = int(torch.argmax(op_logits).item())
+        if op_idx >= len(OPS):  # identity
+            return all_names[s1_idx]
+        return f"{all_names[s1_idx]} {OPS[op_idx]} {all_names[s2_idx]}"
+
+    def discretize(self, arg_names: list[str]) -> str:
+        var_names = [f"v{i}" for i in range(self.num_vars)]
+        all_names = list(arg_names) + var_names
+        lines = []
+        for i in range(self.num_vars):
+            lines.append(f"    v{i}: i64 = 0;")
+
+        for slot in range(self.num_compute_slots):
+            if torch.sigmoid(self.compute_enable[slot]).item() > 0.5:
+                src1_idx = int(torch.argmax(self.compute_src1[slot]).item())
+                src2_idx = int(torch.argmax(self.compute_src2[slot]).item())
+                op_idx = int(torch.argmax(self.compute_op[slot]).item())
+                dst_idx = int(torch.argmax(self.compute_dst[slot]).item())
+                lines.append(f"    {var_names[dst_idx]} = {all_names[src1_idx]} {OPS[op_idx]} {all_names[src2_idx]};")
+
+        cmp_idx = int(torch.argmax(self.cmp_logits).item())
+        lhs_idx = int(torch.argmax(self.lhs_logits).item())
+        rhs_idx = int(torch.argmax(self.rhs_logits).item())
+        then_expr = self._discretize_arm(self.then_src1, self.then_src2, self.then_op, all_names)
+        else_expr = self._discretize_arm(self.else_src1, self.else_src2, self.else_op, all_names)
+
+        lines.append(f"    if ({all_names[lhs_idx]} {CMP_OPS[cmp_idx]} {all_names[rhs_idx]}) {{")
+        lines.append(f"        return {then_expr};")
+        lines.append(f"    }} else {{")
+        lines.append(f"        return {else_expr};")
+        lines.append(f"    }}")
+
+        body = "\n".join(lines)
+        params = ", ".join(f"{a}: i64" for a in arg_names)
+        return f"fn program({params}) -> i64 {{\n{body}\n}}\n"
+
+
+ARM_EXPRS = ["identity", "+", "-", "*"]  # Reduced op set for arms to keep search tractable
+
+
+def _py_eval_expr(expr_str: str, env: dict[str, float]) -> float:
+    """Evaluate a simple Mog expression in Python. Fast, no interpreter overhead."""
+    expr_str = expr_str.strip()
+    if expr_str in env:
+        return env[expr_str]
+    try:
+        return float(expr_str)
+    except ValueError:
+        pass
+    for op in [" + ", " - ", " * "]:
+        if op in expr_str:
+            parts = expr_str.split(op, 1)
+            l = _py_eval_expr(parts[0], env)
+            r = _py_eval_expr(parts[1], env)
+            if op == " + ": return l + r
+            if op == " - ": return l - r
+            if op == " * ": return l * r
+    return 0.0
+
+
+def _py_eval_cmp(cmp_op: str, lhs: float, rhs: float) -> bool:
+    if cmp_op == ">": return lhs > rhs
+    if cmp_op == "<": return lhs < rhs
+    if cmp_op == ">=": return lhs >= rhs
+    if cmp_op == "<=": return lhs <= rhs
+    if cmp_op == "==": return lhs == rhs
+    if cmp_op == "!=": return lhs != rhs
+    return False
+
+
+def _py_eval_branch_program(
+    cmp_op: str, lhs_name: str, rhs_name: str,
+    then_expr: str, else_expr: str,
+    arg_names: list[str], examples,
+) -> float:
+    """Evaluate a branching program on examples using pure Python. Very fast."""
+    total = 0.0
+    for args, target in examples:
+        env = {n: float(v) for n, v in zip(arg_names, args)}
+        lhs = _py_eval_expr(lhs_name, env)
+        rhs = _py_eval_expr(rhs_name, env)
+        if _py_eval_cmp(cmp_op, lhs, rhs):
+            pred = _py_eval_expr(then_expr, env)
+        else:
+            pred = _py_eval_expr(else_expr, env)
+        total += (pred - target) ** 2
+    return total / max(len(examples), 1)
+
+
+def _branching_refinement(prog: SoftBranchingProgram, arg_names: list[str],
+                          examples, function_name: str) -> tuple[str, float]:
+    """Fast combinatorial refinement for branching programs using pure Python eval."""
+    best_code = prog.discretize(arg_names).replace("fn program(", f"fn {function_name}(")
+    best_loss = _eval_code_on_examples(best_code, arg_names, examples)
+
+    if best_loss < 1e-6:
+        return best_code, best_loss
+
+    params = ", ".join(f"{a}: i64" for a in arg_names)
+    var_lines = "\n".join(f"    v{i}: i64 = 0;" for i in range(prog.num_vars))
+
+    CONSTS = [0, 1, -1, 100]
+    search_names = list(arg_names) + [str(c) for c in CONSTS]
+
+    # Build arm expressions
+    arm_set: list[str] = list(search_names)
+    for n1 in arg_names:
+        for n2 in arg_names:
+            for op in ["+", "-", "*"]:
+                arm_set.append(f"{n1} {op} {n2}")
+    for n1 in arg_names:
+        for c in CONSTS:
+            for op in ["+", "-", "*"]:
+                arm_set.append(f"{n1} {op} {c}")
+    arm_set = list(dict.fromkeys(arm_set))
+
+    best_discrete_loss = best_loss
+
+    for cmp_op in CMP_OPS:
+        for lhs_name in search_names:
+            for rhs_name in search_names:
+                for then_e in arm_set:
+                    for else_e in arm_set:
+                        loss = _py_eval_branch_program(
+                            cmp_op, lhs_name, rhs_name,
+                            then_e, else_e, arg_names, examples,
+                        )
+                        if loss < best_discrete_loss:
+                            best_discrete_loss = loss
+                            code = (
+                                f"fn {function_name}({params}) -> i64 {{\n"
+                                f"{var_lines}\n"
+                                f"    if ({lhs_name} {cmp_op} {rhs_name}) {{\n"
+                                f"        return {then_e};\n"
+                                f"    }} else {{\n"
+                                f"        return {else_e};\n"
+                                f"    }}\n"
+                                f"}}\n"
+                            )
+                            best_code = code
+                            best_loss = loss
+                            if best_loss < 1e-6:
+                                return best_code, best_loss
+    return best_code, best_loss
+
+
 def search_program(
     arg_names: Sequence[str],
     examples: Sequence[tuple[tuple[float, ...], float]],
@@ -346,6 +637,43 @@ def search_program(
     best_code = ""
     best_steps = 0
 
+    # --- Try dedicated branching program structure too ---
+    # Soft optimization is just to warm-start; the refinement does the real work.
+    branch_steps = min(steps, 500)
+    for restart in range(max(1, min(num_restarts, 2))):
+        torch.manual_seed(seed + 5000 + restart * 1000)
+        bprog = SoftBranchingProgram(num_args=len(arg_names))
+        bopt = torch.optim.Adam(bprog.parameters(), lr=lr)
+        for step in range(branch_steps):
+            t = temperature_start + (temperature_end - temperature_start) * (step / max(steps - 1, 1))
+            losses = []
+            for args, target in examples:
+                x = torch.tensor(args, dtype=torch.float32)
+                y = torch.tensor(float(target), dtype=torch.float32)
+                pred = bprog(x, temperature=t)
+                losses.append((pred - y) ** 2)
+            loss = torch.stack(losses).mean()
+            bopt.zero_grad()
+            loss.backward()
+            bopt.step()
+            cur = float(loss.detach().item())
+            if cur < best_loss:
+                best_loss = cur
+                best_code = bprog.discretize(list(arg_names))
+                best_steps = step
+
+        # Branching refinement
+        bcode, bloss = _branching_refinement(bprog, list(arg_names), examples, function_name)
+        if bloss < best_loss:
+            best_loss = bloss
+            best_code = bcode
+
+        if best_loss < 1e-6:
+            best_code = best_code.replace("fn program(", f"fn {function_name}(")
+            return SearchResult(success=True, code=best_code, loss=best_loss,
+                                steps_taken=best_steps, metadata={"num_restarts": num_restarts, "num_slots": num_slots, "structure": "branching"})
+
+    # --- General SoftMogProgram ---
     for restart in range(num_restarts):
         torch.manual_seed(seed + restart * 1000)
         prog = SoftMogProgram(num_args=len(arg_names), num_slots=num_slots, num_vars=num_vars)
