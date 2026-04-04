@@ -506,6 +506,156 @@ class SoftBranchingProgram(nn.Module):
 ARM_EXPRS = ["identity", "+", "-", "*"]  # Reduced op set for arms to keep search tractable
 
 
+def _two_branch_refinement(arg_names: list[str], examples, function_name: str) -> tuple[str, float]:
+    """Search for programs with two sequential early-return branches + final return.
+
+    Uses decomposed search: find best first branch, then best second branch on
+    the remaining (non-matched) examples, then best default on the rest.
+    """
+    CONSTS = [0, 1, -1, 100]
+    search_names = list(arg_names) + [str(c) for c in CONSTS]
+    arm_set: list[str] = list(search_names)
+    for n in arg_names:
+        for c in CONSTS:
+            for op in ["+", "-", "*"]:
+                arm_set.append(f"{n} {op} {c}")
+    arm_set = list(dict.fromkeys(arm_set))
+    params = ", ".join(f"{a}: i64" for a in arg_names)
+
+    best_loss = float("inf")
+    best_code = ""
+
+    # Decomposed: for each candidate first branch (cmp1, l1, r1, e1),
+    # compute which examples it catches, then search second branch on the rest.
+    for c1 in CMP_OPS:
+        for l1 in search_names:
+            for r1 in search_names:
+                for e1 in arm_set:
+                    # Evaluate first branch: which examples does it match and get right?
+                    remaining = []
+                    branch1_loss = 0.0
+                    for args, target in examples:
+                        env = {n: float(v) for n, v in zip(arg_names, args)}
+                        if _py_eval_cmp(c1, _py_eval_expr(l1, env), _py_eval_expr(r1, env)):
+                            pred = _py_eval_expr(e1, env)
+                            branch1_loss += (pred - target) ** 2
+                        else:
+                            remaining.append((args, target))
+
+                    if not remaining:
+                        loss = branch1_loss / max(len(examples), 1)
+                        if loss < best_loss:
+                            best_loss = loss
+                            best_code = (
+                                f"fn {function_name}({params}) -> i64 {{\n"
+                                f"    if ({l1} {c1} {r1}) {{\n"
+                                f"        return {e1};\n"
+                                f"    }}\n"
+                                f"    return 0;\n"
+                                f"}}\n"
+                            )
+                            if best_loss < 1e-6:
+                                return best_code, best_loss
+                        continue
+
+                    # Now find best second branch + default for remaining examples.
+                    for c2 in CMP_OPS:
+                        for l2 in search_names:
+                            for r2 in search_names:
+                                for e2 in arm_set:
+                                    for e3 in arm_set:
+                                        loss2 = branch1_loss
+                                        for args, target in remaining:
+                                            env = {n: float(v) for n, v in zip(arg_names, args)}
+                                            if _py_eval_cmp(c2, _py_eval_expr(l2, env), _py_eval_expr(r2, env)):
+                                                pred = _py_eval_expr(e2, env)
+                                            else:
+                                                pred = _py_eval_expr(e3, env)
+                                            loss2 += (pred - target) ** 2
+                                        loss2 /= max(len(examples), 1)
+                                        if loss2 < best_loss:
+                                            best_loss = loss2
+                                            best_code = (
+                                                f"fn {function_name}({params}) -> i64 {{\n"
+                                                f"    if ({l1} {c1} {r1}) {{\n"
+                                                f"        return {e1};\n"
+                                                f"    }}\n"
+                                                f"    if ({l2} {c2} {r2}) {{\n"
+                                                f"        return {e2};\n"
+                                                f"    }}\n"
+                                                f"    return {e3};\n"
+                                                f"}}\n"
+                                            )
+                                            if best_loss < 1e-6:
+                                                return best_code, best_loss
+    return best_code, best_loss
+
+
+def _loop_accum_refinement(arg_names: list[str], examples, function_name: str) -> tuple[str, float]:
+    """Search for loop accumulator programs.
+
+    Structure:
+        acc = init;
+        for i := start to bound { acc = acc OP i_expr; }
+        return acc;
+
+    Covers: sum_to_n, factorial-ish, count patterns.
+    """
+    CONSTS = [0, 1, -1]
+    search_names = list(arg_names) + [str(c) for c in CONSTS]
+    # Bound expression: usually just an arg or arg+1
+    bound_exprs = list(arg_names) + [f"{a} + 1" for a in arg_names] + [f"{a} + 2" for a in arg_names]
+    # Start values
+    start_vals = ["0", "1", "2"]
+    # Init values
+    init_vals = ["0", "1"]
+    # Body: acc OP loop_var, or acc OP (loop_var EXPR)
+    # loop_var is "i"
+    body_ops = ["+", "*"]
+    body_rhs = ["i", "1"]  # acc + i, acc * i, acc + 1, acc * 1
+
+    params = ", ".join(f"{a}: i64" for a in arg_names)
+    best_loss = float("inf")
+    best_code = ""
+
+    for init in init_vals:
+        for start in start_vals:
+            for bound in bound_exprs:
+                for body_op in body_ops:
+                    for rhs in body_rhs:
+                        loss = 0.0
+                        for args, target in examples:
+                            env = {n: float(v) for n, v in zip(arg_names, args)}
+                            acc = float(init)
+                            s = int(_py_eval_expr(start, env))
+                            b = int(_py_eval_expr(bound, env))
+                            for i in range(s, max(s, b)):
+                                env_loop = dict(env)
+                                env_loop["i"] = float(i)
+                                env_loop["acc"] = acc
+                                r = _py_eval_expr(rhs, env_loop)
+                                if body_op == "+":
+                                    acc = acc + r
+                                elif body_op == "*":
+                                    acc = acc * r
+                            loss += (acc - target) ** 2
+                        loss /= max(len(examples), 1)
+                        if loss < best_loss:
+                            best_loss = loss
+                            best_code = (
+                                f"fn {function_name}({params}) -> i64 {{\n"
+                                f"    acc: i64 = {init};\n"
+                                f"    for i := {start} to ({bound}) {{\n"
+                                f"        acc = acc {body_op} {rhs};\n"
+                                f"    }}\n"
+                                f"    return acc;\n"
+                                f"}}\n"
+                            )
+                            if best_loss < 1e-6:
+                                return best_code, best_loss
+    return best_code, best_loss
+
+
 def _py_eval_expr(expr_str: str, env: dict[str, float]) -> float:
     """Evaluate a simple Mog expression in Python. Fast, no interpreter overhead."""
     expr_str = expr_str.strip()
@@ -672,6 +822,24 @@ def search_program(
             best_code = best_code.replace("fn program(", f"fn {function_name}(")
             return SearchResult(success=True, code=best_code, loss=best_loss,
                                 steps_taken=best_steps, metadata={"num_restarts": num_restarts, "num_slots": num_slots, "structure": "branching"})
+
+    # --- Try two-branch structure (sign, clamp patterns) ---
+    tb_code, tb_loss = _two_branch_refinement(list(arg_names), examples, function_name)
+    if tb_loss < best_loss:
+        best_loss = tb_loss
+        best_code = tb_code
+    if best_loss < 1e-6:
+        return SearchResult(success=True, code=best_code, loss=best_loss,
+                            steps_taken=0, metadata={"structure": "two_branch"})
+
+    # --- Try loop accumulator structure (sum_to_n, factorial patterns) ---
+    la_code, la_loss = _loop_accum_refinement(list(arg_names), examples, function_name)
+    if la_loss < best_loss:
+        best_loss = la_loss
+        best_code = la_code
+    if best_loss < 1e-6:
+        return SearchResult(success=True, code=best_code, loss=best_loss,
+                            steps_taken=0, metadata={"structure": "loop_accum"})
 
     # --- General SoftMogProgram ---
     for restart in range(num_restarts):
