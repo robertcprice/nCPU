@@ -94,6 +94,7 @@ class Evaluator:
         self.global_env = Environment()
         self.struct_defs: dict[str, ast.StructDecl] = {}
         self.fn_defs: dict[str, ast.FnDecl] = {}
+        self.input_queue: list[str] = []
         self._register_builtins()
 
     def _register_builtins(self):
@@ -127,6 +128,11 @@ class Evaluator:
         env.define("round", lambda x: int(round(x)))
         env.define("min", lambda a, b: min(a, b))
         env.define("max", lambda a, b: max(a, b))
+        # I/O — read functions pull from input_queue (set externally)
+        env.define("read_i64", lambda: self._builtin_read_i64())
+        env.define("read_string", lambda: self._builtin_read_string())
+        env.define("read_line", lambda: self._builtin_read_string())
+        env.define("has_input", lambda: self._builtin_has_input())
         # Constants
         env.define("PI", math.pi)
         env.define("E", math.e)
@@ -151,6 +157,23 @@ class Evaluator:
             self.output[-1] += str(x)
         else:
             self.output.append(str(x))
+
+    def _builtin_read_i64(self):
+        if self.input_queue:
+            val = self.input_queue.pop(0)
+            try:
+                return int(val)
+            except ValueError:
+                raise RuntimeError(f"read_i64: cannot parse '{val}' as integer")
+        raise RuntimeError("read_i64: no input available")
+
+    def _builtin_read_string(self):
+        if self.input_queue:
+            return self.input_queue.pop(0)
+        raise RuntimeError("read_string: no input available")
+
+    def _builtin_has_input(self):
+        return 1 if self.input_queue else 0
 
     def _builtin_parse_float(self, s):
         try:

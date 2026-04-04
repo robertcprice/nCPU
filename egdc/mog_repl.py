@@ -26,6 +26,7 @@ from egdc.mog_search_solver import (
 from egdc.mog_compositional import CompositionalSolver
 from egdc.mog_counterexample import CounterexampleRefiner
 from egdc.mog_pathways import PathwayMemory
+from egdc.mog_growing_benchmark import GrowingBenchmark
 
 
 class MogREPL:
@@ -33,6 +34,7 @@ class MogREPL:
         self.memory = PathwayMemory(memory_root)
         self.composer = CompositionalSolver()
         self.refiner = CounterexampleRefiner()
+        self.grower = GrowingBenchmark()
         self.solved: dict[str, str] = {}  # name -> code
 
     def synthesize(self, fn_name: str, arg_names: list[str],
@@ -63,9 +65,12 @@ class MogREPL:
             code, loss = search_fn()
             if loss < 1e-6:
                 self.solved[fn_name] = code
+                self.composer.solved_codes[fn_name] = code
                 self.memory.record_success(fn_name, method, code,
                     {"description": f"synthesized {fn_name}", "signature": f"fn {fn_name}(...)"})
                 self.memory.save()
+                # Auto-generate harder variants for self-growing benchmark
+                self.grower.register_solved(fn_name, arg_names, code, examples)
                 return code
 
         # Try composition

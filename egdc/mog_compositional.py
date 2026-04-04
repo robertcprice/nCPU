@@ -48,6 +48,17 @@ class CompositionResult:
 class CompositionalSolver:
     def __init__(self):
         self.library: dict[str, SubProgram] = {}
+        self.solved_codes: dict[str, str] = {}  # name -> code, for auto-extraction
+
+    def auto_extract_and_register(self):
+        """Detect shared code across solved programs and register as sub-programs."""
+        from egdc.mog_auto_extract import SubProgramExtractor
+        ext = SubProgramExtractor()
+        frags = ext.find_shared_fragments(self.solved_codes)
+        for i, frag in enumerate(frags[:5]):
+            name = f"_extracted_{i}"
+            if name not in self.library:
+                self.library[name] = SubProgram(name, [], frag.code)
 
     def register_subprogram(self, name: str, arg_names: list[str], code: str, py_fn=None):
         """Register a discovered sub-program as a reusable building block."""

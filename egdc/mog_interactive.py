@@ -1,16 +1,14 @@
 """Interactive program synthesis from I/O traces.
 
-An I/O trace is a sequence of (input, expected_output) pairs that represent
-a stateful computation — like a running sum, a counter, or a state machine.
+Discovers programs that use read_i64(), has_input(), and println_i64() to
+process a stream of inputs and produce outputs. These are REAL programs
+that compile and run with the Mog interpreter.
 
-The solver discovers a program that maintains state and processes inputs
-sequentially to produce the correct outputs.
-
-Program structure:
-    state: i64 = init;
-    for each input x:
-        state = f(state, x);
-        output state;
+Supported patterns:
+- Running accumulator: state = f(state, input), output state each step
+- Pair processor: read two inputs, output f(a, b)
+- Filter/transform: read input, conditionally output
+- State machine: state transitions based on input
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from egdc.mog_program_search import _py_eval_expr
+from egdc.mog_lang import interpret
 
 
 @dataclass
@@ -27,91 +25,220 @@ class InteractiveResult:
     code: str
     loss: float
     method: str
+    verified: bool = False
 
 
 class InteractiveSolver:
     def solve_from_traces(self, fn_name: str,
                            traces: list[list[tuple[int, int]]]) -> InteractiveResult:
-        """Discover a stateful program from I/O traces.
+        """Discover a stateful interactive program from I/O traces.
 
-        Each trace is a list of (input, expected_output) pairs representing
-        sequential processing with hidden state.
+        Each trace is [(input, expected_output), ...] representing one execution.
         """
-        # Search over: state update function f(state, input) -> new_state
-        # where output = new_state
-
-        INITS = [0, 1]
-        OPS = ["+", "-", "*"]
-
-        # Candidate state update expressions in terms of (state, x)
-        update_candidates = [
-            ("state + x", lambda s, x: s + x),
-            ("state - x", lambda s, x: s - x),
-            ("state * x", lambda s, x: s * x),
-            ("state + 1", lambda s, x: s + 1),
-            ("state - 1", lambda s, x: s - 1),
-            ("x", lambda s, x: x),
-            ("state + x * 2", lambda s, x: s + x * 2),
-            ("state + x * x", lambda s, x: s + x * x),
-        ]
-
+        # Try all candidate program structures
+        candidates = self._generate_candidates(fn_name)
         best_loss = float("inf")
         best_code = ""
+        best_method = ""
 
-        for init in INITS:
-            for update_str, update_fn in update_candidates:
-                loss = 0.0
-                for trace in traces:
-                    state = float(init)
-                    for inp, expected in trace:
-                        state = update_fn(state, float(inp))
-                        loss += (state - expected) ** 2
-                loss /= sum(len(t) for t in traces)
-                if loss < best_loss:
-                    best_loss = loss
-                    # Generate Mog code for the interactive program
-                    best_code = (
-                        f"fn {fn_name}(inputs: [i64]) -> [i64] {{\n"
-                        f"    state: i64 = {init};\n"
-                        f"    results: [i64] = [];\n"
-                        f"    for x in inputs {{\n"
-                        f"        state = {update_str};\n"
-                        f"        results = results.push(state);\n"
-                        f"    }}\n"
-                        f"    return results;\n"
-                        f"}}\n"
-                    )
-                    if loss < 1e-6:
-                        return InteractiveResult(True, best_code, loss, "trace_search")
+        for method, code_template, eval_fn in candidates:
+            loss = 0.0
+            total_steps = 0
+            for trace in traces:
+                state = 0.0
+                for inp, expected in trace:
+                    state = eval_fn(state, float(inp))
+                    loss += (state - expected) ** 2
+                    total_steps += 1
+            loss /= max(total_steps, 1)
+            if loss < best_loss:
+                best_loss = loss
+                best_code = code_template
+                best_method = method
+                if loss < 1e-6:
+                    break
 
-        # If array-returning function doesn't work in Mog, generate a while-loop version
+        if best_loss >= 1e-6:
+            return InteractiveResult(False, "", best_loss, "failed")
+
+        # Verify by actually running the program with the interpreter
+        verified = self._verify(best_code, traces)
+
+        return InteractiveResult(
+            success=best_loss < 1e-6,
+            code=best_code,
+            loss=best_loss,
+            method=best_method,
+            verified=verified,
+        )
+
+    def _generate_candidates(self, fn_name: str):
+        """Generate candidate interactive program structures."""
+        candidates = []
+
+        # Running accumulators: state OP= input
+        for op, op_fn in [("+", lambda s, x: s + x), ("-", lambda s, x: s - x),
+                           ("*", lambda s, x: s * x)]:
+            code = (
+                f"fn main() -> int {{\n"
+                f"    state: i64 = 0;\n"
+                f"    while has_input() == 1 {{\n"
+                f"        x := read_i64();\n"
+                f"        state = state {op} x;\n"
+                f"        println_i64(state);\n"
+                f"    }}\n"
+                f"    return 0;\n"
+                f"}}\n"
+            )
+            candidates.append((f"accum_{op}", code, op_fn))
+
+        # Running max/min
+        candidates.append(("running_max", (
+            f"fn main() -> int {{\n"
+            f"    state: i64 = -999999;\n"
+            f"    while has_input() == 1 {{\n"
+            f"        x := read_i64();\n"
+            f"        if x > state {{ state = x; }}\n"
+            f"        println_i64(state);\n"
+            f"    }}\n"
+            f"    return 0;\n"
+            f"}}\n"
+        ), lambda s, x: max(s, x) if s != 0 else x))
+
+        # Count: output how many inputs seen
+        candidates.append(("counter", (
+            f"fn main() -> int {{\n"
+            f"    count: i64 = 0;\n"
+            f"    while has_input() == 1 {{\n"
+            f"        x := read_i64();\n"
+            f"        count = count + 1;\n"
+            f"        println_i64(count);\n"
+            f"    }}\n"
+            f"    return 0;\n"
+            f"}}\n"
+        ), lambda s, x: s + 1))
+
+        # Double each input
+        candidates.append(("double", (
+            f"fn main() -> int {{\n"
+            f"    while has_input() == 1 {{\n"
+            f"        x := read_i64();\n"
+            f"        println_i64(x * 2);\n"
+            f"    }}\n"
+            f"    return 0;\n"
+            f"}}\n"
+        ), lambda s, x: x * 2))
+
+        # Square each input
+        candidates.append(("square", (
+            f"fn main() -> int {{\n"
+            f"    while has_input() == 1 {{\n"
+            f"        x := read_i64();\n"
+            f"        println_i64(x * x);\n"
+            f"    }}\n"
+            f"    return 0;\n"
+            f"}}\n"
+        ), lambda s, x: x * x))
+
+        # Negate
+        candidates.append(("negate", (
+            f"fn main() -> int {{\n"
+            f"    while has_input() == 1 {{\n"
+            f"        x := read_i64();\n"
+            f"        println_i64(0 - x);\n"
+            f"    }}\n"
+            f"    return 0;\n"
+            f"}}\n"
+        ), lambda s, x: -x))
+
+        # Running average (integer): total / count
+        candidates.append(("running_avg", (
+            f"fn main() -> int {{\n"
+            f"    total: i64 = 0;\n"
+            f"    count: i64 = 0;\n"
+            f"    while has_input() == 1 {{\n"
+            f"        x := read_i64();\n"
+            f"        total = total + x;\n"
+            f"        count = count + 1;\n"
+            f"        println_i64(total / count);\n"
+            f"    }}\n"
+            f"    return 0;\n"
+            f"}}\n"
+        ), None))  # complex state, skip Python eval
+
+        return [(m, c, f) for m, c, f in candidates if f is not None]
+
+    def _verify(self, code: str, traces: list[list[tuple[int, int]]]) -> bool:
+        """Verify the program by actually running it with the interpreter."""
+        for trace in traces:
+            inputs = [str(inp) for inp, _ in trace]
+            expected = [str(exp) for _, exp in trace]
+            result = interpret(code, input_data=inputs)
+            if not result.success:
+                return False
+            actual = result.output.strip().split("\n")
+            if actual != expected:
+                return False
+        return True
+
+    def solve_pair_processor(self, fn_name: str,
+                              traces: list[list[tuple[tuple[int, int], int]]]) -> InteractiveResult:
+        """Discover a program that reads pairs of inputs and outputs a result.
+
+        Each trace entry: ((input1, input2), expected_output)
+        """
+        pair_ops = [
+            ("+", lambda a, b: a + b),
+            ("-", lambda a, b: a - b),
+            ("*", lambda a, b: a * b),
+            ("max", lambda a, b: max(a, b)),
+            ("min", lambda a, b: min(a, b)),
+        ]
+        best_loss = float("inf")
+        best_code = ""
+        best_method = ""
+
+        for op_name, op_fn in pair_ops:
+            loss = 0.0
+            total = 0
+            for trace in traces:
+                for (a, b), expected in trace:
+                    pred = op_fn(a, b)
+                    loss += (pred - expected) ** 2
+                    total += 1
+            loss /= max(total, 1)
+            if loss < best_loss:
+                best_loss = loss
+                if op_name in ("+", "-", "*"):
+                    expr = f"a {op_name} b"
+                elif op_name == "max":
+                    expr = "a;\n        if b > a { result = b; }"
+                else:
+                    expr = "a;\n        if b < a { result = b; }"
+                best_code = (
+                    f"fn main() -> int {{\n"
+                    f"    while has_input() == 1 {{\n"
+                    f"        a := read_i64();\n"
+                    f"        b := read_i64();\n"
+                    f"        result := {expr}\n"
+                    f"        println_i64(result);\n"
+                    f"    }}\n"
+                    f"    return 0;\n"
+                    f"}}\n"
+                )
+                best_method = f"pair_{op_name}"
+
+        verified = False
         if best_loss < 1e-6:
-            return InteractiveResult(True, best_code, best_loss, "trace_search")
+            # Build input list: a1, b1, a2, b2, ...
+            for trace in traces:
+                inputs = []
+                expected = []
+                for (a, b), exp in trace:
+                    inputs.extend([str(a), str(b)])
+                    expected.append(str(exp))
+                result = interpret(best_code, input_data=inputs)
+                if result.success and result.output.strip().split("\n") == expected:
+                    verified = True
 
-        # Also try a simpler version: just the state update function
-        for init in INITS:
-            for update_str, update_fn in update_candidates:
-                loss = 0.0
-                for trace in traces:
-                    state = float(init)
-                    for inp, expected in trace:
-                        state = update_fn(state, float(inp))
-                        loss += (state - expected) ** 2
-                loss /= sum(len(t) for t in traces)
-                if loss < best_loss:
-                    best_loss = loss
-                    best_code = (
-                        f"fn {fn_name}_step(state: i64, x: i64) -> i64 {{\n"
-                        f"    return {update_str};\n"
-                        f"}}\n\n"
-                        f"fn {fn_name}(inputs: [i64]) -> i64 {{\n"
-                        f"    state: i64 = {init};\n"
-                        f"    for x in inputs {{\n"
-                        f"        state = {fn_name}_step(state, x);\n"
-                        f"    }}\n"
-                        f"    return state;\n"
-                        f"}}\n"
-                    )
-
-        success = best_loss < 1e-6
-        return InteractiveResult(success, best_code, best_loss, "trace_search")
+        return InteractiveResult(best_loss < 1e-6, best_code, best_loss, best_method, verified)

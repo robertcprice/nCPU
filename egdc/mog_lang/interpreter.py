@@ -16,11 +16,12 @@ class InterpreterResult:
     success: bool = False
 
 
-def interpret(code: str) -> InterpreterResult:
+def interpret(code: str, input_data: list[str] | None = None) -> InterpreterResult:
     """Interpret a Mog program and return the result.
 
     Args:
         code: Mog source code string.
+        input_data: Optional list of input values (consumed by read_i64 / read_string).
 
     Returns:
         InterpreterResult with captured output, return value, and any error.
@@ -29,6 +30,8 @@ def interpret(code: str) -> InterpreterResult:
         tokens = lex(code)
         program = parse(tokens)
         evaluator = Evaluator()
+        if input_data:
+            evaluator.input_queue = list(input_data)
         ret = evaluator.run(program)
         return InterpreterResult(
             output="\n".join(evaluator.output),

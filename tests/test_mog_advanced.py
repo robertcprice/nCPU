@@ -75,9 +75,10 @@ def test_multi_function_synthesis():
     assert result.loss < 1e-6
 
 
-def test_interactive_program_io_trace():
-    """Test a program that processes multiple inputs sequentially and actually compiles."""
+def test_interactive_running_sum():
+    """Discover and verify a running-sum interactive program."""
     from egdc.mog_interactive import InteractiveSolver
+    from egdc.mog_lang import interpret
 
     solver = InteractiveSolver()
     traces = [
@@ -86,22 +87,25 @@ def test_interactive_program_io_trace():
     ]
     result = solver.solve_from_traces("running_sum", traces)
     assert result.success
-    assert "for" in result.code or "while" in result.code
+    assert result.verified  # actually ran with interpreter
+    assert "while" in result.code
+    assert "read_i64" in result.code
 
-    # Actually compile and run
-    test_code = (
-        result.code.split("fn running_sum(")[0] +  # get any helper functions
-        "fn process(state: i64, x: i64) -> i64 { return state + x; }\n"
-        "fn main() -> int {\n"
-        "    state: i64 = 0;\n"
-        "    inputs: [i64] = [3, 5, 2];\n"
-        "    for x in inputs {\n"
-        "        state = state + x;\n"
-        "        println_i64(state);\n"
-        "    }\n"
-        "    return 0;\n"
-        "}\n"
-    )
-    run = execute_mog(test_code)
-    assert run.success, run.stderr or run.compile_stderr
-    assert run.stdout.strip() == "3\n8\n10"
+    # Run on a new trace
+    r = interpret(result.code, input_data=["7", "3", "10"])
+    assert r.success
+    assert r.output.strip() == "7\n10\n20"
+
+
+def test_interactive_pair_adder():
+    """Discover a program that reads pairs and outputs their sum."""
+    from egdc.mog_interactive import InteractiveSolver
+
+    solver = InteractiveSolver()
+    traces = [
+        [((3, 4), 7), ((10, 20), 30)],
+        [((1, 1), 2), ((5, -3), 2)],
+    ]
+    result = solver.solve_pair_processor("pair_add", traces)
+    assert result.success
+    assert result.verified
