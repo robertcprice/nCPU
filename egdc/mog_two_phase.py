@@ -229,10 +229,10 @@ def two_phase_branch_solve(
         if best_loss < 1e-6:
             break
 
-    # Also try two sequential branches (for sign, clamp patterns)
+    # Also try two sequential branches (for sign, clamp, safe_div patterns)
     if best_loss > 1e-6:
-        code2, loss2 = _two_sequential_branch_solve(arg_names, examples, function_name,
-                                                      num_consts, phase1_steps, phase2_steps, lr, seed)
+        code2, loss2 = _recursive_branch_solve(arg_names, examples, function_name,
+                                                num_consts, phase1_steps, phase2_steps, lr, seed)
         if loss2 < best_loss:
             best_loss = loss2
             best_code = code2
@@ -240,9 +240,14 @@ def two_phase_branch_solve(
     return TwoPhaseResult(best_loss < 2.0, best_code, best_loss, {})
 
 
-def _two_sequential_branch_solve(arg_names, examples, function_name, num_consts,
-                                   steps, arm_steps, lr, seed):
-    """Two sequential if-returns + default, all gradient-trained."""
+def _recursive_branch_solve(arg_names, examples, function_name, num_consts,
+                             steps, arm_steps, lr, seed, max_depth=2):
+    """Recursive two-phase: learn one branch, then recurse on remaining examples.
+
+    Handles: sign (3-way), clamp (2 sequential branches + default), safe_div, etc.
+    """
+    from egdc.mog_program_search import _eval_code_on_examples
+
     num_args = len(arg_names)
     ns = num_args + num_consts
     params_str = ", ".join(f"{a}: i64" for a in arg_names)
@@ -250,96 +255,121 @@ def _two_sequential_branch_solve(arg_names, examples, function_name, num_consts,
     best_loss = float("inf")
     best_code = ""
 
-    for restart in range(3):
+    for restart in range(5):
         torch.manual_seed(seed + 5000 + restart * 1000)
+        branches = []  # list of (condition_str, arm_str)
+
         consts = nn.Parameter(torch.tensor([0.0, 1.0, -1.0, 2.0, 100.0, 0.5]))
+        remaining = list(examples)
 
-        # First condition + arm
-        cond1 = SoftCondition(ns)
-        arm1 = SoftArm(ns)
-        with torch.no_grad():
-            if num_args >= 1: cond1.lhs[0] = 2.0
-            cond1.rhs[num_args] = 2.0  # const 0
-            cond1.cmp[1] = 2.0  # <
+        for depth in range(max_depth):
+            if len(remaining) <= 1:
+                break
 
-        all_params = list(cond1.parameters()) + list(arm1.parameters()) + [consts]
-        opt1 = torch.optim.Adam(all_params, lr=lr)
+            # Two-phase: learn condition + arms on remaining examples
+            cond = SoftCondition(ns)
+            then_arm = SoftArm(ns)
+            else_arm = SoftArm(ns)
 
-        # Train first branch
-        for step in range(steps):
-            t = 2.0 + (0.1 - 2.0) * (step / max(steps - 1, 1))
-            losses = []
-            for args, target in examples:
-                x = torch.tensor(args, dtype=torch.float32)
-                storage = _make_storage(x, consts)
-                c = cond1(storage, t)
-                pred = c * arm1(storage, t)
-                # For non-matching examples, no contribution from this branch
-                losses.append(c * (pred - target) ** 2)
-            loss = torch.stack(losses).mean()
-            opt1.zero_grad(); loss.backward()
-            torch.nn.utils.clip_grad_norm_(all_params, 5.0)
-            opt1.step()
+            # Structured init: each restart tries a different condition pattern
+            with torch.no_grad():
+                # Reset to zero
+                cond.lhs.zero_(); cond.rhs.zero_(); cond.cmp.zero_()
+                # Pick init based on restart + depth
+                init_idx = (restart * (max_depth + 1) + depth) % (ns * len(CMP_OPS))
+                lhs_init = init_idx % ns
+                rhs_init = (init_idx // ns) % ns
+                cmp_init = (restart + depth) % len(CMP_OPS)
+                cond.lhs[lhs_init] = 2.0
+                cond.rhs[rhs_init] = 2.0
+                cond.cmp[cmp_init] = 2.0
 
-        # Partition
-        remaining = []
-        first_examples = []
-        with torch.no_grad():
-            for args, target in examples:
-                x = torch.tensor(args, dtype=torch.float32)
-                storage = _make_storage(x, consts)
-                if cond1(storage, 0.01).item() > 0.5:
-                    first_examples.append((args, target))
-                else:
-                    remaining.append((args, target))
+            all_p = list(cond.parameters()) + list(then_arm.parameters()) + list(else_arm.parameters()) + [consts]
+            opt = torch.optim.Adam(all_p, lr=lr)
 
-        # Second condition + arm on remaining
-        cond2 = SoftCondition(ns)
-        arm2 = SoftArm(ns)
-        default_arm = SoftArm(ns)
+            for step in range(steps):
+                t = 2.0 + (0.1 - 2.0) * (step / max(steps - 1, 1))
+                losses = []
+                cond_probs = []
+                for args, target in remaining:
+                    x = torch.tensor(args, dtype=torch.float32)
+                    storage = _make_storage(x, consts)
+                    c = cond(storage, t)
+                    cond_probs.append(c)
+                    pred = c * then_arm(storage, t) + (1.0 - c) * else_arm(storage, t)
+                    losses.append((pred - target) ** 2)
+                loss = torch.stack(losses).mean()
+                cp = torch.stack(cond_probs)
+                diversity = -0.5 * (cp.mean() * (1.0 - cp.mean()))
+                loss = loss + diversity
+                opt.zero_grad(); loss.backward()
+                torch.nn.utils.clip_grad_norm_(all_p, 5.0)
+                opt.step()
 
+            # Partition by learned condition
+            then_ex = []
+            else_ex = []
+            with torch.no_grad():
+                for args, target in remaining:
+                    x = torch.tensor(args, dtype=torch.float32)
+                    storage = _make_storage(x, consts)
+                    if cond(storage, 0.01).item() > 0.5:
+                        then_ex.append((args, target))
+                    else:
+                        else_ex.append((args, target))
+
+            if not then_ex or not else_ex:
+                break  # condition didn't split, stop recursing
+
+            # Train then-arm independently on its subset
+            then_opt = torch.optim.Adam(list(then_arm.parameters()) + [consts], lr=lr)
+            for step in range(arm_steps):
+                t = 1.5 + (0.05 - 1.5) * (step / max(arm_steps - 1, 1))
+                losses = []
+                for args, target in then_ex:
+                    x = torch.tensor(args, dtype=torch.float32)
+                    storage = _make_storage(x, consts)
+                    losses.append((then_arm(storage, t) - target) ** 2)
+                loss = torch.stack(losses).mean()
+                then_opt.zero_grad(); loss.backward()
+                torch.nn.utils.clip_grad_norm_(then_arm.parameters(), 5.0)
+                then_opt.step()
+
+            # Record this branch
+            const_vals = [int(round(c.item())) for c in consts]
+            all_names = list(arg_names) + [str(c) for c in const_vals]
+            l = all_names[int(torch.argmax(cond.lhs).item())]
+            r = all_names[int(torch.argmax(cond.rhs).item())]
+            c_op = CMP_OPS[int(torch.argmax(cond.cmp).item())]
+            e = _discretize_arm(then_arm, all_names)
+            branches.append(f"    if ({l} {c_op} {r}) {{ return {e}; }}")
+
+            remaining = else_ex
+
+        # Default: train an arm on whatever's left
         if remaining:
-            all_params2 = list(cond2.parameters()) + list(arm2.parameters()) + list(default_arm.parameters()) + [consts]
-            opt2 = torch.optim.Adam(all_params2, lr=lr)
+            default_arm = SoftArm(ns)
+            d_opt = torch.optim.Adam(list(default_arm.parameters()) + [consts], lr=lr)
             for step in range(arm_steps):
                 t = 1.5 + (0.05 - 1.5) * (step / max(arm_steps - 1, 1))
                 losses = []
                 for args, target in remaining:
                     x = torch.tensor(args, dtype=torch.float32)
                     storage = _make_storage(x, consts)
-                    c = cond2(storage, t)
-                    pred = c * arm2(storage, t) + (1 - c) * default_arm(storage, t)
-                    losses.append((pred - target) ** 2)
-                if losses:
-                    loss = torch.stack(losses).mean()
-                    opt2.zero_grad(); loss.backward()
-                    torch.nn.utils.clip_grad_norm_(all_params2, 5.0)
-                    opt2.step()
+                    losses.append((default_arm(storage, t) - target) ** 2)
+                loss = torch.stack(losses).mean()
+                d_opt.zero_grad(); loss.backward()
+                torch.nn.utils.clip_grad_norm_(default_arm.parameters(), 5.0)
+                d_opt.step()
 
-        # Discretize
-        const_vals = [int(round(c.item())) for c in consts]
-        all_names = list(arg_names) + [str(c) for c in const_vals]
+            const_vals = [int(round(c.item())) for c in consts]
+            all_names = list(arg_names) + [str(c) for c in const_vals]
+            d_expr = _discretize_arm(default_arm, all_names)
+            branches.append(f"    return {d_expr};")
+        else:
+            branches.append(f"    return 0;")
 
-        lines = []
-        l1 = all_names[int(torch.argmax(cond1.lhs).item())]
-        r1 = all_names[int(torch.argmax(cond1.rhs).item())]
-        c1 = CMP_OPS[int(torch.argmax(cond1.cmp).item())]
-        e1 = _discretize_arm(arm1, all_names)
-        lines.append(f"    if ({l1} {c1} {r1}) {{ return {e1}; }}")
-
-        if remaining:
-            l2 = all_names[int(torch.argmax(cond2.lhs).item())]
-            r2 = all_names[int(torch.argmax(cond2.rhs).item())]
-            c2 = CMP_OPS[int(torch.argmax(cond2.cmp).item())]
-            e2 = _discretize_arm(arm2, all_names)
-            lines.append(f"    if ({l2} {c2} {r2}) {{ return {e2}; }}")
-
-        e_default = _discretize_arm(default_arm, all_names) if remaining else "0"
-        lines.append(f"    return {e_default};")
-
-        code = f"fn {function_name}({params_str}) -> i64 {{\n" + "\n".join(lines) + "\n}\n"
-
-        from egdc.mog_program_search import _eval_code_on_examples
+        code = f"fn {function_name}({params_str}) -> i64 {{\n" + "\n".join(branches) + "\n}\n"
         dloss = _eval_code_on_examples(code, arg_names, examples)
         if dloss < best_loss:
             best_loss = dloss

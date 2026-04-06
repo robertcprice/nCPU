@@ -47,6 +47,19 @@ def test_gradient_discovers_positive_or_zero():
     assert result.success
 
 
+def test_gradient_discovers_sign_recursive():
+    """sign(x): if x>0 return 1; if x<0 return -1; return 0. Recursive branch."""
+    from egdc.mog_two_phase import two_phase_branch_solve
+
+    examples = [
+        ((-5.,), -1.), ((0.,), 0.), ((7.,), 1.), ((3.,), 1.), ((-1.,), -1.),
+    ]
+    result = two_phase_branch_solve(["x"], examples, "sign", seed=42, num_restarts=8)
+    print(f"sign: loss={result.loss:.4f}")
+    print(result.code)
+    assert result.success
+
+
 def test_gradient_discovers_is_even():
     """is_even requires modulo operation discovery."""
     from egdc.mog_two_phase import two_phase_branch_solve
