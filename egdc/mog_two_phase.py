@@ -78,6 +78,42 @@ def _discretize_arm(arm: SoftArm, all_names: list[str]) -> str:
     return f"{s1} {OPS[oi]} {s2}"
 
 
+def _mine_constants(arg_names: list[str], examples) -> list[float]:
+    """Extract candidate constants from I/O examples.
+
+    Looks at: output values, input values, differences between inputs,
+    and common thresholds. Returns a deduplicated sorted list.
+    """
+    consts = set()
+    # Always include these
+    consts.update([0.0, 1.0, -1.0, 2.0])
+
+    for args, target in examples:
+        # Output values are strong constant candidates
+        consts.add(float(target))
+        # Input values
+        for a in args:
+            consts.add(float(a))
+        # Differences between pairs of inputs
+        for i in range(len(args)):
+            for j in range(i + 1, len(args)):
+                consts.add(abs(float(args[i]) - float(args[j])))
+        # Input-output differences
+        for a in args:
+            consts.add(abs(float(a) - float(target)))
+
+    # Deduplicate, sort, limit to manageable size
+    consts = sorted(consts)
+    # Keep the most useful ones (small values + values from data)
+    if len(consts) > 10:
+        # Prioritize: 0, 1, -1, then values from outputs, then inputs
+        outputs = set(float(t) for _, t in examples)
+        priority = [c for c in consts if c in outputs or abs(c) <= 2]
+        rest = [c for c in consts if c not in priority]
+        consts = priority + rest[:10 - len(priority)]
+    return consts[:10]
+
+
 def two_phase_branch_solve(
     arg_names: list[str],
     examples: Sequence[tuple[tuple[float, ...], float]],
@@ -89,35 +125,51 @@ def two_phase_branch_solve(
     num_restarts: int = 5,
     seed: int = 0,
 ) -> TwoPhaseResult:
-    """Two-phase branch solver with learnable constants."""
+    """Two-phase branch solver with data-mined constants."""
+
+    # Mine constants from examples
+    mined = _mine_constants(arg_names, examples)
 
     num_args = len(arg_names)
+    num_consts = len(mined)
     ns = num_args + num_consts
     params_str = ", ".join(f"{a}: i64" for a in arg_names)
 
     best_loss = float("inf")
     best_code = ""
 
+    # Generate diverse condition inits: try arg vs each mined constant, with each comparison
+    init_conditions = []
+    for lhs_idx in range(min(num_args, 2)):  # try each arg as LHS
+        for rhs_idx in range(num_args, ns):  # try each constant as RHS
+            for cmp_idx in [0, 1, 4]:  # >, <, ==
+                init_conditions.append((lhs_idx, rhs_idx, cmp_idx))
+    if num_args >= 2:
+        # Also try arg vs arg
+        init_conditions.append((0, 1, 0))  # a > b
+        init_conditions.append((1, 0, 0))  # b > a
+
     for restart in range(num_restarts):
         torch.manual_seed(seed + restart * 1000)
+        consts = nn.Parameter(torch.tensor(mined, dtype=torch.float32))
 
-        # Learnable constants
-        consts = nn.Parameter(torch.tensor([0.0, 1.0, -1.0, 2.0, 100.0, 0.5]))
-
-        # Phase 1: Learn the condition + rough arms jointly
         cond = SoftCondition(ns)
         then_rough = SoftArm(ns)
         else_rough = SoftArm(ns)
 
-        # Init condition to compare first two sources
+        # Pick a specific condition init for this restart
         with torch.no_grad():
+            if restart < len(init_conditions):
+                li, ri, ci = init_conditions[restart]
+                cond.lhs[li] = 3.0; cond.rhs[ri] = 3.0; cond.cmp[ci] = 3.0
+            elif num_args >= 2:
+                cond.lhs[0] = 2.0; cond.rhs[1] = 2.0; cond.cmp[0] = 2.0
+            else:
+                cond.lhs[0] = 2.0; cond.rhs[num_args] = 2.0; cond.cmp[0] = 2.0
+            # Init arms differently
             if num_args >= 2:
-                cond.lhs[0] = 2.0; cond.rhs[1] = 2.0
-                then_rough.src1[0] = 2.0; then_rough.src2[1] = 2.0; then_rough.op[1] = 1.0  # a-b
-                else_rough.src1[1] = 2.0; else_rough.src2[0] = 2.0; else_rough.op[1] = 1.0  # b-a
-            elif num_args == 1:
-                cond.lhs[0] = 2.0; cond.rhs[num_args] = 2.0
-            cond.cmp[0] = 1.0  # >
+                then_rough.src1[0] = 2.0; then_rough.src2[1] = 2.0; then_rough.op[1] = 1.0
+                else_rough.src1[1] = 2.0; else_rough.src2[0] = 2.0; else_rough.op[1] = 1.0
 
         all_p1 = list(cond.parameters()) + list(then_rough.parameters()) + list(else_rough.parameters()) + [consts]
         cond_opt = torch.optim.Adam(all_p1, lr=lr)
@@ -242,47 +294,50 @@ def two_phase_branch_solve(
 
 def _recursive_branch_solve(arg_names, examples, function_name, num_consts,
                              steps, arm_steps, lr, seed, max_depth=2):
-    """Recursive two-phase: learn one branch, then recurse on remaining examples.
-
-    Handles: sign (3-way), clamp (2 sequential branches + default), safe_div, etc.
-    """
+    """Recursive two-phase: learn one branch, then recurse on remaining examples."""
     from egdc.mog_program_search import _eval_code_on_examples
 
+    mined = _mine_constants(arg_names, examples)
     num_args = len(arg_names)
+    num_consts = len(mined)
     ns = num_args + num_consts
     params_str = ", ".join(f"{a}: i64" for a in arg_names)
 
     best_loss = float("inf")
     best_code = ""
 
-    for restart in range(5):
-        torch.manual_seed(seed + 5000 + restart * 1000)
-        branches = []  # list of (condition_str, arm_str)
+    # Build init conditions for recursive solver too
+    rec_inits = []
+    for lhs_idx in range(min(num_args, 2)):
+        for rhs_idx in range(num_args, ns):
+            for cmp_idx in [0, 1, 4]:  # >, <, ==
+                rec_inits.append((lhs_idx, rhs_idx, cmp_idx))
 
-        consts = nn.Parameter(torch.tensor([0.0, 1.0, -1.0, 2.0, 100.0, 0.5]))
+    num_rec_restarts = min(len(rec_inits), 15)
+    for restart in range(num_rec_restarts):
+        torch.manual_seed(seed + 5000 + restart * 1000)
+        branches = []
+
+        consts = nn.Parameter(torch.tensor(mined, dtype=torch.float32))
         remaining = list(examples)
 
         for depth in range(max_depth):
             if len(remaining) <= 1:
                 break
 
-            # Two-phase: learn condition + arms on remaining examples
             cond = SoftCondition(ns)
             then_arm = SoftArm(ns)
             else_arm = SoftArm(ns)
 
-            # Structured init: each restart tries a different condition pattern
+            # Pick init: systematic across restarts and depths
             with torch.no_grad():
-                # Reset to zero
                 cond.lhs.zero_(); cond.rhs.zero_(); cond.cmp.zero_()
-                # Pick init based on restart + depth
-                init_idx = (restart * (max_depth + 1) + depth) % (ns * len(CMP_OPS))
-                lhs_init = init_idx % ns
-                rhs_init = (init_idx // ns) % ns
-                cmp_init = (restart + depth) % len(CMP_OPS)
-                cond.lhs[lhs_init] = 2.0
-                cond.rhs[rhs_init] = 2.0
-                cond.cmp[cmp_init] = 2.0
+                idx = (restart * max_depth + depth) % max(len(rec_inits), 1)
+                if idx < len(rec_inits):
+                    li, ri, ci = rec_inits[idx]
+                    cond.lhs[li] = 3.0; cond.rhs[ri] = 3.0; cond.cmp[ci] = 3.0
+                else:
+                    cond.lhs[0] = 2.0; cond.rhs[num_args] = 2.0; cond.cmp[0] = 2.0
 
             all_p = list(cond.parameters()) + list(then_arm.parameters()) + list(else_arm.parameters()) + [consts]
             opt = torch.optim.Adam(all_p, lr=lr)

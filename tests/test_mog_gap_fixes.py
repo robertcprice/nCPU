@@ -60,6 +60,35 @@ def test_gradient_discovers_sign_recursive():
     assert result.success
 
 
+def test_gradient_discovers_clamp():
+    """clamp(x,0,100): constants mined from examples should include 100."""
+    from egdc.mog_two_phase import two_phase_branch_solve
+
+    examples = [
+        ((-5.,), 0.), ((-10.,), 0.), ((-1.,), 0.), ((0.,), 0.),
+        ((50.,), 50.), ((100.,), 100.), ((120.,), 100.), ((200.,), 100.),
+        ((1.,), 1.), ((99.,), 99.),
+    ]
+    result = two_phase_branch_solve(["x"], examples, "clamp_0_100", seed=42, num_restarts=15)
+    print(f"clamp: loss={result.loss:.4f}")
+    print(result.code)
+    assert result.success
+
+
+def test_gradient_discovers_safe_div():
+    """safe_div: if b==0 return -1; else return a/b. Constants mined include 0, -1."""
+    from egdc.mog_two_phase import two_phase_branch_solve
+
+    examples = [
+        ((10., 2.), 5.), ((7., 0.), -1.), ((9., 3.), 3.),
+        ((5., 0.), -1.), ((20., 5.), 4.), ((0., 0.), -1.),
+    ]
+    result = two_phase_branch_solve(["a", "b"], examples, "safe_div", seed=42, num_restarts=10)
+    print(f"safe_div: loss={result.loss:.4f}")
+    print(result.code)
+    assert result.success
+
+
 def test_gradient_discovers_is_even():
     """is_even requires modulo operation discovery."""
     from egdc.mog_two_phase import two_phase_branch_solve
