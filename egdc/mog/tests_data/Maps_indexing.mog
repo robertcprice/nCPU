@@ -1,0 +1,5 @@
+fn main() -> i64 {
+  m := {"x": 10, "y": 20};
+  println(f"{m["x"]}");
+  return 0;
+}

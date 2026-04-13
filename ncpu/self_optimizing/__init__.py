@@ -9,7 +9,7 @@ full engine dependency graph.
 __all__: list[str] = []
 
 try:
-    from ncpu.self_optimizing.engine import (
+    from ncpu.self_optimizing.core.engine import (
         ExecutionResult,
         SelfOptimizingEngine,
         Task,
@@ -26,7 +26,7 @@ except ImportError:
     pass
 
 try:
-    from ncpu.self_optimizing.gradient_feedback import (
+    from ncpu.self_optimizing.core.gradient_feedback import (
         CodePattern,
         ExecutionSignal,
         FeedbackType,
@@ -45,7 +45,7 @@ except ImportError:
     pass
 
 try:
-    from ncpu.self_optimizing.model_integration import (
+    from ncpu.self_optimizing.core.model_integration import (
         ExecutionVerifiedModel,
         ModelInterface,
         MultiCandidateExplorer,
@@ -62,7 +62,7 @@ except ImportError:
     pass
 
 try:
-    from ncpu.self_optimizing.autoresearch_agent import (
+    from ncpu.self_optimizing.core.autoresearch_agent import (
         AutoresearchSOMEAgent,
         ExperimentCandidate,
         ExperimentResult,
@@ -79,7 +79,7 @@ except ImportError:
     pass
 
 try:
-    from ncpu.self_optimizing.experiment_runner import (
+    from ncpu.self_optimizing.core.experiment_runner import (
         CheckpointManager,
         Experiment,
         ExperimentConfig,
@@ -98,7 +98,7 @@ except ImportError:
     pass
 
 try:
-    from ncpu.self_optimizing.gradient_search import (
+    from ncpu.self_optimizing.core.gradient_search import (
         GradientGuidedSearch,
         MultiObjectiveSearch,
         SearchDirection,
@@ -117,20 +117,20 @@ except ImportError:
     pass
 
 try:
-    from ncpu.self_optimizing.controller_bundle import (
+    from ncpu.self_optimizing.controller.bundle import (
         ControllerBundle,
         ControllerComponentConfig,
         load_controller_bundle,
         save_controller_bundle,
     )
-    from ncpu.self_optimizing.controller_runtime import (
+    from ncpu.self_optimizing.controller.runtime import (
         ResolvedControllerRuntime,
         load_bundle_latent_action_policy,
         load_bundle_latent_halt_policy,
         load_bundle_latent_memory_updater,
         resolve_controller_runtime,
     )
-    from ncpu.self_optimizing.weight_cpu_blueprint import (
+    from ncpu.self_optimizing.architecture.weight_cpu_blueprint import (
         WeightCPUBlueprint,
         WeightCPUTrainingStage,
         WeightMemorySpec,
@@ -139,14 +139,14 @@ try:
         load_weight_cpu_blueprint,
         save_weight_cpu_blueprint,
     )
-    from ncpu.self_optimizing.controller_training import (
+    from ncpu.self_optimizing.controller.training import (
         ACTION_LABELS,
         ActionPolicyExample,
         ControllerTrainingBundle,
         build_action_policy_examples,
         build_controller_training_bundle,
     )
-    from ncpu.self_optimizing.latent_action_training import (
+    from ncpu.self_optimizing.latent_heads.action_training import (
         LatentActionTrainingExample,
         build_latent_action_dataset,
         build_latent_action_training_bundle,
@@ -154,7 +154,7 @@ try:
         train_latent_action_head,
         write_latent_action_dataset,
     )
-    from ncpu.self_optimizing.latent_halt_training import (
+    from ncpu.self_optimizing.latent_heads.halt_training import (
         LatentHaltTrainingExample,
         build_latent_halt_dataset,
         build_latent_halt_training_bundle,
@@ -162,9 +162,9 @@ try:
         train_latent_halt_head,
         write_latent_halt_dataset,
     )
-    from ncpu.self_optimizing.hidden_workspace import HiddenWorkspace, WorkspaceStep
-    from ncpu.self_optimizing.latent_controller_state import LatentControllerState
-    from ncpu.self_optimizing.latent_action_policy import (
+    from ncpu.self_optimizing.controller.hidden_workspace import HiddenWorkspace, WorkspaceStep
+    from ncpu.self_optimizing.latent_heads.controller_state import LatentControllerState
+    from ncpu.self_optimizing.latent_heads.action_policy import (
         LATENT_ACTION_LABELS,
         LatentActionDecision,
         LatentActionHead,
@@ -173,14 +173,14 @@ try:
         encode_latent_action_features,
         load_latent_action_head,
     )
-    from ncpu.self_optimizing.latent_descriptor_head import (
+    from ncpu.self_optimizing.latent_heads.descriptor_head import (
         LatentDescriptorGenerator,
         LatentDescriptorHead,
         LatentDescriptorHeadConfig,
         encode_latent_descriptor_features,
         load_latent_descriptor_head,
     )
-    from ncpu.self_optimizing.latent_descriptor_training import (
+    from ncpu.self_optimizing.latent_heads.descriptor_training import (
         LatentDescriptorTrainingExample,
         build_latent_descriptor_dataset,
         build_latent_descriptor_training_bundle,
@@ -188,14 +188,14 @@ try:
         train_latent_descriptor_head,
         write_latent_descriptor_dataset,
     )
-    from ncpu.self_optimizing.latent_memory_head import (
+    from ncpu.self_optimizing.latent_heads.memory_head import (
         LatentMemoryHead,
         LatentMemoryHeadConfig,
         LatentMemoryUpdater,
         encode_latent_memory_features,
         load_latent_memory_head,
     )
-    from ncpu.self_optimizing.latent_memory_training import (
+    from ncpu.self_optimizing.latent_heads.memory_training import (
         LatentMemoryTrainingExample,
         build_latent_memory_dataset,
         build_latent_memory_training_bundle,
@@ -203,7 +203,7 @@ try:
         train_latent_memory_head,
         write_latent_memory_dataset,
     )
-    from ncpu.self_optimizing.latent_halt_policy import (
+    from ncpu.self_optimizing.latent_heads.halt_policy import (
         LATENT_HALT_LABELS,
         LatentHaltDecision,
         LatentHaltHead,
@@ -212,31 +212,31 @@ try:
         encode_latent_halt_features,
         load_latent_halt_head,
     )
-    from ncpu.self_optimizing.internal_controller import (
+    from ncpu.self_optimizing.controller.internal_controller import (
         BufferedInternalController,
         InternalControllerConfig,
         InternalDeliberationTask,
         InternalModelResponse,
     )
-    from ncpu.self_optimizing.task_local_fast_weights import (
+    from ncpu.self_optimizing.architecture.task_local_fast_weights import (
         FastWeightLinear,
         FastWeightUpdateResult,
         HFTaskLocalFastWeightsProvider,
         TaskLocalFastWeightConfig,
         find_target_linear_modules,
     )
-    from ncpu.self_optimizing.ncpu_adaptation_backend import (
+    from ncpu.self_optimizing.architecture.ncpu_adaptation_backend import (
         NCPUAdaptationBackend,
         NCPUAdaptationConfig,
         NCPUAdaptationDescriptor,
         NCPUAdaptationSession,
     )
-    from ncpu.self_optimizing.state_patch_head import (
+    from ncpu.self_optimizing.latent_heads.state_patch_head import (
         StatePatchHead,
         StatePatchHeadConfig,
         load_state_patch_head,
     )
-    from ncpu.self_optimizing.state_patch_training import (
+    from ncpu.self_optimizing.latent_heads.state_patch_training import (
         StatePatchTrainingExample,
         build_state_patch_dataset,
         build_state_patch_training_bundle,
@@ -244,23 +244,23 @@ try:
         train_state_patch_head,
         write_state_patch_dataset,
     )
-    from ncpu.self_optimizing.segmented_kv_cache import (
+    from ncpu.self_optimizing.architecture.segmented_kv_cache import (
         SegmentDescriptor,
         SegmentedKVCacheConfig,
         SegmentedKVCacheState,
         compress_hidden_segment,
     )
-    from ncpu.self_optimizing.recurrent_commit_policy import (
+    from ncpu.self_optimizing.controller.recurrent_commit_policy import (
         RecurrentCommitDecision,
         RecurrentCommitPolicy,
         RecurrentCommitPolicyConfig,
     )
-    from ncpu.self_optimizing.descriptor_decode_runtime import (
+    from ncpu.self_optimizing.controller.descriptor_decode_runtime import (
         DescriptorDecodeConfig,
         DescriptorDecodeRuntime,
     )
-    from ncpu.self_optimizing.sandbox_actions import SandboxActionResult, SandboxActionRunner
-    from ncpu.self_optimizing.trajectory_dataset import (
+    from ncpu.self_optimizing.core.sandbox_actions import SandboxActionResult, SandboxActionRunner
+    from ncpu.self_optimizing.training.trajectory_dataset import (
         DistillationExample,
         LoadedTrajectory,
         build_distillation_dataset,
@@ -270,7 +270,7 @@ try:
         summarize_distillation_dataset,
         write_distillation_dataset,
     )
-    from ncpu.self_optimizing.trajectory_logger import TrajectoryLogger
+    from ncpu.self_optimizing.training.trajectory_logger import TrajectoryLogger
 
     __all__ += [
         "ControllerBundle",

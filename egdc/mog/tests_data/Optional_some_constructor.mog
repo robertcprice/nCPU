@@ -1,0 +1,7 @@
+fn main() -> i64 {
+  o: ?i64 = some(42);
+  if o is some(v) {
+    println(f"{v}");
+  }
+  return 0;
+}

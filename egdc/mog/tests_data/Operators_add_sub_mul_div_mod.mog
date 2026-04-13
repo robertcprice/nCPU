@@ -1,0 +1,8 @@
+fn main() -> i64 {
+  println(f"{10 + 3}");
+  println(f"{10 - 3}");
+  println(f"{10 * 3}");
+  println(f"{10 / 3}");
+  println(f"{10 % 3}");
+  return 0;
+}

@@ -1,0 +1,7 @@
+fn main() -> i64 {
+  m := {"x": 10};
+  if m.has("x") {
+    println("has ok");
+  }
+  return 0;
+}

@@ -29,7 +29,7 @@ DEMO_REGISTRY = {
         ],
         "best_platform": "Cross-platform",
         "weight": "light",
-        "script": DEMOS_DIR / "interactive_discovery.py",
+        "script": DEMOS_DIR / "showcase" / "interactive_discovery.py",
         "default_argv": ["interactive_discovery.py"],
     },
     "text": {
@@ -44,7 +44,7 @@ DEMO_REGISTRY = {
         ],
         "best_platform": "Cross-platform",
         "weight": "light",
-        "script": DEMOS_DIR / "neural_text_machine.py",
+        "script": DEMOS_DIR / "showcase" / "neural_text_machine.py",
         "default_argv": ["neural_text_machine.py", "--interactive"],
     },
     "busybox": {
@@ -59,7 +59,7 @@ DEMO_REGISTRY = {
         ],
         "best_platform": "macOS / Apple Silicon",
         "weight": "medium",
-        "script": DEMOS_DIR / "busybox_gpu_demo.py",
+        "script": DEMOS_DIR / "gpu" / "busybox_gpu_demo.py",
         "default_argv": ["busybox_gpu_demo.py", "--interactive"],
     },
     "alpine": {
@@ -74,7 +74,7 @@ DEMO_REGISTRY = {
         ],
         "best_platform": "macOS / Apple Silicon",
         "weight": "medium",
-        "script": DEMOS_DIR / "alpine_gpu.py",
+        "script": DEMOS_DIR / "gpu" / "alpine_gpu.py",
         "default_argv": ["alpine_gpu.py", "--demo"],
     },
     "coprocessor": {
@@ -89,7 +89,7 @@ DEMO_REGISTRY = {
         ],
         "best_platform": "Cross-platform with model stack",
         "weight": "heavy",
-        "script": DEMOS_DIR / "demo_code_in_brain.py",
+        "script": DEMOS_DIR / "showcase" / "demo_code_in_brain.py",
         "default_argv": ["demo_code_in_brain.py", "--help"],
     },
 }

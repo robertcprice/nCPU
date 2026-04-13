@@ -16,7 +16,7 @@ from kernels.mlx.cpu_kernel_v2 import MLXKernelCPUv2, StopReasonV2
 from ncpu.os.gpu.elf_loader import load_elf_into_memory, parse_elf, make_busybox_syscall_handler
 from ncpu.os.gpu.filesystem import GPUFilesystem
 
-BUSYBOX = str(PROJECT_ROOT / "demos" / "busybox.elf")
+BUSYBOX = str(PROJECT_ROOT / "demos" / "gpu" / "busybox.elf")
 
 
 def main():

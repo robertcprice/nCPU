@@ -42,14 +42,14 @@ jobs:
       - name: Run core tests
         run: |
           pytest tests/ -q \
-            --ignore=tests/test_execution_training.py \
-            --ignore=tests/test_api_server_buffered_inference.py \
-            --ignore=tests/test_rust_cutover.py \
-            --ignore=tests/test_resume_bigcodebench_benchmark.py \
-            --ignore=tests/test_llm_provider.py \
-            --ignore=tests/test_differentiable_integration.py \
-            --ignore=tests/test_muxleq.py \
+            --ignore=tests/differentiable/test_execution_training.py \
+            --ignore=tests/self_optimizing/test_api_server_buffered_inference.py \
+            --ignore=tests/gpu/test_rust_cutover.py \
+            --ignore=tests/self_optimizing/test_resume_bigcodebench_benchmark.py \
+            --ignore=tests/self_optimizing/test_llm_provider.py \
+            --ignore=tests/self_optimizing/test_differentiable_integration.py \
+            --ignore=tests/gpu/test_muxleq.py \
             -k "not metal and not gpu and not rust"
 
       - name: Run differentiable engine tests
-        run: pytest tests/test_differentiable.py tests/test_differentiable_advanced.py -x -q
+        run: pytest tests/differentiable/test_differentiable.py tests/differentiable/test_differentiable_advanced.py -x -q

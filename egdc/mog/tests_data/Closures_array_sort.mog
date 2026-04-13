@@ -1,0 +1,6 @@
+fn main() -> i64 {
+  arr: i64[] = [3, 1, 2];
+  arr.sort();
+  println(f"{arr[0]} {arr[1]} {arr[2]}");
+  return 0;
+}

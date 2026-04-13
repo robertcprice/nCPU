@@ -1,0 +1,5 @@
+fn main() -> i64 {
+  a: bf16 = 3.14;
+  println("bf16 ok");
+  return 0;
+}

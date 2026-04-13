@@ -1,0 +1,8 @@
+fn add(a: i64, b: i64) -> i64 {
+  return a + b;
+}
+
+fn main() -> i64 {
+  println(f"{add(10, 32)}");
+  return 0;
+}

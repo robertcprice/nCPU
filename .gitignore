@@ -33,7 +33,7 @@ models/research/
 checkpoints/**/*.pt
 
 # Training logs
-train_log.txt
+logs/
 
 # Training outputs
 *.log
@@ -46,8 +46,7 @@ training_results/
 *.remote_snapshot
 *_results.json
 *_benchmark*.json
-coprocessor_realworld_*.json
-HumanEval.jsonl
+benchmarks/results/
 *.tar.gz
 .hermes-lab-data/
 .hermes-lab/
@@ -68,26 +67,19 @@ ncpu/os/neuros/_recovered_*
 
 # SOME generated artifacts
 benchmarks/internal_trajectories/
-benchmarks/bigcodebench_*_samples_*.jsonl
-benchmarks/bigcodebench_*_eval_results_*.json
-benchmarks/bigcodebench_*_pass_at_k_*.json
-benchmarks/bigcodebench_*_some.json
-benchmarks/bigcodebench_*_some.json.progress.jsonl
-benchmarks/evalplus_*.json
-benchmarks/evalplus_*.json.progress.jsonl
-benchmarks/*.remote_snapshot
 training/internal_controller_bootstrap/
 training/real_memory_proof_*/
 tmp_benchmark.py
 todo.md
 todo_self_optimizing.md
 docs/DIAGRAM_PROMPT.md
-docs/SOME_ARCH_FULL.png
-docs/SOME_DIAGRAMS.md
-docs/SOME_INFERENCE_DIAGRAM.png
-docs/some_diagram.svg
+docs/some/arch_full.png
+docs/some/diagrams.md
+docs/some/inference_diagram.png
+docs/some/diagram.svg
 
 # Archive (legacy experiments)
 archive/
-ablation_results/
-pipeline_log*.txt
+experiments/ablation_results/
+outputs/
+.mog_synth_memory/

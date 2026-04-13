@@ -1,0 +1,19 @@
+/Users/bobbyprice/projects/nCPU/egdc/mog_model.py:99: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(
+[  1/10] add_two_v0 interp=FAIL
+[  2/10] abs_diff_v0 interp=FAIL
+[  3/10] max2_v0 interp=FAIL
+[  4/10] clamp_0_100_v0 interp=FAIL
+[  5/10] sign_v0 interp=FAIL
+[  6/10] sum_to_n_v0 interp=FAIL
+[  7/10] gcd_v0 interp=FAIL
+[  8/10] lcm_v0 interp=FAIL
+[  9/10] array_sum_v0 interp=FAIL
+[ 10/10] array_max_v0 interp=FAIL
+
+Summary
+-------
+Problems:      10
+Pass@1:        0.000
+Avg syntax:    0.241
+Avg static:    0.327

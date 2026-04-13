@@ -24,7 +24,7 @@ python -m ncpu.execution_training.train \
     --output-dir training_results/exec_training/
 
 # Run tests
-python -m pytest tests/test_execution_training.py -v
+python -m pytest tests/differentiable/test_execution_training.py -v
 ```
 
 ## Architecture
@@ -90,4 +90,4 @@ This builds on:
 - `ncpu/coprocessor/` — NCPUCoprocessorMLP injection, router, soft ALU
 - `ncpu/coprocessor/train.py` — base training harness pattern
 
-See `docs/DIFFERENTIABLE_EXECUTION_TRAINING.md` for the full architecture document.
+See `docs/mog/DIFFERENTIABLE_EXECUTION_TRAINING.md` for the full architecture document.

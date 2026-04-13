@@ -1,0 +1,11 @@
+fn main() -> i64 {
+  s: i64 = 0;
+  for i in 0..10 {
+    if (i == 5) {
+      continue;
+    }
+    s = s + i;
+  }
+  println(f"{s}");
+  return 0;
+}

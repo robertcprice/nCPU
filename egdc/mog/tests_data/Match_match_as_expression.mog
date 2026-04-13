@@ -1,0 +1,11 @@
+fn main() -> i64 {
+  x: i64 = 3;
+  label: [u8] = match x {
+    1 => "one",
+    2 => "two",
+    3 => "three",
+    _ => "other"
+  };
+  println(f"{label}");
+  return 0;
+}

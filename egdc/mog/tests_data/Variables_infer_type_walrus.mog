@@ -1,0 +1,6 @@
+fn main() -> i64 {
+  x := 42;
+  y := "hello";
+  println(f"{x} {y}");
+  return 0;
+}

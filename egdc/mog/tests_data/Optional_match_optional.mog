@@ -1,0 +1,9 @@
+fn main() -> i64 {
+  o: ?i64 = some(99);
+  v: i64 = match o {
+    some(x) => x,
+    none => 0
+  };
+  println(f"{v}");
+  return 0;
+}

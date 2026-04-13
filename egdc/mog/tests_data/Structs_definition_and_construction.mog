@@ -1,0 +1,10 @@
+struct Point {
+  x: f64,
+  y: f64
+}
+
+fn main() -> i64 {
+  p: Point = Point { x: 3.0, y: 4.0 };
+  println("struct ok");
+  return 0;
+}

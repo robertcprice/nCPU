@@ -1,0 +1,9 @@
+fn make_adder(n: i64) -> fn(i64) -> i64 {
+  return fn(x: i64) -> i64 { x + n };
+}
+
+fn main() -> i64 {
+  add5 := make_adder(5);
+  println(f"{add5(10)}");
+  return 0;
+}

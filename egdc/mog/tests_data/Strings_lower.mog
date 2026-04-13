@@ -1,0 +1,6 @@
+fn main() -> i64 {
+  s: [u8] = "HELLO";
+  l: [u8] = s.lower();
+  println(f"{l}");
+  return 0;
+}

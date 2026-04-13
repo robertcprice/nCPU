@@ -449,7 +449,7 @@ def main():
 
     # ─── Write results to JSON ────────────────────────────────────────
     import json
-    results_path = PROJECT_ROOT / "benchmarks" / "sidechannel_results.json"
+    results_path = PROJECT_ROOT / "benchmarks" / "results" / "local" / "sidechannel_results.json"
     output = {
         "gpu_cycles": {str(k): v for k, v in gpu_results.items()} if gpu_results else {},
         "native_ns": {str(k): v for k, v in native_results.items()} if native_results else {},

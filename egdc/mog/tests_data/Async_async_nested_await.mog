@@ -1,0 +1,19 @@
+async fn add(a: i64, b: i64) -> i64 {
+  return a + b;
+}
+
+async fn double(x: i64) -> i64 {
+  return x * 2;
+}
+
+async fn add_then_double(a: i64, b: i64) -> i64 {
+  sum: i64 = await add(a, b);
+  result: i64 = await double(sum);
+  return result;
+}
+
+async fn main() -> i64 {
+  r: i64 = await add_then_double(10, 11);
+  println(f"{r}");
+  return 0;
+}

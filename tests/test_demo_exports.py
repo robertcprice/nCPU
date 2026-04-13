@@ -1,8 +1,8 @@
 import json
 from types import SimpleNamespace
 
-from demos.interactive_discovery import InteractiveDiscovery
-from demos.neural_text_machine import export_program_text, save_result_summary
+from demos.showcase.interactive_discovery import InteractiveDiscovery
+from demos.showcase.neural_text_machine import export_program_text, save_result_summary
 
 
 def test_interactive_discovery_export_program(tmp_path):

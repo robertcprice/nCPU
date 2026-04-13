@@ -1,0 +1,118 @@
+{
+  "num_problems": 10,
+  "num_solved": 10,
+  "pass_rate": 1.0,
+  "family_scores": {
+    "binary": 0.6666666666666666,
+    "if_cmp": 0.75,
+    "clamp_0_100": 0.6666666666666666,
+    "sign3": 0.6666666666666666,
+    "sum_to_n": 0.6666666666666666,
+    "gcd_euclid": 0.6666666666666666,
+    "lcm_via_gcd": 0.6666666666666666,
+    "array_sum_reduce": 0.6666666666666666,
+    "array_max_reduce": 0.6666666666666666
+  },
+  "results": [
+    {
+      "problem": "add_two_v0",
+      "success": true,
+      "family": "binary",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn add_two(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n"
+    },
+    {
+      "problem": "abs_diff_v0",
+      "success": true,
+      "family": "if_cmp",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn abs_diff(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a - b;\n    } else {\n        return b - a;\n    }\n}\n"
+    },
+    {
+      "problem": "max2_v0",
+      "success": true,
+      "family": "if_cmp",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn max2(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a;\n    } else {\n        return b;\n    }\n}\n"
+    },
+    {
+      "problem": "clamp_0_100_v0",
+      "success": true,
+      "family": "clamp_0_100",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn clamp_0_100(x: i64) -> i64 {\n    if (x < 0) {\n        return 0;\n    }\n    if (x > 100) {\n        return 100;\n    }\n    return x;\n}\n"
+    },
+    {
+      "problem": "sign_v0",
+      "success": true,
+      "family": "sign3",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn sign(x: i64) -> i64 {\n    if (x < 0) {\n        return -1;\n    }\n    if (x > 0) {\n        return 1;\n    }\n    return 0;\n}\n"
+    },
+    {
+      "problem": "sum_to_n_v0",
+      "success": true,
+      "family": "sum_to_n",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn sum_to_n(n: i64) -> i64 {\n    return (n * (n + 1)) / 2;\n}\n"
+    },
+    {
+      "problem": "gcd_v0",
+      "success": true,
+      "family": "gcd_euclid",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n"
+    },
+    {
+      "problem": "lcm_v0",
+      "success": true,
+      "family": "lcm_via_gcd",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return (a * b) / x;\n}\n"
+    },
+    {
+      "problem": "array_sum_v0",
+      "success": true,
+      "family": "array_sum_reduce",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n"
+    },
+    {
+      "problem": "array_max_v0",
+      "success": true,
+      "family": "array_max_reduce",
+      "loss": 0.0,
+      "interp_pass": true,
+      "compiler_pass": true,
+      "error": null,
+      "code": "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n"
+    }
+  ]
+}

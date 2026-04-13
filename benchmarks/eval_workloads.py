@@ -451,7 +451,7 @@ def eval_toolchain_workload(nos: NeurOS, quick: bool = False) -> Dict:
     results = {"assembler": {}, "compiler": {}}
 
     # Load assembly programs
-    asm_programs = list(Path("programs").glob("*.asm"))[:5 if quick else 20]
+    asm_programs = list(Path("programs").rglob("*.asm"))[:5 if quick else 20]
 
     logger.info(f"  [Assembler] Assembling {len(asm_programs)} programs...")
     exact_matches = 0
@@ -616,7 +616,7 @@ def run_evaluation(quick: bool = False):
         traceback.print_exc()
 
     # Save results
-    output_file = Path("benchmarks/eval_results.json")
+    output_file = Path("benchmarks/results/local/eval_results.json")
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w") as f:
         json.dump(all_results, f, indent=2)

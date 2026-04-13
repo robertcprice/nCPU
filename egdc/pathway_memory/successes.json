@@ -1,0 +1,82 @@
+[
+  {
+    "ts": 1776035435.932532,
+    "problem_name": "max2",
+    "family": "branch",
+    "code": "fn max2(a: i64, b: i64) -> i64 {\n    v0: i64 = 0;\n    v1: i64 = 0;\n    v2: i64 = 0;\n    v3: i64 = 0;\n    if (a > b) {\n        return a;\n    } else {\n        return b;\n    }\n}\n",
+    "metadata": {
+      "description": "synthesized max2",
+      "signature": "fn max2(...)"
+    }
+  },
+  {
+    "ts": 1776035435.9413152,
+    "problem_name": "gcd",
+    "family": "gcd",
+    "code": "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "description": "synthesized gcd",
+      "signature": "fn gcd(...)"
+    }
+  },
+  {
+    "ts": 1776035435.941877,
+    "problem_name": "lcm",
+    "family": "lcm",
+    "code": "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return (a * b) / x;\n}\n",
+    "metadata": {
+      "description": "synthesized lcm",
+      "signature": "fn lcm(...)"
+    }
+  },
+  {
+    "ts": 1776035436.1537201,
+    "problem_name": "sum_to_n",
+    "family": "loop",
+    "code": "fn sum_to_n(n: i64) -> i64 {\n    acc: i64 = 0;\n    for i := 0 to (n + 1) {\n        acc = acc + i;\n    }\n    return acc;\n}\n",
+    "metadata": {
+      "description": "synthesized sum_to_n",
+      "signature": "fn sum_to_n(...)"
+    }
+  },
+  {
+    "ts": 1776035765.483925,
+    "problem_name": "max2",
+    "family": "branch",
+    "code": "fn max2(a: i64, b: i64) -> i64 {\n    v0: i64 = 0;\n    v1: i64 = 0;\n    v2: i64 = 0;\n    v3: i64 = 0;\n    if (a > b) {\n        return a;\n    } else {\n        return b;\n    }\n}\n",
+    "metadata": {
+      "description": "synthesized max2",
+      "signature": "fn max2(...)"
+    }
+  },
+  {
+    "ts": 1776035765.4951239,
+    "problem_name": "gcd",
+    "family": "gcd",
+    "code": "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "description": "synthesized gcd",
+      "signature": "fn gcd(...)"
+    }
+  },
+  {
+    "ts": 1776035765.495741,
+    "problem_name": "lcm",
+    "family": "lcm",
+    "code": "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return (a * b) / x;\n}\n",
+    "metadata": {
+      "description": "synthesized lcm",
+      "signature": "fn lcm(...)"
+    }
+  },
+  {
+    "ts": 1776035765.707305,
+    "problem_name": "sum_to_n",
+    "family": "loop",
+    "code": "fn sum_to_n(n: i64) -> i64 {\n    acc: i64 = 0;\n    for i := 0 to (n + 1) {\n        acc = acc + i;\n    }\n    return acc;\n}\n",
+    "metadata": {
+      "description": "synthesized sum_to_n",
+      "signature": "fn sum_to_n(...)"
+    }
+  }
+]

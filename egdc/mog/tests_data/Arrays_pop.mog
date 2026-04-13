@@ -1,0 +1,6 @@
+fn main() -> i64 {
+  arr: i64[] = [10, 20, 30];
+  v: i64 = arr.pop();
+  println(f"popped={v} len={arr.len}");
+  return 0;
+}

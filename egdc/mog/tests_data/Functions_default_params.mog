@@ -1,0 +1,10 @@
+fn greet(name: [u8] = "World") -> i64 {
+  println(f"Hello, {name}!");
+  return 0;
+}
+
+fn main() -> i64 {
+  greet();
+  greet("Mog");
+  return 0;
+}

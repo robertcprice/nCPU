@@ -1,0 +1,13 @@
+fn might_fail() -> Result<i64> {
+  return err("oops");
+}
+
+fn main() -> i64 {
+  try {
+    r: i64 = might_fail()?;
+    println(f"got {r}");
+  } catch e {
+    println(f"caught: {e}");
+  }
+  return 0;
+}

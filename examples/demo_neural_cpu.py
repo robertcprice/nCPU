@@ -180,7 +180,7 @@ def demo_cross_validation():
         return
 
     all_match = True
-    for asm_file in sorted(programs_dir.glob("*.asm")):
+    for asm_file in sorted(programs_dir.rglob("*.asm")):
         source = asm_file.read_text()
 
         mock_cpu = CPU(neural_execution=False)

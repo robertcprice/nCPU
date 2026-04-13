@@ -33,7 +33,7 @@ from ncpu.os.gpu.runner import (
 from ncpu.os.gpu.filesystem import GPUFilesystem
 from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
 
-RESULTS_PATH = Path(__file__).resolve().parent / "multiprocess_results.json"
+RESULTS_PATH = Path(__file__).resolve().parent / "results" / "local" / "multiprocess_results.json"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

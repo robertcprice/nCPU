@@ -1,0 +1,12 @@
+struct Particle {
+  x: f64,
+  y: f64
+}
+
+fn main() -> i64 {
+  p: Particle = Particle { x: 0.0, y: 0.0 };
+  p.x = 10.0;
+  p.y = 20.0;
+  println("mutated ok");
+  return 0;
+}

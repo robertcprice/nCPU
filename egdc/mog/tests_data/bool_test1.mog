@@ -1,0 +1,8 @@
+fn main() -> i64 {
+  a: i64 = 1;
+  b: i64 = 0;
+  if a && b {
+    println("both");
+  }
+  return 0;
+}

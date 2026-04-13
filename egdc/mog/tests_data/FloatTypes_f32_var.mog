@@ -1,0 +1,5 @@
+fn main() -> i64 {
+  a: f32 = 3.14;
+  println("f32 ok");
+  return 0;
+}

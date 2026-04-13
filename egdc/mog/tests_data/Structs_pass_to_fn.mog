@@ -1,0 +1,17 @@
+struct Point {
+  x: f64,
+  y: f64
+}
+
+fn dist_sq(p: Point) -> f64 {
+  return (p.x * p.x) + (p.y * p.y);
+}
+
+fn main() -> i64 {
+  p: Point = Point { x: 3.0, y: 4.0 };
+  d: f64 = dist_sq(p);
+  print_string("d=");
+  print_f64(d);
+  println("");
+  return 0;
+}

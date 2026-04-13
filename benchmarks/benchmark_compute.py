@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 PROGRAMS_DIR = PROJECT_ROOT / "programs"
-RESULTS_PATH = Path(__file__).resolve().parent / "compute_results.json"
+RESULTS_PATH = Path(__file__).resolve().parent / "results" / "local" / "compute_results.json"
 
 # Programs to benchmark (representative mix of complexity)
 BENCHMARK_PROGRAMS = [

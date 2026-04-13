@@ -140,34 +140,34 @@ python -m ncpu.lab discover
 python -m ncpu.lab text --interactive
 
 # Direct demo entrypoints
-PYTHONPATH=. python demos/interactive_discovery.py
-PYTHONPATH=. python demos/neural_text_machine.py --interactive
+PYTHONPATH=. python demos/showcase/interactive_discovery.py
+PYTHONPATH=. python demos/showcase/neural_text_machine.py --interactive
 
 # Neural mode --- all arithmetic through trained neural networks
-python main.py --program programs/fibonacci.asm
+python main.py --program programs/arithmetic/fibonacci.asm
 
 # GPU compute mode --- Metal shader, ~1.9M IPS
-python main.py --program programs/fibonacci.asm --compute
+python main.py --program programs/arithmetic/fibonacci.asm --compute
 
 # GPU UNIX OS --- 25-command shell with fork/pipe/wait on Metal
 python ncpu/os/gpu/demo.py --multiproc
 
 # Run real BusyBox on the GPU
-python demos/busybox_gpu_demo.py --interactive
+python demos/gpu/busybox_gpu_demo.py --interactive
 
 # Alpine Linux on GPU
-python demos/alpine_gpu.py --demo
+python demos/gpu/alpine_gpu.py --demo
 
 # Rust-native launcher --- standalone Rust path (ELF or boot image)
 cd kernels/rust_metal
-cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --rootfs -- echo hello
-cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --inspect --json-report
+cargo run --bin ncpu_run -- --elf ../../demos/gpu/busybox.elf --rootfs -- echo hello
+cargo run --bin ncpu_run -- --elf ../../demos/gpu/busybox.elf --inspect --json-report
 cargo run --bin ncpu_run -- ../../path/to/image.bin
 
 # Benchmark mode --- run 3x with aggregate statistics
-cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --benchmark --rootfs -- echo hello
+cargo run --bin ncpu_run -- --elf ../../demos/gpu/busybox.elf --benchmark --rootfs -- echo hello
 # Custom repeat count with JSON aggregate output
-cargo run --bin ncpu_run -- --elf ../../demos/busybox.elf --repeat 10 --json-report --rootfs -- echo hello
+cargo run --bin ncpu_run -- --elf ../../demos/gpu/busybox.elf --repeat 10 --json-report --rootfs -- echo hello
 
 # Differentiable coprocessor --- inject nCPU into a transformer
 python ncpu/coprocessor/train.py  # Train on synthetic arithmetic + GSM8K
@@ -357,11 +357,11 @@ Full Alpine Linux v3.20 distribution running on Metal GPU compute shader with a 
 - Shell scripting: for/while/if/elif/case, functions, local variables, parameter expansion, brace expansion
 - Here-documents, glob expansion, aliases, history, 35+ builtins
 - 109-file Alpine rootfs with /proc, /dev, /etc, init stubs, user databases, package manager
-- 26 novel GPU superpower commands spanning post-mortem forensics, replay/diff, state snapshots, tracing, breakpoints, watchpoints, profiling, disassembly, sanitization, fuzzing, reverse data flow, constant-time verification, memory visualization, and entropy analysis. Full reference: [GPU debugging toolkit](docs/gpu_debugging_toolkit.md)
+- 26 novel GPU superpower commands spanning post-mortem forensics, replay/diff, state snapshots, tracing, breakpoints, watchpoints, profiling, disassembly, sanitization, fuzzing, reverse data flow, constant-time verification, memory visualization, and entropy analysis. Full reference: [GPU debugging toolkit](docs/gpu/gpu_debugging_toolkit.md)
 
 ### Rust Metal Kernel
 
-The primary execution backend: Rust + Metal with StorageModeShared for zero-copy GPU<->Python communication. [Architecture docs](docs/rust_metal_kernel.md).
+The primary execution backend: Rust + Metal with StorageModeShared for zero-copy GPU<->Python communication. [Architecture docs](docs/gpu/rust_metal_kernel.md).
 
 - **~200 ARM64 instructions** (integer + floating-point), ~1.9M IPS sustained
 - **Floating-point support**: single-precision FADD, FSUB, FMUL, FDIV, FSQRT, FABS, FNEG, FMADD, FMSUB, FCMP, FCSEL, FRINT*, FMAX, FMIN, SCVTF, UCVTF, FCVTZS, FCVTZU, FMOV, FCVT, plus all FP load/store addressing modes. Double-precision (D-register) instructions decode and execute but operate at single-precision accuracy — Apple Silicon GPU has no FP64 hardware.
@@ -385,7 +385,7 @@ A debugging platform **impossible on conventional CPUs**. The Metal kernel provi
 - **Automated fuzzing**: Crash detection with instant post-mortem traces (no reproduction needed)
 - **Reverse data flow**: Trace backwards to find where a value originated
 - **Constant-time verification**: Exact verification of constant-time crypto (impossible on noisy CPUs)
-- Full reference: [GPU debugging toolkit](docs/gpu_debugging_toolkit.md). Paper draft: [GPU debugging toolkit paper](paper/gpu_debugging_toolkit_paper.md)
+- Full reference: [GPU debugging toolkit](docs/gpu/gpu_debugging_toolkit.md). Paper draft: [GPU debugging toolkit paper](paper/gpu_debugging_toolkit_paper.md)
 
 **Why this matters**: On a CPU, process state is destroyed after exit, breakpoints require ptrace overhead, watchpoints are limited by hardware debug registers, and non-deterministic microarchitecture prevents replay. On GPU, ALL execution state persists, breakpoints and watchpoints are free, and every run is deterministic.
 
@@ -497,7 +497,7 @@ Current evidence:
 - **BigCodeBench-Hard**: `qwen3.5:9b 33 -> 49`
 - **Latent-memory proof**: learned memory head improved validation MSE by `83.26%` over zero-delta baseline
 
-Docs: [SOME Complete Guide](docs/SOME_COMPLETE_GUIDE.md) | [Architecture](docs/SOME_ARCHITECTURE.md) | [Weight CPU Architecture](docs/WEIGHT_CPU_ARCHITECTURE.md) | [Results](docs/SOME_RESULTS.md)
+Docs: [SOME Complete Guide](docs/some/SOME_COMPLETE_GUIDE.md) | [Architecture](docs/some/SOME_ARCHITECTURE.md) | [Weight CPU Architecture](docs/some/WEIGHT_CPU_ARCHITECTURE.md) | [Results](docs/some/SOME_RESULTS.md)
 
 ### 5. Differentiable Execution as a Training Signal for Code Models
 
@@ -526,7 +526,7 @@ Three training modes:
 | **Differentiable Compilation** | Map LM hidden states → DiffCompiler → execution | End-to-end: execution → compilation → embeddings |
 | **Generated Code Training** | Model generates code, parse, execute, REINFORCE | Execution rewards + optional policy gradient |
 
-96 tests passing across the full pipeline. See [architecture doc](docs/DIFFERENTIABLE_EXECUTION_TRAINING.md) and the [module README](ncpu/execution_training/README.md).
+96 tests passing across the full pipeline. See [architecture doc](docs/mog/DIFFERENTIABLE_EXECUTION_TRAINING.md) and the [module README](ncpu/execution_training/README.md).
 
 ```bash
 # Smoke test (no model needed)
@@ -583,14 +583,14 @@ pytest tests/ -v   # ~1,840 passed
 - **[Wiki](../../wiki)** --- comprehensive documentation (architecture, models, demos, ISA reference)
 - **[Research Paper](paper/ncpu_paper.md)** --- detailed analysis and findings
 - **[Model Index](models/MODEL_INDEX.md)** --- complete trained model inventory
-- **[Rust Metal Kernel](docs/rust_metal_kernel.md)** --- architecture, zero-copy design, build instructions
-- **[Compilation Pipeline](docs/compilation_pipeline.md)** --- end-to-end C-to-GPU flow
-- **[GPU Debugging Toolkit](docs/gpu_debugging_toolkit.md)** --- the 26-command GPU-native "super debugger"
-- **[SOME Complete Guide](docs/SOME_COMPLETE_GUIDE.md)** --- hidden controller, fast weights, latent heads, and training pipeline
-- **[Weight CPU Architecture](docs/WEIGHT_CPU_ARCHITECTURE.md)** --- the "CPU in the model" roadmap and current prototype boundaries
-- **[SOME Results](docs/SOME_RESULTS.md)** --- benchmark evidence and latent-memory proof summary
+- **[Rust Metal Kernel](docs/gpu/rust_metal_kernel.md)** --- architecture, zero-copy design, build instructions
+- **[Compilation Pipeline](docs/gpu/compilation_pipeline.md)** --- end-to-end C-to-GPU flow
+- **[GPU Debugging Toolkit](docs/gpu/gpu_debugging_toolkit.md)** --- the 26-command GPU-native "super debugger"
+- **[SOME Complete Guide](docs/some/SOME_COMPLETE_GUIDE.md)** --- hidden controller, fast weights, latent heads, and training pipeline
+- **[Weight CPU Architecture](docs/some/WEIGHT_CPU_ARCHITECTURE.md)** --- the "CPU in the model" roadmap and current prototype boundaries
+- **[SOME Results](docs/some/SOME_RESULTS.md)** --- benchmark evidence and latent-memory proof summary
 - **[Differentiable Programs](paper/section_differentiable_programs.md)** --- paper section on program optimization, synthesis, ISA discovery
-- **[Differentiable Execution Training](docs/DIFFERENTIABLE_EXECUTION_TRAINING.md)** --- architecture doc for execution-grounded code model training
+- **[Differentiable Execution Training](docs/mog/DIFFERENTIABLE_EXECUTION_TRAINING.md)** --- architecture doc for execution-grounded code model training
 - **[Execution Training Paper Section](paper/section_execution_training.md)** --- paper section on dense execution gradients for code LMs
 
 ## License

@@ -1,0 +1,8 @@
+fn main() -> i64 {
+  a: bool = false;
+  b: bool = true;
+  if a || b {
+    println("or ok");
+  }
+  return 0;
+}

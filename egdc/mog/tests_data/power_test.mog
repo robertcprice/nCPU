@@ -1,0 +1,6 @@
+fn main() -> i64 {
+  r: f64 = pow(2.0, 10.0);
+  print_f64(r);
+  println("");
+  return 0;
+}

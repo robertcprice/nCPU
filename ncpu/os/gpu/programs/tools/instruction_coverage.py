@@ -38,7 +38,7 @@ from ncpu.os.gpu.elf_loader import (
 )
 from ncpu.os.gpu.filesystem import GPUFilesystem
 
-BUSYBOX = PROJECT_ROOT / "demos" / "busybox.elf"
+BUSYBOX = PROJECT_ROOT / "demos" / "gpu" / "busybox.elf"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,8 @@
+fn main() -> i64 {
+  a: f64 = 3.14;
+  b: f64 = 2.71;
+  if a > b {
+    println("gt");
+  }
+  return 0;
+}

@@ -1,0 +1,5 @@
+fn main() -> i64 {
+  a: i32 = 42;
+  println(f"a={a}");
+  return 0;
+}

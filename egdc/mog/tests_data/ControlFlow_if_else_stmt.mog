@@ -1,0 +1,9 @@
+fn main() -> i64 {
+  x: i64 = 10;
+  if (x > 5) {
+    println("gt5");
+  } else {
+    println("le5");
+  }
+  return 0;
+}

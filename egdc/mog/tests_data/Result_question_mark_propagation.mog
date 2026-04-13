@@ -1,0 +1,18 @@
+fn div(a: i64, b: i64) -> Result<i64> {
+  if b == 0 { return err("div0"); }
+  return ok(a / b);
+}
+
+fn chain(a: i64, b: i64, c: i64) -> Result<i64> {
+  step1: i64 = div(a, b)?;
+  step2: i64 = div(step1, c)?;
+  return ok(step2);
+}
+
+fn main() -> i64 {
+  r: Result<i64> = chain(100, 5, 2);
+  if r is ok(v) {
+    println(f"{v}");
+  }
+  return 0;
+}

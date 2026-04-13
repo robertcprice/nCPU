@@ -1,0 +1,6 @@
+requires env;
+
+fn main() -> i64 {
+  println("cap ok");
+  return 0;
+}

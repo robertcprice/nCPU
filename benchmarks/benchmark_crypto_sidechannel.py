@@ -330,7 +330,7 @@ def main():
     print("  speculative execution, no OS interrupts during kernel execution.")
 
     # Save results
-    results_path = PROJECT_ROOT / "benchmarks" / "crypto_sidechannel_results.json"
+    results_path = PROJECT_ROOT / "benchmarks" / "results" / "local" / "crypto_sidechannel_results.json"
     with open(results_path, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"\n  Results saved to {results_path}")

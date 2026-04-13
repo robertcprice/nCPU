@@ -34,7 +34,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 PROGRAMS_DIR = PROJECT_ROOT / "programs"
 MODELS_DIR = PROJECT_ROOT / "models"
-RESULTS_PATH = Path(__file__).resolve().parent / "results.json"
+RESULTS_PATH = Path(__file__).resolve().parent / "results" / "local" / "results.json"
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -231,7 +231,7 @@ def run_program_benchmarks() -> list[dict[str, Any]]:
     """Run each .asm program through the neural CPU, measuring wall time and cycles."""
     from ncpu.model import CPU
 
-    program_files = sorted(PROGRAMS_DIR.glob("*.asm"))
+    program_files = sorted(PROGRAMS_DIR.rglob("*.asm"))
     if not program_files:
         print(f"  WARNING: No .asm files found in {PROGRAMS_DIR}")
         return []

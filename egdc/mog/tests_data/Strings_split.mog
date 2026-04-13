@@ -1,0 +1,6 @@
+fn main() -> i64 {
+  s: [u8] = "a,b,c";
+  parts := s.split(",");
+  println("split ok");
+  return 0;
+}

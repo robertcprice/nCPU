@@ -306,7 +306,7 @@ def load_real_programs(programs_dir: Path) -> List[str]:
         List of assembly source code strings
     """
     programs = []
-    asm_files = sorted(programs_dir.glob("*.asm"))
+    asm_files = sorted(programs_dir.rglob("*.asm"))
     for path in asm_files:
         programs.append(path.read_text())
     print(f"[Data] Loaded {len(programs)} real programs from {programs_dir}")

@@ -35,7 +35,7 @@ from kernels.mlx.gpu_cpu import GPUKernelCPU as create_gpu_cpu, StopReasonV2
 from ncpu.os.gpu.elf_loader import load_elf_into_memory, parse_elf, make_busybox_syscall_handler
 from ncpu.os.gpu.filesystem import GPUFilesystem
 
-BUSYBOX = PROJECT_ROOT / "demos" / "busybox.elf"
+BUSYBOX = PROJECT_ROOT / "demos" / "gpu" / "busybox.elf"
 
 
 def find_qemu():

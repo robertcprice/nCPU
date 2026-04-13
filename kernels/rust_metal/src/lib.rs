@@ -27,6 +27,8 @@ pub mod microkernel;
 pub mod gpu_optimizer;
 mod multi_kernel;
 pub mod native_abi;
+mod neural_alu;
+mod neural_display;
 mod neural_dispatch;
 mod neural_hybrid;
 mod neural_ooo;
@@ -1947,6 +1949,8 @@ fn ncpu_metal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     async_gpu::register_async(m)?;
     parallel::register_parallel(m)?;
     multi_kernel::register_multi_kernel(m)?;
+    neural_alu::register_neural_alu(m)?;
+    neural_display::register_neural_display(m)?;
     neural_dispatch::register_neural(m)?;
     neural_weights::register_weights(m)?;
     pure_gpu::register_pure_gpu(m)?;

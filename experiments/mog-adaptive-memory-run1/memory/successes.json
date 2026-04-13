@@ -1,0 +1,1502 @@
+[
+  {
+    "ts": 1774881932.321656,
+    "problem_name": "add_two_v0",
+    "family": "binary",
+    "code": "fn add_two(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of two i64 integers.",
+      "signature": "fn add_two(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881932.665822,
+    "problem_name": "add_two_v1",
+    "family": "binary",
+    "code": "fn add_two(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of two i64 integers.",
+      "signature": "fn add_two(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881932.994726,
+    "problem_name": "add_two_v2",
+    "family": "binary",
+    "code": "fn add_two(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of two i64 integers.",
+      "signature": "fn add_two(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881933.327716,
+    "problem_name": "add_two_v3",
+    "family": "binary",
+    "code": "fn add_two(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of two i64 integers.",
+      "signature": "fn add_two(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881933.6602151,
+    "problem_name": "add_two_v4",
+    "family": "binary",
+    "code": "fn add_two(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of two i64 integers.",
+      "signature": "fn add_two(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881934.4311419,
+    "problem_name": "abs_diff_v0",
+    "family": "if_cmp",
+    "code": "fn abs_diff(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a - b;\n    } else {\n        return 2 + 2;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the absolute difference between two integers.",
+      "signature": "fn abs_diff(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881935.212588,
+    "problem_name": "abs_diff_v1",
+    "family": "if_cmp",
+    "code": "fn abs_diff(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a - b;\n    } else {\n        return b - a;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the absolute difference between two integers.",
+      "signature": "fn abs_diff(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881935.968619,
+    "problem_name": "abs_diff_v2",
+    "family": "if_cmp",
+    "code": "fn abs_diff(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a - b;\n    } else {\n        return b - a;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the absolute difference between two integers.",
+      "signature": "fn abs_diff(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881936.719088,
+    "problem_name": "abs_diff_v3",
+    "family": "if_cmp",
+    "code": "fn abs_diff(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a - b;\n    } else {\n        return b - a;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the absolute difference between two integers.",
+      "signature": "fn abs_diff(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881937.4710772,
+    "problem_name": "abs_diff_v4",
+    "family": "if_cmp",
+    "code": "fn abs_diff(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a - b;\n    } else {\n        return b - a;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the absolute difference between two integers.",
+      "signature": "fn abs_diff(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881938.2164638,
+    "problem_name": "max2_v0",
+    "family": "if_cmp",
+    "code": "fn max2(a: i64, b: i64) -> i64 {\n    if a > a {\n        return a + a;\n    } else {\n        return a * 1;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the larger of two integers.",
+      "signature": "fn max2(a: i64, b: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881938.976165,
+    "problem_name": "max2_v1",
+    "family": "if_cmp",
+    "code": "fn max2(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a + 0;\n    } else {\n        return b;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the larger of two integers.",
+      "signature": "fn max2(a: i64, b: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881939.72063,
+    "problem_name": "max2_v2",
+    "family": "if_cmp",
+    "code": "fn max2(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a;\n    } else {\n        return -1 - a;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the larger of two integers.",
+      "signature": "fn max2(a: i64, b: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881940.482941,
+    "problem_name": "max2_v3",
+    "family": "if_cmp",
+    "code": "fn max2(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a;\n    } else {\n        return a + b;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the larger of two integers.",
+      "signature": "fn max2(a: i64, b: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881941.236085,
+    "problem_name": "max2_v4",
+    "family": "if_cmp",
+    "code": "fn max2(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a;\n    } else {\n        return b;\n    }\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the larger of two integers.",
+      "signature": "fn max2(a: i64, b: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881941.4396899,
+    "problem_name": "clamp_0_100_v0",
+    "family": "clamp_0_100",
+    "code": "fn clamp_0_100(x: i64) -> i64 {\n    if (x < 0) {\n        return 0;\n    }\n    if (x > 100) {\n        return 100;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Clamp x into the closed range [0, 100].",
+      "signature": "fn clamp_0_100(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881941.64144,
+    "problem_name": "clamp_0_100_v1",
+    "family": "clamp_0_100",
+    "code": "fn clamp_0_100(x: i64) -> i64 {\n    if (x < 0) {\n        return 0;\n    }\n    if (x > 100) {\n        return 100;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Clamp x into the closed range [0, 100].",
+      "signature": "fn clamp_0_100(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881941.844095,
+    "problem_name": "clamp_0_100_v2",
+    "family": "clamp_0_100",
+    "code": "fn clamp_0_100(x: i64) -> i64 {\n    if (x < 0) {\n        return 0;\n    }\n    if (x > 100) {\n        return 100;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Clamp x into the closed range [0, 100].",
+      "signature": "fn clamp_0_100(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881942.062328,
+    "problem_name": "clamp_0_100_v3",
+    "family": "clamp_0_100",
+    "code": "fn clamp_0_100(x: i64) -> i64 {\n    if (x < 0) {\n        return 0;\n    }\n    if (x > 100) {\n        return 100;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Clamp x into the closed range [0, 100].",
+      "signature": "fn clamp_0_100(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881942.2645519,
+    "problem_name": "clamp_0_100_v4",
+    "family": "clamp_0_100",
+    "code": "fn clamp_0_100(x: i64) -> i64 {\n    if (x < 0) {\n        return 0;\n    }\n    if (x > 100) {\n        return 100;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Clamp x into the closed range [0, 100].",
+      "signature": "fn clamp_0_100(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881942.475574,
+    "problem_name": "sign_v0",
+    "family": "sign3",
+    "code": "fn sign(x: i64) -> i64 {\n    if (x < 0) {\n        return -1;\n    }\n    if (x > 0) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return -1 for negative, 0 for zero, and 1 for positive.",
+      "signature": "fn sign(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881942.677093,
+    "problem_name": "sign_v1",
+    "family": "sign3",
+    "code": "fn sign(x: i64) -> i64 {\n    if (x < 0) {\n        return -1;\n    }\n    if (x > 0) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return -1 for negative, 0 for zero, and 1 for positive.",
+      "signature": "fn sign(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881942.878853,
+    "problem_name": "sign_v2",
+    "family": "sign3",
+    "code": "fn sign(x: i64) -> i64 {\n    if (x < 0) {\n        return -1;\n    }\n    if (x > 0) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return -1 for negative, 0 for zero, and 1 for positive.",
+      "signature": "fn sign(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881943.08197,
+    "problem_name": "sign_v3",
+    "family": "sign3",
+    "code": "fn sign(x: i64) -> i64 {\n    if (x < 0) {\n        return -1;\n    }\n    if (x > 0) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return -1 for negative, 0 for zero, and 1 for positive.",
+      "signature": "fn sign(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881943.285252,
+    "problem_name": "sign_v4",
+    "family": "sign3",
+    "code": "fn sign(x: i64) -> i64 {\n    if (x < 0) {\n        return -1;\n    }\n    if (x > 0) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return -1 for negative, 0 for zero, and 1 for positive.",
+      "signature": "fn sign(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881943.487082,
+    "problem_name": "sum_to_n_v0",
+    "family": "sum_to_n",
+    "code": "fn sum_to_n(n: i64) -> i64 {\n    return (n * (n + 1)) / 2;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 + 2 + ... + n. For n <= 0 return 0.",
+      "signature": "fn sum_to_n(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881943.773982,
+    "problem_name": "sum_to_n_v1",
+    "family": "sum_to_n",
+    "code": "fn sum_to_n(n: i64) -> i64 {\n    return (n * (n + 1)) / 2;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 + 2 + ... + n. For n <= 0 return 0.",
+      "signature": "fn sum_to_n(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881943.977939,
+    "problem_name": "sum_to_n_v2",
+    "family": "sum_to_n",
+    "code": "fn sum_to_n(n: i64) -> i64 {\n    return (n * (n + 1)) / 2;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 + 2 + ... + n. For n <= 0 return 0.",
+      "signature": "fn sum_to_n(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881944.178956,
+    "problem_name": "sum_to_n_v3",
+    "family": "sum_to_n",
+    "code": "fn sum_to_n(n: i64) -> i64 {\n    return (n * (n + 1)) / 2;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 + 2 + ... + n. For n <= 0 return 0.",
+      "signature": "fn sum_to_n(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881944.378583,
+    "problem_name": "sum_to_n_v4",
+    "family": "sum_to_n",
+    "code": "fn sum_to_n(n: i64) -> i64 {\n    return (n * (n + 1)) / 2;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 + 2 + ... + n. For n <= 0 return 0.",
+      "signature": "fn sum_to_n(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881944.581679,
+    "problem_name": "gcd_v0",
+    "family": "gcd_euclid",
+    "code": "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the greatest common divisor of two positive integers.",
+      "signature": "fn gcd(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881944.786975,
+    "problem_name": "gcd_v1",
+    "family": "gcd_euclid",
+    "code": "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the greatest common divisor of two positive integers.",
+      "signature": "fn gcd(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881944.985753,
+    "problem_name": "gcd_v2",
+    "family": "gcd_euclid",
+    "code": "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the greatest common divisor of two positive integers.",
+      "signature": "fn gcd(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881945.191054,
+    "problem_name": "gcd_v3",
+    "family": "gcd_euclid",
+    "code": "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the greatest common divisor of two positive integers.",
+      "signature": "fn gcd(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881945.393676,
+    "problem_name": "gcd_v4",
+    "family": "gcd_euclid",
+    "code": "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the greatest common divisor of two positive integers.",
+      "signature": "fn gcd(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881945.5962958,
+    "problem_name": "lcm_v0",
+    "family": "lcm_via_gcd",
+    "code": "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return (a * b) / x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the least common multiple of two positive integers.",
+      "signature": "fn lcm(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881945.7971442,
+    "problem_name": "lcm_v1",
+    "family": "lcm_via_gcd",
+    "code": "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return (a * b) / x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the least common multiple of two positive integers.",
+      "signature": "fn lcm(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881945.9982028,
+    "problem_name": "lcm_v2",
+    "family": "lcm_via_gcd",
+    "code": "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return (a * b) / x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the least common multiple of two positive integers.",
+      "signature": "fn lcm(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881946.201643,
+    "problem_name": "lcm_v3",
+    "family": "lcm_via_gcd",
+    "code": "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return (a * b) / x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the least common multiple of two positive integers.",
+      "signature": "fn lcm(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881946.4045088,
+    "problem_name": "lcm_v4",
+    "family": "lcm_via_gcd",
+    "code": "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return (a * b) / x;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the least common multiple of two positive integers.",
+      "signature": "fn lcm(a: i64, b: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881946.614771,
+    "problem_name": "array_sum_v0",
+    "family": "array_sum_reduce",
+    "code": "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of all elements in an array of i64 values.",
+      "signature": "fn array_sum(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881946.827714,
+    "problem_name": "array_sum_v1",
+    "family": "array_sum_reduce",
+    "code": "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of all elements in an array of i64 values.",
+      "signature": "fn array_sum(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881947.041745,
+    "problem_name": "array_sum_v2",
+    "family": "array_sum_reduce",
+    "code": "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of all elements in an array of i64 values.",
+      "signature": "fn array_sum(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881947.252203,
+    "problem_name": "array_sum_v3",
+    "family": "array_sum_reduce",
+    "code": "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of all elements in an array of i64 values.",
+      "signature": "fn array_sum(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881947.463048,
+    "problem_name": "array_sum_v4",
+    "family": "array_sum_reduce",
+    "code": "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of all elements in an array of i64 values.",
+      "signature": "fn array_sum(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881947.661657,
+    "problem_name": "array_max_v0",
+    "family": "array_max_reduce",
+    "code": "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the largest element in a non-empty array.",
+      "signature": "fn array_max(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881947.873479,
+    "problem_name": "array_max_v1",
+    "family": "array_max_reduce",
+    "code": "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the largest element in a non-empty array.",
+      "signature": "fn array_max(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881948.0798678,
+    "problem_name": "array_max_v2",
+    "family": "array_max_reduce",
+    "code": "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the largest element in a non-empty array.",
+      "signature": "fn array_max(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881948.287143,
+    "problem_name": "array_max_v3",
+    "family": "array_max_reduce",
+    "code": "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the largest element in a non-empty array.",
+      "signature": "fn array_max(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881948.495429,
+    "problem_name": "array_max_v4",
+    "family": "array_max_reduce",
+    "code": "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the largest element in a non-empty array.",
+      "signature": "fn array_max(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881948.701571,
+    "problem_name": "count_occurrences_v0",
+    "family": "count_occurrences_reduce",
+    "code": "fn count_occurrences(arr: [i64], target: i64) -> i64 {\n    count: i64 = 0;\n    for item in arr {\n        if item == target {\n            count = count + 1;\n        }\n    }\n    return count;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many times target appears in arr.",
+      "signature": "fn count_occurrences(arr: [i64], target: i64) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881948.913447,
+    "problem_name": "count_occurrences_v1",
+    "family": "count_occurrences_reduce",
+    "code": "fn count_occurrences(arr: [i64], target: i64) -> i64 {\n    count: i64 = 0;\n    for item in arr {\n        if item == target {\n            count = count + 1;\n        }\n    }\n    return count;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many times target appears in arr.",
+      "signature": "fn count_occurrences(arr: [i64], target: i64) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881949.11902,
+    "problem_name": "count_occurrences_v2",
+    "family": "count_occurrences_reduce",
+    "code": "fn count_occurrences(arr: [i64], target: i64) -> i64 {\n    count: i64 = 0;\n    for item in arr {\n        if item == target {\n            count = count + 1;\n        }\n    }\n    return count;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many times target appears in arr.",
+      "signature": "fn count_occurrences(arr: [i64], target: i64) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881949.3255901,
+    "problem_name": "count_occurrences_v3",
+    "family": "count_occurrences_reduce",
+    "code": "fn count_occurrences(arr: [i64], target: i64) -> i64 {\n    count: i64 = 0;\n    for item in arr {\n        if item == target {\n            count = count + 1;\n        }\n    }\n    return count;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many times target appears in arr.",
+      "signature": "fn count_occurrences(arr: [i64], target: i64) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881949.6126342,
+    "problem_name": "count_occurrences_v4",
+    "family": "count_occurrences_reduce",
+    "code": "fn count_occurrences(arr: [i64], target: i64) -> i64 {\n    count: i64 = 0;\n    for item in arr {\n        if item == target {\n            count = count + 1;\n        }\n    }\n    return count;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many times target appears in arr.",
+      "signature": "fn count_occurrences(arr: [i64], target: i64) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881949.850147,
+    "problem_name": "trimmed_len_v0",
+    "family": "trimmed_len",
+    "code": "fn trimmed_len(s: string) -> i64 {\n    t := s.trim();\n    return t.len;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Trim leading and trailing spaces and return the remaining length.",
+      "signature": "fn trimmed_len(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881950.2085261,
+    "problem_name": "trimmed_len_v1",
+    "family": "trimmed_len",
+    "code": "fn trimmed_len(s: string) -> i64 {\n    t := s.trim();\n    return t.len;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Trim leading and trailing spaces and return the remaining length.",
+      "signature": "fn trimmed_len(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881950.4214761,
+    "problem_name": "trimmed_len_v2",
+    "family": "trimmed_len",
+    "code": "fn trimmed_len(s: string) -> i64 {\n    t := s.trim();\n    return t.len;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Trim leading and trailing spaces and return the remaining length.",
+      "signature": "fn trimmed_len(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881950.628272,
+    "problem_name": "trimmed_len_v3",
+    "family": "trimmed_len",
+    "code": "fn trimmed_len(s: string) -> i64 {\n    t := s.trim();\n    return t.len;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Trim leading and trailing spaces and return the remaining length.",
+      "signature": "fn trimmed_len(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881950.828495,
+    "problem_name": "trimmed_len_v4",
+    "family": "trimmed_len",
+    "code": "fn trimmed_len(s: string) -> i64 {\n    t := s.trim();\n    return t.len;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Trim leading and trailing spaces and return the remaining length.",
+      "signature": "fn trimmed_len(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881951.031478,
+    "problem_name": "vowel_count_v0",
+    "family": "vowel_count",
+    "code": "fn vowel_count(s: string) -> i64 {\n    chars := s.split(\"\");\n    total: i64 = 0;\n    for ch in chars {\n        if ch == \"a\" { total = total + 1; }\n        if ch == \"e\" { total = total + 1; }\n        if ch == \"i\" { total = total + 1; }\n        if ch == \"o\" { total = total + 1; }\n        if ch == \"u\" { total = total + 1; }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count vowels (a, e, i, o, u) in a lowercase ASCII string.",
+      "signature": "fn vowel_count(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881951.2340128,
+    "problem_name": "vowel_count_v1",
+    "family": "vowel_count",
+    "code": "fn vowel_count(s: string) -> i64 {\n    chars := s.split(\"\");\n    total: i64 = 0;\n    for ch in chars {\n        if ch == \"a\" { total = total + 1; }\n        if ch == \"e\" { total = total + 1; }\n        if ch == \"i\" { total = total + 1; }\n        if ch == \"o\" { total = total + 1; }\n        if ch == \"u\" { total = total + 1; }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count vowels (a, e, i, o, u) in a lowercase ASCII string.",
+      "signature": "fn vowel_count(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881951.4416032,
+    "problem_name": "vowel_count_v2",
+    "family": "vowel_count",
+    "code": "fn vowel_count(s: string) -> i64 {\n    chars := s.split(\"\");\n    total: i64 = 0;\n    for ch in chars {\n        if ch == \"a\" { total = total + 1; }\n        if ch == \"e\" { total = total + 1; }\n        if ch == \"i\" { total = total + 1; }\n        if ch == \"o\" { total = total + 1; }\n        if ch == \"u\" { total = total + 1; }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count vowels (a, e, i, o, u) in a lowercase ASCII string.",
+      "signature": "fn vowel_count(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881951.645157,
+    "problem_name": "vowel_count_v3",
+    "family": "vowel_count",
+    "code": "fn vowel_count(s: string) -> i64 {\n    chars := s.split(\"\");\n    total: i64 = 0;\n    for ch in chars {\n        if ch == \"a\" { total = total + 1; }\n        if ch == \"e\" { total = total + 1; }\n        if ch == \"i\" { total = total + 1; }\n        if ch == \"o\" { total = total + 1; }\n        if ch == \"u\" { total = total + 1; }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count vowels (a, e, i, o, u) in a lowercase ASCII string.",
+      "signature": "fn vowel_count(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881951.907624,
+    "problem_name": "vowel_count_v4",
+    "family": "vowel_count",
+    "code": "fn vowel_count(s: string) -> i64 {\n    chars := s.split(\"\");\n    total: i64 = 0;\n    for ch in chars {\n        if ch == \"a\" { total = total + 1; }\n        if ch == \"e\" { total = total + 1; }\n        if ch == \"i\" { total = total + 1; }\n        if ch == \"o\" { total = total + 1; }\n        if ch == \"u\" { total = total + 1; }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count vowels (a, e, i, o, u) in a lowercase ASCII string.",
+      "signature": "fn vowel_count(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881952.189599,
+    "problem_name": "contains_cat_v0",
+    "family": "contains_cat",
+    "code": "fn contains_cat(s: string) -> i64 {\n    if s.contains(\"cat\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if the string contains the substring 'cat', else 0.",
+      "signature": "fn contains_cat(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881952.3969111,
+    "problem_name": "contains_cat_v1",
+    "family": "contains_cat",
+    "code": "fn contains_cat(s: string) -> i64 {\n    if s.contains(\"cat\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if the string contains the substring 'cat', else 0.",
+      "signature": "fn contains_cat(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881952.627043,
+    "problem_name": "contains_cat_v2",
+    "family": "contains_cat",
+    "code": "fn contains_cat(s: string) -> i64 {\n    if s.contains(\"cat\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if the string contains the substring 'cat', else 0.",
+      "signature": "fn contains_cat(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881952.83279,
+    "problem_name": "contains_cat_v3",
+    "family": "contains_cat",
+    "code": "fn contains_cat(s: string) -> i64 {\n    if s.contains(\"cat\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if the string contains the substring 'cat', else 0.",
+      "signature": "fn contains_cat(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881953.0310369,
+    "problem_name": "contains_cat_v4",
+    "family": "contains_cat",
+    "code": "fn contains_cat(s: string) -> i64 {\n    if s.contains(\"cat\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if the string contains the substring 'cat', else 0.",
+      "signature": "fn contains_cat(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881953.235682,
+    "problem_name": "point_sum_v0",
+    "family": "point_sum_struct",
+    "code": "struct Point {\n    x: i64,\n    y: i64,\n}\n\nfn point_sum(p: Point) -> i64 {\n    return p.x + p.y;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Point { x: i64, y: i64 } and return x + y.",
+      "signature": "fn point_sum(p: Point) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881953.43571,
+    "problem_name": "point_sum_v1",
+    "family": "point_sum_struct",
+    "code": "struct Point {\n    x: i64,\n    y: i64,\n}\n\nfn point_sum(p: Point) -> i64 {\n    return p.x + p.y;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Point { x: i64, y: i64 } and return x + y.",
+      "signature": "fn point_sum(p: Point) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881953.6401012,
+    "problem_name": "point_sum_v2",
+    "family": "point_sum_struct",
+    "code": "struct Point {\n    x: i64,\n    y: i64,\n}\n\nfn point_sum(p: Point) -> i64 {\n    return p.x + p.y;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Point { x: i64, y: i64 } and return x + y.",
+      "signature": "fn point_sum(p: Point) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881953.841944,
+    "problem_name": "point_sum_v3",
+    "family": "point_sum_struct",
+    "code": "struct Point {\n    x: i64,\n    y: i64,\n}\n\nfn point_sum(p: Point) -> i64 {\n    return p.x + p.y;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Point { x: i64, y: i64 } and return x + y.",
+      "signature": "fn point_sum(p: Point) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881954.0448692,
+    "problem_name": "point_sum_v4",
+    "family": "point_sum_struct",
+    "code": "struct Point {\n    x: i64,\n    y: i64,\n}\n\nfn point_sum(p: Point) -> i64 {\n    return p.x + p.y;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Point { x: i64, y: i64 } and return x + y.",
+      "signature": "fn point_sum(p: Point) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881954.247044,
+    "problem_name": "safe_div_or_neg1_v0",
+    "family": "safe_div_or_neg1",
+    "code": "fn safe_div_or_neg1(a: i64, b: i64) -> i64 {\n    if b == 0 {\n        return -1;\n    }\n    return a / b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Divide a by b. If b is zero, return -1. Use Result and match.",
+      "signature": "fn safe_div_or_neg1(a: i64, b: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881954.448767,
+    "problem_name": "safe_div_or_neg1_v1",
+    "family": "safe_div_or_neg1",
+    "code": "fn safe_div_or_neg1(a: i64, b: i64) -> i64 {\n    if b == 0 {\n        return -1;\n    }\n    return a / b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Divide a by b. If b is zero, return -1. Use Result and match.",
+      "signature": "fn safe_div_or_neg1(a: i64, b: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881954.647031,
+    "problem_name": "safe_div_or_neg1_v2",
+    "family": "safe_div_or_neg1",
+    "code": "fn safe_div_or_neg1(a: i64, b: i64) -> i64 {\n    if b == 0 {\n        return -1;\n    }\n    return a / b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Divide a by b. If b is zero, return -1. Use Result and match.",
+      "signature": "fn safe_div_or_neg1(a: i64, b: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881954.853952,
+    "problem_name": "safe_div_or_neg1_v3",
+    "family": "safe_div_or_neg1",
+    "code": "fn safe_div_or_neg1(a: i64, b: i64) -> i64 {\n    if b == 0 {\n        return -1;\n    }\n    return a / b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Divide a by b. If b is zero, return -1. Use Result and match.",
+      "signature": "fn safe_div_or_neg1(a: i64, b: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881955.060983,
+    "problem_name": "safe_div_or_neg1_v4",
+    "family": "safe_div_or_neg1",
+    "code": "fn safe_div_or_neg1(a: i64, b: i64) -> i64 {\n    if b == 0 {\n        return -1;\n    }\n    return a / b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Divide a by b. If b is zero, return -1. Use Result and match.",
+      "signature": "fn safe_div_or_neg1(a: i64, b: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881955.26208,
+    "problem_name": "positive_or_default_v0",
+    "family": "positive_or_default",
+    "code": "fn positive_or_default(x: i64) -> i64 {\n    if x > 0 {\n        return x;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return x if x is positive, otherwise return 0. Use ?i64 and match.",
+      "signature": "fn positive_or_default(x: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881955.4636018,
+    "problem_name": "positive_or_default_v1",
+    "family": "positive_or_default",
+    "code": "fn positive_or_default(x: i64) -> i64 {\n    if x > 0 {\n        return x;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return x if x is positive, otherwise return 0. Use ?i64 and match.",
+      "signature": "fn positive_or_default(x: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881955.662473,
+    "problem_name": "positive_or_default_v2",
+    "family": "positive_or_default",
+    "code": "fn positive_or_default(x: i64) -> i64 {\n    if x > 0 {\n        return x;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return x if x is positive, otherwise return 0. Use ?i64 and match.",
+      "signature": "fn positive_or_default(x: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881955.862154,
+    "problem_name": "positive_or_default_v3",
+    "family": "positive_or_default",
+    "code": "fn positive_or_default(x: i64) -> i64 {\n    if x > 0 {\n        return x;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return x if x is positive, otherwise return 0. Use ?i64 and match.",
+      "signature": "fn positive_or_default(x: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881956.0607328,
+    "problem_name": "positive_or_default_v4",
+    "family": "positive_or_default",
+    "code": "fn positive_or_default(x: i64) -> i64 {\n    if x > 0 {\n        return x;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return x if x is positive, otherwise return 0. Use ?i64 and match.",
+      "signature": "fn positive_or_default(x: i64) -> i64",
+      "category": "result_optional"
+    }
+  },
+  {
+    "ts": 1774881956.305948,
+    "problem_name": "factorial_v0",
+    "family": "factorial",
+    "code": "fn factorial(n: i64) -> i64 {\n    if n <= 1 {\n        return 1;\n    }\n    return n * factorial(n - 1);\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return n! recursively.",
+      "signature": "fn factorial(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881956.504566,
+    "problem_name": "factorial_v1",
+    "family": "factorial",
+    "code": "fn factorial(n: i64) -> i64 {\n    if n <= 1 {\n        return 1;\n    }\n    return n * factorial(n - 1);\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return n! recursively.",
+      "signature": "fn factorial(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881956.750585,
+    "problem_name": "factorial_v2",
+    "family": "factorial",
+    "code": "fn factorial(n: i64) -> i64 {\n    if n <= 1 {\n        return 1;\n    }\n    return n * factorial(n - 1);\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return n! recursively.",
+      "signature": "fn factorial(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881956.960012,
+    "problem_name": "factorial_v3",
+    "family": "factorial",
+    "code": "fn factorial(n: i64) -> i64 {\n    if n <= 1 {\n        return 1;\n    }\n    return n * factorial(n - 1);\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return n! recursively.",
+      "signature": "fn factorial(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881957.161128,
+    "problem_name": "factorial_v4",
+    "family": "factorial",
+    "code": "fn factorial(n: i64) -> i64 {\n    if n <= 1 {\n        return 1;\n    }\n    return n * factorial(n - 1);\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return n! recursively.",
+      "signature": "fn factorial(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881957.365047,
+    "problem_name": "fibonacci_v0",
+    "family": "fibonacci",
+    "code": "fn fibonacci(n: i64) -> i64 {\n    if n <= 0 { return 0; }\n    if n == 1 { return 1; }\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        tmp := a + b;\n        a = b;\n        b = tmp;\n        i = i + 1;\n    }\n    return b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the nth Fibonacci number recursively or iteratively.",
+      "signature": "fn fibonacci(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881957.602724,
+    "problem_name": "fibonacci_v1",
+    "family": "fibonacci",
+    "code": "fn fibonacci(n: i64) -> i64 {\n    if n <= 0 { return 0; }\n    if n == 1 { return 1; }\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        tmp := a + b;\n        a = b;\n        b = tmp;\n        i = i + 1;\n    }\n    return b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the nth Fibonacci number recursively or iteratively.",
+      "signature": "fn fibonacci(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881957.8163,
+    "problem_name": "fibonacci_v2",
+    "family": "fibonacci",
+    "code": "fn fibonacci(n: i64) -> i64 {\n    if n <= 0 { return 0; }\n    if n == 1 { return 1; }\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        tmp := a + b;\n        a = b;\n        b = tmp;\n        i = i + 1;\n    }\n    return b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the nth Fibonacci number recursively or iteratively.",
+      "signature": "fn fibonacci(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881958.017515,
+    "problem_name": "fibonacci_v3",
+    "family": "fibonacci",
+    "code": "fn fibonacci(n: i64) -> i64 {\n    if n <= 0 { return 0; }\n    if n == 1 { return 1; }\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        tmp := a + b;\n        a = b;\n        b = tmp;\n        i = i + 1;\n    }\n    return b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the nth Fibonacci number recursively or iteratively.",
+      "signature": "fn fibonacci(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881958.21935,
+    "problem_name": "fibonacci_v4",
+    "family": "fibonacci",
+    "code": "fn fibonacci(n: i64) -> i64 {\n    if n <= 0 { return 0; }\n    if n == 1 { return 1; }\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        tmp := a + b;\n        a = b;\n        b = tmp;\n        i = i + 1;\n    }\n    return b;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the nth Fibonacci number recursively or iteratively.",
+      "signature": "fn fibonacci(n: i64) -> i64",
+      "category": "recursion"
+    }
+  },
+  {
+    "ts": 1774881958.427416,
+    "problem_name": "closure_map_sum_v0",
+    "family": "closure_map_sum",
+    "code": "fn closure_map_sum(arr: [i64]) -> i64 {\n    doubled := arr.map(fn(x: i64) -> i64 { x * 2 });\n    total: i64 = 0;\n    for item in doubled {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Double every array element with .map() and return the sum of the doubled values.",
+      "signature": "fn closure_map_sum(arr: [i64]) -> i64",
+      "category": "higher_order"
+    }
+  },
+  {
+    "ts": 1774881958.628387,
+    "problem_name": "closure_map_sum_v1",
+    "family": "closure_map_sum",
+    "code": "fn closure_map_sum(arr: [i64]) -> i64 {\n    doubled := arr.map(fn(x: i64) -> i64 { x * 2 });\n    total: i64 = 0;\n    for item in doubled {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Double every array element with .map() and return the sum of the doubled values.",
+      "signature": "fn closure_map_sum(arr: [i64]) -> i64",
+      "category": "higher_order"
+    }
+  },
+  {
+    "ts": 1774881958.834867,
+    "problem_name": "closure_map_sum_v2",
+    "family": "closure_map_sum",
+    "code": "fn closure_map_sum(arr: [i64]) -> i64 {\n    doubled := arr.map(fn(x: i64) -> i64 { x * 2 });\n    total: i64 = 0;\n    for item in doubled {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Double every array element with .map() and return the sum of the doubled values.",
+      "signature": "fn closure_map_sum(arr: [i64]) -> i64",
+      "category": "higher_order"
+    }
+  },
+  {
+    "ts": 1774881959.037409,
+    "problem_name": "closure_map_sum_v3",
+    "family": "closure_map_sum",
+    "code": "fn closure_map_sum(arr: [i64]) -> i64 {\n    doubled := arr.map(fn(x: i64) -> i64 { x * 2 });\n    total: i64 = 0;\n    for item in doubled {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Double every array element with .map() and return the sum of the doubled values.",
+      "signature": "fn closure_map_sum(arr: [i64]) -> i64",
+      "category": "higher_order"
+    }
+  },
+  {
+    "ts": 1774881959.241278,
+    "problem_name": "closure_map_sum_v4",
+    "family": "closure_map_sum",
+    "code": "fn closure_map_sum(arr: [i64]) -> i64 {\n    doubled := arr.map(fn(x: i64) -> i64 { x * 2 });\n    total: i64 = 0;\n    for item in doubled {\n        total = total + item;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Double every array element with .map() and return the sum of the doubled values.",
+      "signature": "fn closure_map_sum(arr: [i64]) -> i64",
+      "category": "higher_order"
+    }
+  },
+  {
+    "ts": 1774881959.4460192,
+    "problem_name": "count_positive_v0",
+    "family": "count_positive_reduce",
+    "code": "fn count_positive(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        if item > 0 {\n            total = total + 1;\n        }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many elements in the array are greater than zero.",
+      "signature": "fn count_positive(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881959.652383,
+    "problem_name": "count_positive_v1",
+    "family": "count_positive_reduce",
+    "code": "fn count_positive(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        if item > 0 {\n            total = total + 1;\n        }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many elements in the array are greater than zero.",
+      "signature": "fn count_positive(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881959.85684,
+    "problem_name": "count_positive_v2",
+    "family": "count_positive_reduce",
+    "code": "fn count_positive(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        if item > 0 {\n            total = total + 1;\n        }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many elements in the array are greater than zero.",
+      "signature": "fn count_positive(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881960.0637598,
+    "problem_name": "count_positive_v3",
+    "family": "count_positive_reduce",
+    "code": "fn count_positive(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        if item > 0 {\n            total = total + 1;\n        }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many elements in the array are greater than zero.",
+      "signature": "fn count_positive(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881960.265353,
+    "problem_name": "count_positive_v4",
+    "family": "count_positive_reduce",
+    "code": "fn count_positive(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        if item > 0 {\n            total = total + 1;\n        }\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Count how many elements in the array are greater than zero.",
+      "signature": "fn count_positive(arr: [i64]) -> i64",
+      "category": "arrays"
+    }
+  },
+  {
+    "ts": 1774881960.4651132,
+    "problem_name": "is_even_v0",
+    "family": "mod2_eq0",
+    "code": "fn is_even(x: i64) -> i64 {\n    if (((x % 2) == 0)) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if x is even, otherwise 0.",
+      "signature": "fn is_even(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881960.664968,
+    "problem_name": "is_even_v1",
+    "family": "mod2_eq0",
+    "code": "fn is_even(x: i64) -> i64 {\n    if (((x % 2) == 0)) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if x is even, otherwise 0.",
+      "signature": "fn is_even(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881960.868313,
+    "problem_name": "is_even_v2",
+    "family": "mod2_eq0",
+    "code": "fn is_even(x: i64) -> i64 {\n    if (((x % 2) == 0)) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if x is even, otherwise 0.",
+      "signature": "fn is_even(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881961.074639,
+    "problem_name": "is_even_v3",
+    "family": "mod2_eq0",
+    "code": "fn is_even(x: i64) -> i64 {\n    if (((x % 2) == 0)) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if x is even, otherwise 0.",
+      "signature": "fn is_even(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881961.279747,
+    "problem_name": "is_even_v4",
+    "family": "mod2_eq0",
+    "code": "fn is_even(x: i64) -> i64 {\n    if (((x % 2) == 0)) {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if x is even, otherwise 0.",
+      "signature": "fn is_even(x: i64) -> i64",
+      "category": "control_flow"
+    }
+  },
+  {
+    "ts": 1774881961.4845598,
+    "problem_name": "digit_sum_v0",
+    "family": "digit_sum_loop",
+    "code": "fn digit_sum(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    total: i64 = 0;\n    while x > 0 {\n        total = total + (x % 10);\n        x = x / 10;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of the decimal digits of n.",
+      "signature": "fn digit_sum(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881961.68653,
+    "problem_name": "digit_sum_v1",
+    "family": "digit_sum_loop",
+    "code": "fn digit_sum(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    total: i64 = 0;\n    while x > 0 {\n        total = total + (x % 10);\n        x = x / 10;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of the decimal digits of n.",
+      "signature": "fn digit_sum(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881961.890964,
+    "problem_name": "digit_sum_v2",
+    "family": "digit_sum_loop",
+    "code": "fn digit_sum(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    total: i64 = 0;\n    while x > 0 {\n        total = total + (x % 10);\n        x = x / 10;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of the decimal digits of n.",
+      "signature": "fn digit_sum(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881962.095841,
+    "problem_name": "digit_sum_v3",
+    "family": "digit_sum_loop",
+    "code": "fn digit_sum(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    total: i64 = 0;\n    while x > 0 {\n        total = total + (x % 10);\n        x = x / 10;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of the decimal digits of n.",
+      "signature": "fn digit_sum(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881962.297396,
+    "problem_name": "digit_sum_v4",
+    "family": "digit_sum_loop",
+    "code": "fn digit_sum(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    total: i64 = 0;\n    while x > 0 {\n        total = total + (x % 10);\n        x = x / 10;\n    }\n    return total;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return the sum of the decimal digits of n.",
+      "signature": "fn digit_sum(n: i64) -> i64",
+      "category": "arithmetic"
+    }
+  },
+  {
+    "ts": 1774881962.501406,
+    "problem_name": "starts_with_m_v0",
+    "family": "starts_with_m",
+    "code": "fn starts_with_m(s: string) -> i64 {\n    if s.starts_with(\"m\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if s starts with the lowercase letter m, else 0.",
+      "signature": "fn starts_with_m(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881962.70516,
+    "problem_name": "starts_with_m_v1",
+    "family": "starts_with_m",
+    "code": "fn starts_with_m(s: string) -> i64 {\n    if s.starts_with(\"m\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if s starts with the lowercase letter m, else 0.",
+      "signature": "fn starts_with_m(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881962.9076521,
+    "problem_name": "starts_with_m_v2",
+    "family": "starts_with_m",
+    "code": "fn starts_with_m(s: string) -> i64 {\n    if s.starts_with(\"m\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if s starts with the lowercase letter m, else 0.",
+      "signature": "fn starts_with_m(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881963.104984,
+    "problem_name": "starts_with_m_v3",
+    "family": "starts_with_m",
+    "code": "fn starts_with_m(s: string) -> i64 {\n    if s.starts_with(\"m\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if s starts with the lowercase letter m, else 0.",
+      "signature": "fn starts_with_m(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881963.305165,
+    "problem_name": "starts_with_m_v4",
+    "family": "starts_with_m",
+    "code": "fn starts_with_m(s: string) -> i64 {\n    if s.starts_with(\"m\") {\n        return 1;\n    }\n    return 0;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Return 1 if s starts with the lowercase letter m, else 0.",
+      "signature": "fn starts_with_m(s: string) -> i64",
+      "category": "strings"
+    }
+  },
+  {
+    "ts": 1774881963.514165,
+    "problem_name": "rectangle_area_v0",
+    "family": "rectangle_area_struct",
+    "code": "struct Rectangle {\n    width: i64,\n    height: i64,\n}\n\nfn rectangle_area(r: Rectangle) -> i64 {\n    return r.width * r.height;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Rectangle { width: i64, height: i64 } and return its area.",
+      "signature": "fn rectangle_area(r: Rectangle) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881963.716945,
+    "problem_name": "rectangle_area_v1",
+    "family": "rectangle_area_struct",
+    "code": "struct Rectangle {\n    width: i64,\n    height: i64,\n}\n\nfn rectangle_area(r: Rectangle) -> i64 {\n    return r.width * r.height;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Rectangle { width: i64, height: i64 } and return its area.",
+      "signature": "fn rectangle_area(r: Rectangle) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881963.917711,
+    "problem_name": "rectangle_area_v2",
+    "family": "rectangle_area_struct",
+    "code": "struct Rectangle {\n    width: i64,\n    height: i64,\n}\n\nfn rectangle_area(r: Rectangle) -> i64 {\n    return r.width * r.height;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Rectangle { width: i64, height: i64 } and return its area.",
+      "signature": "fn rectangle_area(r: Rectangle) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881964.1166358,
+    "problem_name": "rectangle_area_v3",
+    "family": "rectangle_area_struct",
+    "code": "struct Rectangle {\n    width: i64,\n    height: i64,\n}\n\nfn rectangle_area(r: Rectangle) -> i64 {\n    return r.width * r.height;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Rectangle { width: i64, height: i64 } and return its area.",
+      "signature": "fn rectangle_area(r: Rectangle) -> i64",
+      "category": "structs"
+    }
+  },
+  {
+    "ts": 1774881964.3170612,
+    "problem_name": "rectangle_area_v4",
+    "family": "rectangle_area_struct",
+    "code": "struct Rectangle {\n    width: i64,\n    height: i64,\n}\n\nfn rectangle_area(r: Rectangle) -> i64 {\n    return r.width * r.height;\n}\n",
+    "metadata": {
+      "loss": 0.0,
+      "description": "Define struct Rectangle { width: i64, height: i64 } and return its area.",
+      "signature": "fn rectangle_area(r: Rectangle) -> i64",
+      "category": "structs"
+    }
+  }
+]

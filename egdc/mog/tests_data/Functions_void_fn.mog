@@ -1,0 +1,8 @@
+fn say_hello() {
+  println("hello");
+}
+
+fn main() -> i64 {
+  say_hello();
+  return 0;
+}

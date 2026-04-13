@@ -244,6 +244,7 @@ def make_syscall_handler(
     raw_input_mode: bool = False,
     socket_table: Optional[dict] = None,
     on_framebuffer: Optional[Callable] = None,
+    neural_display=None,
 ) -> Callable:
     """
     Create a standard syscall handler for ARM64 programs on the Metal GPU.
@@ -258,6 +259,8 @@ def make_syscall_handler(
         on_getchar: Optional callback() -> int for custom getchar handling.
         raw_input_mode: If True, use raw terminal input for getchar.
         socket_table: Optional dict for tracking open sockets {fd: socket_obj}.
+        neural_display: Optional NeuralDisplay instance — captures stdout/stderr
+                        byte stream for neural terminal rendering.
 
     Returns:
         Handler function: handler(cpu) -> bool (True=continue, False=stop)
@@ -306,6 +309,9 @@ def make_syscall_handler(
 
             # Default: write to stdout/stderr
             if fd in (1, 2):
+                # Feed to neural display if attached
+                if neural_display is not None:
+                    neural_display.write(bytes(data) if not isinstance(data, bytes) else data)
                 try:
                     sys.stdout.write(data.decode('ascii', errors='replace'))
                     sys.stdout.flush()
@@ -863,6 +869,7 @@ def run(
     max_cycles: int = 50_000_000,
     batch_size: int = 100_000,
     quiet: bool = False,
+    neural_display=None,
 ) -> dict:
     """
     Execute ARM64 binary on the Metal GPU with Python-mediated syscalls.
@@ -895,6 +902,9 @@ def run(
         if cpu.memory_size <= cpu.SVC_BUF_BASE:
             return
         for fd, data in cpu.drain_svc_buffer():
+            # Feed to neural display if attached
+            if neural_display is not None and fd in (1, 2):
+                neural_display.write(bytes(data) if not isinstance(data, bytes) else data)
             try:
                 text = data.decode('ascii', errors='replace')
                 _sys.stdout.write(text)

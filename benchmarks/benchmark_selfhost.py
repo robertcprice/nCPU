@@ -32,7 +32,7 @@ from ncpu.os.gpu.runner import compile_c, run, make_syscall_handler
 from ncpu.os.gpu.filesystem import GPUFilesystem
 from kernels.mlx.gpu_cpu import GPUKernelCPU as MLXKernelCPUv2
 
-RESULTS_PATH = Path(__file__).resolve().parent / "selfhost_results.json"
+RESULTS_PATH = Path(__file__).resolve().parent / "results" / "local" / "selfhost_results.json"
 CC_SOURCE = PROJECT_ROOT / "ncpu" / "os" / "gpu" / "programs" / "tools" / "cc.c"
 
 MAX_COMPILE_CYCLES = 200_000_000
