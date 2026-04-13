@@ -4427,10 +4427,16 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
     let default_names = ["a", "b", "c", "d", "e", "f"];
     let param_names: Vec<&str> = (0..n_args).map(|i| default_names.get(i).copied().unwrap_or("x")).collect();
 
-    const N_STEPS: usize = 600;
-    const N_RESTARTS: usize = 8; // More restarts since we skip loops — still fast
+    // Scale budget by arg count: more args = more params = need fewer steps to stay fast
+    let n_steps_expr: usize = if n_args <= 2 { 500 } else if n_args <= 4 { 350 } else { 250 };
+    let n_restarts_expr: usize = if n_args <= 2 { 5 } else if n_args <= 4 { 4 } else { 3 };
 
-    for restart in 0..N_RESTARTS {
+    // Global time budget: bail out after this many seconds regardless of restarts
+    let time_budget = std::time::Instant::now();
+    let max_secs: f32 = if n_args <= 2 { 10.0 } else { 15.0 };
+
+    for restart in 0..n_restarts_expr {
+        if time_budget.elapsed().as_secs_f32() > max_secs { break; }
         // SoftExprProgram: v0 = s1 OP s2; return s3 OP s4
         {
             let mut prog = SoftExprProgram::new(n_args);
@@ -4484,7 +4490,7 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
                 prog.params.clone(),
                 move |p, t| SoftExprProgram { n_args, params: p.to_vec() }.loss(&ex, t),
                 |p, fn_n, pn| SoftExprProgram { n_args, params: p.to_vec() }.discretize_and_emit(fn_n, pn),
-                problem, &param_names, fn_name, N_STEPS,
+                problem, &param_names, fn_name, n_steps_expr,
             );
             if result.is_some() { return result; }
         }
@@ -4504,7 +4510,7 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
                 prog.params.clone(),
                 move |p, t| SoftTwoPrecompExprProgram { n_args, params: p.to_vec() }.loss(&ex, t),
                 |p, fn_n, pn| SoftTwoPrecompExprProgram { n_args, params: p.to_vec() }.discretize_and_emit(fn_n, pn),
-                problem, &param_names, fn_name, N_STEPS,
+                problem, &param_names, fn_name, n_steps_expr,
             );
             if result.is_some() { return result; }
         }
@@ -4523,7 +4529,7 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
                 prog.params.clone(),
                 move |p, t| SoftBranchProgram { n_args, params: p.to_vec() }.loss(&ex, t),
                 |p, fn_n, pn| SoftBranchProgram { n_args, params: p.to_vec() }.discretize_and_emit(fn_n, pn),
-                problem, &param_names, fn_name, N_STEPS,
+                problem, &param_names, fn_name, n_steps_expr,
             );
             if result.is_some() { return result; }
         }
@@ -4542,7 +4548,7 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
                 prog.params.clone(),
                 move |p, t| SoftChainedBranch { n_args, params: p.to_vec() }.loss(&ex, t),
                 |p, fn_n, pn| SoftChainedBranch { n_args, params: p.to_vec() }.discretize_and_emit(fn_n, pn),
-                problem, &param_names, fn_name, N_STEPS,
+                problem, &param_names, fn_name, n_steps_expr,
             );
             if result.is_some() { return result; }
         }
