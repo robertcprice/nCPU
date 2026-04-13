@@ -4140,7 +4140,7 @@ pub fn solve_problem(problem: &Problem) -> SolveResult {
     // Skip for external problems with >2 args — the loop types are unlikely to help and take forever
     let n_args = problem.examples.first().map(|e| e.inputs.len()).unwrap_or(0);
     let is_external = problem.category == "external";
-    if !is_external || n_args <= 2 {
+    if !is_external || n_args <= 3 {
         let t0x = std::time::Instant::now();
         if let Some(result) = synthesis::synthesize_scalar(problem) {
             if result.success {
@@ -4187,7 +4187,7 @@ pub fn solve_problem(problem: &Problem) -> SolveResult {
         }
     }
     // Fall back to search-based strategies (skip for external multi-arg — too slow)
-    if is_external && n_args > 2 {
+    if is_external && n_args > 3 {
         eprintln!("[solve] skipping search fallback for external {}-arg problem", n_args);
         return SolveResult {
             success: false,
