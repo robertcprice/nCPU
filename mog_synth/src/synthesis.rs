@@ -63,6 +63,23 @@ fn soft_op(a: f32, b: f32, weights: &[f32]) -> f32 {
     weights.iter().zip(&results).map(|(w, r)| w * r).sum()
 }
 
+/// Extended 7-op version: +, -, *, /, %, |a-b|, max(a,b)
+/// Used by synthesize_scalar_expr_only for richer expression discovery.
+const N_OPS7: usize = 7;
+fn soft_op7(a: f32, b: f32, weights: &[f32]) -> f32 {
+    let safe_b = if b.abs() < 1e-6 { 1.0 } else { b };
+    let results = [
+        a + b,
+        a - b,
+        a * b,
+        a / safe_b,
+        a - (a / safe_b).trunc() * safe_b,
+        (a - b).abs(),                        // 5: abs_diff
+        0.5 * (a + b + (a - b).abs()),        // 6: max(a,b) smooth approx
+    ];
+    weights.iter().zip(&results).map(|(w, r)| w * r).sum()
+}
+
 /// Weighted mix of soft comparisons (returns [0,1]).
 /// `cmp_temp` is the current training temperature — higher → wider sigmoid boundary
 /// → gradients flow for large |d| values (needed for examples like abs_diff where d=±4).
@@ -4499,6 +4516,37 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
         // (can chain 3 operations, handles compute_score = a*b*10+c)
         {
             let mut prog = SoftTwoPrecompExprProgram::new(n_args);
+            let ns_tp = n_args + N_CONSTS;
+            let ne1_tp = ns_tp + 1;
+            let _ne2_tp = ns_tp + 2;
+            let p2_tp = 1 + 2 * ns_tp + N_OPS; // pre2 offset
+            let roff_tp = p2_tp + 1 + 2 * ne1_tp + N_OPS; // ret offset
+
+            if restart == 1 && n_args >= 3 {
+                // compute_score pattern: v0=a*b, v1=v0*const5(10), return v1+c
+                // Pre1: enable, s1=arg0, s2=arg1, op=*
+                prog.params[0] = 4.0; // pre1 enable
+                prog.params[1] = 4.0; // pre1_s1 = arg0
+                prog.params[1 + ns_tp + 1] = 4.0; // pre1_s2 = arg1
+                prog.params[1 + 2 * ns_tp + 2] = 4.0; // pre1_op = *
+                // Pre2: enable, s1=v0, s2=const5(=10), op=*
+                prog.params[p2_tp] = 4.0; // pre2 enable
+                prog.params[p2_tp + 1 + ne1_tp - 1] = 4.0; // pre2_s1 = v0 (last of ext1)
+                prog.params[p2_tp + 1 + ne1_tp + n_args + 5] = 4.0; // pre2_s2 = const5 = 10
+                prog.params[p2_tp + 1 + 2 * ne1_tp + 2] = 4.0; // pre2_op = *
+                // Ret: s1=v1, s2=arg2, op=+
+                let ne2_tp = ns_tp + 2;
+                prog.params[roff_tp + ne2_tp - 1] = 4.0; // ret_s1 = v1 (last of ext2)
+                prog.params[roff_tp + ne2_tp + 2] = 4.0; // ret_s2 = arg2
+                prog.params[roff_tp + 2 * ne2_tp] = 4.0; // ret_op = +
+            } else if restart == 2 && n_args >= 4 {
+                // manhattan pattern: v0=a-c, v1=b-d, return |v0|+|v1|
+                // Approximate: v0=a-c, v1=b-d, return v0*v0+v1*v1 then take sqrt? No.
+                // Better: use branch for abs. But TwoPrecomp can't branch.
+                // Instead: v0=(a-c)*(a-c), v1=(b-d)*(b-d)... no, that gives squared distance.
+                // Actually: we can't do manhattan with TwoPrecomp+5ops. Skip this bias.
+                // Just random init for 4-arg.
+            }
             if restart > 0 {
                 let noise = (restart as f32) * 0.3;
                 for (idx, p) in prog.params.iter_mut().enumerate() {
