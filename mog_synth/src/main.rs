@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use mog_synth::benchmark::get_benchmark;
+use mog_synth::benchmark::{get_benchmark, Example, Problem, Value};
 use mog_synth::interactive::{
     solve_interactive_problem, solve_interactive_problem_differentiable_only,
 };
@@ -38,6 +38,65 @@ fn parse_stdin_data(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parse a Problem from JSON input (for --problem-json CLI).
+fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
+    let v: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| format!("invalid JSON: {e}"))?;
+
+    let name = v["name"].as_str().unwrap_or("unknown").to_string();
+    // Leak strings to get 'static lifetime (Problem uses &'static str for benchmark compat)
+    let signature: &'static str = Box::leak(
+        v["signature"].as_str().unwrap_or("fn unknown(a: i64) -> i64").to_string().into_boxed_str()
+    );
+
+    fn parse_example(v: &serde_json::Value) -> Result<Example, String> {
+        let inputs_arr = v["inputs"].as_array().ok_or("missing inputs")?;
+        let mut inputs = Vec::new();
+        for inp in inputs_arr {
+            if let Some(n) = inp.as_i64() {
+                inputs.push(Value::Int(n));
+            } else if let Some(arr) = inp.as_array() {
+                let vals: Vec<i64> = arr.iter().filter_map(|x| x.as_i64()).collect();
+                inputs.push(Value::Array(vals));
+            } else if let Some(s) = inp.as_str() {
+                inputs.push(Value::Str(s.to_string()));
+            } else {
+                return Err(format!("unsupported input type: {inp}"));
+            }
+        }
+        let expected = v["expected"].as_i64().ok_or("missing expected")?;
+        Ok(Example { inputs, expected })
+    }
+
+    let examples: Vec<Example> = v["examples"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|e| parse_example(e).ok())
+        .collect();
+
+    let holdouts: Vec<Example> = v["holdouts"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|e| parse_example(e).ok())
+        .collect();
+
+    if examples.is_empty() {
+        return Err("no valid examples".to_string());
+    }
+
+    Ok(Problem {
+        name,
+        category: "external",
+        description: "",
+        signature,
+        examples,
+        holdouts,
+        reference_code: "",
+    })
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let use_orchestrator = has_flag(&args, "--orchestrate");
@@ -71,6 +130,53 @@ fn main() {
             println!("{}", result.output);
         } else if let Some(value) = result.return_value {
             println!("{value}");
+        }
+        return;
+    }
+
+    // --problem-json: accept arbitrary problem from stdin or argument
+    if has_flag(&args, "--problem-json") {
+        let json_str = if arg_value(&args, "--problem-json").as_deref() == Some("-") {
+            // Read from stdin
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf).unwrap_or_default();
+            buf
+        } else if let Some(val) = arg_value(&args, "--problem-json") {
+            if val.starts_with('{') {
+                val
+            } else {
+                fs::read_to_string(&val).unwrap_or_default()
+            }
+        } else {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf).unwrap_or_default();
+            buf
+        };
+
+        // Parse JSON into a Problem
+        match parse_problem_json(&json_str) {
+            Ok(problem) => {
+                let result = solve_problem(&problem);
+                // Output as JSON
+                let output = serde_json::json!({
+                    "success": result.success,
+                    "code": result.code,
+                    "method": result.method,
+                    "error": result.error,
+                });
+                println!("{output}");
+            }
+            Err(e) => {
+                let output = serde_json::json!({
+                    "success": false,
+                    "code": null,
+                    "method": "error",
+                    "error": format!("Failed to parse problem JSON: {e}"),
+                });
+                println!("{output}");
+            }
         }
         return;
     }

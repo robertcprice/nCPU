@@ -4138,6 +4138,12 @@ pub fn solve_problem(problem: &Problem) -> SolveResult {
             return result;
         }
     }
+    // Try universal register machine (can discover any scalar program)
+    if let Some(result) = synthesis::synthesize_register_machine(problem) {
+        if result.success {
+            return result;
+        }
+    }
     // Try reference code for non-scalar problems (arrays, strings, structs, etc.)
     {
         let code = problem.reference_code.to_string();
