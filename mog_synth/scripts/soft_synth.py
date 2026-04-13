@@ -242,7 +242,7 @@ def discrete_eval(params: torch.Tensor, inputs: list, n_args: int) -> object:
         reg[i] = int(inputs[i])
     for i in range(N_CONSTS):
         v = float(params[co_off + i].item())
-    reg[n_args + i] = int(round(v)) if (v == v) else 0  # guard NaN
+        reg[n_args + i] = int(round(v)) if (v == v) else 0  # guard NaN
 
     def disc_exec_slot(slot):
         off   = slot * sps

@@ -30,7 +30,7 @@ from soft_synth import (
 )
 from train_metalearner import load_model
 
-DEFAULT_MODEL = str(Path(__file__).parent.parent / "models" / "metalearner_1arg_v3.pt")
+DEFAULT_MODEL = str(Path(__file__).parent.parent / "models" / "metalearner_1arg_v5.pt")
 
 
 def description_to_code(desc: dict, name: str = "f") -> str:
