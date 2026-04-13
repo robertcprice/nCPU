@@ -1599,19 +1599,26 @@ impl Runtime {
     fn eval_binary(&self, lhs: Value, op: BinaryOp, rhs: Value) -> Result<Value, String> {
         match op {
             BinaryOp::Add => match (lhs, rhs) {
-                (Value::Int(a), Value::Int(b)) => a.checked_add(b)
+                (Value::Int(a), Value::Int(b)) => a
+                    .checked_add(b)
                     .map(Value::Int)
                     .ok_or_else(|| "integer overflow in +".to_string()),
                 (Value::Str(a), Value::Str(b)) => Ok(Value::Str(a + &b)),
                 (a, b) => Err(format!("unsupported + operands {:?} and {:?}", a, b)),
             },
             BinaryOp::Sub => {
-                let l = expect_int(&lhs)?; let r = expect_int(&rhs)?;
-                l.checked_sub(r).map(Value::Int).ok_or_else(|| "integer overflow in -".to_string())
+                let l = expect_int(&lhs)?;
+                let r = expect_int(&rhs)?;
+                l.checked_sub(r)
+                    .map(Value::Int)
+                    .ok_or_else(|| "integer overflow in -".to_string())
             }
             BinaryOp::Mul => {
-                let l = expect_int(&lhs)?; let r = expect_int(&rhs)?;
-                l.checked_mul(r).map(Value::Int).ok_or_else(|| "integer overflow in *".to_string())
+                let l = expect_int(&lhs)?;
+                let r = expect_int(&rhs)?;
+                l.checked_mul(r)
+                    .map(Value::Int)
+                    .ok_or_else(|| "integer overflow in *".to_string())
             }
             BinaryOp::Div => {
                 let lhs = expect_int(&lhs)?;

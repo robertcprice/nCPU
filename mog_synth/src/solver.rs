@@ -718,10 +718,7 @@ fn build_expr_candidates(
     (atoms, exprs)
 }
 
-fn build_deep_expr_candidates(
-    arity: usize,
-    examples: &[Vec<i64>],
-) -> Vec<ExprCandidate> {
+fn build_deep_expr_candidates(arity: usize, examples: &[Vec<i64>]) -> Vec<ExprCandidate> {
     let constants = [-1i64, 0, 1, 2, 3, 10, 100];
     let mut seen = HashMap::<Vec<Option<i64>>, ScalarExpr>::new();
 
@@ -1219,7 +1216,11 @@ fn search_digit_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
         }
         acc
     }) {
-        return verified_result(problem, code_digit_product(fn_name), "search_digit_product_loop");
+        return verified_result(
+            problem,
+            code_digit_product(fn_name),
+            "search_digit_product_loop",
+        );
     }
     if validate_unary_int(problem, |mut n| {
         let mut best = 0i64;
@@ -1718,14 +1719,8 @@ fn search_array_item_loop(problem: &Problem, fn_name: &str) -> Option<SolveResul
                     "search_array_count_greater_than",
                 );
             }
-            if validate_array_and_int(problem, |arr, k| {
-                arr.iter().take(k as usize).sum()
-            }) {
-                return verified_result(
-                    problem,
-                    code_prefix_sum_k(fn_name),
-                    "search_prefix_sum_k",
-                );
+            if validate_array_and_int(problem, |arr, k| arr.iter().take(k as usize).sum()) {
+                return verified_result(problem, code_prefix_sum_k(fn_name), "search_prefix_sum_k");
             }
         }
         _ => {}
@@ -1895,7 +1890,9 @@ fn search_count_zeros(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
-    if !validate_unary_array(problem, |arr| arr.iter().filter(|x| **x == 0).count() as i64) {
+    if !validate_unary_array(problem, |arr| {
+        arr.iter().filter(|x| **x == 0).count() as i64
+    }) {
         return None;
     }
     verified_result(problem, code_count_zeros(fn_name), "search_count_zeros")
@@ -3189,11 +3186,7 @@ fn search_binary_search(problem: &Problem, fn_name: &str) -> Option<SolveResult>
     if !validate_array_and_int(problem, binary_search_rust) {
         return None;
     }
-    verified_result(
-        problem,
-        code_binary_search(fn_name),
-        "search_binary_search",
-    )
+    verified_result(problem, code_binary_search(fn_name), "search_binary_search")
 }
 
 fn longest_plateau_rust(arr: &[i64]) -> i64 {
@@ -3702,7 +3695,11 @@ fn search_arr_sum_squares(problem: &Problem, fn_name: &str) -> Option<SolveResul
     if !validate_unary_array(problem, |arr| arr.iter().map(|x| x * x).sum()) {
         return None;
     }
-    verified_result(problem, code_arr_sum_squares(fn_name), "search_arr_sum_squares")
+    verified_result(
+        problem,
+        code_arr_sum_squares(fn_name),
+        "search_arr_sum_squares",
+    )
 }
 
 fn search_min_element(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
@@ -3732,7 +3729,9 @@ fn search_count_evens(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
-    if !validate_unary_array(problem, |arr| arr.iter().filter(|x| *x % 2 == 0).count() as i64) {
+    if !validate_unary_array(problem, |arr| {
+        arr.iter().filter(|x| *x % 2 == 0).count() as i64
+    }) {
         return None;
     }
     verified_result(problem, code_count_evens(fn_name), "search_count_evens")
@@ -3787,7 +3786,9 @@ fn search_max_abs(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
-    if !validate_unary_array(problem, |arr| arr.iter().map(|x| x.abs()).max().unwrap_or(0)) {
+    if !validate_unary_array(problem, |arr| {
+        arr.iter().map(|x| x.abs()).max().unwrap_or(0)
+    }) {
         return None;
     }
     verified_result(problem, code_max_abs(fn_name), "search_max_abs")
@@ -3809,8 +3810,12 @@ fn search_lucas_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
         return None;
     }
     if !validate_unary_int(problem, |n| {
-        if n == 0 { return 2; }
-        if n == 1 { return 1; }
+        if n == 0 {
+            return 2;
+        }
+        if n == 1 {
+            return 1;
+        }
         let mut a = 2i64;
         let mut b = 1i64;
         for _ in 2..=n {
@@ -3847,7 +3852,11 @@ fn search_is_perfect_square(problem: &Problem, fn_name: &str) -> Option<SolveRes
     }
     if !validate_unary_int(problem, |n| {
         let s = (n as f64).sqrt() as i64;
-        if s * s == n { 1 } else { 0 }
+        if s * s == n {
+            1
+        } else {
+            0
+        }
     }) {
         return None;
     }
@@ -3872,7 +3881,11 @@ fn search_next_power_of_2(problem: &Problem, fn_name: &str) -> Option<SolveResul
     }) {
         return None;
     }
-    verified_result(problem, code_next_power_of_2(fn_name), "search_next_power_of_2")
+    verified_result(
+        problem,
+        code_next_power_of_2(fn_name),
+        "search_next_power_of_2",
+    )
 }
 
 fn search_min_positive(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
@@ -3920,7 +3933,11 @@ fn search_alternating_sum(problem: &Problem, fn_name: &str) -> Option<SolveResul
     }) {
         return None;
     }
-    verified_result(problem, code_alternating_sum(fn_name), "search_alternating_sum")
+    verified_result(
+        problem,
+        code_alternating_sum(fn_name),
+        "search_alternating_sum",
+    )
 }
 
 fn search_dot_product(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
@@ -3928,7 +3945,9 @@ fn search_dot_product(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if param_types != [ParamType::ArrayI64, ParamType::ArrayI64] {
         return None;
     }
-    if !validate_two_arrays(problem, |a, b| a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()) {
+    if !validate_two_arrays(problem, |a, b| {
+        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    }) {
         return None;
     }
     verified_result(problem, code_dot_product(fn_name), "search_dot_product")
@@ -3996,7 +4015,11 @@ fn search_sum_odd_indexed(problem: &Problem, fn_name: &str) -> Option<SolveResul
     }) {
         return None;
     }
-    verified_result(problem, code_sum_odd_indexed(fn_name), "search_sum_odd_indexed")
+    verified_result(
+        problem,
+        code_sum_odd_indexed(fn_name),
+        "search_sum_odd_indexed",
+    )
 }
 
 mod legacy_fallback {
@@ -4109,6 +4132,12 @@ pub fn solve_problem(problem: &Problem) -> SolveResult {
             return result;
         }
     }
+    // Try array gradient synthesis for array-input problems
+    if let Some(result) = synthesis::synthesize_array(problem) {
+        if result.success {
+            return result;
+        }
+    }
     // Try reference code for non-scalar problems (arrays, strings, structs, etc.)
     {
         let code = problem.reference_code.to_string();
@@ -4203,18 +4232,49 @@ pub fn solve_benchmark_differentiable_only(problems: &[Problem]) -> BenchmarkSum
 /// Try Python warm-start synthesis for a single problem.
 /// Spawns `python3 scripts/py_warmstart.py` via stdin/stdout JSON.
 /// Returns Some(SolveResult) if solved, None otherwise.
+fn find_python_warmstart_model(project_root: &std::path::Path) -> Option<std::path::PathBuf> {
+    [
+        "models/metalearner_1arg_v5.pt",
+        "models/metalearner_1arg_v4.pt",
+        "models/metalearner_1arg_v3.pt",
+        "models/metalearner_1arg_known.pt",
+        "models/metalearner_1arg.pt",
+    ]
+    .into_iter()
+    .map(|rel| project_root.join(rel))
+    .find(|path| path.exists())
+}
+
 fn try_python_warmstart(problem: &Problem) -> Option<SolveResult> {
     // Only handle 1-arg scalar integer problems (what the meta-learner supports)
-    let n_args = problem.examples.first().map(|e| e.inputs.len()).unwrap_or(0);
-    if n_args != 1 { return None; }
+    let n_args = problem
+        .examples
+        .first()
+        .map(|e| e.inputs.len())
+        .unwrap_or(0);
+    if n_args != 1 {
+        return None;
+    }
 
     // Serialise I/O examples as [[inputs...], output] pairs
-    let examples: Vec<serde_json::Value> = problem.examples.iter().map(|ex| {
-        let inputs: Vec<i64> = ex.inputs.iter().filter_map(|v| {
-            if let Value::Int(i) = v { Some(*i) } else { None }
-        }).collect();
-        serde_json::json!([inputs, ex.expected])
-    }).collect();
+    let examples: Vec<serde_json::Value> = problem
+        .examples
+        .iter()
+        .map(|ex| {
+            let inputs: Vec<i64> = ex
+                .inputs
+                .iter()
+                .filter_map(|v| {
+                    if let Value::Int(i) = v {
+                        Some(*i)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            serde_json::json!([inputs, ex.expected])
+        })
+        .collect();
 
     let req = serde_json::json!({
         "name":     problem.name,
@@ -4239,18 +4299,23 @@ fn try_python_warmstart(problem: &Problem) -> Option<SolveResult> {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     let script = project_root.join("scripts/py_warmstart.py");
-    let model  = project_root.join("models/metalearner_1arg_v3.pt");
+    let model = find_python_warmstart_model(&project_root)?;
 
-    if !script.exists() || !model.exists() { return None; }
+    if !script.exists() {
+        return None;
+    }
 
     let mut child = Command::new("python3")
         .arg(&script)
-        .arg("--model").arg(&model)
-        .arg("--n-steps").arg("400")
+        .arg("--model")
+        .arg(&model)
+        .arg("--n-steps")
+        .arg("400")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn().ok()?;
+        .spawn()
+        .ok()?;
 
     // Send request JSON
     if let Some(stdin) = child.stdin.take() {
@@ -4260,15 +4325,20 @@ fn try_python_warmstart(problem: &Problem) -> Option<SolveResult> {
     }
 
     let output = child.wait_with_output().ok()?;
-    if !output.status.success() { return None; }
+    if !output.status.success() {
+        return None;
+    }
 
     let resp: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     if resp.get("solved")?.as_bool()? {
         Some(SolveResult {
             success: true,
             code: resp.get("code")?.as_str().unwrap_or("").to_string(),
-            method: resp.get("method").and_then(|m| m.as_str())
-                        .unwrap_or("py_warmstart").to_string(),
+            method: resp
+                .get("method")
+                .and_then(|m| m.as_str())
+                .unwrap_or("py_warmstart")
+                .to_string(),
             error: None,
             metadata: DifferentiableMetadata::default(),
         })
@@ -4288,7 +4358,10 @@ pub fn solve_benchmark_prefer_differentiable(problems: &[Problem]) -> BenchmarkS
         } else {
             // Python warm-start fallback: meta-learner → perturbation → gradient refinement
             if let Some(py_result) = try_python_warmstart(problem) {
-                eprintln!("[py_fallback] {} → SOLVED ({})", problem.name, py_result.method);
+                eprintln!(
+                    "[py_fallback] {} → SOLVED ({})",
+                    problem.name, py_result.method
+                );
                 solved += 1;
                 continue;
             }
@@ -4331,6 +4404,8 @@ pub fn solve_benchmark_search_only(problems: &[Problem]) -> BenchmarkSummary {
 mod tests {
     use super::*;
     use crate::benchmark::{factory_count, generated_holdouts, get_benchmark, Example, Value};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn aliased_problem(
         source_prefix: &str,
@@ -4392,6 +4467,20 @@ mod tests {
         assert_search_generalizes_problem(problem, holdouts);
     }
 
+    fn temp_model_root() -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mog-warmstart-models-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        fs::create_dir_all(root.join("models")).unwrap();
+        root
+    }
+
     #[test]
     fn benchmark_has_54_factories() {
         assert_eq!(factory_count(), 95);
@@ -4406,6 +4495,29 @@ mod tests {
                 problem.name
             );
         }
+    }
+
+    #[test]
+    fn python_warmstart_prefers_latest_available_model() {
+        let root = temp_model_root();
+        fs::write(root.join("models/metalearner_1arg_v3.pt"), b"v3").unwrap();
+        fs::write(root.join("models/metalearner_1arg_v5.pt"), b"v5").unwrap();
+
+        let selected = find_python_warmstart_model(&root).unwrap();
+        assert_eq!(selected, root.join("models/metalearner_1arg_v5.pt"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn python_warmstart_falls_back_when_latest_model_is_missing() {
+        let root = temp_model_root();
+        fs::write(root.join("models/metalearner_1arg_v3.pt"), b"v3").unwrap();
+
+        let selected = find_python_warmstart_model(&root).unwrap();
+        assert_eq!(selected, root.join("models/metalearner_1arg_v3.pt"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -5991,7 +6103,11 @@ mod tests {
         let result = result.unwrap();
         println!("[add_two] code:\n{}", result.code);
         assert!(result.success, "synthesis failed: {:?}", result.error);
-        assert!(result.method == "synth_gradient" || result.method == "template", "unexpected method: {}", result.method);
+        assert!(
+            result.method == "synth_gradient" || result.method == "template",
+            "unexpected method: {}",
+            result.method
+        );
     }
 
     #[test]
@@ -6005,7 +6121,11 @@ mod tests {
         let result = result.unwrap();
         println!("[max2] code:\n{}", result.code);
         assert!(result.success, "synthesis failed: {:?}", result.error);
-        assert!(result.method == "synth_gradient" || result.method == "template", "unexpected method: {}", result.method);
+        assert!(
+            result.method == "synth_gradient" || result.method == "template",
+            "unexpected method: {}",
+            result.method
+        );
     }
 
     #[test]
@@ -6019,7 +6139,11 @@ mod tests {
         let result = result.unwrap();
         println!("[sum_to_n] code:\n{}", result.code);
         assert!(result.success, "synthesis failed: {:?}", result.error);
-        assert!(result.method == "synth_gradient" || result.method == "template", "unexpected method: {}", result.method);
+        assert!(
+            result.method == "synth_gradient" || result.method == "template",
+            "unexpected method: {}",
+            result.method
+        );
     }
 
     #[test]
@@ -6033,7 +6157,11 @@ mod tests {
         let result = result.unwrap();
         println!("[abs_diff] code:\n{}", result.code);
         assert!(result.success, "synthesis failed: {:?}", result.error);
-        assert!(result.method == "synth_gradient" || result.method == "template", "unexpected method: {}", result.method);
+        assert!(
+            result.method == "synth_gradient" || result.method == "template",
+            "unexpected method: {}",
+            result.method
+        );
     }
 
     #[test]
@@ -6047,7 +6175,11 @@ mod tests {
         let result = result.unwrap();
         println!("[is_even] code:\n{}", result.code);
         assert!(result.success, "synthesis failed: {:?}", result.error);
-        assert!(result.method == "synth_gradient" || result.method == "template", "unexpected method: {}", result.method);
+        assert!(
+            result.method == "synth_gradient" || result.method == "template",
+            "unexpected method: {}",
+            result.method
+        );
     }
 
     fn gradient_synth_discovers_one(problem_name: &str) {
@@ -6059,24 +6191,74 @@ mod tests {
         assert!(r.is_some(), "{}: synthesis returned None", problem_name);
         let r = r.unwrap();
         println!("[{}] code:\n{}", problem_name, r.code);
-        assert!(r.success, "{}: not verified. code:\n{}", problem_name, r.code);
-        assert!(r.method == "synth_gradient" || r.method == "template", "unexpected method: {}", r.method);
+        assert!(
+            r.success,
+            "{}: not verified. code:\n{}",
+            problem_name, r.code
+        );
+        assert!(
+            r.method == "synth_gradient" || r.method == "template",
+            "unexpected method: {}",
+            r.method
+        );
     }
 
-    #[test] fn gradient_synth_discovers_factorial()  { gradient_synth_discovers_one("factorial"); }
-    #[test] fn gradient_synth_discovers_cube()       { gradient_synth_discovers_one("cube"); }
-    #[test] fn gradient_synth_discovers_square_plus_n() { gradient_synth_discovers_one("square_plus_n"); }
-    #[test] fn gradient_synth_discovers_product_1_to_n() { gradient_synth_discovers_one("product_1_to_n"); }
-    #[test] fn gradient_synth_discovers_bilinear3()  { gradient_synth_discovers_one("bilinear3"); }
-    #[test] fn gradient_synth_discovers_sign()       { gradient_synth_discovers_one("sign"); }
-    #[test] fn gradient_synth_discovers_clamp()      { gradient_synth_discovers_one("clamp_0_100"); }
-    #[test] fn gradient_synth_discovers_power()      { gradient_synth_discovers_one("power"); }
-    #[test] fn gradient_synth_discovers_fibonacci()  { gradient_synth_discovers_one("fibonacci"); }
-    #[test] fn gradient_synth_discovers_fib_iter()   { gradient_synth_discovers_one("fib_iter"); }
-    #[test] fn gradient_synth_discovers_lucas()      { gradient_synth_discovers_one("lucas_number"); }
-    #[test] fn gradient_synth_discovers_sum_squares() { gradient_synth_discovers_one("sum_squares"); }
-    #[test] fn gradient_synth_discovers_celsius()    { gradient_synth_discovers_one("celsius_to_fahrenheit"); }
-    #[test] fn gradient_synth_discovers_product_offset() { gradient_synth_discovers_one("product_offset"); }
+    #[test]
+    fn gradient_synth_discovers_factorial() {
+        gradient_synth_discovers_one("factorial");
+    }
+    #[test]
+    fn gradient_synth_discovers_cube() {
+        gradient_synth_discovers_one("cube");
+    }
+    #[test]
+    fn gradient_synth_discovers_square_plus_n() {
+        gradient_synth_discovers_one("square_plus_n");
+    }
+    #[test]
+    fn gradient_synth_discovers_product_1_to_n() {
+        gradient_synth_discovers_one("product_1_to_n");
+    }
+    #[test]
+    fn gradient_synth_discovers_bilinear3() {
+        gradient_synth_discovers_one("bilinear3");
+    }
+    #[test]
+    fn gradient_synth_discovers_sign() {
+        gradient_synth_discovers_one("sign");
+    }
+    #[test]
+    fn gradient_synth_discovers_clamp() {
+        gradient_synth_discovers_one("clamp_0_100");
+    }
+    #[test]
+    fn gradient_synth_discovers_power() {
+        gradient_synth_discovers_one("power");
+    }
+    #[test]
+    fn gradient_synth_discovers_fibonacci() {
+        gradient_synth_discovers_one("fibonacci");
+    }
+    #[test]
+    fn gradient_synth_discovers_fib_iter() {
+        gradient_synth_discovers_one("fib_iter");
+    }
+    #[test]
+    fn gradient_synth_discovers_lucas() {
+        gradient_synth_discovers_one("lucas_number");
+    }
+    #[test]
+    fn gradient_synth_discovers_sum_squares() {
+        gradient_synth_discovers_one("sum_squares");
+    }
+    #[test]
+    fn gradient_synth_discovers_celsius() {
+        gradient_synth_discovers_one("celsius_to_fahrenheit");
+    }
+    #[test]
+    fn gradient_synth_discovers_product_offset() {
+        gradient_synth_discovers_one("product_offset");
+    }
 
     /// Pure gradient synthesis (no templates) — measures actual gradient discovery capability.
     #[test]
@@ -6087,21 +6269,34 @@ mod tests {
         let mut solved_names = vec![];
         let mut failed_names = vec![];
         for p in &problems {
-            if !p.examples.iter().all(|ex| ex.inputs.iter().all(|v| matches!(v, crate::benchmark::Value::Int(_)))) {
+            if !p.examples.iter().all(|ex| {
+                ex.inputs
+                    .iter()
+                    .all(|v| matches!(v, crate::benchmark::Value::Int(_)))
+            }) {
                 continue;
             }
             total += 1;
             let ok = crate::synthesis::synthesize_gradient_only(p)
-                .map(|r| r.success).unwrap_or(false);
+                .map(|r| r.success)
+                .unwrap_or(false);
             if ok {
                 solved += 1;
                 solved_names.push(p.name.clone());
             } else {
                 failed_names.push(p.name.clone());
             }
-            println!("  [{}/47] {} {}", total, p.name, if ok { "SOLVED" } else { "failed" });
+            println!(
+                "  [{}/47] {} {}",
+                total,
+                p.name,
+                if ok { "SOLVED" } else { "failed" }
+            );
         }
-        println!("\n=== Pure Gradient Coverage (scalar only): {}/{} ===", solved, total);
+        println!(
+            "\n=== Pure Gradient Coverage (scalar only): {}/{} ===",
+            solved, total
+        );
         println!("SOLVED: {}", solved_names.join(", "));
         println!("FAILED: {}", failed_names.join(", "));
     }
@@ -6113,11 +6308,21 @@ mod tests {
     fn predicate_loop_quick_test() {
         let problems = get_benchmark(1);
         let targets = [
-            "gcd_v0", "gcd_extended_v0", "leading_digit_v0", "next_power_of_2_v0",
-            "safe_div_or_neg1_v0", "digit_count_v0", "digit_product_v0",
-            "digital_root_v0", "polynomial_v0", "harmonic_sum_v0",
-            "count_divisors_v0", "sum_of_divisors_v0",
-            "sum_odd_digits_v0", "popcount_v0", "max_digit_v0",
+            "gcd_v0",
+            "gcd_extended_v0",
+            "leading_digit_v0",
+            "next_power_of_2_v0",
+            "safe_div_or_neg1_v0",
+            "digit_count_v0",
+            "digit_product_v0",
+            "digital_root_v0",
+            "polynomial_v0",
+            "harmonic_sum_v0",
+            "count_divisors_v0",
+            "sum_of_divisors_v0",
+            "sum_odd_digits_v0",
+            "popcount_v0",
+            "max_digit_v0",
         ];
         for name in &targets {
             let Some(p) = problems.iter().find(|p| p.name == *name) else {
@@ -6134,33 +6339,60 @@ mod tests {
     #[test]
     fn digital_root_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "digital_root_v0").expect("digital_root_v0 not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "digital_root_v0")
+            .expect("digital_root_v0 not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("digital_root_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "digital_root_v0 should be solved by biased gradient restart");
+        println!(
+            "digital_root_v0: {}",
+            if solved { "SOLVED" } else { "failed" }
+        );
+        assert!(
+            solved,
+            "digital_root_v0 should be solved by biased gradient restart"
+        );
     }
 
     /// Targeted smoke-test for the count_divisors biased SoftCondAccumLoop restart.
     #[test]
     fn count_divisors_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "count_divisors_v0").expect("count_divisors_v0 not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "count_divisors_v0")
+            .expect("count_divisors_v0 not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("count_divisors_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "count_divisors_v0 should be solved by SoftCondAccumLoop biased restart");
+        println!(
+            "count_divisors_v0: {}",
+            if solved { "SOLVED" } else { "failed" }
+        );
+        assert!(
+            solved,
+            "count_divisors_v0 should be solved by SoftCondAccumLoop biased restart"
+        );
     }
 
     /// Targeted smoke-test for the sum_of_divisors biased SoftCondAccumLoop restart.
     #[test]
     fn sum_of_divisors_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "sum_of_divisors_v0").expect("sum_of_divisors_v0 not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "sum_of_divisors_v0")
+            .expect("sum_of_divisors_v0 not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("sum_of_divisors_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "sum_of_divisors_v0 should be solved by SoftCondAccumLoop biased restart");
+        println!(
+            "sum_of_divisors_v0: {}",
+            if solved { "SOLVED" } else { "failed" }
+        );
+        assert!(
+            solved,
+            "sum_of_divisors_v0 should be solved by SoftCondAccumLoop biased restart"
+        );
     }
 
     /// count_even_digits has f(0)=1 edge case incompatible with our loop-based approach
@@ -6169,10 +6401,20 @@ mod tests {
     #[test]
     fn count_even_digits_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "count_even_digits_v0").expect("count_even_digits_v0 not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "count_even_digits_v0")
+            .expect("count_even_digits_v0 not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("count_even_digits_v0: {}", if solved { "SOLVED" } else { "failed (expected — f(0)=1 edge case)" });
+        println!(
+            "count_even_digits_v0: {}",
+            if solved {
+                "SOLVED"
+            } else {
+                "failed (expected — f(0)=1 edge case)"
+            }
+        );
         // Not asserting: f(0)=1 requires special handling outside our loop program type
     }
 
@@ -6180,66 +6422,111 @@ mod tests {
     #[test]
     fn sum_odd_digits_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "sum_odd_digits_v0").expect("sum_odd_digits_v0 not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "sum_odd_digits_v0")
+            .expect("sum_odd_digits_v0 not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("sum_odd_digits_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "sum_odd_digits_v0 should be solved by SoftCondDigitLoop biased restart");
+        println!(
+            "sum_odd_digits_v0: {}",
+            if solved { "SOLVED" } else { "failed" }
+        );
+        assert!(
+            solved,
+            "sum_odd_digits_v0 should be solved by SoftCondDigitLoop biased restart"
+        );
     }
 
     /// Targeted smoke-test for the popcount biased SoftCondDigitLoop restart.
     #[test]
     fn popcount_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "popcount_v0").expect("popcount_v0 not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "popcount_v0")
+            .expect("popcount_v0 not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
         println!("popcount_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "popcount_v0 should be solved by SoftCondDigitLoop biased restart");
+        assert!(
+            solved,
+            "popcount_v0 should be solved by SoftCondDigitLoop biased restart"
+        );
     }
 
     /// Targeted smoke-test for the max_digit biased SoftCondDigitLoop restart.
     #[test]
     fn max_digit_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "max_digit_v0").expect("max_digit_v0 not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "max_digit_v0")
+            .expect("max_digit_v0 not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
         println!("max_digit_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "max_digit_v0 should be solved by SoftCondDigitLoop biased restart");
+        assert!(
+            solved,
+            "max_digit_v0 should be solved by SoftCondDigitLoop biased restart"
+        );
     }
 
     /// count_even_digits with zero_return=1 for n=0 edge case.
     #[test]
     fn count_even_digits_gradient_only_v2_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "count_even_digits_v0").expect("not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "count_even_digits_v0")
+            .expect("not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("count_even_digits_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "count_even_digits_v0 should be solved by SoftCondDigitLoop with zero_return=1");
+        println!(
+            "count_even_digits_v0: {}",
+            if solved { "SOLVED" } else { "failed" }
+        );
+        assert!(
+            solved,
+            "count_even_digits_v0 should be solved by SoftCondDigitLoop with zero_return=1"
+        );
     }
 
     /// is_perfect_square: loop i in [0..n], count where i*i==n, returns 1 for perfect squares.
     #[test]
     fn is_perfect_square_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "is_perfect_square_v0").expect("not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "is_perfect_square_v0")
+            .expect("not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("is_perfect_square_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "is_perfect_square_v0 should be solved by SoftCondAccumLoop biased restart");
+        println!(
+            "is_perfect_square_v0: {}",
+            if solved { "SOLVED" } else { "failed" }
+        );
+        assert!(
+            solved,
+            "is_perfect_square_v0 should be solved by SoftCondAccumLoop biased restart"
+        );
     }
 
     /// min3: two-stage chained ternary — v0=min(a,b), return min(v0,c).
     #[test]
     fn min3_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "min3_v0").expect("not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "min3_v0")
+            .expect("not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
         println!("min3_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "min3_v0 should be solved by SoftChainedBranch biased restart");
+        assert!(
+            solved,
+            "min3_v0 should be solved by SoftChainedBranch biased restart"
+        );
     }
 
     /// is_prime: SoftCondAccumCmpReturnLoop — count divisors then return acc==2
@@ -6247,11 +6534,17 @@ mod tests {
     #[ignore]
     fn is_prime_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "is_prime_v0").expect("not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "is_prime_v0")
+            .expect("not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
         println!("is_prime_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "is_prime_v0 should be solved by SoftCondAccumCmpReturnLoop biased restart");
+        assert!(
+            solved,
+            "is_prime_v0 should be solved by SoftCondAccumCmpReturnLoop biased restart"
+        );
     }
 
     /// triangular_check: SoftPredicateLoopRetCmp — two-acc loop x0=k,x1=tri; if x1==n return 1
@@ -6259,11 +6552,20 @@ mod tests {
     #[ignore]
     fn triangular_check_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "triangular_check_v0").expect("not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "triangular_check_v0")
+            .expect("not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("triangular_check_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "triangular_check_v0 should be solved by SoftPredicateLoopRetCmp biased restart");
+        println!(
+            "triangular_check_v0: {}",
+            if solved { "SOLVED" } else { "failed" }
+        );
+        assert!(
+            solved,
+            "triangular_check_v0 should be solved by SoftPredicateLoopRetCmp biased restart"
+        );
     }
 
     /// collatz_steps: SoftCondMutateLoop — while x!=1 { if x%2==0 { x=x/2 } else { x=x*3+1 }; acc++ }
@@ -6271,11 +6573,20 @@ mod tests {
     #[ignore]
     fn collatz_steps_gradient_only_test() {
         let problems = get_benchmark(1);
-        let p = problems.iter().find(|p| p.name == "collatz_steps_v0").expect("not found");
+        let p = problems
+            .iter()
+            .find(|p| p.name == "collatz_steps_v0")
+            .expect("not found");
         let r = crate::synthesis::synthesize_gradient_only(p);
         let solved = r.map(|r| r.success).unwrap_or(false);
-        println!("collatz_steps_v0: {}", if solved { "SOLVED" } else { "failed" });
-        assert!(solved, "collatz_steps_v0 should be solved by SoftCondMutateLoop biased restart");
+        println!(
+            "collatz_steps_v0: {}",
+            if solved { "SOLVED" } else { "failed" }
+        );
+        assert!(
+            solved,
+            "collatz_steps_v0 should be solved by SoftCondMutateLoop biased restart"
+        );
     }
 
     /// Show which benchmark problems the gradient+template solver can discover
@@ -6300,7 +6611,10 @@ mod tests {
                 failed_names.push(p.name.clone());
             }
         }
-        println!("\n=== Gradient Synthesis Coverage: {}/{} ===", solved, total);
+        println!(
+            "\n=== Gradient Synthesis Coverage: {}/{} ===",
+            solved, total
+        );
         println!("SOLVED: {}", solved_names.join(", "));
         println!("FAILED: {}", failed_names.join(", "));
     }
@@ -6311,7 +6625,8 @@ mod tests {
         let problems = get_benchmark(1);
         let mut solved = 0;
         let mut total = 0;
-        let mut by_method: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut by_method: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         let mut failed_names = vec![];
         for p in &problems {
             total += 1;
@@ -6333,4 +6648,5 @@ mod tests {
             println!("FAILED: {}", failed_names.join(", "));
         }
     }
+
 }

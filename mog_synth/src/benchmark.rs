@@ -776,10 +776,7 @@ fn make_polynomial(variant: usize) -> Problem {
             example(vec![int(2)], 15),
             example(vec![int(5)], 66),
         ],
-        vec![
-            example(vec![int(3)], 28),
-            example(vec![int(-1)], 0),
-        ],
+        vec![example(vec![int(3)], 28), example(vec![int(-1)], 0)],
         "fn polynomial(x: i64) -> i64 {\n    return 2 * x * x + 3 * x + 1;\n}\n",
     )
 }
@@ -1656,10 +1653,7 @@ fn make_cube(variant: usize) -> Problem {
             example(vec![int(4)], 64),
             example(vec![int(1)], 1),
         ],
-        vec![
-            example(vec![int(0)], 0),
-            example(vec![int(-2)], -8),
-        ],
+        vec![example(vec![int(0)], 0), example(vec![int(-2)], -8)],
         "fn cube(x: i64) -> i64 {\n    return x * x * x;\n}\n",
     )
 }
@@ -1677,10 +1671,7 @@ fn make_square_plus_n(variant: usize) -> Problem {
             example(vec![int(3)], 12),
             example(vec![int(4)], 20),
         ],
-        vec![
-            example(vec![int(0)], 0),
-            example(vec![int(5)], 30),
-        ],
+        vec![example(vec![int(0)], 0), example(vec![int(5)], 30)],
         "fn square_plus_n(n: i64) -> i64 {\n    return (n * n) + n;\n}\n",
     )
 }
@@ -2181,10 +2172,7 @@ fn make_celsius_to_fahrenheit(variant: usize) -> Problem {
             example(vec![int(20)], 68),
             example(vec![int(37)], 98),
         ],
-        vec![
-            example(vec![int(-40)], -40),
-            example(vec![int(25)], 77),
-        ],
+        vec![example(vec![int(-40)], -40), example(vec![int(25)], 77)],
         "fn celsius_to_fahrenheit(c: i64) -> i64 {\n    return c * 9 / 5 + 32;\n}\n",
     )
 }
