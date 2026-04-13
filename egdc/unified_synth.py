@@ -76,6 +76,17 @@ class UnifiedSynthesizer:
         self.enable_differentiable = enable_differentiable
         self.enable_llm = enable_llm
 
+        # Load meta-learner for program type prediction
+        self.meta_learner = None
+        try:
+            model_path = Path(__file__).parent.parent / "mog_synth" / "models" / "expr_type_classifier.pt"
+            if model_path.exists():
+                sys.path.insert(0, str(Path(__file__).parent.parent / "mog_synth" / "scripts"))
+                from train_expr_metalearner import load_model
+                self.meta_learner = load_model(str(model_path))
+        except Exception:
+            pass  # Meta-learner is optional
+
     # ── Main entry point ──────────────────────────────────────────────────
 
     def synthesize(
@@ -98,6 +109,21 @@ class UnifiedSynthesizer:
             holdouts: extra test cases for validation (not shown to LLM)
         """
         results = []
+
+        # Meta-learner prediction: predict which program type to try first
+        predicted_type = None
+        if self.meta_learner:
+            try:
+                n_args = len(examples[0][0]) if isinstance(examples[0][0], (list, tuple)) else 1
+                io_pairs = []
+                for args, exp in examples[:8]:
+                    if isinstance(args, (list, tuple)):
+                        io_pairs.append([list(args), exp])
+                    else:
+                        io_pairs.append([[args], exp])
+                predicted_type, probs = self.meta_learner.predict(io_pairs, n_args)
+            except Exception:
+                pass
 
         # Layer 1: Differentiable synthesis via mog_synth
         if self.enable_differentiable and self.mog_binary:
