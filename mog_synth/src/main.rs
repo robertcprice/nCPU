@@ -156,8 +156,10 @@ fn main() {
         };
 
         // Parse JSON into a Problem
+        eprintln!("[problem-json] parsed {} bytes, calling solve_problem...", json_str.len());
         match parse_problem_json(&json_str) {
             Ok(problem) => {
+                eprintln!("[problem-json] problem: {} ({} examples, {} args)", problem.name, problem.examples.len(), problem.examples.first().map(|e| e.inputs.len()).unwrap_or(0));
                 let result = solve_problem(&problem);
                 // Output as JSON
                 let output = serde_json::json!({

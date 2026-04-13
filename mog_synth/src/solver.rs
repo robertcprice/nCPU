@@ -4126,24 +4126,53 @@ pub fn solve_problem_prefer_differentiable(problem: &Problem) -> SolveResult {
 }
 
 pub fn solve_problem(problem: &Problem) -> SolveResult {
-    // Try native gradient synthesis first (scalar problems, includes template fast-path)
-    if let Some(result) = synthesis::synthesize_scalar(problem) {
+    // Fast path: expression-only synthesis (no loops). Handles any arg count in <5s.
+    let t0 = std::time::Instant::now();
+    if let Some(result) = synthesis::synthesize_scalar_expr_only(problem) {
         if result.success {
+            eprintln!("[solve] expr_only OK in {:.1}s — {}", t0.elapsed().as_secs_f32(), result.method);
             return result;
         }
     }
+    eprintln!("[solve] expr_only MISS in {:.1}s", t0.elapsed().as_secs_f32());
+
+    // Try full gradient synthesis (scalar problems, includes template fast-path + loops)
+    // Skip for external problems with >2 args — the loop types are unlikely to help and take forever
+    let n_args = problem.examples.first().map(|e| e.inputs.len()).unwrap_or(0);
+    let is_external = problem.category == "external";
+    if !is_external || n_args <= 2 {
+        let t0x = std::time::Instant::now();
+        if let Some(result) = synthesis::synthesize_scalar(problem) {
+            if result.success {
+                eprintln!("[solve] synthesize_scalar OK in {:.1}s — {}", t0x.elapsed().as_secs_f32(), result.method);
+                return result;
+            }
+        }
+        eprintln!("[solve] synthesize_scalar MISS in {:.1}s", t0x.elapsed().as_secs_f32());
+    } else {
+        eprintln!("[solve] skipping full synthesize_scalar for external {}-arg problem", n_args);
+    }
+
     // Try array gradient synthesis for array-input problems
+    let t1 = std::time::Instant::now();
     if let Some(result) = synthesis::synthesize_array(problem) {
         if result.success {
+            eprintln!("[solve] synthesize_array OK in {:.1}s", t1.elapsed().as_secs_f32());
             return result;
         }
     }
+    eprintln!("[solve] synthesize_array MISS in {:.1}s", t1.elapsed().as_secs_f32());
+
     // Try universal register machine (can discover any scalar program)
+    let t2 = std::time::Instant::now();
     if let Some(result) = synthesis::synthesize_register_machine(problem) {
         if result.success {
+            eprintln!("[solve] register_machine OK in {:.1}s", t2.elapsed().as_secs_f32());
             return result;
         }
     }
+    eprintln!("[solve] register_machine MISS in {:.1}s", t2.elapsed().as_secs_f32());
+
     // Try reference code for non-scalar problems (arrays, strings, structs, etc.)
     {
         let code = problem.reference_code.to_string();
@@ -4157,8 +4186,22 @@ pub fn solve_problem(problem: &Problem) -> SolveResult {
             };
         }
     }
-    // Fall back to search-based strategies
-    solve_problem_prefer_differentiable(problem)
+    // Fall back to search-based strategies (skip for external multi-arg — too slow)
+    if is_external && n_args > 2 {
+        eprintln!("[solve] skipping search fallback for external {}-arg problem", n_args);
+        return SolveResult {
+            success: false,
+            code: String::new(),
+            method: "none".to_string(),
+            error: Some(format!("no synthesis method solved this {n_args}-arg problem")),
+            metadata: DifferentiableMetadata::default(),
+        };
+    }
+    eprintln!("[solve] falling back to search...");
+    let t3 = std::time::Instant::now();
+    let result = solve_problem_prefer_differentiable(problem);
+    eprintln!("[solve] search done in {:.1}s — success={}", t3.elapsed().as_secs_f32(), result.success);
+    result
 }
 
 pub fn solve_problem_search_only(problem: &Problem) -> SolveResult {

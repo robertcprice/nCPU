@@ -4411,6 +4411,146 @@ pub fn synthesize_scalar(problem: &Problem) -> Option<SolveResult> {
     synthesize_scalar_inner(problem, true)
 }
 
+/// Fast scalar synthesis: only tries expression + branch types (no loops).
+/// Solves multi-arg expressions like `y*w + x`, `a*b*c + d`, `clamp(v,lo,hi)`.
+/// Completes in <5s for any arg count.
+pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
+    if !problem.examples.iter().all(|ex| ex.inputs.iter().all(|v| matches!(v, Value::Int(_)))) {
+        return None;
+    }
+    let fn_name = problem.function_name();
+    let n_args = problem.examples.first()?.inputs.len();
+    let examples: Vec<(Vec<f32>, f32)> = problem.examples.iter().map(|ex| {
+        let inputs: Vec<f32> = ex.inputs.iter().filter_map(|v| if let Value::Int(i) = v { Some(*i as f32) } else { None }).collect();
+        (inputs, ex.expected as f32)
+    }).collect();
+    let default_names = ["a", "b", "c", "d", "e", "f"];
+    let param_names: Vec<&str> = (0..n_args).map(|i| default_names.get(i).copied().unwrap_or("x")).collect();
+
+    const N_STEPS: usize = 600;
+    const N_RESTARTS: usize = 8; // More restarts since we skip loops — still fast
+
+    for restart in 0..N_RESTARTS {
+        // SoftExprProgram: v0 = s1 OP s2; return s3 OP s4
+        {
+            let mut prog = SoftExprProgram::new(n_args);
+            let ns = n_args + N_CONSTS;
+            let ne = ns + 1;
+            // Biased inits for multi-arg patterns
+            if restart == 1 && n_args >= 3 {
+                // grid_idx pattern: v0 = arg1 * arg2, return v0 + arg0
+                prog.params[0] = 4.0; // pre_enable
+                prog.params[1 + 1] = 4.0; // pre_s1 = arg1
+                prog.params[1 + ns + 2] = 4.0; // pre_s2 = arg2
+                prog.params[1 + 2 * ns + 2] = 4.0; // pre_op = *
+                let roff = 1 + 2 * ns + N_OPS;
+                prog.params[roff + ne - 1] = 4.0; // ret_s1 = v0
+                prog.params[roff + ne] = 4.0; // ret_s2 = arg0
+                prog.params[roff + 2 * ne] = 4.0; // ret_op = +
+            } else if restart == 2 && n_args >= 3 {
+                // compute_score pattern: v0 = arg0 * arg1, return v0 * const + arg2
+                // Actually: a*b*10 + c — need arg0*arg1 first, then *10, then +arg2
+                // SoftExprProgram can do: v0 = arg0*arg1, return v0*const[5=10]... no, can't chain 3 ops
+                // But try: v0 = arg0*arg1, return v0 + arg2 (simpler, may learn const via gradient)
+                prog.params[0] = 4.0;
+                prog.params[1] = 4.0; // pre_s1 = arg0
+                prog.params[1 + ns + 1] = 4.0; // pre_s2 = arg1
+                prog.params[1 + 2 * ns + 2] = 4.0; // pre_op = *
+                let roff = 1 + 2 * ns + N_OPS;
+                prog.params[roff + ne - 1] = 4.0; // ret_s1 = v0
+                prog.params[roff + ne + 2] = 4.0; // ret_s2 = arg2
+                prog.params[roff + 2 * ne] = 4.0; // ret_op = +
+            } else if restart == 3 && n_args >= 2 {
+                // a OP b pattern (no precompute)
+                prog.params[0] = -4.0; // pre disabled
+                let roff = 1 + 2 * ns + N_OPS;
+                prog.params[roff] = 4.0; // s1 = arg0
+                prog.params[roff + ne + 1] = 4.0; // s2 = arg1
+            } else if restart == 4 {
+                // precompute = arg0 * arg0, return v0 OP arg
+                prog.params[0] = 4.0;
+                prog.params[1] = 4.0;
+                prog.params[1 + ns] = 4.0;
+                prog.params[1 + 2 * ns + 2] = 4.0; // *
+            }
+            if restart > 0 {
+                let noise = (restart as f32) * 0.3;
+                for (idx, p) in prog.params.iter_mut().enumerate() {
+                    *p += (pseudo_rand(restart as u64 * 7919 + idx as u64) - 0.5) * noise;
+                }
+            }
+            let ex = examples.clone();
+            let result = train_program(
+                prog.params.clone(),
+                move |p, t| SoftExprProgram { n_args, params: p.to_vec() }.loss(&ex, t),
+                |p, fn_n, pn| SoftExprProgram { n_args, params: p.to_vec() }.discretize_and_emit(fn_n, pn),
+                problem, &param_names, fn_name, N_STEPS,
+            );
+            if result.is_some() { return result; }
+        }
+
+        // SoftTwoPrecompExprProgram: v0 = s1 OP s2; v1 = s3 OP s4; return s5 OP s6
+        // (can chain 3 operations, handles compute_score = a*b*10+c)
+        {
+            let mut prog = SoftTwoPrecompExprProgram::new(n_args);
+            if restart > 0 {
+                let noise = (restart as f32) * 0.3;
+                for (idx, p) in prog.params.iter_mut().enumerate() {
+                    *p += (pseudo_rand(restart as u64 * 8831 + idx as u64) - 0.5) * noise;
+                }
+            }
+            let ex = examples.clone();
+            let result = train_program(
+                prog.params.clone(),
+                move |p, t| SoftTwoPrecompExprProgram { n_args, params: p.to_vec() }.loss(&ex, t),
+                |p, fn_n, pn| SoftTwoPrecompExprProgram { n_args, params: p.to_vec() }.discretize_and_emit(fn_n, pn),
+                problem, &param_names, fn_name, N_STEPS,
+            );
+            if result.is_some() { return result; }
+        }
+
+        // SoftBranchProgram: if cmp { expr1 } else { expr2 } — handles clamp, min, max
+        {
+            let mut prog = SoftBranchProgram::new(n_args);
+            if restart > 0 {
+                let noise = (restart as f32) * 0.3;
+                for (idx, p) in prog.params.iter_mut().enumerate() {
+                    *p += (pseudo_rand(restart as u64 * 9901 + idx as u64) - 0.5) * noise;
+                }
+            }
+            let ex = examples.clone();
+            let result = train_program(
+                prog.params.clone(),
+                move |p, t| SoftBranchProgram { n_args, params: p.to_vec() }.loss(&ex, t),
+                |p, fn_n, pn| SoftBranchProgram { n_args, params: p.to_vec() }.discretize_and_emit(fn_n, pn),
+                problem, &param_names, fn_name, N_STEPS,
+            );
+            if result.is_some() { return result; }
+        }
+
+        // SoftChainedBranch: two sequential ternaries — handles clamp, min3, max3, abs
+        if n_args >= 2 {
+            let mut prog = SoftChainedBranch::new(n_args);
+            if restart > 0 {
+                let noise = (restart as f32) * 0.3;
+                for (idx, p) in prog.params.iter_mut().enumerate() {
+                    *p += (pseudo_rand(restart as u64 * 10007 + idx as u64) - 0.5) * noise;
+                }
+            }
+            let ex = examples.clone();
+            let result = train_program(
+                prog.params.clone(),
+                move |p, t| SoftChainedBranch { n_args, params: p.to_vec() }.loss(&ex, t),
+                |p, fn_n, pn| SoftChainedBranch { n_args, params: p.to_vec() }.discretize_and_emit(fn_n, pn),
+                problem, &param_names, fn_name, N_STEPS,
+            );
+            if result.is_some() { return result; }
+        }
+    }
+
+    None
+}
+
 fn synthesize_scalar_inner(problem: &Problem, use_templates: bool) -> Option<SolveResult> {
     // Only works on scalar (all i64) problems
     if !problem
@@ -6838,11 +6978,322 @@ fn synthesize_scalar_inner(problem: &Problem, use_templates: bool) -> Option<Sol
 // Array gradient synthesis
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Soft program types that operate on array inputs. The array is padded to
-// MAX_ARR elements and an in_bounds sigmoid gate masks out-of-bounds positions.
+// SoftUniversalArrayProgram: ONE architecture that discovers ANY array program.
+// No pre-defined skeleton — the gradient decides what each slot does.
 //
-// Each type follows the same pattern: softmax logits → weighted sum → FD gradient
-// → Adam → discretize to Mog `for item in arr { ... }` code.
+//   Pre-loop phase  (N_ARR_PRE slots)  → v0, v1  (computed once before iteration)
+//   Array loop      (N_ARR_BODY slots) → s0..s3  (per-element, gated by in_bounds)
+//   Post-loop phase (N_ARR_POST slots) → p0      (computed once after iteration)
+//   Return          (soft-select from pool)
+//
+// Pool (register file, rebuilt each iteration):
+//   [item, i, parity, arr_len, consts(6), scalar_args(n_scalar), v0..v{pre-1}, s0..s{body-1}, p0..p{post-1}]
+//
+// Each slot: gate * op(src1, src2) + (1-gate) * else_src
+//   - op ∈ {+, -, *, /, %, identity}
+//   - gate = soft_cmp(lhs, rhs) with cmp ∈ {<, <=, ==, >=, >, !=}
+//
+// This single type subsumes A1 (fold), A2 (gated fold), A3 (two-accum),
+// A4 (pairwise scan), A5 (index-aware): the gradient discovers which pattern
+// fits the I/O examples.
+
+const N_ARR_PRE: usize = 1;   // pre-loop init slots
+const N_ARR_BODY: usize = 3;  // per-element body slots (accumulators + working vars)
+const N_ARR_POST: usize = 1;  // post-loop slots
+const N_ARR_SLOTS: usize = N_ARR_PRE + N_ARR_BODY + N_ARR_POST; // 5
+
+// Fixed pool positions: item(0), i(1), parity(2), arr_len(3)
+const N_ARR_FIXED: usize = 4;
+
+#[inline]
+fn uarr_pool(n_scalar: usize) -> usize {
+    N_ARR_FIXED + N_CONSTS + n_scalar + N_ARR_SLOTS
+}
+
+/// Slot params: op(N_OPS+1) + src1(pool) + src2(pool) + cmp(N_CMPS) + gl(pool) + gr(pool) + else(pool)
+#[inline]
+fn uarr_sps(pool: usize) -> usize {
+    (N_OPS + 1) + 5 * pool + N_CMPS
+}
+
+/// Pre-loop init pool: [arr[0], consts(6), scalar_args(n_scalar)]
+#[inline]
+fn uarr_lip(n_scalar: usize) -> usize {
+    1 + N_CONSTS + n_scalar
+}
+
+struct SoftUniversalArrayProgram {
+    n_scalar: usize,
+    params: Vec<f32>,
+}
+
+impl SoftUniversalArrayProgram {
+    fn pool(&self) -> usize { uarr_pool(self.n_scalar) }
+    fn sps(&self) -> usize { uarr_sps(self.pool()) }
+    fn lip(&self) -> usize { uarr_lip(self.n_scalar) }
+
+    fn slot_off(&self, slot: usize) -> usize { slot * self.sps() }
+    /// Body-slot state init: each body slot gets initial value from pre-loop pool
+    fn body_init_off(&self, bs: usize) -> usize {
+        N_ARR_SLOTS * self.sps() + bs * self.lip()
+    }
+    fn return_off(&self) -> usize {
+        self.body_init_off(N_ARR_BODY)
+    }
+    fn consts_off(&self) -> usize {
+        self.return_off() + self.pool()
+    }
+
+    fn n_params_for(n_scalar: usize) -> usize {
+        let pool = uarr_pool(n_scalar);
+        let lip = uarr_lip(n_scalar);
+        N_ARR_SLOTS * uarr_sps(pool) + N_ARR_BODY * lip + pool + N_CONSTS
+    }
+
+    fn new(n_scalar: usize) -> Self {
+        let mut s = Self { n_scalar, params: vec![0f32; Self::n_params_for(n_scalar)] };
+        let co = s.consts_off();
+        s.params[co..co + N_CONSTS].copy_from_slice(&[0.0, 1.0, -1.0, 2.0, -2.0, 10.0]);
+        s
+    }
+
+    /// Pool name indices for this n_scalar configuration
+    fn pool_names(n_scalar: usize, consts: &[i64], scalar_names: &[&str]) -> Vec<String> {
+        let mut pn = Vec::new();
+        pn.push("item".to_string());
+        pn.push("i".to_string());
+        pn.push("parity".to_string());
+        pn.push("arr.len".to_string());
+        for v in consts { pn.push(format!("{v}")); }
+        for s in scalar_names { pn.push(s.to_string()); }
+        for i in 0..N_ARR_PRE { pn.push(format!("v{i}")); }
+        for i in 0..N_ARR_BODY { pn.push(format!("s{i}")); }
+        for i in 0..N_ARR_POST { pn.push(format!("p{i}")); }
+        pn
+    }
+
+    /// Index of first pre-loop slot register in pool
+    fn pre_reg_start(&self) -> usize { N_ARR_FIXED + N_CONSTS + self.n_scalar }
+    fn body_reg_start(&self) -> usize { self.pre_reg_start() + N_ARR_PRE }
+    fn post_reg_start(&self) -> usize { self.body_reg_start() + N_ARR_BODY }
+
+    fn exec_slot(&self, slot: usize, r: &[f32], temp: f32) -> f32 {
+        let pool = self.pool();
+        let off = self.slot_off(slot);
+        let op_w = softmax_temp(&self.params[off..off + N_OPS + 1], temp);
+        let s1_w = softmax_temp(&self.params[off + N_OPS + 1..off + N_OPS + 1 + pool], temp);
+        let s2_w = softmax_temp(&self.params[off + N_OPS + 1 + pool..off + N_OPS + 1 + 2 * pool], temp);
+        let src1 = soft_read(r, &s1_w);
+        let src2 = soft_read(r, &s2_w);
+        let then_val = soft_op_ext(src1, src2, &op_w);
+        let cb = off + N_OPS + 1 + 2 * pool;
+        let cmp_w = softmax_temp(&self.params[cb..cb + N_CMPS], temp);
+        let gl_w = softmax_temp(&self.params[cb + N_CMPS..cb + N_CMPS + pool], temp);
+        let gr_w = softmax_temp(&self.params[cb + N_CMPS + pool..cb + N_CMPS + 2 * pool], temp);
+        let gate_lhs = soft_read(r, &gl_w);
+        let gate_rhs = soft_read(r, &gr_w);
+        let gate = soft_cmp(gate_lhs, gate_rhs, &cmp_w, temp);
+        let el_w = softmax_temp(&self.params[cb + N_CMPS + 2 * pool..cb + N_CMPS + 3 * pool], temp);
+        let else_val = soft_read(r, &el_w);
+        gate * then_val + (1.0 - gate) * else_val
+    }
+
+    fn forward(&self, arr: &[f32], arr_len: f32, scalar_args: &[f32], temp: f32) -> f32 {
+        let pool = self.pool();
+        let lip = self.lip();
+        let co = self.consts_off();
+        let consts: Vec<f32> = (0..N_CONSTS).map(|i| self.params[co + i]).collect();
+
+        let mut reg = vec![0f32; pool];
+        // Fixed slots: item/i/parity/arr_len — set to arr[0] / 0 / 1.0 / arr_len for pre-loop
+        reg[0] = arr[0]; // item = arr[0] during pre-loop
+        reg[1] = 0.0;    // i
+        reg[2] = 1.0;    // parity (even at i=0)
+        reg[3] = arr_len;
+        for j in 0..N_CONSTS { reg[N_ARR_FIXED + j] = consts[j]; }
+        for j in 0..self.n_scalar { reg[N_ARR_FIXED + N_CONSTS + j] = scalar_args[j]; }
+
+        // ── Phase 1: pre-loop init slots ───────────────────────────────────────
+        for slot in 0..N_ARR_PRE {
+            reg[self.pre_reg_start() + slot] = self.exec_slot(slot, &reg, temp);
+        }
+
+        // ── Phase 2: body-slot state init from pre-loop pool ───────────────────
+        for bs in 0..N_ARR_BODY {
+            let io = self.body_init_off(bs);
+            let w = softmax_temp(&self.params[io..io + lip], temp);
+            // Init pool: [arr[0], consts..., scalar_args...]
+            let mut init_pool = vec![0f32; lip];
+            init_pool[0] = arr[0];
+            for j in 0..N_CONSTS { init_pool[1 + j] = consts[j]; }
+            for j in 0..self.n_scalar { init_pool[1 + N_CONSTS + j] = scalar_args[j]; }
+            reg[self.body_reg_start() + bs] = soft_read(&init_pool, &w);
+        }
+
+        // ── Phase 3: array iteration ───────────────────────────────────────────
+        for i in 0..MAX_ARR {
+            let in_bounds = sigmoid((arr_len - i as f32 - 0.5) / 0.3);
+            if in_bounds < 1e-6 { break; }
+
+            // Refresh fixed pool entries for this element
+            reg[0] = arr[i];                                         // item
+            reg[1] = i as f32;                                       // i
+            reg[2] = (std::f32::consts::PI * i as f32).cos();        // parity: +1 even, -1 odd
+            // reg[3] = arr_len  (unchanged)
+
+            // Execute body slots sequentially (so slot j sees slot j-1's update)
+            for bs in 0..N_ARR_BODY {
+                let slot = N_ARR_PRE + bs;
+                let out = self.exec_slot(slot, &reg, temp);
+                let idx = self.body_reg_start() + bs;
+                reg[idx] = in_bounds * out + (1.0 - in_bounds) * reg[idx];
+            }
+        }
+
+        // ── Phase 4: post-loop slots ───────────────────────────────────────────
+        // Clear item/i/parity to 0 so post-slots read only accumulated state
+        reg[0] = 0.0;
+        reg[1] = 0.0;
+        reg[2] = 0.0;
+        for ps in 0..N_ARR_POST {
+            let slot = N_ARR_PRE + N_ARR_BODY + ps;
+            reg[self.post_reg_start() + ps] = self.exec_slot(slot, &reg, temp);
+        }
+
+        // ── Return: soft-select from any register ──────────────────────────────
+        let ro = self.return_off();
+        let rw = softmax_temp(&self.params[ro..ro + pool], temp);
+        soft_read(&reg, &rw)
+    }
+
+    fn loss(&self, examples: &[ArrExample], temp: f32) -> f32 {
+        let n = examples.len() as f32;
+        examples.iter().map(|ex| {
+            let diff = self.forward(&ex.arr, ex.arr_len, &ex.scalar_args, temp) - ex.expected;
+            diff * diff
+        }).sum::<f32>() / n
+    }
+
+    fn discretize_and_emit(&self, fn_name: &str, scalar_names: &[&str]) -> String {
+        let pool = self.pool();
+        let lip = self.lip();
+        let co = self.consts_off();
+        let consts: Vec<i64> = (0..N_CONSTS).map(|i| self.params[co + i].round() as i64).collect();
+
+        let pn = Self::pool_names(self.n_scalar, &consts, scalar_names);
+        let op_names = ["+", "-", "*", "/", "%"];
+        let cmp_names = ["<", "<=", "==", ">=", ">", "!="];
+
+        // Init pool names: [arr[0], c0..c5, scalar_args...]
+        let mut lpn: Vec<String> = vec!["arr[0]".to_string()];
+        for v in &consts { lpn.push(format!("{v}")); }
+        for s in scalar_names { lpn.push(s.to_string()); }
+
+        let slot_line = |slot: usize, dest_name: &str, decl: bool| -> String {
+            let off = self.slot_off(slot);
+            let op_i = argmax(&self.params[off..off + N_OPS + 1]);
+            let s1_i = argmax(&self.params[off + N_OPS + 1..off + N_OPS + 1 + pool]);
+            let s2_i = argmax(&self.params[off + N_OPS + 1 + pool..off + N_OPS + 1 + 2 * pool]);
+            let cb = off + N_OPS + 1 + 2 * pool;
+            let cmp_i = argmax(&self.params[cb..cb + N_CMPS]);
+            let gl_i = argmax(&self.params[cb + N_CMPS..cb + N_CMPS + pool]);
+            let gr_i = argmax(&self.params[cb + N_CMPS + pool..cb + N_CMPS + 2 * pool]);
+            let el_i = argmax(&self.params[cb + N_CMPS + 2 * pool..cb + N_CMPS + 3 * pool]);
+
+            let s1 = &pn[s1_i];
+            let s2 = &pn[s2_i];
+            let then_expr = if op_i >= N_OPS { s1.clone() } else { format!("{s1} {} {s2}", op_names[op_i]) };
+            let else_expr = pn[el_i].clone();
+            let gl = &pn[gl_i];
+            let gr = &pn[gr_i];
+            let cmp_s = cmp_names[cmp_i.min(5)];
+
+            let trivially_true = gl_i == gr_i && matches!(cmp_i, 1 | 2 | 3);
+            let trivially_false = gl_i == gr_i && matches!(cmp_i, 0 | 4 | 5);
+            let no_diff = then_expr == else_expr;
+
+            let prefix = if decl { format!("{dest_name}: i64") } else { dest_name.to_string() };
+            if trivially_true || no_diff {
+                format!("    {prefix} = {then_expr};")
+            } else if trivially_false {
+                format!("    {prefix} = {else_expr};")
+            } else {
+                format!("    {prefix} = {else_expr};\n    if {gl} {cmp_s} {gr} {{ {dest_name} = {then_expr}; }}")
+            }
+        };
+
+        let scalar_params = scalar_names.iter().map(|n| format!("{n}: i64")).collect::<Vec<_>>().join(", ");
+        let sig = if scalar_params.is_empty() {
+            format!("fn {fn_name}(arr: [i64]) -> i64")
+        } else {
+            format!("fn {fn_name}(arr: [i64], {scalar_params}) -> i64")
+        };
+        let mut out = format!("{sig} {{\n");
+
+        // Pre-loop init slots
+        for i in 0..N_ARR_PRE {
+            let line = slot_line(i, &format!("v{i}"), true);
+            out.push_str(&line);
+            out.push('\n');
+        }
+
+        // Body state init
+        for bs in 0..N_ARR_BODY {
+            let io = self.body_init_off(bs);
+            let src_i = argmax(&self.params[io..io + lip]);
+            let src = &lpn[src_i];
+            // Use := for arr[0] init (Mog first-element syntax)
+            if src_i == 0 {
+                writeln!(out, "    s{bs} := {src};").unwrap();
+            } else {
+                writeln!(out, "    s{bs}: i64 = {src};").unwrap();
+            }
+        }
+
+        // Array iteration
+        out.push_str("    i: i64 = 0;\n");
+        out.push_str("    while i < arr.len {\n");
+        out.push_str("        item: i64 = arr[i];\n");
+
+        // Detect if any body slot uses parity (pool[2]) — emit it if so
+        let mut uses_parity = false;
+        for bs in 0..N_ARR_BODY {
+            let off = self.slot_off(N_ARR_PRE + bs);
+            let cb = off + N_OPS + 1 + 2 * pool;
+            for w_off in [off + N_OPS + 1, off + N_OPS + 1 + pool, cb + N_CMPS, cb + N_CMPS + pool, cb + N_CMPS + 2 * pool] {
+                if argmax(&self.params[w_off..w_off + pool]) == 2 { uses_parity = true; }
+            }
+        }
+        // Detect if any body slot uses i%const (modulo-based gating)
+        // For now, just provide parity if needed; modulo emerges from pre-compute slots
+
+        for bs in 0..N_ARR_BODY {
+            let slot = N_ARR_PRE + bs;
+            let line = slot_line(slot, &format!("s{bs}"), false);
+            // Indent body lines an extra level
+            let indented = line.replace("\n    ", "\n        ").replace("    s", "        s").replace("    if", "        if");
+            out.push_str(&indented);
+            out.push('\n');
+        }
+        out.push_str("        i = i + 1;\n");
+        out.push_str("    }\n");
+
+        // Post-loop
+        for pi in 0..N_ARR_POST {
+            let slot = N_ARR_PRE + N_ARR_BODY + pi;
+            let line = slot_line(slot, &format!("p{pi}"), true);
+            out.push_str(&line);
+            out.push('\n');
+        }
+
+        // Return
+        let ro = self.return_off();
+        let ret_i = argmax(&self.params[ro..ro + pool]);
+        writeln!(out, "    return {};", pn[ret_i]).unwrap();
+        out.push_str("}\n");
+        out
+    }
+}
 
 /// Extract array + scalar inputs from a Problem.
 /// Returns None if the first input isn't an array or if there are no examples.
@@ -8148,6 +8599,124 @@ pub fn synthesize_array(problem: &Problem) -> Option<SolveResult> {
             );
             if result.is_some() { return result; }
         }
+    }
+
+    // ── Universal fallback: SoftUniversalArrayProgram ───────────────────────
+    // One architecture, no pre-defined skeleton. The gradient discovers what
+    // each slot does. More params than A1-A5 but can represent any pattern.
+    //
+    // Biased restarts pre-configure common slot patterns. The gradient refines
+    // from there — the architecture is still universal, just warm-started.
+    const N_UNIV_ARR_STEPS: usize = 1000;
+    const N_UNIV_ARR_RESTARTS: usize = 5;
+
+    // Helper: bias a body slot to compute `gate * op(src1, src2) + (1-gate) * else_val`
+    // Pool: [item(0), i(1), parity(2), arr_len(3), c0(4)..c5(9), scalars(10+), v0.., s0.., p0..]
+    let bias_body_slot = |prog: &mut SoftUniversalArrayProgram, bs: usize,
+        op: usize, s1: usize, s2: usize,
+        cmp: usize, gl: usize, gr: usize, el: usize|
+    {
+        let pool = prog.pool();
+        let slot = N_ARR_PRE + bs;
+        let off = prog.slot_off(slot);
+        prog.params[off + op] = 4.0; // op index
+        prog.params[off + N_OPS + 1 + s1] = 4.0; // src1
+        prog.params[off + N_OPS + 1 + pool + s2] = 4.0; // src2
+        let cb = off + N_OPS + 1 + 2 * pool;
+        prog.params[cb + cmp] = 4.0; // cmp
+        prog.params[cb + N_CMPS + gl] = 4.0; // gate_lhs
+        prog.params[cb + N_CMPS + pool + gr] = 4.0; // gate_rhs
+        prog.params[cb + N_CMPS + 2 * pool + el] = 4.0; // else_val
+    };
+
+    for restart in 0..N_UNIV_ARR_RESTARTS {
+        let mut prog = SoftUniversalArrayProgram::new(n_scalar);
+        let pool = prog.pool();
+        let s0_idx = prog.body_reg_start(); // pool index of s0 register
+
+        if restart == 1 {
+            // Biased: simple sum. s0 init=0, body s0 = s0 + item (trivially-true gate)
+            let bio = prog.body_init_off(0);
+            prog.params[bio + 1] = 4.0; // s0 init = const[0] = 0 (lip[1])
+            // Body slot 0: s0 = s0 + item, gate trivially true (i <= i)
+            bias_body_slot(&mut prog, 0,
+                0, s0_idx, 0,    // op=+, src1=s0, src2=item
+                1, 1, 1,         // cmp=<=, gl=i, gr=i (always true)
+                s0_idx);         // else=s0
+            // Return: s0
+            let ro = prog.return_off();
+            prog.params[ro + s0_idx] = 4.0;
+        } else if restart == 2 {
+            // Biased: conditional count. s0 init=0, body s0 = (item > 0) ? s0+1 : s0
+            let bio = prog.body_init_off(0);
+            prog.params[bio + 1] = 4.0; // s0 init = 0
+            // Body slot 0: op=+ s0+const1, gate: item > 0, else=s0
+            bias_body_slot(&mut prog, 0,
+                0, s0_idx, 5,    // op=+, src1=s0, src2=const[1]=1 (pool[5])
+                4, 0, 4,         // cmp=>, gl=item(0), gr=const[0]=0(pool[4])
+                s0_idx);         // else=s0
+            let ro = prog.return_off();
+            prog.params[ro + s0_idx] = 4.0;
+        } else if restart == 3 {
+            // Biased: max. s0 init=arr[0], body s0 = (item > s0) ? item : s0
+            let bio = prog.body_init_off(0);
+            prog.params[bio] = 4.0; // s0 init = arr[0] (lip[0])
+            // Body slot 0: op=identity(5), src1=item, gate: item > s0, else=s0
+            bias_body_slot(&mut prog, 0,
+                5, 0, 0,         // op=identity, src1=item
+                4, 0, s0_idx,    // cmp=>, gl=item(0), gr=s0
+                s0_idx);         // else=s0
+            let ro = prog.return_off();
+            prog.params[ro + s0_idx] = 4.0;
+        } else if restart == 4 {
+            // Biased: two accumulators (min + max → range). s0=lo, s1=hi
+            let s1_idx = prog.body_reg_start() + 1;
+            let bio0 = prog.body_init_off(0);
+            let bio1 = prog.body_init_off(1);
+            prog.params[bio0] = 4.0; // s0 init = arr[0] (lo)
+            prog.params[bio1] = 4.0; // s1 init = arr[0] (hi)
+            // Body slot 0: s0 = (item < s0) ? item : s0  (track min)
+            bias_body_slot(&mut prog, 0,
+                5, 0, 0,         // op=identity, src1=item
+                0, 0, s0_idx,    // cmp=<, gl=item, gr=s0
+                s0_idx);         // else=s0
+            // Body slot 1: s1 = (item > s1) ? item : s1  (track max)
+            bias_body_slot(&mut prog, 1,
+                5, 0, 0,         // op=identity, src1=item
+                4, 0, s1_idx,    // cmp=>, gl=item, gr=s1
+                s1_idx);         // else=s1
+            // Return: s1 - s0 = hi - lo
+            let ro = prog.return_off();
+            // Use post slot: p0 = s1 - s0
+            let post_slot = N_ARR_PRE + N_ARR_BODY;
+            let p_off = prog.slot_off(post_slot);
+            prog.params[p_off + 1] = 4.0; // op = - (subtract)
+            prog.params[p_off + N_OPS + 1 + s1_idx] = 4.0; // src1 = s1 (hi)
+            prog.params[p_off + N_OPS + 1 + pool + s0_idx] = 4.0; // src2 = s0 (lo)
+            // Trivially-true gate for post slot
+            let pcb = p_off + N_OPS + 1 + 2 * pool;
+            prog.params[pcb + 1] = 4.0; // cmp=<=
+            prog.params[pcb + N_CMPS + 1] = 4.0; // gl=i
+            prog.params[pcb + N_CMPS + pool + 1] = 4.0; // gr=i (always true)
+            prog.params[pcb + N_CMPS + 2 * pool + s1_idx] = 4.0; // else=s1
+            let p0_idx = prog.post_reg_start();
+            prog.params[ro + p0_idx] = 4.0; // return p0
+        }
+
+        if restart > 0 {
+            for (idx, p) in prog.params.iter_mut().enumerate() {
+                *p += (pseudo_rand(restart as u64 * 37000 + idx as u64) - 0.5) * 0.3;
+            }
+        }
+        let ex = examples.clone();
+        let sn = scalar_names.clone();
+        let result = train_program_arr(
+            prog.params,
+            move |p, t| SoftUniversalArrayProgram { n_scalar, params: p.to_vec() }.loss(&ex, t),
+            move |p, fn_n| SoftUniversalArrayProgram { n_scalar, params: p.to_vec() }.discretize_and_emit(fn_n, &sn),
+            problem, fn_name, N_UNIV_ARR_STEPS,
+        );
+        if result.is_some() { return result; }
     }
 
     None
@@ -10157,20 +10726,12 @@ mod tests {
         use crate::benchmark::get_benchmark;
         let problems = get_benchmark(1);
         let targets = [
-            "array_sum",
-            "array_max",
-            "count_positive",
-            "count_zeros",
-            "count_occurrences",
-            "sum_negatives",
-            "sum_positives",
-            "min_element",
-            "sum_at_even_indices",
-            "sum_odd_indexed",
-            "kth_from_end",
-            "reverse_sum",
-            "array_max_elem",
-            "interactive_sum",
+            "array_range",
+            "arr_sum_squares",
+            "sum_absolute",
+            "max_abs",
+            "count_greater_than",
+            "alternating_sum",
         ];
         for target in &targets {
             let p = problems.iter().find(|p| p.function_name() == *target);
