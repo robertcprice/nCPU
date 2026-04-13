@@ -172,6 +172,139 @@ impl Adam {
     }
 }
 
+// ─── Analytical gradient primitives ──────────────────────────────────────────
+//
+// Backprop through the soft execution primitives. Each function computes both
+// the forward output and the gradient w.r.t. the logit parameters.
+// This replaces the 2×N FD gradient with a single forward+backward pass.
+
+/// Backward through softmax_temp: given dL/d(weights), compute dL/d(logits).
+/// Uses the Jacobian: dw_i/dz_j = w_i * (delta_ij - w_j) / temp
+fn softmax_temp_backward(weights: &[f32], d_weights: &[f32], temp: f32) -> Vec<f32> {
+    let n = weights.len();
+    let inv_temp = 1.0 / temp;
+    let mut d_logits = vec![0.0f32; n];
+    // dot = sum_j(dL/dw_j * w_j)
+    let dot: f32 = d_weights.iter().zip(weights).map(|(dw, w)| dw * w).sum();
+    for i in 0..n {
+        d_logits[i] = inv_temp * weights[i] * (d_weights[i] - dot);
+    }
+    d_logits
+}
+
+/// Forward + backward for soft_read: out = sum(storage[i] * weights[i])
+/// Returns (output, dL/d_weight_logits) given dL/d_output = d_out
+struct SoftReadGrad {
+    output: f32,
+    storage: Vec<f32>,
+    weights: Vec<f32>,
+}
+
+impl SoftReadGrad {
+    fn forward(storage: &[f32], weight_logits: &[f32], temp: f32) -> Self {
+        let weights = softmax_temp(weight_logits, temp);
+        let output = soft_read(storage, &weights);
+        Self { output, storage: storage.to_vec(), weights }
+    }
+
+    /// Given dL/d_output, return dL/d(weight_logits) and dL/d(storage)
+    fn backward(&self, d_out: f32, temp: f32) -> (Vec<f32>, Vec<f32>) {
+        // dL/dw_i = d_out * storage[i]
+        let d_weights: Vec<f32> = self.storage.iter().map(|&s| d_out * s).collect();
+        // dL/dstorage_i = d_out * weights[i]
+        let d_storage: Vec<f32> = self.weights.iter().map(|&w| d_out * w).collect();
+        let d_logits = softmax_temp_backward(&self.weights, &d_weights, temp);
+        (d_logits, d_storage)
+    }
+}
+
+/// Forward + backward for soft_op_ext: out = sum(op_weights[k] * results[k])
+/// where results = [a+b, a-b, a*b, a/b, a%b, a]
+struct SoftOpExtGrad {
+    a: f32,
+    b: f32,
+    results: [f32; 6],
+    op_weights: Vec<f32>,
+    output: f32,
+}
+
+impl SoftOpExtGrad {
+    fn forward(a: f32, b: f32, op_logits: &[f32], temp: f32) -> Self {
+        let safe_b = if b.abs() < 1e-6 { 1.0 } else { b };
+        let results = [
+            a + b, a - b, a * b, a / safe_b,
+            a - (a / safe_b).trunc() * safe_b, a,
+        ];
+        let op_weights = softmax_temp(op_logits, temp);
+        let output = op_weights.iter().zip(&results).map(|(w, r)| w * r).sum();
+        Self { a, b, results, op_weights, output }
+    }
+
+    /// Given dL/d_output, return (dL/d_op_logits, dL/da, dL/db)
+    fn backward(&self, d_out: f32, temp: f32) -> (Vec<f32>, f32, f32) {
+        // dL/d_op_weights[k] = d_out * results[k]
+        let d_op_w: Vec<f32> = self.results.iter().map(|&r| d_out * r).collect();
+        let d_op_logits = softmax_temp_backward(&self.op_weights, &d_op_w, temp);
+
+        let safe_b = if self.b.abs() < 1e-6 { 1.0 } else { self.b };
+        // dL/da = d_out * sum_k(w_k * d_results_k/da)
+        let da_results = [1.0, 1.0, self.b, 1.0 / safe_b, 1.0, 1.0]; // d(result_k)/da approx
+        let d_a: f32 = d_out * self.op_weights.iter().zip(&da_results).map(|(w, dr)| w * dr).sum::<f32>();
+        // dL/db = d_out * sum_k(w_k * d_results_k/db)
+        let db_results = [1.0, -1.0, self.a, -self.a / (safe_b * safe_b), -1.0, 0.0]; // approx
+        let d_b: f32 = d_out * self.op_weights.iter().zip(&db_results).map(|(w, dr)| w * dr).sum::<f32>();
+        (d_op_logits, d_a, d_b)
+    }
+}
+
+/// Forward + backward for soft_cmp: gate = sum(cmp_weights[k] * cmp_results[k])
+struct SoftCmpGrad {
+    d: f32,
+    t: f32,
+    gauss_var: f32,
+    cmp_results: [f32; 6],
+    cmp_weights: Vec<f32>,
+    gate: f32,
+}
+
+impl SoftCmpGrad {
+    fn forward(a: f32, b: f32, cmp_logits: &[f32], cmp_temp: f32, temp: f32) -> Self {
+        let d = a - b;
+        let t = cmp_temp.clamp(0.5, 2.0);
+        let gauss_var = (t * t * 0.5).max(0.125);
+        let gauss = (-(d * d) / gauss_var).exp();
+        let cmp_results = [
+            sigmoid(-d / t), sigmoid(-d / t),
+            gauss, sigmoid(d / t), sigmoid(d / t),
+            1.0 - gauss,
+        ];
+        let cmp_weights = softmax_temp(cmp_logits, temp);
+        let gate = cmp_weights.iter().zip(&cmp_results).map(|(w, r)| w * r).sum();
+        Self { d, t, gauss_var, cmp_results, cmp_weights, gate }
+    }
+
+    /// Given dL/d_gate, return (dL/d_cmp_logits, dL/da, dL/db)
+    fn backward(&self, d_gate: f32, temp: f32) -> (Vec<f32>, f32, f32) {
+        // dL/d_cmp_weights[k] = d_gate * cmp_results[k]
+        let d_cmp_w: Vec<f32> = self.cmp_results.iter().map(|&r| d_gate * r).collect();
+        let d_cmp_logits = softmax_temp_backward(&self.cmp_weights, &d_cmp_w, temp);
+
+        // dL/dd (d = a - b)
+        let sig_pos = sigmoid(self.d / self.t);
+        let sig_neg = sigmoid(-self.d / self.t);
+        let gauss = self.cmp_results[2];
+        let d_gauss_dd = -2.0 * self.d / self.gauss_var * gauss;
+        let d_sig_pos_dd = sig_pos * (1.0 - sig_pos) / self.t;
+        let d_sig_neg_dd = -sig_neg * (1.0 - sig_neg) / self.t;
+        let d_results_dd = [
+            d_sig_neg_dd, d_sig_neg_dd, d_gauss_dd,
+            d_sig_pos_dd, d_sig_pos_dd, -d_gauss_dd,
+        ];
+        let d_d: f32 = d_gate * self.cmp_weights.iter().zip(&d_results_dd).map(|(w, dr)| w * dr).sum::<f32>();
+        (d_cmp_logits, d_d, -d_d) // da = d_d, db = -d_d
+    }
+}
+
 // ─── Finite-difference gradient ───────────────────────────────────────────────
 
 fn fd_grad<F: Fn(&[f32], f32) -> f32>(params: &[f32], loss_fn: F, temp: f32) -> Vec<f32> {
@@ -4511,7 +4644,7 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
 
     // Global time budget: bail out after this many seconds regardless of restarts
     let time_budget = std::time::Instant::now();
-    let max_secs: f32 = if n_args <= 2 { 10.0 } else { 15.0 };
+    let max_secs: f32 = if n_args <= 2 { 10.0 } else if n_args <= 3 { 20.0 } else { 40.0 };
 
     for restart in 0..n_restarts_expr {
         if time_budget.elapsed().as_secs_f32() > max_secs { break; }
@@ -4801,6 +4934,144 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
                 out.push_str("}\n"); out
             };
             let result = train_program(params7, loss_fn, emit_fn, problem, &param_names, fn_name, n_steps_expr);
+            if result.is_some() { return result; }
+        }
+
+        // SoftTwoPrecomp7: v0 = s1 OP7 s2; v1 = s3 OP7 s4; return s5 OP7 s6
+        // With 7 ops including |a-b| and max. Discovers manhattan, clamp, complex expressions.
+        if n_args >= 2 {
+            let ns = n_args + N_CONSTS;
+            let ne1 = ns + 1;
+            let ne2 = ns + 2;
+            let np = 1 + 2*ns + N_OPS7 + 1 + 2*ne1 + N_OPS7 + 2*ne2 + N_OPS7 + N_CONSTS;
+            let mut p = vec![0.0f32; np];
+            // Defaults
+            p[0] = -4.0; // pre1 disabled
+            let p2off = 1 + 2*ns + N_OPS7;
+            p[p2off] = -4.0; // pre2 disabled
+            let roff = p2off + 1 + 2*ne1 + N_OPS7;
+            if n_args > 0 { p[roff] = 2.0; } // ret_s1 = arg0
+            if n_args > 1 { p[roff + ne2 + 1] = 2.0; } // ret_s2 = arg1
+            p[roff + 2*ne2] = 2.0; // ret_op = +
+            let coff = roff + 2*ne2 + N_OPS7;
+            p[coff..coff+N_CONSTS].copy_from_slice(&[0.0, 1.0, -1.0, 2.0, -2.0, 10.0]);
+
+            // Biased inits
+            if restart == 1 && n_args >= 4 {
+                // manhattan: v0=|a-c|, v1=|b-d|, return v0+v1
+                p[0] = 4.0; // pre1 enable
+                p[1] = 4.0; // pre1_s1 = arg0
+                p[1 + ns + 2] = 4.0; // pre1_s2 = arg2
+                p[1 + 2*ns + 5] = 4.0; // pre1_op = abs_diff (idx 5)
+                p[p2off] = 4.0; // pre2 enable
+                p[p2off + 1 + 1] = 4.0; // pre2_s1 = arg1
+                p[p2off + 1 + ne1 + 3] = 4.0; // pre2_s2 = arg3
+                p[p2off + 1 + 2*ne1 + 5] = 4.0; // pre2_op = abs_diff
+                p[roff + ne2 - 2] = 4.0; // ret_s1 = v0 (ns+1-1 in ext2? need to be careful)
+                // Actually v0 is at index ns in ext2, v1 is at index ns+1
+                p[roff] = 0.0; // clear default
+                p[roff + ns] = 4.0; // ret_s1 = v0
+                p[roff + ne2] = 0.0; // clear default
+                p[roff + ne2 + ns + 1] = 4.0; // ret_s2 = v1
+                p[roff + 2*ne2] = 4.0; // ret_op = +
+            } else if restart == 2 && n_args >= 3 {
+                // clamp: v0=max(a,b), return min(v0,c) → clamp(a,b,c) where b=lo, c=hi
+                p[0] = 4.0; // pre1 enable
+                p[1] = 4.0; // pre1_s1 = arg0 (v)
+                p[1 + ns + 1] = 4.0; // pre1_s2 = arg1 (lo)
+                p[1 + 2*ns + 6] = 4.0; // pre1_op = max (idx 6)
+                p[p2off] = -4.0; // pre2 disabled
+                p[roff] = 0.0;
+                p[roff + ns] = 4.0; // ret_s1 = v0
+                p[roff + ne2] = 0.0;
+                p[roff + ne2 + 2] = 4.0; // ret_s2 = arg2 (hi)
+                // Need min: index 7 doesn't exist in soft_op7 which only has 7 ops (0-6)
+                // soft_op7: [+,-,*,/,%,|a-b|,max]. No min! Let me use a trick:
+                // min(a,b) = a + b - max(a,b). Or just skip min for now.
+                // Actually for clamp, better: v0=max(v, lo), return if v0 > hi then hi else v0
+                // But TwoPrecomp can't branch. Let ChainedBranch handle clamp.
+            }
+            if restart > 0 {
+                let noise = (restart as f32) * 0.3;
+                for (idx, px) in p.iter_mut().enumerate() {
+                    *px += (pseudo_rand(restart as u64 * 12007 + idx as u64) - 0.5) * noise;
+                }
+            }
+
+            let na = n_args;
+            let ex = examples.clone();
+            let loss_fn = move |pr: &[f32], temp: f32| -> f32 {
+                let ns = na + N_CONSTS; let ne1 = ns+1; let ne2 = ns+2;
+                let n = ex.len() as f32;
+                ex.iter().map(|(inputs, expected)| {
+                    let coff = 1+2*ns+N_OPS7 + 1+2*ne1+N_OPS7 + 2*ne2+N_OPS7;
+                    let mut s = vec![0f32; ns];
+                    for (i,&v) in inputs.iter().take(na).enumerate() { s[i]=v; }
+                    for i in 0..N_CONSTS { s[na+i]=pr[coff+i]; }
+                    // Pre1
+                    let en1 = sigmoid(pr[0]);
+                    let s1 = soft_read(&s, &softmax_temp(&pr[1..1+ns], temp));
+                    let s2 = soft_read(&s, &softmax_temp(&pr[1+ns..1+2*ns], temp));
+                    let v0 = soft_op7(s1, s2, &softmax_temp(&pr[1+2*ns..1+2*ns+N_OPS7], temp)) * en1;
+                    let mut e1 = s.clone(); e1.push(v0);
+                    // Pre2
+                    let p2 = 1+2*ns+N_OPS7;
+                    let en2 = sigmoid(pr[p2]);
+                    let t1 = soft_read(&e1, &softmax_temp(&pr[p2+1..p2+1+ne1], temp));
+                    let t2 = soft_read(&e1, &softmax_temp(&pr[p2+1+ne1..p2+1+2*ne1], temp));
+                    let v1 = soft_op7(t1, t2, &softmax_temp(&pr[p2+1+2*ne1..p2+1+2*ne1+N_OPS7], temp)) * en2;
+                    let mut e2 = e1; e2.push(v1);
+                    // Ret
+                    let ro = p2+1+2*ne1+N_OPS7;
+                    let r1 = soft_read(&e2, &softmax_temp(&pr[ro..ro+ne2], temp));
+                    let r2 = soft_read(&e2, &softmax_temp(&pr[ro+ne2..ro+2*ne2], temp));
+                    let pred = soft_op7(r1, r2, &softmax_temp(&pr[ro+2*ne2..ro+2*ne2+N_OPS7], temp));
+                    let d = pred - expected; d*d
+                }).sum::<f32>() / n
+            };
+            let op7n = ["+","-","*","/","%","abs_diff","max"];
+            let pn2 = param_names.clone();
+            let emit_fn = move |pr: &[f32], fn_n: &str, _pn: &[&str]| -> String {
+                let ns=na+N_CONSTS; let ne1=ns+1; let ne2=ns+2;
+                let coff=1+2*ns+N_OPS7+1+2*ne1+N_OPS7+2*ne2+N_OPS7;
+                let c: Vec<i64>=(0..N_CONSTS).map(|i| pr[coff+i].round() as i64).collect();
+                let mut sn: Vec<String>=pn2.iter().map(|s|s.to_string()).collect();
+                for cv in &c { sn.push(format!("{cv}")); }
+                let mut e1n=sn.clone(); e1n.push("v0".into());
+                let mut e2n=e1n.clone(); e2n.push("v1".into());
+                let en1=pr[0]>0.0; let p2=1+2*ns+N_OPS7; let en2=pr[p2]>0.0;
+                let ro=p2+1+2*ne1+N_OPS7;
+                let sig=pn2.iter().map(|n|format!("{n}: i64")).collect::<Vec<_>>().join(", ");
+                let mut out=format!("fn {fn_n}({sig}) -> i64 {{\n");
+                use std::fmt::Write;
+                if en1 {
+                    let i1=argmax(&pr[1..1+ns]); let i2=argmax(&pr[1+ns..1+2*ns]);
+                    let oi=argmax(&pr[1+2*ns..1+2*ns+N_OPS7]);
+                    let (a,b)=(&sn[i1],&sn[i2]);
+                    let expr=if oi==5{format!("if {a} > {b} {{ {a} - {b} }} else {{ {b} - {a} }}")}
+                             else if oi==6{format!("if {a} > {b} {{ {a} }} else {{ {b} }}")}
+                             else{format!("{a} {} {b}",op7n[oi])};
+                    writeln!(out,"    v0: i64 = {expr};").unwrap();
+                }
+                if en2 {
+                    let i1=argmax(&pr[p2+1..p2+1+ne1]); let i2=argmax(&pr[p2+1+ne1..p2+1+2*ne1]);
+                    let oi=argmax(&pr[p2+1+2*ne1..p2+1+2*ne1+N_OPS7]);
+                    let (a,b)=(&e1n[i1],&e1n[i2]);
+                    let expr=if oi==5{format!("if {a} > {b} {{ {a} - {b} }} else {{ {b} - {a} }}")}
+                             else if oi==6{format!("if {a} > {b} {{ {a} }} else {{ {b} }}")}
+                             else{format!("{a} {} {b}",op7n[oi])};
+                    writeln!(out,"    v1: i64 = {expr};").unwrap();
+                }
+                let ri1=argmax(&pr[ro..ro+ne2]); let ri2=argmax(&pr[ro+ne2..ro+2*ne2]);
+                let roi=argmax(&pr[ro+2*ne2..ro+2*ne2+N_OPS7]);
+                let (a,b)=(&e2n[ri1],&e2n[ri2]);
+                let expr=if roi==5{format!("if {a} > {b} {{ {a} - {b} }} else {{ {b} - {a} }}")}
+                         else if roi==6{format!("if {a} > {b} {{ {a} }} else {{ {b} }}")}
+                         else{format!("{a} {} {b}",op7n[roi])};
+                writeln!(out,"    return {expr};").unwrap();
+                out.push_str("}\n"); out
+            };
+            let result = train_program(p, loss_fn, emit_fn, problem, &param_names, fn_name, n_steps_expr);
             if result.is_some() { return result; }
         }
     }
@@ -7259,8 +7530,9 @@ const N_ARR_BODY: usize = 3;  // per-element body slots (accumulators + working 
 const N_ARR_POST: usize = 1;  // post-loop slots
 const N_ARR_SLOTS: usize = N_ARR_PRE + N_ARR_BODY + N_ARR_POST; // 5
 
-// Fixed pool positions: item(0), i(1), parity(2), arr_len(3)
-const N_ARR_FIXED: usize = 4;
+// Fixed pool positions: item(0), i(1), parity(2), arr_len(3), item_even(4)
+// item_even = cos(π*item): +1 when item is even, -1 when odd (periodic mod-2 signal)
+const N_ARR_FIXED: usize = 5;
 
 #[inline]
 fn uarr_pool(n_scalar: usize) -> usize {
@@ -7315,12 +7587,13 @@ impl SoftUniversalArrayProgram {
     }
 
     /// Pool name indices for this n_scalar configuration
-    fn pool_names(n_scalar: usize, consts: &[i64], scalar_names: &[&str]) -> Vec<String> {
+    fn pool_names(_n_scalar: usize, consts: &[i64], scalar_names: &[&str]) -> Vec<String> {
         let mut pn = Vec::new();
         pn.push("item".to_string());
         pn.push("i".to_string());
         pn.push("parity".to_string());
         pn.push("arr.len".to_string());
+        pn.push("item_even".to_string());
         for v in consts { pn.push(format!("{v}")); }
         for s in scalar_names { pn.push(s.to_string()); }
         for i in 0..N_ARR_PRE { pn.push(format!("v{i}")); }
@@ -7333,6 +7606,67 @@ impl SoftUniversalArrayProgram {
     fn pre_reg_start(&self) -> usize { N_ARR_FIXED + N_CONSTS + self.n_scalar }
     fn body_reg_start(&self) -> usize { self.pre_reg_start() + N_ARR_PRE }
     fn post_reg_start(&self) -> usize { self.body_reg_start() + N_ARR_BODY }
+
+    /// Backward through exec_slot: given dL/d(output), accumulate dL/d(params) and return dL/d(reg).
+    fn exec_slot_backward(&self, slot: usize, r: &[f32], d_out: f32, temp: f32, d_params: &mut [f32]) -> Vec<f32> {
+        let pool = self.pool();
+        let off = self.slot_off(slot);
+        let cb = off + N_OPS + 1 + 2 * pool;
+
+        // Recompute forward intermediates
+        let op_w = softmax_temp(&self.params[off..off + N_OPS + 1], temp);
+        let s1_w = softmax_temp(&self.params[off + N_OPS + 1..off + N_OPS + 1 + pool], temp);
+        let s2_w = softmax_temp(&self.params[off + N_OPS + 1 + pool..off + N_OPS + 1 + 2 * pool], temp);
+        let src1 = soft_read(r, &s1_w);
+        let src2 = soft_read(r, &s2_w);
+        let then_val = soft_op_ext(src1, src2, &op_w);
+        let cmp_w = softmax_temp(&self.params[cb..cb + N_CMPS], temp);
+        let gl_w = softmax_temp(&self.params[cb + N_CMPS..cb + N_CMPS + pool], temp);
+        let gr_w = softmax_temp(&self.params[cb + N_CMPS + pool..cb + N_CMPS + 2 * pool], temp);
+        let gate_lhs = soft_read(r, &gl_w);
+        let gate_rhs = soft_read(r, &gr_w);
+        let gate = soft_cmp(gate_lhs, gate_rhs, &cmp_w, temp);
+        let el_w = softmax_temp(&self.params[cb + N_CMPS + 2 * pool..cb + N_CMPS + 3 * pool], temp);
+        let else_val = soft_read(r, &el_w);
+
+        // output = gate * then_val + (1-gate) * else_val
+        let d_gate = d_out * (then_val - else_val);
+        let d_then = d_out * gate;
+        let d_else = d_out * (1.0 - gate);
+        let mut d_reg = vec![0.0f32; pool];
+
+        // else_val backward
+        let d_el_w: Vec<f32> = r.iter().map(|&ri| d_else * ri).collect();
+        let d_el_logits = softmax_temp_backward(&el_w, &d_el_w, temp);
+        for (j, &g) in d_el_logits.iter().enumerate() { d_params[cb + N_CMPS + 2 * pool + j] += g; }
+        for (j, &w) in el_w.iter().enumerate() { d_reg[j] += d_else * w; }
+
+        // gate backward
+        let cmp_grad = SoftCmpGrad::forward(gate_lhs, gate_rhs, &self.params[cb..cb + N_CMPS], temp, temp);
+        let (d_cmp_logits, d_gl, d_gr) = cmp_grad.backward(d_gate, temp);
+        for (j, &g) in d_cmp_logits.iter().enumerate() { d_params[cb + j] += g; }
+        // gl, gr backward
+        let d_gl_w: Vec<f32> = r.iter().map(|&ri| d_gl * ri).collect();
+        for (j, &g) in softmax_temp_backward(&gl_w, &d_gl_w, temp).iter().enumerate() { d_params[cb + N_CMPS + j] += g; }
+        for (j, &w) in gl_w.iter().enumerate() { d_reg[j] += d_gl * w; }
+        let d_gr_w: Vec<f32> = r.iter().map(|&ri| d_gr * ri).collect();
+        for (j, &g) in softmax_temp_backward(&gr_w, &d_gr_w, temp).iter().enumerate() { d_params[cb + N_CMPS + pool + j] += g; }
+        for (j, &w) in gr_w.iter().enumerate() { d_reg[j] += d_gr * w; }
+
+        // then_val backward
+        let op_grad = SoftOpExtGrad::forward(src1, src2, &self.params[off..off + N_OPS + 1], temp);
+        let (d_op_logits, d_src1, d_src2) = op_grad.backward(d_then, temp);
+        for (j, &g) in d_op_logits.iter().enumerate() { d_params[off + j] += g; }
+        // src1, src2 backward
+        let d_s1_w: Vec<f32> = r.iter().map(|&ri| d_src1 * ri).collect();
+        for (j, &g) in softmax_temp_backward(&s1_w, &d_s1_w, temp).iter().enumerate() { d_params[off + N_OPS + 1 + j] += g; }
+        for (j, &w) in s1_w.iter().enumerate() { d_reg[j] += d_src1 * w; }
+        let d_s2_w: Vec<f32> = r.iter().map(|&ri| d_src2 * ri).collect();
+        for (j, &g) in softmax_temp_backward(&s2_w, &d_s2_w, temp).iter().enumerate() { d_params[off + N_OPS + 1 + pool + j] += g; }
+        for (j, &w) in s2_w.iter().enumerate() { d_reg[j] += d_src2 * w; }
+
+        d_reg
+    }
 
     fn exec_slot(&self, slot: usize, r: &[f32], temp: f32) -> f32 {
         let pool = self.pool();
@@ -7362,11 +7696,12 @@ impl SoftUniversalArrayProgram {
         let consts: Vec<f32> = (0..N_CONSTS).map(|i| self.params[co + i]).collect();
 
         let mut reg = vec![0f32; pool];
-        // Fixed slots: item/i/parity/arr_len — set to arr[0] / 0 / 1.0 / arr_len for pre-loop
+        // Fixed slots: item/i/parity/arr_len/item_even — set for pre-loop
         reg[0] = arr[0]; // item = arr[0] during pre-loop
         reg[1] = 0.0;    // i
         reg[2] = 1.0;    // parity (even at i=0)
         reg[3] = arr_len;
+        reg[4] = (std::f32::consts::PI * arr[0]).cos(); // item_even
         for j in 0..N_CONSTS { reg[N_ARR_FIXED + j] = consts[j]; }
         for j in 0..self.n_scalar { reg[N_ARR_FIXED + N_CONSTS + j] = scalar_args[j]; }
 
@@ -7397,6 +7732,7 @@ impl SoftUniversalArrayProgram {
             reg[1] = i as f32;                                       // i
             reg[2] = (std::f32::consts::PI * i as f32).cos();        // parity: +1 even, -1 odd
             // reg[3] = arr_len  (unchanged)
+            reg[4] = (std::f32::consts::PI * arr[i]).cos();          // item_even: +1 if item even, -1 if odd
 
             // Execute body slots sequentially (so slot j sees slot j-1's update)
             for bs in 0..N_ARR_BODY {
@@ -7429,6 +7765,209 @@ impl SoftUniversalArrayProgram {
             let diff = self.forward(&ex.arr, ex.arr_len, &ex.scalar_args, temp) - ex.expected;
             diff * diff
         }).sum::<f32>() / n
+    }
+
+    /// Analytical gradient via per-example FD on slot params + analytical on return.
+    /// ~2x faster than global FD since return params are computed analytically
+    /// and per-example FD amortizes across examples.
+    /// Full analytical gradient via reverse-mode AD through the entire forward pass.
+    /// No FD — single forward + backward pass per example.
+    fn grad(&self, examples: &[ArrExample], temp: f32) -> Vec<f32> {
+        let n_ex = examples.len() as f32;
+        let n_params = self.params.len();
+        let pool_sz = self.pool();
+        let lip_sz = self.lip();
+        let ro = self.return_off();
+        let co = self.consts_off();
+        let mut grad = vec![0.0f32; n_params];
+
+        for ex in examples {
+            let consts: Vec<f32> = (0..N_CONSTS).map(|i| self.params[co + i]).collect();
+
+            // ── Forward pass (record reg states for backward) ──
+            let mut reg = vec![0f32; pool_sz];
+            reg[0] = ex.arr[0]; reg[1] = 0.0; reg[2] = 1.0; reg[3] = ex.arr_len;
+            reg[4] = (std::f32::consts::PI * ex.arr[0]).cos();
+            for j in 0..N_CONSTS { reg[N_ARR_FIXED + j] = consts[j]; }
+            for j in 0..self.n_scalar { reg[N_ARR_FIXED + N_CONSTS + j] = ex.scalar_args[j]; }
+
+            // Phase 1: pre-loop
+            let mut reg_snapshots: Vec<Vec<f32>> = Vec::new(); // saved for backward
+            for slot in 0..N_ARR_PRE {
+                reg_snapshots.push(reg.clone());
+                reg[self.pre_reg_start() + slot] = self.exec_slot(slot, &reg, temp);
+            }
+
+            // Phase 2: body init
+            let reg_before_body_init = reg.clone();
+            for bs in 0..N_ARR_BODY {
+                let io = self.body_init_off(bs);
+                let w = softmax_temp(&self.params[io..io + lip_sz], temp);
+                let mut init_pool = vec![0f32; lip_sz];
+                init_pool[0] = ex.arr[0];
+                for j in 0..N_CONSTS { init_pool[1 + j] = consts[j]; }
+                for j in 0..self.n_scalar { init_pool[1 + N_CONSTS + j] = ex.scalar_args[j]; }
+                reg[self.body_reg_start() + bs] = soft_read(&init_pool, &w);
+            }
+
+            // Phase 3: iteration (save reg state before each body slot execution)
+            struct IterState { reg: Vec<f32>, in_bounds: f32 }
+            let mut iter_states: Vec<Vec<Vec<f32>>> = Vec::new(); // [iter][body_slot] = reg snapshot
+            let mut iter_bounds: Vec<f32> = Vec::new();
+            let n_iters;
+            {
+                let mut count = 0usize;
+                for i in 0..MAX_ARR {
+                    let in_bounds = sigmoid((ex.arr_len - i as f32 - 0.5) / 0.3);
+                    if in_bounds < 1e-6 { break; }
+                    reg[0] = ex.arr[i]; reg[1] = i as f32;
+                    reg[2] = (std::f32::consts::PI * i as f32).cos();
+                    reg[4] = (std::f32::consts::PI * ex.arr[i]).cos();
+                    let mut slot_snaps = Vec::new();
+                    for bs in 0..N_ARR_BODY {
+                        slot_snaps.push(reg.clone());
+                        let slot = N_ARR_PRE + bs;
+                        let out = self.exec_slot(slot, &reg, temp);
+                        let idx = self.body_reg_start() + bs;
+                        reg[idx] = in_bounds * out + (1.0 - in_bounds) * reg[idx];
+                    }
+                    iter_states.push(slot_snaps);
+                    iter_bounds.push(in_bounds);
+                    count += 1;
+                }
+                n_iters = count;
+            }
+
+            // Phase 4: post-loop
+            reg[0] = 0.0; reg[1] = 0.0; reg[2] = 0.0; reg[4] = 1.0;
+            let mut post_snaps = Vec::new();
+            for ps in 0..N_ARR_POST {
+                post_snaps.push(reg.clone());
+                let slot = N_ARR_PRE + N_ARR_BODY + ps;
+                reg[self.post_reg_start() + ps] = self.exec_slot(slot, &reg, temp);
+            }
+
+            // Phase 5: return
+            let rw = softmax_temp(&self.params[ro..ro + pool_sz], temp);
+            let output = soft_read(&reg, &rw);
+            let diff = output - ex.expected;
+            let d_output = 2.0 * diff / n_ex;
+
+            // ── Backward pass ──
+            let mut d_reg = vec![0.0f32; pool_sz];
+
+            // Return backward
+            let d_rw: Vec<f32> = reg.iter().map(|&r| d_output * r).collect();
+            let d_rw_logits = softmax_temp_backward(&rw, &d_rw, temp);
+            for (j, &g) in d_rw_logits.iter().enumerate() { grad[ro + j] += g; }
+            for (j, &w) in rw.iter().enumerate() { d_reg[j] += d_output * w; }
+
+            // Post-loop backward (reverse order)
+            for ps in (0..N_ARR_POST).rev() {
+                let slot = N_ARR_PRE + N_ARR_BODY + ps;
+                let reg_idx = self.post_reg_start() + ps;
+                let d_slot_out = d_reg[reg_idx];
+                d_reg[reg_idx] = 0.0; // consumed
+                let d_r = self.exec_slot_backward(slot, &post_snaps[ps], d_slot_out, temp, &mut grad);
+                for (j, &dr) in d_r.iter().enumerate() { d_reg[j] += dr; }
+            }
+
+            // Iteration backward (reverse order)
+            for iter_i in (0..n_iters).rev() {
+                let ib = iter_bounds[iter_i];
+                // Reverse body slots within this iteration
+                for bs in (0..N_ARR_BODY).rev() {
+                    let slot = N_ARR_PRE + bs;
+                    let reg_idx = self.body_reg_start() + bs;
+                    let d_reg_val = d_reg[reg_idx];
+                    // reg[idx] = ib * out + (1-ib) * reg_prev[idx]
+                    // d_out = d_reg_val * ib
+                    // d_reg_prev[idx] = d_reg_val * (1-ib)
+                    let d_out = d_reg_val * ib;
+                    d_reg[reg_idx] = d_reg_val * (1.0 - ib); // pass through to prev iteration
+                    let d_r = self.exec_slot_backward(slot, &iter_states[iter_i][bs], d_out, temp, &mut grad);
+                    for (j, &dr) in d_r.iter().enumerate() {
+                        if j != reg_idx { d_reg[j] += dr; }
+                        // Don't accumulate d_reg for the output register itself (it's the thing being updated)
+                    }
+                }
+            }
+
+            // Body init backward
+            for bs in 0..N_ARR_BODY {
+                let io = self.body_init_off(bs);
+                let reg_idx = self.body_reg_start() + bs;
+                let d_init = d_reg[reg_idx];
+                let w = softmax_temp(&self.params[io..io + lip_sz], temp);
+                let mut init_pool = vec![0f32; lip_sz];
+                init_pool[0] = ex.arr[0];
+                for j in 0..N_CONSTS { init_pool[1 + j] = consts[j]; }
+                for j in 0..self.n_scalar { init_pool[1 + N_CONSTS + j] = ex.scalar_args[j]; }
+                let d_w: Vec<f32> = init_pool.iter().map(|&v| d_init * v).collect();
+                let d_logits = softmax_temp_backward(&w, &d_w, temp);
+                for (j, &g) in d_logits.iter().enumerate() { grad[io + j] += g; }
+                // d_init also flows to consts
+                for j in 0..N_CONSTS { grad[co + j] += d_init * w[1 + j]; }
+            }
+
+            // Pre-loop backward (reverse order)
+            for slot in (0..N_ARR_PRE).rev() {
+                let reg_idx = self.pre_reg_start() + slot;
+                let d_slot_out = d_reg[reg_idx];
+                let d_r = self.exec_slot_backward(slot, &reg_snapshots[slot], d_slot_out, temp, &mut grad);
+                for (j, &dr) in d_r.iter().enumerate() { d_reg[j] += dr; }
+            }
+
+            // Const gradient: d_reg flows to consts through the reg
+            for j in 0..N_CONSTS {
+                grad[co + j] += d_reg[N_ARR_FIXED + j];
+            }
+        }
+        grad
+    }
+
+    /// Forward pass that returns the final register file (for backprop)
+    fn forward_reg(&self, arr: &[f32], arr_len: f32, scalar_args: &[f32], temp: f32) -> Vec<f32> {
+        let pool = self.pool();
+        let lip = self.lip();
+        let co = self.consts_off();
+        let consts: Vec<f32> = (0..N_CONSTS).map(|i| self.params[co + i]).collect();
+        let mut reg = vec![0f32; pool];
+        reg[0] = arr[0]; reg[1] = 0.0; reg[2] = 1.0; reg[3] = arr_len;
+        reg[4] = (std::f32::consts::PI * arr[0]).cos();
+        for j in 0..N_CONSTS { reg[N_ARR_FIXED + j] = consts[j]; }
+        for j in 0..self.n_scalar { reg[N_ARR_FIXED + N_CONSTS + j] = scalar_args[j]; }
+        for slot in 0..N_ARR_PRE {
+            reg[self.pre_reg_start() + slot] = self.exec_slot(slot, &reg, temp);
+        }
+        for bs in 0..N_ARR_BODY {
+            let io = self.body_init_off(bs);
+            let w = softmax_temp(&self.params[io..io + lip], temp);
+            let mut init_pool = vec![0f32; lip];
+            init_pool[0] = arr[0];
+            for j in 0..N_CONSTS { init_pool[1 + j] = consts[j]; }
+            for j in 0..self.n_scalar { init_pool[1 + N_CONSTS + j] = scalar_args[j]; }
+            reg[self.body_reg_start() + bs] = soft_read(&init_pool, &w);
+        }
+        for i in 0..MAX_ARR {
+            let in_bounds = sigmoid((arr_len - i as f32 - 0.5) / 0.3);
+            if in_bounds < 1e-6 { break; }
+            reg[0] = arr[i]; reg[1] = i as f32;
+            reg[2] = (std::f32::consts::PI * i as f32).cos();
+            reg[4] = (std::f32::consts::PI * arr[i]).cos();
+            for bs in 0..N_ARR_BODY {
+                let slot = N_ARR_PRE + bs;
+                let out = self.exec_slot(slot, &reg, temp);
+                let idx = self.body_reg_start() + bs;
+                reg[idx] = in_bounds * out + (1.0 - in_bounds) * reg[idx];
+            }
+        }
+        reg[0] = 0.0; reg[1] = 0.0; reg[2] = 0.0;
+        for ps in 0..N_ARR_POST {
+            let slot = N_ARR_PRE + N_ARR_BODY + ps;
+            reg[self.post_reg_start() + ps] = self.exec_slot(slot, &reg, temp);
+        }
+        reg
     }
 
     fn discretize_and_emit(&self, fn_name: &str, scalar_names: &[&str]) -> String {
@@ -8965,15 +9504,64 @@ pub fn synthesize_array(problem: &Problem) -> Option<SolveResult> {
                 *p += (pseudo_rand(restart as u64 * 37000 + idx as u64) - 0.5) * 0.3;
             }
         }
-        let ex = examples.clone();
-        let sn = scalar_names.clone();
-        let result = train_program_arr(
-            prog.params,
-            move |p, t| SoftUniversalArrayProgram { n_scalar, params: p.to_vec() }.loss(&ex, t),
-            move |p, fn_n| SoftUniversalArrayProgram { n_scalar, params: p.to_vec() }.discretize_and_emit(fn_n, &sn),
-            problem, fn_name, N_UNIV_ARR_STEPS,
-        );
-        if result.is_some() { return result; }
+
+        // Use analytical grad() method for universal type (avoids 2×N FD overhead)
+        let mut params = prog.params;
+        let n = params.len();
+        let mut opt = Adam::new(n, 0.05);
+        let mut best_loss = f32::MAX;
+        let mut best_params = params.clone();
+        let mut last_check_loss = f32::MAX;
+        let chk1 = N_UNIV_ARR_STEPS / 4;
+        let chk2 = N_UNIV_ARR_STEPS / 2;
+        let mut loss_at_chk1 = f32::MAX;
+
+        for step in 0..N_UNIV_ARR_STEPS {
+            if step == chk1 { loss_at_chk1 = best_loss; }
+            if step == chk2 && best_loss > loss_at_chk1 * 0.98 { break; }
+
+            let temp = (2.0f32 * (1.0 - step as f32 / N_UNIV_ARR_STEPS as f32)).max(0.1);
+            let prog_cur = SoftUniversalArrayProgram { n_scalar, params: params.clone() };
+            let grads = prog_cur.grad(&examples, temp);
+            let loss = prog_cur.loss(&examples, temp);
+
+            if loss < best_loss {
+                best_loss = loss;
+                best_params = params.clone();
+            }
+            let should_check = loss < 1.0 || (loss < last_check_loss * 0.9) || (step % 50 == 49);
+            if should_check {
+                last_check_loss = loss.min(last_check_loss);
+                let code = SoftUniversalArrayProgram { n_scalar, params: params.clone() }
+                    .discretize_and_emit(fn_name, &scalar_names);
+                if verify_problem_code_strict(problem, &code).is_ok() {
+                    return Some(SolveResult {
+                        success: true, code, method: "univ_arr_gradient".to_string(),
+                        error: None, metadata: DifferentiableMetadata::default(),
+                    });
+                }
+                if best_loss < loss {
+                    let code2 = SoftUniversalArrayProgram { n_scalar, params: best_params.clone() }
+                        .discretize_and_emit(fn_name, &scalar_names);
+                    if verify_problem_code_strict(problem, &code2).is_ok() {
+                        return Some(SolveResult {
+                            success: true, code: code2, method: "univ_arr_gradient".to_string(),
+                            error: None, metadata: DifferentiableMetadata::default(),
+                        });
+                    }
+                }
+            }
+            opt.step(&mut params, &grads);
+        }
+        // Final check
+        let code = SoftUniversalArrayProgram { n_scalar, params: best_params }
+            .discretize_and_emit(fn_name, &scalar_names);
+        if verify_problem_code_strict(problem, &code).is_ok() {
+            return Some(SolveResult {
+                success: true, code, method: "univ_arr_gradient".to_string(),
+                error: None, metadata: DifferentiableMetadata::default(),
+            });
+        }
     }
 
     None
@@ -10983,10 +11571,8 @@ mod tests {
         use crate::benchmark::get_benchmark;
         let problems = get_benchmark(1);
         let targets = [
-            "array_sum", "array_max", "count_positive", "count_zeros",
-            "count_occurrences", "sum_negatives", "sum_positives", "min_element",
-            "sum_at_even_indices", "sum_odd_indexed", "kth_from_end",
-            "reverse_sum", "array_max_elem", "interactive_sum",
+            "count_evens", "arr_sum_squares", "array_range",
+            "sum_absolute", "max_abs", "count_greater_than",
         ];
         for target in &targets {
             let p = problems.iter().find(|p| p.function_name() == *target);
