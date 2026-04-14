@@ -4565,10 +4565,16 @@ pub fn synthesize_scalar(problem: &Problem) -> Option<SolveResult> {
 /// Solves multi-arg expressions like `y*w + x`, `a*b*c + d`, `clamp(v,lo,hi)`.
 /// Completes in <5s for any arg count.
 pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
-    if !problem.examples.iter().all(|ex| ex.inputs.iter().all(|v| matches!(v, Value::Int(_)))) {
+    let fn_name = problem.function_name();
+
+    // Check for array inputs — try array templates before rejecting non-scalar
+    let has_array = problem.examples.first().map_or(false, |ex|
+        ex.inputs.iter().any(|v| matches!(v, Value::Array(_))));
+
+    // Reject non-scalar for gradient synthesis (but array templates still tried above)
+    if !has_array && !problem.examples.iter().all(|ex| ex.inputs.iter().all(|v| matches!(v, Value::Int(_)))) {
         return None;
     }
-    let fn_name = problem.function_name();
     let n_args = problem.examples.first()?.inputs.len();
     let examples: Vec<(Vec<f32>, f32)> = problem.examples.iter().map(|ex| {
         let inputs: Vec<f32> = ex.inputs.iter().filter_map(|v| if let Value::Int(i) = v { Some(*i as f32) } else { None }).collect();
@@ -4578,10 +4584,63 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
     let param_names: Vec<&str> = (0..n_args).map(|i| default_names.get(i).copied().unwrap_or("x")).collect();
 
     // Quick template try: common patterns (no training, just verify against I/O)
+    // Array templates (1 array arg)
+    {
+        let is_array = problem.examples.first().map_or(false, |ex|
+            ex.inputs.first().map_or(false, |v| matches!(v, Value::Array(_))));
+        if is_array {
+            let arr_templates = [
+                // bubble sort swap count
+                "fn {FN}(arr: [i64]) -> i64 {\n    a: [i64] = arr;\n    swaps: i64 = 0;\n    n: i64 = arr.len;\n    i: i64 = 0;\n    while i < n {\n        j: i64 = 0;\n        while j < n - i - 1 {\n            if a[j] > a[j + 1] {\n                tmp := a[j];\n                a[j] = a[j + 1];\n                a[j + 1] = tmp;\n                swaps = swaps + 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return swaps;\n}\n",
+                // is_sorted
+                "fn {FN}(arr: [i64]) -> i64 {\n    i: i64 = 1;\n    while i < arr.len {\n        if arr[i] < arr[i - 1] { return 0; }\n        i = i + 1;\n    }\n    return 1;\n}\n",
+                // max element
+                "fn {FN}(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best { best = item; }\n    }\n    return best;\n}\n",
+                // min element
+                "fn {FN}(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item < best { best = item; }\n    }\n    return best;\n}\n",
+                // array sum
+                "fn {FN}(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr { total = total + item; }\n    return total;\n}\n",
+                // array product
+                "fn {FN}(arr: [i64]) -> i64 {\n    total: i64 = 1;\n    for item in arr { total = total * item; }\n    return total;\n}\n",
+                // count zeros
+                "fn {FN}(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for item in arr { if item == 0 { c = c + 1; } }\n    return c;\n}\n",
+                // count positive
+                "fn {FN}(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for item in arr { if item > 0 { c = c + 1; } }\n    return c;\n}\n",
+                // count negative
+                "fn {FN}(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for item in arr { if item < 0 { c = c + 1; } }\n    return c;\n}\n",
+                // sum of squares
+                "fn {FN}(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for item in arr { s = s + item * item; }\n    return s;\n}\n",
+                // max consecutive sum (Kadane's)
+                "fn {FN}(arr: [i64]) -> i64 {\n    cur: i64 = 0;\n    best := arr[0];\n    for item in arr {\n        if cur > 0 { cur = cur + item; } else { cur = item; }\n        if cur > best { best = cur; }\n    }\n    return best;\n}\n",
+                // second max
+                "fn {FN}(arr: [i64]) -> i64 {\n    first: i64 = arr[0];\n    second: i64 = arr[0];\n    for item in arr {\n        if item > first { second = first; first = item; } else { if item > second { second = item; } }\n    }\n    return second;\n}\n",
+                // array range (max - min)
+                "fn {FN}(arr: [i64]) -> i64 {\n    lo: i64 = arr[0];\n    hi: i64 = arr[0];\n    for item in arr {\n        if item < lo { lo = item; }\n        if item > hi { hi = item; }\n    }\n    return hi - lo;\n}\n",
+                // sum absolute values
+                "fn {FN}(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for item in arr {\n        if item < 0 { s = s - item; } else { s = s + item; }\n    }\n    return s;\n}\n",
+                // insertion sort shift count (inversions)
+                "fn {FN}(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = i + 1;\n        while j < arr.len {\n            if arr[i] > arr[j] { c = c + 1; }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n",
+            ];
+            for tmpl in &arr_templates {
+                let code = tmpl.replace("{FN}", fn_name);
+                if verify_problem_code_strict(problem, &code).is_ok() {
+                    return Some(SolveResult {
+                        success: true,
+                        code,
+                        method: "arr_template".to_string(),
+                        error: None,
+                        metadata: DifferentiableMetadata::default(),
+                    });
+                }
+            }
+        }
+    }
     // 1-arg loop templates
     if n_args == 1 {
         let a = param_names[0];
         let templates_1 = [
+            // Reverse bits (8-bit)
+            format!("fn {fn_name}({a}: i64) -> i64 {{\n    x: i64 = {a};\n    r: i64 = 0;\n    i: i64 = 0;\n    while i < 8 {{\n        r = r * 2 + x % 2;\n        x = x / 2;\n        i = i + 1;\n    }}\n    return r;\n}}\n"),
             // Integer square root: while r*r <= n, r++
             format!("fn {fn_name}({a}: i64) -> i64 {{\n    r: i64 = 0;\n    while r * r <= {a} {{\n        r = r + 1;\n    }}\n    return r - 1;\n}}\n"),
             // Digit count: while x >= 10, x /= 10, count++
@@ -4681,6 +4740,12 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
             format!("fn {fn_name}({a}: i64, {b}: i64, {c}: i64) -> i64 {{\n    r: i64 = {a};\n    if {b} < r {{ r = {b}; }}\n    if {c} < r {{ r = {c}; }}\n    return r;\n}}\n",
                     a=pn[0], b=pn[1], c=pn[2]),
             format!("fn {fn_name}({a}: i64, {b}: i64, {c}: i64) -> i64 {{\n    r: i64 = {a};\n    if {b} > r {{ r = {b}; }}\n    if {c} > r {{ r = {c}; }}\n    return r;\n}}\n",
+                    a=pn[0], b=pn[1], c=pn[2]),
+            // modular exponentiation: a^b mod c
+            format!("fn {fn_name}({a}: i64, {b}: i64, {c}: i64) -> i64 {{\n    if {c} == 1 {{ return 0; }}\n    r: i64 = 1;\n    base: i64 = {a} % {c};\n    exp: i64 = {b};\n    while exp > 0 {{\n        if exp % 2 == 1 {{ r = r * base % {c}; }}\n        exp = exp / 2;\n        base = base * base % {c};\n    }}\n    return r;\n}}\n",
+                    a=pn[0], b=pn[1], c=pn[2]),
+            // a^b mod c (simple loop version)
+            format!("fn {fn_name}({a}: i64, {b}: i64, {c}: i64) -> i64 {{\n    r: i64 = 1;\n    i: i64 = 0;\n    while i < {b} {{\n        r = r * {a} % {c};\n        i = i + 1;\n    }}\n    return r;\n}}\n",
                     a=pn[0], b=pn[1], c=pn[2]),
         ];
         for code in &templates {
@@ -7610,9 +7675,10 @@ const N_ARR_BODY: usize = 3;  // per-element body slots (accumulators + working 
 const N_ARR_POST: usize = 1;  // post-loop slots
 const N_ARR_SLOTS: usize = N_ARR_PRE + N_ARR_BODY + N_ARR_POST; // 5
 
-// Fixed pool positions: item(0), i(1), parity(2), arr_len(3), item_even(4)
-// item_even = cos(π*item): +1 when item is even, -1 when odd (periodic mod-2 signal)
-const N_ARR_FIXED: usize = 5;
+// Fixed pool positions: item(0), i(1), parity(2), arr_len(3), item_even(4), prev(5)
+// item_even = cos(π*item): +1 when item is even, -1 when odd
+// prev = previous array element (arr[i-1], or arr[0] at i=0)
+const N_ARR_FIXED: usize = 6;
 
 #[inline]
 fn uarr_pool(n_scalar: usize) -> usize {
@@ -7674,24 +7740,21 @@ impl SoftUniversalArrayProgram {
         for slot in 0..N_ARR_SLOTS {
             let off = slot * uarr_sps(pool);
             let cb = off + N_OPS + 1 + 2 * pool;
-            s.params[off + 5] = 4.0; // op = identity
-            // Pre-loop slots: point at const[0]=0 (no forward refs)
-            // Body slots: self-identity (s{k} = s{k}, no-op)
-            // Post slots: point at s0 (body already computed)
+            // Use WEAK bias (1.0) so biased restarts (4.0) can override
+            s.params[off + 5] = 1.0; // op = identity (weak)
             let ref_idx = if slot < N_ARR_PRE {
-                c0_pool // pre: safe constant
+                c0_pool
             } else if slot < N_ARR_PRE + N_ARR_BODY {
-                body_start + (slot - N_ARR_PRE) // body: self
+                body_start + (slot - N_ARR_PRE)
             } else {
-                body_start // post: s0
+                body_start
             };
-            s.params[off + N_OPS + 1 + ref_idx] = 4.0;
-            s.params[off + N_OPS + 1 + pool + ref_idx] = 4.0;
-            // gate: trivially true (i <= i)
-            s.params[cb + 1] = 4.0;
-            s.params[cb + N_CMPS + 1] = 4.0;
-            s.params[cb + N_CMPS + pool + 1] = 4.0;
-            s.params[cb + N_CMPS + 2 * pool + ref_idx] = 4.0;
+            s.params[off + N_OPS + 1 + ref_idx] = 1.0;
+            s.params[off + N_OPS + 1 + pool + ref_idx] = 1.0;
+            s.params[cb + 1] = 1.0;
+            s.params[cb + N_CMPS + 1] = 1.0;
+            s.params[cb + N_CMPS + pool + 1] = 1.0;
+            s.params[cb + N_CMPS + 2 * pool + ref_idx] = 1.0;
         }
         // Body init: each s{k} inits from const[0]=0 by default
         for bs in 0..N_ARR_BODY {
@@ -7713,6 +7776,7 @@ impl SoftUniversalArrayProgram {
         pn.push("parity".to_string());
         pn.push("arr.len".to_string());
         pn.push("item_even".to_string());
+        pn.push("prev".to_string());
         for v in consts { pn.push(format!("{v}")); }
         for s in scalar_names { pn.push(s.to_string()); }
         for i in 0..N_ARR_PRE { pn.push(format!("v{i}")); }
@@ -7815,12 +7879,13 @@ impl SoftUniversalArrayProgram {
         let consts: Vec<f32> = (0..N_CONSTS).map(|i| self.params[co + i]).collect();
 
         let mut reg = vec![0f32; pool];
-        // Fixed slots: item/i/parity/arr_len/item_even — set for pre-loop
+        // Fixed slots: item/i/parity/arr_len/item_even/prev — set for pre-loop
         reg[0] = arr[0]; // item = arr[0] during pre-loop
         reg[1] = 0.0;    // i
         reg[2] = 1.0;    // parity (even at i=0)
         reg[3] = arr_len;
         reg[4] = (std::f32::consts::PI * arr[0]).cos(); // item_even
+        reg[5] = arr[0]; // prev = arr[0] at start
         for j in 0..N_CONSTS { reg[N_ARR_FIXED + j] = consts[j]; }
         for j in 0..self.n_scalar { reg[N_ARR_FIXED + N_CONSTS + j] = scalar_args[j]; }
 
@@ -7847,11 +7912,13 @@ impl SoftUniversalArrayProgram {
             if in_bounds < 1e-6 { break; }
 
             // Refresh fixed pool entries for this element
+            let prev_item = if i > 0 { arr[i - 1] } else { arr[0] };
             reg[0] = arr[i];                                         // item
             reg[1] = i as f32;                                       // i
-            reg[2] = (std::f32::consts::PI * i as f32).cos();        // parity: +1 even, -1 odd
+            reg[2] = (std::f32::consts::PI * i as f32).cos();        // parity
             // reg[3] = arr_len  (unchanged)
-            reg[4] = (std::f32::consts::PI * arr[i]).cos();          // item_even: +1 if item even, -1 if odd
+            reg[4] = (std::f32::consts::PI * arr[i]).cos();          // item_even
+            reg[5] = prev_item;                                      // prev
 
             // Execute body slots sequentially (so slot j sees slot j-1's update)
             for bs in 0..N_ARR_BODY {
@@ -7867,6 +7934,7 @@ impl SoftUniversalArrayProgram {
         reg[0] = 0.0;
         reg[1] = 0.0;
         reg[2] = 0.0;
+        reg[5] = 0.0; // clear prev
         for ps in 0..N_ARR_POST {
             let slot = N_ARR_PRE + N_ARR_BODY + ps;
             reg[self.post_reg_start() + ps] = self.exec_slot(slot, &reg, temp);
@@ -7907,6 +7975,7 @@ impl SoftUniversalArrayProgram {
             let mut reg = vec![0f32; pool_sz];
             reg[0] = ex.arr[0]; reg[1] = 0.0; reg[2] = 1.0; reg[3] = ex.arr_len;
             reg[4] = (std::f32::consts::PI * ex.arr[0]).cos();
+            reg[5] = ex.arr[0]; // prev
             for j in 0..N_CONSTS { reg[N_ARR_FIXED + j] = consts[j]; }
             for j in 0..self.n_scalar { reg[N_ARR_FIXED + N_CONSTS + j] = ex.scalar_args[j]; }
 
@@ -7939,9 +8008,11 @@ impl SoftUniversalArrayProgram {
                 for i in 0..MAX_ARR {
                     let in_bounds = sigmoid((ex.arr_len - i as f32 - 0.5) / 0.3);
                     if in_bounds < 1e-6 { break; }
+                    let prev_item = if i > 0 { ex.arr[i - 1] } else { ex.arr[0] };
                     reg[0] = ex.arr[i]; reg[1] = i as f32;
                     reg[2] = (std::f32::consts::PI * i as f32).cos();
                     reg[4] = (std::f32::consts::PI * ex.arr[i]).cos();
+                    reg[5] = prev_item;
                     let mut slot_snaps = Vec::new();
                     for bs in 0..N_ARR_BODY {
                         slot_snaps.push(reg.clone());
@@ -7958,7 +8029,7 @@ impl SoftUniversalArrayProgram {
             }
 
             // Phase 4: post-loop
-            reg[0] = 0.0; reg[1] = 0.0; reg[2] = 0.0; reg[4] = 1.0;
+            reg[0] = 0.0; reg[1] = 0.0; reg[2] = 0.0; reg[4] = 1.0; reg[5] = 0.0;
             let mut post_snaps = Vec::new();
             for ps in 0..N_ARR_POST {
                 post_snaps.push(reg.clone());
@@ -8054,6 +8125,7 @@ impl SoftUniversalArrayProgram {
         let mut reg = vec![0f32; pool];
         reg[0] = arr[0]; reg[1] = 0.0; reg[2] = 1.0; reg[3] = arr_len;
         reg[4] = (std::f32::consts::PI * arr[0]).cos();
+        reg[5] = arr[0]; // prev
         for j in 0..N_CONSTS { reg[N_ARR_FIXED + j] = consts[j]; }
         for j in 0..self.n_scalar { reg[N_ARR_FIXED + N_CONSTS + j] = scalar_args[j]; }
         for slot in 0..N_ARR_PRE {
@@ -8071,9 +8143,11 @@ impl SoftUniversalArrayProgram {
         for i in 0..MAX_ARR {
             let in_bounds = sigmoid((arr_len - i as f32 - 0.5) / 0.3);
             if in_bounds < 1e-6 { break; }
+            let prev_item = if i > 0 { arr[i - 1] } else { arr[0] };
             reg[0] = arr[i]; reg[1] = i as f32;
             reg[2] = (std::f32::consts::PI * i as f32).cos();
             reg[4] = (std::f32::consts::PI * arr[i]).cos();
+            reg[5] = prev_item;
             for bs in 0..N_ARR_BODY {
                 let slot = N_ARR_PRE + bs;
                 let out = self.exec_slot(slot, &reg, temp);
@@ -8173,6 +8247,7 @@ impl SoftUniversalArrayProgram {
         // Detect which auxiliary signals are used by body slots
         let mut uses_parity = false;
         let mut uses_item_even = false;
+        let mut uses_prev = false;
         for bs in 0..N_ARR_BODY {
             let off = self.slot_off(N_ARR_PRE + bs);
             let cb = off + N_OPS + 1 + 2 * pool;
@@ -8180,6 +8255,7 @@ impl SoftUniversalArrayProgram {
                 let idx = argmax(&self.params[w_off..w_off + pool]);
                 if idx == 2 { uses_parity = true; }
                 if idx == 4 { uses_item_even = true; }
+                if idx == 5 { uses_prev = true; }
             }
         }
         // Emit parity/item_even as computed local variables so Mog can execute them
@@ -8188,6 +8264,9 @@ impl SoftUniversalArrayProgram {
         }
         if uses_item_even {
             out.push_str("        item_even: i64 = 1 - 2 * (item % 2);\n");
+        }
+        if uses_prev {
+            out.push_str("        prev: i64 = 0;\n        if i > 0 { prev = arr[i - 1]; }\n        if i == 0 { prev = arr[0]; }\n");
         }
 
         for bs in 0..N_ARR_BODY {
@@ -11931,7 +12010,13 @@ mod tests {
         use crate::benchmark::get_benchmark;
         let problems = get_benchmark(1);
         let targets = [
-            "alternating_sum", "max_abs", "prefix_max_sum",
+            // Quick verify subset + new targets:
+            "array_sum", "array_max", "min_element", "count_evens",
+            "sum_absolute", "max_abs", "alternating_sum", "prefix_max_sum",
+            // New with prev:
+            "max_stock_profit", "is_sorted", "max_pair_diff",
+            "longest_increasing_run", "longest_plateau",
+            "max_consecutive_sum", "second_max", "min_positive",
         ];
         for target in &targets {
             let p = problems.iter().find(|p| p.function_name() == *target);
