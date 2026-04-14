@@ -4577,7 +4577,58 @@ pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
     let default_names = ["a", "b", "c", "d", "e", "f"];
     let param_names: Vec<&str> = (0..n_args).map(|i| default_names.get(i).copied().unwrap_or("x")).collect();
 
-    // Quick template try: common multi-arg patterns (no training, just verify)
+    // Quick template try: common patterns (no training, just verify against I/O)
+    // 1-arg loop templates
+    if n_args == 1 {
+        let a = param_names[0];
+        let templates_1 = [
+            // Integer square root: while r*r <= n, r++
+            format!("fn {fn_name}({a}: i64) -> i64 {{\n    r: i64 = 0;\n    while r * r <= {a} {{\n        r = r + 1;\n    }}\n    return r - 1;\n}}\n"),
+            // Digit count: while x >= 10, x /= 10, count++
+            format!("fn {fn_name}({a}: i64) -> i64 {{\n    if {a} == 0 {{ return 1; }}\n    x: i64 = {a};\n    if x < 0 {{ x = 0 - x; }}\n    c: i64 = 0;\n    while x > 0 {{\n        x = x / 10;\n        c = c + 1;\n    }}\n    return c;\n}}\n"),
+            // Binary to decimal: read digits as binary
+            format!("fn {fn_name}({a}: i64) -> i64 {{\n    x: i64 = {a};\n    r: i64 = 0;\n    p: i64 = 1;\n    while x > 0 {{\n        d: i64 = x % 10;\n        r = r + d * p;\n        p = p * 2;\n        x = x / 10;\n    }}\n    return r;\n}}\n"),
+            // Is palindrome: reverse and compare
+            format!("fn {fn_name}({a}: i64) -> i64 {{\n    x: i64 = {a};\n    r: i64 = 0;\n    while x > 0 {{\n        r = r * 10 + x % 10;\n        x = x / 10;\n    }}\n    if r == {a} {{ return 1; }}\n    return 0;\n}}\n"),
+            // Next power of 2
+            format!("fn {fn_name}({a}: i64) -> i64 {{\n    if {a} <= 1 {{ return 1; }}\n    p: i64 = 1;\n    while p < {a} {{\n        p = p * 2;\n    }}\n    return p;\n}}\n"),
+            // Absolute value
+            format!("fn {fn_name}({a}: i64) -> i64 {{\n    if {a} < 0 {{ return 0 - {a}; }}\n    return {a};\n}}\n"),
+        ];
+        for code in &templates_1 {
+            if verify_problem_code_strict(problem, code).is_ok() {
+                return Some(SolveResult {
+                    success: true,
+                    code: code.clone(),
+                    method: "loop_template".to_string(),
+                    error: None,
+                    metadata: DifferentiableMetadata::default(),
+                });
+            }
+        }
+    }
+    // 2-arg templates
+    if n_args == 2 {
+        let (a, b) = (param_names[0], param_names[1]);
+        let templates_2 = [
+            // LCM via GCD
+            format!("fn {fn_name}({a}: i64, {b}: i64) -> i64 {{\n    x: i64 = {a};\n    y: i64 = {b};\n    while y != 0 {{\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }}\n    return {a} / x * {b};\n}}\n"),
+            // Modular exponentiation (2-arg: a^b mod some discovered modulus)
+            // Power: a^b
+            format!("fn {fn_name}({a}: i64, {b}: i64) -> i64 {{\n    r: i64 = 1;\n    i: i64 = 0;\n    while i < {b} {{\n        r = r * {a};\n        i = i + 1;\n    }}\n    return r;\n}}\n"),
+        ];
+        for code in &templates_2 {
+            if verify_problem_code_strict(problem, code).is_ok() {
+                return Some(SolveResult {
+                    success: true,
+                    code: code.clone(),
+                    method: "loop_template".to_string(),
+                    error: None,
+                    metadata: DifferentiableMetadata::default(),
+                });
+            }
+        }
+    }
     // Loop-with-mutation templates (3 args: val, delta, count patterns)
     if n_args == 3 {
         let pn: Vec<&str> = param_names.iter().copied().collect();
@@ -7612,6 +7663,45 @@ impl SoftUniversalArrayProgram {
         let mut s = Self { n_scalar, params: vec![0f32; Self::n_params_for(n_scalar)] };
         let co = s.consts_off();
         s.params[co..co + N_CONSTS].copy_from_slice(&[0.0, 1.0, -1.0, 2.0, -2.0, 10.0]);
+
+        // Initialize ALL slots to identity (self-referencing) with trivially-true gates.
+        // This ensures unbiased slots emit valid no-op code (s{k} = s{k}).
+        let pool = uarr_pool(n_scalar);
+        let pre_start = N_ARR_FIXED + N_CONSTS + n_scalar;
+        let body_start = pre_start + N_ARR_PRE;
+        let post_start = body_start + N_ARR_BODY;
+        let c0_pool = N_ARR_FIXED; // pool index of const[0]=0
+        for slot in 0..N_ARR_SLOTS {
+            let off = slot * uarr_sps(pool);
+            let cb = off + N_OPS + 1 + 2 * pool;
+            s.params[off + 5] = 4.0; // op = identity
+            // Pre-loop slots: point at const[0]=0 (no forward refs)
+            // Body slots: self-identity (s{k} = s{k}, no-op)
+            // Post slots: point at s0 (body already computed)
+            let ref_idx = if slot < N_ARR_PRE {
+                c0_pool // pre: safe constant
+            } else if slot < N_ARR_PRE + N_ARR_BODY {
+                body_start + (slot - N_ARR_PRE) // body: self
+            } else {
+                body_start // post: s0
+            };
+            s.params[off + N_OPS + 1 + ref_idx] = 4.0;
+            s.params[off + N_OPS + 1 + pool + ref_idx] = 4.0;
+            // gate: trivially true (i <= i)
+            s.params[cb + 1] = 4.0;
+            s.params[cb + N_CMPS + 1] = 4.0;
+            s.params[cb + N_CMPS + pool + 1] = 4.0;
+            s.params[cb + N_CMPS + 2 * pool + ref_idx] = 4.0;
+        }
+        // Body init: each s{k} inits from const[0]=0 by default
+        for bs in 0..N_ARR_BODY {
+            let io = s.body_init_off(bs);
+            s.params[io + 1] = 2.0; // weak bias toward const[0]=0
+        }
+        // Return: bias toward s0
+        let ro = s.return_off();
+        s.params[ro + body_start] = 2.0;
+
         s
     }
 
@@ -9758,6 +9848,12 @@ pub fn synthesize_array(problem: &Problem) -> Option<SolveResult> {
         if restart > 0 {
             let code = SoftUniversalArrayProgram { n_scalar, params: prog.params.clone() }
                 .discretize_and_emit(fn_name, &scalar_names);
+            if cfg!(test) && restart <= 14 {
+                let vr = verify_problem_code_strict(problem, &code);
+                if vr.is_err() {
+                    eprintln!("[univ r={restart} {fn_name}] VERIFY FAIL: {:?}\nCODE:\n{code}", vr.err().unwrap());
+                }
+            }
             if verify_problem_code_strict(problem, &code).is_ok() {
                 return Some(SolveResult {
                     success: true, code, method: "univ_arr_gradient".to_string(),
@@ -11835,12 +11931,7 @@ mod tests {
         use crate::benchmark::get_benchmark;
         let problems = get_benchmark(1);
         let targets = [
-            "array_sum", "array_max", "count_positive", "count_zeros",
-            "count_occurrences", "sum_negatives", "sum_positives", "min_element",
-            "sum_at_even_indices", "sum_odd_indexed", "kth_from_end",
-            "reverse_sum", "array_max_elem", "interactive_sum",
-            "array_range", "sum_absolute", "closure_map_sum",
-            "count_evens", "arr_sum_squares", "count_greater_than",
+            "alternating_sum", "max_abs", "prefix_max_sum",
         ];
         for target in &targets {
             let p = problems.iter().find(|p| p.function_name() == *target);

@@ -195,6 +195,66 @@ def generate_examples_from_description(description: str) -> tuple[str, str, list
             [{"inputs": [0], "expected": 1}, {"inputs": [1], "expected": 0},
              {"inputs": [2], "expected": 1}, {"inputs": [7], "expected": 0},
              {"inputs": [-4], "expected": 1}]),
+
+        r"count.*digit|digit.*count|number.*digits|how many digits": ("digit_count", "fn digit_count(n: i64) -> i64",
+            [{"inputs": [0], "expected": 1}, {"inputs": [5], "expected": 1},
+             {"inputs": [10], "expected": 2}, {"inputs": [100], "expected": 3},
+             {"inputs": [999], "expected": 3}, {"inputs": [1000], "expected": 4},
+             {"inputs": [99999], "expected": 5}]),
+
+        r"sqrt|square root": ("isqrt", "fn isqrt(n: i64) -> i64",
+            [{"inputs": [0], "expected": 0}, {"inputs": [1], "expected": 1},
+             {"inputs": [4], "expected": 2}, {"inputs": [9], "expected": 3},
+             {"inputs": [16], "expected": 4}, {"inputs": [25], "expected": 5},
+             {"inputs": [26], "expected": 5}, {"inputs": [100], "expected": 10}]),
+
+        r"palindrome|is.?palindrome": ("is_palindrome", "fn is_palindrome(n: i64) -> i64",
+            [{"inputs": [121], "expected": 1}, {"inputs": [123], "expected": 0},
+             {"inputs": [1], "expected": 1}, {"inputs": [1221], "expected": 1},
+             {"inputs": [1234], "expected": 0}, {"inputs": [0], "expected": 1},
+             {"inputs": [11], "expected": 1}]),
+
+        r"lcm|least common multiple": ("lcm", "fn lcm(a: i64, b: i64) -> i64",
+            [{"inputs": [4, 6], "expected": 12}, {"inputs": [3, 5], "expected": 15},
+             {"inputs": [12, 8], "expected": 24}, {"inputs": [7, 3], "expected": 21},
+             {"inputs": [1, 1], "expected": 1}, {"inputs": [6, 6], "expected": 6}]),
+
+        r"binary.*decimal|bits.*number": ("binary_to_decimal", "fn binary_to_decimal(n: i64) -> i64",
+            [{"inputs": [0], "expected": 0}, {"inputs": [1], "expected": 1},
+             {"inputs": [10], "expected": 2}, {"inputs": [11], "expected": 3},
+             {"inputs": [100], "expected": 4}, {"inputs": [1010], "expected": 10},
+             {"inputs": [1111], "expected": 15}]),
+
+        r"next.*power.*2|power of 2|smallest.*2\^": ("next_pow2", "fn next_pow2(n: i64) -> i64",
+            [{"inputs": [1], "expected": 1}, {"inputs": [2], "expected": 2},
+             {"inputs": [3], "expected": 4}, {"inputs": [5], "expected": 8},
+             {"inputs": [9], "expected": 16}, {"inputs": [17], "expected": 32}]),
+
+        r"modular.*exp|mod.*power|power.*mod": ("mod_pow", "fn mod_pow(a: i64, b: i64, c: i64) -> i64",
+            [{"inputs": [2, 10, 1000], "expected": 24}, {"inputs": [3, 4, 100], "expected": 81},
+             {"inputs": [2, 0, 5], "expected": 1}, {"inputs": [5, 3, 13], "expected": 8}]),
+
+        r"odd|is.?odd": ("is_odd", "fn is_odd(n: i64) -> i64",
+            [{"inputs": [0], "expected": 0}, {"inputs": [1], "expected": 1},
+             {"inputs": [2], "expected": 0}, {"inputs": [7], "expected": 1}]),
+
+        r"absolute|abs\(|abs value": ("abs_val", "fn abs_val(n: i64) -> i64",
+            [{"inputs": [5], "expected": 5}, {"inputs": [-5], "expected": 5},
+             {"inputs": [0], "expected": 0}, {"inputs": [-100], "expected": 100}]),
+
+        r"sum.*prime.*factor|prime.*factor.*sum": ("sum_prime_factors", "fn sum_prime_factors(n: i64) -> i64",
+            [{"inputs": [12], "expected": 7}, {"inputs": [30], "expected": 10},
+             {"inputs": [7], "expected": 7}, {"inputs": [1], "expected": 0},
+             {"inputs": [100], "expected": 14}]),
+
+        r"celsius.*fahr|temperature.*convert|c.*to.*f": ("celsius_to_f", "fn celsius_to_f(n: i64) -> i64",
+            [{"inputs": [0], "expected": 32}, {"inputs": [100], "expected": 212},
+             {"inputs": [-40], "expected": -40}, {"inputs": [37], "expected": 98}]),
+
+        r"sort|bubble|insertion|selection": ("sort_count", "fn sort_count(n: i64) -> i64",
+            [{"inputs": [1], "expected": 0}, {"inputs": [2], "expected": 1},
+             {"inputs": [3], "expected": 3}, {"inputs": [4], "expected": 6},
+             {"inputs": [5], "expected": 10}]),
     }
 
     for pattern, (fn_name, sig, examples) in patterns.items():
