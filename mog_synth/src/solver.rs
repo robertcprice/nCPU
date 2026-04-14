@@ -4140,6 +4140,18 @@ pub fn solve_problem(problem: &Problem) -> SolveResult {
     // Skip for external problems with >2 args — the loop types are unlikely to help and take forever
     let n_args = problem.examples.first().map(|e| e.inputs.len()).unwrap_or(0);
     let is_external = problem.category == "external";
+    // Try enumerative synthesis (truly general — discovers any expression)
+    {
+        let t_enum = std::time::Instant::now();
+        if let Some(result) = crate::enumerative::synthesize_enumerative(problem) {
+            if result.success {
+                eprintln!("[solve] enumerative OK in {:.1}s", t_enum.elapsed().as_secs_f32());
+                return result;
+            }
+        }
+        eprintln!("[solve] enumerative MISS in {:.1}s", t_enum.elapsed().as_secs_f32());
+    }
+
     if !is_external || n_args <= 3 {
         let t0x = std::time::Instant::now();
         if let Some(result) = synthesis::synthesize_scalar(problem) {

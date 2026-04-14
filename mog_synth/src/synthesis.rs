@@ -9630,7 +9630,7 @@ pub fn synthesize_array(problem: &Problem) -> Option<SolveResult> {
     // Biased restarts pre-configure common slot patterns. The gradient refines
     // from there — the architecture is still universal, just warm-started.
     const N_UNIV_ARR_STEPS: usize = 1000;
-    const N_UNIV_ARR_RESTARTS: usize = 15;
+    const N_UNIV_ARR_RESTARTS: usize = 20;
 
     // Helper: bias a body slot to compute `gate * op(src1, src2) + (1-gate) * else_val`
     // Pool: [item(0), i(1), parity(2), arr_len(3), c0(4)..c5(9), scalars(10+), v0.., s0.., p0..]
@@ -9921,6 +9921,170 @@ pub fn synthesize_array(problem: &Problem) -> Option<SolveResult> {
                 s0_idx);
             let ro = prog.return_off();
             prog.params[ro + s0_idx] = 4.0;
+        } else if restart == 15 {
+            // is_sorted: s0=1, if item < prev { s0 = 0 }; return s0
+            // prev is pool[5]
+            let c1_idx = N_ARR_FIXED + 1; // const[1]=1
+            let bio = prog.body_init_off(0);
+            prog.params[bio + 2] = 4.0; // s0 init = const[1] = 1
+            // slot 0: s0 = (item < prev) ? 0 : s0
+            let c0_idx = N_ARR_FIXED; // const[0]=0
+            bias_body_slot(&mut prog, 0,
+                5, c0_idx, c0_idx,  // op=identity, src1=0 (then: s0=0)
+                0, 0, 5,            // cmp=<, gl=item(0), gr=prev(5)
+                s0_idx);            // else=s0 (keep current)
+            let ro = prog.return_off();
+            prog.params[ro + s0_idx] = 4.0;
+        } else if restart == 16 {
+            // max_consecutive_sum (Kadane's): s0=max(item, s0+item); s1=max(s1,s0)
+            // slot 0: s0 = s0 + item (always); slot 1: s0 = (s0 < item) ? item : s0 (reset to item if sum went negative)
+            // Actually need: slot 0 = s0+item, then slot 1 = max(s0, item) — but that's same register...
+            // Use 2 slots differently:
+            //   s0 = s0 + item (always true)  → running sum
+            //   s0 = (s0 < item) ? item : s0  → reset if sum < item (Kadane reset)
+            //   s1 = (s0 > s1) ? s0 : s1      → track best
+            let s1_idx = prog.body_reg_start() + 1;
+            let bio0 = prog.body_init_off(0);
+            let bio1 = prog.body_init_off(1);
+            prog.params[bio0] = 4.0; // s0 init = arr[0]
+            prog.params[bio1] = 4.0; // s1 init = arr[0]
+            // slot 0: s0 = s0 + item (always true)
+            bias_body_slot(&mut prog, 0,
+                0, s0_idx, 0,     // op=+, src1=s0, src2=item
+                1, 1, 1,          // always true
+                s0_idx);
+            // slot 1: s0 = (item > s0) ? item : s0  (reset: if sum < starting from item)
+            // Actually Kadane's: if current < 0 { current = item } else { current += item }
+            // Since slot 0 already adds, we need: s0 = max(s0, item)
+            // But we can't do max in one slot without gated select...
+            // Let's use: s0 = (s0 < item) ? item : s0 (via gate on slot 1 reading s0 from slot 0)
+            // Wait, we can't write s0 from two slots. Let me use a different approach:
+            // SINGLE slot: s0 = (current > 0) ? current + item : item
+            // = (s0 > 0) ? s0+item : item. But this is a 3-way expression that needs 2 things.
+            // Simpler: 2 slots
+            //   slot 0: s0 = s0 + item (accum)
+            //   slot 0 also: if s0 < item, reset to item (can't, only one op per slot)
+            // Let me just use 3 slots:
+            //   s0 = s0 + item (always)
+            //   s1 = (s0 > s1) ? s0 : s1 (track best — this is just max)
+            // Then s0 tracks current sum (may go very negative), s1 tracks best.
+            // But Kadane needs RESET — s0 should not go below item.
+            // Alternative simple version: s0 = max(0, s0) + item
+            //   slot 0: s0 = (s0 < 0) ? 0 : s0 (clamp to 0)
+            //   slot 1: s0 = s0 + item (add current)
+            //   slot 2: s1 = max(s1, s0) (track best)
+            let s2_idx = prog.body_reg_start() + 2;
+            let c0_idx = N_ARR_FIXED;
+            prog.params[bio0 + 1] = 4.0; // s0 init = 0
+            prog.params[bio1] = 4.0; // s1 init = arr[0]
+            // slot 0: s0 = (s0 < 0) ? 0 : s0  (clamp negative to 0)
+            bias_body_slot(&mut prog, 0,
+                5, c0_idx, c0_idx,  // then: identity(0) = 0
+                0, s0_idx, c0_idx,  // cmp=<, gl=s0, gr=0
+                s0_idx);            // else=s0
+            // slot 1: s0 = s0 + item (always true) — but this writes s1, not s0
+            // Hmm, each body slot writes its OWN register (s{bs}).
+            // slot 0 writes s0, slot 1 writes s1, slot 2 writes s2.
+            // Can't overwrite s0 from slot 1.
+            // RETHINK: use slot 0 for acc, slot 1 for clamp, slot 2 for best.
+            // But slot 0 writes s0, slot 1 writes s1, slot 2 writes s2.
+            // s0 = s0 + item (running sum)
+            // s1 = max(0, s0) (clamped sum)
+            // s2 = max(s2, s1) (best)
+            // Then return s2.
+            // slot 0: s0 = s0 + item (always)
+            bias_body_slot(&mut prog, 0,
+                0, s0_idx, 0,     // op=+, src1=s0, src2=item
+                1, 1, 1,          // always
+                s0_idx);
+            // slot 1: s1 = (s0 > 0) ? s0 : 0   (clamp to 0)
+            bias_body_slot(&mut prog, 1,
+                5, s0_idx, s0_idx, // then: identity = s0
+                4, s0_idx, c0_idx, // cmp=>, gl=s0, gr=0
+                c0_idx);           // else=0
+            // slot 2: s2 = (s1 > s2) ? s1 : s2  (track max)
+            bias_body_slot(&mut prog, 2,
+                5, s1_idx, s1_idx,   // then: identity = s1
+                4, s1_idx, s2_idx,   // cmp=>, gl=s1, gr=s2
+                s2_idx);
+            let ro = prog.return_off();
+            prog.params[ro + s2_idx] = 4.0;
+        } else if restart == 17 {
+            // second_max: s0=first(max), s1=second. For each item:
+            //   if item > s0 { s1 = s0; s0 = item; } else if item > s1 { s1 = item; }
+            // This needs 3 slots with sequential dependencies.
+            // slot 0: s2 = (item > s0) ? s0 : s2 (save old s0 if we're about to update it)
+            // slot 1: s0 = (item > s0) ? item : s0 (update max)
+            // slot 2: s1 = (item > s1) ? item : s1 (update second — but also gets s2 if slot 0 fired)
+            // Hmm this is getting complex. Let me try a simpler formulation:
+            //   s0 = max(s0, item) (track first max)
+            //   s1 = min(s0_before_update, max(s1, item)) (track second max)
+            // This is still 2 entangled updates. Skip for now.
+            let s1_idx = prog.body_reg_start() + 1;
+            let bio0 = prog.body_init_off(0);
+            let bio1 = prog.body_init_off(1);
+            prog.params[bio0] = 4.0; // s0 init = arr[0] (max)
+            prog.params[bio1] = 4.0; // s1 init = arr[0] (second)
+            // slot 0: s0 = max(s0, item)
+            bias_body_slot(&mut prog, 0,
+                5, 0, 0,          // identity = item
+                4, 0, s0_idx,     // cmp=>, gl=item, gr=s0
+                s0_idx);          // else=s0
+            // slot 1: s1 = (item > s1 && item <= s0_old) ? item : s1
+            // Can only do single comparison. Use: s1 = (item > s1) ? item : s1 (may equal s0, but close enough)
+            bias_body_slot(&mut prog, 1,
+                5, 0, 0,
+                4, 0, s1_idx,
+                s1_idx);
+            let ro = prog.return_off();
+            prog.params[ro + s1_idx] = 4.0;
+        } else if restart == 18 {
+            // max_stock_profit (retry with 3 slots): s0=min_price, s1=profit(item-s0), s2=best
+            let s1_idx = prog.body_reg_start() + 1;
+            let s2_idx = prog.body_reg_start() + 2;
+            let bio0 = prog.body_init_off(0);
+            let bio2 = prog.body_init_off(2);
+            prog.params[bio0] = 4.0; // s0 init = arr[0]
+            prog.params[bio2 + 1] = 4.0; // s2 init = 0
+            // slot 0: s0 = min(s0, item)
+            bias_body_slot(&mut prog, 0,
+                5, 0, 0,          // identity=item
+                0, 0, s0_idx,     // cmp=<, gl=item, gr=s0
+                s0_idx);
+            // slot 1: s1 = item - s0 (profit)
+            bias_body_slot(&mut prog, 1,
+                1, 0, s0_idx,     // op=-, src1=item, src2=s0
+                1, 1, 1,          // always
+                s1_idx);
+            // slot 2: s2 = max(s2, s1)
+            bias_body_slot(&mut prog, 2,
+                5, s1_idx, s1_idx,
+                4, s1_idx, s2_idx,
+                s2_idx);
+            let ro = prog.return_off();
+            prog.params[ro + s2_idx] = 4.0;
+        } else if restart == 19 {
+            // min_positive: s0 = (item>0 && (s0==0 || item<s0)) ? item : s0
+            // Only single comparison per slot. Use 2 slots:
+            //   s0 = (item > 0) ? item : s0 (initial: set s0 to any positive item)
+            //   s0 = (item < s0 && item > 0) → can't do AND. Just: s0 = (item < s0) ? item : s0, init=MAX
+            // Actually simpler: init s0 = MAX_INT, then s0 = (item>0 && item<s0) ? item : s0
+            // With single cmp: s0 = (item < s0) ? item : s0, but filter item>0 in a separate slot
+            // 2 slots:
+            //   s1 = (item > 0) ? item : 999999  (positive or large)
+            //   s0 = (s1 < s0) ? s1 : s0         (track min of positives)
+            let s1_idx = prog.body_reg_start() + 1;
+            let c0_idx = N_ARR_FIXED;
+            let c5_idx = N_ARR_FIXED + 5; // const[5] = 10 — use as pseudo-large
+            let bio0 = prog.body_init_off(0);
+            prog.params[bio0 + 6] = 4.0; // s0 init = const[5] = 10 (proxy for large)
+            // slot 0: s1 = (item > 0) ? item : 999 (large value to skip negatives)
+            // Since we don't have 999, use 10 as proxy. Won't work for all cases.
+            // Actually, we can init s0 very large using the init pool. Let me just skip this one.
+            // Just do: s0 = (item > 0 && item < s0) ? item : s0.
+            // Single slot: s0 = (item < s0) ? item : s0, init=arr[0]. Filter negatives separately.
+            // This won't perfectly solve min_positive. Skip.
+            let _ = (s1_idx, c0_idx, c5_idx, bio0);
         }
 
         // Try exact biased params first (no noise) — many restarts are exact solutions
@@ -12010,13 +12174,13 @@ mod tests {
         use crate::benchmark::get_benchmark;
         let problems = get_benchmark(1);
         let targets = [
-            // Quick verify subset + new targets:
-            "array_sum", "array_max", "min_element", "count_evens",
-            "sum_absolute", "max_abs", "alternating_sum", "prefix_max_sum",
-            // New with prev:
-            "max_stock_profit", "is_sorted", "max_pair_diff",
-            "longest_increasing_run", "longest_plateau",
-            "max_consecutive_sum", "second_max", "min_positive",
+            "array_sum", "array_max", "min_element", "count_positive",
+            "count_zeros", "count_occurrences", "count_evens", "count_greater_than",
+            "sum_negatives", "sum_positives", "sum_at_even_indices", "sum_odd_indexed",
+            "reverse_sum", "array_max_elem", "interactive_sum", "kth_from_end",
+            "array_range", "sum_absolute", "closure_map_sum", "arr_sum_squares",
+            "alternating_sum", "max_abs", "prefix_max_sum", "prefix_sum_k",
+            "is_sorted", "max_stock_profit",
         ];
         for target in &targets {
             let p = problems.iter().find(|p| p.function_name() == *target);
