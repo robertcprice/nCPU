@@ -26,23 +26,23 @@ class TestRetryLoop(unittest.TestCase):
         self.assertEqual(calls, ["baseline-greedy"])
 
     def test_retries_until_pass(self):
-        # Fail first 2 attempts, pass the 3rd.
+        # Default schedule is 2 strategies: fail the 1st, pass the 2nd.
         attempt_count = [0]
         def gen(s):
             attempt_count[0] += 1
             return f"attempt-{attempt_count[0]}"
         def ver(t):
-            if "3" in t:
+            if "2" in t:
                 return (True, 1.0, None)
             return (False, 0.1, "syntax error")
         result = retry_until_verified(generate_fn=gen, verify_fn=ver)
         self.assertTrue(result.final_passed)
-        self.assertEqual(result.total_attempts, 3)
-        self.assertEqual(result.winning_attempt_index, 2)
+        self.assertEqual(result.total_attempts, 2)
+        self.assertEqual(result.winning_attempt_index, 1)
 
     def test_none_pass_returns_best_score(self):
         # All fail, but with different scores. Should return highest score.
-        scores = [0.1, 0.5, 0.3, 0.2, 0.4]
+        scores = [0.1, 0.5]
         idx = [0]
         def gen(s):
             out = f"a{idx[0]}"
@@ -53,7 +53,7 @@ class TestRetryLoop(unittest.TestCase):
             return (False, scores[i], "fail")
         result = retry_until_verified(generate_fn=gen, verify_fn=ver)
         self.assertFalse(result.final_passed)
-        self.assertEqual(result.total_attempts, 5)
+        self.assertEqual(result.total_attempts, 2)
         # Best score is index 1 (0.5). Final text should be "a1".
         self.assertEqual(result.final_text, "a1")
 
@@ -74,8 +74,16 @@ class TestRetryLoop(unittest.TestCase):
             return f"a{count[0]}"
         def ver(t): return (True, 1.0, None)
         result = retry_until_verified(generate_fn=gen, verify_fn=ver, config=cfg)
-        # Should run all 5 strategies even though first passes.
-        self.assertEqual(result.total_attempts, 5)
+        # Should run both default strategies even though first passes.
+        self.assertEqual(result.total_attempts, 2)
+
+    def test_default_is_ablation_pruned_pair(self):
+        cfg = RetryConfig()
+        self.assertEqual(len(cfg.strategies), 2)
+        self.assertEqual(cfg.strategies[0].gate, 0.0)
+        self.assertEqual(cfg.strategies[0].temperature, 0.0)
+        self.assertEqual(cfg.strategies[1].gate, 0.05)
+        self.assertEqual(cfg.strategies[1].temperature, 0.5)
 
 
 if __name__ == "__main__":

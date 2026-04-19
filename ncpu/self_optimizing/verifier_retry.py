@@ -36,19 +36,22 @@ class RetryStrategy:
 
 @dataclass
 class RetryConfig:
-    """Strategies ordered cheapest-first."""
+    """Strategies ordered cheapest-first.
+
+    Default schedule is the ablation-pruned 2-strategy pair from the full
+    HumanEval run on Qwen3.5-4B (see paper 15.10): all observed retry-wins
+    came from [gate=0.05, temp=0.5]; the intermediate greedy-NPCoT
+    strategies rescued zero problems and were dropped.
+    """
 
     strategies: list[RetryStrategy] = field(
         default_factory=lambda: [
             RetryStrategy(gate=0.0, temperature=0.0, label="baseline-greedy"),
-            RetryStrategy(gate=0.02, temperature=0.0, label="low-npcot-greedy"),
-            RetryStrategy(gate=0.05, temperature=0.0, label="full-npcot-greedy"),
-            RetryStrategy(gate=0.0, temperature=0.5, label="baseline-sampled"),
             RetryStrategy(gate=0.05, temperature=0.5, label="npcot-sampled"),
         ]
     )
     stop_on_first_pass: bool = True
-    max_attempts: int = 5
+    max_attempts: int = 2
 
 
 @dataclass
