@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from ncpu.autoresearch.miner import extract_io_pairs, load_queue
-from ncpu.autoresearch.types import WorkItem
+from ncpu.autoresearch.types import IoPair, WorkItem
 
 
 SIMPLE_TEST = """
@@ -86,6 +86,31 @@ class TestQueueRoundtrip(unittest.TestCase):
                     fh.write(json.dumps(it.to_dict()) + "\n")
             loaded = load_queue(path)
             self.assertEqual([it.task_id for it in loaded], ["b", "c", "a"])
+
+    def test_roundtrip_preserves_non_json_literals(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "q.jsonl"
+            item = WorkItem(
+                task_id="complex",
+                source_benchmark="mbpp",
+                prompt="def f(x):\n    pass\n",
+                entry_point="f",
+                test_source="assert f(1j) == (2+3j)\n",
+                io_pairs=[IoPair(
+                    args=[(1, 2), 1j],
+                    kwargs={"z": (-2 + 0j)},
+                    expected=(2 + 3j),
+                )],
+                priority=1.0,
+            )
+            with open(path, "w") as fh:
+                fh.write(json.dumps(item.to_dict()) + "\n")
+            loaded = load_queue(path)
+            pair = loaded[0].io_pairs[0]
+            self.assertEqual(pair.args[0], (1, 2))
+            self.assertEqual(pair.args[1], 1j)
+            self.assertEqual(pair.kwargs["z"], (-2 + 0j))
+            self.assertEqual(pair.expected, (2 + 3j))
 
 
 if __name__ == "__main__":

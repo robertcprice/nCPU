@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -16,7 +17,25 @@ class IoPair:
     expected: Any
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            "args_repr": [repr(v) for v in self.args],
+            "kwargs_repr": {k: repr(v) for k, v in self.kwargs.items()},
+            "expected_repr": repr(self.expected),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "IoPair":
+        if "args_repr" in d or "expected_repr" in d:
+            return cls(
+                args=[_literal_from_repr(v) for v in d.get("args_repr", [])],
+                kwargs={k: _literal_from_repr(v) for k, v in d.get("kwargs_repr", {}).items()},
+                expected=_literal_from_repr(d.get("expected_repr")),
+            )
+        return cls(
+            args=d.get("args", []),
+            kwargs=d.get("kwargs", {}),
+            expected=d.get("expected"),
+        )
 
 
 @dataclass
@@ -40,7 +59,7 @@ class WorkItem:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WorkItem":
-        io = [IoPair(**p) for p in d.get("io_pairs", [])]
+        io = [IoPair.from_dict(p) for p in d.get("io_pairs", [])]
         return cls(
             task_id=d["task_id"],
             source_benchmark=d["source_benchmark"],
@@ -102,3 +121,13 @@ class CascadeResult:
 
 DEFAULT_ARTIFACT_DIR = Path(".nCPU_autoresearch")
 """Where autoresearch writes work queues, solved items, status cards."""
+
+
+def _literal_from_repr(source: Any) -> Any:
+    """Decode a repr-serialized literal, falling back to the raw value."""
+    if not isinstance(source, str):
+        return source
+    try:
+        return ast.literal_eval(source)
+    except (SyntaxError, ValueError):
+        return source
