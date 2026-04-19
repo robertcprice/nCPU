@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from ncpu.autoresearch.cascade import CascadeConfig
+from ncpu.autoresearch.cascade import CascadeConfig, run_cascade
 from ncpu.autoresearch.distiller import dedupe_solved, load_solved, summarize_solved
 from ncpu.autoresearch.miner import load_queue, mine
 from ncpu.autoresearch.runner import run_session
@@ -128,6 +128,59 @@ def cmd_dedupe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_user(args: argparse.Namespace) -> int:
+    """Solve a single user prompt end-to-end via the cascade.
+
+    Pipeline: read prompt → extract tests via
+    :func:`prompt_parser.build_work_item` → run cascade → persist
+    result into the compounding store.
+    """
+    from ncpu.autoresearch.compounding_store import (
+        CompoundingStore, CompoundingStoreConfig,
+    )
+    from ncpu.autoresearch.prompt_parser import build_work_item
+
+    prompt = args.prompt
+    if prompt is None and args.prompt_file is not None:
+        prompt = args.prompt_file.read_text()
+    if prompt is None:
+        prompt = sys.stdin.read()
+    if not prompt.strip():
+        print("error: empty prompt", file=sys.stderr)
+        return 2
+
+    wi = build_work_item(
+        prompt, task_id="user/cli", entry_point=args.entry_point,
+    )
+    if wi is None:
+        print("error: could not infer entry_point from prompt; "
+              "pass --entry-point or include a `def` line.", file=sys.stderr)
+        return 2
+    print(f"[user] entry_point={wi.entry_point}  "
+          f"io_pairs={len(wi.io_pairs)}  "
+          f"sources={wi.provenance.get('extraction_sources')}",
+          flush=True)
+
+    solvers = args.solver or ["template_match"]
+    cfg = CascadeConfig(
+        solver_names=solvers,
+        per_solver_seconds=args.per_problem_seconds,
+    )
+    result = run_cascade(wi, config=cfg)
+
+    store = CompoundingStore(CompoundingStoreConfig(
+        artifact_dir=Path(args.artifact_dir),
+    ))
+    if result.solved and result.solved_item is not None:
+        store.record(result.solved_item, work_item=wi)
+        print(f"\n[user] SOLVED by {result.solver} in {result.wall_seconds:.2f}s\n")
+        print(wi.prompt + result.solved_item.program_python)
+    else:
+        print(f"\n[user] unsolved (tried: {','.join(solvers)})")
+        print(f"last error: {result.error}")
+    return 0 if result.solved else 1
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="ncpu.autoresearch",
                                 description=__doc__.splitlines()[0])
@@ -158,6 +211,19 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     d = sub.add_parser("dedupe", help="dedupe the solved_programs.jsonl")
     d.set_defaults(func=cmd_dedupe)
+
+    u = sub.add_parser("user",
+                       help="extract tests from a user prompt and solve it end-to-end")
+    u.add_argument("--prompt", type=str, default=None,
+                   help="user prompt; defaults to reading stdin")
+    u.add_argument("--prompt-file", type=Path, default=None)
+    u.add_argument("--entry-point", type=str, default=None,
+                   help="override entry point (otherwise inferred from def)")
+    u.add_argument("--per-problem-seconds", type=float, default=10.0)
+    u.add_argument("--solver", action="append", default=None,
+                   help="solver name(s) to run, in order; repeatable. "
+                        "Default: template_match.")
+    u.set_defaults(func=cmd_user)
 
     args = p.parse_args(argv)
     # Fill solver default (argparse can't default a 'append' action).
