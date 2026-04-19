@@ -38,19 +38,31 @@ class TestRunner(unittest.TestCase):
             test_source=SUM_TEST, io_pairs=pairs, priority=1.0,
         )
 
+    def _item_unique(self, task_id: str, pairs: list[IoPair]) -> WorkItem:
+        # Give each item a syntactically-distinct prompt so the prompt
+        # cache doesn't collapse them all onto one entry.
+        prompt = f"def total_{task_id.replace('/', '_')}(xs):\n    \"\"\"Return sum.\"\"\"\n"
+        entry = f"total_{task_id.replace('/', '_')}"
+        return WorkItem(
+            task_id=task_id, source_benchmark="humaneval",
+            prompt=prompt, entry_point=entry,
+            test_source=SUM_TEST.replace("candidate",
+                                         entry) if "candidate" in SUM_TEST else SUM_TEST,
+            io_pairs=pairs, priority=1.0,
+        )
+
     def test_skips_already_solved(self):
         with tempfile.TemporaryDirectory() as td:
             qpath = Path(td) / "q.jsonl"
             spath = Path(td) / "solved.jsonl"
             items = [
-                self._item("h/1", [IoPair(args=[[1, 2, 3]], kwargs={}, expected=6),
-                                   IoPair(args=[[]], kwargs={}, expected=0)]),
-                self._item("h/2", [IoPair(args=[[10]], kwargs={}, expected=10),
-                                   IoPair(args=[[]], kwargs={}, expected=0)]),
+                self._item_unique("h/1", [IoPair(args=[[1, 2, 3]], kwargs={}, expected=6),
+                                           IoPair(args=[[]], kwargs={}, expected=0)]),
+                self._item_unique("h/2", [IoPair(args=[[10]], kwargs={}, expected=10),
+                                           IoPair(args=[[]], kwargs={}, expected=0)]),
             ]
             _write_queue(qpath, items)
 
-            # First run: solve both.
             r1 = run_session(
                 queue_path=qpath, solved_path=spath,
                 cascade_config=CascadeConfig(solver_names=["template_match"]),
@@ -58,7 +70,7 @@ class TestRunner(unittest.TestCase):
             )
             self.assertEqual(r1.problems_solved, 2)
 
-            # Second run: both should be skipped, 0 new attempts.
+            # Second run: legacy-log skip catches both → attempted stays 0.
             r2 = run_session(
                 queue_path=qpath, solved_path=spath,
                 cascade_config=CascadeConfig(solver_names=["template_match"]),
@@ -72,8 +84,9 @@ class TestRunner(unittest.TestCase):
             qpath = Path(td) / "q.jsonl"
             spath = Path(td) / "solved.jsonl"
             items = [
-                self._item(f"h/{i}", [IoPair(args=[[1, 2]], kwargs={}, expected=3),
-                                       IoPair(args=[[]], kwargs={}, expected=0)])
+                self._item_unique(f"h/{i}",
+                                  [IoPair(args=[[1, 2]], kwargs={}, expected=3),
+                                   IoPair(args=[[]], kwargs={}, expected=0)])
                 for i in range(5)
             ]
             _write_queue(qpath, items)

@@ -5,6 +5,12 @@ this solver tries a wider sweep: multiple independent samples at each
 of several temperatures, extracting the function body from each and
 returning the first candidate that passes the original test suite.
 
+Provenance tracking: on a successful solve the winning temperature and
+sample index are stashed in ``item.provenance`` so the cascade + the
+compounding store can persist them for future runs. This is what lets
+the daemon learn "problem shape X solves best at temperature 0.7" over
+many sessions.
+
 Integrated with the compounding stack: if a model + tokenizer is passed
 in, we also allow the coprocessor gate to flip between baseline and
 NPCoT-sampled settings across attempts. So the LLM-resample stage is
@@ -31,6 +37,7 @@ def make_llm_resampler(
     temperatures: Sequence[float] = (0.3, 0.5, 0.7, 0.9),
     samples_per_temp: int = 4,
     verify_fn: Optional[Callable[[WorkItem, str], tuple[bool, str]]] = None,
+    temperature_priority: Optional[Callable[[], Sequence[float]]] = None,
 ):
     """Return a solver callable the cascade can install.
 
@@ -49,21 +56,28 @@ def make_llm_resampler(
         Samples drawn per temperature. Total samples = len(temps) * this.
     verify_fn : callable, optional
         Per-sample verifier (bool, detail) = fn(item, code). If omitted,
-        falls back to :func:`cascade.verify_python_solution`. Useful if
-        the caller wants to skip verification (e.g. "any output is OK").
+        falls back to :func:`cascade.verify_python_solution`.
+    temperature_priority : callable, optional
+        If given, returns a reordered tuple of temperatures each solve.
+        Typical use: :meth:`CompoundingStore.temperature_priority` so
+        historically winning temperatures are tried first.
 
     Returns
     -------
     callable
-        A ``(item, *, budget_seconds) -> Optional[str]`` solver.
+        A ``(item, *, budget_seconds) -> Optional[str]`` solver. On a
+        successful solve, writes provenance keys
+        ``winning_temperature`` and ``winning_sample_idx`` into
+        ``item.provenance`` so downstream recorders can persist them.
     """
     from ncpu.autoresearch.cascade import verify_python_solution as _default_verify
     verify = verify_fn or _default_verify
 
     def _solver(item: WorkItem, *, budget_seconds: float = 120.0) -> Optional[str]:
         t0 = time.perf_counter()
-        for temp in temperatures:
-            for _ in range(samples_per_temp):
+        temps = tuple(temperature_priority()) if temperature_priority else tuple(temperatures)
+        for temp in temps:
+            for sample_idx in range(samples_per_temp):
                 if time.perf_counter() - t0 > budget_seconds:
                     return None
                 try:
@@ -73,6 +87,10 @@ def make_llm_resampler(
                 code = extract_code_fn(raw, item.prompt)
                 passed, _detail = verify(item, code)
                 if passed:
+                    item.provenance["winning_temperature"] = float(temp)
+                    item.provenance["winning_sample_idx"] = int(sample_idx)
+                    item.provenance["prompt"] = item.prompt
+                    item.provenance["entry_point"] = item.entry_point
                     return code
         return None
 
