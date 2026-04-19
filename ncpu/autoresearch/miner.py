@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -120,15 +121,52 @@ def _load_mbpp() -> dict[str, dict[str, Any]]:
     ds = load_dataset("mbpp", split="test")
     out: dict[str, dict[str, Any]] = {}
     for row in ds:
-        tid = f"mbpp/{row['task_id']}"
-        out[tid] = {
-            "task_id": tid,
-            "prompt": row["text"] + "\n\n" + row["test_list"][0] if row.get("test_list") else row["text"],
-            "test": "\n".join(row.get("test_list", [])) + "\n",
-            "canonical_solution": row.get("code", ""),
-            "entry_point": _guess_entry_point_from_mbpp(row),
-        }
+        task = _mbpp_task_from_row(row)
+        out[task["task_id"]] = task
     return out
+
+
+def _mbpp_task_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Reconstruct an MBPP row into a runnable WorkItem-shaped record."""
+    tid = f"mbpp/{row['task_id']}"
+    entry_point = _guess_entry_point_from_mbpp(row)
+    prompt = _build_mbpp_prompt_stub(row, entry_point)
+
+    test_parts = []
+    setup = row.get("test_setup_code", "")
+    if setup:
+        test_parts.append(setup.rstrip())
+    tests = row.get("test_list", [])
+    if tests:
+        test_parts.append("\n".join(tests))
+
+    return {
+        "task_id": tid,
+        "prompt": prompt,
+        "test": ("\n".join(test_parts).rstrip() + "\n") if test_parts else "",
+        "canonical_solution": row.get("code", ""),
+        "entry_point": entry_point,
+    }
+
+
+_DEF_LINE_RE = re.compile(r"^def\s+.+:\s*$")
+
+
+def _build_mbpp_prompt_stub(row: dict[str, Any], entry_point: str) -> str:
+    """Build a HumanEval-style function scaffold for MBPP verification."""
+    code = row.get("code") or ""
+    def_line = None
+    for line in code.splitlines():
+        if _DEF_LINE_RE.match(line.strip()):
+            def_line = line.strip()
+            break
+    if def_line is None:
+        def_line = f"def {entry_point}(*args, **kwargs):"
+
+    text = (row.get("text") or "").strip().replace('"""', '\\"\\"\\"')
+    if text:
+        return f"{def_line}\n    \"\"\"{text}\"\"\"\n"
+    return f"{def_line}\n"
 
 
 def _guess_entry_point_from_mbpp(row: dict[str, Any]) -> str:

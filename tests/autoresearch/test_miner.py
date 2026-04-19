@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ncpu.autoresearch.miner import extract_io_pairs, load_queue
+from ncpu.autoresearch.miner import _mbpp_task_from_row, extract_io_pairs, load_queue
 from ncpu.autoresearch.types import IoPair, WorkItem
 
 
@@ -111,6 +111,24 @@ class TestQueueRoundtrip(unittest.TestCase):
             self.assertEqual(pair.args[1], 1j)
             self.assertEqual(pair.kwargs["z"], (-2 + 0j))
             self.assertEqual(pair.expected, (2 + 3j))
+
+
+class TestMBPPTaskReconstruction(unittest.TestCase):
+    def test_builds_python_prompt_and_preserves_setup_code(self):
+        row = {
+            "task_id": 1,
+            "text": "Return the ceiling square root.",
+            "code": "def ceil_sqrt(x):\n    return math.ceil(math.sqrt(x))\n",
+            "test_list": ["assert ceil_sqrt(10) == 4"],
+            "test_setup_code": "import math",
+        }
+        task = _mbpp_task_from_row(row)
+        self.assertEqual(task["task_id"], "mbpp/1")
+        self.assertEqual(task["entry_point"], "ceil_sqrt")
+        self.assertIn("def ceil_sqrt(x):", task["prompt"])
+        self.assertIn('"""Return the ceiling square root."""', task["prompt"])
+        self.assertTrue(task["test"].startswith("import math\n"))
+        self.assertIn("assert ceil_sqrt(10) == 4", task["test"])
 
 
 if __name__ == "__main__":
