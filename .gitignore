@@ -69,17 +69,22 @@ ncpu/os/neuros/_recovered_*
 benchmarks/internal_trajectories/
 training/internal_controller_bootstrap/
 training/real_memory_proof_*/
-tmp_benchmark.py
-todo.md
-todo_self_optimizing.md
+scripts/dev/tmp_benchmark.py
+docs/plans/workspace_todo.md
+some/todo.md
 docs/DIAGRAM_PROMPT.md
-docs/some/arch_full.png
-docs/some/diagrams.md
-docs/some/inference_diagram.png
-docs/some/diagram.svg
+some/docs/architecture/arch_full.png
+some/docs/architecture/diagrams.md
+some/docs/architecture/inference_diagram.png
+some/docs/architecture/diagram.svg
 
 # Archive (legacy experiments)
 archive/
+artifacts/archives/
 experiments/ablation_results/
 outputs/
 .mog_synth_memory/
+nsynth/.mog_synth_memory/
+
+# autoresearch local artifacts
+.nCPU_autoresearch/
