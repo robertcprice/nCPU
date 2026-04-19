@@ -32,6 +32,12 @@ def check(candidate):
 """
 
 
+MBPP_ADD_TEST = """
+assert add(1, 2) == 3
+assert add(10, -5) == 5
+"""
+
+
 class TestParseParams(unittest.TestCase):
     def test_two_params(self):
         self.assertEqual(_parse_params(ADD_PROMPT, "add"), ["a", "b"])
@@ -130,6 +136,25 @@ class TestCascade(unittest.TestCase):
         r = run_cascade(item, config=cfg)
         self.assertTrue(hits["called"])
         self.assertTrue(r.solved)
+
+    def test_mbpp_style_top_level_asserts_verify(self):
+        pairs = [
+            IoPair(args=[1, 2], kwargs={}, expected=3),
+            IoPair(args=[10, -5], kwargs={}, expected=5),
+        ]
+        item = WorkItem(
+            task_id="mbpp/add",
+            source_benchmark="mbpp",
+            prompt=ADD_PROMPT,
+            entry_point="add",
+            test_source=MBPP_ADD_TEST,
+            io_pairs=pairs,
+            priority=1.0,
+        )
+        cfg = CascadeConfig(solver_names=["template_match"])
+        r = run_cascade(item, config=cfg)
+        self.assertTrue(r.solved)
+        self.assertEqual(r.solver, "template_match")
 
 
 if __name__ == "__main__":

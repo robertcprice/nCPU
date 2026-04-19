@@ -30,16 +30,61 @@ def verify_python_solution(item: WorkItem, candidate_code: str) -> tuple[bool, s
     ``candidate_code`` is a function body (or full function) that, when
     concatenated after ``item.prompt``, gives a runnable Python module.
     Returns ``(passed, detail_message)``.
+
+    HumanEval-style tests expose a ``check(candidate)`` wrapper.
+    MBPP-style tests are usually a raw block of top-level ``assert``
+    statements over the function name directly. Support both here so the
+    cascade can verify mined hard-fails from either benchmark.
     """
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
     from ncpu.self_optimizing.humaneval_runner import _check_solution
+
     full = item.prompt + candidate_code
-    problem = {
-        "task_id": item.task_id,
-        "prompt": item.prompt,
-        "test": item.test_source,
-        "entry_point": item.entry_point,
-    }
-    return _check_solution(problem, full)
+    if "def check(" in item.test_source:
+        problem = {
+            "task_id": item.task_id,
+            "prompt": item.prompt,
+            "test": item.test_source,
+            "entry_point": item.entry_point,
+        }
+        return _check_solution(problem, full)
+
+    harness = "\n".join([
+        "import sys",
+        "# === solution ===",
+        full,
+        "# === test ===",
+        item.test_source,
+        "print('OK')",
+    ])
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as fh:
+        fh.write(harness)
+        tmp_path = fh.name
+
+    try:
+        result = subprocess.run(
+            [sys.executable, tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        if result.returncode == 0 and "OK" in result.stdout:
+            return True, ""
+        error = (result.stderr or result.stdout).strip().splitlines()[-1:]
+        return False, (error[0] if error else "nonzero exit")
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+    finally:
+        try:
+            Path(tmp_path).unlink()
+        except OSError:
+            pass
 
 
 @dataclass
