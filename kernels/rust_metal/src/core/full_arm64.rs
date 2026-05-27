@@ -20,7 +20,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::time::{Duration, Instant};
 
-use crate::continuous::{ContinuousResult, Signal};
+use crate::execution::continuous::{ContinuousResult, Signal};
 use crate::{get_default_device, MetalError};
 
 /// Full ARM64 Metal shader source — 139 instructions, single-buffer mode

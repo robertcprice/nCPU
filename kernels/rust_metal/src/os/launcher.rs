@@ -22,13 +22,13 @@ use objc2_metal::{
 
 use pyo3::types::PyDictMethods;
 
-use crate::elf_loader::PreparedElf;
-use crate::full_arm64::FULL_ARM64_SHADER;
+use crate::loader::elf_loader::PreparedElf;
+use crate::core::full_arm64::FULL_ARM64_SHADER;
 use crate::get_default_device;
-use crate::process::{
+use crate::os::process::{
     GpuSnapshot, ProcessManager, ProcessState, HEAP_BASE, MAX_CYCLE_LIMIT, MMAP_BASE,
 };
-use crate::vfs::{FdEntry, FdKind, GpuVfs, HostSocketState};
+use crate::loader::vfs::{FdEntry, FdKind, GpuVfs, HostSocketState};
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -673,7 +673,7 @@ impl GpuLauncher {
                 .iter()
                 .map(|(key, value)| (key.as_str(), value.as_str()))
                 .collect::<Vec<_>>();
-            let prepared = match crate::elf_loader::prepare_elf(
+            let prepared = match crate::loader::elf_loader::prepare_elf(
                 &binary,
                 &argv_refs,
                 &env_refs,
@@ -2514,7 +2514,7 @@ impl GpuLauncher {
                 // Accept AF_INET + SOCK_STREAM (TCP) or SOCK_DGRAM (UDP)
                 if domain == 2 {
                     if let Some(ref mut vfs) = vfs {
-                        use crate::vfs::HostSocketState;
+                        use crate::loader::vfs::HostSocketState;
                         let state = if sock_type == 1 {
                             // TCP
                             HostSocketState::PendingTcp {
@@ -2560,8 +2560,8 @@ impl GpuLauncher {
                     if family != 2 {
                         SyscallResult::Continue(-97) // -EAFNOSUPPORT
                     } else if let Some(entry) = vfs.fd_table.get(&sockfd) {
-                        use crate::vfs::FdKind;
-                        use crate::vfs::HostSocketState;
+                        use crate::loader::vfs::FdKind;
+                        use crate::loader::vfs::HostSocketState;
                         if let FdKind::HostSocket(socket) = &entry.kind {
                             let mut state = socket.lock().unwrap();
                             if let HostSocketState::PendingTcp { bind_host, bind_port } | HostSocketState::PendingUdp { bind_host, bind_port } = &mut *state {
@@ -2595,8 +2595,8 @@ impl GpuLauncher {
                     // listen(backlog)
                     if let Some(ref vfs) = vfs {
                         if let Some(entry) = vfs.fd_table.get(&sockfd) {
-                            use crate::vfs::FdKind;
-                            use crate::vfs::HostSocketState;
+                            use crate::loader::vfs::FdKind;
+                            use crate::loader::vfs::HostSocketState;
                             if let FdKind::HostSocket(socket) = &entry.kind {
                                 let mut state = socket.lock().unwrap();
                                 if let HostSocketState::PendingTcp { bind_host, bind_port } | HostSocketState::PendingUdp { bind_host, bind_port } = &mut *state {
@@ -2640,8 +2640,8 @@ impl GpuLauncher {
                         if family != 2 {
                             SyscallResult::Continue(-97)
                         } else if let Some(entry) = vfs.fd_table.get(&sockfd) {
-                            use crate::vfs::FdKind;
-                            use crate::vfs::HostSocketState;
+                            use crate::loader::vfs::FdKind;
+                            use crate::loader::vfs::HostSocketState;
                             if let FdKind::HostSocket(socket) = &entry.kind {
                                 let mut state = socket.lock().unwrap();
                                 if let HostSocketState::PendingTcp { .. } | HostSocketState::PendingUdp { .. } = &mut *state {
@@ -2677,8 +2677,8 @@ impl GpuLauncher {
 
                 if let Some(ref vfs) = vfs {
                     if let Some(entry) = vfs.fd_table.get(&sockfd) {
-                        use crate::vfs::FdKind;
-                        use crate::vfs::HostSocketState;
+                        use crate::loader::vfs::FdKind;
+                        use crate::loader::vfs::HostSocketState;
                         if let FdKind::HostSocket(socket) = &entry.kind {
                             let mut state = socket.lock().unwrap();
                             if let HostSocketState::PendingTcp { bind_host, bind_port } | HostSocketState::PendingUdp { bind_host, bind_port } = &mut *state {
@@ -2722,8 +2722,8 @@ impl GpuLauncher {
                     Some(e) => e,
                     None => return SyscallResult::Continue(-9),
                 };
-                use crate::vfs::FdKind;
-                use crate::vfs::HostSocketState;
+                use crate::loader::vfs::FdKind;
+                use crate::loader::vfs::HostSocketState;
                 if let FdKind::HostSocket(socket) = entry.kind {
                     let mut state = socket.lock().unwrap();
                     if let HostSocketState::Listener(listener) = &mut *state {
@@ -3797,7 +3797,7 @@ impl GpuLauncher {
 
 /// Handle syscalls using the GPU microkernel instead of Linux VFS
 pub fn handle_microkernel_syscall(
-    kernel: &mut crate::microkernel::GpuMicrokernel,
+    kernel: &mut crate::core::microkernel::GpuMicrokernel,
     num: i64,
     x0: i64,
     x1: i64,
@@ -3807,7 +3807,7 @@ pub fn handle_microkernel_syscall(
     _stderr_buf: &mut Vec<u8>,
 ) -> SyscallResult {
     
-    use crate::microkernel::FdKind;
+    use crate::core::microkernel::FdKind;
 
     #[allow(unreachable_patterns)]
     match num {
@@ -4070,7 +4070,7 @@ pub fn handle_microkernel_syscall(
 }
 
 /// Helper to read a null-terminated string from process memory
-fn read_cstring(_kernel: &crate::microkernel::GpuMicrokernel, _addr: u64, _max_len: usize) -> String {
+fn read_cstring(_kernel: &crate::core::microkernel::GpuMicrokernel, _addr: u64, _max_len: usize) -> String {
     // This would need access to process memory
     // Simplified for now
     String::new()

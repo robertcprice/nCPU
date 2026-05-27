@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder,
+    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
     MTLComputeCommandEncoder, MTLComputePipelineState,
     MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
@@ -287,15 +287,17 @@ impl PureNeuralDispatchCPU {
             .ok_or(MetalError::ExecutionFailed)?;
 
         encoder.setComputePipelineState(&self.pipeline);
-        encoder.setBuffer(0, Some(&self.dispatch_weights_buf), 0);
-        encoder.setBuffer(1, Some(&self.test_inst_buf), 0);
-        encoder.setBuffer(2, Some(&self.test_pc_buf), 0);
-        encoder.setBuffer(3, Some(&self.predictions_buf), 0);
+        unsafe {
+            encoder.setBuffer_offset_atIndex(Some(&self.dispatch_weights_buf), 0, 0);
+            encoder.setBuffer_offset_atIndex(Some(&self.test_inst_buf), 0, 1);
+            encoder.setBuffer_offset_atIndex(Some(&self.test_pc_buf), 0, 2);
+            encoder.setBuffer_offset_atIndex(Some(&self.predictions_buf), 0, 3);
+        }
 
         let threads = MTLSize { width: 1, height: 1, depth: 1 };
         let threadgroups = MTLSize { width: 1, height: 1, depth: 1 };
 
-        encoder.dispatchThreadgroups_threads(threadgroups, threads);
+        encoder.dispatchThreadgroups_threadsPerThreadgroup(threadgroups, threads);
         encoder.endEncoding();
 
         command_buffer.commit();

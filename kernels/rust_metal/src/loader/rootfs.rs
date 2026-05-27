@@ -1,7 +1,7 @@
 //! Rootfs loader — populate a GpuVfs from a boot image's rootfs region.
 
-use crate::boot_image::unpack_rootfs;
-use crate::vfs::GpuVfs;
+use crate::loader::boot_image::unpack_rootfs;
+use crate::loader::vfs::GpuVfs;
 
 /// Load rootfs entries from a packed boot image rootfs region into a VFS.
 ///

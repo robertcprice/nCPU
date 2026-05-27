@@ -10,36 +10,28 @@
 
 use std::cell::RefCell;
 
-mod async_gpu;
-mod bb_cache;
-pub mod bb_cache_runtime;
-pub mod boot_image;
-mod continuous;
-mod diff_jit;
-mod differentiable_ooo;
-pub mod elf_loader;
-mod full_arm64;
-mod fusion;
-mod jit_compiler;
-pub mod launcher;
-pub mod micro_op;
-pub mod microkernel;
-pub mod gpu_optimizer;
-mod multi_kernel;
-pub mod native_abi;
-mod neural_alu;
-mod neural_cpu;
-mod neural_display;
-mod neural_dispatch;
-mod neural_os;
-mod neural_os_models;
-mod neural_jepa_kernel;  // JEPA / learned neural kernel execution engine (the "JEPA CPU" in Rust)
-mod neural_hybrid;
-mod neural_ooo;
-mod neural_weights;
-pub mod npcot_exec;
-mod ooo_exec;
-mod optimized;
+// =============================================================================
+// Public module structure (reorganized from flat src/ into logical layers)
+// =============================================================================
+
+pub mod cache;     // Blackboard / working memory caches
+pub mod core;      // Fundamental ARM64 CPU emulation engine
+pub mod execution; // Different execution engine variants (pure, ultra, OOO, JIT, differentiable, etc.)
+pub mod jepa;      // JEPA Neural Kernel + learned Neural OS (3 decision levers)
+pub mod loader;    // ELF loading, boot images, rootfs, VFS
+pub mod neural;    // Neural ALU, weights, dispatch, neural CPU variants
+pub mod os;        // Process model, launcher, runtime (the multi-process UNIX substrate)
+pub mod support;   // Small supporting utilities
+
+// =============================================================================
+// Convenient top-level re-exports
+// =============================================================================
+pub use os::launcher::GpuLauncher;
+pub use os::process::{Process, ProcessManager, ProcessState};
+
+pub use core::FullARM64CPU;
+pub use jepa::NeuralJepaKernel;
+pub use loader::elf_loader::PreparedElf;
 
 // Thread-local storage for framebuffer callback
 thread_local! {
@@ -64,16 +56,7 @@ pub fn call_framebuffer_callback(width: u32, height: u32, data: &[u8]) {
         }
     });
 }
-mod parallel;
-pub mod process;
-mod pure_gpu;
-pub mod rootfs;
-mod trace_jit;
-mod ultra;
-mod ultra_optimized;
-mod unified_diff_cpu;
-mod unified_test_kernel;
-pub mod vfs;
+
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -1752,10 +1735,8 @@ fn run_elf(
     py: Python<'_>,
 ) -> PyResult<Py<PyAny>> {
     use std::fs;
-    use launcher::GpuLauncher;
-    use elf_loader::{prepare_elf, DEFAULT_ENVP};
-    use rootfs::create_standard_dirs;
-    use vfs::GpuVfs;
+    use crate::os::launcher::GpuLauncher;
+    use loader::{elf_loader::{prepare_elf, DEFAULT_ENVP}, rootfs::create_standard_dirs, vfs::GpuVfs};
 
     // Set the framebuffer callback if provided
     set_framebuffer_callback(on_framebuffer);
@@ -1908,7 +1889,7 @@ fn run_microkernel(
     max_ticks: Option<u64>,
     py: Python<'_>,
 ) -> PyResult<Py<PyAny>> {
-    use microkernel::GpuMicrokernel;
+    use crate::core::microkernel::GpuMicrokernel;
     use pyo3::types::PyDict;
 
     let max_ticks = max_ticks.unwrap_or(1_000_000);
@@ -1965,38 +1946,37 @@ fn ncpu_metal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     {
         m.add_function(wrap_pyfunction!(run_microkernel, m)?)?;
     }
-    continuous::register_continuous(m)?;
-    async_gpu::register_async(m)?;
-    parallel::register_parallel(m)?;
-    multi_kernel::register_multi_kernel(m)?;
-    neural_alu::register_neural_alu(m)?;
-    npcot_exec::register_npcot_exec(m)?;
-    neural_display::register_neural_display(m)?;
-    neural_dispatch::register_neural(m)?;
-    neural_os::register_neural_os(m)?;
-    neural_os_models::register_neural_os_models(m)?;
-    neural_weights::register_weights(m)?;
-    pure_gpu::register_pure_gpu(m)?;
-    optimized::register_optimized(m)?;
-    ultra_optimized::register_hyper_optimized(m)?;
-    fusion::register_fusion(m)?;
-    bb_cache::register_bb_cache(m)?;
-    ultra::register_ultra(m)?;
-    trace_jit::register_trace_jit(m)?;
-    ooo_exec::register_ooo_exec(m)?;
-    neural_ooo::register_neural_ooo(m)?;
-    neural_hybrid::register_neural_hybrid(m)?;
-    differentiable_ooo::register_diff_ooo(m)?;
-    jit_compiler::register_jit_compiler(m)?;
-    diff_jit::register_diff_jit(m)?;
-    unified_diff_cpu::register_unified_diff_cpu(m)?;
-    unified_test_kernel::register_minimal_test_cpu(m)?;
-    full_arm64::register_full_arm64(m)?;
-    neural_cpu::register_neural_cpu(m)?;
-    gpu_optimizer::register_gpu_optimizer(m)?;
+    execution::continuous::register_continuous(m)?;
+    execution::async_gpu::register_async(m)?;
+    execution::parallel::register_parallel(m)?;
+    execution::multi_kernel::register_multi_kernel(m)?;
+    neural::neural_alu::register_neural_alu(m)?;
+    support::npcot_exec::register_npcot_exec(m)?;
+    neural::neural_display::register_neural_display(m)?;
+    neural::neural_dispatch::register_neural(m)?;
+    jepa::neural_os::register_neural_os(m)?;
+    jepa::neural_os_models::register_neural_os_models(m)?;
+    neural::neural_weights::register_weights(m)?;
+    execution::pure_gpu::register_pure_gpu(m)?;
+    execution::optimized::register_optimized(m)?;
+    execution::ultra_optimized::register_hyper_optimized(m)?;
+    execution::fusion::register_fusion(m)?;
+    cache::bb_cache::register_bb_cache(m)?;
+    execution::ultra::register_ultra(m)?;
+    execution::trace_jit::register_trace_jit(m)?;
+    execution::ooo_exec::register_ooo_exec(m)?;
+    execution::neural_ooo::register_neural_ooo(m)?;
+    neural::neural_hybrid::register_neural_hybrid(m)?;
+    execution::differentiable_ooo::register_diff_ooo(m)?;
+    execution::jit_compiler::register_jit_compiler(m)?;
+    execution::diff_jit::register_diff_jit(m)?;
+    execution::unified_diff_cpu::register_unified_diff_cpu(m)?;
+    execution::unified_test_kernel::register_minimal_test_cpu(m)?;
+    core::full_arm64::register_full_arm64(m)?;
+    neural::neural_cpu::register_neural_cpu(m)?;
 
     // JEPA / learned neural kernel (the "JEPA CPU" execution engine in Rust)
-    neural_jepa_kernel::register_neural_jepa_kernel(m)?;
+    jepa::neural_jepa_kernel::register_neural_jepa_kernel(m)?;
 
     Ok(())
 }

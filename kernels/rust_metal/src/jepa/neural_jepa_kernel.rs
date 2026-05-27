@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::process::{Process, ProcessManager, ProcessState};
+use crate::os::process::{Process, ProcessManager, ProcessState};
 
 /// A minimal but functional neural kernel execution environment in Rust.
 ///
@@ -566,8 +566,8 @@ impl NeuralJepaKernel {
             dict.set_item("registers", proc.registers.to_vec())?;
             dict.set_item("flags", proc.flags.to_vec())?;
             dict.set_item("total_cycles", proc.total_cycles)?;
-            dict.set_item("memory_base", crate::process::ProcessManager::backing_addr(pid))?;
-            dict.set_item("memory_size", crate::process::BACKING_STORE_SIZE)?;
+            dict.set_item("memory_base", crate::os::process::ProcessManager::backing_addr(pid))?;
+            dict.set_item("memory_size", crate::os::process::BACKING_STORE_SIZE)?;
         } else {
             dict.set_item("error", format!("process {} not found", pid))?;
         }
@@ -587,8 +587,8 @@ impl NeuralJepaKernel {
 
         if let Some(proc) = self.process_manager.processes.get(&pid) {
             dict.set_item("pid", proc.pid)?;
-            dict.set_item("memory_base", crate::process::ProcessManager::backing_addr(pid))?;
-            dict.set_item("memory_size", crate::process::BACKING_STORE_SIZE)?;
+            dict.set_item("memory_base", crate::os::process::ProcessManager::backing_addr(pid))?;
+            dict.set_item("memory_size", crate::os::process::BACKING_STORE_SIZE)?;
             dict.set_item("heap_break", proc.heap_break)?;
             dict.set_item("mmap_next", proc.mmap_next)?;
 

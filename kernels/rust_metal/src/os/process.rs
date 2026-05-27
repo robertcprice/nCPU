@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::vfs::{FdEntry, FdKind, GpuVfs};
+use crate::loader::vfs::{FdEntry, FdKind, GpuVfs};
 
 // ── Constants ────────────────────────────────────────────────────────────
 

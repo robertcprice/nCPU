@@ -31,7 +31,7 @@
 
 use std::time::SystemTime;
 
-use crate::vfs::GpuVfs;
+use crate::loader::vfs::GpuVfs;
 
 // ── SVC discriminator ────────────────────────────────────────────────────
 
@@ -435,7 +435,7 @@ fn read_cstring(memory_reader: &dyn Fn(usize, usize) -> Vec<u8>, addr: usize) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::GpuVfs;
+    use crate::loader::vfs::GpuVfs;
 
     // ── Helpers for tests ────────────────────────────────────────────────
 

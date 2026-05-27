@@ -578,7 +578,7 @@ impl GpuVfs {
             FdKind::HostSocket(socket) => {
                 // Read from TCP stream
                 use std::io::Read;
-                use crate::vfs::HostSocketState;
+                use crate::loader::vfs::HostSocketState;
                 let mut state = socket.lock().unwrap();
                 if let HostSocketState::Stream(stream) = &mut *state {
                     let mut buf = vec![0u8; count.min(4096)];
@@ -662,7 +662,7 @@ impl GpuVfs {
             FdKind::HostSocket(socket) => {
                 // Write to TCP stream
                 
-                use crate::vfs::HostSocketState;
+                use crate::loader::vfs::HostSocketState;
                 let mut state = socket.lock().unwrap();
                 if let HostSocketState::Stream(stream) = &mut *state {
                     use std::io::Write;

@@ -4,7 +4,7 @@
 //! and a single exit point (branch, SVC, or HLT). By caching block extents, the launcher
 //! can dispatch exactly the right number of cycles for a block, avoiding over-dispatching.
 
-use crate::micro_op::{MicroOp, OpKind};
+use crate::core::micro_op::{MicroOp, OpKind};
 use std::collections::HashMap;
 
 /// A cached basic block.

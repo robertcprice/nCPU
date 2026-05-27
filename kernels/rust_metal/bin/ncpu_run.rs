@@ -12,14 +12,16 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
-use ncpu_metal::boot_image::{
-    deserialize_region, deserialize_task, validate_image, BootImageHeader, BootRegionDesc,
-    BootTaskDesc,
+use ncpu_metal::os::launcher::GpuLauncher;
+use ncpu_metal::loader::{
+    boot_image::{
+        deserialize_region, deserialize_task, validate_image, BootImageHeader, BootRegionDesc,
+        BootTaskDesc,
+    },
+    elf_loader,
+    rootfs::{create_standard_dirs, load_rootfs_into_vfs},
+    vfs::GpuVfs,
 };
-use ncpu_metal::elf_loader;
-use ncpu_metal::launcher::GpuLauncher;
-use ncpu_metal::rootfs::{create_standard_dirs, load_rootfs_into_vfs};
-use ncpu_metal::vfs::GpuVfs;
 
 const MIB: usize = 1024 * 1024;
 const DEFAULT_MEMORY_MB: usize = 16;
