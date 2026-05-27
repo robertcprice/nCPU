@@ -406,12 +406,12 @@ class NeuralScheduler:
 
     # ─── Persistence ──────────────────────────────────────────────────────
 
-    def save(self, path: str = "models/os/scheduler.pt"):
+    def save(self, path: str = "models/research/neuros/scheduler.pt"):
         """Save the trained scheduler."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.net.state_dict(), path)
 
-    def load(self, path: str = "models/os/scheduler.pt") -> bool:
+    def load(self, path: str = "models/research/neuros/scheduler.pt") -> bool:
         """Load a trained scheduler."""
         p = Path(path)
         if not p.exists():

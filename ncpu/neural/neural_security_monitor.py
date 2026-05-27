@@ -643,7 +643,7 @@ class NeuralSecurityMonitor:
         """Save the trained autoencoder weights.
 
         Args:
-            path: Save path. Defaults to models/os/security_monitor.pt.
+            path: Save path. Defaults to models/research/neuros/security_monitor.pt.
         """
         save_path = Path(path) if path else DEFAULT_MODEL_PATH
         save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -654,7 +654,7 @@ class NeuralSecurityMonitor:
         """Load pretrained autoencoder weights.
 
         Args:
-            path: Load path. Defaults to models/os/security_monitor.pt.
+            path: Load path. Defaults to models/research/neuros/security_monitor.pt.
 
         Returns:
             True if loaded successfully.

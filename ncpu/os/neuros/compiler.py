@@ -1039,11 +1039,11 @@ class NeuralCompiler:
 
     # ─── Persistence ──────────────────────────────────────────────────────
 
-    def save(self, path: str = "models/os/compiler_optimizer.pt"):
+    def save(self, path: str = "models/research/neuros/compiler_optimizer.pt"):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.optimizer_net.state_dict(), path)
 
-    def load(self, path: str = "models/os/compiler_optimizer.pt") -> bool:
+    def load(self, path: str = "models/research/neuros/compiler_optimizer.pt") -> bool:
         if Path(path).exists():
             self.optimizer_net.load_state_dict(
                 torch.load(path, map_location=self.device, weights_only=True))

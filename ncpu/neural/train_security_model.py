@@ -306,7 +306,7 @@ def prepare_sequences(traces: List[List[int]], seq_len: int = 64,
 
 def train(epochs: int = 80, batch_size: int = 64, lr: float = 1e-3,
           n_traces: int = 800, seq_len: int = 64):
-    """Train the security LSTM and save to models/os/security_lstm.pt."""
+    """Train the security LSTM and save to models/research/neuros/security_lstm.pt."""
     device = "cpu"
     if torch.backends.mps.is_available():
         device = "mps"
@@ -467,7 +467,7 @@ def train(epochs: int = 80, batch_size: int = 64, lr: float = 1e-3,
 
 def train_autoencoder(epochs: int = 80, batch_size: int = 64, lr: float = 1e-3,
                       n_traces: int = 800, window_size: int = 32):
-    """Train the SyscallAutoencoder and save to models/os/security_monitor.pt.
+    """Train the SyscallAutoencoder and save to models/research/neuros/security_monitor.pt.
 
     The autoencoder learns to reconstruct normal syscall windows through a
     latent bottleneck. Anomalous sequences that deviate from normal patterns

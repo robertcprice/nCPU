@@ -1290,7 +1290,7 @@ Examples:
     parser.add_argument("--patience", type=int, default=500,
                         help="Early stopping patience in epochs (default: 500)")
     parser.add_argument("--output-dir", type=str, default=None,
-                        help="Output directory for models (default: models/os/)")
+                        help="Output directory for models (default: models/research/neuros/)")
     parser.add_argument("--quick", action="store_true",
                         help="Quick smoke test with reduced epochs")
     parser.add_argument("--codegen-only", action="store_true",

@@ -903,7 +903,7 @@ def main():
     parser.add_argument("--device", type=str, default="auto",
                         help="Device: auto, cpu, mps, cuda")
     parser.add_argument("--save-path", type=str, default=None,
-                        help="Output model path (default: models/os/cache_replace_optimal.pt)")
+                        help="Output model path (default: models/research/neuros/cache_replace_optimal.pt)")
     args = parser.parse_args()
 
     print("=" * 66)

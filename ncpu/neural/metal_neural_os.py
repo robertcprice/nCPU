@@ -35,7 +35,7 @@ MODELS_DIR = Path(__file__).parent.parent.parent / "models"
 # Weight extraction helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_gic_weights(path: str = "models/os/gic.pt") -> Optional[list[float]]:
+def _extract_gic_weights(path: str = "models/research/neuros/gic.pt") -> Optional[list[float]]:
     """Extract GIC MLP weights as flat float list (12,448 values).
 
     Layout:
@@ -65,7 +65,7 @@ def _extract_gic_weights(path: str = "models/os/gic.pt") -> Optional[list[float]
         return None
 
 
-def _extract_watchdog_weights(path: str = "models/os/watchdog.pt") -> Optional[list[float]]:
+def _extract_watchdog_weights(path: str = "models/research/neuros/watchdog.pt") -> Optional[list[float]]:
     """Extract Watchdog LSTM + scorer weights as flat float list (5,921 values).
 
     Layout:
@@ -97,7 +97,7 @@ def _extract_watchdog_weights(path: str = "models/os/watchdog.pt") -> Optional[l
         return None
 
 
-def _extract_compiler_weights(path: str = "models/os/compiler_optimizer.pt") -> Optional[list[float]]:
+def _extract_compiler_weights(path: str = "models/research/neuros/compiler_optimizer.pt") -> Optional[list[float]]:
     """Extract Compiler Optimizer MLP weights as flat float list (3,269 values).
 
     Layout:
@@ -289,7 +289,7 @@ def load_metal_neural_os(
 ) -> MetalNeuralOS:
     """Load neural OS model weights and create a MetalNeuralOS instance.
 
-    Loads trained .pt models from models/os/ and transfers their weights
+    Loads trained .pt models from models/research/neuros/ and transfers their weights
     to Metal GPU buffers for native shader execution.
 
     Args:

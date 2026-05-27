@@ -328,7 +328,7 @@ class NeuralErrorRecoveryModel(nn.Module):
 
 def train(epochs: int = 80, batch_size: int = 64, lr: float = 1e-3,
           samples_per_class: int = 200):
-    """Train the error recovery model and save to models/os/error_recovery.pt."""
+    """Train the error recovery model and save to models/research/neuros/error_recovery.pt."""
     device = "cpu"
     if torch.backends.mps.is_available():
         device = "mps"

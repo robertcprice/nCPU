@@ -621,12 +621,12 @@ class NeuralFilesystem:
 
     # ─── Persistence ──────────────────────────────────────────────────────
 
-    def save(self, path: str = "models/os/block_alloc.pt"):
+    def save(self, path: str = "models/research/neuros/block_alloc.pt"):
         from pathlib import Path as P
         P(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self._allocator_net.state_dict(), path)
 
-    def load(self, path: str = "models/os/block_alloc.pt") -> bool:
+    def load(self, path: str = "models/research/neuros/block_alloc.pt") -> bool:
         from pathlib import Path as P
         if not P(path).exists():
             return False

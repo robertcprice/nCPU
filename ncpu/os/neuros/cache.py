@@ -401,15 +401,15 @@ class NeuralCache:
 
     # ─── Persistence ──────────────────────────────────────────────────────
 
-    def save(self, replace_path: str = "models/os/cache_replace.pt",
-             prefetch_path: str = "models/os/prefetch.pt"):
+    def save(self, replace_path: str = "models/research/neuros/cache_replace.pt",
+             prefetch_path: str = "models/research/neuros/prefetch.pt"):
         """Save trained models."""
         Path(replace_path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.replacer.state_dict(), replace_path)
         torch.save(self.prefetcher.state_dict(), prefetch_path)
 
-    def load(self, replace_path: str = "models/os/cache_replace.pt",
-             prefetch_path: str = "models/os/prefetch.pt") -> Dict[str, bool]:
+    def load(self, replace_path: str = "models/research/neuros/cache_replace.pt",
+             prefetch_path: str = "models/research/neuros/prefetch.pt") -> Dict[str, bool]:
         """Load trained models."""
         result = {}
         if Path(replace_path).exists():

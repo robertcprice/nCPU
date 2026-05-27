@@ -100,7 +100,7 @@ _kernel_loader = MetalKernelLoader()
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_watchdog_weights(
-    model_path: str = "models/os/watchdog.pt",
+    model_path: str = "models/research/neuros/watchdog.pt",
 ) -> Optional[list[float]]:
     """Load watchdog weights from .npy cache or .pt checkpoint.
 
@@ -152,7 +152,7 @@ def _load_watchdog_weights(
 
 
 def _load_gic_weights(
-    model_path: str = "models/os/gic.pt",
+    model_path: str = "models/research/neuros/gic.pt",
 ) -> Optional[list[float]]:
     """Load GIC weights from .npy cache or .pt checkpoint.
 
@@ -217,7 +217,7 @@ class MetalWatchdog:
 
     def __init__(
         self,
-        model_path: str = "models/os/watchdog.pt",
+        model_path: str = "models/research/neuros/watchdog.pt",
         verbose: bool = False,
     ):
         self._metal_kernel = None
@@ -391,7 +391,7 @@ class MetalGIC:
 
     def __init__(
         self,
-        model_path: str = "models/os/gic.pt",
+        model_path: str = "models/research/neuros/gic.pt",
         verbose: bool = False,
     ):
         self._metal_kernel = None
@@ -597,7 +597,7 @@ class MetalGIC:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_metal_watchdog(
-    model_path: str = "models/os/watchdog.pt",
+    model_path: str = "models/research/neuros/watchdog.pt",
     verbose: bool = False,
 ) -> MetalWatchdog:
     """Load the Metal Watchdog LSTM anomaly detector.
@@ -616,7 +616,7 @@ def load_metal_watchdog(
 
 
 def load_metal_gic(
-    model_path: str = "models/os/gic.pt",
+    model_path: str = "models/research/neuros/gic.pt",
     verbose: bool = False,
 ) -> MetalGIC:
     """Load the Metal GIC neural priority encoder.

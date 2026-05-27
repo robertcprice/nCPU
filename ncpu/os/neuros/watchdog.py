@@ -305,12 +305,12 @@ class NeuralWatchdog:
 
     # ─── Persistence ───────────────────────────────────────────────────────
 
-    def save(self, path: str = "models/os/watchdog.pt"):
+    def save(self, path: str = "models/research/neuros/watchdog.pt"):
         """Save the trained watchdog model."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.net.state_dict(), path)
 
-    def load(self, path: str = "models/os/watchdog.pt") -> bool:
+    def load(self, path: str = "models/research/neuros/watchdog.pt") -> bool:
         """Load a trained watchdog model.
 
         Returns:

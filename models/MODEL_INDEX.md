@@ -65,7 +65,13 @@ Qwen2.5-Coder-1.5B with LoRA adapter for semantic instruction decode.
 
 ## Research (`research/`)
 
-Gitignored. Contains large experimental models.
+Contains experimental / research models that are **not** part of the production wired neural ALU.
+
+- `research/predictors/` — Microarchitectural neural predictors (branch, hazard, dependency, instruction scheduler, direct_alu). These are opt-in research components for the differentiable / neural CPU surface. See `research/predictors/README.md`.
+- `research/neuros/` — Neural OS ("neuros") models (assembler, cache, compiler, mmu, scheduler, security, tlb, watchdog, etc.). Used by `ncpu/os/neuros/` and `ncpu/neural/metal_neural_os*`.
+- `neural/` — Neural state / world model components (CAM, registers, ECC memory). Used by JEPA and differentiable research paths.
+
+These models are distinct from the production models in `alu/`, `math/`, and `shifts/`.
 
 ## Summary
 

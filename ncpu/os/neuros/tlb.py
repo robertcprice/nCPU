@@ -321,12 +321,12 @@ class NeuralTLB:
 
     # ─── Persistence ──────────────────────────────────────────────────────
 
-    def save(self, path: str = "models/os/tlb.pt"):
+    def save(self, path: str = "models/research/neuros/tlb.pt"):
         """Save the trained eviction policy."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.eviction_policy.state_dict(), path)
 
-    def load(self, path: str = "models/os/tlb.pt") -> bool:
+    def load(self, path: str = "models/research/neuros/tlb.pt") -> bool:
         """Load a trained eviction policy."""
         p = Path(path)
         if not p.exists():

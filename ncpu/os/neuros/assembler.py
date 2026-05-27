@@ -764,14 +764,14 @@ class NeuralAssembler:
 
     # ─── Persistence ──────────────────────────────────────────────────────
 
-    def save(self, tokenizer_path: str = "models/os/assembler_tokenizer.pt",
-             codegen_path: str = "models/os/assembler_codegen.pt"):
+    def save(self, tokenizer_path: str = "models/research/neuros/assembler_tokenizer.pt",
+             codegen_path: str = "models/research/neuros/assembler_codegen.pt"):
         Path(tokenizer_path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.tokenizer_net.state_dict(), tokenizer_path)
         torch.save(self.codegen_net.state_dict(), codegen_path)
 
-    def load(self, tokenizer_path: str = "models/os/assembler_tokenizer.pt",
-             codegen_path: str = "models/os/assembler_codegen.pt") -> Dict[str, bool]:
+    def load(self, tokenizer_path: str = "models/research/neuros/assembler_tokenizer.pt",
+             codegen_path: str = "models/research/neuros/assembler_codegen.pt") -> Dict[str, bool]:
         result = {}
         if Path(tokenizer_path).exists():
             self.tokenizer_net.load_state_dict(

@@ -446,13 +446,13 @@ class NeuralMMU:
 
     # ─── Persistence ──────────────────────────────────────────────────────
 
-    def save(self, path: str = "models/os/mmu.pt"):
+    def save(self, path: str = "models/research/neuros/mmu.pt"):
         """Save the trained neural page table."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.net.state_dict(), path)
         logger.info(f"[MMU] Saved to {path}")
 
-    def load(self, path: str = "models/os/mmu.pt") -> bool:
+    def load(self, path: str = "models/research/neuros/mmu.pt") -> bool:
         """Load a trained neural page table."""
         p = Path(path)
         if not p.exists():

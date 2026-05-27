@@ -240,11 +240,11 @@ class NeuralGIC:
 
     # ─── Persistence ──────────────────────────────────────────────────────
 
-    def save(self, path: str = "models/os/gic.pt"):
+    def save(self, path: str = "models/research/neuros/gic.pt"):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(self.encoder.state_dict(), path)
 
-    def load(self, path: str = "models/os/gic.pt") -> bool:
+    def load(self, path: str = "models/research/neuros/gic.pt") -> bool:
         if not Path(path).exists():
             return False
         self.encoder.load_state_dict(

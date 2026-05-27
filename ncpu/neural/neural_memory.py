@@ -22,8 +22,8 @@ Integration:
     print(mem.stats)
 
 Usage with existing models:
-    - models/os/prefetch.pt: LSTM address predictor (trained, 8.1 MB)
-    - models/os/mmu.pt: MLP address translator (trained, 5.4 MB, 100% accuracy)
+    - models/research/neuros/prefetch.pt: LSTM address predictor (trained, 8.1 MB)
+    - models/research/neuros/mmu.pt: MLP address translator (trained, 5.4 MB, 100% accuracy)
 """
 
 from __future__ import annotations

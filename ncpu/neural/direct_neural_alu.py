@@ -113,7 +113,7 @@ class DirectALU:
     direct_alu.pt checkpoint and provides scalar + batched execution.
     """
 
-    DEFAULT_PATH = Path("models/alu/direct_alu.pt")
+    DEFAULT_PATH = Path("models/research/predictors/direct_alu.pt")
 
     def __init__(
         self,
