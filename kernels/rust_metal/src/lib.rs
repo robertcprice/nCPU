@@ -1,10 +1,23 @@
 #![allow(deprecated)]
 //! nCPU Metal - High-performance Metal GPU kernel for ARM64 CPU emulation
 //!
-//! This crate provides direct Metal API access via objc2-metal for:
-//! - Zero-copy shared memory between CPU and GPU
-//! - Indirect Command Buffers for GPU-autonomous dispatch
-//! - Maximum performance CPU emulation
+//! This crate implements a complete, deterministic ARM64 computer that runs
+//! natively on Apple Silicon Metal GPUs. It can boot real BusyBox + Alpine Linux
+//! and a self-hosting C compiler at ~1.9M IPS with σ=0.0 cycle variance.
+//!
+//! ## Architecture (after reorganization)
+//!
+//! The crate is organized into clear layers:
+//!
+//! - `core` — The fundamental deterministic ARM64 CPU emulation engine
+//! - `os` — Process model, launcher, and multi-process UNIX runtime
+//! - `neural` — Neural ALU (in-shader), weights, and dispatch logic
+//! - `jepa` — Learned JEPA Neural Kernel + Neural OS (3 decision levers for scheduling)
+//! - `execution` — Multiple execution engine variants (pure, ultra, OOO, JIT, differentiable, etc.)
+//! - `loader` — ELF loading, boot images, rootfs, and VFS
+//!
+//! This structure makes the hero thesis ("The GPU *is* the computer") and the
+//! current high-signal learned kernel work immediately visible and maintainable.
 //!
 //! Exposed to Python via PyO3.
 

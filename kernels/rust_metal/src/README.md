@@ -17,7 +17,7 @@ It has been restructured into a proper layered module system that makes the diff
 | `cache/`    | Blackboard / working-set caches used by the neural OS layer |
 | `support/`  | Small supporting utilities (native ABI helpers, NPCoT bridge) |
 
-Empty / future directories: `debug/`, `metal/`
+The root of `src/` is now clean — only `lib.rs` and this README remain at the top level.
 
 ## Top-level Re-exports (for ergonomics)
 
@@ -43,19 +43,29 @@ The new layout makes the hero thesis ("The GPU *is* the computer") and the curre
 
 ## Status (as of this session)
 
-Major phases completed and compiling cleanly:
-- cache/
-- loader/
-- jepa/
-- neural/
-- execution/ (the many kernel variants)
-- os/ (process + launcher)
-- core/ (ARM64 emulation)
-- support/
+**Reorganization substantially complete.**
 
-The crate passes `cargo check --release` after each extraction.
+All significant code has been moved out of the flat `src/` root into logical modules:
 
-## Future Work
+- `core/` — ARM64 CPU emulation engine
+- `os/` — Process model + launcher + UNIX runtime
+- `neural/` — Neural ALU + weights + dispatch
+- `jepa/` — Learned JEPA Neural Kernel + Neural OS (current high-signal work)
+- `execution/` — All execution engine variants
+- `loader/` — ELF, boot, rootfs, VFS
+- `cache/` — Blackboard caches
+- `support/` — Small utilities
+
+The crate compiles cleanly (`cargo check --release`) after every phase. Sensible `pub use` re-exports have been added throughout for ergonomic usage.
+
+## Future Polish Work (lower priority)
+
+- Move the 26-command deterministic debugging toolkit into a proper `debug/` module
+- Consider extracting the large embedded Metal shader sources into a `metal/` module
+- Further split very large files inside `core/` or `execution/` if they grow
+- Improve inline documentation comments in the largest files
+
+The current structure already delivers the main goal: making the different kinds of kernels and the hero architecture obvious and maintainable.
 
 - Extract Metal shader sources more cleanly into `metal/`
 - Move the 26-command deterministic debugging toolkit into `debug/`
