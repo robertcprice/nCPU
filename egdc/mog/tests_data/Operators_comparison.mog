@@ -1,9 +1,0 @@
-fn main() -> i64 {
-  if 10 == 10 { println("eq"); }
-  if 10 != 11 { println("ne"); }
-  if 9 < 10 { println("lt"); }
-  if 11 > 10 { println("gt"); }
-  if 10 <= 10 { println("le"); }
-  if 10 >= 10 { println("ge"); }
-  return 0;
-}

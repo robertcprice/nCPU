@@ -1,5 +1,0 @@
-fn main() -> i64 {
-  arr := [0; 10];
-  println(f"len={arr.len}");
-  return 0;
-}

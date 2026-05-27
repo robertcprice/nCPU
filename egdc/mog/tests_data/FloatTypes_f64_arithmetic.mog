@@ -1,9 +1,0 @@
-fn main() -> i64 {
-  a: f64 = 3.14;
-  b: f64 = 2.0;
-  c: f64 = a + b;
-  print_string("c=");
-  print_f64(c);
-  println("");
-  return 0;
-}

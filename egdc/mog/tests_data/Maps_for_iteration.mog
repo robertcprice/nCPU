@@ -1,7 +1,0 @@
-fn main() -> i64 {
-  m := {"alice": 95};
-  for key, value in m {
-    println(f"{key}: {value}");
-  }
-  return 0;
-}

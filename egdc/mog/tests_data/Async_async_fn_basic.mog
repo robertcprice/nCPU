@@ -1,9 +1,0 @@
-async fn compute(a: i64, b: i64) -> i64 {
-  return a + b;
-}
-
-async fn main() -> i64 {
-  r: i64 = await compute(20, 22);
-  println(f"{r}");
-  return 0;
-}

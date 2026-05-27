@@ -1,9 +1,0 @@
-fn make(x: i64, y: i64) -> i64 {
-  return x * 10 + y;
-}
-
-fn main() -> i64 {
-  r: i64 = make(y: 3, x: 4);
-  println(f"{r}");
-  return 0;
-}

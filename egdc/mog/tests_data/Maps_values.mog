@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  m := {"x": 10};
-  v := m.values();
-  println("values ok");
-  return 0;
-}

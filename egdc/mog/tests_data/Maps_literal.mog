@@ -1,5 +1,0 @@
-fn main() -> i64 {
-  m := {"x": 10, "y": 20};
-  println("map ok");
-  return 0;
-}

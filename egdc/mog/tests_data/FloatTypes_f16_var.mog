@@ -1,5 +1,0 @@
-fn main() -> i64 {
-  a: f16 = 3.14;
-  println("f16 ok");
-  return 0;
-}

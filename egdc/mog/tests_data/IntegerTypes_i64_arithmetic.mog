@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  a: i64 = 100;
-  b: i64 = 37;
-  println(f"{a + b}");
-  return 0;
-}

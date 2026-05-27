@@ -1,9 +1,0 @@
-fn make_multiplier(n: i64) -> fn(i64) -> i64 {
-  return fn(x: i64) -> i64 { x * n };
-}
-
-fn main() -> i64 {
-  mul3 := make_multiplier(3);
-  println(f"{mul3(14)}");
-  return 0;
-}

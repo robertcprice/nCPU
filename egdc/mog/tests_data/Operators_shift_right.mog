@@ -1,5 +1,0 @@
-fn main() -> i64 {
-  r: i64 = 256 >> 4;
-  println(f"{r}");
-  return 0;
-}

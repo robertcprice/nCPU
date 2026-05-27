@@ -1,7 +1,0 @@
-type Num = i64;
-
-fn main() -> i64 {
-  x: Num = 42;
-  println(f"{x}");
-  return 0;
-}

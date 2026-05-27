@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  arr: i64[] = [1, 2, 3, 4, 5, 6];
-  evens := arr.filter(fn(x: i64) -> bool { x % 2 == 0 });
-  println(f"len={evens.len}");
-  return 0;
-}

@@ -1,9 +1,0 @@
-fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
-  return f(x);
-}
-
-fn main() -> i64 {
-  double := fn(x: i64) -> i64 { x * 2 };
-  println(f"{apply(double, 7)}");
-  return 0;
-}

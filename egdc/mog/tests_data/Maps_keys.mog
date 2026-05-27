@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  m := {"x": 10};
-  k := m.keys();
-  println("keys ok");
-  return 0;
-}

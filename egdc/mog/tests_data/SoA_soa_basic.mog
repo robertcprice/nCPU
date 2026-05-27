@@ -1,9 +1,0 @@
-struct Datum { id: i64, val: i64 }
-
-fn main() -> i64 {
-  datums := soa Datum[10];
-  datums[0].id = 1;
-  datums[0].val = 100;
-  println(f"id={datums[0].id}");
-  return 0;
-}

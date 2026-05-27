@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  s: [u8] = "  hi  ";
-  t: [u8] = s.trim();
-  println(f"[{t}]");
-  return 0;
-}

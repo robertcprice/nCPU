@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  a: i32 = 42;
-  b: i64 = a as i64;
-  println(f"{b}");
-  return 0;
-}

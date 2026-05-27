@@ -1,9 +1,0 @@
-fn main() -> i64 {
-  arr: i64[] = [10, 20, 30];
-  s: i64 = 0;
-  for item in arr {
-    s = s + item;
-  }
-  println(f"{s}");
-  return 0;
-}

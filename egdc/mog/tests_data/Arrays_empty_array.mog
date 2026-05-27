@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  arr: i64[] = [];
-  arr.push(10);
-  println(f"len={arr.len}");
-  return 0;
-}

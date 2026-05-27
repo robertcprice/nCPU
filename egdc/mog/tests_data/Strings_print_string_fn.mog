@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  print_string("hello ");
-  print_string("world");
-  println("");
-  return 0;
-}

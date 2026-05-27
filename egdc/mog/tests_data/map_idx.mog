@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  m := {"x": 10, "y": 20};
-  v: i64 = m["x"];
-  println(f"{v}");
-  return 0;
-}

@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  s: [u8] = "hello world";
-  r: [u8] = s.replace("world", "mog");
-  println(f"{r}");
-  return 0;
-}

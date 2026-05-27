@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  x: i64 = 10;
-  r: i64 = if x > 5 { 1; } else { 0; };
-  println(f"{r}");
-  return 0;
-}

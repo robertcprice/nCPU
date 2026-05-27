@@ -1,7 +1,0 @@
-fn main() -> i64 {
-  a: [u8] = "hello ";
-  b: [u8] = "world";
-  c: [u8] = a + b;
-  println(f"{c}");
-  return 0;
-}

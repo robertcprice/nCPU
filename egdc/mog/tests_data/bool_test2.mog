@@ -1,6 +1,0 @@
-fn main() -> i64 {
-  if true {
-    println("true works");
-  }
-  return 0;
-}
