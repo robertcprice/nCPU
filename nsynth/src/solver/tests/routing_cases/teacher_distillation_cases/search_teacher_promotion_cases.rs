@@ -1,0 +1,93 @@
+use super::*;
+
+#[test]
+fn search_teacher_promotes_scalar_gradient_before_raw_search() {
+    let problem = Problem {
+        name: "add_two_search_teacher_v0".to_string(),
+        category: "test",
+        description: "Return the sum of a and b.",
+        signature: "fn add_two_search_teacher(a: i64, b: i64) -> i64",
+        examples: vec![
+            Example {
+                inputs: vec![Value::Int(10), Value::Int(4)],
+                expected: 14,
+            },
+            Example {
+                inputs: vec![Value::Int(4), Value::Int(10)],
+                expected: 14,
+            },
+            Example {
+                inputs: vec![Value::Int(3), Value::Int(3)],
+                expected: 6,
+            },
+            Example {
+                inputs: vec![Value::Int(-2), Value::Int(5)],
+                expected: 3,
+            },
+        ],
+        holdouts: vec![
+            Example {
+                inputs: vec![Value::Int(-10), Value::Int(7)],
+                expected: -3,
+            },
+            Example {
+                inputs: vec![Value::Int(9), Value::Int(-4)],
+                expected: 5,
+            },
+        ],
+        reference_code: "",
+    };
+    let result = solve_problem_prefer_differentiable(&problem);
+    assert!(result.success, "{:?}", result.error);
+    assert!(
+        result.method == "search_scalar_expr" || result.method == "synth_gradient",
+        "expected exact scalar search or native scalar gradient, got {}",
+        result.method,
+    );
+}
+
+#[test]
+fn search_teacher_promotes_array_gradient_before_raw_search() {
+    let problem = Problem {
+        name: "count_positive_search_teacher_v0".to_string(),
+        category: "test",
+        description: "Return the number of positive entries in the array.",
+        signature: "fn count_positive_search_teacher(arr: [i64]) -> i64",
+        examples: vec![
+            Example {
+                inputs: vec![Value::Array(vec![1, 2, 3, 4])],
+                expected: 4,
+            },
+            Example {
+                inputs: vec![Value::Array(vec![4, -3, 2, -1])],
+                expected: 2,
+            },
+            Example {
+                inputs: vec![Value::Array(vec![-5])],
+                expected: 0,
+            },
+            Example {
+                inputs: vec![Value::Array(vec![0, 0, 0])],
+                expected: 0,
+            },
+        ],
+        holdouts: vec![
+            Example {
+                inputs: vec![Value::Array(vec![3, 0, -2, 1])],
+                expected: 2,
+            },
+            Example {
+                inputs: vec![Value::Array(vec![-1, -2, -3])],
+                expected: 0,
+            },
+        ],
+        reference_code: "",
+    };
+    let result = solve_problem_prefer_differentiable(&problem);
+    assert!(result.success, "{:?}", result.error);
+    assert!(
+        result.method == "arr_gradient" || result.method == "univ_arr_gradient",
+        "expected search teacher to return native array gradient, got {}",
+        result.method
+    );
+}

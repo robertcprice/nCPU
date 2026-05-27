@@ -1,5 +1,8 @@
 name: CI
 
+env:
+  MOG_GIT_REF: b64a7eb388f2fda66e014ffcc3d88635e914c694
+
 on:
   push:
     branches: [main]
@@ -36,8 +39,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Bootstrap Mog toolchain
+        run: ./scripts/bootstrap_mog_toolchain.sh
+
       - name: Install dependencies
         run: pip install -e '.[demo,dev]'
+
+      - name: Environment doctor
+        run: python -m ncpu doctor
 
       - name: Run core tests
         run: |
@@ -53,3 +65,37 @@ jobs:
 
       - name: Run differentiable engine tests
         run: pytest tests/differentiable/test_differentiable.py tests/differentiable/test_differentiable_advanced.py -x -q
+
+  self_improvement_gate:
+    name: Self-improvement gate (nsynth cross-run learning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            nsynth/target
+          key: nsynth-gate-${{ runner.os }}-${{ hashFiles('nsynth/Cargo.lock', 'nsynth/Cargo.toml') }}
+
+      - name: Build release binaries
+        working-directory: nsynth
+        # Only the two binaries the gate needs; keeps cold build under a minute
+        # on the GitHub runner and skips the long-tail deps the full workspace
+        # pulls in for other bins.
+        run: cargo build --release --bin transfer_curve --bin curve_analysis
+
+      - name: Run self-improvement gate
+        # Isolated cache + weights paths so the gate's synthetic run never
+        # touches real user artifacts, and so parallel CI runs don't fight.
+        env:
+          NSYNTH_CACHE_PATH: /tmp/nsynth_ci_gate_cache.json
+          NSYNTH_META_WEIGHTS_PATH: /tmp/nsynth_ci_gate_weights.tsv
+          NSYNTH_TEACHER_BUDGET_SEC: "8"
+        run: tools/ci_self_improvement_gate.sh --limit 15

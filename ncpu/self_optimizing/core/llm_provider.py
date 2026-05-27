@@ -394,6 +394,10 @@ class LLMProviderFactory:
             StatePatchHeadConfig,
             load_state_patch_head,
         )
+        from ncpu.self_optimizing.executable_thought_head import (
+            ExecutableThoughtHeadConfig,
+            load_executable_thought_head,
+        )
         from ncpu.self_optimizing.architecture.task_local_fast_weights import (
             HFTaskLocalFastWeightsProvider,
             TaskLocalFastWeightConfig,
@@ -508,12 +512,65 @@ class LLMProviderFactory:
             state_patch_head = state_patch_head.to(device or LLMProviderFactory._resolve_hf_device(None))
             state_patch_head.eval()
 
+        executable_thought_head = kwargs.pop("executable_thought_head", None)
+        executable_thought_head_path = kwargs.pop("executable_thought_head_path", None)
+        executable_thought_head_enabled = bool(
+            kwargs.pop("executable_thought_head_enabled", executable_thought_head_path is not None)
+        )
+        executable_thought_head_config = kwargs.pop("executable_thought_head_config", None)
+        if executable_thought_head_config is None and any(
+            key in kwargs
+            for key in (
+                "executable_thought_compiler_d_model",
+                "executable_thought_compiler_max_program_len",
+                "executable_thought_num_registers",
+                "executable_thought_execution_max_steps",
+                "executable_thought_output_register",
+                "executable_thought_trace_projection_dim",
+                "executable_thought_trace_hidden_dim",
+                "executable_thought_state_patch_dim",
+                "executable_thought_temperature",
+            )
+        ):
+            executable_thought_head_config = ExecutableThoughtHeadConfig(
+                hidden_dim=int(kwargs.pop("executable_thought_hidden_dim", 0) or 0),
+                compiler_d_model=int(kwargs.pop("executable_thought_compiler_d_model", 64)),
+                compiler_max_program_len=int(kwargs.pop("executable_thought_compiler_max_program_len", 4)),
+                num_registers=int(kwargs.pop("executable_thought_num_registers", 8)),
+                execution_max_steps=int(kwargs.pop("executable_thought_execution_max_steps", 4)),
+                output_register=int(kwargs.pop("executable_thought_output_register", 2)),
+                trace_projection_dim=int(kwargs.pop("executable_thought_trace_projection_dim", 16)),
+                trace_hidden_dim=int(kwargs.pop("executable_thought_trace_hidden_dim", 64)),
+                state_patch_dim=int(kwargs.pop("executable_thought_state_patch_dim", 16)),
+                temperature=float(kwargs.pop("executable_thought_temperature", 1.0)),
+            )
+        if isinstance(executable_thought_head_config, ExecutableThoughtHeadConfig) and executable_thought_head_config.hidden_dim <= 0:
+            executable_thought_head_config = ExecutableThoughtHeadConfig(
+                **{
+                    **executable_thought_head_config.to_dict(),
+                    "hidden_dim": int(kwargs.pop("executable_thought_hidden_dim", 0) or 0),
+                }
+            )
+        if executable_thought_head is None and executable_thought_head_path:
+            resolved_config = executable_thought_head_config
+            if isinstance(resolved_config, ExecutableThoughtHeadConfig) and resolved_config.hidden_dim <= 0:
+                resolved_config = None
+            executable_thought_head = load_executable_thought_head(
+                path=executable_thought_head_path,
+                device=device or LLMProviderFactory._resolve_hf_device(None),
+                config=resolved_config,
+                state_patch_head=state_patch_head,
+            )
+
         provider = HFTaskLocalFastWeightsProvider(
             model=model,
             config=config,
             adaptation_backend=adaptation_backend,
             latent_descriptor_head=latent_descriptor_head,
             state_patch_head=state_patch_head,
+            executable_thought_head=executable_thought_head,
+            executable_thought_head_config=executable_thought_head_config,
+            executable_thought_head_enabled=executable_thought_head_enabled,
             temperature=temperature,
             max_tokens=max_tokens,
             device=device,

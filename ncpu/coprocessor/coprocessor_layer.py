@@ -56,6 +56,22 @@ class NCPUCoprocessorMLP(nn.Module):
         Returns:
             [batch, seq_len, hidden_dim] blended output
         """
+        # Ensure hidden_states matches the original MLP's weight dtype. This
+        # defends against upstream mixed-precision layernorms that may
+        # promote activations to float32 even when weights stay bf16.
+        original_weight = None
+        for p in self.original_mlp.parameters():
+            if p.is_floating_point():
+                original_weight = p
+                break
+        import os
+        _dbg = os.environ.get("NPCOT_DTYPE_DEBUG") == "1"
+        if _dbg:
+            print(f"[coproc-fwd] hidden={hidden_states.dtype} weight={original_weight.dtype if original_weight is not None else None}", flush=True)
+        if original_weight is not None and hidden_states.dtype != original_weight.dtype:
+            hidden_states = hidden_states.to(dtype=original_weight.dtype)
+            if _dbg:
+                print(f"[coproc-fwd] cast hidden → {hidden_states.dtype}", flush=True)
         # Original MLP path
         mlp_out = self.original_mlp(hidden_states, **kwargs)
 

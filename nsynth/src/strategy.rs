@@ -211,17 +211,57 @@ impl SynthesisStrategy for PureEmergent {
 pub struct CachedTeachers;
 
 /// Number of top-ranked teachers tried per problem when `NSYNTH_TEACHER_TOPK`
-/// is unset. Chosen as a rough break-even between "enough candidates to cover
-/// a gradient-distillation miss on the top match" (K ≥ 3) and "bounded
-/// per-problem wall-clock as the cache grows past a few hundred entries"
-/// (K ≤ small-constant).
-pub const DEFAULT_TEACHER_TOPK: usize = 8;
+/// is unset. The measured Pareto-optimal value on the benchmark cache:
+/// `tools/diversity_pareto.sh` showed K=48 dominates K=0 (same 80% win rate,
+/// 30% lower mean wall-clock). See `artifacts/diversity_pareto.md` for the
+/// sweep data.
+///
+/// Re-measure the sweep after any ranker change (distance formula, feature
+/// set, training pass) and bump this constant when the optimum moves. The
+/// autotune script (`tools/autotune_topk.sh`) reads the Pareto CSV and
+/// writes the winner to `tools/config/nsynth_autotune.tsv`, which
+/// `teacher_topk()` also consults — so production uses the latest measured
+/// best without editing this constant.
+pub const DEFAULT_TEACHER_TOPK: usize = 48;
 
 fn teacher_topk() -> usize {
-    match std::env::var("NSYNTH_TEACHER_TOPK") {
-        Ok(raw) => raw.parse::<usize>().unwrap_or(DEFAULT_TEACHER_TOPK),
-        Err(_) => DEFAULT_TEACHER_TOPK,
+    // Resolution order, first hit wins:
+    //   1. NSYNTH_TEACHER_TOPK env var (explicit override)
+    //   2. tools/config/nsynth_autotune.tsv "topk" entry (measured winner)
+    //   3. DEFAULT_TEACHER_TOPK constant
+    //
+    // Environment always wins so humans and CI can force a value; the
+    // config file expresses the last Pareto measurement; the constant is
+    // the hard-coded fallback.
+    if let Ok(raw) = std::env::var("NSYNTH_TEACHER_TOPK") {
+        if let Ok(v) = raw.parse::<usize>() {
+            return v;
+        }
     }
+    if let Some(v) = teacher_topk_from_config() {
+        return v;
+    }
+    DEFAULT_TEACHER_TOPK
+}
+
+/// Read the `topk` value from the autotune config file (`tsv`, lines of
+/// `key\tvalue`). Override the path with `NSYNTH_AUTOTUNE_CONFIG`. Returns
+/// `None` on any failure — missing file, unparseable value, etc. —
+/// because this lookup is advisory and the env var / constant fall
+/// through safely.
+fn teacher_topk_from_config() -> Option<usize> {
+    let path = std::env::var("NSYNTH_AUTOTUNE_CONFIG")
+        .unwrap_or_else(|_| "tools/config/nsynth_autotune.tsv".to_string());
+    let raw = std::fs::read_to_string(&path).ok()?;
+    for line in raw.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let key = parts.next()?.trim();
+        let val = parts.next()?.trim();
+        if key == "topk" {
+            return val.parse::<usize>().ok();
+        }
+    }
+    None
 }
 
 /// Default wall-clock cap for a single `CachedTeachers::try_solve` call.
@@ -250,25 +290,37 @@ impl SynthesisStrategy for CachedTeachers {
         if snapshot.is_empty() {
             return None;
         }
-        let ranked = crate::meta_learner::rank_teachers_with_meta(p, snapshot);
+        // Pass the top-K through the diversity pass so a cache dominated by
+        // one program family doesn't starve out rare-but-relevant teachers
+        // in the rank head.
+        let k = teacher_topk();
+        let ranked = crate::meta_learner::rank_teachers_with_meta_topk(p, snapshot, k);
         // K = 0 disables the cap (exhaustive iteration, useful for debugging
         // and for the emergent_coverage benchmark where we want to measure
         // full transfer capacity without budget limits).
-        let k = teacher_topk();
         let budget = teacher_budget_sec();
         let t0 = std::time::Instant::now();
-        let iter: Box<dyn Iterator<Item = (f64, String, String, u32, u64)>> = if k == 0 {
-            Box::new(ranked.into_iter())
+        let effective_iter: Vec<(f64, String, String, u32, u64)> = if k == 0 {
+            ranked
         } else {
-            Box::new(ranked.into_iter().take(k))
+            ranked.into_iter().take(k).collect()
         };
-        for (_dist, method, code, _success_count, _last_used) in iter {
+
+        // Capture the teachers we're about to try so we can attribute a
+        // whole-stage miss back to them in artifacts/transfer_failures.jsonl
+        // (opt-in). Cloning up to K small (method, code) pairs is cheap
+        // compared to the gradient work about to happen.
+        let mut attempted: Vec<(String, String)> = Vec::new();
+
+        for (_dist, method, code, _success_count, _last_used) in effective_iter {
             // Wall-clock gate: check *before* starting the next teacher round,
             // not during, so a single over-budget distillation can't cut off
             // mid-gradient (the caller expects a clean `Option<SolveResult>`).
             if budget > 0.0 && t0.elapsed().as_secs_f32() >= budget {
+                log_teacher_miss(p, &attempted, "budget_exceeded");
                 return None;
             }
+            attempted.push((method.clone(), code.clone()));
             if let Some(mut result) = synthesis::synthesize_scalar_from_teacher(p, &code) {
                 if result.success {
                     // Online update #1: reinforce the feature weights that
@@ -288,8 +340,88 @@ impl SynthesisStrategy for CachedTeachers {
                 }
             }
         }
+        log_teacher_miss(p, &attempted, "all_teachers_missed");
         None
     }
+}
+
+/// Opt-in miss attribution. When `NSYNTH_LOG_TEACHER_FAILURES=1` and the
+/// strategy exhausts its top-K without a win, append one JSONL row to
+/// `artifacts/transfer_failures.jsonl` so downstream analysis can cluster
+/// the misses and answer "what program family is the system
+/// nearly-but-not-quite able to solve?" — a direct prioritization signal
+/// for solver development.
+///
+/// Quiet when the env var is unset (default): logging every miss on a
+/// real-world bench would swamp the artifacts dir.
+fn log_teacher_miss(problem: &Problem, attempted: &[(String, String)], reason: &str) {
+    if std::env::var("NSYNTH_LOG_TEACHER_FAILURES").as_deref() != Ok("1") {
+        return;
+    }
+    let path = std::env::var("NSYNTH_TEACHER_FAILURES_PATH")
+        .unwrap_or_else(|_| "artifacts/transfer_failures.jsonl".to_string());
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+    else {
+        return;
+    };
+    use std::io::Write;
+    let mut preview = String::new();
+    preview.push('[');
+    for (i, (method, code)) in attempted.iter().take(3).enumerate() {
+        if i > 0 {
+            preview.push(',');
+        }
+        let first_line: String = code
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .chars()
+            .take(80)
+            .collect();
+        preview.push_str(&format!(
+            r#"{{"method":"{}","preview":"{}"}}"#,
+            json_escape_simple(method),
+            json_escape_simple(&first_line),
+        ));
+    }
+    preview.push(']');
+    let n_args = problem
+        .examples
+        .first()
+        .map(|ex| ex.inputs.len())
+        .unwrap_or(0);
+    let row = format!(
+        r#"{{"problem":"{}","n_args":{},"n_examples":{},"n_attempted":{},"reason":"{}","attempted":{}}}"#,
+        json_escape_simple(&problem.name),
+        n_args,
+        problem.examples.len(),
+        attempted.len(),
+        reason,
+        preview,
+    );
+    let _ = writeln!(file, "{}", row);
+}
+
+fn json_escape_simple(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Strategy list for the fully-emergent evaluation mode (no hand-designed

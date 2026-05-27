@@ -21,6 +21,7 @@ from ncpu.self_optimizing import (
     load_weight_cpu_blueprint,
     load_trajectory,
 )
+from ncpu.self_optimizing.training.train_internal_controller import write_fast_weight_controller_bundle
 
 
 FIB_TESTS = [
@@ -95,6 +96,8 @@ class TestControllerTraining(unittest.TestCase):
             self.assertTrue(Path(bundle.latent_halt_val_path or "").exists())
             self.assertTrue(Path(bundle.state_patch_train_path or "").exists())
             self.assertTrue(Path(bundle.state_patch_val_path or "").exists())
+            self.assertTrue(Path(bundle.executable_thought_train_path or "").exists())
+            self.assertTrue(Path(bundle.executable_thought_val_path or "").exists())
             manifest = json.loads(Path(bundle.manifest_path).read_text(encoding="utf-8"))
             self.assertEqual(manifest["response_sft"]["train_source_files"], 1)
             self.assertEqual(manifest["response_sft"]["val_source_files"], 1)
@@ -103,6 +106,7 @@ class TestControllerTraining(unittest.TestCase):
             self.assertIn("latent_memory_head", manifest)
             self.assertEqual(manifest["latent_halt_policy"]["action_labels"], ["continue", "commit", "fail"])
             self.assertIn("state_patch_head", manifest)
+            self.assertIn("executable_thought_head", manifest)
 
     def test_prepare_only_cli(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -124,6 +128,7 @@ class TestControllerTraining(unittest.TestCase):
                     "--prepare-only",
                     "--val-ratio",
                     "0.5",
+                    "--executable-thought-enabled",
                 ],
                 capture_output=True,
                 text=True,
@@ -139,6 +144,7 @@ class TestControllerTraining(unittest.TestCase):
             self.assertGreaterEqual(manifest["latent_action_policy"]["train_examples"], 1)
             self.assertIn("latent_halt_policy", manifest)
             self.assertGreaterEqual(manifest["latent_halt_policy"]["train_examples"], 1)
+            self.assertIn("executable_thought_head", manifest)
             bundle_path = output_dir / "controller_bundle.template.json"
             self.assertTrue(bundle_path.exists())
             bundle = load_controller_bundle(bundle_path)
@@ -178,17 +184,86 @@ class TestControllerTraining(unittest.TestCase):
                 fast_weight_bundle.response.provider_kwargs["state_patch_head_config"]["hidden_dim"],
                 64,
             )
+            self.assertTrue(fast_weight_bundle.response.provider_kwargs["executable_thought_head_enabled"])
+            self.assertIsNone(fast_weight_bundle.response.provider_kwargs["executable_thought_head_path"])
+            self.assertEqual(
+                fast_weight_bundle.response.provider_kwargs["executable_thought_head_config"]["hidden_dim"],
+                0,
+            )
+            self.assertEqual(
+                fast_weight_bundle.response.provider_kwargs["executable_thought_head_config"]["trace_projection_dim"],
+                16,
+            )
+            self.assertEqual(
+                fast_weight_bundle.response.provider_kwargs["executable_thought_head_config"]["state_patch_dim"],
+                16,
+            )
             self.assertFalse(fast_weight_bundle.controller_config["fast_weight_updates_on_plan"])
             self.assertTrue(fast_weight_bundle.controller_config["descriptor_updates_on_plan"])
+            self.assertTrue(fast_weight_bundle.metadata["executable_thought_head_enabled"])
+            self.assertFalse(fast_weight_bundle.metadata["executable_thought_head_exists"])
             self.assertEqual(
                 fast_weight_bundle.response.provider_kwargs["fast_weights_target_modules"],
                 ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            )
+            self.assertEqual(
+                fast_weight_bundle.metadata["runtime_variant"],
+                "response_fast_weights_descriptor_first+segmented_kv_decode+executable_thought",
             )
             blueprint_path = output_dir / "weight_cpu_blueprint.template.json"
             self.assertTrue(blueprint_path.exists())
             blueprint = load_weight_cpu_blueprint(blueprint_path)
             self.assertEqual(blueprint.controller_bundle_path, str(bundle_path))
             self.assertEqual(blueprint.training_stages[0].name, "stage1_hidden_controller_distillation")
+
+    def test_fast_weight_bundle_can_include_trained_executable_thought_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "training_out"
+            output_dir.mkdir()
+            dataset_dir = output_dir / "prepared_datasets"
+            dataset_dir.mkdir()
+            response_dir = output_dir / "adapters" / "response"
+            response_dir.mkdir(parents=True)
+            executable_thought_head_path = output_dir / "executable_thought_head.pt"
+            executable_thought_head_path.write_bytes(b"stub")
+
+            bundle_path = write_fast_weight_controller_bundle(
+                output_root=output_dir,
+                base_model="stub-model",
+                dataset_dir=dataset_dir,
+                response_dir=response_dir,
+                action_dir=None,
+                training_run_path=None,
+                prepared_only=False,
+                fast_weights_rank=4,
+                fast_weights_learning_rate=1e-3,
+                fast_weights_gradient_steps=1,
+                fast_weights_adapter_scale=1.0,
+                fast_weights_max_target_tokens=128,
+                fast_weights_target_modules=["q_proj"],
+                executable_thought_head_path=executable_thought_head_path,
+                executable_thought_head_config={
+                    "hidden_dim": 128,
+                    "compiler_d_model": 32,
+                    "num_registers": 8,
+                    "trace_projection_dim": 16,
+                    "trace_hidden_dim": 32,
+                    "state_patch_dim": 16,
+                },
+                executable_thought_head_enabled=True,
+            )
+
+            bundle = load_controller_bundle(bundle_path)
+            self.assertEqual(
+                bundle.response.provider_kwargs["executable_thought_head_path"],
+                str(executable_thought_head_path),
+            )
+            self.assertEqual(
+                bundle.response.provider_kwargs["executable_thought_head_config"]["hidden_dim"],
+                128,
+            )
+            self.assertTrue(bundle.metadata["executable_thought_head_exists"])
+            self.assertTrue(bundle.metadata["executable_thought_head_enabled"])
 
 
 if __name__ == "__main__":

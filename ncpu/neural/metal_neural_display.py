@@ -301,3 +301,241 @@ def load_metal_neural_display(model_path: str) -> Optional[MetalNeuralDisplay]:
     """Convenience: load Metal neural display, return None if unavailable."""
     disp = MetalNeuralDisplay(model_path)
     return disp if disp.available else None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# V2 Neural Display — position-aware glyph MLP on Metal GPU
+# ═══════════════════════════════════════════════════════════════════════════
+
+N_WEIGHT_FLOATS_V2 = 383_233  # pos_enc + embed + FC1-3 + 256-color palette
+
+# Weight keys for V2 in the order the Metal shader expects them in the flat buffer.
+# The pos_enc buffer is first because it's a registered buffer in the model.
+_V2_WEIGHT_KEYS = [
+    'glyphs.pos_enc',            # [128, 32]   = 4096 floats (registered buffer)
+    'glyphs.embed.weight',       # [1024, 64]  = 65536 floats
+    'glyphs.net.0.weight',       # [512, 96]   = 49152 floats (FC1)
+    'glyphs.net.0.bias',         # [512]       = 512 floats
+    'glyphs.net.2.weight',       # [512, 512]  = 262144 floats (FC2)
+    'glyphs.net.2.bias',         # [512]       = 512 floats
+    'glyphs.net.4.weight',       # [1, 512]    = 512 floats (FC3)
+    'glyphs.net.4.bias',         # [1]         = 1 float
+    'colors.palette.weight',     # [256, 3]    = 768 floats
+]
+
+
+def _load_weights_v2(model_path: str) -> Optional[list[float]]:
+    """Load V2 display weights from cache or torch extraction.
+
+    Resolution order:
+        1. .npy cache (383,233 floats)
+        2. Torch extraction with explicit V2 key ordering
+    """
+    cache = WeightCache(
+        model_path, N_WEIGHT_FLOATS_V2,
+        cache_suffix='.metal_weights_v2.npy',
+    )
+
+    # Try cache first
+    weights = cache.load()
+    if weights is not None:
+        return weights.tolist()
+
+    # Try torch extraction with explicit keys
+    weights = cache.extract_from_state_dict(_V2_WEIGHT_KEYS)
+    if weights is not None:
+        return weights.tolist()
+
+    return None
+
+
+class MetalNeuralDisplayV2:
+    """Wraps NeuralDisplayKernelV2 (Rust/Metal) with automatic weight loading.
+
+    V2 features over V1:
+      - 1024 character embeddings (vs 256) for extended Unicode
+      - 256-color xterm palette (vs 16-color ANSI)
+      - Per-pixel positional encoding for sharper glyph rendering
+      - Two-pass GPU architecture: per-cell partial FC1 + per-pixel completion
+
+    Usage:
+        from ncpu.neural.metal_neural_display import MetalNeuralDisplayV2
+
+        display = MetalNeuralDisplayV2('models/display/terminal_renderer_v2.pt')
+        if display.available:
+            rgb = display.render(char_codes, fg_codes, bg_codes)  # (384, 640, 3) uint8
+    """
+
+    def __init__(self, model_path: str):
+        """Initialize Metal V2 neural display.
+
+        Args:
+            model_path: path to V2 .pt checkpoint
+        """
+        self._kernel = None
+        self._available = False
+
+        kernel_cls = _kernel_loader.get_class('NeuralDisplayKernelV2')
+        if kernel_cls is None:
+            return
+
+        weights = _load_weights_v2(model_path)
+        if weights is None:
+            return
+
+        try:
+            kernel = kernel_cls()
+            kernel.load_weights(weights)
+            self._kernel = kernel
+            self._available = kernel.is_ready()
+        except Exception:
+            pass
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def set_palette(self, colors: list[tuple[int, int, int]]) -> None:
+        """Update the 256-color xterm palette on the GPU for real-time theme switching.
+
+        Writes directly to the palette region of the Metal weight buffer.
+        Next render() uses the new colors.
+
+        Args:
+            colors: list of 256 (R, G, B) tuples, each 0-255.
+        """
+        if not self._available:
+            raise RuntimeError("Metal V2 neural display not available")
+        if len(colors) != 256:
+            raise ValueError(f"Need 256 colors, got {len(colors)}")
+        flat = []
+        for r, g, b in colors:
+            flat.extend([r / 255.0, g / 255.0, b / 255.0])
+        self._kernel.set_palette(flat)
+
+    def get_palette(self) -> list[tuple[int, int, int]]:
+        """Read the current 256-color palette from the GPU buffer.
+
+        Returns:
+            list of 256 (R, G, B) tuples, each 0-255.
+        """
+        if not self._available:
+            raise RuntimeError("Metal V2 neural display not available")
+        flat = self._kernel.get_palette()
+        colors = []
+        for i in range(256):
+            r = int(flat[i * 3 + 0] * 255 + 0.5)
+            g = int(flat[i * 3 + 1] * 255 + 0.5)
+            b = int(flat[i * 3 + 2] * 255 + 0.5)
+            colors.append((r, g, b))
+        return colors
+
+    def render(self, char_codes: np.ndarray, fg_codes: np.ndarray,
+               bg_codes: np.ndarray, cursor_row: int = -1,
+               cursor_col: int = -1) -> np.ndarray:
+        """Render terminal state to RGB frame (384, 640, 3) uint8.
+
+        Args:
+            char_codes: (24, 80) uint8/uint16 array of character codes (0-1023)
+            fg_codes:   (24, 80) uint8 array of foreground color indices (0-255)
+            bg_codes:   (24, 80) uint8 array of background color indices (0-255)
+            cursor_row: cursor row (-1 = no cursor)
+            cursor_col: cursor col (-1 = no cursor)
+
+        Returns:
+            (384, 640, 3) uint8 numpy array
+        """
+        if not self._available:
+            raise RuntimeError("Metal V2 neural display not available")
+
+        # Flatten to contiguous uint8 byte arrays for the Rust kernel
+        # V2 supports codes up to 1023 but passes as uint8 (Rust expands to uint32)
+        chars_flat = np.ascontiguousarray(char_codes.flatten(), dtype=np.uint8)
+        fg_flat = np.ascontiguousarray(fg_codes.flatten(), dtype=np.uint8)
+        bg_flat = np.ascontiguousarray(bg_codes.flatten(), dtype=np.uint8)
+
+        # Dispatch Metal kernel (pass as bytes for zero-copy)
+        rgb_bytes = self._kernel.render(
+            bytes(chars_flat), bytes(fg_flat), bytes(bg_flat)
+        )
+
+        # Reshape to (H, W, 3)
+        frame = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(
+            FRAME_H, FRAME_W, 3
+        ).copy()
+
+        # CPU-side cursor inversion (single cell, trivially fast)
+        if 0 <= cursor_row < TERM_ROWS and 0 <= cursor_col < TERM_COLS:
+            y0 = cursor_row * 16
+            y1 = y0 + 16
+            x0 = cursor_col * 8
+            x1 = x0 + 8
+            frame[y0:y1, x0:x1] = 255 - frame[y0:y1, x0:x1]
+
+        return frame
+
+    def render_batch(
+        self,
+        char_codes_list: list[np.ndarray],
+        fg_codes_list: list[np.ndarray],
+        bg_codes_list: list[np.ndarray],
+    ) -> list[np.ndarray]:
+        """Render multiple frames in a single Metal command buffer.
+
+        Args:
+            char_codes_list: list of N (24, 80) uint8 arrays
+            fg_codes_list:   list of N (24, 80) uint8 arrays
+            bg_codes_list:   list of N (24, 80) uint8 arrays
+
+        Returns:
+            list of N (384, 640, 3) uint8 numpy arrays
+        """
+        if not self._available:
+            raise RuntimeError("Metal V2 neural display not available")
+
+        n = len(char_codes_list)
+        if n != len(fg_codes_list) or n != len(bg_codes_list):
+            raise ValueError("All input lists must have the same length")
+        if n == 0:
+            return []
+
+        max_batch = self._kernel.max_batch_size()
+
+        # Process in chunks of max_batch
+        all_frames = []
+        for start in range(0, n, max_batch):
+            end = min(start + max_batch, n)
+            batch_n = end - start
+
+            # Concatenate into flat arrays
+            all_chars = np.concatenate([
+                np.ascontiguousarray(char_codes_list[i].flatten(), dtype=np.uint8)
+                for i in range(start, end)
+            ])
+            all_fg = np.concatenate([
+                np.ascontiguousarray(fg_codes_list[i].flatten(), dtype=np.uint8)
+                for i in range(start, end)
+            ])
+            all_bg = np.concatenate([
+                np.ascontiguousarray(bg_codes_list[i].flatten(), dtype=np.uint8)
+                for i in range(start, end)
+            ])
+
+            # Dispatch batched Metal kernel
+            rgb_list = self._kernel.render_batch(
+                batch_n, bytes(all_chars), bytes(all_fg), bytes(all_bg)
+            )
+
+            for rgb_bytes in rgb_list:
+                frame = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(
+                    FRAME_H, FRAME_W, 3
+                ).copy()
+                all_frames.append(frame)
+
+        return all_frames
+
+
+def load_metal_neural_display_v2(model_path: str) -> Optional[MetalNeuralDisplayV2]:
+    """Convenience: load Metal V2 neural display, return None if unavailable."""
+    disp = MetalNeuralDisplayV2(model_path)
+    return disp if disp.available else None

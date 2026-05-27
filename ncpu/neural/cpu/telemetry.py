@@ -247,7 +247,16 @@ class TelemetryMixin:
 
     def export_telemetry_dict(self) -> dict:
         """Export all telemetry as a dictionary for logging or analysis."""
-        return self.get_dispatcher_telemetry().to_dict()
+        payload = self.get_dispatcher_telemetry().to_dict()
+        hotloop_stats = getattr(self, "_last_gpu_only_hotloop_stats", None)
+        if isinstance(hotloop_stats, dict):
+            payload["gpu_only_hotloop"] = {
+                "stats": dict(hotloop_stats),
+                "segments": list(getattr(self, "_last_gpu_only_hotloop_trace", [])),
+                "recent_samples": list(getattr(self, "_last_gpu_only_hotloop_samples", [])),
+                "training_corpus_size": len(getattr(self, "_hotloop_dispatch_samples", [])),
+            }
+        return payload
 
     def accelerate_memset(self, dst_addr: int, value: int, size: int) -> bool:
         """Directly call the memset GPU kernel for acceleration."""
@@ -325,4 +334,3 @@ class TelemetryMixin:
                 self.framebuffer[-1].fill_(space)
                 cursor = (height - 1) * width
         self.cursor_pos.fill_(cursor)
-

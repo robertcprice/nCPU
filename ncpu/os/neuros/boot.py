@@ -95,7 +95,11 @@ class NeurOS:
         self.sync: Optional[SyncManager] = None
         self.mpu: Optional[MemoryProtectionUnit] = None
 
-    def boot(self, load_models: bool = True, quiet: bool = False) -> Dict:
+        # Online adaptation (initialized during boot if enabled)
+        self.adaptation_manager = None
+
+    def boot(self, load_models: bool = True, quiet: bool = False,
+             online_adaptation: bool = False) -> Dict:
         """Boot neurOS.
 
         Initializes all components in dependency order.
@@ -223,6 +227,20 @@ class NeurOS:
             if not quiet and models_loaded:
                 logger.info(f"  [BOOT] Models: {stages['models']*1000:.1f}ms "
                            f"({models_loaded} loaded)")
+
+        # ─── Stage 11: Online Adaptation (optional) ────────────────
+        if online_adaptation:
+            t = time.perf_counter()
+            try:
+                from ncpu.neural.online_adaptation import attach_to_neuros
+                self.adaptation_manager = attach_to_neuros(self)
+                stages["adaptation"] = time.perf_counter() - t
+                if not quiet:
+                    logger.info(f"  [BOOT] Online adaptation: {stages['adaptation']*1000:.1f}ms")
+            except Exception as e:
+                stages["adaptation"] = 0.0
+                if not quiet:
+                    logger.warning(f"  [BOOT] Online adaptation failed: {e}")
 
         self._boot_time = time.perf_counter() - t_start
         self._booted = True

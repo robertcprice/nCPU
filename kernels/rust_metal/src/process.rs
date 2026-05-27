@@ -76,6 +76,20 @@ pub struct Process {
     pub pending_signal: Option<i32>,
     /// Per-process environment variables.
     pub env: HashMap<String, String>,
+
+    /// Temporary de-prioritization "skip" counter driven by the live JEPA Neural
+    /// observer when it decides a high-churn process should yield for a few turns.
+    /// Set (to 2-3) at bias override sites in GpuLauncher after a memory-heavy
+    /// syscall or context switch on a hot process. schedule_next respects it by
+    /// preferring other ready pids and decrementing. This amplifies the effect
+    /// of each learned bias decision under the lowest-PID ready selection policy.
+    pub jepa_deprio_remaining: u32,
+
+    /// Number of times this process has been dispatched to run (incremented on every
+    /// successful restore_context). This is the direct fairness/distribution metric
+    /// that lets us see whether the JEPA bias levers (recency churn + deprio skips)
+    /// actually change how many slices each pid receives vs pure lowest-PID baseline.
+    pub times_scheduled: u32,
 }
 
 impl Process {
@@ -98,6 +112,8 @@ impl Process {
             total_cycles: 0,
             pending_signal: None,
             env: HashMap::new(),
+            jepa_deprio_remaining: 0,
+            times_scheduled: 0,
         }
     }
 }
@@ -230,6 +246,7 @@ impl ProcessManager {
         proc.state = ProcessState::Running;
         self.current_pid = pid;
         self.total_context_switches += 1;
+        proc.times_scheduled += 1;   // direct per-process slice count for JEPA bias fairness measurement
         Some((snapshot, fd_table, cwd))
     }
 
@@ -240,7 +257,28 @@ impl ProcessManager {
     /// Selects the lowest-PID ready process whose PID is greater than
     /// `current_pid`, wrapping around to the beginning if necessary.
     /// Returns `None` when no process is ready.
+    ///
+    /// JEPA Neural layer interaction (the 3rd decision lever):
+    /// When the observer returns a bias suggestion the launcher sets
+    /// jepa_deprio_remaining on the high-churn process (value 1–7, proportional
+    /// to the exact churn delta at the moment of the decision). This method
+    /// skips any process that still has remaining de-prio, then decrements
+    /// the counters for everyone via age_jepa_deprios() on every schedule
+    /// attempt. The net effect is that a process the learned model just
+    /// decided was "too hot right now" is forced to yield for multiple turns
+    /// even under this simple lowest-PID policy.
+    ///
+    /// The fairness impact of this lever (together with the override count)
+    /// is measured via the times_scheduled counter (incremented on every
+    /// restore_context and on explicit bias-forced dispatches) and surfaced
+    /// as per_process_scheduled in LaunchResult. See the A/B harness for
+    /// how this is used to quantify whether the model is actually changing
+    /// slice distribution on real guest code.
     pub fn schedule_next(&self) -> Option<i32> {
+        // Collect ready processes, but respect JEPA-driven temporary de-prio skips.
+        // Any process with jepa_deprio_remaining > 0 is de-prioritized for this pick
+        // (unless it's literally the only choice). The counter is decremented here
+        // so the penalty naturally expires after a few turns.
         let mut ready: Vec<i32> = self
             .processes
             .values()
@@ -251,14 +289,45 @@ impl ProcessManager {
             return None;
         }
         ready.sort_unstable();
-        // Pick the first ready PID after current_pid.
+
+        // First pass: prefer non-deprio candidates
+        for &pid in &ready {
+            if let Some(p) = self.processes.get(&pid) {
+                if p.jepa_deprio_remaining == 0 && pid > self.current_pid {
+                    return Some(pid);
+                }
+            }
+        }
+        // Second pass: wrap for non-deprio
+        for &pid in &ready {
+            if let Some(p) = self.processes.get(&pid) {
+                if p.jepa_deprio_remaining == 0 {
+                    return Some(pid);
+                }
+            }
+        }
+
+        // Fallback: everyone has deprio or we have to pick something. Still respect
+        // lowest-PID>current order among the penalized set (and they will age out).
         for &pid in &ready {
             if pid > self.current_pid {
                 return Some(pid);
             }
         }
-        // Wrap around to the lowest.
         Some(ready[0])
+    }
+
+    /// Age (decrement) all active JEPA de-prioritization counters.
+    /// Called by the execution engine (GpuLauncher) on every scheduling decision
+    /// so that a "skip 2-3 turns" bias from the learned model naturally expires.
+    /// This makes each override from on_context_switch / on_syscall have persistent
+    /// effect even under the lowest-PID ready selection policy.
+    pub fn age_jepa_deprios(&mut self) {
+        for p in self.processes.values_mut() {
+            if p.jepa_deprio_remaining > 0 {
+                p.jepa_deprio_remaining -= 1;
+            }
+        }
     }
 
     // ── Fork ─────────────────────────────────────────────────────────
@@ -326,6 +395,8 @@ impl ProcessManager {
             total_cycles: 0,
             pending_signal: None,
             env: parent.env.clone(),
+            jepa_deprio_remaining: 0,
+            times_scheduled: 0,
         };
 
         // Return values: child gets 0, parent gets child_pid.

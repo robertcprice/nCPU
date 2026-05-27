@@ -1,3 +1,4 @@
+use super::search_codegen::verified_result;
 use super::*;
 
 fn method_name(problem: &Problem) -> String {

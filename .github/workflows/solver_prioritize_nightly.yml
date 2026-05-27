@@ -1,0 +1,71 @@
+name: Solver prioritization nightly
+
+# Nightly roll-up of which program families CachedTeachers keeps missing.
+# Runs tools/prioritize.sh, commits artifacts/SOLVER_PRIORITIZATION.md back
+# to main. The committed file is always-current — anyone can read it to
+# see what the solver *wants* to solve but can't.
+#
+# Design note: we run on a novel offset slice that's unlikely to be fully
+# cached, so CachedTeachers actually fires and logs misses. The isolated
+# NSYNTH_CACHE_PATH keeps the CI run from colliding with any other workflow
+# or user state.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: solver-prioritize-nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  prioritize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            nsynth/target
+          key: nsynth-prioritize-${{ runner.os }}-${{ hashFiles('nsynth/Cargo.lock', 'nsynth/Cargo.toml') }}
+
+      - name: Build required binaries
+        working-directory: nsynth
+        run: cargo build --release --bin transfer_curve --bin near_miss_clusters
+
+      - name: Run prioritize sweep
+        # Offset 80 targets the harder end of the bench where Stage-0 + the
+        # preemptive search teacher more often miss — that's where
+        # CachedTeachers fires and produces log rows.
+        env:
+          NSYNTH_TEACHER_BUDGET_SEC: "8"
+        run: tools/prioritize.sh --offset 80 --limit 20 --k 3
+
+      - name: Commit the updated prioritization list
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # No-op when no change (typical when no misses were captured —
+          # the script writes a placeholder but its content is stable).
+          if ! git diff --quiet artifacts/SOLVER_PRIORITIZATION.md; then
+            git add artifacts/SOLVER_PRIORITIZATION.md
+            git commit -m "chore(metrics): nightly solver prioritization update"
+            git push origin HEAD:main
+          else
+            echo "[nightly] no change to SOLVER_PRIORITIZATION.md"
+          fi

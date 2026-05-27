@@ -33,7 +33,14 @@ class StepMixin:
             self.halted = True
             return False
 
-        op_type, rd, rn, rm, imm, branch_off = self._decode_neural(inst)
+        # ════════════════════════════════════════════════════════════════════
+        # SVC detection by bit pattern (op tables may not map 0xD4 → SVC)
+        # ════════════════════════════════════════════════════════════════════
+        if (inst & 0xFFE0001F) == 0xD4000001:
+            op_type = OpType.SVC
+            rd, rn, rm, imm, branch_off = 0, 0, 0, 0, 0
+        else:
+            op_type, rd, rn, rm, imm, branch_off = self._decode_neural(inst)
 
         # Try loop vectorization
         if op_type in [OpType.B_COND, OpType.CBZ, OpType.CBNZ] and branch_off < 0:
@@ -477,9 +484,44 @@ class StepMixin:
             return True
 
         elif op_type == OpType.SVC:
-            # Syscall - syscall number in X8, args in X0-X5
-            # For now, just log it and continue
-            # In full implementation, would call neural syscall handler
+            # Syscall dispatch — X8 = syscall number, args in X0-X5
+            syscall_nr = int(self.regs[8].item())
+
+            if syscall_nr == 64:  # SYS_WRITE
+                fd = int(self.regs[0].item())
+                buf_addr = int(self.regs[1].item())
+                length = int(self.regs[2].item())
+                # Read bytes from memory
+                length = min(length, self.mem_size - buf_addr)
+                if length > 0 and 0 <= buf_addr < self.mem_size:
+                    data = bytes(int(self.memory[buf_addr + i].item()) for i in range(length))
+                    if fd in (1, 2):  # stdout / stderr
+                        import sys as _sys
+                        _sys.stdout.buffer.write(data)
+                        _sys.stdout.buffer.flush()
+                        if self._neural_display is not None:
+                            self._neural_display.write(data)
+                    self.regs[0] = length  # return bytes written
+                else:
+                    self.regs[0] = 0
+
+            elif syscall_nr == 93:  # SYS_EXIT
+                self.halted = True
+                self.inst_count += 1
+                self.pc += 4
+                return False
+
+            elif syscall_nr == 214:  # SYS_BRK
+                if not hasattr(self, '_brk'):
+                    self._brk = 0x60000
+                req = int(self.regs[0].item())
+                if req > 0:
+                    self._brk = req
+                self.regs[0] = self._brk
+
+            else:
+                logger.debug("SVC: unhandled syscall %d", syscall_nr)
+
             self.inst_count += 1
             self.pc += 4
             return True

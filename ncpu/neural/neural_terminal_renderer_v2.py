@@ -48,9 +48,10 @@ __all__ = [
 # ─── V2 constants ─────────────────────────────────────────────────────────
 N_CHARS_V2 = 1024     # Extended character set (Latin-1, box-drawing, symbols)
 N_COLORS_V2 = 256     # Full xterm-256 palette
-POS_DIM = 16           # Total positional encoding dimension (4 sin/cos per axis x 2 axes)
+POS_DIM = 32           # Total positional encoding dimension (8 sin/cos per axis x 2 axes)
 EMBED_DIM = 64         # Character embedding dimension
-N_FREQS = 4            # Sinusoidal frequency count per spatial axis (4 freqs x sin/cos = 8 per axis)
+HIDDEN_DIM = 512       # Glyph MLP hidden layer width (512 for sharper glyphs)
+N_FREQS = 8            # Sinusoidal frequency count per spatial axis (8 freqs x sin/cos = 16 per axis)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -160,8 +161,8 @@ class NeuralGlyphGeneratorV2(nn.Module):
     fine-grained structure.
 
     Architecture:
-      Input per pixel: [char_embedding(64) | pos_encoding(16)] = 80-dim
-      MLP: Linear(80, 256) + GELU -> Linear(256, 256) + GELU -> Linear(256, 1) + Sigmoid
+      Input per pixel: [char_embedding(64) | pos_encoding(32)] = 96-dim
+      MLP: Linear(96, 512) + GELU -> Linear(512, 512) + GELU -> Linear(512, 1) + Sigmoid
       All 128 pixels processed in parallel via batched positional encodings.
 
     Input:  char codes (...,) int tensor, clamped to [0, n_chars)
@@ -174,6 +175,7 @@ class NeuralGlyphGeneratorV2(nn.Module):
         cell_h: int = CELL_H,
         cell_w: int = CELL_W,
         embed_dim: int = EMBED_DIM,
+        hidden_dim: int = HIDDEN_DIM,
         n_freqs: int = N_FREQS,
     ):
         super().__init__()
@@ -184,18 +186,19 @@ class NeuralGlyphGeneratorV2(nn.Module):
 
         # Positional encoding dimension: 4 * n_freqs (sin+cos for both y and x)
         self.pos_dim = 4 * n_freqs
-        mlp_input_dim = embed_dim + self.pos_dim  # 64 + 16 = 80
+        mlp_input_dim = embed_dim + self.pos_dim  # 64 + 32 = 96
 
         # Character embedding: 1024 characters for extended Unicode support
         self.embed = nn.Embedding(n_chars, embed_dim)
 
         # Per-pixel MLP: takes [char_embed | pos_enc] and outputs scalar alpha
+        # 512-wide hidden layers with residual skip for sharper glyphs
         self.net = nn.Sequential(
-            nn.Linear(mlp_input_dim, 256),
+            nn.Linear(mlp_input_dim, hidden_dim),
             nn.GELU(),
-            nn.Linear(256, 256),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
-            nn.Linear(256, 1),
+            nn.Linear(hidden_dim, 1),
             nn.Sigmoid(),
         )
 
@@ -498,8 +501,30 @@ class NeuralDisplayV2:
         path = Path(model_path) if model_path else self.MODEL_PATH
         if path.exists():
             state = torch.load(str(path), map_location=device, weights_only=True)
-            self.renderer.load_state_dict(state)
+            try:
+                self.renderer.load_state_dict(state)
+            except RuntimeError:
+                # Architecture mismatch (e.g., old narrow checkpoint with new wide model)
+                # — try loading with strict=False to get what we can
+                self.renderer.load_state_dict(state, strict=False)
         self.renderer.eval()
+
+        # Try to load Metal V2 native display (bypass PyTorch entirely)
+        self._metal_display = None
+        try:
+            from ncpu.neural.metal_neural_display import load_metal_neural_display_v2
+            self._metal_display = load_metal_neural_display_v2(str(path))
+            if self._metal_display is not None:
+                self._use_metal = True
+            else:
+                self._use_metal = False
+        except Exception:
+            self._use_metal = False
+
+    @property
+    def metal_available(self) -> bool:
+        """Whether native Metal V2 rendering is active (no PyTorch)."""
+        return self._use_metal
 
     def write(self, data: bytes):
         """Feed raw bytes from SYS_WRITE into the terminal state tracker."""
@@ -508,6 +533,11 @@ class NeuralDisplayV2:
     @torch.no_grad()
     def render(self) -> np.ndarray:
         """Render current terminal state to RGB frame (H, W, 3) uint8."""
+        if self._use_metal:
+            return self._metal_display.render(
+                self.terminal.chars, self.terminal.fg, self.terminal.bg,
+                cursor_row=self.terminal.cr, cursor_col=self.terminal.cc,
+            )
         return self.renderer.render_state(self.terminal, self.device)
 
     def render_rgba(self) -> tuple[bytes, int, int]:

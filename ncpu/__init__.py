@@ -1,5 +1,9 @@
 """nCPU: Neural CPU — every CPU component replaced by trained neural networks.
 
+Preferred entry points for the hero experience:
+    python -m ncpu gpu                 # THE HERO: GPU as complete self-sufficient computer
+    python -m ncpu lab / ncpu-lab      # Unified launcher
+
 Three execution strategies:
 
 1. Neural (ncpu.neural): Full neural CPU with 21+ trained models replacing

@@ -808,7 +808,7 @@ static int exec_builtin(char *cmd_str) {
 
     if (strcmp(cmd_str, "exit") == 0) {
         ret = 1;
-    } else if (strcmp(cmd_str, "help") == 0) {
+    } else if (strcmp(cmd_str, "help") == 0 || starts_with(cmd_str, "help ")) {
         cmd_help();
     } else if (strcmp(cmd_str, "pwd") == 0) {
         cmd_pwd();

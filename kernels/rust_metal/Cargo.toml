@@ -22,6 +22,13 @@ path = "bin/doom_native.rs"
 name = "ncpu_run"
 path = "bin/ncpu_run.rs"
 
+# Standalone NPCoT library runtime: loads library.json, consults, executes
+# on CPU or Metal GPU with no Python dependency.
+[[bin]]
+name = "npcot_run"
+path = "bin/npcot_run.rs"
+required-features = ["standalone-bin"]
+
 [dependencies]
 # Metal API bindings
 objc2 = "0.6"
@@ -45,3 +52,4 @@ codegen-units = 1
 [features]
 default = ["extension-module"]
 extension-module = ["pyo3/extension-module"]
+standalone-bin = []

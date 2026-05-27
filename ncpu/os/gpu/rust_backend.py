@@ -73,6 +73,12 @@ def run_elf(
                 symlink_list.append((link_path, target))
 
         # Call Rust run_elf
+        # Pass JEPA observer if the caller provided a cpu that has the right shape
+        jepa_obs = None
+        if cpu is not None and hasattr(cpu, "rust") and cpu.rust is not None:
+            # The cpu here is expected to be a NeuralJepaKernel (or adapter exposing .rust)
+            jepa_obs = getattr(cpu, "rust", None) or cpu
+
         result = ncpu_metal.run_elf(
             elf_path=elf_path,
             argv=argv,
@@ -84,6 +90,7 @@ def run_elf(
             directories=dir_list if dir_list else None,
             symlinks=symlink_list if symlink_list else None,
             on_framebuffer=on_framebuffer,
+            jepa_observer=jepa_obs,
         )
 
         # Apply VFS changes back to the filesystem for persistence
@@ -116,7 +123,7 @@ def run_elf(
         if stop_reason == 'EXIT' and result.get('exit_code', 0) == 0:
             stop_reason = 'SYSCALL'  # Match Python behavior for clean exit
 
-        return {
+        out = {
             'stdout': result.get('stdout', ''),
             'stderr': result.get('stderr', ''),
             'exit_code': result.get('exit_code', 0),
@@ -127,6 +134,20 @@ def run_elf(
             '_rust': True,
             '_cpu': None,
         }
+        if jepa_obs is not None:
+            try:
+                st = jepa_obs.get_stats() if hasattr(jepa_obs, 'get_stats') else {}
+                if isinstance(st, dict):
+                    out['jepa_bias_suggestions'] = st.get('total_jepa_bias_suggestions', 0)
+                # Also surface the final per-process churn view learned during the real run
+                if hasattr(jepa_obs, 'get_all_churn_scores'):
+                    try:
+                        out['jepa_final_churn_scores'] = jepa_obs.get_all_churn_scores()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        return out
     except ImportError as e:
         # Fallback to Python implementation
         from ncpu.os.gpu.elf_loader import load_and_run_elf

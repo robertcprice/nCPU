@@ -14,6 +14,13 @@ from ncpu.self_optimizing.architecture.ncpu_adaptation_backend import (
     NCPUAdaptationBackend,
     NCPUAdaptationDescriptor,
 )
+from ncpu.self_optimizing.executable_thought_context import (
+    build_executable_register_inputs,
+    build_executable_thought_prompt,
+    extract_hidden_state_from_prompt,
+    latent_state_summary,
+    normalize_latent_state_payload,
+)
 from ncpu.self_optimizing.latent_heads.descriptor_head import LatentDescriptorGenerator
 from ncpu.self_optimizing.latent_heads.state_patch_head import StatePatchHead
 
@@ -147,6 +154,9 @@ class HFTaskLocalFastWeightsProvider:
         adaptation_backend: Optional[NCPUAdaptationBackend] = None,
         latent_descriptor_head: Optional[LatentDescriptorGenerator] = None,
         state_patch_head: Optional[StatePatchHead] = None,
+        executable_thought_head: Optional[Any] = None,
+        executable_thought_head_config: Optional[Any] = None,
+        executable_thought_head_enabled: bool = False,
         temperature: float = 0.0,
         max_tokens: int = 2048,
         device: Optional[str] = None,
@@ -165,6 +175,7 @@ class HFTaskLocalFastWeightsProvider:
         self.adaptation_backend = adaptation_backend or NCPUAdaptationBackend()
         self.latent_descriptor_head = latent_descriptor_head
         self.state_patch_head = state_patch_head
+        self.executable_thought_head = executable_thought_head
         self.decode_runtime: Optional[Any] = None
 
         loaded_model, tokenizer, resolved_device = LLMProviderFactory._load_hf_local_model(
@@ -177,6 +188,47 @@ class HFTaskLocalFastWeightsProvider:
         self.tokenizer = tokenizer
         self.device = resolved_device
         self.model.eval()
+
+        if self.executable_thought_head is None and (
+            executable_thought_head_enabled or executable_thought_head_config is not None
+        ):
+            from ncpu.self_optimizing.executable_thought_head import (
+                ExecutableThoughtHead,
+                ExecutableThoughtHeadConfig,
+            )
+
+            resolved_config = executable_thought_head_config
+            hidden_dim = self._infer_model_hidden_dim()
+            if resolved_config is None:
+                resolved_config = ExecutableThoughtHeadConfig(hidden_dim=hidden_dim)
+            elif isinstance(resolved_config, dict):
+                resolved_payload = dict(resolved_config)
+                resolved_payload.setdefault("hidden_dim", hidden_dim)
+                resolved_config = ExecutableThoughtHeadConfig(**resolved_payload)
+            elif isinstance(resolved_config, ExecutableThoughtHeadConfig):
+                if int(resolved_config.hidden_dim) <= 0:
+                    resolved_config = ExecutableThoughtHeadConfig(
+                        **{
+                            **resolved_config.to_dict(),
+                            "hidden_dim": hidden_dim,
+                        }
+                    )
+                elif int(resolved_config.hidden_dim) != int(hidden_dim):
+                    raise ValueError(
+                        "Executable thought head hidden_dim does not match provider model: "
+                        f"{resolved_config.hidden_dim} vs {hidden_dim}"
+                    )
+            else:
+                raise TypeError("executable_thought_head_config must be dict, ExecutableThoughtHeadConfig, or None")
+
+            self.executable_thought_head = ExecutableThoughtHead(
+                resolved_config,
+                state_patch_head=self.state_patch_head,
+            ).to(self.device)
+            self.executable_thought_head.eval()
+        elif self.executable_thought_head is not None:
+            self.executable_thought_head = self.executable_thought_head.to(self.device)
+            self.executable_thought_head.eval()
 
         for parameter in self.model.parameters():
             parameter.requires_grad = False
@@ -193,6 +245,23 @@ class HFTaskLocalFastWeightsProvider:
         self._optimizer: Optional[torch.optim.Optimizer] = None
         self._active_task_name: Optional[str] = None
         self._update_count = 0
+
+    def _infer_model_hidden_dim(self) -> int:
+        config = getattr(self.model, "config", None)
+        for attr in ("hidden_size", "n_embd", "d_model"):
+            value = getattr(config, attr, None)
+            if value is not None:
+                return int(value)
+        get_embeddings = getattr(self.model, "get_input_embeddings", None)
+        if callable(get_embeddings):
+            embeddings = get_embeddings()
+            embedding_dim = getattr(embeddings, "embedding_dim", None)
+            if embedding_dim is not None:
+                return int(embedding_dim)
+            weight = getattr(embeddings, "weight", None)
+            if weight is not None and getattr(weight, "ndim", 0) == 2:
+                return int(weight.shape[1])
+        raise ValueError("Unable to infer model hidden size for executable thought head")
 
     def _install_fast_weight_adapters(self) -> None:
         matches = find_target_linear_modules(
@@ -244,6 +313,54 @@ class HFTaskLocalFastWeightsProvider:
             batch = batch.to(self.device)
         return dict(batch)
 
+    def _normalize_latent_state_payload(self, latent_state: Any) -> dict[str, Any]:
+        return normalize_latent_state_payload(latent_state)
+
+    def _latent_state_summary(self, latent_state: Any) -> str:
+        return latent_state_summary(latent_state)
+
+    def _build_executable_thought_prompt(
+        self,
+        *,
+        task_name: str,
+        update_kind: str,
+        latent_state: Any,
+        error_text: str,
+        candidate_text: str,
+    ) -> str:
+        return build_executable_thought_prompt(
+            task_name=task_name,
+            update_kind=update_kind,
+            latent_state=latent_state,
+            error_text=error_text,
+            candidate_text=candidate_text,
+        )
+
+    def _build_executable_register_inputs(
+        self,
+        *,
+        latent_state: Any,
+        error_text: str,
+        candidate_text: str,
+    ) -> torch.Tensor:
+        return build_executable_register_inputs(
+            latent_state=latent_state,
+            error_text=error_text,
+            candidate_text=candidate_text,
+            num_registers=int(self.executable_thought_head.config.num_registers),
+            device=self.device,
+        )
+
+    def _extract_hidden_state_from_prompt(self, prompt: str) -> tuple[torch.Tensor, dict[str, Any]]:
+        return extract_hidden_state_from_prompt(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            prompt=prompt,
+            device=self.device,
+            max_tokens=self.max_tokens,
+            add_special_tokens=False,
+        )
+
     def _collect_fast_gradients(self) -> torch.Tensor:
         gradients: list[torch.Tensor] = []
         for adapter in self._adapters:
@@ -260,11 +377,12 @@ class HFTaskLocalFastWeightsProvider:
         *,
         learning_rate_scale: float,
         update_kind: str,
+        apply_state_patch_head: bool = True,
     ) -> None:
         if not projection:
             return
         transformed_projection = projection
-        if self.state_patch_head is not None:
+        if apply_state_patch_head and self.state_patch_head is not None:
             transformed_projection = self.state_patch_head.transform(
                 projection,
                 device=self.device,
@@ -428,6 +546,44 @@ class HFTaskLocalFastWeightsProvider:
             error_text=error_text,
             candidate_text=candidate_text,
         )
+        apply_state_patch_head = True
+        if self.executable_thought_head is not None:
+            try:
+                prompt = self._build_executable_thought_prompt(
+                    task_name=task_name,
+                    update_kind=update_kind,
+                    latent_state=latent_state,
+                    error_text=error_text,
+                    candidate_text=candidate_text,
+                )
+                hidden_state, hidden_metadata = self._extract_hidden_state_from_prompt(prompt)
+                register_inputs = self._build_executable_register_inputs(
+                    latent_state=latent_state,
+                    error_text=error_text,
+                    candidate_text=candidate_text,
+                )
+                with torch.no_grad():
+                    thought_result = self.executable_thought_head(
+                        hidden_state,
+                        register_inputs,
+                    )
+                descriptor.signal_projection = thought_result.patch_signal.squeeze(0).detach().cpu().tolist()
+                descriptor.source = "latent_state+hf_hidden_state+executable_thought_head"
+                descriptor.implementation = "ncpu_gradient_protocol+executable_thought_head"
+                descriptor.descriptor["executable_thought"] = {
+                    **hidden_metadata,
+                    "register_inputs": register_inputs.squeeze(0).detach().cpu().tolist(),
+                    "predicted_output": float(thought_result.predicted_output.squeeze().detach().cpu().item()),
+                    "steps_executed": list(thought_result.steps_executed),
+                    "halted": list(thought_result.halted),
+                    "program_texts": list(thought_result.program_texts),
+                    "mog_previews": list(thought_result.mog_previews),
+                }
+                apply_state_patch_head = False
+            except Exception as exc:
+                descriptor.descriptor["executable_thought_error"] = f"{type(exc).__name__}: {exc}"
+                if self.latent_descriptor_head is None:
+                    raise
         if self.latent_descriptor_head is not None:
             projection, feature_summary = self.latent_descriptor_head.build_projection(
                 latent_state=latent_state,
@@ -435,15 +591,17 @@ class HFTaskLocalFastWeightsProvider:
                 error_text=error_text,
                 candidate_text=candidate_text,
             )
-            descriptor.signal_projection = projection
-            descriptor.source = "latent_state+learned_descriptor_head"
-            descriptor.implementation = "ncpu_gradient_protocol+learned_descriptor_head"
+            if "executable_thought" not in descriptor.descriptor:
+                descriptor.signal_projection = projection
+                descriptor.source = "latent_state+learned_descriptor_head"
+                descriptor.implementation = "ncpu_gradient_protocol+learned_descriptor_head"
             descriptor.descriptor["feature_summary"] = feature_summary
         try:
             self._apply_projection_to_adapters(
                 descriptor.signal_projection,
                 learning_rate_scale=descriptor.learning_rate_scale,
                 update_kind=update_kind,
+                apply_state_patch_head=apply_state_patch_head,
             )
             self._update_count += 1
             elapsed = time.perf_counter() - started

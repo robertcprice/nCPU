@@ -186,6 +186,34 @@ class TestLLMProviderFactory(unittest.TestCase):
         _, kwargs = provider_cls.call_args
         self.assertIsNotNone(kwargs["state_patch_head"])
 
+    def test_hf_fast_weights_provider_can_enable_executable_thought_head(self):
+        with mock.patch(
+            "ncpu.self_optimizing.architecture.task_local_fast_weights.HFTaskLocalFastWeightsProvider",
+            autospec=True,
+        ) as provider_cls:
+            instance = provider_cls.return_value
+            provider = LLMProviderFactory.create_provider(
+                "hf_fast_weights",
+                model="stub-model",
+                state_patch_head_enabled=True,
+                state_patch_head_input_dim=8,
+                state_patch_head_hidden_dim=16,
+                state_patch_head_output_dim=8,
+                executable_thought_head_enabled=True,
+                executable_thought_compiler_d_model=24,
+                executable_thought_trace_projection_dim=8,
+                executable_thought_state_patch_dim=8,
+            )
+
+        self.assertIs(provider, instance)
+        _, kwargs = provider_cls.call_args
+        self.assertTrue(kwargs["executable_thought_head_enabled"])
+        self.assertIsNotNone(kwargs["state_patch_head"])
+        self.assertIsNotNone(kwargs["executable_thought_head_config"])
+        self.assertEqual(kwargs["executable_thought_head_config"].compiler_d_model, 24)
+        self.assertEqual(kwargs["executable_thought_head_config"].trace_projection_dim, 8)
+        self.assertEqual(kwargs["executable_thought_head_config"].state_patch_dim, 8)
+
     def test_hf_fast_weights_provider_can_enable_segmented_decode_backend(self):
         with (
             mock.patch(

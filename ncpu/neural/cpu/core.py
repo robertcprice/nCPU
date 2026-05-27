@@ -88,7 +88,9 @@ class NeuralCPU(
     FB_HEIGHT = 25
     FB_SIZE = FB_WIDTH * FB_HEIGHT
 
-    def __init__(self, memory_size: int = 1024 * 1024, device_override: Optional[str] = None, fast_mode: bool = False):
+    def __init__(self, memory_size: int = 1024 * 1024, device_override: Optional[str] = None, fast_mode: bool = False,
+                 use_neural_registers: bool = False, use_ssd_memory: bool = False,
+                 ssd_memory_size: int = 64 * 1024 * 1024):
         logger.info("=" * 78)
         logger.info("   NEURAL GPU ULTIMATE - 100% GPU EXECUTION")
         logger.info("=" * 78)
@@ -257,6 +259,46 @@ class NeuralCPU(
         self.cursor_pos = torch.tensor(0, dtype=torch.int64, device=self.device)
 
         self.halted = False
+
+        # ════════════════════════════════════════════════════════════════════
+        # NEURAL DISPLAY — attached by demo scripts for SVC SYS_WRITE output
+        # ════════════════════════════════════════════════════════════════════
+        self._neural_display = None
+
+        # ════════════════════════════════════════════════════════════════════
+        # NEURAL REGISTER FILE — trained autoencoder-based register storage
+        # Every read/write passes through encoder/decoder MLPs (~41K params)
+        # ════════════════════════════════════════════════════════════════════
+        self._use_neural_registers = use_neural_registers
+        self._neural_reg_file = None
+        if use_neural_registers:
+            try:
+                from ..neural_registers import NeuralRegisterFile
+                self._neural_reg_file = NeuralRegisterFile.load(
+                    Path('models/neural_registers.pt'),
+                    device=str(self.device),
+                )
+                logger.info("   Neural Register File: ENABLED (autoencoder, ~41K params)")
+            except Exception as e:
+                logger.warning(f"   Neural Register File: FAILED to load ({e})")
+                self._use_neural_registers = False
+
+        # ════════════════════════════════════════════════════════════════════
+        # NEURAL SSD MEMORY — mmap-backed memory with LSTM prefetch + MMU
+        # ════════════════════════════════════════════════════════════════════
+        self._use_ssd_memory = use_ssd_memory
+        self._ssd_memory = None
+        if use_ssd_memory:
+            try:
+                from ..neural_memory import NeuralSSDMemory
+                self._ssd_memory = NeuralSSDMemory(
+                    size=ssd_memory_size,
+                    device=str(self.device),
+                )
+                logger.info(f"   Neural SSD Memory: ENABLED ({ssd_memory_size // (1024*1024)} MB, LSTM prefetch)")
+            except Exception as e:
+                logger.warning(f"   Neural SSD Memory: FAILED to init ({e})")
+                self._use_ssd_memory = False
 
         # ════════════════════════════════════════════════════════════════════
         # NEURAL COMPONENTS (ALL ON GPU)
@@ -476,7 +518,31 @@ class NeuralCPU(
         self._sync_regs_to_cpu()
         return {i: int(self.cpu_regs[i]) for i in range(32)}
 
+    # ════════════════════════════════════════════════════════════════════
+    # NEURAL REGISTER ACCESS — route through autoencoder when enabled
+    # ════════════════════════════════════════════════════════════════════
 
+    def neural_reg_read(self, idx: int) -> int:
+        """Read a register value, optionally through the neural autoencoder.
+
+        When neural registers are enabled, the value is decoded from the
+        learned embedding in the register bank. Otherwise, falls back to
+        the plain int64 tensor.
+        """
+        if self._use_neural_registers and self._neural_reg_file is not None:
+            return self._neural_reg_file.read(idx)
+        return int(self.regs[idx].item())
+
+    def neural_reg_write(self, idx: int, value: int):
+        """Write a value to a register, optionally through the neural encoder.
+
+        When neural registers are enabled, the value is encoded into a
+        learned embedding and stored in the register bank. The plain
+        tensor is always updated too for compatibility with existing code.
+        """
+        if self._use_neural_registers and self._neural_reg_file is not None:
+            self._neural_reg_file.write(idx, value)
+        self.regs[idx] = value  # always update tensor for compatibility
 
     def run(self, max_instructions: int = 1000000) -> Tuple[int, float]:
         """

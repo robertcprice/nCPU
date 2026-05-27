@@ -60,18 +60,22 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
 
     let non_scalar = has_non_scalar_input(problem);
 
-    // Stage 0.5: cross-run knowledge transfer via CachedTeachers. After the
-    // Stage-0 exact-match lookup misses, consult the persistent cache as a
-    // *source of teachers*: every prior solve is a candidate program whose
-    // behaviour can seed gradient distillation on the current problem.
-    // Bounded by NSYNTH_TEACHER_BUDGET_SEC (default 15s) so this stage can't
-    // stall trivial problems on a large cache. Scalar-only today; gated
-    // internally by the strategy's `applicable()` check.
+    // Run the cheap preemptive search teacher first — it's ms-scale and
+    // covers a large fraction of the benchmark. This is the correct pre-
+    // gradient stage ordering; running CachedTeachers before this was a
+    // measured regression (curve_analysis flagged 22-24s cumulative wall-
+    // clock on problems the preemptive stage solved in 5-10ms).
+    let preemptive_search_result = solve_problem_from_preemptive_search_teacher(problem);
+
+    // Stage 1.5: cross-run knowledge transfer via CachedTeachers. Runs only
+    // when cheaper stages (Stage 0 exact-match + preemptive search) have
+    // already missed. Bounded by NSYNTH_TEACHER_BUDGET_SEC (default 15s).
     //
-    // This is the first place normal bench runs exercise the cross-run
-    // learning loop — without it, `CachedTeachers` only runs via the
-    // emergent_coverage binary.
-    if !non_scalar && crate::solved_cache::entry_count() > 0 {
+    // This is the "gradient distillation from prior solves" path — real work,
+    // not a lookup. Placing it after preemptive search means fast problems
+    // stay fast; placing it before enumerative + synth_gradient means a
+    // transfer win short-circuits the slowest stages of the pipeline.
+    if !non_scalar && preemptive_search_result.is_none() && crate::solved_cache::entry_count() > 0 {
         let strategy = crate::strategy::CachedTeachers;
         if <crate::strategy::CachedTeachers as crate::strategy::SynthesisStrategy>::applicable(
             &strategy, problem,
@@ -96,8 +100,6 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
             );
         }
     }
-
-    let preemptive_search_result = solve_problem_from_preemptive_search_teacher(problem);
 
     // Stage 1: Classical bottom-up symbolic enumeration (no neural weights, no
     // gradients). Cheap on small closed-form expressions and cuts them off

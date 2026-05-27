@@ -50,19 +50,34 @@ class _ToyTokenizer:
 class _ToyCausalModel(nn.Module):
     def __init__(self):
         super().__init__()
+        self.config = SimpleNamespace(hidden_size=8)
         self.embed = nn.Embedding(64, 8)
         self.q_proj = nn.Linear(8, 8)
         self.v_proj = nn.Linear(8, 8)
         self.lm_head = nn.Linear(8, 64)
 
-    def forward(self, input_ids, attention_mask=None, labels=None):
+    def get_input_embeddings(self):
+        return self.embed
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        labels=None,
+        output_hidden_states=False,
+        use_cache=False,
+        inputs_embeds=None,
+        **_kwargs,
+    ):
+        del use_cache
         del attention_mask
-        hidden = self.embed(input_ids)
-        hidden = torch.tanh(self.q_proj(hidden))
-        hidden = torch.tanh(self.v_proj(hidden))
-        logits = self.lm_head(hidden)
+        hidden0 = inputs_embeds if inputs_embeds is not None else self.embed(input_ids)
+        hidden1 = torch.tanh(self.q_proj(hidden0))
+        hidden2 = torch.tanh(self.v_proj(hidden1))
+        logits = self.lm_head(hidden2)
+        hidden_states = (hidden0, hidden1, hidden2) if output_hidden_states else None
         if labels is None:
-            return SimpleNamespace(logits=logits)
+            return SimpleNamespace(logits=logits, hidden_states=hidden_states, last_hidden_state=hidden2)
         shift_logits = logits[:, :-1, :].contiguous()
         shift_labels = labels[:, 1:].contiguous()
         loss = F.cross_entropy(
@@ -70,7 +85,12 @@ class _ToyCausalModel(nn.Module):
             shift_labels.view(-1),
             ignore_index=-100,
         )
-        return SimpleNamespace(logits=logits, loss=loss)
+        return SimpleNamespace(
+            logits=logits,
+            loss=loss,
+            hidden_states=hidden_states,
+            last_hidden_state=hidden2,
+        )
 
     def generate(self, input_ids, **kwargs):
         max_new_tokens = int(kwargs.get("max_new_tokens", 1))
@@ -213,6 +233,74 @@ class TestTaskLocalFastWeights(unittest.TestCase):
             self.assertEqual(result.kind, "verify_failure_descriptor")
             self.assertEqual(result.adaptation_descriptor["source"], "latent_state")
             self.assertEqual(result.implementation, "task_local_low_rank_residual+descriptor_update")
+            self.assertFalse(torch.equal(initial_a, provider._adapters[0].fast_a.weight.detach()))
+
+    def test_provider_can_route_descriptor_updates_through_executable_thought_head(self):
+        toy_model = _ToyCausalModel()
+        tokenizer = _ToyTokenizer()
+        with mock.patch.object(
+            LLMProviderFactory,
+            "_load_hf_local_model",
+            return_value=(toy_model, tokenizer, "cpu"),
+        ):
+            provider = HFTaskLocalFastWeightsProvider(
+                model="stub-model",
+                config=TaskLocalFastWeightConfig(
+                    rank=2,
+                    gradient_steps=1,
+                    learning_rate=0.1,
+                    target_modules=("q_proj", "v_proj"),
+                    max_target_tokens=8,
+                ),
+                executable_thought_head_enabled=True,
+                executable_thought_head_config={
+                    "compiler_d_model": 16,
+                    "compiler_max_program_len": 4,
+                    "num_registers": 4,
+                    "execution_max_steps": 4,
+                    "output_register": 2,
+                    "trace_projection_dim": 8,
+                    "trace_hidden_dim": 16,
+                    "state_patch_dim": 8,
+                    "allowed_opcodes": ("NOP", "ADD", "SUB", "MUL", "HALT"),
+                },
+                device="cpu",
+                max_tokens=2,
+            )
+            provider.begin_task("demo", "Write code.")
+            initial_a = provider._adapters[0].fast_a.weight.detach().clone()
+
+            result = provider.apply_state_descriptor_update(
+                task_name="demo",
+                update_kind="verify_failure_descriptor",
+                latent_state={
+                    "verification_passes": 0,
+                    "verification_failures": 1,
+                    "fast_weight_updates_used": 0,
+                    "descriptor_updates_used": 0,
+                    "confidence": 0.1,
+                    "failure_patterns": ["expected fibonacci recurrence"],
+                    "verified_constraints": ["output_format=python"],
+                    "recent_actions": ["write", "verify"],
+                    "memory_vector": [0.2, -0.1, 0.3, 0.0],
+                },
+                error_text="expected 8, got 0",
+                candidate_text="def fib(n): return 0",
+            )
+
+            self.assertTrue(result.success)
+            self.assertEqual(
+                result.adaptation_descriptor["source"],
+                "latent_state+hf_hidden_state+executable_thought_head",
+            )
+            self.assertEqual(
+                result.adaptation_descriptor["implementation"],
+                "ncpu_gradient_protocol+executable_thought_head",
+            )
+            thought_meta = result.adaptation_descriptor["descriptor"]["executable_thought"]
+            self.assertEqual(thought_meta["hidden_state_source"], "model_hidden_states")
+            self.assertEqual(thought_meta["register_inputs"][:2], [8.0, 0.0])
+            self.assertTrue(thought_meta["program_texts"])
             self.assertFalse(torch.equal(initial_a, provider._adapters[0].fast_a.weight.detach()))
 
     def test_factory_can_build_hf_fast_weights_provider(self):

@@ -68,10 +68,22 @@ from ncpu.neural.neural_terminal_renderer import (
 class ShellProcess:
     """Manages a shell child process attached to a PTY."""
 
-    def __init__(self, shell: str, rows: int = TERM_ROWS, cols: int = TERM_COLS):
+    def __init__(
+        self,
+        shell: str,
+        rows: int = TERM_ROWS,
+        cols: int = TERM_COLS,
+        *,
+        login: bool = True,
+        inherit_env: bool = True,
+        extra_env: dict[str, str] | None = None,
+    ):
         self.shell = shell
         self.rows = rows
         self.cols = cols
+        self.login = login
+        self.inherit_env = inherit_env
+        self.extra_env = dict(extra_env or {})
         self.pid: int = -1
         self.fd: int = -1
         self._alive = False
@@ -82,12 +94,16 @@ class ShellProcess:
 
         if pid == 0:
             # Child process — exec the shell
-            os.environ["TERM"] = "xterm-256color"
-            os.environ["COLUMNS"] = str(self.cols)
-            os.environ["LINES"] = str(self.rows)
-            # Some shells read LANG for UTF-8 support
-            os.environ.setdefault("LANG", "en_US.UTF-8")
-            os.execvp(self.shell, [self.shell, "--login"])
+            env = dict(os.environ) if self.inherit_env else {}
+            env["TERM"] = "xterm-256color"
+            env["COLUMNS"] = str(self.cols)
+            env["LINES"] = str(self.rows)
+            env.setdefault("LANG", "en_US.UTF-8")
+            env.update(self.extra_env)
+            argv = [self.shell]
+            if self.login:
+                argv.append("--login")
+            os.execvpe(self.shell, argv, env)
             # execvp does not return on success
             sys.exit(1)
 

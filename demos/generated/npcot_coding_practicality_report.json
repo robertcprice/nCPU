@@ -1,0 +1,65 @@
+{
+  "train": {
+    "initial_loss": 64.83024597167969,
+    "final_loss": 0.34153518080711365,
+    "final_mae": 0.44404301047325134
+  },
+  "crystallize": {
+    "train_samples": 40,
+    "newly_cached": 39,
+    "library_entries": 5,
+    "library_path": "/tmp/npcot_coding_demo.json",
+    "file_size_bytes": 5282
+  },
+  "reuse": {
+    "hit_rate": 1.0,
+    "mean_abs_error": 1.4957765102386475,
+    "details": [
+      {
+        "skill": "sum_elements",
+        "hit": true,
+        "predicted": -0.5715252161026001,
+        "target": -1.0,
+        "error": 0.4284747838973999
+      },
+      {
+        "skill": "find_max",
+        "hit": true,
+        "predicted": 1.2325948476791382,
+        "target": 3.0,
+        "error": 1.7674051523208618
+      },
+      {
+        "skill": "find_min",
+        "hit": true,
+        "predicted": -1.0001773834228516,
+        "target": -1.0,
+        "error": 0.0001773834228515625
+      },
+      {
+        "skill": "count_positive_values",
+        "hit": true,
+        "predicted": 1.9940788745880127,
+        "target": 0.0,
+        "error": 1.9940788745880127
+      },
+      {
+        "skill": "count_negative_values",
+        "hit": true,
+        "predicted": 3.2887463569641113,
+        "target": 0.0,
+        "error": 3.2887463569641113
+      }
+    ]
+  },
+  "compliance": {
+    "aggregate_risk": "warn",
+    "safe_entries": 4,
+    "total_entries": 5
+  },
+  "benchmark": {
+    "soft_ms_per_batch": 0.4697704199952568,
+    "library_ms_per_batch": 0.20573624999997264,
+    "rust_us_per_sample": 1.9800819991360186
+  }
+}

@@ -15,6 +15,8 @@ Main entry points:
   own instruction memory during execution, with full gradient flow
 - DifferentiableCompiler: Neural compiler with gradient flow through compilation
 - DifferentiableCompilationPipeline: End-to-end source -> compile -> execute
+- SynthesisOSPipeline: End-to-end synthesis + differentiable OS execution
+- GradientGuidedSynthesis: Use OS gradients to steer program synthesis search
 """
 
 from .execution import (
@@ -49,6 +51,14 @@ from .diff_compiler import (
     CompilationResult,
     SimpleTokenizer,
 )
+from .synthesis_integration import (
+    DifferentiableProgramExecutor,
+    SynthesisOSPipeline,
+    GradientGuidedSynthesis,
+    ExecutorResult,
+    PipelineResult,
+    GradientGuidance,
+)
 
 __all__ = [
     "DifferentiableEngine",
@@ -79,4 +89,10 @@ __all__ = [
     "DifferentiableCompilationPipeline",
     "CompilationResult",
     "SimpleTokenizer",
+    "DifferentiableProgramExecutor",
+    "SynthesisOSPipeline",
+    "GradientGuidedSynthesis",
+    "ExecutorResult",
+    "PipelineResult",
+    "GradientGuidance",
 ]

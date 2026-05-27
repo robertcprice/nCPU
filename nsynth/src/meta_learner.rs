@@ -54,12 +54,28 @@ use crate::benchmark::{Problem, Value};
 ///  23  log1p('if ' count)                (code histogram)
 ///  24  log1p(loop-keyword count)         (code histogram: for+while)
 ///  25  log1p('return' count)             (code histogram)
+///  26  n_args × monotone                 (bilinear problem cross-term)
+///  27  mean_abs_out × (1 − monotone)     (bilinear problem cross-term)
+///  28  n_examples × n_args               (bilinear problem cross-term)
+///  29  ratio × fraction_nonneg           (bilinear problem cross-term)
+///  30  has_loop × has_branch             (bilinear code cross-term)
+///  31  has_mul × has_mod                 (bilinear code cross-term)
 ///
 /// Presence bits (9..17) and histogram counts (18..25) coexist — presence
 /// bits give the ranker a cheap "this teacher uses multiplication" feature,
 /// histogram counts let it distinguish "one multiplication" from "many
 /// multiplications" without nonlinear feature crossing.
-pub const FEATURE_DIM: usize = 26;
+///
+/// Slots 26..=31 are explicit bilinear cross-terms. They fix a signal-
+/// volume problem the `bootstrap_train` + `diversity_ab` A/B found: the
+/// pure additive feature space doesn't contain enough information to pick
+/// transfer winners out of the cache. Cross-terms multiply pairs of
+/// existing features so the weighted distance gets a product signal to
+/// train on — without invoking an explicit bilinear-form layer.
+///
+/// Back-compat: `MetaWeights::load` defaults missing slots to 1.0, so
+/// old weight files (26 dims) keep working with the new constant.
+pub const FEATURE_DIM: usize = 32;
 
 /// Log-space histogram bucket for a count: `log1p(c)` so bucket 0→0 and larger
 /// counts compress gracefully. Using log1p instead of raw counts keeps the
@@ -214,6 +230,22 @@ pub fn extract_problem_features(problem: &Problem) -> [f64; FEATURE_DIM] {
         }
     }
 
+    // Bilinear problem cross-terms (slots 26..=29). Captures signal that
+    // pure linear features miss — e.g. "multi-arg monotone problems" look
+    // different from "single-arg monotone problems" even though both have
+    // the monotone bit set. Features remain purely problem-derived so the
+    // distance formula keeps its problem-vs-code structure.
+    f[26] = f[0] * f[5]; // n_args × monotone
+    f[27] = f[4].ln_1p() * (1.0 - f[5]); // log |mean out| × non-monotone
+    f[28] = f[0] * f[1]; // n_args × n_examples
+    f[29] = f[6].abs() * f[7]; // |ratio| × non-negative fraction
+
+    // Slots 30..=31 are populated by `extract_code_features` since they
+    // are code-side cross terms (slots 0..=29 in the problem vector stay
+    // zero for those indices — they're filled per-side).
+    f[30] = 0.0;
+    f[31] = 0.0;
+
     f
 }
 
@@ -262,6 +294,20 @@ pub fn extract_code_features(code: &str) -> [f64; FEATURE_DIM] {
         + code.matches("while(").count();
     f[24] = histogram_bucket(loop_count);
     f[25] = histogram_bucket(code.matches("return").count());
+
+    // Code-side bilinear cross-terms. Slots 26..=29 stay zero for code
+    // (they're problem-derived). Slots 30..=31 carry code cross-products:
+    //   30: has_loop × has_branch — iterative branching shape signature
+    //   31: has_mul × has_mod       — multiplicative-modular combination
+    // These let the ranker distinguish "loops with branches" (e.g.
+    // state-machine iterators) from "pure loops" or "pure branches" —
+    // signal the additive presence bits can't express.
+    f[26] = 0.0;
+    f[27] = 0.0;
+    f[28] = 0.0;
+    f[29] = 0.0;
+    f[30] = f[14] * f[15];
+    f[31] = f[9] * f[12];
     f
 }
 
@@ -280,6 +326,152 @@ fn merge_features(
         out[i] = problem_feats[i] + code_feats[i];
     }
     out
+}
+
+/// Predicted code-feature vector from a problem's shape. This is the
+/// **priors layer** that makes the ranker query-conditional: given problem
+/// statistics (arity, output magnitude, monotonicity), predict the code-
+/// feature shape a matching teacher is likely to have.
+///
+/// Without this, the existing `weighted_distance(pf, merge(pf, cf))`
+/// reduces to `sum_{i≥8} w_i * cf_i²` — purely a function of the candidate's
+/// code features, *identical for every query*. That was a measured
+/// regression (see diversity_ab A/B: ranker's top-50 failed to contain
+/// transfer-winners because the ranker wasn't reading the query).
+///
+/// Priors encoded here are intentionally coarse; `bootstrap_train` tunes
+/// the weight vector that multiplies the squared residuals, so these
+/// defaults need only be directionally right. Wrong priors just mean slow
+/// training, not broken ranking.
+pub fn expected_code_features(pf: &[f64; FEATURE_DIM]) -> [f64; FEATURE_DIM] {
+    let mut ecf = [0.0_f64; FEATURE_DIM];
+
+    let n_args = pf[0];
+    let n_examples = pf[1];
+    let mean_abs_out = pf[4];
+    let monotone = pf[5]; // 0..1
+    let ratio = pf[6];
+
+    // Presence bits (9..=17). Encode directional priors.
+    // '*' more likely when output/input ratios are large (multiplicative):
+    ecf[9] = (ratio.abs() / 5.0).clamp(0.0, 1.0);
+    // '+' effectively always present in scalar i64 bodies.
+    ecf[10] = 1.0;
+    // '-' more likely for non-monotone (subtraction-based) problems.
+    ecf[11] = (1.0 - monotone).clamp(0.0, 1.0);
+    // '%' (modulo) only likely when outputs are small relative to inputs.
+    ecf[12] = if mean_abs_out < 20.0 && mean_abs_out > 0.0 {
+        0.5
+    } else {
+        0.0
+    };
+    // '/' mildly correlated with ratio < 1 problems.
+    ecf[13] = if ratio.abs() < 1.0 && ratio != 0.0 {
+        0.3
+    } else {
+        0.0
+    };
+    // Branches: non-monotone problems frequently branch.
+    ecf[14] = (1.0 - monotone).clamp(0.0, 1.0);
+    // Loops: 1-arg problems with big outputs usually need iteration.
+    ecf[15] = if n_args <= 1.0 && mean_abs_out > 50.0 {
+        0.8
+    } else {
+        0.0
+    };
+    // Depth proxy: brace count. Heuristic: 2 (fn body + maybe one block).
+    ecf[16] = 2.0 + ((1.0 - monotone) * 2.0);
+    // 'return' bit trivially present.
+    ecf[17] = 1.0;
+
+    // Histogram slots 18..=25. Match directionally.
+    ecf[18] = n_args.ln_1p() + 1.0_f64.ln_1p(); // at least one '+'
+    ecf[19] = (1.0 - monotone).ln_1p(); // '-' count
+    ecf[20] = (ratio.abs() / 3.0).ln_1p(); // '*' count
+    ecf[21] = if ratio.abs() < 1.0 { 0.5 } else { 0.0 };
+    ecf[22] = if mean_abs_out < 20.0 { 0.5 } else { 0.0 };
+    ecf[23] = (1.0 - monotone).ln_1p();
+    ecf[24] = if n_args <= 1.0 && mean_abs_out > 50.0 {
+        1.0_f64.ln_1p()
+    } else {
+        0.0
+    };
+    ecf[25] = 1.0_f64.ln_1p(); // at least one 'return'
+
+    // Use n_examples only as a weak size prior on code length slot 8.
+    ecf[8] = 40.0 + n_examples * 10.0;
+
+    // Bilinear expected slots. Slots 26..=29 match the problem-side
+    // bilinear terms (so the residual `cf[i] - ecf[i]` for i=26..=29 is
+    // ~0 for a well-matched teacher). Slots 30..=31 use priors on code
+    // structure: expected "loop × branch" = max(expected_loop × expected_branch),
+    // expected "mul × mod" similarly.
+    ecf[26] = n_args * monotone;
+    ecf[27] = mean_abs_out.ln_1p() * (1.0 - monotone);
+    ecf[28] = n_args * n_examples;
+    ecf[29] = ratio.abs() * pf[7];
+    ecf[30] = ecf[14] * ecf[15];
+    ecf[31] = ecf[9] * ecf[12];
+
+    ecf
+}
+
+/// Query-conditional distance between a problem and a candidate code. This
+/// is what `rank_teachers_with_meta_topk` actually calls now. Replaces the
+/// prior `weighted_distance(pf, merge(pf, cf))` formula that was
+/// query-invariant.
+///
+/// d(pf, cf) = sqrt( Σ w_i · (cf_i - expected_cf(pf)_i)² )
+///
+/// Smaller = "this candidate's structural shape matches what we expected
+/// for this problem." Weights are learned via `record_transfer_success` and
+/// `bootstrap_train`.
+pub fn query_conditional_distance(
+    pf: &[f64; FEATURE_DIM],
+    cf: &[f64; FEATURE_DIM],
+    weights: &MetaWeights,
+) -> f64 {
+    let ecf = expected_code_features(pf);
+    let mut s = 0.0_f64;
+    for i in 0..FEATURE_DIM {
+        let d = cf[i] - ecf[i];
+        s += weights.w[i] * d * d;
+    }
+    s.sqrt()
+}
+
+/// Apply `MetaWeights` to a residual vector. Used by `bootstrap_train` to
+/// compute `d = √(Σ w_i · r_i²)` and its gradient without duplicating the
+/// internal formula.
+pub fn apply_weights_to_residual(residual: &[f64; FEATURE_DIM], weights: &MetaWeights) -> f64 {
+    let mut s = 0.0_f64;
+    for i in 0..FEATURE_DIM {
+        s += weights.w[i] * residual[i] * residual[i];
+    }
+    s.sqrt()
+}
+
+/// In-place weight update from a ranking-loss gradient. `delta` is the raw
+/// gradient direction per weight (computed externally); `lr` is the step
+/// size. Clamps to [0.01, 100.0] so a bad batch can't blow up the ranker.
+pub fn apply_weight_gradient(weights: &mut MetaWeights, delta: &[f64; FEATURE_DIM], lr: f64) {
+    for i in 0..FEATURE_DIM {
+        weights.w[i] = (weights.w[i] + lr * delta[i]).clamp(0.01, 100.0);
+    }
+}
+
+/// Persist the current process-wide weights to disk. Used by
+/// `bootstrap_train` to commit offline training results.
+pub fn save_weights() -> Result<(), String> {
+    with_weights(|w| w.save())
+}
+
+/// Replace the in-memory weights with the given vector and persist. For
+/// harnesses that build a fresh `MetaWeights` externally.
+pub fn set_weights(new_weights: MetaWeights) -> Result<(), String> {
+    let mut guard = WEIGHTS.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = Some(new_weights);
+    guard.as_ref().expect("weights set").save()
 }
 
 /// Weighted L2 distance between two feature vectors under `weights`.
@@ -327,6 +519,96 @@ pub fn rank_teachers(
 /// teacher can't monopolize the rank forever.
 const SUCCESS_COUNT_REWARD: f64 = 0.25;
 
+/// Cheap diversity key for a candidate's code features: a tuple of
+/// structural bits that partitions the candidate pool into ~8 buckets.
+/// Used by [`diversity_pass`] to cap how many picks a single bucket can
+/// dominate in the top-K — otherwise a cache heavy with one program family
+/// starves out rare-but-relevant teachers.
+///
+/// The key uses *presence bits*, not histogram counts: structurally-similar
+/// teachers (same loop/branch/arg-count signature) share a key even if their
+/// histograms differ. This is the intended granularity — we want diversity
+/// over "functional shape," not over exact op mix.
+#[inline]
+fn diversity_key(cf: &[f64; FEATURE_DIM]) -> u32 {
+    let has_loop = cf[15] > 0.0;
+    let has_branch = cf[14] > 0.0;
+    let has_mul = cf[9] > 0.0;
+    let has_mod = cf[12] > 0.0;
+    // 4 bits → 16 buckets max; typical cache hits ~6-8.
+    (has_loop as u32)
+        | ((has_branch as u32) << 1)
+        | ((has_mul as u32) << 2)
+        | ((has_mod as u32) << 3)
+}
+
+/// Apply per-bucket diversity cap to an already-score-sorted candidate list.
+/// Caps each diversity bucket at `ceil(K / bucket_count_estimate)` picks
+/// before falling through to fill the remainder without cap. Preserves the
+/// original score ordering within each bucket.
+///
+/// Rationale: the raw top-K can collapse onto a single functional shape when
+/// the cache is dominated by one program family. The diversity pass trades
+/// some score fidelity for representation of rarer families — which is
+/// exactly when `CachedTeachers` would otherwise miss (the rare-family
+/// teacher never makes the top-K because the dominant family owns every
+/// slot).
+fn diversity_pass<T>(
+    sorted: Vec<(f64, String, String, u32, u64)>,
+    k: usize,
+    bucket_fn: impl Fn(&str) -> u32,
+    _marker: std::marker::PhantomData<T>,
+) -> Vec<(f64, String, String, u32, u64)> {
+    if k == 0 || sorted.len() <= k {
+        return sorted;
+    }
+    // Estimate distinct buckets from the first 3×K candidates (or the full
+    // list if shorter) — enough to characterise the rank head without
+    // scanning a thousand-entry cache.
+    let sample = sorted.iter().take((3 * k).min(sorted.len()));
+    let mut seen = std::collections::HashSet::<u32>::new();
+    for (_, _, code, _, _) in sample {
+        seen.insert(bucket_fn(code));
+    }
+    let num_buckets = seen.len().max(1);
+    let cap_per_bucket = (k + num_buckets - 1) / num_buckets;
+
+    let mut out: Vec<(f64, String, String, u32, u64)> = Vec::with_capacity(sorted.len());
+    let mut leftover: Vec<(f64, String, String, u32, u64)> = Vec::new();
+    let mut bucket_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+
+    for row in sorted {
+        let bucket = bucket_fn(&row.2);
+        let count = bucket_counts.entry(bucket).or_insert(0);
+        if *count < cap_per_bucket && out.len() < k {
+            *count += 1;
+            out.push(row);
+        } else {
+            leftover.push(row);
+        }
+    }
+    // Fill remainder from leftover without cap (tail positions don't need
+    // diversity — they exist to cover the case where the diverse heads all
+    // miss).
+    for row in leftover {
+        if out.len() >= k {
+            out.push(row);
+        } else {
+            out.push(row);
+        }
+    }
+    out
+}
+
+/// Feature extraction for a candidate code string, reusing the public
+/// `extract_code_features` entry point. Thin wrapper for use by the
+/// diversity pass so it doesn't need to plumb features through every
+/// caller.
+fn diversity_bucket_of(code: &str) -> u32 {
+    let cf = extract_code_features(code);
+    diversity_key(&cf)
+}
+
 /// Rank with the full cache metadata in scope. `candidates` is
 /// `(method, code, success_count, last_used_at)`. The emitted score is
 /// `weighted_distance - SUCCESS_COUNT_REWARD * log1p(success_count)` — lower
@@ -335,6 +617,18 @@ const SUCCESS_COUNT_REWARD: f64 = 0.25;
 pub fn rank_teachers_with_meta(
     problem: &Problem,
     candidates: Vec<(String, String, u32, u64)>,
+) -> Vec<(f64, String, String, u32, u64)> {
+    rank_teachers_with_meta_topk(problem, candidates, 0)
+}
+
+/// Like [`rank_teachers_with_meta`] but applies a diversity cap when
+/// `topk > 0`. Keeps score ordering inside each diversity bucket and caps
+/// each bucket at `ceil(topk / observed_bucket_count)` picks. Pass `topk=0`
+/// for raw score ordering (the default).
+pub fn rank_teachers_with_meta_topk(
+    problem: &Problem,
+    candidates: Vec<(String, String, u32, u64)>,
+    topk: usize,
 ) -> Vec<(f64, String, String, u32, u64)> {
     if candidates.is_empty() {
         return Vec::new();
@@ -345,8 +639,11 @@ pub fn rank_teachers_with_meta(
             .into_iter()
             .map(|(method, code, success_count, last_used_at)| {
                 let cf = extract_code_features(&code);
-                let merged = merge_features(&pf, &cf);
-                let d = weighted_distance(&pf, &merged, w);
+                // Query-conditional distance: compare candidate code against
+                // what we'd expect for this problem's shape. Replaces the
+                // prior merge-features formula that was query-invariant —
+                // see `expected_code_features` for rationale.
+                let d = query_conditional_distance(&pf, &cf, w);
                 let reward = SUCCESS_COUNT_REWARD * (success_count as f64).ln_1p();
                 (d - reward, method, code, success_count, last_used_at)
             })
@@ -354,6 +651,14 @@ pub fn rank_teachers_with_meta(
     });
     let mut out = scored;
     out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    if topk > 0 {
+        out = diversity_pass(
+            out,
+            topk,
+            diversity_bucket_of,
+            std::marker::PhantomData::<()>,
+        );
+    }
     out
 }
 
@@ -548,6 +853,51 @@ mod tests {
         });
     }
 
+    /// Verify the bilinear cross-term slots populate with non-zero values
+    /// when their component features are non-zero, and that the layout
+    /// matches the spec in `FEATURE_DIM`'s doc comment.
+    #[test]
+    fn bilinear_slots_capture_cross_terms() {
+        // Multi-arg, monotone, non-negative outputs → slot 26 (n_args ×
+        // monotone) should be > 0 and slot 28 (n_args × n_examples) should
+        // be large.
+        let p = Problem {
+            name: "t".to_string(),
+            category: "test",
+            description: "",
+            signature: "fn t(a: i64, b: i64) -> i64",
+            examples: vec![
+                Example {
+                    inputs: vec![Value::Int(1), Value::Int(0)],
+                    expected: 1,
+                },
+                Example {
+                    inputs: vec![Value::Int(2), Value::Int(0)],
+                    expected: 4,
+                },
+                Example {
+                    inputs: vec![Value::Int(3), Value::Int(0)],
+                    expected: 9,
+                },
+            ],
+            holdouts: vec![],
+            reference_code: "",
+        };
+        let pf = extract_problem_features(&p);
+        assert!(pf[26] > 0.0, "slot 26 (n_args × monotone) must fire");
+        assert!(pf[28] >= 6.0, "slot 28 (n_args × n_examples) should be 2*3");
+        // Code cross-term: code with both loop and branch.
+        let cf = extract_code_features(
+            "fn t(n: i64) -> i64 { let mut x = 0; for i in 0..n { if i > 0 { x += 1; } } return x; }",
+        );
+        assert!(cf[30] > 0.0, "slot 30 (has_loop × has_branch) must fire");
+        // Pure loop, no branch: slot 30 stays 0.
+        let cf_pure = extract_code_features(
+            "fn t(n: i64) -> i64 { let mut x = 0; for i in 0..n { x += 1; } return x; }",
+        );
+        assert_eq!(cf_pure[30], 0.0, "slot 30 must be 0 when no branch");
+    }
+
     #[test]
     fn histogram_slots_capture_op_frequency() {
         let once = extract_code_features("fn t(a: i64) -> i64 { return a + 1; }");
@@ -671,6 +1021,75 @@ mod tests {
                 "with L2=0, weight should stay near starting value, got {}",
                 w_after.w[3]
             );
+            reset_for_tests();
+        });
+    }
+
+    #[test]
+    fn diversity_pass_caps_bucket_dominance() {
+        // 5 candidates in the same diversity bucket (all loops) plus 1 rare
+        // candidate in a different bucket (no loop). Raw top-3 would pick 3
+        // from the dominant bucket; diversity pass should include the rare
+        // candidate.
+        let pf = extract_problem_features(&make_problem(vec![
+            Example {
+                inputs: vec![Value::Int(0)],
+                expected: 0,
+            },
+            Example {
+                inputs: vec![Value::Int(5)],
+                expected: 5,
+            },
+        ]));
+
+        let loopy = vec![
+            "fn a(n: i64) -> i64 { let mut x = 0; for i in 0..n { x += i; } return x; }",
+            "fn b(n: i64) -> i64 { let mut y = 1; for i in 0..n { y *= 2; } return y; }",
+            "fn c(n: i64) -> i64 { let mut z = 0; while z < n { z += 1; } return z; }",
+            "fn d(n: i64) -> i64 { let mut q = n; for i in 0..10 { q -= 1; } return q; }",
+            "fn e(n: i64) -> i64 { let mut r = 0; for i in 0..n { r += n; } return r; }",
+        ];
+        let rare = "fn r(n: i64) -> i64 { return n + 1; }";
+
+        // Build candidates with identical "method" and distinct code strings.
+        let mut candidates: Vec<(String, String, u32, u64)> = loopy
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (format!("loop_{i}"), c.to_string(), 0, 0))
+            .collect();
+        candidates.push(("rare".to_string(), rare.to_string(), 0, 0));
+
+        with_test_lock(|| {
+            reset_for_tests();
+            let ranked = rank_teachers_with_meta_topk(
+                &Problem {
+                    name: "t".to_string(),
+                    category: "test",
+                    description: "",
+                    signature: "fn t(n: i64) -> i64",
+                    examples: vec![Example {
+                        inputs: vec![Value::Int(3)],
+                        expected: 3,
+                    }],
+                    holdouts: vec![],
+                    reference_code: "",
+                },
+                candidates,
+                3,
+            );
+            // Head of rank should include the rare candidate (not all 3 top
+            // picks are loops), because the loop bucket is capped.
+            let first_three_methods: Vec<&str> =
+                ranked.iter().take(3).map(|r| r.1.as_str()).collect();
+            let contains_rare = first_three_methods.iter().any(|m| *m == "rare");
+            assert!(
+                contains_rare,
+                "diversity pass should include rare bucket in top-3, got {:?}",
+                first_three_methods
+            );
+            // `pf` only referenced to keep the test self-contained against
+            // refactors that change the feature-extraction surface.
+            let _ = pf;
             reset_for_tests();
         });
     }

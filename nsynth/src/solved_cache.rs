@@ -302,10 +302,46 @@ impl SolvedCache {
             out.push_str(&encode_code(&sol.code));
             out.push('\n');
         }
-        std::fs::write(&path, out).map_err(|e| format!("write {}: {e}", path.display()))?;
+        atomic_write(&path, &out).map_err(|e| format!("write {}: {e}", path.display()))?;
         self.dirty = false;
         Ok(())
     }
+}
+
+/// Write `content` to `path` atomically via temp-file-then-rename. Protects
+/// against two failure modes that `std::fs::write` is vulnerable to:
+///   1. Crash mid-write → file becomes a torn partial.
+///   2. Concurrent writers → both call write(), the last one wins but the
+///      first one's bytes might interleave depending on the fs.
+///
+/// By writing to `<path>.tmp.<pid>` first and then `rename()`-ing to the
+/// target, we get POSIX's atomic rename semantics: readers see either the
+/// old file or the new one, never a half-written one. Concurrent writers
+/// still race to the rename, but neither observes the other's garbage.
+///
+/// This is production-grade durability without introducing a
+/// file-locking dependency (`fs2`, `fd-lock`, etc.). Good enough for
+/// multi-process use on a single machine; distributed-lock semantics
+/// require a real lock service (out of scope here).
+fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let tmp_path = match path.file_name() {
+        Some(name) => {
+            let mut fname = name.to_os_string();
+            fname.push(format!(".tmp.{}", std::process::id()));
+            path.with_file_name(fname)
+        }
+        None => {
+            // Path with no file_name (ends in slash, etc.) — write directly.
+            // The locking guarantee is weakened but we never hit this in
+            // practice since cache_path always ends in a filename.
+            return std::fs::write(path, content);
+        }
+    };
+    std::fs::write(&tmp_path, content)?;
+    // Rename is atomic on POSIX when same-filesystem; on Windows `rename`
+    // fails if the target exists, but Rust's rename() uses ReplaceFileW
+    // internally which handles the overwrite case.
+    std::fs::rename(&tmp_path, path)
 }
 
 // Process-wide singleton. Loaded lazily on first use.
@@ -375,6 +411,10 @@ pub fn record(problem: &Problem, method: &str, code: &str) {
         if let Err(e) = c.save() {
             eprintln!("[solved-cache] save failed: {e}");
         }
+        // Check whether the cache has grown enough to justify a retrain.
+        // Cheap: reads a tiny state file, writes a marker if needed. The
+        // actual retraining happens out-of-band via `bootstrap_train`.
+        maybe_trigger_bootstrap_retrain(c.len());
     });
 }
 
@@ -385,6 +425,133 @@ fn max_entries() -> usize {
     match std::env::var("NSYNTH_CACHE_MAX_ENTRIES") {
         Ok(raw) => raw.parse::<usize>().unwrap_or(0),
         Err(_) => 0,
+    }
+}
+
+/// Growth threshold (percent). When the cache size exceeds
+/// `last_trained_size × (1 + threshold / 100)`, [`record`] writes a
+/// marker file hinting that `bootstrap_train` should be re-run. Actually
+/// doing the retraining is deliberately out-of-band — the `record` hot
+/// path stays a file write + a counter check, no ML work inline.
+fn bootstrap_growth_pct() -> u32 {
+    match std::env::var("NSYNTH_BOOTSTRAP_GROWTH_PCT") {
+        Ok(raw) => raw.parse::<u32>().unwrap_or(25),
+        Err(_) => 25,
+    }
+}
+
+fn bootstrap_state_path() -> Option<PathBuf> {
+    if let Ok(val) = std::env::var("NSYNTH_BOOTSTRAP_STATE_PATH") {
+        if val.is_empty() {
+            return None;
+        }
+        return Some(PathBuf::from(val));
+    }
+    if cfg!(test) {
+        return None;
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    Some(PathBuf::from(home).join(".nsynth_bootstrap_state.tsv"))
+}
+
+fn bootstrap_marker_path() -> Option<PathBuf> {
+    if let Ok(val) = std::env::var("NSYNTH_BOOTSTRAP_MARKER_PATH") {
+        if val.is_empty() {
+            return None;
+        }
+        return Some(PathBuf::from(val));
+    }
+    if cfg!(test) {
+        return None;
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    Some(PathBuf::from(home).join(".nsynth_bootstrap_needed"))
+}
+
+/// Read `last_trained_size` from the bootstrap state file; 0 if absent.
+fn read_last_trained_size() -> usize {
+    let Some(path) = bootstrap_state_path() else {
+        return 0;
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    for line in raw.lines() {
+        if let Some((k, v)) = line.split_once('\t') {
+            if k == "last_trained_size" {
+                return v.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+    0
+}
+
+/// Check if the cache has grown past the retraining threshold; if so,
+/// write a marker file so a cron / CI step knows to re-run
+/// `bootstrap_train`. The marker contains the current size + the size at
+/// last training so an external observer can decide whether the delta
+/// is worth the retrain cost.
+///
+/// Called from `record` after the in-memory insert. Idempotent — re-
+/// triggering when the marker already exists just rewrites the same file
+/// with fresher numbers.
+fn maybe_trigger_bootstrap_retrain(current_size: usize) {
+    let pct = bootstrap_growth_pct();
+    if pct == 0 {
+        return;
+    }
+    let last = read_last_trained_size();
+    // On the first solve ever, there's no baseline. Don't fire the
+    // trigger until training has run once — otherwise every initial
+    // insert would look like "infinite growth" and drop a marker.
+    if last == 0 {
+        return;
+    }
+    let threshold = last + (last * pct as usize / 100).max(1);
+    if current_size < threshold {
+        return;
+    }
+    let Some(marker_path) = bootstrap_marker_path() else {
+        return;
+    };
+    if let Some(parent) = marker_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let now = now_epoch_seconds();
+    let body = format!(
+        "needed_since\t{}\ncurrent_size\t{}\nlast_trained_size\t{}\ngrowth_pct\t{}\n",
+        now, current_size, last, pct
+    );
+    let _ = std::fs::write(&marker_path, body);
+}
+
+/// Commit a successful `bootstrap_train` run: update the state file with
+/// the new baseline size and clear the marker. Called by the training
+/// binary when it finishes.
+pub fn note_bootstrap_trained(cache_size: usize) {
+    if let Some(path) = bootstrap_state_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let now = now_epoch_seconds();
+        let body = format!(
+            "last_trained_size\t{}\nlast_trained_ts\t{}\n",
+            cache_size, now
+        );
+        let _ = std::fs::write(&path, body);
+    }
+    if let Some(marker) = bootstrap_marker_path() {
+        let _ = std::fs::remove_file(&marker);
+    }
+}
+
+/// Public predicate for downstream tooling: "does the cache think a
+/// retrain is due?" Returns true when the marker file exists. Used by
+/// `bootstrap_train` and by cron / CI to decide whether to re-run.
+pub fn bootstrap_retrain_due() -> bool {
+    match bootstrap_marker_path() {
+        Some(path) => path.exists(),
+        None => false,
     }
 }
 
@@ -571,6 +738,69 @@ mod tests {
             assert!(!encoded.contains('\n'));
             assert_eq!(decode_code(&encoded), code);
         });
+    }
+
+    /// Verify the bootstrap-retrain trigger: writing a marker when the
+    /// cache grows past the threshold, and clearing it on
+    /// `note_bootstrap_trained`.
+    #[test]
+    fn bootstrap_retrain_marker_lifecycle() {
+        let state = std::env::temp_dir().join(format!(
+            "nsynth_test_bootstrap_state_{}.tsv",
+            std::process::id()
+        ));
+        let marker = std::env::temp_dir().join(format!(
+            "nsynth_test_bootstrap_marker_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&state);
+        let _ = std::fs::remove_file(&marker);
+
+        // SAFETY: single-threaded test scope.
+        unsafe {
+            std::env::set_var("NSYNTH_BOOTSTRAP_STATE_PATH", &state);
+            std::env::set_var("NSYNTH_BOOTSTRAP_MARKER_PATH", &marker);
+            std::env::set_var("NSYNTH_BOOTSTRAP_GROWTH_PCT", "25");
+        }
+
+        // With no baseline, the trigger is a no-op (don't mark on first insert).
+        maybe_trigger_bootstrap_retrain(100);
+        assert!(
+            !marker.exists(),
+            "marker must not fire before first training"
+        );
+
+        // Install a baseline of 100. A size of 100 stays under threshold (125);
+        // 125+ fires.
+        note_bootstrap_trained(100);
+        assert!(
+            !marker.exists(),
+            "note_bootstrap_trained must clear any prior marker"
+        );
+
+        maybe_trigger_bootstrap_retrain(110);
+        assert!(!marker.exists(), "110 should not trip the 125 threshold");
+
+        maybe_trigger_bootstrap_retrain(130);
+        assert!(marker.exists(), "130 > 125 threshold must write the marker");
+        assert!(bootstrap_retrain_due(), "public predicate must agree");
+
+        // A subsequent retrain commits a new baseline + clears the marker.
+        note_bootstrap_trained(130);
+        assert!(
+            !marker.exists(),
+            "note_bootstrap_trained must clear the marker"
+        );
+        assert!(!bootstrap_retrain_due());
+
+        // Cleanup.
+        unsafe {
+            std::env::remove_var("NSYNTH_BOOTSTRAP_STATE_PATH");
+            std::env::remove_var("NSYNTH_BOOTSTRAP_MARKER_PATH");
+            std::env::remove_var("NSYNTH_BOOTSTRAP_GROWTH_PCT");
+        }
+        let _ = std::fs::remove_file(&state);
+        let _ = std::fs::remove_file(&marker);
     }
 
     #[test]

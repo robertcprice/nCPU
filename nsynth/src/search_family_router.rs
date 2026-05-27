@@ -10,6 +10,8 @@
 //! It does not change verification, only the order in which families are
 //! attempted.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -38,6 +40,10 @@ struct SearchFamilyRouter {
 }
 
 fn router_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_ROUTER_PATH.with(|slot| slot.borrow().clone()) {
+        return Some(path);
+    }
     if let Ok(val) = std::env::var("NSYNTH_SEARCH_FAMILY_ROUTER_PATH") {
         if val.is_empty() {
             return None;
@@ -162,6 +168,11 @@ static ROUTER: Mutex<Option<SearchFamilyRouter>> = Mutex::new(None);
 #[cfg(test)]
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(test)]
+thread_local! {
+    static TEST_ROUTER_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
 fn with_router<R>(f: impl FnOnce(&mut SearchFamilyRouter) -> R) -> Option<R> {
     router_path()?;
     let mut guard = ROUTER.lock().unwrap_or_else(|p| p.into_inner());
@@ -203,23 +214,33 @@ pub fn with_test_lock<R>(f: impl FnOnce() -> R) -> R {
 }
 
 #[cfg(test)]
+pub fn with_test_router_path<R>(path: Option<PathBuf>, f: impl FnOnce() -> R) -> R {
+    with_test_lock(|| {
+        let previous = TEST_ROUTER_PATH.with(|slot| slot.replace(path));
+        reset_for_tests();
+        let result = f();
+        TEST_ROUTER_PATH.with(|slot| {
+            slot.replace(previous);
+        });
+        reset_for_tests();
+        result
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::benchmark::{Example, Value};
 
     fn with_scratch_router<R>(f: impl FnOnce() -> R) -> R {
-        with_test_lock(|| {
-            let scratch = std::env::temp_dir().join(format!(
-                "nsynth_search_family_router_test_{}_{:?}.json",
-                std::process::id(),
-                std::thread::current().id(),
-            ));
-            std::env::set_var("NSYNTH_SEARCH_FAMILY_ROUTER_PATH", &scratch);
-            reset_for_tests();
+        let scratch = std::env::temp_dir().join(format!(
+            "nsynth_search_family_router_test_{}_{:?}.json",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        with_test_router_path(Some(scratch.clone()), || {
             let _ = std::fs::remove_file(&scratch);
             let r = f();
-            std::env::remove_var("NSYNTH_SEARCH_FAMILY_ROUTER_PATH");
-            reset_for_tests();
             let _ = std::fs::remove_file(&scratch);
             r
         })

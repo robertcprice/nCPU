@@ -1,0 +1,9 @@
+# Autotuned nsynth config. Generated 2026-04-18T19:47:37Z
+# by tools/autotune_topk.sh from artifacts/diversity_pareto.csv.
+# Format: key<TAB>value. One key per line. Read by strategy.rs
+# when NSYNTH_TEACHER_TOPK env var is unset.
+topk	64
+measured_win_pct	80
+measured_mean_ms	7617
+measured_offset	60
+measured_limit	10

@@ -953,6 +953,7 @@ def load_and_run(
     max_cycles: int = 50_000_000,
     quiet: bool = False,
     load_addr: int = 0x10000,
+    neural_display=None,
 ) -> dict:
     """
     Load a binary and run it on the Metal GPU.
@@ -963,6 +964,8 @@ def load_and_run(
         max_cycles: Maximum cycles
         quiet: Suppress output
         load_addr: Address to load binary at (default: 0x10000 per linker script)
+        neural_display: Optional NeuralDisplay/NeuralDisplayV2 instance — captures
+                        stdout/stderr for neural terminal rendering.
 
     Returns:
         Execution results dict
@@ -986,7 +989,7 @@ def load_and_run(
         print(f"PC = 0x{load_addr:X}, SP will be set by _start")
         print("=" * 60)
 
-    results = run(cpu, handler, max_cycles=max_cycles, quiet=quiet)
+    results = run(cpu, handler, max_cycles=max_cycles, quiet=quiet, neural_display=neural_display)
 
     if not quiet:
         print("=" * 60)

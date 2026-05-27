@@ -513,4 +513,3 @@ class WeaveMixin:
         elapsed = time.perf_counter() - start
         ips = executed / elapsed if elapsed > 0 else 0.0
         return executed, elapsed
-

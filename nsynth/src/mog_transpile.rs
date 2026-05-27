@@ -1,0 +1,567 @@
+//! Mog → {Python, Rust, TypeScript} transpiler.
+//!
+//! The Mog programs emitted by the synthesizer are already C-like. Each
+//! target language needs only a small set of rewrites:
+//!   - Function headers: type syntax, arrow-return vs colon-return
+//!   - Variable declarations: strip vs keep types, Python has no `let`
+//!   - Block syntax: braces vs indentation
+//!   - Type names: `i64` → {`int`, `i64`, `number`}, `[i64]` → {`list[int]`, `Vec<i64>`, `number[]`}
+//!
+//! This isn't a full parser — Mog's output grammar is regular enough for
+//! a line-based rewrite. If synthesized programs ever grow to multi-line
+//! expressions or nested closures we'll need a real parser; today every
+//! cached program fits the line-based model.
+//!
+//! The three public entry points are `to_python`, `to_rust`, `to_typescript`.
+//! They share `parse_function_header` + indent tracking; the per-language
+//! differences are body rewrites.
+
+/// Language target. Controls header syntax, type rewrites, and block-
+/// delimiter emission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Python,
+    Rust,
+    TypeScript,
+}
+
+/// Transpile a Mog source string to Python. Returns idiomatic,
+/// runnable Python code.
+pub fn to_python(mog: &str) -> String {
+    transpile(mog, Target::Python)
+}
+
+/// Transpile a Mog source string to Rust. The output is a complete
+/// `fn NAME(...) -> RET { ... }` block; embed in a crate for execution.
+pub fn to_rust(mog: &str) -> String {
+    transpile(mog, Target::Rust)
+}
+
+/// Transpile a Mog source string to TypeScript. Output is a
+/// `function NAME(...): RET { ... }` block, drop into a `.ts` file.
+pub fn to_typescript(mog: &str) -> String {
+    transpile(mog, Target::TypeScript)
+}
+
+/// Single parametric transpiler; the three public entries are thin
+/// wrappers.
+fn transpile(mog: &str, target: Target) -> String {
+    let mut out = String::new();
+    let mut depth: usize = 0;
+    let mut in_fn_header = false;
+
+    // Detect whether the Mog function returns an integer. Mog uses `i64`
+    // as its integer return type, matching its closed-form-expression
+    // synthesis model. When true, the Python target must rewrite bare `/`
+    // to `//` so Python's float-division semantics don't silently produce
+    // wrong outputs (observed: sum_abs_diffs returned 0.3 instead of 15).
+    let returns_int = mog.contains("-> i64");
+
+    for raw_line in mog.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            // Preserve blank lines for readability; don't emit extra
+            // indentation on an empty row.
+            out.push('\n');
+            continue;
+        }
+
+        // Function header: `fn NAME(args) -> RET {`. We detect it by the
+        // `fn ` prefix; everything else is a body line.
+        if line.starts_with("fn ") {
+            if let Some(header) = rewrite_fn_header(line, target) {
+                // Python dedents the body via colons + indent; Rust/TS use
+                // braces which survive in the output. All three targets
+                // start the body at depth+1.
+                for _ in 0..depth {
+                    out.push_str(indent_unit(target));
+                }
+                out.push_str(&header);
+                out.push('\n');
+                depth += 1;
+                in_fn_header = true;
+                continue;
+            }
+        }
+
+        // Closing brace: `}` on its own line decreases depth. Python
+        // elides the brace entirely (blocks close by dedent).
+        if line == "}" {
+            if depth > 0 {
+                depth -= 1;
+            }
+            match target {
+                Target::Python => { /* no-op; dedent is implicit */ }
+                Target::Rust | Target::TypeScript => {
+                    for _ in 0..depth {
+                        out.push_str(indent_unit(target));
+                    }
+                    out.push_str("}\n");
+                }
+            }
+            continue;
+        }
+
+        // Continuation line starting with `}` — e.g. `} else {`. Python's
+        // else is just `else:` at one dedent level. Rust/TS keep the
+        // literal line (close-brace + else + open-brace).
+        if line.starts_with("}") {
+            // The close-brace pops one depth level; the opens_block logic
+            // below will push one back when the line ends with `{`.
+            if depth > 0 {
+                depth -= 1;
+            }
+            let rest = line[1..].trim();
+            match target {
+                Target::Python => {
+                    // For `} else {` → emit `else:` at the *outer* depth
+                    // (which is now `depth`), then the body-depth increase
+                    // comes from opens_block below.
+                    if rest.starts_with("else") {
+                        for _ in 0..depth {
+                            out.push_str(indent_unit(target));
+                        }
+                        // Python has no `else if` — render `else if` as
+                        // `elif`. `rest` at this point is e.g. `else {` or
+                        // `else if X {`.
+                        let stripped = rest.trim_end_matches('{').trim();
+                        if let Some(cond) = stripped.strip_prefix("else if ") {
+                            out.push_str(&format!("elif {}:\n", cond.trim()));
+                        } else {
+                            out.push_str("else:\n");
+                        }
+                        depth += 1; // body block opens
+                        continue;
+                    }
+                    // Other `} ...` shapes fall through to body handling.
+                }
+                Target::Rust | Target::TypeScript => {
+                    for _ in 0..depth {
+                        out.push_str(indent_unit(target));
+                    }
+                    // For TS, `} else if (X) {` needs parens around the
+                    // condition just like bare `if`. Handle with a small
+                    // rewrite; Rust keeps the line as-is.
+                    let rewritten = if target == Target::TypeScript {
+                        if let Some(cond_plus) = rest.strip_prefix("else if ") {
+                            let cond = cond_plus.trim_end_matches('{').trim();
+                            format!("}} else if ({}) {{", cond)
+                        } else {
+                            format!("}} {}", rest)
+                        }
+                    } else {
+                        format!("}} {}", rest)
+                    };
+                    out.push_str(rewritten.trim_end());
+                    out.push('\n');
+                    if rewritten.trim_end().ends_with('{') {
+                        depth += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Body lines: dispatch on prefix to a specific rewriter, otherwise
+        // fall through to generic expression rewriting (type-name swaps
+        // + statement-end semicolons).
+        let mut body = rewrite_body_line(line, target);
+
+        // Python integer-division fix. The Mog synthesizer emits `/` with
+        // integer-division intent. Python 3's `/` is float division; for
+        // integer-returning functions we rewrite the operator so
+        // `5 / 2 == 2`, not `2.5`. Only applies at the top-level body of
+        // `-> i64` functions — doesn't touch other targets.
+        if target == Target::Python && returns_int {
+            body = rewrite_int_div_python(&body);
+        }
+
+        // Opening-brace blocks (`if ... {`, `for ... {`, `while ... {`).
+        // Python rewrites the trailing `{` to `:`; Rust/TS keep the brace.
+        // In all targets, depth increases by one.
+        let opens_block = body.trim_end().ends_with('{');
+        if opens_block {
+            match target {
+                Target::Python => {
+                    // Strip the trailing `{` and replace with `:`.
+                    body = body.trim_end().trim_end_matches('{').trim_end().to_string();
+                    body.push(':');
+                }
+                Target::Rust | Target::TypeScript => {
+                    // Keep the brace; no rewrite.
+                }
+            }
+        }
+
+        for _ in 0..depth {
+            out.push_str(indent_unit(target));
+        }
+        out.push_str(&body);
+        out.push('\n');
+
+        if opens_block {
+            depth += 1;
+        }
+
+        let _ = in_fn_header; // suppress unused-warning; reserved for future
+    }
+
+    // Python body-only blocks need a `pass` when empty (rare for
+    // synthesizer output but safe guard).
+    if target == Target::Python && out.trim().is_empty() {
+        return String::from("pass\n");
+    }
+    out
+}
+
+/// Replace bare `/` with `//` in a Python line. Skips cases where the
+/// slash is already part of `//` (unchanged), or embedded in a string
+/// literal (best-effort: we avoid rewriting inside quotes). Strings in
+/// the synthesizer's output are rare; a conservative scan is enough.
+fn rewrite_int_div_python(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len() + 4);
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match c {
+            b'\'' if !in_double => in_single = !in_single,
+            b'"' if !in_single => in_double = !in_double,
+            _ => {}
+        }
+        if !in_single && !in_double && c == b'/' {
+            // Already `//` (integer division) or `/=` or part of a comment.
+            let next = bytes.get(i + 1).copied();
+            let prev = if i > 0 { bytes[i - 1] } else { 0 };
+            if next == Some(b'/') || next == Some(b'=') || prev == b'/' {
+                out.push(c as char);
+                i += 1;
+                continue;
+            }
+            out.push_str("//");
+            i += 1;
+            continue;
+        }
+        out.push(c as char);
+        i += 1;
+    }
+    out
+}
+
+fn indent_unit(target: Target) -> &'static str {
+    match target {
+        Target::Python | Target::TypeScript => "    ",
+        Target::Rust => "    ",
+    }
+}
+
+/// Rewrite the `fn NAME(args) -> RET {` header. Returns `Some(new_line)`
+/// when the rewrite succeeds, `None` when the header doesn't match the
+/// expected shape (caller falls through to generic body handling).
+fn rewrite_fn_header(line: &str, target: Target) -> Option<String> {
+    // Parse: `fn NAME(args) -> RET {`
+    let body = line.strip_prefix("fn ")?.trim();
+    let (name, rest) = body.split_once('(')?;
+    let (args, rest) = rest.split_once(')')?;
+    let name = name.trim();
+    let args = args.trim();
+    // Optional return type; if not present, body already contains `{`.
+    let (ret_type, tail) = if let Some(stripped) = rest.trim_start().strip_prefix("->") {
+        let stripped = stripped.trim();
+        let (ret, tail) = stripped.split_once('{').unwrap_or((stripped, ""));
+        (ret.trim(), tail.trim())
+    } else {
+        ("", rest.trim().trim_start_matches('{').trim())
+    };
+    let _ = tail;
+    Some(match target {
+        Target::Python => format!("def {}({}):", name, rewrite_args_python(args)),
+        Target::Rust => format!(
+            "fn {}({}) -> {} {{",
+            name,
+            rewrite_args_rust(args),
+            rewrite_type_rust(ret_type)
+        ),
+        Target::TypeScript => format!(
+            "function {}({}): {} {{",
+            name,
+            rewrite_args_ts(args),
+            rewrite_type_ts(ret_type)
+        ),
+    })
+}
+
+fn rewrite_args_python(args: &str) -> String {
+    // Python: `a: i64, b: i64` → `a: int, b: int`. Drop types entirely if
+    // you want even looser code, but type hints are cheap and useful.
+    args.split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|arg| {
+            if let Some((n, t)) = arg.split_once(':') {
+                format!("{}: {}", n.trim(), rewrite_type_python(t.trim()))
+            } else {
+                arg.trim().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn rewrite_args_rust(args: &str) -> String {
+    args.split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|arg| {
+            if let Some((n, t)) = arg.split_once(':') {
+                format!("{}: {}", n.trim(), rewrite_type_rust(t.trim()))
+            } else {
+                arg.trim().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn rewrite_args_ts(args: &str) -> String {
+    args.split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|arg| {
+            if let Some((n, t)) = arg.split_once(':') {
+                format!("{}: {}", n.trim(), rewrite_type_ts(t.trim()))
+            } else {
+                arg.trim().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn rewrite_type_python(t: &str) -> String {
+    match t {
+        "i64" => "int".into(),
+        "[i64]" => "list[int]".into(),
+        "string" => "str".into(),
+        other => other.to_string(),
+    }
+}
+
+fn rewrite_type_rust(t: &str) -> String {
+    match t {
+        "i64" => "i64".into(),
+        "[i64]" => "Vec<i64>".into(),
+        "string" => "String".into(),
+        other => other.to_string(),
+    }
+}
+
+fn rewrite_type_ts(t: &str) -> String {
+    match t {
+        "i64" => "number".into(),
+        "[i64]" => "number[]".into(),
+        "string" => "string".into(),
+        other => other.to_string(),
+    }
+}
+
+/// Body-line rewrites shared across all three targets:
+///   - `VAR: TYPE = EXPR;` → declaration in the target's syntax
+///   - `return EXPR;` → target-specific return
+///   - `VAR = EXPR;` → assignment
+///   - bare expression lines stay as-is (modulo semicolon handling)
+fn rewrite_body_line(line: &str, target: Target) -> String {
+    let line = line.trim_end_matches(';');
+
+    // Pattern: `VAR: TYPE = EXPR`. Matches declarations like
+    // `acc: i64 = 0`.
+    if let Some((lhs, rhs)) = line.split_once('=') {
+        let lhs = lhs.trim();
+        let rhs = rhs.trim();
+        if let Some((var, ty)) = lhs.split_once(':') {
+            let var = var.trim();
+            let ty = ty.trim();
+            return match target {
+                Target::Python => format!("{} = {}", var, rhs),
+                Target::Rust => format!("let mut {}: {} = {};", var, rewrite_type_rust(ty), rhs),
+                Target::TypeScript => {
+                    format!("let {}: {} = {};", var, rewrite_type_ts(ty), rhs)
+                }
+            };
+        }
+        // Plain assignment (no type): same var on both sides means
+        // reassignment; we emit language-appropriate syntax.
+        if !lhs.contains(' ') && !lhs.contains('(') {
+            return match target {
+                Target::Python => format!("{} = {}", lhs, rhs),
+                Target::Rust | Target::TypeScript => format!("{} = {};", lhs, rhs),
+            };
+        }
+    }
+
+    // `return EXPR`.
+    if let Some(expr) = line.strip_prefix("return ") {
+        return match target {
+            Target::Python => format!("return {}", expr.trim()),
+            Target::Rust | Target::TypeScript => format!("return {};", expr.trim()),
+        };
+    }
+
+    // Block headers (`if`, `while`) — Rust/Python accept the bare form;
+    // TypeScript requires parens around the condition.
+    if line.starts_with("if ") {
+        let cond_plus_brace = line.strip_prefix("if ").unwrap_or(line);
+        let cond = cond_plus_brace.trim_end_matches('{').trim();
+        return match target {
+            Target::Python | Target::Rust => line.to_string(),
+            Target::TypeScript => format!("if ({}) {{", cond),
+        };
+    }
+    if line.starts_with("while ") {
+        let cond_plus_brace = line.strip_prefix("while ").unwrap_or(line);
+        let cond = cond_plus_brace.trim_end_matches('{').trim();
+        return match target {
+            Target::Python | Target::Rust => line.to_string(),
+            Target::TypeScript => format!("while ({}) {{", cond),
+        };
+    }
+    if line == "else" || line.starts_with("else ") {
+        return line.to_string();
+    }
+
+    // `for VAR in EXPR { ... }` requires a per-target rewrite because
+    // TypeScript needs `for (const VAR of EXPR) {` instead of the Mog-
+    // native shape. Python + Rust already accept `for VAR in EXPR`.
+    if let Some(rest) = line.strip_prefix("for ") {
+        // `VAR in EXPR [{]` — the trailing `{` is stripped by the caller
+        // when it detects opens_block. Split off the `in` keyword.
+        let trimmed = rest.trim_end_matches('{').trim();
+        if let Some((var, iter_expr)) = trimmed.split_once(" in ") {
+            let var = var.trim();
+            let iter_expr = iter_expr.trim();
+            return match target {
+                Target::Python | Target::Rust => format!("for {} in {} {{", var, iter_expr),
+                Target::TypeScript => format!("for (const {} of {}) {{", var, iter_expr),
+            };
+        }
+        // Fallback: pass through.
+        return line.to_string();
+    }
+
+    // Fallback: emit the line with a target-appropriate terminator.
+    match target {
+        Target::Python => line.to_string(),
+        Target::Rust | Target::TypeScript => format!("{};", line),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A representative synthesized Mog program: array sum with a
+    /// negative-filter. Exercises function header, typed declaration,
+    /// for-loop, if-branch, accumulation, and return.
+    const SAMPLE: &str = "fn sum_negatives(arr: [i64]) -> i64 {\n\
+        acc: i64 = 0;\n\
+        for item in arr {\n\
+            if item < 0 {\n\
+                acc = acc + item;\n\
+            }\n\
+        }\n\
+        return acc;\n\
+        }\n";
+
+    #[test]
+    fn python_transpile_shape() {
+        let out = to_python(SAMPLE);
+        assert!(out.contains("def sum_negatives(arr: list[int]):"));
+        assert!(out.contains("acc = 0"));
+        assert!(out.contains("for item in arr:"));
+        assert!(out.contains("if item < 0:"));
+        assert!(out.contains("acc = acc + item"));
+        assert!(out.contains("return acc"));
+        // Python has no `{` / `}` in the output.
+        assert!(!out.contains('{'));
+        assert!(!out.contains('}'));
+    }
+
+    #[test]
+    fn rust_transpile_shape() {
+        let out = to_rust(SAMPLE);
+        assert!(out.contains("fn sum_negatives(arr: Vec<i64>) -> i64 {"));
+        assert!(out.contains("let mut acc: i64 = 0;"));
+        assert!(out.contains("for item in arr {"));
+        assert!(out.contains("if item < 0 {"));
+        assert!(out.contains("return acc;"));
+        assert!(out.ends_with("}\n"));
+    }
+
+    #[test]
+    fn typescript_transpile_shape() {
+        let out = to_typescript(SAMPLE);
+        assert!(out.contains("function sum_negatives(arr: number[]): number {"));
+        assert!(out.contains("let acc: number = 0;"));
+        assert!(
+            out.contains("for (const item of arr) {"),
+            "TypeScript for-loop must use `for (const X of Y)` shape, got {out}"
+        );
+        assert!(
+            out.contains("if (item < 0) {"),
+            "TypeScript if must have parens, got {out}"
+        );
+        assert!(out.contains("return acc;"));
+    }
+
+    #[test]
+    fn else_branch_transpiles_cleanly() {
+        // Synthesizer emits `} else {` on one continuation line. Python
+        // must produce `else:` at the outer indent; Rust/TS must keep the
+        // braced form.
+        let mog = "fn f(x: i64) -> i64 {\n\
+            if x > 0 {\n\
+                return 1;\n\
+            } else {\n\
+                return 0;\n\
+            }\n\
+            }\n";
+        let py = to_python(mog);
+        assert!(
+            py.contains("else:"),
+            "Python must emit `else:`, got: {py}"
+        );
+        assert!(!py.contains("} else:"), "Python must not keep the close-brace: {py}");
+        assert!(!py.contains('{'), "Python must have no braces: {py}");
+
+        let rs = to_rust(mog);
+        assert!(rs.contains("} else {"), "Rust keeps braced else: {rs}");
+
+        let ts = to_typescript(mog);
+        assert!(ts.contains("} else {"), "TS keeps braced else: {ts}");
+    }
+
+    /// Integer-returning Python functions must use `//` for division so
+    /// Python 3 doesn't silently float-divide. Rust/TS are unaffected —
+    /// `/` on integers is already integer division in both.
+    #[test]
+    fn python_integer_division_rewrite() {
+        let mog = "fn average_two(a: i64, b: i64) -> i64 {\n    return (a + b) / 2;\n}\n";
+        let py = to_python(mog);
+        assert!(
+            py.contains("// 2"),
+            "Python must rewrite `/` → `//` for integer-returning fn: {py}"
+        );
+        // Verify the generated Python actually computes integer division.
+        // `(4 + 6) // 2 == 5`; with float division it would be `5.0`.
+        assert!(!py.contains(" / "), "no bare `/` should survive in Python int output: {py}");
+    }
+
+    #[test]
+    fn simple_scalar_fn_all_targets() {
+        let mog = "fn double(a: i64) -> i64 {\n    return a * 2;\n}\n";
+        assert!(to_python(mog).contains("def double(a: int):"));
+        assert!(to_python(mog).contains("return a * 2"));
+        assert!(to_rust(mog).contains("fn double(a: i64) -> i64"));
+        assert!(to_rust(mog).contains("return a * 2;"));
+        assert!(to_typescript(mog).contains("function double(a: number): number"));
+    }
+}

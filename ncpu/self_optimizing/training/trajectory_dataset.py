@@ -93,6 +93,7 @@ def load_trajectory(path: str | Path) -> LoadedTrajectory:
         metadata={
             "max_generation_attempts": init_event.get("max_generation_attempts"),
             "terminal_event": terminal_event.get("event"),
+            "initial_latent_state": dict(init_event.get("latent_state") or {}),
         },
     )
 

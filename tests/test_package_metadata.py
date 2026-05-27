@@ -14,6 +14,7 @@ def test_pyproject_metadata_parses():
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert data["project"]["name"] == "ncpu"
     assert data["project"]["authors"][0]["name"] == "Robert Price"
+    assert data["project"]["scripts"]["ncpu"] == "ncpu.__main__:main"
     assert data["project"]["scripts"]["ncpu-lab"] == "ncpu.lab:main"
     extras = data["project"]["optional-dependencies"]
     assert "demo" in extras

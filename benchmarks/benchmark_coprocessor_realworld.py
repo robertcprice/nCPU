@@ -77,9 +77,19 @@ def generate_text(
             {"role": "system", "content": "You are a helpful coding and math assistant. Follow instructions exactly."},
             {"role": "user", "content": prompt},
         ]
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
+        # Qwen3/3.5 chat template supports enable_thinking=False to suppress
+        # reasoning mode. Without it the model burns the token budget on planning
+        # text before emitting code. Pass the flag when available; fall back for
+        # older tokenizer versions.
+        try:
+            text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+            )
     else:
         text = prompt
 
@@ -244,7 +254,7 @@ def benchmark_humaneval(
         t0 = time.time()
         completion = generate_text(
             model, tokenizer, chat_prompt,
-            max_new_tokens=256,
+            max_new_tokens=512,
             use_chat=True,
         )
         gen_time = time.time() - t0
@@ -900,7 +910,7 @@ def inject_coprocessor(
             module.router.load_state_dict(state[router_key])
             print(f"    Loaded router weights for layer {i}")
         if expert_key in state:
-            module.expert.load_state_dict(state[expert_key])
+            module.expert.load_state_dict(state[expert_key], strict=False)
             print(f"    Loaded expert weights for layer {i}")
 
     # Verify gate statistics

@@ -56,6 +56,8 @@ __all__ = [
     "demo",
     "main",
     "_build_char_pools",
+    "_build_char_weights",
+    "_edge_aware_loss",
 ]
 
 MODEL_DIR = Path(__file__).parent.parent.parent / "models" / "display"
@@ -530,6 +532,86 @@ def _build_char_pools() -> dict[str, np.ndarray]:
     }
 
 
+def _build_char_weights(
+    box_weight: float = 3.0,
+    block_weight: float = 2.0,
+) -> torch.Tensor:
+    """Build per-character loss weights for emphasizing box-drawing and block elements.
+
+    Returns a (N_CHARS_V2,) tensor where:
+      - Box-drawing chars (U+2500-U+257F) get weight ``box_weight``
+      - Block element chars (U+2580-U+259F) get weight ``block_weight``
+      - All other characters get weight 1.0
+
+    The weights are keyed by *embedding index*, so they can be indexed directly
+    with the ``char_indices`` tensor produced by ``generate_v2_training_batch``.
+    """
+    weights = torch.ones(N_CHARS_V2)
+    for cp, idx in _CODEPOINT_TO_INDEX.items():
+        if 0x2500 <= cp < 0x2580:
+            weights[idx] = box_weight
+        elif 0x2580 <= cp < 0x25A0:
+            weights[idx] = block_weight
+    return weights
+
+
+def _edge_aware_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    char_indices: torch.Tensor,
+    edge_weight: float = 0.3,
+) -> torch.Tensor:
+    """Compute a gradient-based structural loss for box-drawing characters.
+
+    Box-drawing chars are thin lines where *edge position* matters more than
+    overall pixel intensity.  We compare horizontal and vertical Sobel-like
+    gradients between ``pred`` and ``target`` and return a weighted L1 loss
+    over those gradients.  The loss is only computed for samples whose
+    ``char_indices`` fall in the box-drawing range (embedding indices for
+    U+2500-U+257F).
+
+    Args:
+        pred:         (B, H, W, 3) predicted cell pixels
+        target:       (B, H, W, 3) ground-truth cell pixels
+        char_indices: (B,) long tensor of embedding indices
+        edge_weight:  multiplier for the edge loss term
+
+    Returns:
+        Scalar edge loss (zero if no box-drawing chars in the batch).
+    """
+    # Identify which embedding indices correspond to box-drawing code points
+    box_idx_set = set()
+    for cp, idx in _CODEPOINT_TO_INDEX.items():
+        if 0x2500 <= cp < 0x2580:
+            box_idx_set.add(idx)
+    if not box_idx_set:
+        return torch.tensor(0.0, device=pred.device)
+
+    # Build a boolean mask for box-drawing samples in this batch
+    box_mask = torch.zeros(char_indices.shape[0], dtype=torch.bool, device=pred.device)
+    for idx in box_idx_set:
+        box_mask |= (char_indices == idx)
+
+    if not box_mask.any():
+        return torch.tensor(0.0, device=pred.device)
+
+    p = pred[box_mask]    # (K, H, W, 3)
+    t = target[box_mask]  # (K, H, W, 3)
+
+    # Horizontal gradient: diff along width axis (dim=2)
+    p_dx = p[:, :, 1:, :] - p[:, :, :-1, :]
+    t_dx = t[:, :, 1:, :] - t[:, :, :-1, :]
+
+    # Vertical gradient: diff along height axis (dim=1)
+    p_dy = p[:, 1:, :, :] - p[:, :-1, :, :]
+    t_dy = t[:, 1:, :, :] - t[:, :-1, :, :]
+
+    loss_dx = torch.abs(p_dx - t_dx).mean()
+    loss_dy = torch.abs(p_dy - t_dy).mean()
+
+    return edge_weight * (loss_dx + loss_dy)
+
+
 def _run_cell_stage(
     model: NeuralTerminalRendererV2,
     conv: ConventionalRendererV2,
@@ -540,34 +622,61 @@ def _run_cell_stage(
     batch_size: int,
     lr: float,
     stage_name: str,
-    patience: int = 800,
+    patience: int = 2000,
+    min_steps_frac: float = 0.5,
+    color_lr_scale: float = 0.1,
     rng: np.random.Generator | None = None,
+    save_path: Path | None = None,
+    char_weights: torch.Tensor | None = None,
+    edge_loss: bool = False,
 ):
     """Run one curriculum stage of cell-level training with early stopping.
 
-    Returns the best loss achieved and the optimizer (for LR continuity).
+    Args:
+        min_steps_frac: Fraction of n_steps that must run before early
+            stopping can trigger (default 0.5 = 50% of budget).
+        color_lr_scale: LR multiplier for color embeddings vs glyphs.
+        save_path: If provided, save best checkpoint during this stage.
+        char_weights: Optional (N_CHARS_V2,) tensor of per-character loss
+            weights.  When provided the L1 loss is weighted per-sample by
+            the character's weight (e.g. 3x for box-drawing).
+        edge_loss: When True, add a gradient-based structural loss for
+            box-drawing characters (weighted 0.3x) on top of the pixel loss.
+
+    Returns the best loss achieved.
     """
     n_chars = len(char_pool)
+    min_steps = int(n_steps * min_steps_frac)
+    extra = ""
+    if char_weights is not None:
+        extra += " +char_weights"
+    if edge_loss:
+        extra += " +edge_loss"
     print(f"\n  ── {stage_name}: {n_chars} chars, {n_colors} colors, "
-          f"{n_steps} steps, lr={lr:.1e} ──")
+          f"{n_steps} steps, lr={lr:.1e}, patience={patience}, "
+          f"min_steps={min_steps}{extra} ──")
 
     optimizer = torch.optim.Adam(
         [
             {"params": model.glyphs.parameters(), "lr": lr},
-            {"params": model.colors.parameters(), "lr": lr * 0.1},
+            {"params": model.colors.parameters(), "lr": lr * color_lr_scale},
         ]
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, n_steps, eta_min=lr * 0.01
+    # Warm restarts let the optimizer escape plateaus after char-set expansions
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=max(n_steps // 3, 1000), T_mult=2, eta_min=lr * 0.01,
     )
-    loss_fn = nn.L1Loss()
     if rng is None:
         rng = np.random.default_rng(42)
+
+    # Move char_weights to device once
+    cw = char_weights.to(device) if char_weights is not None else None
 
     model.train()
     t0 = time.perf_counter()
     best_loss = float("inf")
     steps_without_improvement = 0
+    best_state = None
 
     for step in range(n_steps):
         char_indices, fg_colors, bg_colors = generate_v2_training_batch(
@@ -591,20 +700,35 @@ def _run_cell_stage(
         b = bg_rgb[:, None, None, :]
         pred = a * f + (1.0 - a) * b
 
-        loss = loss_fn(pred, target_t)
+        # ── Weighted pixel loss ───────────────────────────────────────
+        if cw is not None:
+            # Per-sample weights from char_weights: (batch,) -> (batch, 1, 1, 1)
+            batch_w = cw[ch_t].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            pixel_loss = torch.abs(pred - target_t)  # (batch, cell_h, cell_w, 3)
+            loss = (pixel_loss * batch_w).mean()
+        else:
+            loss = torch.nn.functional.l1_loss(pred, target_t)
+
+        # ── Edge-aware structural loss for box-drawing ────────────────
+        if edge_loss:
+            loss = loss + _edge_aware_loss(pred, target_t, ch_t)
+
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        scheduler.step()
+        scheduler.step(step)
 
         lv = loss.item()
         if lv < best_loss:
             best_loss = lv
             steps_without_improvement = 0
+            if save_path is not None:
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             steps_without_improvement += 1
 
-        if step % 500 == 0 or step == n_steps - 1:
+        if step % 1000 == 0 or step == n_steps - 1:
             elapsed = time.perf_counter() - t0
             cur_lr = scheduler.get_last_lr()[0]
             print(
@@ -612,12 +736,18 @@ def _run_cell_stage(
                 f"best={best_loss:.6f}  lr={cur_lr:.2e}  ({elapsed:.1f}s)"
             )
 
-        # Early stopping: if no improvement for `patience` steps, move on
-        if steps_without_improvement >= patience and step >= 2000:
+        # Early stopping: requires both min_steps and patience exhaustion
+        if steps_without_improvement >= patience and step >= min_steps:
             elapsed = time.perf_counter() - t0
             print(f"    Early stop at step {step} (no improvement for {patience} steps)")
-            print(f"    {stage_name} done: {elapsed:.1f}s, best loss={best_loss:.6f}")
-            return best_loss
+            break
+
+    # Restore best weights if we tracked them
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        if save_path is not None:
+            torch.save(best_state, str(save_path))
+            print(f"    Checkpoint saved: {save_path}")
 
     elapsed = time.perf_counter() - t0
     print(f"    {stage_name} done: {elapsed:.1f}s, best loss={best_loss:.6f}")
@@ -632,30 +762,53 @@ def train_phase1(
     batch_size: int = 512,
     lr: float = 1e-3,
     curriculum: bool = True,
+    box_focus_only: bool = False,
 ):
-    """Phase 1: Cell-level training with progressive curriculum.
+    """Phase 1: Cell-level training with 5-stage progressive curriculum.
 
     Curriculum stages (when curriculum=True):
-      Stage 1: ASCII-95 + 16 ANSI colors — builds sharp glyph foundations
-      Stage 2: + Latin-1 (191 chars) + 16 colors — extends to accented chars
-      Stage 3: Full 465 chars + 256 colors — complete character/color coverage
+      Stage 1:  ASCII-95 + 16 ANSI colors -- builds sharp glyph foundations
+      Stage 2:  + Latin-1 (191 chars) + 16 colors -- extends to accented chars
+      Stage 3a: Full 465 chars + 16 colors -- learn box-drawing/symbol glyphs
+      Stage 3b: Full 465 chars + 256 colors -- expand color palette
+      Stage 4:  Box-drawing focus (50% box-drawing + 50% ASCII) with
+                per-character loss weighting and edge-aware loss
 
-    Each stage uses cosine LR annealing and early stopping (patience=800).
-    Stage transitions preserve all learned weights — new characters start
-    from the embedding's random init while existing glyphs retain their
-    trained representations.
+    When ``box_focus_only=True``, only Stage 4 runs (useful when resuming
+    from a stage3b checkpoint via ``--box-focus``).
+
+    Each stage uses CosineAnnealingWarmRestarts, gradient clipping, and early
+    stopping with per-stage patience and minimum-step thresholds.  Best-loss
+    checkpoints are saved per stage.
     """
     print(f"\n{'=' * 60}")
-    if curriculum:
-        print(f"Phase 1: Progressive curriculum training")
+    if box_focus_only:
+        print(f"Phase 1: Box-drawing focus ONLY (Stage 4)")
+    elif curriculum:
+        print(f"Phase 1: Progressive curriculum training ({n_steps} total steps)")
     else:
         print(f"Phase 1: Cell-level training ({n_steps} steps, batch={batch_size})")
     print(f"  Characters: {len(TRAINABLE_CHARS)} trainable total")
     print(f"  Colors: {N_COLORS_V2} (xterm-256)")
     print(f"{'=' * 60}")
 
+    checkpoint_dir = MODEL_DIR / "v2_checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    pools = _build_char_pools()
+    rng = np.random.default_rng(42)
+
+    if box_focus_only:
+        # ── Stage 4 only (box-drawing focus) ──────────────────────────
+        s4_steps = max(int(n_steps * 0.05), 4000)
+        _run_stage4_box_focus(
+            model, conv, device,
+            pools=pools, n_steps=s4_steps, batch_size=batch_size,
+            lr=lr, checkpoint_dir=checkpoint_dir, rng=rng,
+        )
+        return
+
     if not curriculum:
-        # Flat training (original behavior)
         _run_cell_stage(
             model, conv, device,
             char_pool=np.array(TRAINABLE_INDICES, dtype=np.int64),
@@ -664,40 +817,109 @@ def train_phase1(
         )
         return
 
-    pools = _build_char_pools()
-    rng = np.random.default_rng(42)
+    # Step allocation: 15% / 15% / 30% / 35% / 5%
+    # Front-load ASCII for sharp foundations, most time on hardest stages,
+    # with a dedicated box-drawing polish pass at the end.
+    s1_steps = int(n_steps * 0.15)
+    s2_steps = int(n_steps * 0.15)
+    s3a_steps = int(n_steps * 0.30)
+    s3b_steps = int(n_steps * 0.35)
+    s4_steps = n_steps - s1_steps - s2_steps - s3a_steps - s3b_steps
 
-    # Allocate steps per stage: 40% / 30% / 30%
-    s1_steps = int(n_steps * 0.40)
-    s2_steps = int(n_steps * 0.30)
-    s3_steps = n_steps - s1_steps - s2_steps
-
-    # Stage 1: ASCII-95 + 16 colors — same char density as V1
+    # Stage 1: ASCII-95 + 16 colors
     _run_cell_stage(
         model, conv, device,
         char_pool=pools["ascii"], n_colors=16,
         n_steps=s1_steps, batch_size=batch_size, lr=lr,
         stage_name="Stage 1 (ASCII-95, 16 colors)",
+        patience=1500, min_steps_frac=0.4,
+        save_path=checkpoint_dir / "stage1.pt",
         rng=rng,
     )
 
     # Stage 2: + Latin-1 (191 chars), still 16 colors
-    # Lower LR for fine-tuning — don't destroy ASCII glyphs
     _run_cell_stage(
         model, conv, device,
         char_pool=pools["latin1"], n_colors=16,
         n_steps=s2_steps, batch_size=batch_size, lr=lr * 0.5,
         stage_name="Stage 2 (+ Latin-1 = 191 chars, 16 colors)",
+        patience=1500, min_steps_frac=0.4,
+        save_path=checkpoint_dir / "stage2.pt",
         rng=rng,
     )
 
-    # Stage 3: Full 465 chars + 256 colors
+    # Stage 3a: Full 465 chars, still 16 colors — learn box-drawing glyphs
+    # without also learning 240 new color embeddings simultaneously.
+    _run_cell_stage(
+        model, conv, device,
+        char_pool=pools["full"], n_colors=16,
+        n_steps=s3a_steps, batch_size=batch_size, lr=lr * 0.5,
+        stage_name="Stage 3a (full 465 chars, 16 colors)",
+        patience=2000, min_steps_frac=0.5,
+        save_path=checkpoint_dir / "stage3a.pt",
+        rng=rng,
+    )
+
+    # Stage 3b: Full 465 chars + 256 colors — expand color palette.
+    # Colors need faster learning since they're the new component.
     _run_cell_stage(
         model, conv, device,
         char_pool=pools["full"], n_colors=256,
-        n_steps=s3_steps, batch_size=batch_size, lr=lr * 0.3,
-        stage_name="Stage 3 (full 465 chars, 256 colors)",
+        n_steps=s3b_steps, batch_size=batch_size, lr=lr * 0.3,
+        stage_name="Stage 3b (full 465 chars, 256 colors)",
+        patience=3000, min_steps_frac=0.4,
+        color_lr_scale=0.5,
+        save_path=checkpoint_dir / "stage3b.pt",
         rng=rng,
+    )
+
+    # Stage 4: Box-drawing focus with weighted loss + edge-aware loss
+    _run_stage4_box_focus(
+        model, conv, device,
+        pools=pools, n_steps=s4_steps, batch_size=batch_size,
+        lr=lr, checkpoint_dir=checkpoint_dir, rng=rng,
+    )
+
+
+def _run_stage4_box_focus(
+    model: NeuralTerminalRendererV2,
+    conv: ConventionalRendererV2,
+    device: str,
+    pools: dict[str, np.ndarray],
+    n_steps: int,
+    batch_size: int,
+    lr: float,
+    checkpoint_dir: Path,
+    rng: np.random.Generator,
+):
+    """Stage 4: Focused box-drawing fine-tuning with weighted + edge loss.
+
+    Trains on a mixed pool of 50% box-drawing characters and 50% ASCII to
+    prevent catastrophic forgetting while sharpening box-drawing glyphs.
+    Uses per-character loss weighting (3x box-drawing, 2x block elements)
+    and an edge-aware gradient loss (0.3x weight).
+    """
+    # Build box-drawing pool: embedding indices for U+2500..U+259F
+    box_pool = np.array(
+        [idx for cp, idx in _CODEPOINT_TO_INDEX.items()
+         if 0x2500 <= cp < 0x25A0],
+        dtype=np.int64,
+    )
+    # Mix with ASCII to prevent forgetting (50% box-drawing, 50% ASCII)
+    mixed_pool = np.concatenate([box_pool, pools["ascii"]])
+
+    char_weights = _build_char_weights(box_weight=3.0, block_weight=2.0)
+
+    _run_cell_stage(
+        model, conv, device,
+        char_pool=mixed_pool, n_colors=16,
+        n_steps=n_steps, batch_size=batch_size, lr=lr * 0.1,
+        stage_name="Stage 4 (box-drawing focus)",
+        patience=1000, min_steps_frac=0.3,
+        save_path=checkpoint_dir / "stage4_box.pt",
+        rng=rng,
+        char_weights=char_weights,
+        edge_loss=True,
     )
 
 
@@ -918,9 +1140,13 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--device", default=None, help="Device (cpu, mps, cuda)")
-    parser.add_argument("--epochs", type=int, default=30000, help="Phase 1 total training steps")
+    parser.add_argument("--epochs", type=int, default=80000, help="Phase 1 total training steps")
     parser.add_argument(
-        "--phase2-steps", type=int, default=3000, help="Phase 2 training steps"
+        "--phase2-steps", type=int, default=8000, help="Phase 2 training steps"
+    )
+    parser.add_argument(
+        "--resume-checkpoint", type=str, default=None,
+        help="Resume from a stage checkpoint (skip Phase 1)",
     )
     parser.add_argument("--lr", type=float, default=1e-3, help="Phase 1 learning rate")
     parser.add_argument("--batch-size", type=int, default=512, help="Phase 1 batch size")
@@ -935,6 +1161,12 @@ def main():
         help="Custom model save path (default: models/display/terminal_renderer_v2.pt)",
     )
     parser.add_argument("--demo-only", action="store_true", help="Skip training, run demo")
+    parser.add_argument(
+        "--box-focus",
+        action="store_true",
+        help="Run only Stage 4 (box-drawing focus) + Phase 2. "
+             "Requires --resume-checkpoint (e.g. stage3b.pt).",
+    )
     parser.add_argument(
         "--efficient-compositor",
         action="store_true",
@@ -975,12 +1207,30 @@ def main():
     print("Building conventional renderer V2 (pre-rendering extended glyphs)...")
     conv = ConventionalRendererV2()
 
-    # Phase 1: cell-level training (with curriculum by default)
-    train_phase1(
-        model, conv, device,
-        n_steps=args.epochs, batch_size=args.batch_size, lr=args.lr,
-        curriculum=not args.no_curriculum,
-    )
+    if args.resume_checkpoint:
+        # Resume from a stage checkpoint — skip earlier stages
+        ckpt = Path(args.resume_checkpoint)
+        state = torch.load(str(ckpt), map_location=device, weights_only=True)
+        model.load_state_dict(state)
+        print(f"Resumed from checkpoint: {ckpt}")
+
+        if args.box_focus:
+            # Run only Stage 4 (box-drawing focus) then Phase 2
+            train_phase1(
+                model, conv, device,
+                n_steps=args.epochs, batch_size=args.batch_size, lr=args.lr,
+                box_focus_only=True,
+            )
+    elif args.box_focus:
+        print("ERROR: --box-focus requires --resume-checkpoint (e.g. stage3b.pt)")
+        sys.exit(1)
+    else:
+        # Phase 1: cell-level training (with curriculum by default)
+        train_phase1(
+            model, conv, device,
+            n_steps=args.epochs, batch_size=args.batch_size, lr=args.lr,
+            curriculum=not args.no_curriculum,
+        )
 
     # Phase 2: frame-level fine-tuning
     train_phase2(model, conv, device, n_steps=args.phase2_steps)

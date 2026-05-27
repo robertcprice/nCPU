@@ -1,0 +1,286 @@
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[solve] enumerative OK in 0.0s
+{"category":"arithmetic","error":null,"method":"enumerative","name":"add_two_v0","seconds":0.0006,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] found expr but Mog verification failed: if a - b < 0 { 0 - a - b } else { a - b }
+[solve] enumerative MISS in 0.0s
+[solve] synthesize_gradient_only OK in 1.6s — synth_gradient
+{"category":"arithmetic","error":null,"method":"synth_gradient","name":"abs_diff_v0","seconds":1.6476,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] found expr but Mog verification failed: if a < b { b } else { a }
+[solve] enumerative MISS in 0.0s
+[solve] synthesize_gradient_only OK in 29.5s — synth_gradient
+{"category":"control_flow","error":null,"method":"synth_gradient","name":"max2_v0","seconds":29.5145,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 8 new, 29 total unique, 0.0s
+[enum] size 3: 175 new, 204 total unique, 0.0s
+[enum] size 4: 132 new, 336 total unique, 0.0s
+[enum] size 5: 3876 new, 4212 total unique, 0.1s
+[enum] size 6: 4924 new, 9136 total unique, 0.3s
+[enum] size 7: 110413 new, 119549 total unique, 2.6s
+[enum] size 8: 168951 new, 288500 total unique, 10.0s
+[enum] size 2: 20 new, 41 total unique, 0.0s
+[enum] size 3: 280 new, 321 total unique, 0.0s
+[enum] size 4: 955 new, 1276 total unique, 0.0s
+[enum] found expr but Mog verification failed: if 0 > if a < 100 { a } else { 100 } { 0 } else { if a < 100 { a } else { 100 } }
+[solve] enumerative MISS in 10.1s
+[solve] synthesize_gradient_only OK in 6.5s — synth_gradient
+{"category":"control_flow","error":null,"method":"synth_gradient","name":"clamp_0_100_v0","seconds":16.5326,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] found expr but Mog verification failed: a % 2
+[solve] enumerative OK in 0.0s
+{"category":"control_flow","error":null,"method":"enumerative-while-cond","name":"sign_v0","seconds":0.0024,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 27 total unique, 0.0s
+[enum] size 3: 169 new, 196 total unique, 0.0s
+[enum] size 4: 69 new, 265 total unique, 0.0s
+[enum] size 5: 3511 new, 3776 total unique, 0.1s
+[enum] size 6: 2841 new, 6617 total unique, 0.3s
+[enum] size 2: 19 new, 39 total unique, 0.0s
+[enum] size 3: 266 new, 305 total unique, 0.0s
+[enum] size 4: 708 new, 1013 total unique, 0.0s
+[enum] size 5: 10829 new, 11842 total unique, 0.1s
+[enum] found expr but Mog verification failed: a * 0 - a - 1 / (0 - 2)
+[solve] enumerative MISS in 0.7s
+[solve] synthesize_gradient_only OK in 10.4s — synth_gradient
+{"category":"arithmetic","error":null,"method":"synth_gradient","name":"sum_to_n_v0","seconds":11.1464,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 8 new, 35 total unique, 0.0s
+[enum] size 3: 238 new, 273 total unique, 0.0s
+[enum] size 4: 110 new, 383 total unique, 0.0s
+[enum] size 5: 6685 new, 7068 total unique, 0.1s
+[enum] size 6: 4055 new, 11123 total unique, 0.4s
+[enum] size 2: 22 new, 49 total unique, 0.0s
+[enum] size 3: 366 new, 415 total unique, 0.0s
+[enum] size 4: 1093 new, 1508 total unique, 0.0s
+[enum] size 5: 18750 new, 20258 total unique, 0.1s
+[solve] enumerative MISS in 0.9s
+[solve] synthesize_gradient_only OK in 16.8s — synth_gradient
+{"category":"arithmetic","error":null,"method":"synth_gradient","name":"gcd_v0","seconds":17.6824,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 8 new, 34 total unique, 0.0s
+[enum] size 3: 241 new, 275 total unique, 0.0s
+[enum] size 4: 115 new, 390 total unique, 0.0s
+[enum] size 5: 6566 new, 6956 total unique, 0.1s
+[enum] size 6: 4216 new, 11172 total unique, 0.3s
+[enum] size 7: 201839 new, 213011 total unique, 3.8s
+[enum] size 2: 22 new, 48 total unique, 0.0s
+[enum] size 3: 375 new, 423 total unique, 0.0s
+[enum] size 4: 1133 new, 1556 total unique, 0.0s
+[enum] size 5: 18252 new, 19808 total unique, 0.1s
+[solve] enumerative MISS in 4.0s
+[solve] preemptive_search_teacher OK in 0.0s — search_lcm_formula
+{"category":"arithmetic","error":null,"method":"search_lcm_formula","name":"lcm_v0","seconds":3.9627,"success":true}
+[enum-array] FOUND simple fold: array_sum ForFold { init: Const(0), body_op: Add, body_rhs: Var(0) }
+[solve] enumerative OK in 0.0s
+{"category":"arrays","error":null,"method":"enumerative-array","name":"array_sum_v0","seconds":0.0002,"success":true}
+[enum-array] FOUND max/min fold: array_max ForFold { init: Const(0), body_op: Max, body_rhs: Var(0) }
+[enum-array] FOUND max/min fold: array_max ForFold { init: Const(1), body_op: Max, body_rhs: Var(0) }
+[enum-array] FOUND max/min fold: array_max ForFold { init: Const(-1), body_op: Max, body_rhs: Var(0) }
+[solve] enumerative OK in 0.0s
+{"category":"arrays","error":null,"method":"enumerative-array","name":"array_max_v0","seconds":0.0005,"success":true}
+[enum-array] FOUND cond-count: count_occurrences ForFold { init: Const(0), body_op: Add, body_rhs: IfExpr(Eq, Var(1), Var(0), Const(1), Const(0)) }
+[solve] enumerative OK in 0.0s
+{"category":"arrays","error":null,"method":"enumerative-array","name":"count_occurrences_v0","seconds":0.0006,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 19 total unique, 0.0s
+[enum] size 3: 125 new, 144 total unique, 0.0s
+[enum] size 4: 43 new, 187 total unique, 0.0s
+[enum] size 5: 1302 new, 1489 total unique, 0.0s
+[enum] size 6: 572 new, 2061 total unique, 0.1s
+[enum] size 7: 14888 new, 16949 total unique, 1.2s
+[enum] size 8: 14705 new, 31654 total unique, 5.1s
+[enum] size 9: 167277 new, 198931 total unique, 10.0s
+[enum] size 2: 17 new, 29 total unique, 0.0s
+[enum] size 3: 162 new, 191 total unique, 0.0s
+[enum] size 4: 291 new, 482 total unique, 0.0s
+[enum] size 5: 2665 new, 3147 total unique, 0.1s
+[enum] size 6: 6399 new, 9546 total unique, 0.3s
+[enum] size 7: 51217 new, 60763 total unique, 2.2s
+[solve] enumerative MISS in 12.3s
+[solve] skipping synthesize_gradient_only for non-scalar 1-arg problem
+[solve] synthesize_array MISS in 0.0s
+[solve] expr_only MISS in 12.3s
+[solve] search_teacher OK in 0.0s — search_trimmed_len
+{"category":"strings","error":null,"method":"search_trimmed_len","name":"trimmed_len_v0","seconds":12.2649,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 19 total unique, 0.0s
+[enum] size 3: 125 new, 144 total unique, 0.0s
+[enum] size 4: 43 new, 187 total unique, 0.0s
+[enum] size 5: 1302 new, 1489 total unique, 0.0s
+[enum] size 6: 572 new, 2061 total unique, 0.1s
+[enum] size 7: 14888 new, 16949 total unique, 1.0s
+[enum] size 8: 14705 new, 31654 total unique, 4.2s
+[enum] size 9: 167277 new, 198931 total unique, 10.1s
+[enum] size 2: 17 new, 29 total unique, 0.0s
+[enum] size 3: 162 new, 191 total unique, 0.0s
+[enum] size 4: 291 new, 482 total unique, 0.0s
+[enum] size 5: 2665 new, 3147 total unique, 0.1s
+[enum] size 6: 6399 new, 9546 total unique, 0.3s
+[enum] size 7: 51217 new, 60763 total unique, 2.0s
+[solve] enumerative MISS in 12.2s
+[solve] skipping synthesize_gradient_only for non-scalar 1-arg problem
+[solve] synthesize_array MISS in 0.0s
+[solve] expr_only MISS in 12.2s
+[solve] search_teacher OK in 0.0s — search_vowel_count
+{"category":"strings","error":null,"method":"search_vowel_count","name":"vowel_count_v0","seconds":12.228,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 19 total unique, 0.0s
+[enum] size 3: 125 new, 144 total unique, 0.0s
+[enum] size 4: 43 new, 187 total unique, 0.0s
+[enum] size 5: 1302 new, 1489 total unique, 0.0s
+[enum] size 6: 572 new, 2061 total unique, 0.1s
+[enum] size 7: 14888 new, 16949 total unique, 1.0s
+[enum] size 8: 14705 new, 31654 total unique, 4.5s
+[enum] size 9: 167277 new, 198931 total unique, 10.2s
+[enum] size 2: 17 new, 29 total unique, 0.0s
+[enum] size 3: 162 new, 191 total unique, 0.0s
+[enum] size 4: 291 new, 482 total unique, 0.0s
+[enum] size 5: 2665 new, 3147 total unique, 0.1s
+[enum] size 6: 6399 new, 9546 total unique, 0.3s
+[enum] size 7: 51217 new, 60763 total unique, 2.2s
+[solve] enumerative MISS in 12.4s
+[solve] skipping synthesize_gradient_only for non-scalar 1-arg problem
+[solve] synthesize_array MISS in 0.0s
+[solve] expr_only MISS in 12.4s
+[solve] search_teacher OK in 0.0s — search_contains_literal
+{"category":"strings","error":null,"method":"search_contains_literal","name":"contains_cat_v0","seconds":12.4137,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 19 total unique, 0.0s
+[enum] size 3: 125 new, 144 total unique, 0.0s
+[enum] size 4: 43 new, 187 total unique, 0.0s
+[enum] size 5: 1302 new, 1489 total unique, 0.0s
+[enum] size 6: 572 new, 2061 total unique, 0.2s
+[enum] size 7: 14888 new, 16949 total unique, 1.3s
+[enum] size 8: 14705 new, 31654 total unique, 5.5s
+[enum] size 9: 167277 new, 198931 total unique, 10.1s
+[enum] size 2: 17 new, 29 total unique, 0.0s
+[enum] size 3: 162 new, 191 total unique, 0.0s
+[enum] size 4: 291 new, 482 total unique, 0.0s
+[enum] size 5: 2665 new, 3147 total unique, 0.0s
+[enum] size 6: 6399 new, 9546 total unique, 0.3s
+[enum] size 7: 51217 new, 60763 total unique, 2.2s
+[solve] enumerative MISS in 12.4s
+[solve] skipping synthesize_gradient_only for non-scalar 1-arg problem
+[solve] synthesize_array MISS in 0.0s
+[solve] expr_only MISS in 12.4s
+[solve] search_teacher OK in 0.0s — search_struct_pair
+{"category":"structs","error":null,"method":"search_struct_pair","name":"point_sum_v0","seconds":12.3756,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 8 new, 32 total unique, 0.0s
+[enum] size 3: 226 new, 258 total unique, 0.0s
+[enum] size 4: 99 new, 357 total unique, 0.0s
+[enum] size 5: 5599 new, 5956 total unique, 0.1s
+[enum] size 6: 3887 new, 9843 total unique, 0.3s
+[enum] size 2: 22 new, 46 total unique, 0.0s
+[enum] size 3: 357 new, 403 total unique, 0.0s
+[enum] size 4: 1054 new, 1457 total unique, 0.0s
+[enum] size 5: 16562 new, 18019 total unique, 0.1s
+[solve] enumerative MISS in 0.6s
+[solve] synthesize_gradient_only OK in 3.7s — synth_gradient
+{"category":"result_optional","error":null,"method":"synth_gradient","name":"safe_div_or_neg1_v0","seconds":4.2065,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 8 new, 28 total unique, 0.0s
+[enum] size 3: 170 new, 198 total unique, 0.0s
+[enum] size 4: 122 new, 320 total unique, 0.0s
+[enum] size 2: 20 new, 40 total unique, 0.0s
+[enum] found expr but Mog verification failed: if a > 0 { a } else { 0 }
+[solve] enumerative OK in 0.0s
+{"category":"result_optional","error":null,"method":"enumerative-while-cond","name":"positive_or_default_v0","seconds":0.007,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 28 total unique, 0.0s
+[enum] size 3: 168 new, 196 total unique, 0.0s
+[enum] size 4: 67 new, 263 total unique, 0.0s
+[enum] size 5: 3439 new, 3702 total unique, 0.0s
+[enum] size 6: 2696 new, 6398 total unique, 0.2s
+[enum] size 7: 89589 new, 95987 total unique, 1.9s
+[enum] size 8: 88729 new, 184716 total unique, 9.3s
+[enum] size 9: 190054 new, 374770 total unique, 10.0s
+[enum] size 2: 19 new, 40 total unique, 0.0s
+[enum] size 3: 257 new, 297 total unique, 0.0s
+[enum] size 4: 668 new, 965 total unique, 0.0s
+[enum] size 5: 10065 new, 11030 total unique, 0.1s
+[enum] size 6: 39352 new, 50382 total unique, 0.4s
+[enum] size 7: 490977 new, 541359 total unique, 4.5s
+[solve] enumerative MISS in 14.7s
+[solve] synthesize_gradient_only OK in 7.6s — synth_gradient
+{"category":"recursion","error":null,"method":"synth_gradient","name":"factorial_v0","seconds":22.3241,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 27 total unique, 0.0s
+[enum] size 3: 170 new, 197 total unique, 0.0s
+[enum] size 4: 70 new, 267 total unique, 0.0s
+[enum] size 5: 3513 new, 3780 total unique, 0.0s
+[enum] size 6: 2863 new, 6643 total unique, 0.2s
+[enum] size 7: 92838 new, 99481 total unique, 1.5s
+[enum] size 8: 94993 new, 194474 total unique, 8.3s
+[enum] size 9: 442890 new, 637364 total unique, 10.0s
+[enum] size 2: 19 new, 39 total unique, 0.0s
+[enum] size 3: 268 new, 307 total unique, 0.0s
+[enum] size 4: 706 new, 1013 total unique, 0.0s
+[enum] size 5: 11016 new, 12029 total unique, 0.1s
+[enum] size 6: 43119 new, 55148 total unique, 0.5s
+[enum] size 7: 553358 new, 608506 total unique, 5.5s
+[solve] enumerative MISS in 15.7s
+[solve] synthesize_gradient_only OK in 16.4s — synth_gradient
+{"category":"recursion","error":null,"method":"synth_gradient","name":"fibonacci_v0","seconds":32.0717,"success":true}
+[enum-array] FOUND simple fold: closure_map_sum ForFold { init: Const(0), body_op: Add, body_rhs: BinOp(Add, Var(0), Var(0)) }
+[solve] enumerative OK in 0.0s
+{"category":"higher_order","error":null,"method":"enumerative-array","name":"closure_map_sum_v0","seconds":0.0002,"success":true}
+[enum-array] FOUND cond-count: count_positive ForFold { init: Const(0), body_op: Add, body_rhs: IfExpr(Gt, Var(0), Const(0), Const(1), Const(0)) }
+[solve] enumerative OK in 0.0s
+{"category":"arrays","error":null,"method":"enumerative-array","name":"count_positive_v0","seconds":0.0004,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 28 total unique, 0.0s
+[enum] size 3: 170 new, 198 total unique, 0.0s
+[enum] size 4: 71 new, 269 total unique, 0.0s
+[enum] size 2: 19 new, 40 total unique, 0.0s
+[enum] size 3: 266 new, 306 total unique, 0.0s
+[enum] found expr but Mog verification failed: 0 - a + (0 - 2) - 1
+[solve] enumerative MISS in 0.0s
+[solve] synthesize_gradient_only OK in 4.0s — synth_gradient
+{"category":"control_flow","error":null,"method":"synth_gradient","name":"is_even_v0","seconds":3.9999,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 28 total unique, 0.0s
+[enum] size 3: 176 new, 204 total unique, 0.0s
+[enum] size 4: 80 new, 284 total unique, 0.0s
+[enum] size 5: 4027 new, 4311 total unique, 0.1s
+[enum] size 6: 3133 new, 7444 total unique, 2.0s
+[enum] size 7: 117961 new, 125405 total unique, 9.1s
+[enum] size 8: 50148 new, 175553 total unique, 10.0s
+[enum] size 2: 19 new, 40 total unique, 0.0s
+[enum] size 3: 269 new, 309 total unique, 0.0s
+[enum] size 4: 789 new, 1098 total unique, 0.0s
+[enum] size 5: 12168 new, 13266 total unique, 0.2s
+[enum] size 6: 55184 new, 68450 total unique, 2.6s
+[enum] size 7: 627515 new, 695965 total unique, 8.0s
+[solve] enumerative OK in 18.3s
+{"category":"arithmetic","error":null,"method":"enumerative-while-cond","name":"digit_sum_v0","seconds":18.3038,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 28 total unique, 0.0s
+[enum] size 3: 176 new, 204 total unique, 0.0s
+[enum] size 4: 80 new, 284 total unique, 0.0s
+[enum] size 5: 3651 new, 3935 total unique, 0.1s
+[enum] size 6: 2646 new, 6581 total unique, 1.0s
+[enum] size 7: 99372 new, 105953 total unique, 4.4s
+[enum] size 8: 75143 new, 181096 total unique, 10.2s
+[enum] size 2: 19 new, 40 total unique, 0.0s
+[enum] size 3: 270 new, 310 total unique, 0.0s
+[enum] size 4: 787 new, 1097 total unique, 0.0s
+[enum] size 5: 11805 new, 12902 total unique, 0.1s
+[enum] size 6: 53209 new, 66111 total unique, 0.8s
+[enum] size 7: 667040 new, 733151 total unique, 6.3s
+[solve] enumerative MISS in 16.7s
+[solve] synthesize_gradient_only OK in 8.9s — synth_gradient
+{"category":"loops","error":null,"method":"synth_gradient","name":"reverse_digits_v0","seconds":25.5719,"success":true}
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 28 total unique, 0.0s
+[enum] size 3: 176 new, 204 total unique, 0.0s
+[enum] size 4: 80 new, 284 total unique, 0.0s
+[enum] size 5: 3955 new, 4239 total unique, 0.0s
+[enum] size 6: 3172 new, 7411 total unique, 0.5s
+[enum] size 2: 19 new, 40 total unique, 0.0s
+[enum] size 3: 270 new, 310 total unique, 0.0s
+[enum] size 4: 792 new, 1102 total unique, 0.0s
+[enum] size 5: 12229 new, 13331 total unique, 0.1s
+[enum] found expr but Mog verification failed: 0 - 0 - a / 5 - 1
+[solve] enumerative MISS in 1.1s

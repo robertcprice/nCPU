@@ -1,0 +1,101 @@
+name: HumanEval-lite weekly
+
+# Weekly measurement of the nsynth pass@1 on the committed benchmark.
+# Appends one row to artifacts/humaneval_lite_trajectory.tsv so the
+# trajectory of (date, pass@1, nsynth_share, llm_share) is a committed
+# dataset anyone can cat.
+#
+# The hybrid runner is only used when ANTHROPIC_API_KEY is available
+# as a repo secret; otherwise we run the nsynth-only variant and
+# llm_share comes out as 0.
+
+on:
+  schedule:
+    - cron: "30 8 * * 1"  # Mondays 08:30 UTC (before the self-improvement weekly)
+  workflow_dispatch:
+
+concurrency:
+  group: humaneval-weekly
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            nsynth/target
+          key: nsynth-humaneval-${{ runner.os }}-${{ hashFiles('nsynth/Cargo.lock', 'nsynth/Cargo.toml') }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps (optional anthropic)
+        run: |
+          python3 -m pip install --upgrade pip
+          # anthropic is optional — pipeline degrades gracefully without it
+          pip install anthropic || true
+
+      - name: Build nsynth_codegen
+        working-directory: nsynth
+        run: cargo build --release --bin nsynth_codegen
+
+      - name: Run hybrid benchmark
+        env:
+          # Pass-through: the runner treats missing key as graceful
+          # no-op (LLM fallback disabled, nsynth-only behaviour).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NSYNTH_CACHE_PATH: /tmp/humaneval_ci_cache.json
+          NSYNTH_META_WEIGHTS_PATH: /tmp/humaneval_ci_weights.tsv
+          NSYNTH_TEACHER_BUDGET_SEC: "8"
+        run: |
+          python3 tools/benchmarks/run_humaneval_hybrid.py \
+            --timeout 20 \
+            --out artifacts/humaneval_results_hybrid.md
+
+      - name: Append trajectory row
+        run: |
+          set -euo pipefail
+          # Parse pass@1 + path shares out of the report markdown.
+          REPORT=artifacts/humaneval_results_hybrid.md
+          PASS=$(grep -oE 'Pass@1.*[0-9]+/[0-9]+' "$REPORT" | head -1 | grep -oE '[0-9]+/[0-9]+' | head -1)
+          NSYNTH=$(grep -oE 'Solved by nsynth: [0-9]+' "$REPORT" | head -1 | grep -oE '[0-9]+' | head -1)
+          LLM=$(grep -oE 'Solved by LLM fallback: [0-9]+' "$REPORT" | head -1 | grep -oE '[0-9]+' | head -1)
+          MISS=$(grep -oE 'Missed by both: [0-9]+' "$REPORT" | head -1 | grep -oE '[0-9]+' | head -1)
+
+          HISTORY=artifacts/humaneval_lite_trajectory.tsv
+          if [[ ! -s "$HISTORY" ]]; then
+            printf "date_utc\tpass_at_1\tnsynth_share\tllm_share\tmiss_share\n" > "$HISTORY"
+          fi
+          DATE=$(date -u +%Y-%m-%d)
+          printf "%s\t%s\t%s\t%s\t%s\n" "$DATE" "$PASS" "${NSYNTH:-0}" "${LLM:-0}" "${MISS:-0}" >> "$HISTORY"
+          cat "$HISTORY" | tail -5
+
+      - name: Commit trajectory
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet artifacts/humaneval_lite_trajectory.tsv artifacts/humaneval_results_hybrid.md; then
+            git add artifacts/humaneval_lite_trajectory.tsv artifacts/humaneval_results_hybrid.md
+            git commit -m "chore(benchmarks): weekly humaneval-lite measurement"
+            git push origin HEAD:main
+          else
+            echo "[weekly] no change"
+          fi

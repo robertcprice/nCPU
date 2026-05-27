@@ -355,3 +355,44 @@ def test_search_solves_all_61_factories():
         print(f"  FAILED: {', '.join(failures)}")
 
     assert solved >= 59, f"Expected >=59 solved, got {solved}. Failed: {failures}"
+
+
+def test_search_solves_all_factories_multi_variant():
+    """Full reproducibility regression: every factory × 5 variants must solve.
+
+    This pins the publication claim. If a solver change drops coverage on any
+    variant, this test surfaces it with a per-factory breakdown.
+    """
+    from collections import defaultdict
+
+    from egdc.mog.benchmark import get_benchmark
+    from egdc.mog.solvers.search_solver import solve_problem
+
+    problems = get_benchmark(seed=42, variants_per_factory=5)
+    total = len(problems)
+    by_factory_total: dict[str, int] = defaultdict(int)
+    by_factory_passed: dict[str, int] = defaultdict(int)
+    failures: list[tuple[str, str, float]] = []
+
+    for p in problems:
+        by_factory_total[p.name] += 1
+        r = solve_problem(p, use_compiler=False)
+        if r.success:
+            by_factory_passed[p.name] += 1
+        else:
+            failures.append((p.name, r.method or "unknown", float(r.loss or 0.0)))
+
+    solved = sum(by_factory_passed.values())
+    print(f"\nMulti-variant benchmark: {solved}/{total} solved across {len(by_factory_total)} factories")
+    if failures:
+        print("  failing variants (factory, method, loss):")
+        for name, method, loss in failures:
+            print(f"    {name}: method={method} loss={loss:.4g}")
+        partial = [f for f in by_factory_total if by_factory_passed[f] < by_factory_total[f]]
+        print(f"  partial factories: {sorted(partial)}")
+
+    # Current baseline: 315/315 = 100%. Any drop is a regression.
+    assert solved == total, (
+        f"Expected {total}/{total} solved (100%), got {solved}/{total}. "
+        f"Failing: {failures}"
+    )

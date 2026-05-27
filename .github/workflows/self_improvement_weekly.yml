@@ -1,0 +1,79 @@
+name: Self-improvement weekly
+
+# Weekly roll-up of the nsynth cross-run learning metric. Runs the scoped
+# cumulative transfer_curve sweep, appends one row to
+# artifacts/SELF_IMPROVEMENT_RATE.md, commits the updated file back to main.
+#
+# The committed file becomes a *published* trajectory anyone can browse:
+# `cat artifacts/SELF_IMPROVEMENT_RATE.md` tells the full story of whether the
+# solver keeps getting faster over the weeks, with per-row provenance
+# (cache_size, instant_hits, slowdowns, transfer_pct, top teacher's wins).
+#
+# Manual trigger is available via workflow_dispatch for ad-hoc captures —
+# useful right after landing a change that should move the metric.
+
+on:
+  schedule:
+    # Every Monday at 09:00 UTC — after the weekend so a Friday landing has
+    # cache state to measure against.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+# Only one weekly run at a time; if a prior run is still executing, cancel
+# the earlier one (the newer one will produce the correct snapshot).
+concurrency:
+  group: self-improvement-weekly
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full history so we can commit back without rejection.
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            nsynth/target
+          key: nsynth-weekly-${{ runner.os }}-${{ hashFiles('nsynth/Cargo.lock', 'nsynth/Cargo.toml') }}
+
+      - name: Build required binaries
+        working-directory: nsynth
+        run: cargo build --release --bin transfer_curve --bin curve_analysis --bin top_teachers
+
+      - name: Append weekly row
+        env:
+          # Dedicated cache path so the weekly run doesn't pollute a shared
+          # user cache and so cold-run (first week) vs warm-run (later weeks)
+          # dynamics are preserved cleanly.
+          NSYNTH_CACHE_PATH: /tmp/nsynth_weekly_cache.json
+          NSYNTH_META_WEIGHTS_PATH: /tmp/nsynth_weekly_weights.tsv
+          NSYNTH_TEACHER_BUDGET_SEC: "12"
+        run: tools/measure_self_improvement.sh --limit 30
+
+      - name: Commit and push the updated trajectory
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # No-op if the script didn't actually append (e.g. a gate failure).
+          if ! git diff --quiet artifacts/SELF_IMPROVEMENT_RATE.md; then
+            git add artifacts/SELF_IMPROVEMENT_RATE.md
+            git commit -m "chore(metrics): weekly self-improvement trajectory row"
+            git push origin HEAD:main
+          else
+            echo "[weekly] no change to SELF_IMPROVEMENT_RATE.md; skipping commit"
+          fi

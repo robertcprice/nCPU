@@ -491,5 +491,131 @@ class TestEdgeCases:
         assert ts.fg[1, 0] == 3  # yellow = 3 (33-30)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# V2 Neural Terminal Renderer Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+from ncpu.neural.neural_terminal_renderer_v2 import (
+    NeuralGlyphGeneratorV2,
+    NeuralColorPaletteV2,
+    NeuralCompositorV2,
+    NeuralTerminalRendererV2,
+    NeuralDisplayV2,
+    N_CHARS_V2,
+    N_COLORS_V2,
+    XTERM_256_PALETTE,
+)
+
+
+class TestNeuralGlyphGeneratorV2:
+    def test_output_shape(self):
+        g = NeuralGlyphGeneratorV2()
+        chars = torch.randint(0, N_CHARS_V2, (2, 3))
+        out = g(chars)
+        assert out.shape == (2, 3, CELL_H, CELL_W)
+
+    def test_output_range(self):
+        g = NeuralGlyphGeneratorV2()
+        chars = torch.randint(0, 95, (4, 8))
+        out = g(chars)
+        assert out.min() >= 0.0
+        assert out.max() <= 1.0
+
+    def test_different_chars_produce_different_glyphs(self):
+        g = NeuralGlyphGeneratorV2()
+        a = g(torch.tensor([[ord('A')]]))
+        b = g(torch.tensor([[ord('B')]]))
+        assert not torch.allclose(a, b)
+
+
+class TestNeuralColorPaletteV2:
+    def test_output_shape(self):
+        c = NeuralColorPaletteV2()
+        idx = torch.randint(0, N_COLORS_V2, (2, 3))
+        out = c(idx)
+        assert out.shape == (2, 3, 3)
+
+    def test_256_colors(self):
+        c = NeuralColorPaletteV2()
+        all_idx = torch.arange(N_COLORS_V2).unsqueeze(0)
+        out = c(all_idx)
+        assert out.shape == (1, 256, 3)
+
+    def test_ansi_black_near_zero(self):
+        c = NeuralColorPaletteV2()
+        black = c(torch.tensor([0]))
+        assert black.squeeze().abs().max() < 0.05
+
+
+class TestNeuralTerminalRendererV2:
+    def test_batched_output_shape(self):
+        r = NeuralTerminalRendererV2()
+        chars = torch.randint(0, N_CHARS_V2, (2, TERM_ROWS, TERM_COLS))
+        fg = torch.randint(0, N_COLORS_V2, (2, TERM_ROWS, TERM_COLS))
+        bg = torch.zeros(2, TERM_ROWS, TERM_COLS, dtype=torch.long)
+        out = r(chars, fg, bg)
+        assert out.shape == (2, FRAME_H, FRAME_W, 3)
+
+    def test_unbatched_output_shape(self):
+        r = NeuralTerminalRendererV2()
+        chars = torch.randint(0, N_CHARS_V2, (TERM_ROWS, TERM_COLS))
+        fg = torch.randint(0, N_COLORS_V2, (TERM_ROWS, TERM_COLS))
+        bg = torch.zeros(TERM_ROWS, TERM_COLS, dtype=torch.long)
+        out = r(chars, fg, bg)
+        assert out.shape == (FRAME_H, FRAME_W, 3)
+
+    def test_output_range(self):
+        r = NeuralTerminalRendererV2()
+        chars = torch.randint(0, N_CHARS_V2, (TERM_ROWS, TERM_COLS))
+        fg = torch.full((TERM_ROWS, TERM_COLS), 7, dtype=torch.long)
+        bg = torch.zeros(TERM_ROWS, TERM_COLS, dtype=torch.long)
+        out = r(chars, fg, bg)
+        assert out.min() >= 0.0
+        assert out.max() <= 1.0
+
+    def test_render_state(self):
+        r = NeuralTerminalRendererV2()
+        ts = TerminalState()
+        ts.write(b'V2 Test')
+        frame = r.render_state(ts, 'cpu')
+        assert isinstance(frame, np.ndarray)
+        assert frame.shape == (FRAME_H, FRAME_W, 3)
+        assert frame.dtype == np.uint8
+
+    def test_param_count(self):
+        r = NeuralTerminalRendererV2()
+        n = r.count_params()
+        # Wider model: 390K+ params
+        assert n > 300_000
+
+
+class TestNeuralDisplayV2:
+    def test_init_without_model(self):
+        d = NeuralDisplayV2(model_path='/nonexistent/path.pt', device='cpu')
+        assert d.device == 'cpu'
+        assert isinstance(d.terminal, TerminalState)
+
+    def test_write_and_render(self):
+        d = NeuralDisplayV2(model_path='/nonexistent/path.pt', device='cpu')
+        d.write(b'Hello V2 World')
+        frame = d.render()
+        assert isinstance(frame, np.ndarray)
+        assert frame.shape == (FRAME_H, FRAME_W, 3)
+        assert frame.dtype == np.uint8
+
+    def test_render_text(self):
+        d = NeuralDisplayV2(model_path='/nonexistent/path.pt', device='cpu')
+        frame = d.render_text('V2 Neural Display')
+        assert frame.shape == (FRAME_H, FRAME_W, 3)
+
+    def test_render_rgba(self):
+        d = NeuralDisplayV2(model_path='/nonexistent/path.pt', device='cpu')
+        d.write(b'RGBA test')
+        rgba_bytes, w, h = d.render_rgba()
+        assert h == FRAME_H
+        assert w == FRAME_W
+        assert len(rgba_bytes) == FRAME_H * FRAME_W * 4
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

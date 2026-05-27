@@ -1,0 +1,24 @@
+[package]
+name = "npcot_wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust NPCoT library executor — compiles to native, WASM, or embedded. Zero deps."
+
+[lib]
+name = "npcot_wasm"
+crate-type = ["cdylib", "rlib", "staticlib"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[features]
+default = []
+# `wasm-bindgen` adds JS-facing exports when building for the browser.
+wasm = ["dep:wasm-bindgen"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", optional = true }

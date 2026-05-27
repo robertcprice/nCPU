@@ -28,11 +28,16 @@ pub mod gpu_optimizer;
 mod multi_kernel;
 pub mod native_abi;
 mod neural_alu;
+mod neural_cpu;
 mod neural_display;
 mod neural_dispatch;
+mod neural_os;
+mod neural_os_models;
+mod neural_jepa_kernel;  // JEPA / learned neural kernel execution engine (the "JEPA CPU" in Rust)
 mod neural_hybrid;
 mod neural_ooo;
 mod neural_weights;
+pub mod npcot_exec;
 mod ooo_exec;
 mod optimized;
 
@@ -1729,7 +1734,7 @@ pub fn get_default_device() -> Option<Retained<ProtocolObject<dyn MTLDevice>>> {
 ///     Dict with: stdout, stderr, exit_code, total_cycles, elapsed_secs,
 ///                stop_reason, total_forks, total_context_switches, processes_created
 #[pyfunction]
-#[pyo3(signature = (elf_path, argv=None, envp=None, max_cycles=None, memory_mb=None, timeout=None, quiet=None, stdin_data=None, files=None, directories=None, symlinks=None, on_framebuffer=None))]
+#[pyo3(signature = (elf_path, argv=None, envp=None, max_cycles=None, memory_mb=None, timeout=None, quiet=None, stdin_data=None, files=None, directories=None, symlinks=None, on_framebuffer=None, jepa_observer=None))]
 fn run_elf(
     elf_path: &str,
     argv: Option<Vec<String>>,
@@ -1743,6 +1748,7 @@ fn run_elf(
     directories: Option<Vec<String>>,
     symlinks: Option<Vec<(String, String)>>,
     on_framebuffer: Option<Py<PyAny>>,
+    jepa_observer: Option<Py<PyAny>>,
     py: Python<'_>,
 ) -> PyResult<Py<PyAny>> {
     use std::fs;
@@ -1791,8 +1797,13 @@ fn run_elf(
     };
 
     // Create launcher
-    let launcher = GpuLauncher::new(memory_size, 10_000_000)
+    let mut launcher = GpuLauncher::new(memory_size, 10_000_000)
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to create launcher: {}", e)))?;
+
+    // Attach JEPA observer if provided (this is the live integration point)
+    if let Some(obs) = jepa_observer {
+        launcher.jepa_observer = Some(obs);
+    }
 
     // Prepare ELF
     let prepared = prepare_elf(&elf_data, &argv_refs, &envp_refs, memory_size as u64)
@@ -1856,6 +1867,15 @@ fn run_elf(
     dict.set_item("total_forks", result.total_forks)?;
     dict.set_item("total_context_switches", result.total_context_switches)?;
     dict.set_item("processes_created", result.processes_created)?;
+    dict.set_item("jepa_bias_suggestions", result.jepa_bias_suggestions)?;
+    // Per-process scheduling distribution (key fairness metric for the JEPA learned bias levers)
+    let sched_dict = PyDict::new(py);
+    for (&pid, &count) in &result.per_process_scheduled {
+        if pid > 0 {
+            let _ = sched_dict.set_item(pid, count);
+        }
+    }
+    dict.set_item("per_process_scheduled", sched_dict)?;
 
     // Include VFS snapshot for persistence - as simple dict
     if let Some(snapshot) = result.vfs_snapshot {
@@ -1950,8 +1970,11 @@ fn ncpu_metal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     parallel::register_parallel(m)?;
     multi_kernel::register_multi_kernel(m)?;
     neural_alu::register_neural_alu(m)?;
+    npcot_exec::register_npcot_exec(m)?;
     neural_display::register_neural_display(m)?;
     neural_dispatch::register_neural(m)?;
+    neural_os::register_neural_os(m)?;
+    neural_os_models::register_neural_os_models(m)?;
     neural_weights::register_weights(m)?;
     pure_gpu::register_pure_gpu(m)?;
     optimized::register_optimized(m)?;
@@ -1969,7 +1992,12 @@ fn ncpu_metal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     unified_diff_cpu::register_unified_diff_cpu(m)?;
     unified_test_kernel::register_minimal_test_cpu(m)?;
     full_arm64::register_full_arm64(m)?;
+    neural_cpu::register_neural_cpu(m)?;
     gpu_optimizer::register_gpu_optimizer(m)?;
+
+    // JEPA / learned neural kernel (the "JEPA CPU" execution engine in Rust)
+    neural_jepa_kernel::register_neural_jepa_kernel(m)?;
+
     Ok(())
 }
 

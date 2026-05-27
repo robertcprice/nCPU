@@ -19,6 +19,11 @@ from ncpu.self_optimizing.controller.bundle import (
     ControllerComponentConfig,
     save_controller_bundle,
 )
+from ncpu.self_optimizing.executable_thought_head import (
+    ExecutableThoughtHeadConfig,
+    train_executable_thought_head,
+)
+from ncpu.self_optimizing.executable_thought_evaluation import evaluate_executable_thought_head
 from ncpu.self_optimizing.latent_heads.action_policy import LatentActionHeadConfig
 from ncpu.self_optimizing.latent_heads.action_training import train_latent_action_head
 from ncpu.self_optimizing.latent_heads.descriptor_head import LatentDescriptorHeadConfig
@@ -129,6 +134,9 @@ def write_fast_weight_controller_bundle(
     latent_halt_head_config: Optional[dict[str, Any]] = None,
     state_patch_head_path: Optional[Path] = None,
     state_patch_head_config: Optional[dict[str, Any]] = None,
+    executable_thought_head_path: Optional[Path] = None,
+    executable_thought_head_config: Optional[dict[str, Any]] = None,
+    executable_thought_head_enabled: bool = False,
 ) -> Path:
     """Write a bundle variant that runs the response model with task-local fast weights."""
     filename = (
@@ -163,6 +171,11 @@ def write_fast_weight_controller_bundle(
                 "state_patch_head_input_dim": (state_patch_head_config or {}).get("input_dim", 16),
                 "state_patch_head_hidden_dim": (state_patch_head_config or {}).get("hidden_dim", 64),
                 "state_patch_head_output_dim": (state_patch_head_config or {}).get("output_dim", 16),
+                "executable_thought_head_enabled": executable_thought_head_enabled,
+                "executable_thought_head_path": (
+                    str(executable_thought_head_path) if executable_thought_head_path is not None else None
+                ),
+                "executable_thought_head_config": dict(executable_thought_head_config or {}) or None,
                 "decode_backend": "segmented_kv",
                 "segmented_cache_recent_window_tokens": 256,
                 "segmented_cache_commit_segment_tokens": 128,
@@ -213,7 +226,15 @@ def write_fast_weight_controller_bundle(
             "latent_memory_head_exists": latent_memory_head_path.exists() if latent_memory_head_path is not None else False,
             "latent_halt_head_exists": latent_halt_head_path.exists() if latent_halt_head_path is not None else False,
             "state_patch_head_exists": state_patch_head_path.exists() if state_patch_head_path is not None else False,
-            "runtime_variant": "response_fast_weights_descriptor_first+segmented_kv_decode",
+            "executable_thought_head_exists": (
+                executable_thought_head_path.exists() if executable_thought_head_path is not None else False
+            ),
+            "executable_thought_head_enabled": executable_thought_head_enabled,
+            "runtime_variant": (
+                "response_fast_weights_descriptor_first+segmented_kv_decode+executable_thought"
+                if executable_thought_head_enabled
+                else "response_fast_weights_descriptor_first+segmented_kv_decode"
+            ),
         },
     )
     return save_controller_bundle(bundle, output_root / filename)
@@ -459,6 +480,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-patch-hidden-dim", type=int, default=64)
     parser.add_argument("--state-patch-output-dim", type=int, default=16)
     parser.add_argument("--state-patch-dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--executable-thought-enabled",
+        action="store_true",
+        help="Enable hidden-state executable-thought decoding in the fast-weight runtime bundle",
+    )
+    parser.add_argument(
+        "--executable-thought-hidden-dim",
+        type=int,
+        default=0,
+        help="Hidden size for executable-thought checkpoints; 0 defers inference to runtime model config",
+    )
+    parser.add_argument("--executable-thought-compiler-d-model", type=int, default=64)
+    parser.add_argument("--executable-thought-compiler-max-program-len", type=int, default=4)
+    parser.add_argument("--executable-thought-num-registers", type=int, default=8)
+    parser.add_argument("--executable-thought-execution-max-steps", type=int, default=4)
+    parser.add_argument("--executable-thought-output-register", type=int, default=2)
+    parser.add_argument(
+        "--executable-thought-trace-projection-dim",
+        type=int,
+        default=None,
+        help="Defaults to --state-patch-input-dim so the shared patch head stays shape-compatible",
+    )
+    parser.add_argument("--executable-thought-trace-hidden-dim", type=int, default=64)
+    parser.add_argument(
+        "--executable-thought-state-patch-dim",
+        type=int,
+        default=None,
+        help="Defaults to --state-patch-output-dim so the shared patch head stays shape-compatible",
+    )
+    parser.add_argument("--executable-thought-temperature", type=float, default=1.0)
+    parser.add_argument("--executable-thought-train-steps", type=int, default=80)
+    parser.add_argument("--executable-thought-batch-size", type=int, default=8)
+    parser.add_argument("--executable-thought-learning-rate", type=float, default=5e-2)
+    parser.add_argument("--executable-thought-samples-per-op", type=int, default=8)
+    parser.add_argument("--executable-thought-start-temperature", type=float, default=1.5)
+    parser.add_argument("--executable-thought-end-temperature", type=float, default=0.35)
     parser.add_argument("--max-seq-length", type=int, default=1024)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
@@ -498,6 +555,7 @@ def main() -> int:
     latent_memory_head_path = output_root / "latent_memory_head.pt"
     latent_halt_head_path = output_root / "latent_halt_head.pt"
     state_patch_head_path = output_root / "state_patch_head.pt"
+    executable_thought_head_path = output_root / "executable_thought_head.pt"
     latent_action_head_config = LatentActionHeadConfig(
         hidden_dim=args.latent_action_hidden_dim,
         dropout=args.latent_action_dropout,
@@ -522,6 +580,36 @@ def main() -> int:
         output_dim=args.state_patch_output_dim,
         dropout=args.state_patch_dropout,
     ).to_dict()
+    executable_thought_trace_projection_dim = (
+        args.executable_thought_trace_projection_dim
+        if args.executable_thought_trace_projection_dim is not None
+        else args.state_patch_input_dim
+    )
+    executable_thought_state_patch_dim = (
+        args.executable_thought_state_patch_dim
+        if args.executable_thought_state_patch_dim is not None
+        else args.state_patch_output_dim
+    )
+    if args.executable_thought_enabled and executable_thought_trace_projection_dim != args.state_patch_input_dim:
+        raise ValueError(
+            "Executable thought trace projection dim must match state patch input dim when the heads are shared"
+        )
+    if args.executable_thought_enabled and executable_thought_state_patch_dim != args.state_patch_output_dim:
+        raise ValueError(
+            "Executable thought state patch dim must match state patch output dim when the heads are shared"
+        )
+    executable_thought_head_config = ExecutableThoughtHeadConfig(
+        hidden_dim=args.executable_thought_hidden_dim,
+        compiler_d_model=args.executable_thought_compiler_d_model,
+        compiler_max_program_len=args.executable_thought_compiler_max_program_len,
+        num_registers=args.executable_thought_num_registers,
+        execution_max_steps=args.executable_thought_execution_max_steps,
+        output_register=args.executable_thought_output_register,
+        trace_projection_dim=executable_thought_trace_projection_dim,
+        trace_hidden_dim=args.executable_thought_trace_hidden_dim,
+        state_patch_dim=executable_thought_state_patch_dim,
+        temperature=args.executable_thought_temperature,
+    ).to_dict()
     fast_weight_target_modules = [
         item.strip() for item in args.fast_weights_target_modules.split(",") if item.strip()
     ]
@@ -533,6 +621,8 @@ def main() -> int:
         include_think_steps=not args.exclude_think_steps,
         allow_unverified_trajectories=args.allow_unverified_trajectories,
         include_action_policy=not args.skip_action_policy_export,
+        executable_thought_num_registers=int(executable_thought_head_config["num_registers"]),
+        executable_thought_output_dim=int(executable_thought_head_config["state_patch_dim"]),
         val_ratio=args.val_ratio,
         seed=args.seed,
     )
@@ -580,6 +670,11 @@ def main() -> int:
             latent_halt_head_config=latent_halt_head_config,
             state_patch_head_path=state_patch_head_path,
             state_patch_head_config=state_patch_head_config,
+            executable_thought_head_path=(
+                executable_thought_head_path if executable_thought_head_path.exists() else None
+            ),
+            executable_thought_head_config=executable_thought_head_config,
+            executable_thought_head_enabled=args.executable_thought_enabled,
         )
         blueprint_path = write_weight_cpu_blueprint(
             output_root=output_root,
@@ -704,6 +799,65 @@ def main() -> int:
             learning_rate=args.state_patch_learning_rate,
             device=device,
         )
+    if args.executable_thought_enabled:
+        executable_thought_train_path = getattr(bundle, "executable_thought_train_path", None)
+        executable_thought_val_path = getattr(bundle, "executable_thought_val_path", None)
+        if executable_thought_train_path and executable_thought_val_path:
+            executable_thought_metrics = train_executable_thought_head(
+                output_path=executable_thought_head_path,
+                config=ExecutableThoughtHeadConfig(**executable_thought_head_config),
+                model_name_or_path=args.base_model,
+                steps=args.executable_thought_train_steps,
+                batch_size=args.executable_thought_batch_size,
+                learning_rate=args.executable_thought_learning_rate,
+                start_temperature=args.executable_thought_start_temperature,
+                end_temperature=args.executable_thought_end_temperature,
+                seed=args.seed,
+                device=device,
+                train_path=executable_thought_train_path,
+                val_path=executable_thought_val_path,
+                max_prompt_tokens=args.max_seq_length,
+            )
+            if executable_thought_metrics.get("train_examples", 0) == 0:
+                executable_thought_metrics = train_executable_thought_head(
+                    output_path=executable_thought_head_path,
+                    config=ExecutableThoughtHeadConfig(**executable_thought_head_config),
+                    model_name_or_path=args.base_model,
+                    steps=args.executable_thought_train_steps,
+                    learning_rate=args.executable_thought_learning_rate,
+                    samples_per_op=args.executable_thought_samples_per_op,
+                    start_temperature=args.executable_thought_start_temperature,
+                    end_temperature=args.executable_thought_end_temperature,
+                    seed=args.seed,
+                    device=device,
+                )
+                executable_thought_metrics["objective"] = "smoke_arithmetic_fallback"
+        else:
+            executable_thought_metrics = train_executable_thought_head(
+                output_path=executable_thought_head_path,
+                config=ExecutableThoughtHeadConfig(**executable_thought_head_config),
+                model_name_or_path=args.base_model,
+                steps=args.executable_thought_train_steps,
+                learning_rate=args.executable_thought_learning_rate,
+                samples_per_op=args.executable_thought_samples_per_op,
+                start_temperature=args.executable_thought_start_temperature,
+                end_temperature=args.executable_thought_end_temperature,
+                seed=args.seed,
+                device=device,
+            )
+            executable_thought_metrics["objective"] = "smoke_arithmetic_fallback"
+        executable_thought_head_config = dict(executable_thought_metrics["config"])
+        metrics["executable_thought_head"] = executable_thought_metrics
+        if executable_thought_train_path and executable_thought_val_path and executable_thought_head_path.exists():
+            metrics["executable_thought_eval"] = evaluate_executable_thought_head(
+                train_path=executable_thought_train_path,
+                val_path=executable_thought_val_path,
+                checkpoint_path=executable_thought_head_path,
+                model_name_or_path=args.base_model,
+                output_path=output_root / "executable_thought_eval.json",
+                device=device,
+                max_prompt_tokens=args.max_seq_length,
+            )
 
     metrics_path = output_root / "training_run.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -748,6 +902,11 @@ def main() -> int:
         latent_halt_head_config=latent_halt_head_config,
         state_patch_head_path=state_patch_head_path if state_patch_head_path.exists() else None,
         state_patch_head_config=state_patch_head_config,
+        executable_thought_head_path=(
+            executable_thought_head_path if executable_thought_head_path.exists() else None
+        ),
+        executable_thought_head_config=executable_thought_head_config,
+        executable_thought_head_enabled=args.executable_thought_enabled,
     )
     blueprint_path = write_weight_cpu_blueprint(
         output_root=output_root,

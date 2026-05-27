@@ -19,6 +19,7 @@ from ncpu.self_optimizing.latent_heads.descriptor_training import build_latent_d
 from ncpu.self_optimizing.latent_heads.halt_training import build_latent_halt_training_bundle
 from ncpu.self_optimizing.latent_heads.memory_training import build_latent_memory_training_bundle
 from ncpu.self_optimizing.latent_heads.state_patch_training import build_state_patch_training_bundle
+from ncpu.self_optimizing.executable_thought_training import build_executable_thought_training_bundle
 
 
 ACTION_LABELS = ("think", "write", "patch", "commit", "fail")
@@ -64,6 +65,8 @@ class ControllerTrainingBundle:
     latent_halt_val_path: Optional[str]
     state_patch_train_path: Optional[str]
     state_patch_val_path: Optional[str]
+    executable_thought_train_path: Optional[str]
+    executable_thought_val_path: Optional[str]
     manifest_path: str
     summary: dict[str, Any]
 
@@ -218,6 +221,8 @@ def build_controller_training_bundle(
     include_think_steps: bool = True,
     allow_unverified_trajectories: bool = False,
     include_action_policy: bool = True,
+    executable_thought_num_registers: int = 8,
+    executable_thought_output_dim: int = 16,
     val_ratio: float = 0.1,
     seed: int = 42,
 ) -> ControllerTrainingBundle:
@@ -344,6 +349,28 @@ def build_controller_training_bundle(
             "output_dim": 16,
         }
     )
+    executable_thought_summary = (
+        build_executable_thought_training_bundle(
+            trajectory_root,
+            output_root,
+            require_verified_commit=not allow_unverified_trajectories,
+            num_registers=executable_thought_num_registers,
+            output_dim=executable_thought_output_dim,
+            val_ratio=val_ratio,
+            seed=seed,
+        )
+        if include_action_policy
+        else {
+            "train_path": None,
+            "val_path": None,
+            "train_examples": 0,
+            "val_examples": 0,
+            "train_source_files": 0,
+            "val_source_files": 0,
+            "num_registers": executable_thought_num_registers,
+            "output_dim": executable_thought_output_dim,
+        }
+    )
     manifest_path = output_root / "training_manifest.json"
 
     response_train_count = _write_examples(response_train, response_train_path)
@@ -377,6 +404,7 @@ def build_controller_training_bundle(
         "latent_memory_head": dict(latent_memory_summary),
         "latent_halt_policy": dict(latent_halt_summary),
         "state_patch_head": dict(state_patch_summary),
+        "executable_thought_head": dict(executable_thought_summary),
         "options": {
             "include_failed_response_steps": include_failed_response_steps,
             "include_think_steps": include_think_steps,
@@ -425,6 +453,12 @@ def build_controller_training_bundle(
         latent_halt_val_path=str(latent_halt_summary["val_path"]) if latent_halt_summary["val_path"] else None,
         state_patch_train_path=str(state_patch_summary["train_path"]) if state_patch_summary["train_path"] else None,
         state_patch_val_path=str(state_patch_summary["val_path"]) if state_patch_summary["val_path"] else None,
+        executable_thought_train_path=(
+            str(executable_thought_summary["train_path"]) if executable_thought_summary["train_path"] else None
+        ),
+        executable_thought_val_path=(
+            str(executable_thought_summary["val_path"]) if executable_thought_summary["val_path"] else None
+        ),
         manifest_path=str(manifest_path),
         summary=summary,
     )

@@ -5,6 +5,7 @@ pub mod interactive;
 pub mod learned_biases;
 pub mod meta_learner;
 pub mod method_router;
+pub mod mog_transpile;
 pub mod orchestrator;
 pub mod program_trace;
 pub mod runtime;

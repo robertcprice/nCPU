@@ -6,6 +6,8 @@
 ║                                                                                  ║
 ║  100% GPU EXECUTION - NO .item() CALLS DURING NORMAL EXECUTION!                  ║
 ║                                                                                  ║
+║  (Research / legacy neural CPU path — new users should start with `ncpu gpu`)    ║
+║                                                                                  ║
 ║  ON GPU:                                                                         ║
 ║  ┌────────────────────────────────────────────────────────────────────────────┐  ║
 ║  │  Registers [32] int64  │  Memory [1M] uint8    │  Flags [4] float          │  ║

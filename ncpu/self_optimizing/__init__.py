@@ -26,6 +26,51 @@ except ImportError:
     pass
 
 try:
+    from ncpu.self_optimizing.executable_thought_head import (
+        ExecutableThoughtHead,
+        ExecutableThoughtHeadConfig,
+        ExecutableThoughtResult,
+        ExecutableThoughtSmokeMetrics,
+        build_executable_thought_smoke_batch,
+        infer_executable_thought_hidden_dim,
+        load_executable_thought_head,
+        run_executable_thought_smoke_train,
+        train_executable_thought_head,
+    )
+    from ncpu.self_optimizing.executable_thought_training import (
+        ExecutableThoughtTrainingExample,
+        build_executable_thought_dataset,
+        build_executable_thought_training_bundle,
+        build_executable_thought_training_examples,
+        write_executable_thought_dataset,
+    )
+    from ncpu.self_optimizing.executable_thought_evaluation import (
+        ExecutableThoughtEvalMetrics,
+        evaluate_executable_thought_head,
+    )
+
+    __all__ += [
+        "ExecutableThoughtHeadConfig",
+        "ExecutableThoughtResult",
+        "ExecutableThoughtSmokeMetrics",
+        "ExecutableThoughtHead",
+        "build_executable_thought_smoke_batch",
+        "infer_executable_thought_hidden_dim",
+        "load_executable_thought_head",
+        "run_executable_thought_smoke_train",
+        "train_executable_thought_head",
+        "ExecutableThoughtTrainingExample",
+        "build_executable_thought_training_examples",
+        "build_executable_thought_dataset",
+        "build_executable_thought_training_bundle",
+        "write_executable_thought_dataset",
+        "ExecutableThoughtEvalMetrics",
+        "evaluate_executable_thought_head",
+    ]
+except ImportError:
+    pass
+
+try:
     from ncpu.self_optimizing.core.gradient_feedback import (
         CodePattern,
         ExecutionSignal,

@@ -151,11 +151,43 @@ class NeuralGIC:
         Returns the IRQ number that was dispatched, or None if no
         interrupts are pending.
         """
+        return self.dispatch_with_policy()
+
+    def score_pending(self, pending: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Return priority scores for the currently pending interrupts."""
+        if pending is None:
+            pending = self.pending()
+
+        state = torch.cat([
+            self.irr.float(),
+            self.isr.float(),
+            self.imr.float(),
+        ])
+
+        with torch.no_grad():
+            scores = self.encoder(state)
+
+        scores = scores.clone()
+        scores[~pending] = float('-inf')
+        return scores
+
+    def dispatch_with_policy(self, use_neural: Optional[bool] = None) -> Optional[int]:
+        """Dispatch the highest-priority pending interrupt.
+
+        Args:
+            use_neural:
+                - None: use the controller's default policy (`self._trained`)
+                - True: force the neural encoder when trained
+                - False: force fixed-priority dispatch
+        """
         pending = self.pending()
         if not pending.any():
             return None
 
-        if self._trained:
+        if use_neural is None:
+            use_neural = self._trained
+
+        if use_neural and self._trained:
             irq = self._neural_dispatch(pending)
         else:
             irq = self._fixed_dispatch(pending)
@@ -181,11 +213,11 @@ class NeuralGIC:
 
         return irq
 
-    def dispatch_all(self) -> List[int]:
+    def dispatch_all(self, use_neural: Optional[bool] = None) -> List[int]:
         """Dispatch all pending interrupts in priority order."""
         dispatched = []
         while True:
-            irq = self.dispatch()
+            irq = self.dispatch_with_policy(use_neural=use_neural)
             if irq is None:
                 break
             dispatched.append(irq)
@@ -200,17 +232,7 @@ class NeuralGIC:
 
     def _neural_dispatch(self, pending: torch.Tensor) -> Optional[int]:
         """Neural priority dispatch: learned priority ordering."""
-        state = torch.cat([
-            self.irr.float(),
-            self.isr.float(),
-            self.imr.float(),
-        ])
-
-        with torch.no_grad():
-            scores = self.encoder(state)
-
-        # Mask non-pending IRQs
-        scores[~pending] = float('-inf')
+        scores = self.score_pending(pending)
         if (scores == float('-inf')).all():
             return None
 

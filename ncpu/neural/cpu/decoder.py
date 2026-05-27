@@ -206,6 +206,11 @@ class DecoderMixin:
         Build GPU opcode table for pure parallel execution.
         Pre-allocate all tensors needed for run_parallel_gpu.
         """
+        # Fused decode: extract 8 fields from instruction in 3 ops instead of 16
+        # Fields: rd, rn, rm, imm12, imm16, hw, op_byte, hazard_key
+        self._decode_shifts = torch.tensor([0, 5, 16, 10, 5, 21, 24, 21], dtype=torch.int64, device=self.device)
+        self._decode_masks  = torch.tensor([0x1F, 0x1F, 0x1F, 0xFFF, 0xFFFF, 0x3, 0xFF, 0x7FF], dtype=torch.int64, device=self.device)
+
         # MOVK mask constant - pre-allocated, no allocation in hot loop!
         self._movk_clear_base = torch.tensor(0xFFFF, dtype=torch.int64, device=self.device)
 
@@ -343,6 +348,159 @@ class DecoderMixin:
         self._sb_imm16 = torch.zeros((self._sb_entries, self._sb_max), dtype=torch.int64, device=self.device)
         self._sb_hw = torch.zeros((self._sb_entries, self._sb_max), dtype=torch.int64, device=self.device)
 
+        # Build hazard detection LUTs (replaces ~330 tensor ops with 3 lookups)
+        self._build_hazard_luts()
+
+    # ════════════════════════════════════════════════════════════════════════════════
+    # HAZARD PROFILE LUTS — replaces ~330 tensor ops with 3 table lookups
+    # ════════════════════════════════════════════════════════════════════════════════
+
+    def _build_hazard_luts(self):
+        """Pre-compute hazard property LUTs indexed by 11-bit key = (inst >> 21) & 0x7FF.
+
+        For each key, checks whether ANY ARM64 instruction with those bits[31:21]
+        could: (a) read Rm as a source register, (b) write to Rd, (c) NOT read Rn
+        (i.e., Rn field is part of an immediate encoding like MOVZ/MOVK/ADRP).
+
+        Conservative: false positives (extra serialization) are safe;
+        false negatives (missed hazards) are forbidden.
+        """
+        # ── reads_rm_as_reg patterns: (mask, value) ──
+        _rm_patterns = [
+            # Register-register ALU
+            (0xFF200000, 0x8B000000), (0xFF200000, 0x0B000000),  # ADD REG 64/32
+            (0xFF200000, 0xCB000000), (0xFF200000, 0x4B000000),  # SUB REG 64/32
+            (0xFF200000, 0xAB000000), (0xFF200000, 0x2B000000),  # ADDS REG 64/32
+            (0xFF200000, 0xEB000000), (0xFF200000, 0x6B000000),  # SUBS REG 64/32
+            # MUL
+            (0xFFE0FC00, 0x9B007C00), (0xFFE0FC00, 0x1B007C00),
+            # Logical REG
+            (0xFF200000, 0x8A000000), (0xFF200000, 0x0A000000),  # AND 64/32
+            (0xFF200000, 0xAA000000), (0xFF200000, 0x2A000000),  # ORR 64/32
+            (0xFF200000, 0xCA000000), (0xFF200000, 0x4A000000),  # EOR 64/32
+            (0xFF200000, 0xEA000000), (0xFF200000, 0x6A000000),  # ANDS 64/32
+            (0xFF200000, 0x8A200000), (0xFF200000, 0x0A200000),  # BIC 64/32
+            (0xFF200000, 0xEA200000), (0xFF200000, 0x6A200000),  # BICS 64/32
+            (0xFF200000, 0xCA200000), (0xFF200000, 0x4A200000),  # EON 64/32
+            (0xFF200000, 0xAA200000), (0xFF200000, 0x2A200000),  # ORN 64/32
+            # Shift REG
+            (0xFFE0FC00, 0x9AC02000), (0xFFE0FC00, 0x1AC02000),  # LSLV 64/32
+            (0xFFE0FC00, 0x9AC02400), (0xFFE0FC00, 0x1AC02400),  # LSRV 64/32
+            (0xFFE0FC00, 0x9AC02800), (0xFFE0FC00, 0x1AC02800),  # ASRV 64/32
+            # CSEL
+            (0xFFC00000, 0x9A800000), (0xFFC00000, 0x1A800000),
+            # Load/Store with register offset
+            (0xFFE00C00, 0xF8600800), (0xFFE00C00, 0xB8600800),  # LDR 64/32 reg
+            (0xFFE00C00, 0x38A00800), (0xFFE00C00, 0x38E00800),  # LDRSB 64/32 reg
+            (0xFFE00C00, 0x78600800),                             # LDRH reg
+            (0xFFE00C00, 0xF8200800), (0xFFE00C00, 0xB8200800),  # STR 64/32 reg
+            (0xFFE00C00, 0x38200800), (0xFFE00C00, 0x78200800),  # STRB/STRH reg
+        ]
+
+        # ── rn_not_reg patterns (Rn field is NOT a register source) ──
+        _rn_not_patterns = [
+            (0xFF800000, 0xD2800000), (0xFF800000, 0x52800000),  # MOVZ 64/32
+            (0xFF800000, 0xF2800000), (0xFF800000, 0x72800000),  # MOVK 64/32
+            (0xFF800000, 0x92800000), (0xFF800000, 0x12800000),  # MOVN 64/32
+            (0x9F000000, 0x90000000),                             # ADRP
+            (0x9F000000, 0x10000000),                             # ADR
+        ]
+
+        # ── writes_rd bit-pattern checks ──
+        _wr_patterns = [
+            (0xFF000000, 0x91000000), (0xFF000000, 0xD1000000),  # ADD/SUB IMM 64
+            (0xFF200000, 0x8B000000), (0xFF200000, 0xCB000000),  # ADD/SUB REG 64
+            (0xFF800000, 0xD2800000), (0xFF800000, 0x52800000),  # MOVZ 64/32
+            (0xFF800000, 0xF2800000), (0xFF800000, 0x72800000),  # MOVK 64/32
+            (0x9F000000, 0x90000000),                             # ADRP
+            (0xFF200000, 0xEB000000), (0xFF000000, 0xF1000000),  # SUBS REG/IMM 64
+            (0xFFE0FC00, 0x9B007C00), (0xFFE0FC00, 0x1B007C00),  # MUL 64/32
+            (0xFFC00000, 0xB9800000), (0xFFC00000, 0x79400000),  # LDRSW / LDRH
+            (0xFFC00000, 0x39800000), (0xFFC00000, 0x39C00000),  # LDRSB 64/32
+            (0xFFE00C00, 0xF8400000), (0xFFE00C00, 0xB8400000),  # LDUR 64/32
+            (0xFFE00C00, 0xF8600800),                             # LDR 64 reg offset
+            (0xFFFFFC00, 0xC85F7C00),                             # LDXR
+            (0xFFC00000, 0x9A800000), (0xFFC00000, 0x1A800000),  # CSEL 64/32
+            (0xFFE00C00, 0xF8400C00),                             # LDR 64 pre
+            (0xFFE00C00, 0xB8400400), (0xFFE00C00, 0xB8400C00),  # LDR 32 post/pre
+            (0xFFE00C00, 0x78600800),                             # LDRH reg
+            (0xFFE00C00, 0x78400400),                             # LDRH post
+            (0xFFE00C00, 0x38A00800), (0xFFE00C00, 0x38E00800),  # LDRSB 64/32 reg
+            (0xFFC00000, 0xB3400000), (0xFFC00000, 0x33000000),  # BFM 64/32
+            (0xFFFFFC00, 0xDAC00000), (0xFFFFFC00, 0x5AC00000),  # RBIT 64/32
+            (0xFF800000, 0x92800000), (0xFF800000, 0x12800000),  # MOVN 64/32
+            (0xFFE00000, 0x9B200000), (0xFFE00000, 0x9BA00000),  # SMADDL/UMADDL
+            (0xFFE0FC00, 0x9B407C00), (0xFFE0FC00, 0x9BC07C00),  # SMULH/UMULH
+            (0xFFE00000, 0x93800000), (0xFFE00000, 0x13800000),  # EXTR 64/32
+            (0xFFE00C00, 0xB8800400), (0xFFE00C00, 0xB8800C00),  # LDRSW post/pre
+            (0xFFE00C00, 0xB8A00800),                             # LDRSW reg
+            (0xFFFFFC00, 0xC8DFFC00), (0xFFFFFC00, 0x88DFFC00),  # LDAR 64/32
+            (0xFFC00000, 0x79800000), (0xFFC00000, 0x79C00000),  # LDRSH 64/32
+            (0xFFE00C00, 0x78400000),                             # LDURH
+            (0xFFE00C00, 0x78800000), (0xFFE00C00, 0x78C00000),  # LDURSH 64/32
+            (0xFFE00C00, 0x38800000), (0xFFE00C00, 0x38C00000),  # LDURSB 64/32
+            (0xFFE00C00, 0x78800400), (0xFFE00C00, 0x78C00400),  # LDRSH post
+            (0xFFE00C00, 0x78800C00), (0xFFE00C00, 0x78C00C00),  # LDRSH pre
+            (0xFFC00000, 0x29400000),                             # LDP 32
+            (0xFFE07C00, 0xC8207C00), (0xFFE07C00, 0xC8607C00),  # CAS/CASA 64
+            (0xFFE07C00, 0xC8A07C00), (0xFFE07C00, 0xC8E07C00),  # CASL/CASAL 64
+            (0xFFE07C00, 0x88207C00), (0xFFE07C00, 0x88607C00),  # CAS/CASA 32
+            (0xFFE07C00, 0x88A07C00), (0xFFE07C00, 0x88E07C00),  # CASL/CASAL 32
+            (0xFF200000, 0x8A200000), (0xFF200000, 0x0A200000),  # BIC 64/32
+            (0xFF200000, 0xEA200000), (0xFF200000, 0x6A200000),  # BICS 64/32
+            (0xFF200000, 0xCA200000), (0xFF200000, 0x4A200000),  # EON 64/32
+            (0xFFFFFC00, 0x13001C00), (0xFFFFFC00, 0x13003C00),  # SXTB/SXTH 32
+            (0xFFFFFC00, 0xDAC00400), (0xFFFFFC00, 0x5AC00400),  # REV16 64/32
+            (0xFFE0FC00, 0x9A000000), (0xFFE0FC00, 0x1A000000),  # ADC 64/32
+            (0xFFE0FC00, 0xBA000000), (0xFFE0FC00, 0x3A000000),  # ADCS 64/32
+            (0xFFE0FC00, 0xDA000000), (0xFFE0FC00, 0x5A000000),  # SBC 64/32
+            (0xFFE0FC00, 0xFA000000), (0xFFE0FC00, 0x7A000000),  # SBCS 64/32
+            (0xFFFFFC00, 0xC8DF7C00), (0xFFFFFC00, 0x88DF7C00),  # LDAXR 64/32
+            (0xFF000000, 0x58000000), (0xFF000000, 0x18000000),  # LDR literal 64/32
+            (0xFFC00000, 0x53000000),                             # UBFM 32
+            (0xFFC00000, 0x13000000),                             # SBFM 32
+            (0xFFE00C00, 0x78400C00),                             # LDRH pre
+            (0xFFE00C00, 0x38400C00),                             # LDRB pre
+        ]
+
+        # ── writes_rd OpType-based patterns ──
+        # These instructions are identified via op_type_table, not bit patterns.
+        # Resolve to top-byte keys so they appear in the LUT.
+        _wr_optypes = {
+            OpType.ORR_REG, OpType.AND_REG, OpType.EOR_REG,
+            OpType.LSL_IMM, OpType.LSR_IMM, OpType.MOV_REG,
+            OpType.LDR, OpType.LDRB, OpType.LDP, OpType.LDUR, OpType.MUL,
+            OpType.AND_IMM, OpType.ORR_IMM, OpType.EOR_IMM, OpType.ASR_IMM,
+            OpType.LSL_REG, OpType.LSR_REG, OpType.ASR_REG,
+        }
+        # Map OpTypes → top bytes via op_type_table
+        _wr_optype_keys = set()
+        for tb in range(256):
+            if self.op_type_table[tb].item() in {ot.value for ot in _wr_optypes}:
+                _wr_optype_keys.add(tb << 3)       # 11-bit key = top_byte << 3
+                for low3 in range(8):               # all 8 variants of bits[23:21]
+                    _wr_optype_keys.add((tb << 3) | low3)
+
+        def _match_key(k, patterns):
+            for mask, value in patterns:
+                km = (mask >> 21) & 0x7FF
+                kv = (value >> 21) & 0x7FF
+                if (k & km) == kv:
+                    return True
+            return False
+
+        _rm_lut = torch.zeros(2048, dtype=torch.bool)
+        _rn_not_lut = torch.zeros(2048, dtype=torch.bool)
+        _wr_lut = torch.zeros(2048, dtype=torch.bool)
+
+        for k in range(2048):
+            _rm_lut[k] = _match_key(k, _rm_patterns)
+            _rn_not_lut[k] = _match_key(k, _rn_not_patterns)
+            _wr_lut[k] = _match_key(k, _wr_patterns) or (k in _wr_optype_keys)
+
+        self._reads_rm_lut = _rm_lut.to(self.device)
+        self._rn_not_reg_lut = _rn_not_lut.to(self.device)
+        self._writes_rd_lut = _wr_lut.to(self.device)
 
     # ════════════════════════════════════════════════════════════════════════════════
     # BATCHED NEURAL DECODING - Process multiple instructions at once

@@ -37,6 +37,7 @@ from ncpu.neural.neural_terminal_renderer import (
     FRAME_H,
     FRAME_W,
 )
+from ncpu.neural.neural_terminal_renderer_v2 import NeuralDisplayV2
 
 
 # ---------------------------------------------------------------------------
@@ -241,20 +242,33 @@ def main():
         "--chars-per-frame", type=int, default=3,
         help="Characters to advance per captured frame (default: 3)",
     )
+    parser.add_argument(
+        "--v2", action="store_true",
+        help="Use V2 renderer (512-wide MLP, 1024 chars, 256 colors)",
+    )
     args = parser.parse_args()
 
-    model_path = PROJECT_ROOT / "models" / "display" / "terminal_renderer.pt"
+    if args.v2:
+        model_path = PROJECT_ROOT / "models" / "display" / "terminal_renderer_v2.pt"
+        version = "V2"
+    else:
+        model_path = PROJECT_ROOT / "models" / "display" / "terminal_renderer.pt"
+        version = "V1"
 
     print()
     print("=" * 60)
-    print("  nCPU Neural Display -- Animated GIF Generator")
+    print(f"  nCPU Neural Display -- Animated GIF Generator ({version})")
     print("=" * 60)
     print()
     print(f"  Model: {model_path}")
 
-    display = NeuralDisplay(str(model_path), device=args.device)
+    if args.v2:
+        display = NeuralDisplayV2(str(model_path), device=args.device)
+    else:
+        display = NeuralDisplay(str(model_path), device=args.device)
     print(f"  Device: {display.device}")
-    print(f"  Metal:  {display.metal_available}")
+    if hasattr(display, 'metal_available'):
+        print(f"  Metal:  {display.metal_available}")
     print()
 
     # Select content

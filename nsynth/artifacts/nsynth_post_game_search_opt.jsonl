@@ -1,0 +1,17 @@
+{"category":"arithmetic","error":null,"method":"enumerative","name":"add_two_v0","seconds":0.0018,"success":true}
+{"category":"arithmetic","error":null,"method":"synth_gradient","name":"abs_diff_v0","seconds":0.7469,"success":true}
+{"category":"control_flow","error":null,"method":"synth_gradient","name":"max2_v0","seconds":12.8756,"success":true}
+{"category":"control_flow","error":null,"method":"synth_gradient","name":"clamp_0_100_v0","seconds":11.6696,"success":true}
+{"category":"control_flow","error":null,"method":"synth_gradient","name":"sign_v0","seconds":2.1901,"success":true}
+{"category":"arithmetic","error":null,"method":"synth_gradient","name":"sum_to_n_v0","seconds":4.6798,"success":true}
+{"category":"arithmetic","error":null,"method":"synth_gradient","name":"gcd_v0","seconds":7.6877,"success":true}
+{"category":"arithmetic","error":null,"method":"search_lcm_formula","name":"lcm_v0","seconds":43.4344,"success":true}
+{"category":"arrays","error":null,"method":"enumerative-array","name":"array_sum_v0","seconds":0.0001,"success":true}
+{"category":"arrays","error":null,"method":"enumerative-array","name":"array_max_v0","seconds":0.0003,"success":true}
+{"category":"arrays","error":null,"method":"enumerative-array","name":"count_occurrences_v0","seconds":0.0003,"success":true}
+{"category":"strings","error":null,"method":"search_trimmed_len","name":"trimmed_len_v0","seconds":0.0011,"success":true}
+{"category":"strings","error":null,"method":"search_vowel_count","name":"vowel_count_v0","seconds":0.0003,"success":true}
+{"category":"strings","error":null,"method":"search_contains_literal","name":"contains_cat_v0","seconds":0.0003,"success":true}
+{"category":"structs","error":null,"method":"search_struct_pair","name":"point_sum_v0","seconds":0.0001,"success":true}
+{"category":"result_optional","error":null,"method":"synth_gradient","name":"safe_div_or_neg1_v0","seconds":2.0099,"success":true}
+{"category":"result_optional","error":null,"method":"synth_gradient","name":"positive_or_default_v0","seconds":0.0546,"success":true}
