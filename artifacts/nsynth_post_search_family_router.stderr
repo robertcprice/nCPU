@@ -1,0 +1,236 @@
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_scalar_expr
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_abs_diff_formula
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_max2_formula
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_clamp_formula
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_sign_branch
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_unary_range_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_gcd_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_lcm_formula
+[enum-array] FOUND simple fold: array_sum ForFold { init: Const(0), body_op: Add, body_rhs: Var(0) }
+[solve] enumerative OK in 0.0s
+[enum-array] FOUND max/min fold: array_max ForFold { init: Const(0), body_op: Max, body_rhs: Var(0) }
+[enum-array] FOUND max/min fold: array_max ForFold { init: Const(1), body_op: Max, body_rhs: Var(0) }
+[enum-array] FOUND max/min fold: array_max ForFold { init: Const(-1), body_op: Max, body_rhs: Var(0) }
+[solve] enumerative OK in 0.0s
+[enum-array] FOUND cond-count: count_occurrences ForFold { init: Const(0), body_op: Add, body_rhs: IfExpr(Eq, Var(1), Var(0), Const(1), Const(0)) }
+[solve] enumerative OK in 0.0s
+[solve] skipping enumerative: non-scalar input (string/pair/struct)
+[solve] synthesize_array MISS in 0.0s
+[solve] search_teacher OK in 0.0s — search_trimmed_len
+[solve] skipping enumerative: non-scalar input (string/pair/struct)
+[solve] method_router rec: search_teacher
+[solve] search_teacher OK in 0.0s — search_vowel_count
+[solve] skipping enumerative: non-scalar input (string/pair/struct)
+[solve] method_router rec: search_teacher
+[solve] search_teacher OK in 0.0s — search_contains_literal
+[solve] skipping enumerative: non-scalar input (string/pair/struct)
+[solve] synthesize_array MISS in 0.0s
+[solve] search_teacher OK in 0.0s — search_struct_pair
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_safe_div_or_neg1_branch
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_positive_or_default_branch
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_unary_range_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_fib_iter_loop
+[enum-array] FOUND simple fold: closure_map_sum ForFold { init: Const(0), body_op: Add, body_rhs: BinOp(Add, Var(0), Var(0)) }
+[solve] enumerative OK in 0.0s
+[enum-array] FOUND cond-count: count_positive ForFold { init: Const(0), body_op: Add, body_rhs: IfExpr(Gt, Var(0), Const(0), Const(1), Const(0)) }
+[solve] enumerative OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_is_even_formula
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_digit_sum_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_reverse_digits_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_digit_count_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_count_even_digits_loop
+[solve] skipping enumerative: non-scalar input (string/pair/struct)
+[solve] method_router rec: search_teacher
+[solve] search_teacher OK in 0.0s — search_contains_literal
+[solve] skipping enumerative: non-scalar input (string/pair/struct)
+[solve] method_router rec: search_teacher
+[solve] search_teacher OK in 0.0s — search_struct_pair
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_power_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_polynomial_quadratic
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_collatz_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_min3_branch
+[enum-array] FOUND simple fold: reverse_sum ForFold { init: Const(0), body_op: Add, body_rhs: Var(0) }
+[solve] enumerative OK in 0.0s
+[enum-array] FOUND max/min fold: array_max_elem ForFold { init: Const(0), body_op: Max, body_rhs: Var(0) }
+[enum-array] FOUND max/min fold: array_max_elem ForFold { init: Const(1), body_op: Max, body_rhs: Var(0) }
+[enum-array] FOUND max/min fold: array_max_elem ForFold { init: Const(-1), body_op: Max, body_rhs: Var(0) }
+[solve] enumerative OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_is_prime_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_unary_range_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_fib_iter_loop
+[solve] skipping enumerative: non-scalar input (string/pair/struct)
+[solve] method_router rec: search_teacher
+[solve] search_teacher OK in 0.0s — search_palindrome
+[solve] skipping enumerative: non-scalar input (string/pair/struct)
+[solve] method_router rec: search_teacher
+[solve] search_teacher OK in 0.0s — search_count_words
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_euler_totient_loop
+[solve] skipping enumerative: method_router favors search_teacher (7 wins, 100% success)
+[solve] method_router rec: search_teacher
+[solve] search_teacher OK in 0.0s — synth_gradient
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_unary_range_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_count_divisors_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_triangular_check_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_max_pair_diff
+[enum-array] FOUND cond-sum: sum_negatives ForFold { init: Const(0), body_op: Add, body_rhs: IfExpr(Lt, Var(0), Const(0), Var(0), Const(0)) }
+[solve] enumerative OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_gcd_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_harmonic_sum_loop
+[enum-array] FOUND simple fold: interactive_sum ForFold { init: Const(0), body_op: Add, body_rhs: Var(0) }
+[solve] enumerative OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_second_max
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_max_pair_diff
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_sum_of_divisors_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_sum_odd_digits_loop
+[enum-array] FOUND cond-count: count_zeros ForFold { init: Const(0), body_op: Add, body_rhs: IfExpr(Eq, Var(0), Const(0), Const(1), Const(0)) }
+[solve] enumerative OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_max_consecutive_sum
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_min_consecutive_sum
+[enum-array] no fold found in 0.0s
+[solve] enumerative MISS in 0.0s
+[solve] synthesize_array OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_max_stock_profit
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_is_sorted
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_longest_increasing_run
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_digital_root
+[enum-array] no fold found in 0.0s
+[solve] enumerative MISS in 0.0s
+[solve] synthesize_array OK in 0.0s
+[enum-array] no fold found in 0.0s
+[solve] enumerative MISS in 0.0s
+[solve] synthesize_array OK in 0.0s
+[enum-array] no fold found in 0.0s
+[solve] enumerative MISS in 0.0s
+[solve] method_router rec: array_gradient
+[solve] synthesize_array OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_longest_plateau
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_prefix_max_sum
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_scalar_expr
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_scalar_expr
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_scalar_expr
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_scalar_expr
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_scalar_expr
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_arr_sum_squares
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_min_consecutive_sum
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_sum_absolute
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_count_evens
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_sum_positives
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_sum_at_even_indices
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_kth_from_end
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_max_abs
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_digit_product_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_max_digit_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_min_positive
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_lucas_loop
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_celsius_to_fahrenheit
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_is_perfect_square
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_next_power_of_2
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_count_peaks
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_alternating_sum
+[enum-array] FOUND cond-count: count_greater_than ForFold { init: Const(0), body_op: Add, body_rhs: IfExpr(Gt, Var(1), Var(0), Const(1), Const(0)) }
+[solve] enumerative OK in 0.0s
+[enum-array] no fold found in 0.0s
+[solve] enumerative MISS in 0.0s
+[solve] synthesize_array OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_leading_digit
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_popcount
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_prefix_sum_k
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_is_palindrome_arr
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_sum_odd_indexed
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_score_tracker_branch
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_vending_change_branch
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_combat_resolve_branch
+[library] loaded 15 components from /Users/bobbyprice/.mog_synth_library.json
+[enum] size 2: 7 new, 28 total unique, 0.0s
+[enum] size 3: 170 new, 198 total unique, 0.0s
+[enum] size 4: 71 new, 269 total unique, 0.0s
+[solve] enumerative OK in 0.0s
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_run_length_decode_sum
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_count_adjacent_diff
+[solve] skipping enumerative: method_router favors search_teacher (7 wins, 100% success)
+[solve] method_router rec: search_teacher
+[solve] search_teacher OK in 0.0s — arr_gradient
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_turn_order_rotate
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_grid_bounds_check_branch
+[solve] skipping enumerative: exact search preemption
+[solve] preemptive_search_teacher OK in 0.0s — search_simulate_gravity_clamp
+real 0.27
+user 0.12
+sys 0.01

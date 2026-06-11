@@ -80,7 +80,7 @@ some/docs/architecture/diagram.svg
 
 # Archive (legacy experiments)
 archive/
-artifacts/archives/
+artifacts/archive/
 experiments/ablation_results/
 outputs/
 .mog_synth_memory/

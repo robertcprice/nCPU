@@ -1,0 +1,941 @@
+{
+  "rows": [
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "enumerative",
+      "name": "add_two_v0",
+      "seconds": 0.0016,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "abs_diff_v0",
+      "seconds": 0.7479,
+      "success": true
+    },
+    {
+      "category": "control_flow",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "max2_v0",
+      "seconds": 13.1776,
+      "success": true
+    },
+    {
+      "category": "control_flow",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "clamp_0_100_v0",
+      "seconds": 12.0958,
+      "success": true
+    },
+    {
+      "category": "control_flow",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "sign_v0",
+      "seconds": 2.2146,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "sum_to_n_v0",
+      "seconds": 4.721,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "gcd_v0",
+      "seconds": 7.7449,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "search_lcm_formula",
+      "name": "lcm_v0",
+      "seconds": 2.0442,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "array_sum_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "array_max_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "count_occurrences_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "strings",
+      "error": null,
+      "method": "search_trimmed_len",
+      "name": "trimmed_len_v0",
+      "seconds": 0.0004,
+      "success": true
+    },
+    {
+      "category": "strings",
+      "error": null,
+      "method": "search_vowel_count",
+      "name": "vowel_count_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "strings",
+      "error": null,
+      "method": "search_contains_literal",
+      "name": "contains_cat_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "structs",
+      "error": null,
+      "method": "search_struct_pair",
+      "name": "point_sum_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "result_optional",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "safe_div_or_neg1_v0",
+      "seconds": 2.0344,
+      "success": true
+    },
+    {
+      "category": "result_optional",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "positive_or_default_v0",
+      "seconds": 0.0557,
+      "success": true
+    },
+    {
+      "category": "recursion",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "factorial_v0",
+      "seconds": 15.1288,
+      "success": true
+    },
+    {
+      "category": "recursion",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "fibonacci_v0",
+      "seconds": 18.7064,
+      "success": true
+    },
+    {
+      "category": "higher_order",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "closure_map_sum_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "count_positive_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "control_flow",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "is_even_v0",
+      "seconds": 0.6912,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "digit_sum_v0",
+      "seconds": 16.0581,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "reverse_digits_v0",
+      "seconds": 14.8558,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "digit_count_v0",
+      "seconds": 14.9618,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "count_even_digits_v0",
+      "seconds": 14.7492,
+      "success": true
+    },
+    {
+      "category": "strings",
+      "error": null,
+      "method": "search_starts_with_literal",
+      "name": "starts_with_m_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "structs",
+      "error": null,
+      "method": "search_struct_pair",
+      "name": "rectangle_area_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "power_v0",
+      "seconds": 5.4439,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "polynomial_v0",
+      "seconds": 4.2738,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "collatz_steps_v0",
+      "seconds": 10.3172,
+      "success": true
+    },
+    {
+      "category": "control_flow",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "min3_v0",
+      "seconds": 2.9974,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "reverse_sum_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "array_max_elem_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "is_prime_v0",
+      "seconds": 14.3306,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "nth_triangle_v0",
+      "seconds": 4.7421,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "fib_iter_v0",
+      "seconds": 18.0255,
+      "success": true
+    },
+    {
+      "category": "strings",
+      "error": null,
+      "method": "search_palindrome",
+      "name": "palindrome_check_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "strings",
+      "error": null,
+      "method": "search_count_words",
+      "name": "count_words_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "algorithms",
+      "error": null,
+      "method": "search_euler_totient_loop",
+      "name": "euler_totient_v0",
+      "seconds": 26.3255,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "sum_squares_v0",
+      "seconds": 16.3283,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "product_1_to_n_v0",
+      "seconds": 15.6198,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "count_divisors_v0",
+      "seconds": 12.207,
+      "success": true
+    },
+    {
+      "category": "algorithms",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "triangular_check_v0",
+      "seconds": 0.0018,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "max_pair_diff_v0",
+      "seconds": 18.0834,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "sum_negatives_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "algorithms",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "gcd_extended_v0",
+      "seconds": 13.4571,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "harmonic_sum_v0",
+      "seconds": 16.1606,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "interactive_sum_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "second_max_v0",
+      "seconds": 19.2275,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "array_range_v0",
+      "seconds": 18.424,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "sum_of_divisors_v0",
+      "seconds": 22.1378,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "sum_odd_digits_v0",
+      "seconds": 24.0934,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "count_zeros_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "max_consecutive_sum_v0",
+      "seconds": 19.0275,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "min_consecutive_sum_v0",
+      "seconds": 16.8066,
+      "success": true
+    },
+    {
+      "category": "sorting",
+      "error": null,
+      "method": "arr_gradient_kth_smallest",
+      "name": "kth_smallest_v0",
+      "seconds": 0.0003,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "max_stock_profit_v0",
+      "seconds": 21.8578,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "is_sorted_v0",
+      "seconds": 19.2142,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "longest_increasing_run_v0",
+      "seconds": 18.9654,
+      "success": true
+    },
+    {
+      "category": "loops",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "digital_root_v0",
+      "seconds": 4.5803,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "arr_gradient_two_sum_exists",
+      "name": "two_sum_exists_v0",
+      "seconds": 0.0007,
+      "success": true
+    },
+    {
+      "category": "sorting",
+      "error": null,
+      "method": "arr_gradient_count_distinct",
+      "name": "count_distinct_v0",
+      "seconds": 0.0007,
+      "success": true
+    },
+    {
+      "category": "sorting",
+      "error": null,
+      "method": "arr_gradient_binary_search",
+      "name": "binary_search_v0",
+      "seconds": 0.0034,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "longest_plateau_v0",
+      "seconds": 25.3867,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "prefix_max_sum_v0",
+      "seconds": 17.528,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "enumerative",
+      "name": "cube_v0",
+      "seconds": 0.0589,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "enumerative",
+      "name": "square_plus_n_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "bilinear3_v0",
+      "seconds": 2.2701,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "enumerative",
+      "name": "scaled_sum_v0",
+      "seconds": 0.0007,
+      "success": true
+    },
+    {
+      "category": "arithmetic",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "product_offset_v0",
+      "seconds": 2.1881,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "arr_sum_squares_v0",
+      "seconds": 0.0001,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "arr_gradient",
+      "name": "min_element_v0",
+      "seconds": 0.0021,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "sum_absolute_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "count_evens_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "sum_positives_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "arr_gradient",
+      "name": "sum_at_even_indices_v0",
+      "seconds": 3.8591,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "arr_gradient",
+      "name": "kth_from_end_v0",
+      "seconds": 10.2367,
+      "success": true
+    },
+    {
+      "category": "arrays",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "max_abs_v0",
+      "seconds": 18.6971,
+      "success": true
+    },
+    {
+      "category": "integer",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "digit_product_v0",
+      "seconds": 12.6389,
+      "success": true
+    },
+    {
+      "category": "integer",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "max_digit_v0",
+      "seconds": 23.3419,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "min_positive_v0",
+      "seconds": 17.4366,
+      "success": true
+    },
+    {
+      "category": "math",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "lucas_number_v0",
+      "seconds": 19.614,
+      "success": true
+    },
+    {
+      "category": "math",
+      "error": null,
+      "method": "enumerative",
+      "name": "celsius_to_fahrenheit_v0",
+      "seconds": 8.0698,
+      "success": true
+    },
+    {
+      "category": "math",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "is_perfect_square_v0",
+      "seconds": 14.886,
+      "success": true
+    },
+    {
+      "category": "math",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "next_power_of_2_v0",
+      "seconds": 8.8601,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "count_peaks_v0",
+      "seconds": 20.3343,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "alternating_sum_v0",
+      "seconds": 16.0726,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "enumerative-array",
+      "name": "count_greater_than_v0",
+      "seconds": 0.0003,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "arr_gradient",
+      "name": "dot_product_v0",
+      "seconds": 0.0002,
+      "success": true
+    },
+    {
+      "category": "integer",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "leading_digit_v0",
+      "seconds": 17.4249,
+      "success": true
+    },
+    {
+      "category": "integer",
+      "error": null,
+      "method": "synth_gradient",
+      "name": "popcount_v0",
+      "seconds": 18.5169,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "prefix_sum_k_v0",
+      "seconds": 21.891,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "univ_arr_gradient",
+      "name": "is_palindrome_arr_v0",
+      "seconds": 20.1325,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "arr_gradient",
+      "name": "sum_odd_indexed_v0",
+      "seconds": 5.5272,
+      "success": true
+    },
+    {
+      "category": "game",
+      "error": null,
+      "method": "template",
+      "name": "score_tracker_v0",
+      "seconds": 274.5088,
+      "success": true
+    },
+    {
+      "category": "game",
+      "error": null,
+      "method": "search_single_branch",
+      "name": "vending_change_v0",
+      "seconds": 42.0664,
+      "success": true
+    },
+    {
+      "category": "game",
+      "error": null,
+      "method": "search_single_branch",
+      "name": "combat_resolve_v0",
+      "seconds": 265.0154,
+      "success": true
+    },
+    {
+      "category": "game",
+      "error": null,
+      "method": "enumerative",
+      "name": "traffic_light_phase_v0",
+      "seconds": 0.0034,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "template_reference",
+      "name": "run_length_decode_sum_v0",
+      "seconds": 103.3475,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "template_reference",
+      "name": "count_adjacent_diff_v0",
+      "seconds": 98.2691,
+      "success": true
+    },
+    {
+      "category": "array",
+      "error": null,
+      "method": "arr_gradient",
+      "name": "priority_pop_v0",
+      "seconds": 0.0025,
+      "success": true
+    },
+    {
+      "category": "game",
+      "error": null,
+      "method": "search_scalar_expr",
+      "name": "turn_order_rotate_v0",
+      "seconds": 89.6857,
+      "success": true
+    },
+    {
+      "category": "game",
+      "error": null,
+      "method": "template",
+      "name": "grid_bounds_check_v0",
+      "seconds": 459.3605,
+      "success": true
+    },
+    {
+      "category": "game",
+      "error": null,
+      "method": "template",
+      "name": "simulate_gravity_v0",
+      "seconds": 296.278,
+      "success": true
+    }
+  ],
+  "summary": {
+    "coverage": 1.0,
+    "failures": [],
+    "family_counts": {
+      "enumerative": 21,
+      "gradient": 66,
+      "search": 13,
+      "template": 5
+    },
+    "method_counts": {
+      "arr_gradient": 6,
+      "arr_gradient_binary_search": 1,
+      "arr_gradient_count_distinct": 1,
+      "arr_gradient_kth_smallest": 1,
+      "arr_gradient_two_sum_exists": 1,
+      "enumerative": 6,
+      "enumerative-array": 15,
+      "search_contains_literal": 1,
+      "search_count_words": 1,
+      "search_euler_totient_loop": 1,
+      "search_lcm_formula": 1,
+      "search_palindrome": 1,
+      "search_scalar_expr": 1,
+      "search_single_branch": 2,
+      "search_starts_with_literal": 1,
+      "search_struct_pair": 2,
+      "search_trimmed_len": 1,
+      "search_vowel_count": 1,
+      "synth_gradient": 40,
+      "template": 3,
+      "template_reference": 2,
+      "univ_arr_gradient": 16
+    },
+    "passed": 105,
+    "problem_count": 105,
+    "slowest": [
+      {
+        "method": "template",
+        "name": "grid_bounds_check_v0",
+        "seconds": 459.3605
+      },
+      {
+        "method": "template",
+        "name": "simulate_gravity_v0",
+        "seconds": 296.278
+      },
+      {
+        "method": "template",
+        "name": "score_tracker_v0",
+        "seconds": 274.5088
+      },
+      {
+        "method": "search_single_branch",
+        "name": "combat_resolve_v0",
+        "seconds": 265.0154
+      },
+      {
+        "method": "template_reference",
+        "name": "run_length_decode_sum_v0",
+        "seconds": 103.3475
+      },
+      {
+        "method": "template_reference",
+        "name": "count_adjacent_diff_v0",
+        "seconds": 98.2691
+      },
+      {
+        "method": "search_scalar_expr",
+        "name": "turn_order_rotate_v0",
+        "seconds": 89.6857
+      },
+      {
+        "method": "search_single_branch",
+        "name": "vending_change_v0",
+        "seconds": 42.0664
+      },
+      {
+        "method": "search_euler_totient_loop",
+        "name": "euler_totient_v0",
+        "seconds": 26.3255
+      },
+      {
+        "method": "univ_arr_gradient",
+        "name": "longest_plateau_v0",
+        "seconds": 25.3867
+      }
+    ],
+    "summary": true,
+    "timing": {
+      "max_seconds": 459.3605,
+      "mean_seconds": 23.2015,
+      "median_seconds": 7.7449,
+      "p95_seconds": 101.824
+    },
+    "variants_per_factory": 1,
+    "wall_seconds": 2436.16
+  }
+}

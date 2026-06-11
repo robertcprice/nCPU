@@ -1,0 +1,13 @@
+Iterations per configuration: 2000
+
+ threshold     wall_s    us/iter trace_miss trace_skip  trace_promo  tpl_hit
+         0     0.0382      19.12       2001          0            0     2000
+         3     0.0376      18.80          4       1997            1     2000
+         8     0.0371      18.55          9       1992            1     2000
+
+Interpretation:
+  threshold=0 disables adaptive promotion (always check trace level)
+  threshold>0 skips trace-level lookup after N consecutive trace misses
+  trace_skips indicates how many lookups were promoted past trace-level
+  template_hits should be unchanged across thresholds — only the work
+  that precedes it differs.

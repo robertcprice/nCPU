@@ -1,0 +1,255 @@
+{
+  "generated_from": {
+    "previous": "artifacts/nsynth_post_opt_coverage.json",
+    "current_jsonl": "nsynth/artifacts/nsynth_post_symbolic_shortcuts.jsonl"
+  },
+  "summary": {
+    "previous_wall_seconds": 2436.16,
+    "current_wall_seconds": 706.463,
+    "wall_seconds_saved": 1729.697,
+    "speedup_ratio": 3.448,
+    "previous_problem_count": 105,
+    "current_problem_count": 105,
+    "previous_coverage": 1,
+    "current_coverage": 1
+  },
+  "top_improvements": [
+    {
+      "name": "grid_bounds_check_v0",
+      "old_method": "template",
+      "new_method": "search_grid_bounds_check_branch",
+      "old_seconds": 459.3605,
+      "new_seconds": 0.2774,
+      "seconds_saved": 459.0831
+    },
+    {
+      "name": "simulate_gravity_v0",
+      "old_method": "template",
+      "new_method": "search_simulate_gravity_clamp",
+      "old_seconds": 296.278,
+      "new_seconds": 0.2402,
+      "seconds_saved": 296.0378
+    },
+    {
+      "name": "score_tracker_v0",
+      "old_method": "template",
+      "new_method": "search_score_tracker_branch",
+      "old_seconds": 274.5088,
+      "new_seconds": 1.8141,
+      "seconds_saved": 272.6947
+    },
+    {
+      "name": "combat_resolve_v0",
+      "old_method": "search_single_branch",
+      "new_method": "search_combat_resolve_branch",
+      "old_seconds": 265.0154,
+      "new_seconds": 0.2062,
+      "seconds_saved": 264.8092
+    },
+    {
+      "name": "run_length_decode_sum_v0",
+      "old_method": "template_reference",
+      "new_method": "search_run_length_decode_sum",
+      "old_seconds": 103.3475,
+      "new_seconds": 0.0001,
+      "seconds_saved": 103.3474
+    },
+    {
+      "name": "count_adjacent_diff_v0",
+      "old_method": "template_reference",
+      "new_method": "search_count_adjacent_diff",
+      "old_seconds": 98.2691,
+      "new_seconds": 0.0001,
+      "seconds_saved": 98.269
+    },
+    {
+      "name": "turn_order_rotate_v0",
+      "old_method": "search_scalar_expr",
+      "new_method": "search_turn_order_rotate",
+      "old_seconds": 89.6857,
+      "new_seconds": 0.0001,
+      "seconds_saved": 89.6856
+    },
+    {
+      "name": "vending_change_v0",
+      "old_method": "search_single_branch",
+      "new_method": "search_vending_change_branch",
+      "old_seconds": 42.0664,
+      "new_seconds": 0.6356,
+      "seconds_saved": 41.4308
+    },
+    {
+      "name": "euler_totient_v0",
+      "old_method": "search_euler_totient_loop",
+      "new_method": "search_euler_totient_loop",
+      "old_seconds": 26.3255,
+      "new_seconds": 1.2401,
+      "seconds_saved": 25.0854
+    },
+    {
+      "name": "array_range_v0",
+      "old_method": "univ_arr_gradient",
+      "new_method": "univ_arr_gradient",
+      "old_seconds": 18.424,
+      "new_seconds": 0.0171,
+      "seconds_saved": 18.4069
+    },
+    {
+      "name": "fib_iter_v0",
+      "old_method": "synth_gradient",
+      "new_method": "synth_gradient",
+      "old_seconds": 18.0255,
+      "new_seconds": 6.9042,
+      "seconds_saved": 11.1213
+    },
+    {
+      "name": "sum_of_divisors_v0",
+      "old_method": "synth_gradient",
+      "new_method": "synth_gradient",
+      "old_seconds": 22.1378,
+      "new_seconds": 11.2162,
+      "seconds_saved": 10.9216
+    },
+    {
+      "name": "sum_odd_digits_v0",
+      "old_method": "synth_gradient",
+      "new_method": "synth_gradient",
+      "old_seconds": 24.0934,
+      "new_seconds": 13.1975,
+      "seconds_saved": 10.8959
+    },
+    {
+      "name": "harmonic_sum_v0",
+      "old_method": "synth_gradient",
+      "new_method": "synth_gradient",
+      "old_seconds": 16.1606,
+      "new_seconds": 5.4386,
+      "seconds_saved": 10.722
+    },
+    {
+      "name": "product_1_to_n_v0",
+      "old_method": "synth_gradient",
+      "new_method": "synth_gradient",
+      "old_seconds": 15.6198,
+      "new_seconds": 4.9412,
+      "seconds_saved": 10.6786
+    },
+    {
+      "name": "sum_squares_v0",
+      "old_method": "synth_gradient",
+      "new_method": "synth_gradient",
+      "old_seconds": 16.3283,
+      "new_seconds": 5.6672,
+      "seconds_saved": 10.6611
+    },
+    {
+      "name": "collatz_steps_v0",
+      "old_method": "synth_gradient",
+      "new_method": "search_collatz_loop",
+      "old_seconds": 10.3172,
+      "new_seconds": 0.0002,
+      "seconds_saved": 10.317
+    },
+    {
+      "name": "longest_plateau_v0",
+      "old_method": "univ_arr_gradient",
+      "new_method": "univ_arr_gradient",
+      "old_seconds": 25.3867,
+      "new_seconds": 20.4038,
+      "seconds_saved": 4.9829
+    },
+    {
+      "name": "digit_count_v0",
+      "old_method": "synth_gradient",
+      "new_method": "synth_gradient",
+      "old_seconds": 14.9618,
+      "new_seconds": 12.5621,
+      "seconds_saved": 2.3997
+    },
+    {
+      "name": "max_abs_v0",
+      "old_method": "univ_arr_gradient",
+      "new_method": "univ_arr_gradient",
+      "old_seconds": 18.6971,
+      "new_seconds": 16.5958,
+      "seconds_saved": 2.1013
+    }
+  ],
+  "current_slowest": [
+    {
+      "name": "max_digit_v0",
+      "method": "synth_gradient",
+      "seconds": 23.1178
+    },
+    {
+      "name": "prefix_sum_k_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 21.068
+    },
+    {
+      "name": "longest_plateau_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 20.4038
+    },
+    {
+      "name": "max_stock_profit_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 20.1231
+    },
+    {
+      "name": "count_peaks_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 19.9929
+    },
+    {
+      "name": "lucas_number_v0",
+      "method": "synth_gradient",
+      "seconds": 19.8782
+    },
+    {
+      "name": "max_consecutive_sum_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 18.6849
+    },
+    {
+      "name": "longest_increasing_run_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 18.1798
+    },
+    {
+      "name": "second_max_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 18.1394
+    },
+    {
+      "name": "is_palindrome_arr_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 18.1291
+    },
+    {
+      "name": "is_sorted_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 17.7939
+    },
+    {
+      "name": "max_pair_diff_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 17.6443
+    },
+    {
+      "name": "fibonacci_v0",
+      "method": "synth_gradient",
+      "seconds": 17.4391
+    },
+    {
+      "name": "count_evens_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 17.3851
+    },
+    {
+      "name": "min_positive_v0",
+      "method": "univ_arr_gradient",
+      "seconds": 17.3689
+    }
+  ]
+}

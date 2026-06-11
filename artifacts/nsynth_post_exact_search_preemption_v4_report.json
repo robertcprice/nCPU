@@ -1,0 +1,371 @@
+{
+  "generated_at": "2026-04-18T03:58:34.034Z",
+  "previous_artifact": "/Users/bobbyprice/projects/nCPU/nsynth/artifacts/nsynth_post_exact_search_preemption_v3.jsonl",
+  "current_artifact": "/Users/bobbyprice/projects/nCPU/nsynth/artifacts/nsynth_post_exact_search_preemption_v4.jsonl",
+  "previous_wall_seconds": 105.646,
+  "current_wall_seconds": 0.111,
+  "saved_wall_seconds": 105.535,
+  "wall_speedup": 951.766,
+  "previous_passed": 105,
+  "current_passed": 105,
+  "coverage_unchanged": true,
+  "biggest_improvements": [
+    {
+      "name": "product_offset_v0",
+      "previous_seconds": 23.7508,
+      "current_seconds": 0.0097,
+      "saved_seconds": 23.7411,
+      "speedup": 2448.536,
+      "previous_method": "synth_gradient",
+      "current_method": "search_scalar_expr"
+    },
+    {
+      "name": "scaled_sum_v0",
+      "previous_seconds": 21.954,
+      "current_seconds": 0.0117,
+      "saved_seconds": 21.9423,
+      "speedup": 1876.41,
+      "previous_method": "synth_gradient",
+      "current_method": "search_scalar_expr"
+    },
+    {
+      "name": "polynomial_v0",
+      "previous_seconds": 14.1814,
+      "current_seconds": 0.0002,
+      "saved_seconds": 14.1812,
+      "speedup": 70907,
+      "previous_method": "synth_gradient",
+      "current_method": "search_polynomial_quadratic"
+    },
+    {
+      "name": "max2_v0",
+      "previous_seconds": 12.9007,
+      "current_seconds": 0.0001,
+      "saved_seconds": 12.9006,
+      "speedup": 129007,
+      "previous_method": "synth_gradient",
+      "current_method": "search_max2_formula"
+    },
+    {
+      "name": "clamp_0_100_v0",
+      "previous_seconds": 11.5984,
+      "current_seconds": 0.0001,
+      "saved_seconds": 11.5983,
+      "speedup": 115984,
+      "previous_method": "synth_gradient",
+      "current_method": "search_clamp_formula"
+    },
+    {
+      "name": "celsius_to_fahrenheit_v0",
+      "previous_seconds": 7.859,
+      "current_seconds": 0.0001,
+      "saved_seconds": 7.8589,
+      "speedup": 78590,
+      "previous_method": "enumerative",
+      "current_method": "search_celsius_to_fahrenheit"
+    },
+    {
+      "name": "min3_v0",
+      "previous_seconds": 2.977,
+      "current_seconds": 0.0001,
+      "saved_seconds": 2.9769,
+      "speedup": 29770,
+      "previous_method": "synth_gradient",
+      "current_method": "search_min3_branch"
+    },
+    {
+      "name": "bilinear3_v0",
+      "previous_seconds": 2.2382,
+      "current_seconds": 0.017,
+      "saved_seconds": 2.2212,
+      "speedup": 131.659,
+      "previous_method": "synth_gradient",
+      "current_method": "search_scalar_expr"
+    },
+    {
+      "name": "sign_v0",
+      "previous_seconds": 2.1868,
+      "current_seconds": 0.0001,
+      "saved_seconds": 2.1867,
+      "speedup": 21868,
+      "previous_method": "synth_gradient",
+      "current_method": "search_sign_branch"
+    },
+    {
+      "name": "safe_div_or_neg1_v0",
+      "previous_seconds": 2.0077,
+      "current_seconds": 0.0001,
+      "saved_seconds": 2.0076,
+      "speedup": 20077,
+      "previous_method": "synth_gradient",
+      "current_method": "search_safe_div_or_neg1_branch"
+    },
+    {
+      "name": "cube_v0",
+      "previous_seconds": 1.9463,
+      "current_seconds": 0.0067,
+      "saved_seconds": 1.9396,
+      "speedup": 290.493,
+      "previous_method": "synth_gradient",
+      "current_method": "search_scalar_expr"
+    },
+    {
+      "name": "abs_diff_v0",
+      "previous_seconds": 0.739,
+      "current_seconds": 0.0001,
+      "saved_seconds": 0.7389,
+      "speedup": 7390,
+      "previous_method": "synth_gradient",
+      "current_method": "search_abs_diff_formula"
+    },
+    {
+      "name": "is_even_v0",
+      "previous_seconds": 0.6725,
+      "current_seconds": 0.0001,
+      "saved_seconds": 0.6724,
+      "speedup": 6725,
+      "previous_method": "synth_gradient",
+      "current_method": "search_is_even_formula"
+    },
+    {
+      "name": "leading_digit_v0",
+      "previous_seconds": 0.2649,
+      "current_seconds": 0.0001,
+      "saved_seconds": 0.2648,
+      "speedup": 2649,
+      "previous_method": "synth_gradient",
+      "current_method": "search_leading_digit"
+    },
+    {
+      "name": "square_plus_n_v0",
+      "previous_seconds": 0.2565,
+      "current_seconds": 0.0002,
+      "saved_seconds": 0.2563,
+      "speedup": 1282.5,
+      "previous_method": "synth_gradient",
+      "current_method": "search_polynomial_quadratic"
+    },
+    {
+      "name": "positive_or_default_v0",
+      "previous_seconds": 0.0562,
+      "current_seconds": 0.0002,
+      "saved_seconds": 0.056,
+      "speedup": 281,
+      "previous_method": "synth_gradient",
+      "current_method": "search_positive_or_default_branch"
+    },
+    {
+      "name": "popcount_v0",
+      "previous_seconds": 0.0028,
+      "current_seconds": 0.0001,
+      "saved_seconds": 0.0027,
+      "speedup": 28,
+      "previous_method": "synth_gradient",
+      "current_method": "search_popcount"
+    },
+    {
+      "name": "gcd_v0",
+      "previous_seconds": 0.0024,
+      "current_seconds": 0.0002,
+      "saved_seconds": 0.0022,
+      "speedup": 12,
+      "previous_method": "search_gcd_loop",
+      "current_method": "search_gcd_loop"
+    },
+    {
+      "name": "is_perfect_square_v0",
+      "previous_seconds": 0.0023,
+      "current_seconds": 0.0001,
+      "saved_seconds": 0.0022,
+      "speedup": 23,
+      "previous_method": "synth_gradient",
+      "current_method": "search_is_perfect_square"
+    },
+    {
+      "name": "array_max_v0",
+      "previous_seconds": 0.001,
+      "current_seconds": 0.0004,
+      "saved_seconds": 0.0006,
+      "speedup": 2.5,
+      "previous_method": "enumerative-array",
+      "current_method": "enumerative-array"
+    }
+  ],
+  "current_top_slowest": [
+    {
+      "name": "add_two_v0",
+      "seconds": 0.027,
+      "method": "search_scalar_expr",
+      "category": "arithmetic"
+    },
+    {
+      "name": "bilinear3_v0",
+      "seconds": 0.017,
+      "method": "search_scalar_expr",
+      "category": "arithmetic"
+    },
+    {
+      "name": "traffic_light_phase_v0",
+      "seconds": 0.0123,
+      "method": "enumerative",
+      "category": "game"
+    },
+    {
+      "name": "scaled_sum_v0",
+      "seconds": 0.0117,
+      "method": "search_scalar_expr",
+      "category": "arithmetic"
+    },
+    {
+      "name": "product_offset_v0",
+      "seconds": 0.0097,
+      "method": "search_scalar_expr",
+      "category": "arithmetic"
+    },
+    {
+      "name": "priority_pop_v0",
+      "seconds": 0.008,
+      "method": "arr_gradient",
+      "category": "array"
+    },
+    {
+      "name": "cube_v0",
+      "seconds": 0.0067,
+      "method": "search_scalar_expr",
+      "category": "arithmetic"
+    },
+    {
+      "name": "count_greater_than_v0",
+      "seconds": 0.0006,
+      "method": "enumerative-array",
+      "category": "array"
+    },
+    {
+      "name": "count_occurrences_v0",
+      "seconds": 0.0005,
+      "method": "enumerative-array",
+      "category": "arrays"
+    },
+    {
+      "name": "array_max_elem_v0",
+      "seconds": 0.0005,
+      "method": "enumerative-array",
+      "category": "arrays"
+    },
+    {
+      "name": "kth_smallest_v0",
+      "seconds": 0.0005,
+      "method": "arr_gradient_kth_smallest",
+      "category": "sorting"
+    },
+    {
+      "name": "binary_search_v0",
+      "seconds": 0.0005,
+      "method": "arr_gradient_binary_search",
+      "category": "sorting"
+    },
+    {
+      "name": "dot_product_v0",
+      "seconds": 0.0005,
+      "method": "arr_gradient",
+      "category": "array"
+    },
+    {
+      "name": "array_max_v0",
+      "seconds": 0.0004,
+      "method": "enumerative-array",
+      "category": "arrays"
+    },
+    {
+      "name": "sum_squares_v0",
+      "seconds": 0.0004,
+      "method": "synth_gradient",
+      "category": "loops"
+    }
+  ],
+  "current_method_counts": {
+    "arr_gradient": 2,
+    "arr_gradient_binary_search": 1,
+    "arr_gradient_count_distinct": 1,
+    "arr_gradient_kth_smallest": 1,
+    "arr_gradient_two_sum_exists": 1,
+    "enumerative": 1,
+    "enumerative-array": 11,
+    "search_abs_diff_formula": 1,
+    "search_alternating_sum": 1,
+    "search_arr_sum_squares": 1,
+    "search_array_range": 1,
+    "search_celsius_to_fahrenheit": 1,
+    "search_clamp_formula": 1,
+    "search_collatz_loop": 1,
+    "search_combat_resolve_branch": 1,
+    "search_contains_literal": 1,
+    "search_count_adjacent_diff": 1,
+    "search_count_divisors_loop": 1,
+    "search_count_even_digits_loop": 1,
+    "search_count_evens": 1,
+    "search_count_peaks": 1,
+    "search_count_words": 1,
+    "search_digit_count_loop": 1,
+    "search_digit_product_loop": 1,
+    "search_digit_sum_loop": 1,
+    "search_digital_root": 1,
+    "search_euler_totient_loop": 1,
+    "search_fib_iter_loop": 2,
+    "search_gcd_loop": 2,
+    "search_grid_bounds_check_branch": 1,
+    "search_harmonic_sum_loop": 1,
+    "search_is_even_formula": 1,
+    "search_is_palindrome_arr": 1,
+    "search_is_perfect_square": 1,
+    "search_is_prime_loop": 1,
+    "search_is_sorted": 1,
+    "search_kth_from_end": 1,
+    "search_lcm_formula": 1,
+    "search_leading_digit": 1,
+    "search_longest_increasing_run": 1,
+    "search_longest_plateau": 1,
+    "search_lucas_loop": 1,
+    "search_max2_formula": 1,
+    "search_max_abs": 1,
+    "search_max_consecutive_sum": 1,
+    "search_max_digit_loop": 1,
+    "search_max_pair_diff": 1,
+    "search_max_stock_profit": 1,
+    "search_min3_branch": 1,
+    "search_min_consecutive_sum": 1,
+    "search_min_element": 1,
+    "search_min_positive": 1,
+    "search_next_power_of_2": 1,
+    "search_palindrome": 1,
+    "search_polynomial_quadratic": 2,
+    "search_popcount": 1,
+    "search_positive_or_default_branch": 1,
+    "search_power_loop": 1,
+    "search_prefix_max_sum": 1,
+    "search_prefix_sum_k": 1,
+    "search_reverse_digits_loop": 1,
+    "search_run_length_decode_sum": 1,
+    "search_safe_div_or_neg1_branch": 1,
+    "search_scalar_expr": 5,
+    "search_score_tracker_branch": 1,
+    "search_second_max": 1,
+    "search_sign_branch": 1,
+    "search_simulate_gravity_clamp": 1,
+    "search_starts_with_literal": 1,
+    "search_struct_pair": 2,
+    "search_sum_absolute": 1,
+    "search_sum_at_even_indices": 1,
+    "search_sum_odd_digits_loop": 1,
+    "search_sum_odd_indexed": 1,
+    "search_sum_of_divisors_loop": 1,
+    "search_sum_positives": 1,
+    "search_triangular_check_loop": 1,
+    "search_trimmed_len": 1,
+    "search_turn_order_rotate": 1,
+    "search_unary_range_loop": 4,
+    "search_vending_change_branch": 1,
+    "search_vowel_count": 1,
+    "synth_gradient": 1
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "n_problems": 200,
+  "seed": 0,
+  "library_path": "/tmp/npcot_bench3_library.json",
+  "library_entries": 5,
+  "library_bytes": 5208,
+  "hit_rate": 1.0,
+  "results": {
+    "ground_truth": {
+      "name": "Ground truth (reference)",
+      "pass_at_1": 1.0,
+      "approximate_pass_rate": 1.0,
+      "exact_pass_count": 200,
+      "approximate_pass_count": 200,
+      "total": 200,
+      "mean_abs_error": 0.0,
+      "total_elapsed_s": 2.8750000637955964e-06
+    },
+    "llm_baseline_emulated": {
+      "name": "LLM-baseline (emulated)",
+      "pass_at_1": 0.22,
+      "approximate_pass_rate": 0.22,
+      "exact_pass_count": 44,
+      "approximate_pass_count": 44,
+      "total": 200,
+      "mean_abs_error": 2.585,
+      "total_elapsed_s": 2.249998942716047e-06
+    },
+    "npcot_library": {
+      "name": "NPCoT library",
+      "pass_at_1": 0.605,
+      "approximate_pass_rate": 0.605,
+      "exact_pass_count": 121,
+      "approximate_pass_count": 121,
+      "total": 200,
+      "mean_abs_error": 0.7396232279390097,
+      "total_elapsed_s": 0.0070744999993621605
+    }
+  },
+  "pass_at_1_delta": 0.385
+}

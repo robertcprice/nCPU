@@ -1,0 +1,357 @@
+{
+  "generated_at": "2026-04-18T03:17:01.542Z",
+  "previous_artifact": "/Users/bobbyprice/projects/nCPU/nsynth/artifacts/nsynth_post_symbolic_shortcuts.jsonl",
+  "current_artifact": "/Users/bobbyprice/projects/nCPU/nsynth/artifacts/nsynth_post_exact_search_preemption_v3.jsonl",
+  "previous_wall_seconds": 706.463,
+  "current_wall_seconds": 105.646,
+  "saved_wall_seconds": 600.817,
+  "wall_speedup": 6.687,
+  "previous_passed": 105,
+  "current_passed": 105,
+  "coverage_unchanged": true,
+  "biggest_improvements": [
+    {
+      "name": "max_digit_v0",
+      "previous_seconds": 23.1178,
+      "current_seconds": 0.0001,
+      "saved_seconds": 23.1177,
+      "speedup": 231178,
+      "previous_method": "synth_gradient",
+      "current_method": "search_max_digit_loop"
+    },
+    {
+      "name": "prefix_sum_k_v0",
+      "previous_seconds": 21.068,
+      "current_seconds": 0.0001,
+      "saved_seconds": 21.0679,
+      "speedup": 210680,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_prefix_sum_k"
+    },
+    {
+      "name": "longest_plateau_v0",
+      "previous_seconds": 20.4038,
+      "current_seconds": 0.0002,
+      "saved_seconds": 20.4036,
+      "speedup": 102019,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_longest_plateau"
+    },
+    {
+      "name": "max_stock_profit_v0",
+      "previous_seconds": 20.1231,
+      "current_seconds": 0.0001,
+      "saved_seconds": 20.123,
+      "speedup": 201231,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_max_stock_profit"
+    },
+    {
+      "name": "count_peaks_v0",
+      "previous_seconds": 19.9929,
+      "current_seconds": 0.0001,
+      "saved_seconds": 19.9928,
+      "speedup": 199929,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_count_peaks"
+    },
+    {
+      "name": "lucas_number_v0",
+      "previous_seconds": 19.8782,
+      "current_seconds": 0.0001,
+      "saved_seconds": 19.8781,
+      "speedup": 198782,
+      "previous_method": "synth_gradient",
+      "current_method": "search_lucas_loop"
+    },
+    {
+      "name": "max_consecutive_sum_v0",
+      "previous_seconds": 18.6849,
+      "current_seconds": 0.0001,
+      "saved_seconds": 18.6848,
+      "speedup": 186849,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_max_consecutive_sum"
+    },
+    {
+      "name": "longest_increasing_run_v0",
+      "previous_seconds": 18.1798,
+      "current_seconds": 0.0001,
+      "saved_seconds": 18.1797,
+      "speedup": 181798,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_longest_increasing_run"
+    },
+    {
+      "name": "second_max_v0",
+      "previous_seconds": 18.1394,
+      "current_seconds": 0.0001,
+      "saved_seconds": 18.1393,
+      "speedup": 181394,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_second_max"
+    },
+    {
+      "name": "is_palindrome_arr_v0",
+      "previous_seconds": 18.1291,
+      "current_seconds": 0.0002,
+      "saved_seconds": 18.1289,
+      "speedup": 90645.5,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_is_palindrome_arr"
+    },
+    {
+      "name": "is_sorted_v0",
+      "previous_seconds": 17.7939,
+      "current_seconds": 0.0001,
+      "saved_seconds": 17.7938,
+      "speedup": 177939,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_is_sorted"
+    },
+    {
+      "name": "max_pair_diff_v0",
+      "previous_seconds": 17.6443,
+      "current_seconds": 0.0001,
+      "saved_seconds": 17.6442,
+      "speedup": 176443,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_max_pair_diff"
+    },
+    {
+      "name": "fibonacci_v0",
+      "previous_seconds": 17.4391,
+      "current_seconds": 0.0001,
+      "saved_seconds": 17.439,
+      "speedup": 174391,
+      "previous_method": "synth_gradient",
+      "current_method": "search_fib_iter_loop"
+    },
+    {
+      "name": "count_evens_v0",
+      "previous_seconds": 17.3851,
+      "current_seconds": 0.0001,
+      "saved_seconds": 17.385,
+      "speedup": 173851,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_count_evens"
+    },
+    {
+      "name": "min_positive_v0",
+      "previous_seconds": 17.3689,
+      "current_seconds": 0.0001,
+      "saved_seconds": 17.3688,
+      "speedup": 173689,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_min_positive"
+    },
+    {
+      "name": "popcount_v0",
+      "previous_seconds": 17.0216,
+      "current_seconds": 0.0028,
+      "saved_seconds": 17.0188,
+      "speedup": 6079.143,
+      "previous_method": "synth_gradient",
+      "current_method": "synth_gradient"
+    },
+    {
+      "name": "prefix_max_sum_v0",
+      "previous_seconds": 16.9991,
+      "current_seconds": 0.0001,
+      "saved_seconds": 16.999,
+      "speedup": 169991,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_prefix_max_sum"
+    },
+    {
+      "name": "sum_absolute_v0",
+      "previous_seconds": 16.8185,
+      "current_seconds": 0.0001,
+      "saved_seconds": 16.8184,
+      "speedup": 168185,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_sum_absolute"
+    },
+    {
+      "name": "leading_digit_v0",
+      "previous_seconds": 17.005,
+      "current_seconds": 0.2649,
+      "saved_seconds": 16.7401,
+      "speedup": 64.194,
+      "previous_method": "synth_gradient",
+      "current_method": "synth_gradient"
+    },
+    {
+      "name": "max_abs_v0",
+      "previous_seconds": 16.5958,
+      "current_seconds": 0.0001,
+      "saved_seconds": 16.5957,
+      "speedup": 165958,
+      "previous_method": "univ_arr_gradient",
+      "current_method": "search_max_abs"
+    }
+  ],
+  "current_top_slowest": [
+    {
+      "name": "product_offset_v0",
+      "seconds": 23.7508,
+      "method": "synth_gradient",
+      "category": "arithmetic"
+    },
+    {
+      "name": "scaled_sum_v0",
+      "seconds": 21.954,
+      "method": "synth_gradient",
+      "category": "arithmetic"
+    },
+    {
+      "name": "polynomial_v0",
+      "seconds": 14.1814,
+      "method": "synth_gradient",
+      "category": "arithmetic"
+    },
+    {
+      "name": "max2_v0",
+      "seconds": 12.9007,
+      "method": "synth_gradient",
+      "category": "control_flow"
+    },
+    {
+      "name": "clamp_0_100_v0",
+      "seconds": 11.5984,
+      "method": "synth_gradient",
+      "category": "control_flow"
+    },
+    {
+      "name": "celsius_to_fahrenheit_v0",
+      "seconds": 7.859,
+      "method": "enumerative",
+      "category": "math"
+    },
+    {
+      "name": "min3_v0",
+      "seconds": 2.977,
+      "method": "synth_gradient",
+      "category": "control_flow"
+    },
+    {
+      "name": "bilinear3_v0",
+      "seconds": 2.2382,
+      "method": "synth_gradient",
+      "category": "arithmetic"
+    },
+    {
+      "name": "sign_v0",
+      "seconds": 2.1868,
+      "method": "synth_gradient",
+      "category": "control_flow"
+    },
+    {
+      "name": "safe_div_or_neg1_v0",
+      "seconds": 2.0077,
+      "method": "synth_gradient",
+      "category": "result_optional"
+    },
+    {
+      "name": "cube_v0",
+      "seconds": 1.9463,
+      "method": "synth_gradient",
+      "category": "arithmetic"
+    },
+    {
+      "name": "abs_diff_v0",
+      "seconds": 0.739,
+      "method": "synth_gradient",
+      "category": "arithmetic"
+    },
+    {
+      "name": "is_even_v0",
+      "seconds": 0.6725,
+      "method": "synth_gradient",
+      "category": "control_flow"
+    },
+    {
+      "name": "leading_digit_v0",
+      "seconds": 0.2649,
+      "method": "synth_gradient",
+      "category": "integer"
+    },
+    {
+      "name": "square_plus_n_v0",
+      "seconds": 0.2565,
+      "method": "synth_gradient",
+      "category": "arithmetic"
+    }
+  ],
+  "current_method_counts": {
+    "arr_gradient": 2,
+    "arr_gradient_binary_search": 1,
+    "arr_gradient_count_distinct": 1,
+    "arr_gradient_kth_smallest": 1,
+    "arr_gradient_two_sum_exists": 1,
+    "enumerative": 3,
+    "enumerative-array": 11,
+    "search_alternating_sum": 1,
+    "search_arr_sum_squares": 1,
+    "search_array_range": 1,
+    "search_collatz_loop": 1,
+    "search_combat_resolve_branch": 1,
+    "search_contains_literal": 1,
+    "search_count_adjacent_diff": 1,
+    "search_count_divisors_loop": 1,
+    "search_count_even_digits_loop": 1,
+    "search_count_evens": 1,
+    "search_count_peaks": 1,
+    "search_count_words": 1,
+    "search_digit_count_loop": 1,
+    "search_digit_product_loop": 1,
+    "search_digit_sum_loop": 1,
+    "search_digital_root": 1,
+    "search_euler_totient_loop": 1,
+    "search_fib_iter_loop": 2,
+    "search_gcd_loop": 2,
+    "search_grid_bounds_check_branch": 1,
+    "search_harmonic_sum_loop": 1,
+    "search_is_palindrome_arr": 1,
+    "search_is_prime_loop": 1,
+    "search_is_sorted": 1,
+    "search_kth_from_end": 1,
+    "search_lcm_formula": 1,
+    "search_longest_increasing_run": 1,
+    "search_longest_plateau": 1,
+    "search_lucas_loop": 1,
+    "search_max_abs": 1,
+    "search_max_consecutive_sum": 1,
+    "search_max_digit_loop": 1,
+    "search_max_pair_diff": 1,
+    "search_max_stock_profit": 1,
+    "search_min_consecutive_sum": 1,
+    "search_min_element": 1,
+    "search_min_positive": 1,
+    "search_next_power_of_2": 1,
+    "search_palindrome": 1,
+    "search_power_loop": 1,
+    "search_prefix_max_sum": 1,
+    "search_prefix_sum_k": 1,
+    "search_reverse_digits_loop": 1,
+    "search_run_length_decode_sum": 1,
+    "search_score_tracker_branch": 1,
+    "search_second_max": 1,
+    "search_simulate_gravity_clamp": 1,
+    "search_starts_with_literal": 1,
+    "search_struct_pair": 2,
+    "search_sum_absolute": 1,
+    "search_sum_at_even_indices": 1,
+    "search_sum_odd_digits_loop": 1,
+    "search_sum_odd_indexed": 1,
+    "search_sum_of_divisors_loop": 1,
+    "search_sum_positives": 1,
+    "search_triangular_check_loop": 1,
+    "search_trimmed_len": 1,
+    "search_turn_order_rotate": 1,
+    "search_unary_range_loop": 4,
+    "search_vending_change_branch": 1,
+    "search_vowel_count": 1,
+    "synth_gradient": 18
+  }
+}

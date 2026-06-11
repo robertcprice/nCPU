@@ -1,0 +1,34 @@
+{
+  "total": 95,
+  "family_counts": {
+    "gradient": 75,
+    "search": 20
+  },
+  "method_counts": {
+    "synth_gradient": 38,
+    "univ_arr_gradient": 18,
+    "arr_gradient": 15,
+    "search_fib_iter_loop": 2,
+    "search_unary_range_loop": 2,
+    "search_struct_pair": 2,
+    "arr_gradient_binary_search": 1,
+    "search_contains_literal": 1,
+    "arr_gradient_count_distinct": 1,
+    "search_count_words": 1,
+    "search_digital_root": 1,
+    "search_dot_product": 1,
+    "search_euler_totient_loop": 1,
+    "arr_gradient_kth_smallest": 1,
+    "search_lcm_formula": 1,
+    "search_lucas_loop": 1,
+    "search_max2_formula": 1,
+    "search_palindrome": 1,
+    "search_starts_with_literal": 1,
+    "search_sum_at_even_indices": 1,
+    "search_sum_odd_indexed": 1,
+    "search_trimmed_len": 1,
+    "arr_gradient_two_sum_exists": 1,
+    "search_vowel_count": 1
+  },
+  "wall_seconds_summed": 3918.5
+}
