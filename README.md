@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <strong>A complete neural computer. Every layer — from arithmetic to OS to compiler to display — is a trained neural network or runs entirely on GPU.</strong><br>
-  The AI doesn't run <em>on</em> a computer. The AI <em>is</em> the computer.
+  <strong>A complete computer in which every layer — arithmetic, OS, compiler, display — is either a trained neural network or runs entirely on GPU.</strong><br>
+  The model doesn't run <em>on</em> the computer. The model <em>is</em> the computer.
 </p>
 
 <p align="center">
@@ -17,136 +17,195 @@
 
 ---
 
-## Five Pillars
+nCPU is one repository pursuing one thesis from five directions: a computer
+can be built out of learned components, and once the whole execution stack is
+differentiable, programs stop being things you write and become things you can
+search for by gradient descent. Each subsystem below stands on its own
+measurements; together they cover the stack from individual ALU operations to
+an operating system to program synthesis.
 
-### 1. The Neural Computer
+## The five subsystems
 
-Every ALU operation — addition, subtraction, multiplication, bitwise logic, shifts, division — is a trained neural network. The neural OS (neurOS) manages memory, schedules processes, compiles code: 11 trained models, zero fallbacks. The neural display renders characters through char→glyph MLPs→ConvNet→pixels (143K params). The full pipeline is differentiable: source code → neural compiler → neural assembler → neural CPU → neural display, all through trained models.
+### 1. The neural computer
 
-The neural ALU achieves **100% accuracy on 32-bit integer arithmetic**, exhaustively verified over every possible input. Multiplication is 12x faster than addition — inverting the conventional CPU hierarchy because addition needs an 8-pass carry chain while multiplication decomposes into parallel byte-pair lookups.
+Every ALU operation — addition, subtraction, multiplication, bitwise logic,
+shifts, division — is a trained neural network. The neural OS (neurOS) manages
+memory, schedules processes, and compiles code through 11 trained models with
+no hand-written fallbacks. A neural display renders characters through
+char→glyph MLPs and a ConvNet (143K parameters). The full pipeline — source
+code → neural compiler → neural assembler → neural CPU → neural display — is
+differentiable end to end.
+
+The neural ALU reaches 100% accuracy on 32-bit integer arithmetic, verified
+exhaustively over every possible input. One result inverts the conventional
+hardware hierarchy: multiplication is 12x *faster* than addition here, because
+addition needs an 8-pass carry chain while multiplication decomposes into
+parallel byte-pair table lookups.
 
 | Instruction | Strategy | Latency |
 |-------------|----------|---------|
-| ADD/SUB/CMP | Kogge-Stone CLA (8 passes) | 248 us |
-| MUL | Byte-pair LUT (65,536 entries) | 21 us |
-| AND/OR/XOR | Vectorized truth table | 21 us |
-| SHL/SHR | Attention-based bit routing | 434 us |
+| ADD/SUB/CMP | Kogge-Stone carry-lookahead (8 passes) | 248 µs |
+| MUL | Byte-pair LUT (65,536 entries) | 21 µs |
+| AND/OR/XOR | Vectorized truth table | 21 µs |
+| SHL/SHR | Attention-based bit routing | 434 µs |
 | DIV | Restoring division (neural subtraction) | varies |
 
-neurOS accuracy:
+neurOS component accuracy:
 
 | Component | Accuracy | Component | Accuracy |
 |-----------|----------|-----------|----------|
-| MMU | 100% | Assembler codegen | **100%** |
+| MMU | 100% | Assembler codegen | 100% |
 | TLB | 99.6% | Assembler tokenizer | 99.4% |
 | Cache | 99.7% | Compiler optimizer | 95.2% |
 | Scheduler | 99.2% | Watchdog | 100% |
 | Prefetch | 97.8% | Block allocator | 98.4% |
 
-### 2. The GPU Computer
+### 2. The GPU computer
 
-A complete self-sufficient computer running on a single GPU chip — no CPU required beyond bootstrap. The Rust + Metal kernel executes ~200 ARM64 instructions (integer + floating-point) at **~1.9M IPS** with zero-copy StorageModeShared memory and **zero cycle-count variance** (σ=0.0).
+A self-sufficient computer on a single GPU — the CPU is involved only at
+bootstrap. The Rust + Metal kernel executes about 200 ARM64 instructions
+(integer and floating-point) at roughly 1.9M instructions per second, with
+zero-copy shared memory and zero cycle-count variance across runs (σ = 0.0).
 
 What runs on it:
-- **Multi-process UNIX OS**: fork/pipe/wait, 25-command shell, 28 syscalls, up to 15 concurrent processes
-- **Self-hosting C compiler**: ~4,200 lines, compiles itself then compiles and runs programs — entirely on GPU
-- **Real Linux binaries**: BusyBox (264KB, 34+ commands) and Alpine Linux v3.20 via ELF64 loader
-- **13+ compiled C applications**: SHA-256, AES-128, Tetris, Snake, Brainfuck interpreter, Forth REPL, CHIP-8 emulator, HTTP server, MNIST classifier, and more
-- **26-command deterministic debugger**: instruction tracing, breakpoints/watchpoints, time-travel, memory sanitizer, automated fuzzing, reverse data flow, constant-time verification — structurally impossible on conventional CPUs
 
-### 3. Differentiable Program Synthesis
+- A multi-process UNIX OS: fork/pipe/wait, a 25-command shell, 28 syscalls,
+  up to 15 concurrent processes
+- A self-hosting C compiler (~4,200 lines) that compiles itself, then compiles
+  and runs other programs — entirely on the GPU
+- Real Linux binaries via an ELF64 loader: BusyBox (264KB, 34+ commands) and
+  Alpine Linux v3.20
+- 13+ compiled C applications: SHA-256, AES-128, Tetris, Snake, a Brainfuck
+  interpreter, a Forth REPL, a CHIP-8 emulator, an HTTP server, an MNIST
+  classifier, and others
+- A 26-command deterministic debugger: instruction tracing, breakpoints and
+  watchpoints, time-travel debugging, a memory sanitizer, automated fuzzing,
+  reverse data-flow analysis, and constant-time verification. Deterministic
+  execution is what makes time-travel and exact replay possible; conventional
+  CPUs, with cache- and speculation-induced timing noise, can't offer the same
+  guarantees.
 
-Given input/output examples, gradient descent discovers executable programs by backpropagating through the differentiable CPU. Programs are continuous parameters (Gumbel-softmax over opcodes, soft attention over registers) that converge on discrete executable code via temperature annealing.
+### 3. Differentiable program synthesis
 
-The Rust synthesizer (`nsynth/`) solves **105/105 benchmark problems** across five solver families:
+Given input/output examples, gradient descent discovers executable programs by
+backpropagating through the differentiable CPU. A candidate program is a set
+of continuous parameters — Gumbel-softmax distributions over opcodes, soft
+attention over registers — that temperature annealing collapses into discrete,
+runnable code.
+
+Two synthesizers cover two benchmark suites, both at full coverage:
+
+- **Mog** (grammar-constrained, differentiable compiler): 315/315 problems.
+- **nSynth** (Rust solver portfolio): 105/105 problems on the expanded suite.
+  (The paper's canonical suite is the earlier 95-problem version; the expanded
+  suite adds a template-solver family.)
+
+nSynth's coverage by solver family:
 
 | Family | Solved | Method |
 |--------|--------|--------|
-| Gradient | 66/105 | Differentiable search with learned restart bank |
+| Gradient | 66/105 | Differentiable search with a learned restart bank |
 | Enumerative | 21/105 | Bottom-up expression enumeration |
-| Search | 13/105 | Single-branch, struct-pair, string teachers |
-| Template | 5/105 | Pattern-matching for hardest problems |
+| Search | 13/105 | Single-branch, struct-pair, and string teachers |
+| Template | 5/105 | Pattern matching for the hardest problems |
 
-Key optimizations: persistent solved-program memoization (5000x on cache hit), learned bias bank with warm-refine cross-problem transfer, emergent constant vocabulary mined from examples.
+No single family gets close to full coverage alone; the portfolio does. Key
+optimizations: persistent solved-program memoization (about 5000x on a cache
+hit), a learned bias bank with warm-refine transfer across problems, and a
+constant vocabulary mined from the examples themselves.
 
-### 4. The Differentiable Coprocessor
+### 4. The differentiable coprocessor
 
-nCPU's neural ALU injected directly into any transformer's forward pass as a routed expert. A learned per-token gate decides whether each token flows through the original MLP or through the neural ALU. Bilinear soft truth tables provide differentiable logic (AND/OR/XOR), tensor ops provide differentiable arithmetic, and confidence-aware gating modulates routing based on model uncertainty.
+The neural ALU injected into a transformer's forward pass as a routed expert.
+A learned per-token gate decides whether each token flows through the original
+MLP or through the neural ALU. Bilinear soft truth tables provide
+differentiable logic, tensor ops provide differentiable arithmetic, and
+gating is modulated by model confidence.
 
-**11-model scaling sweep** across Qwen 2.5/3/3.5 families:
+Results from an 11-model sweep across the Qwen 2.5/3/3.5 families, on
+arithmetic tasks:
 
-| Model | Gain | Best Result |
-|-------|------|-------------|
-| Qwen3.5-2B (instruct) | 14.5% → **71.0%** (+56.5%) | Best overall |
-| Qwen3.5-2B (base) | 15.5% → **63.0%** (+47.5%) | 100% on ADD/SUB/MUL/DIV |
-| Qwen3.5-4B | +51.0% delta | Largest base gain (tied) |
-| Qwen3.5-9B | +51.0% delta | Largest base gain (tied) |
+| Model | Arithmetic accuracy | Note |
+|-------|--------------------|------|
+| Qwen3.5-2B (instruct) | 14.5% → 71.0% (+56.5 pp) | best overall |
+| Qwen3.5-2B (base) | 15.5% → 63.0% (+47.5 pp) | 100% on ADD/SUB/MUL/DIV |
+| Qwen3.5-4B | +51.0 pp | largest base-model gain (tied) |
+| Qwen3.5-9B | +51.0 pp | largest base-model gain (tied) |
 
-Real-world transfer (Qwen3.5-4B, A100): 62.2% → **64.6%** (+4 problems solved on full HumanEval).
+Real-world transfer is measured, not extrapolated: on full HumanEval
+(Qwen3.5-4B, A100), 62.2% → 64.6% — four additional problems solved.
 
-### 5. JEPA Predictive Machine Dynamics
+### 5. JEPA predictive machine dynamics
 
-A bottom-up predictive world model of the computer itself. Instead of just executing instructions, a JEPA-style (Joint Embedding Predictive Architecture) network learns to predict machine state transitions in a compressed latent space:
+A predictive world model of the computer itself. Alongside exact execution, a
+JEPA-style network (Joint Embedding Predictive Architecture) learns to predict
+machine state transitions in a compressed latent space:
 
 ```
 latent_state_t + instruction → predictor → latent_state_{t+1}
 ```
 
-This runs at two levels:
-- **Python** (`ncpu/jepa_neural_cpu/`): A watchable demo where real programs execute alongside an untrained JEPA predictor — prediction error becomes a live anomaly/robustness signal
-- **Rust Metal** (`kernels/rust_metal/src/jepa/`): 2,858 lines of JEPA neural kernel + neural OS models that observe deterministic GPU execution and actively steer scheduling via learned bias override, Ready demotion, and adaptive de-prio
+It runs at two levels. A Python demo (`ncpu/jepa_neural_cpu/`) executes real
+programs next to the predictor, turning prediction error into a live anomaly
+signal. A Rust Metal implementation (`kernels/rust_metal/src/jepa/`, 2,858
+lines) observes deterministic GPU execution and actively steers scheduling
+through learned bias overrides.
 
-The JEPA layer sits on top of the exact neural ALU substrate, giving it two properties most world models lack: **perfect ground truth is free** (just run more programs through the engine) and **exact vs. predicted can be mixed at will** (cheap latent speculation for exploration, exact execution when precision matters).
-
-Long-term target: a hierarchical cross-JEPA where bit-level, instruction-level, program-level, and task-level predictors form a complete neural machine whose dynamics are entirely learned.
+Because the substrate underneath is exact, this world model has two properties
+most lack: unlimited free ground truth (run more programs), and the ability to
+mix predicted and exact execution at will — cheap latent speculation when
+exploring, exact execution when it matters. The long-term direction is a
+hierarchy of predictors at the bit, instruction, program, and task levels.
 
 ```bash
-python3 -m ncpu.jepa_neural_cpu.demo    # Bottom-up JEPA neural computer demo
+python3 -m ncpu.jepa_neural_cpu.demo     # bottom-up JEPA neural computer demo
 python -m ncpu.world_model.quickstart    # JEPA machine world model quickstart
 ```
 
 ---
 
-## Start in 60 Seconds
+## Start in 60 seconds
 
 ```bash
 pip install -e ".[demo,dev]"
 
-# Hero: GPU as complete computer (macOS / Apple Silicon)
-python -m ncpu gpu                 # GPU IS the computer
-python -m ncpu gpu --neural-alu    # With neural ALU in Metal shader
-python -m ncpu gpu debug           # 26-command deterministic super-debugger
+# The headline demo: the GPU as a complete computer (macOS / Apple Silicon)
+python -m ncpu gpu                 # boot it
+python -m ncpu gpu --neural-alu    # with the neural ALU inside the Metal shader
+python -m ncpu gpu debug           # 26-command deterministic debugger
 
-# Cross-platform (no heavy deps)
-python -m ncpu discover            # Program by examples via differentiable synthesis
-python -m ncpu text --interactive  # Neural text / cipher machine
+# Cross-platform, no heavy dependencies
+python -m ncpu discover            # program by examples, via differentiable synthesis
+python -m ncpu text --interactive  # neural text / cipher machine
 
-# Full neural pipeline (with model stack)
-python -m ncpu full-neural         # Bottom-up neural CPU + neural display
-python -m ncpu meta-compare        # Side-by-side proof demo
+# Full neural pipeline (requires the model stack)
+python -m ncpu full-neural         # bottom-up neural CPU + neural display
+python -m ncpu meta-compare        # side-by-side comparison demo
 
 # JEPA predictive layer
-python3 -m ncpu.jepa_neural_cpu.demo    # JEPA neural computer demo
-python -m ncpu.world_model.quickstart   # World model quickstart
+python3 -m ncpu.jepa_neural_cpu.demo
+python -m ncpu.world_model.quickstart
 
-# Rust-native standalone (no Python needed)
+# Rust-native, no Python required
 cd kernels/rust_metal
 cargo run --bin ncpu_run -- --elf ../../demos/gpu/busybox.elf --rootfs -- echo hello
 ```
 
 ---
 
-## Three Execution Modes
+## Three execution modes
 
-| Mode | What Runs | Differentiable? | Speed |
+| Mode | What runs | Differentiable? | Speed |
 |------|-----------|-----------------|-------|
-| **Neural** | 13 trained `.pt` models | Yes — full gradient flow | ~5K IPS |
-| **Fast** | Native tensor ops | Yes — standard autograd | ~5K IPS |
-| **Compute** | Rust + Metal shader | No (discrete hardware) | **~1.9M IPS** |
+| Neural | 13 trained `.pt` models | yes — full gradient flow | ~5K IPS |
+| Fast | native tensor ops | yes — standard autograd | ~5K IPS |
+| Compute | Rust + Metal shader | no (discrete hardware) | ~1.9M IPS |
 
-Neural mode: every operation flows through trained neural networks. Fast mode: native tensors, same ISA, same differentiability. Compute mode: trades gradient flow for raw speed — this is where the UNIX OS boots, the compiler self-hosts, and BusyBox/Alpine run.
-
-All three modes execute the same programs and produce the same results.
+All three execute the same programs and produce the same results. Neural mode
+sends every operation through trained networks. Fast mode uses native tensors
+with the same ISA and the same differentiability. Compute mode trades gradient
+flow for speed — it is where the UNIX OS boots, the compiler self-hosts, and
+BusyBox runs.
 
 ```python
 # Neural mode — every operation is a trained model
@@ -154,7 +213,7 @@ from ncpu.model import CPU
 cpu = CPU(neural_execution=True)
 cpu.load_program("MOV R0, 7\nMOV R1, 6\nMUL R2, R0, R1\nHALT")
 cpu.run()
-print(cpu.get_register("R2"))  # 42 — computed by neural byte-pair LUT
+print(cpu.get_register("R2"))  # 42 — computed by the neural byte-pair LUT
 
 # Differentiable coprocessor — inject into any Hugging Face model
 from ncpu.coprocessor import inject_ncpu_coprocessor, NCPUCoprocessorConfig
@@ -169,7 +228,7 @@ spec = SynthesisSpec(examples=[
 ])
 synth = ProgramSynthesizer(max_program_len=6)
 result = synth.synthesize(spec, max_iters=2000)
-# Discovers: ADD R2, R0, R1; HALT
+# discovers: ADD R2, R0, R1; HALT
 
 # JEPA world model — predict machine state transitions
 from ncpu.world_model.je_world_model import JEWorldModel, JEWMConfig
@@ -179,53 +238,62 @@ pred = model.predict_next_latent(model.encode_state(state), model.encode_action(
 
 ---
 
-## The Full Stack
+## The full stack
 
-| Layer | Implementation | What It Proves |
-|-------|---------------|----------------|
-| **ALU** | 13 trained `.pt` models | Neural nets do exact 32-bit integer arithmetic — exhaustively verified |
-| **OS** | neurOS — 11 neural models, zero fallbacks | Learned MMU, TLB, cache, scheduler, compiler — the OS is differentiable |
-| **GPU Compute** | Rust Metal kernel, ~200 ARM64 insns | GPU executes arbitrary programs at ~1.9M IPS |
-| **UNIX OS** | Compiled C on Metal | Fork/pipe/wait, 25-command shell, 28 syscalls |
-| **Compiler** | cc.c, ~4,200 lines, self-hosting | Compiles itself then compiles programs — on GPU |
-| **ELF Loader** | Real Linux binaries on GPU | BusyBox + Alpine Linux v3.20 run on Metal |
-| **Coprocessor** | nCPU ALU in transformer forward pass | Transformers learn to route tokens through neural arithmetic |
-| **JEPA** | Predictive world model of machine dynamics | Fast latent speculation + anomaly detection on top of exact substrate |
-| **Program Synthesis** | Backprop through execution | Gradient descent discovers programs from I/O examples |
-| **Constant-Time Crypto** | AES-128 ECB/CBC (ncpu/crypto/) | σ=0.0 timing; FIPS 197 + NIST SP 800-38A verified |
-| **Multi-GPU** | Distributed cores with shared memory | Fork/pipe/wait across GPUs; parallel + pipeline execution |
-| **SOME** | Hidden controller with latent heads | Self-optimizing inference: HumanEval+ and BigCodeBench improvements |
+| Layer | Implementation | Result |
+|-------|---------------|--------|
+| ALU | 13 trained `.pt` models | Exact 32-bit integer arithmetic, exhaustively verified |
+| OS | neurOS — 11 neural models, no fallbacks | Learned MMU, TLB, cache, scheduler, compiler |
+| GPU compute | Rust Metal kernel, ~200 ARM64 instructions | Arbitrary programs at ~1.9M IPS |
+| UNIX OS | Compiled C on Metal | fork/pipe/wait, 25-command shell, 28 syscalls |
+| Compiler | cc.c, ~4,200 lines, self-hosting | Compiles itself, then compiles programs — on GPU |
+| ELF loader | Real Linux binaries on GPU | BusyBox and Alpine Linux v3.20 on Metal |
+| Coprocessor | Neural ALU in a transformer forward pass | Tokens routed through neural arithmetic, measured gains |
+| JEPA | Predictive world model of machine dynamics | Latent speculation + anomaly detection over an exact substrate |
+| Program synthesis | Backprop through execution | Programs discovered from I/O examples |
+| Constant-time crypto | AES-128 ECB/CBC (`ncpu/crypto/`) | σ = 0.0 timing; FIPS 197 + NIST SP 800-38A vectors pass |
+| Multi-GPU | Distributed cores with shared memory | fork/pipe/wait across GPUs; parallel and pipeline execution |
+| SOME | Hidden controller with latent heads | Self-optimizing inference; HumanEval+ and BigCodeBench gains |
 
 ---
 
-## Timing Side-Channel Immunity
+## Timing side-channel immunity
 
-GPU execution produces **zero cycle-count variance** (σ=0.0 across 270 runs). Same code on native Apple Silicon shows 47-73% timing variance. AES-128 T-table attacks are structurally impossible — no data cache, no cache lines, no cache-miss penalty.
+GPU execution here produces zero cycle-count variance — σ = 0.0 across 270
+runs, where the same code on native Apple Silicon shows 47–73% timing
+variance. With no data cache there are no cache lines and no cache-miss
+penalty, so AES T-table attacks have nothing to measure.
 
-Built on this: `ncpu/crypto/` provides provably constant-time AES-128 (ECB + CBC) with 19 constant-time primitives, FIPS 197 and NIST SP 800-38A test vectors all passing.
+Built on that property, `ncpu/crypto/` provides constant-time AES-128 (ECB and
+CBC) from 19 constant-time primitives, passing all FIPS 197 and NIST SP
+800-38A test vectors.
 
 ---
 
 ## Self-Optimizing Machine Engine (SOME)
 
-A hidden controller that turns part of the neural machine into an internal coprocessor for code generation and reasoning:
+A hidden controller that turns part of the neural machine into an internal
+coprocessor for code generation: a buffered think → write → verify → patch →
+commit loop, learned action/halt/descriptor/state-patch/memory heads, and
+task-local fast weights updated during inference. The learned memory head
+improved validation MSE by 83.26% over baseline.
 
-- **Buffered hidden controller**: think → write → verify → patch → commit
-- **Latent control heads**: learned action, halt, descriptor, state-patch, and recurrent memory heads
-- **Task-local fast weights**: descriptor-driven per-task weight updates during inference
-- **Latent-memory proof**: learned memory head improved validation MSE by 83.26% over baseline
-
-Results: HumanEval+ qwen3.5:4b 147→154, 9b 144→156. BigCodeBench-Hard qwen3.5:9b 33→49.
-
----
-
-## MUXLEQ: Turing-Complete in 2 Instructions
-
-SUBLEQ + MUX running in all three modes. Neural mode: SUB via Kogge-Stone CLA (~248us), MUX via neural AND/OR/NOT (~63us). Loads `.dec` images, boots eForth. If neural nets exactly execute a 2-instruction OISC, the principle extends to any instruction set.
+Measured end to end: HumanEval+ for qwen3.5:4b improved 147 → 154 and for
+qwen3.5:9b 144 → 156; BigCodeBench-Hard for qwen3.5:9b improved 33 → 49.
 
 ---
 
-## Program Synthesis from Examples (nsynth_codegen)
+## MUXLEQ: Turing-complete in two instructions
+
+SUBLEQ plus MUX, running in all three execution modes. In neural mode, SUB
+goes through the Kogge-Stone carry-lookahead (~248 µs) and MUX through neural
+AND/OR/NOT (~63 µs). It loads `.dec` images and boots eForth. The point: if
+trained networks exactly execute a two-instruction one-instruction-set
+computer, the construction extends to any instruction set.
+
+---
+
+## Program synthesis from examples (nsynth_codegen)
 
 ```bash
 cargo build --release --bin nsynth_codegen
@@ -238,14 +306,14 @@ cargo build --release --bin nsynth_codegen
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 ncpu/
   differentiable/    # Differentiable execution, program synthesis, ISA discovery
   coprocessor/       # Inject nCPU into transformer forward passes
   execution_training/# Differentiable execution as training signal for code LMs
-  crypto/            # Provably constant-time crypto (AES-128)
+  crypto/            # Constant-time crypto (AES-128)
   distributed/       # Multi-GPU distributed execution
   jepa_neural_cpu/   # Bottom-up JEPA neural computer demo
   world_model/       # JEPA machine world model (predictive dynamics)
@@ -293,7 +361,7 @@ dist/                # Build distributions
 logs/  outputs/      # Run logs and scratch outputs
 ```
 
-Every top-level directory carries its own `README.md` describing its purpose.
+Every top-level directory has its own `README.md` describing its purpose.
 
 ---
 
@@ -304,23 +372,27 @@ python -m ncpu doctor
 pytest tests/ -q   # 2,500+ tests across the stack
 ```
 
-Covers: exhaustive formal verification, neural ops, neurOS, compute mode, multi-process, MUXLEQ, BusyBox/Alpine, GPU debugging toolkit, coprocessor, Mog synthesis, differentiable execution, constant-time crypto, self-modifying programs, diff compiler, multi-GPU distributed, SOME, and JEPA predictive models.
+Coverage spans exhaustive formal verification of the ALU, neural ops, neurOS,
+compute mode, multi-process execution, MUXLEQ, BusyBox/Alpine, the GPU
+debugging toolkit, the coprocessor, Mog synthesis, differentiable execution,
+constant-time crypto, self-modifying programs, the diff compiler, multi-GPU
+distribution, SOME, and the JEPA predictive models.
 
 ---
 
 ## Documentation
 
-- **[Research Paper](paper/ncpu_paper.md)** — detailed analysis and findings
-- **[GPU Debugging Toolkit Paper](paper/gpu_debugging_toolkit_paper.md)** — the 26-command GPU-native debugger
-- **[GPU Debugging Toolkit Reference](docs/gpu/gpu_debugging_toolkit.md)** — full command reference
-- **[Rust Metal Kernel](docs/gpu/rust_metal_kernel.md)** — architecture, zero-copy design, build instructions
-- **[Compilation Pipeline](docs/gpu/compilation_pipeline.md)** — end-to-end C-to-GPU flow
-- **[JEPA Neural CPU](docs/architecture/BOTTOM_UP_JEPA_NEURAL_CPU.md)** — bottom-up neural computer vision and architecture
-- **[JEPA Machine World Model](docs/architecture/JEPA_MACHINE_WORLD_MODEL.md)** — predictive dynamics design and use cases
-- **[Model Index](models/MODEL_INDEX.md)** — complete trained model inventory
-- **[SOME Complete Guide](some/docs/guides/SOME_COMPLETE_GUIDE.md)** — hidden controller and training pipeline
-- **[Differentiable Programs](paper/section_differentiable_programs.md)** — program optimization, synthesis, ISA discovery
-- **[Benchmark Results](artifacts/BENCHMARK_RESULTS.md)** — pass@1 numbers for every mode and model tier
+- [Research paper](paper/ncpu_paper.md) — the full analysis and findings
+- [GPU debugging toolkit paper](paper/gpu_debugging_toolkit_paper.md) — the 26-command GPU-native debugger
+- [GPU debugging toolkit reference](docs/gpu/gpu_debugging_toolkit.md) — command reference
+- [Rust Metal kernel](docs/gpu/rust_metal_kernel.md) — architecture, zero-copy design, build instructions
+- [Compilation pipeline](docs/gpu/compilation_pipeline.md) — end-to-end C-to-GPU flow
+- [JEPA neural CPU](docs/architecture/BOTTOM_UP_JEPA_NEURAL_CPU.md) — bottom-up neural computer architecture
+- [JEPA machine world model](docs/architecture/JEPA_MACHINE_WORLD_MODEL.md) — predictive dynamics design
+- [Model index](models/MODEL_INDEX.md) — complete trained-model inventory
+- [SOME complete guide](some/docs/guides/SOME_COMPLETE_GUIDE.md) — hidden controller and training pipeline
+- [Differentiable programs](paper/section_differentiable_programs.md) — program optimization, synthesis, ISA discovery
+- [Benchmark results](artifacts/BENCHMARK_RESULTS.md) — pass@1 numbers for every mode and model tier
 
 ---
 
