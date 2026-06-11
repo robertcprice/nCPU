@@ -1103,6 +1103,16 @@ pub(super) fn synthesize_universal_array_fallback(
     // close-by restart biases often converge to the same discrete program.
     let mut rejected_codes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // Cross-run negative memory: every code string that failed strict
+    // verification for this exact example set in ANY previous run is skipped
+    // before the parser sees it. Verification is deterministic in (code,
+    // examples), so a rejection can never un-reject — the search structurally
+    // cannot make the same mistake twice. New rejections are flushed to the
+    // bank on every exit path via the recorder's Drop.
+    let mut neg = crate::rejected_cache::RejectionRecorder::new(
+        crate::solved_cache::examples_fingerprint(&problem.examples),
+    );
+
     // Phase 0: replay the K most-recent biases that *previously* led to a
     // successful solve of any compatible-shape problem. Each learned bias is
     // a full parameter vector; we try a zero-step discretize+verify, which
@@ -1123,7 +1133,7 @@ pub(super) fn synthesize_universal_array_fallback(
             params: bias.params.clone(),
         };
         let code = prog.discretize_and_emit(fn_name, scalar_names);
-        if rejected_codes.contains(&code) {
+        if rejected_codes.contains(&code) || neg.known_bad(&code) {
             continue;
         }
         if verify_problem_code_strict(problem, &code).is_ok() {
@@ -1141,6 +1151,7 @@ pub(super) fn synthesize_universal_array_fallback(
                 metadata: DifferentiableMetadata::default(),
             });
         }
+        neg.note_rejection(&code);
         rejected_codes.insert(code);
     }
 
@@ -1576,7 +1587,7 @@ pub(super) fn synthesize_universal_array_fallback(
                 std::mem::swap(&mut prog_cur.params, &mut params);
                 let code = prog_cur.discretize_and_emit(fn_name, scalar_names);
                 std::mem::swap(&mut prog_cur.params, &mut params);
-                if !rejected_codes.contains(&code) {
+                if !rejected_codes.contains(&code) && !neg.known_bad(&code) {
                     if verify_problem_code_strict(problem, &code).is_ok() {
                         crate::learned_biases::record_success(
                             n_scalar,
@@ -1599,13 +1610,14 @@ pub(super) fn synthesize_universal_array_fallback(
                             metadata: DifferentiableMetadata::default(),
                         });
                     }
+                    neg.note_rejection(&code);
                     rejected_codes.insert(code);
                 }
                 if best_loss < loss {
                     std::mem::swap(&mut prog_cur.params, &mut best_params);
                     let code2 = prog_cur.discretize_and_emit(fn_name, scalar_names);
                     std::mem::swap(&mut prog_cur.params, &mut best_params);
-                    if !rejected_codes.contains(&code2) {
+                    if !rejected_codes.contains(&code2) && !neg.known_bad(&code2) {
                         if verify_problem_code_strict(problem, &code2).is_ok() {
                             crate::learned_biases::record_success(
                                 n_scalar,
@@ -1628,6 +1640,7 @@ pub(super) fn synthesize_universal_array_fallback(
                                 metadata: DifferentiableMetadata::default(),
                             });
                         }
+                        neg.note_rejection(&code2);
                         rejected_codes.insert(code2);
                     }
                 }
@@ -1640,7 +1653,10 @@ pub(super) fn synthesize_universal_array_fallback(
             params: best_params,
         }
         .discretize_and_emit(fn_name, scalar_names);
-        if !rejected_codes.contains(&code) && verify_problem_code_strict(problem, &code).is_ok() {
+        if !rejected_codes.contains(&code)
+            && !neg.known_bad(&code)
+            && verify_problem_code_strict(problem, &code).is_ok()
+        {
             crate::learned_biases::record_success(
                 n_scalar,
                 initial_params.clone(),

@@ -8,6 +8,7 @@ pub mod method_router;
 pub mod mog_transpile;
 pub mod orchestrator;
 pub mod program_trace;
+pub mod rejected_cache;
 pub mod runtime;
 pub mod search_family_router;
 pub mod solved_cache;
