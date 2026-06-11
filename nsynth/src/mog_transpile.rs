@@ -176,6 +176,17 @@ fn transpile(mog: &str, target: Target) -> String {
             body = rewrite_int_div_python(&body);
         }
 
+        // TypeScript integer-division fix (same intent as the Python one
+        // above). JS `/` is float division; Mog `/` is truncating i64
+        // division. Wrap each division as `Math.trunc(A / B)` so e.g.
+        // `399 / 400 == 0`, not `0.9975`. Without this, synthesized
+        // programs that are correct under Mog semantics ship as subtly
+        // wrong JS (observed: hit_bottom's `a / b` CEGIS-livelocked
+        // because the verifier evaluated it as float division).
+        if target == Target::TypeScript && returns_int {
+            body = rewrite_int_div_typescript(&body);
+        }
+
         // Opening-brace blocks (`if ... {`, `for ... {`, `while ... {`).
         // Python rewrites the trailing `{` to `:`; Rust/TS keep the brace.
         // In all targets, depth increases by one.
@@ -248,6 +259,152 @@ fn rewrite_int_div_python(line: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// Rewrite `A / B` to `Math.trunc(A / B)` in a TypeScript line so JS
+/// float division matches Mog's truncating i64 division. Operands are
+/// the synthesizer's atoms: identifiers, integer literals (optionally
+/// negative), or balanced parenthesized expressions. Scans left to
+/// right; chained divisions fold left-associatively.
+fn rewrite_int_div_typescript(line: &str) -> String {
+    let mut s = line.to_string();
+    // Cursor past which we look for the next unwrapped `/`. After each
+    // wrap it is moved past the wrapped group's closing paren so the `/`
+    // inside `Math.trunc(A / B)` is never re-wrapped; an outer chained
+    // `/` to its right still sees the whole wrapped group as its left
+    // operand (callee name included), so `a / b / c` folds correctly to
+    // `Math.trunc(Math.trunc(a / b) / c)`.
+    let mut search_from = 0usize;
+    loop {
+        let bytes = s.as_bytes();
+        // Next `/` not part of `//` or `/=`.
+        let mut slash = None;
+        let mut i = search_from;
+        while i < bytes.len() {
+            if bytes[i] == b'/' {
+                let next = bytes.get(i + 1).copied();
+                let prev = if i > 0 { bytes[i - 1] } else { 0 };
+                if next != Some(b'/') && next != Some(b'=') && prev != b'/' {
+                    slash = Some(i);
+                    break;
+                }
+            }
+            i += 1;
+        }
+        let Some(slash) = slash else { return s };
+
+        // Left operand: walk back over whitespace, then either a balanced
+        // `(...)` group (plus any callee name) or an identifier/number run.
+        let mut l_end = slash;
+        while l_end > 0 && bytes[l_end - 1] == b' ' {
+            l_end -= 1;
+        }
+        let mut l_start = l_end;
+        if l_end > 0 && bytes[l_end - 1] == b')' {
+            let mut depth = 0i32;
+            let mut j = l_end;
+            while j > 0 {
+                j -= 1;
+                match bytes[j] {
+                    b')' => depth += 1,
+                    b'(' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            l_start = j;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            while l_start > 0
+                && (bytes[l_start - 1].is_ascii_alphanumeric()
+                    || bytes[l_start - 1] == b'_'
+                    || bytes[l_start - 1] == b'.')
+            {
+                l_start -= 1;
+            }
+        } else {
+            while l_start > 0
+                && (bytes[l_start - 1].is_ascii_alphanumeric()
+                    || bytes[l_start - 1] == b'_'
+                    || bytes[l_start - 1] == b'.')
+            {
+                l_start -= 1;
+            }
+            // Unary minus: only when preceded by an operator or open paren.
+            if l_start > 0 && bytes[l_start - 1] == b'-' {
+                let mut k = l_start - 1;
+                while k > 0 && bytes[k - 1] == b' ' {
+                    k -= 1;
+                }
+                if k == 0
+                    || matches!(
+                        bytes[k - 1],
+                        b'(' | b'+' | b'-' | b'*' | b'%' | b'=' | b',' | b'<' | b'>'
+                    )
+                {
+                    l_start -= 1;
+                }
+            }
+        }
+        if l_start == l_end {
+            // Malformed/unexpected shape — leave this slash alone.
+            search_from = slash + 1;
+            continue;
+        }
+
+        // Right operand: whitespace, then a balanced group or an
+        // identifier/number run (optionally negative).
+        let mut r_start = slash + 1;
+        while r_start < bytes.len() && bytes[r_start] == b' ' {
+            r_start += 1;
+        }
+        let mut r_end = r_start;
+        if r_end < bytes.len() && bytes[r_end] == b'-' {
+            r_end += 1;
+        }
+        if r_end < bytes.len() && bytes[r_end] == b'(' {
+            let mut depth = 0i32;
+            while r_end < bytes.len() {
+                match bytes[r_end] {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            r_end += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                r_end += 1;
+            }
+        } else {
+            while r_end < bytes.len()
+                && (bytes[r_end].is_ascii_alphanumeric()
+                    || bytes[r_end] == b'_'
+                    || bytes[r_end] == b'.')
+            {
+                r_end += 1;
+            }
+        }
+        if r_start == r_end {
+            search_from = slash + 1;
+            continue;
+        }
+
+        let wrapped_len =
+            "Math.trunc(".len() + (l_end - l_start) + " / ".len() + (r_end - r_start) + ")".len();
+        s = format!(
+            "{}Math.trunc({} / {}){}",
+            &s[..l_start],
+            &s[l_start..l_end],
+            &s[r_start..r_end],
+            &s[r_end..]
+        );
+        search_from = l_start + wrapped_len;
+    }
 }
 
 fn indent_unit(target: Target) -> &'static str {
@@ -494,6 +651,50 @@ mod tests {
         assert!(out.contains("if item < 0 {"));
         assert!(out.contains("return acc;"));
         assert!(out.ends_with("}\n"));
+    }
+
+    #[test]
+    fn typescript_int_div_truncates() {
+        // Plain division in an i64-returning function must become
+        // Math.trunc so JS float division matches Mog semantics.
+        let mog = "fn hit_bottom(a: i64, b: i64) -> i64 {\n\
+            return (a / b);\n\
+            }\n";
+        let out = to_typescript(mog);
+        assert!(
+            out.contains("return (Math.trunc(a / b));"),
+            "expected Math.trunc wrap, got {out}"
+        );
+        // Unparenthesized form too (e.g. flag_or's `return b / 1;`).
+        let mog2 = "fn f(b: i64) -> i64 {\n    return b / 1;\n}\n";
+        let out2 = to_typescript(mog2);
+        assert!(
+            out2.contains("return Math.trunc(b / 1);"),
+            "expected Math.trunc wrap, got {out2}"
+        );
+        // Chained division folds left-associatively.
+        let mog3 = "fn g(a: i64, b: i64, c: i64) -> i64 {\n    return a / b / c;\n}\n";
+        let out3 = to_typescript(mog3);
+        assert!(
+            out3.contains("return Math.trunc(Math.trunc(a / b) / c);"),
+            "expected nested Math.trunc, got {out3}"
+        );
+        // Nested parenthesized division.
+        let mog4 = "fn h(a: i64, b: i64, c: i64) -> i64 {\n    return ((a / b) / c);\n}\n";
+        let out4 = to_typescript(mog4);
+        assert!(
+            out4.contains("return ((Math.trunc((Math.trunc(a / b)) / c)));")
+                || out4.contains("Math.trunc((Math.trunc(a / b)) / c)"),
+            "expected nested Math.trunc, got {out4}"
+        );
+        // Division mixed with other ops keeps surrounding expression intact.
+        let mog5 = "fn k(a: i64, b: i64) -> i64 {\n    return (a / 2) + b;\n}\n";
+        let out5 = to_typescript(mog5);
+        assert!(
+            out5.contains("return (Math.trunc(a / 2)) + b;")
+                || out5.contains("return Math.trunc(a / 2) + b;"),
+            "expected trunc on div only, got {out5}"
+        );
     }
 
     #[test]
