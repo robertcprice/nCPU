@@ -88,3 +88,4 @@ nsynth/.mog_synth_memory/
 
 # autoresearch local artifacts
 .nCPU_autoresearch/
+paper/generated/
