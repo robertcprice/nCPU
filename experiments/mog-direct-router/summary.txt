@@ -1,2 +1,0 @@
-solved 125 / 125 rate 1.0
-failed 0
