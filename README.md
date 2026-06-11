@@ -257,19 +257,43 @@ ncpu/
   neural/            # NeuralCPU: neural ALU bridge, weave pipeline
   model/             # Model-based CPU (neural_ops, assembler)
   tensor/            # Tensor-based ARM64 emulator (differentiable)
-kernels/
-  rust_metal/        # Rust + Metal ARM64 kernel + JEPA neural OS layer
+
+# Compiled / accelerated backends
+kernels/             # rust_metal (Rust+Metal ARM64 kernel), mlx, npcot_wasm
 nsynth/              # Rust program synthesizer (gradient + enumerative + search)
-models/              # 24 trained .pt models
-programs/            # 62 assembly programs
-scripts/             # Entrypoints and maintainer automation
-tests/               # 2,500+ tests
-benchmarks/          # Benchmark scripts
-demos/               # Standalone demos (BusyBox, Alpine, compiler)
+packages/            # Companion packages (metal_mlp)
+
+# Models & synthesis corpus
+models/              # Trained neural-component weights (see models/MODEL_INDEX.md)
+programs/            # Synthesis benchmark corpus (arithmetic, bitwise, algorithms, ...)
+
+# Evidence, paper, experiments
+artifacts/           # Committed benchmark results cited by the paper + tests
+paper/               # Research paper + modular sections
+benchmarks/          # Benchmark driver scripts
+experiments/         # Exploratory experiment runs
+
+# Usage & ops
+examples/            # Minimal runnable demos (one per execution path)
+demos/               # Larger showcase walkthroughs (BusyBox, Alpine, compiler)
+scripts/             # Entry points + maintainer automation
+tools/               # Developer tooling
+training/            # Training pipelines
+packaging/           # Deployment scaffolding (Homebrew, Modal, DEPLOYMENT.md)
+
+# Tests, docs, assets
+tests/               # Test suite (see tests/README.md)
+docs/                # Documentation
+assets/              # Logos / static assets
+
+# Build & runtime output (gitignored — regenerable, not committed)
+checkpoints/         # Large .pt weight checkpoints
 training_results/    # Coprocessor scaling sweeps, ablation studies
-paper/               # Research paper + sections
-artifacts/           # Generated benchmark artifacts
+dist/                # Build distributions
+logs/  outputs/      # Run logs and scratch outputs
 ```
+
+Every top-level directory carries its own `README.md` describing its purpose.
 
 ---
 
