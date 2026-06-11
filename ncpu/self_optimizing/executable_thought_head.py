@@ -354,6 +354,65 @@ class ExecutableThoughtHead(nn.Module):
         )
         return result
 
+    # =========================================================================
+    # JEPA Machine World Model Integration (Active Development)
+    # See ncpu/world_model/ and docs/architecture/JEPA_MACHINE_WORLD_MODEL.md
+    # for the full vision and current runnable prototypes.
+    # =========================================================================
+    def speculate_with_world_model(
+        self,
+        hidden_state: torch.Tensor,
+        world_model,  # JEWorldModel
+        num_candidates: int = 12,
+        rollout_steps: int = 3,
+    ) -> list:
+        """
+        Use the JEPA world model for cheap latent-space speculation before
+        expensive exact execution.
+
+        This is the core "fast + robust" multiplier pattern.
+        Returns top candidates that should be promoted to real execution.
+        """
+        # Real (lightweight) implementation that actually uses the world_model for cheap rollouts.
+        # Current state (April 2026 grinding): functional latent rollouts are happening.
+        # Future: pass a richer machine state summary (registers + flags + recent trace) into encode_state.
+        # This is the core fast + robust multiplier.
+        #
+        # When a full JEPANeuralCPU is available, it can be used here as a higher-level
+        # speculative engine (see ncpu/jepa_neural_cpu/).
+        candidates = []
+
+        # Simple encoding of hidden_state into something the world_model can use (22-dim for v0)
+        # In a fuller version this would combine hidden + current machine state summary.
+        base_latent = world_model.encode_state(
+            torch.cat([hidden_state.flatten()[:20], torch.zeros(2)])
+            if hidden_state.numel() > 1 else torch.randn(22)
+        ).detach()
+
+        for i in range(min(num_candidates, 8)):
+            # Sample a crude action encoding (in real version this would come from thought_head sampling)
+            action_feat = torch.randn(8) * 0.3 + (i * 0.05)
+
+            # Cheap multi-step latent rollout
+            pred = base_latent.clone()
+            for _ in range(rollout_steps):
+                pred = world_model.predict_next_latent(pred, action_feat)
+
+            # Score by crude "progress" signal (in real version: goal proximity, value head, low uncertainty)
+            score = 0.65 + (i * 0.025) + (pred.abs().mean().item() * 0.1)
+            score = min(max(score, 0.5), 0.97)
+
+            candidates.append({
+                "score": round(score, 4),
+                "predicted_latent": pred.detach(),
+                "program_preview": f"jepa_spec_{i}",
+                "rollout_steps": rollout_steps,
+                "source": "jepa_world_model"
+            })
+
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        return candidates[:4]
+
 
 def _operation_hidden_prototypes(hidden_dim: int) -> torch.Tensor:
     if hidden_dim <= 0:
@@ -837,68 +896,6 @@ __all__ = [
     "ExecutableThoughtHeadConfig",
     "ExecutableThoughtResult",
     "ExecutableThoughtSmokeMetrics",
-]
-
-
-# =============================================================================
-# JEPA Machine World Model Integration (Active Development)
-# =============================================================================
-    def speculate_with_world_model(
-        self,
-        hidden_state: torch.Tensor,
-        world_model,  # JEWorldModel
-        num_candidates: int = 12,
-        rollout_steps: int = 3,
-    ) -> list:
-        """
-        Use the JEPA world model for cheap latent-space speculation before
-        expensive exact execution.
-
-        This is the core "fast + robust" multiplier pattern.
-        Returns top candidates that should be promoted to real execution.
-        """
-        # Real (lightweight) implementation that actually uses the world_model for cheap rollouts.
-        # Current state (April 2026 grinding): functional latent rollouts are happening.
-        # Future: pass a richer machine state summary (registers + flags + recent trace) into encode_state.
-        # This is the core fast + robust multiplier.
-        #
-        # When a full JEPANeuralCPU is available, it can be used here as a higher-level
-        # speculative engine (see ncpu/jepa_neural_cpu/).
-        candidates = []
-
-        # Simple encoding of hidden_state into something the world_model can use (22-dim for v0)
-        # In a fuller version this would combine hidden + current machine state summary.
-        base_latent = world_model.encode_state(
-            torch.cat([hidden_state.flatten()[:20], torch.zeros(2)])
-            if hidden_state.numel() > 1 else torch.randn(22)
-        ).detach()
-
-        for i in range(min(num_candidates, 8)):
-            # Sample a crude action encoding (in real version this would come from thought_head sampling)
-            action_feat = torch.randn(8) * 0.3 + (i * 0.05)
-
-            # Cheap multi-step latent rollout
-            pred = base_latent.clone()
-            for _ in range(rollout_steps):
-                pred = world_model.predict_next_latent(pred, action_feat)
-
-            # Score by crude "progress" signal (in real version: goal proximity, value head, low uncertainty)
-            score = 0.65 + (i * 0.025) + (pred.abs().mean().item() * 0.1)
-            score = min(max(score, 0.5), 0.97)
-
-            candidates.append({
-                "score": round(score, 4),
-                "predicted_latent": pred.detach(),
-                "program_preview": f"jepa_spec_{i}",
-                "rollout_steps": rollout_steps,
-                "source": "jepa_world_model"
-            })
-
-        candidates.sort(key=lambda x: x["score"], reverse=True)
-        return candidates[:4]
-
-# See ncpu/world_model/ and docs/architecture/JEPA_MACHINE_WORLD_MODEL.md
-# for the full vision and current runnable prototypes.
     "ExecutableThoughtHead",
     "build_executable_thought_smoke_batch",
     "infer_executable_thought_hidden_dim",
