@@ -205,6 +205,192 @@ pub fn execute_program_v2(p: ProgramV2, data: &[f32], n_points: u32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// Format v3 — stateful skills: skill = (state, input) → (state', output).
+//
+// A v3 program is a v2-style per-step pipeline PLUS one persistent state
+// cell `s: f32`. A v3 *example* is a TRACE: a sequence of (input record,
+// expected output) steps; execution emits one output per step and state
+// persists across steps (each trace restarts state). Per step:
+//
+//   v = combine(fields)                         (v2 combine vocabulary)
+//   if include_guard passes (v2 guard vocab; synthesis keeps it `always`):
+//       if reset_guard fires on v: s ← init, included ← 0   (full restart)
+//       included += 1
+//       s ← reduce(s, transform(v))             (v1 op vocabularies)
+//   y = output_select(s, v)                     (small enumerable vocab)
+//   y = post_scale(y)  + offset                 (v2 post vocab; synthesis
+//                                                keeps it `identity`)
+//
+// The reset guard reuses the v2 guard comparison vocabulary with index 0
+// meaning "never fire" (the stage's no-op, mirroring 0 = "always pass" for
+// inclusion guards). Reset thresholds are MINED from trace data via
+// `mine_thresholds` — no hardcoded vocabulary.
+//
+// `guard_idx`/`guard_threshold`/`post_scale_idx` exist so that EVERY v2
+// program lifts exactly into v3 (`ProgramV3::from_v2` with reset=never,
+// output=state reproduces `execute_program_v2` at the final step — v2 is
+// the exact special case "state never resets, output is the fold"). The
+// v3 SYNTHESIS space keeps both stages neutral; they are carried for
+// entry-wise lifting when a mixed library exports as format 3.
+//
+// v3 libraries serialize with `"format": 3` and a `program_v3` key. v1/v2
+// loaders fail closed on them (their parsers require a `program` /
+// `program_v2` object key), so an old runtime can never mis-execute a
+// stateful program as a stateless fold.
+// ---------------------------------------------------------------------------
+
+/// Output-select vocabulary size: 0=s, 1=v, 2=s+v, 3=s*v, 4=|s|.
+pub const N_OUTPUTS_V3: u32 = 5;
+/// Reset-guard vocabulary size (0=never, 1..=4 reuse v2 guard comparisons).
+pub const N_RESET_GUARDS: u32 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProgramV3 {
+    /// Fields per data point (1..=MAX_ARITY).
+    pub arity: u32,
+    /// v2 combine vocabulary (see `ProgramV2::combine_idx`).
+    pub combine_idx: u32,
+    /// Inclusion guard, exact v2 semantics (0=always). Kept for lossless
+    /// v2→v3 lifting; the v3 synthesis space leaves this at 0.
+    pub guard_idx: u32,
+    pub guard_threshold: f32,
+    /// Reset guard on the combined value `v`: 0=never, 1=v>t, 2=v<t,
+    /// 3=|v|>t, 4=v==t (1e-4 tolerance). Fires BEFORE the state update.
+    pub reset_guard_idx: u32,
+    pub reset_threshold: f32,
+    /// State initializer (v1 `init_value` vocabulary): 0.0 / 1.0 / NEG_LARGE.
+    pub state_init_idx: u32,
+    /// Transform applied to `v` before folding into state (v1 vocabulary).
+    pub update_transform_idx: u32,
+    /// Reduce folding the transformed value into state (v1 vocabulary).
+    pub update_reduce_idx: u32,
+    /// Post-scale on the selected output, exact v2 semantics (0=identity,
+    /// 1=divide by included-so-far, 2=clamp-exp). Kept for lossless v2→v3
+    /// lifting; the v3 synthesis space leaves this at 0.
+    pub post_scale_idx: u32,
+    /// Output select: 0=s, 1=v, 2=s+v, 3=s*v, 4=|s|.
+    pub output_idx: u32,
+    /// Closed-form fitted offset added to every step's output.
+    pub offset: f32,
+}
+
+impl ProgramV3 {
+    pub fn from_v2(p: ProgramV2) -> Self {
+        ProgramV3 {
+            arity: p.arity,
+            combine_idx: p.combine_idx,
+            guard_idx: p.guard_idx,
+            guard_threshold: p.guard_threshold,
+            reset_guard_idx: 0,
+            reset_threshold: 0.0,
+            state_init_idx: p.init_idx,
+            update_transform_idx: p.transform_idx,
+            update_reduce_idx: p.reduce_idx,
+            post_scale_idx: p.post_scale_idx,
+            output_idx: 0,
+            offset: p.offset,
+        }
+    }
+
+    pub fn from_v1(p: DiscreteProgram) -> Self {
+        Self::from_v2(ProgramV2::from_v1(p))
+    }
+
+    /// True when expressible in the v2 format: state never resets and the
+    /// output is the running fold, i.e. the final step's output equals the
+    /// v2 aggregate. Lets exports stay at the lowest loadable format.
+    pub fn is_v2(&self) -> bool {
+        self.reset_guard_idx == 0 && self.output_idx == 0
+    }
+
+    pub fn to_v2(&self) -> Option<ProgramV2> {
+        if !self.is_v2() {
+            return None;
+        }
+        Some(ProgramV2 {
+            arity: self.arity,
+            combine_idx: self.combine_idx,
+            guard_idx: self.guard_idx,
+            guard_threshold: self.guard_threshold,
+            init_idx: self.state_init_idx,
+            transform_idx: self.update_transform_idx,
+            reduce_idx: self.update_reduce_idx,
+            post_scale_idx: self.post_scale_idx,
+            offset: self.offset,
+        })
+    }
+}
+
+/// Reset guard: index 0 is "never"; 1..=4 reuse the v2 guard comparisons.
+#[inline]
+fn reset_fires(v: f32, idx: u32, t: f32) -> bool {
+    idx != 0 && guard_passes(v, idx, t)
+}
+
+#[inline]
+fn output_select_v3(p: &ProgramV3, s: f32, v: f32) -> f32 {
+    match p.output_idx {
+        1 => v,
+        2 => s + v,
+        3 => s * v,
+        4 => s.abs(),
+        _ => s,
+    }
+}
+
+#[inline]
+fn post_scale_v3(p: &ProgramV3, y: f32, included: u32) -> f32 {
+    match p.post_scale_idx {
+        0 => y,
+        1 => y / (included as f32).max(1.0),
+        _ => y.max(-30.0).min(30.0).exp(),
+    }
+}
+
+/// Replay a v3 program over a trace of `n_steps` records of `arity` floats
+/// laid out contiguously in `data`. Returns one output per step. State is
+/// initialized at the start of the trace (each trace restarts state); a
+/// reset-guard hit restores both the state cell and the included-counter
+/// (a full restart of the running aggregate).
+pub fn execute_program_v3(p: ProgramV3, data: &[f32], n_steps: u32) -> Vec<f32> {
+    let arity = p.arity.max(1) as usize;
+    let usable = (n_steps as usize).min(data.len() / arity);
+    let mut s = init_value(p.state_init_idx);
+    let mut included = 0u32;
+    let mut outputs = Vec::with_capacity(usable);
+    for i in 0..usable {
+        let fields = &data[i * arity..(i + 1) * arity];
+        let v = apply_combine(fields, p.combine_idx);
+        if guard_passes(v, p.guard_idx, p.guard_threshold) {
+            if reset_fires(v, p.reset_guard_idx, p.reset_threshold) {
+                s = init_value(p.state_init_idx);
+                included = 0;
+            }
+            included += 1;
+            s = apply_reduce(s, apply_transform(v, p.update_transform_idx), p.update_reduce_idx);
+        }
+        let y = output_select_v3(&p, s, v);
+        outputs.push(post_scale_v3(&p, y, included) + p.offset);
+    }
+    outputs
+}
+
+/// Final-step output of a v3 trace replay. For programs lifted from v2
+/// (`ProgramV3::from_v2`) this equals `execute_program_v2` over the same
+/// points exactly — including the empty trace, where it mirrors v2's
+/// empty fold (state stays at its initializer, `v` is taken as 0).
+pub fn execute_program_v3_final(p: ProgramV3, data: &[f32], n_steps: u32) -> f32 {
+    match execute_program_v3(p, data, n_steps).last() {
+        Some(&y) => y,
+        None => {
+            let s = init_value(p.state_init_idx);
+            let y = output_select_v3(&p, s, 0.0);
+            post_scale_v3(&p, y, 0) + p.offset
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Minimal lookup index — linear scan. Libraries shipped to browsers / edge
 // devices are small (tens to low hundreds of entries); the sharded index
 // from the heavy crate is overkill at that scale.
@@ -218,11 +404,23 @@ pub struct NativeEntry {
     /// `Some`, execution goes through the v2 engine; `program` is a
     /// placeholder kept for struct compatibility.
     pub program_v2: Option<ProgramV2>,
+    /// Present when the entry uses v3 capabilities (persistent state,
+    /// resets, non-fold outputs). When `Some`, consults go through the v3
+    /// trace engine; `program`/`program_v2` are kept in sync for struct
+    /// compatibility and lowest-format export.
+    pub program_v3: Option<ProgramV3>,
 }
 
 impl NativeEntry {
     pub fn effective_program(&self) -> ProgramV2 {
         self.program_v2.unwrap_or_else(|| ProgramV2::from_v1(self.program))
+    }
+
+    /// The entry's program lifted to v3 (exact: lower formats are special
+    /// cases of v3 — see `ProgramV3::from_v2`).
+    pub fn effective_program_v3(&self) -> ProgramV3 {
+        self.program_v3
+            .unwrap_or_else(|| ProgramV3::from_v2(self.effective_program()))
     }
 }
 
@@ -298,10 +496,46 @@ pub fn consult_native(
     }
     let normalized: Vec<f32> = hidden.iter().map(|v| v / norm).collect();
     let entry = index.lookup(&normalized)?;
+    // v3 entries replay the trace and answer with the final step's output
+    // (for v2-lifted programs this is exactly the v2 aggregate). v1/v2
+    // entries take the original v2-engine path, byte-identical to before.
+    if let Some(p3) = entry.program_v3 {
+        return Some(execute_program_v3_final(p3, array, length));
+    }
     let p = entry.effective_program();
     // `length` counts data points; v1 entries have arity 1 so this is the
     // exact v1 semantics, and v2 entries interpret `array` as records.
     Some(execute_program_v2(p, array, length))
+}
+
+/// Consult path for stateful (v3) skills: look up by hidden-state
+/// similarity, then replay the program over `n_steps` records of `arity`
+/// floats, returning ALL per-step outputs. Works for v1/v2 entries too
+/// (lifted exactly — their per-step outputs are the running fold). Returns
+/// `None` on lookup miss, or when the entry's arity disagrees with the
+/// caller's layout (honest refusal instead of misinterpreting records).
+pub fn consult_native_v3(
+    index: &NativeIndex,
+    hidden: &[f32],
+    data: &[f32],
+    arity: u32,
+    n_steps: u32,
+) -> Option<Vec<f32>> {
+    let mut norm_sq = 0.0f32;
+    for v in hidden {
+        norm_sq += v * v;
+    }
+    let norm = norm_sq.sqrt();
+    if norm < 1e-8 {
+        return None;
+    }
+    let normalized: Vec<f32> = hidden.iter().map(|v| v / norm).collect();
+    let entry = index.lookup(&normalized)?;
+    let p = entry.effective_program_v3();
+    if p.arity.max(1) != arity.max(1) {
+        return None;
+    }
+    Some(execute_program_v3(p, data, n_steps))
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +622,39 @@ fn find_matching(text: &str, open: char, close: char) -> Option<usize> {
 
 fn parse_entry(obj: &str) -> Result<NativeEntry, String> {
     let signature = parse_float_array(obj, "\"signature\"")?;
-    // v2 entries carry a `program_v2` object; v1 entries carry `program`.
+    // v3 entries carry a `program_v3` object; v2 entries `program_v2`; v1
+    // entries `program`. Each loader generation requires its own key, so
+    // older runtimes fail closed on newer files instead of mis-executing.
+    if let Some(v3_obj) = find_object_value(obj, "\"program_v3\"") {
+        let program_v3 = ProgramV3 {
+            arity: (parse_int_field(v3_obj, "\"arity\"")? as u32).clamp(1, MAX_ARITY),
+            combine_idx: parse_int_field(v3_obj, "\"combine_idx\"")? as u32,
+            guard_idx: parse_int_field(v3_obj, "\"guard_idx\"")? as u32,
+            guard_threshold: parse_float_field(v3_obj, "\"guard_threshold\"")?,
+            reset_guard_idx: parse_int_field(v3_obj, "\"reset_guard_idx\"")? as u32,
+            reset_threshold: parse_float_field(v3_obj, "\"reset_threshold\"")?,
+            state_init_idx: parse_int_field(v3_obj, "\"state_init_idx\"")? as u32,
+            update_transform_idx: parse_int_field(v3_obj, "\"update_transform_idx\"")? as u32,
+            update_reduce_idx: parse_int_field(v3_obj, "\"update_reduce_idx\"")? as u32,
+            post_scale_idx: parse_int_field(v3_obj, "\"post_scale_idx\"")? as u32,
+            output_idx: parse_int_field(v3_obj, "\"output_idx\"")? as u32,
+            offset: parse_float_field(v3_obj, "\"offset\"")?,
+        };
+        return Ok(NativeEntry {
+            signature,
+            program: DiscreteProgram {
+                init_idx: program_v3.state_init_idx,
+                transform_idx: program_v3.update_transform_idx,
+                reduce_idx: program_v3.update_reduce_idx,
+                post_scale_idx: program_v3.post_scale_idx,
+                offset: program_v3.offset,
+            },
+            // Keep the v2 view in sync when expressible so a later export
+            // can demote the entry back to the lowest loadable format.
+            program_v2: program_v3.to_v2(),
+            program_v3: Some(program_v3),
+        });
+    }
     if let Some(v2_obj) = find_object_value(obj, "\"program_v2\"") {
         let program_v2 = ProgramV2 {
             arity: (parse_int_field(v2_obj, "\"arity\"")? as u32).clamp(1, MAX_ARITY),
@@ -411,6 +677,7 @@ fn parse_entry(obj: &str) -> Result<NativeEntry, String> {
                 offset: program_v2.offset,
             },
             program_v2: Some(program_v2),
+            program_v3: None,
         });
     }
     let program_start = find_object_value(obj, "\"program\"").ok_or("no program")?;
@@ -421,7 +688,7 @@ fn parse_entry(obj: &str) -> Result<NativeEntry, String> {
         post_scale_idx: parse_int_field(program_start, "\"post_scale_idx\"")? as u32,
         offset: parse_float_field(program_start, "\"offset\"")?,
     };
-    Ok(NativeEntry { signature, program, program_v2: None })
+    Ok(NativeEntry { signature, program, program_v2: None, program_v3: None })
 }
 
 fn find_object_value<'a>(obj: &'a str, key: &str) -> Option<&'a str> {
@@ -777,6 +1044,217 @@ pub fn synthesize_program_v2(
     })
 }
 
+fn complexity_v3(p: &ProgramV3) -> u32 {
+    let mut c = 0;
+    if p.combine_idx != 0 {
+        c += 1;
+    }
+    if p.guard_idx != 0 {
+        c += 2;
+    }
+    if p.reset_guard_idx != 0 {
+        c += 2;
+    }
+    if p.state_init_idx != 0 {
+        c += 1;
+    }
+    if p.update_transform_idx != 0 {
+        c += 1;
+    }
+    if p.update_reduce_idx != 0 {
+        c += 1;
+    }
+    if p.post_scale_idx != 0 {
+        c += 2;
+    }
+    if p.output_idx != 0 {
+        c += 1;
+    }
+    if p.offset != 0.0 {
+        c += 2;
+    }
+    c
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SynthesisResultV3 {
+    pub program: ProgramV3,
+    /// Worst absolute error across every step of every trace after offset
+    /// fitting.
+    pub max_err: f32,
+    pub n_consistent: u32,
+    pub n_searched: u32,
+}
+
+/// v3 synthesis: exhaustive search over the stateful program space, replaying
+/// every candidate over every trace and accepting only when EVERY step's
+/// output matches within tolerance. Refusal contract as v1/v2: `None` when
+/// nothing in the space explains all traces.
+///
+/// Each trace is `(data, expected)`: `data` holds the trace's records back to
+/// back (`arity` floats per step), `expected` one target output per step, so
+/// `data.len() == expected.len() * arity`. Every trace restarts state.
+///
+/// Search-space size (the inclusion guard and post-scale stay neutral — they
+/// exist only for v2 lifting):
+///
+///   combines (≤8, 1 at arity 1)
+///   × reset options (1 never + 4 comparisons × ≤12 mined thresholds = ≤49)
+///   × state inits (3) × update transforms (6) × update reduces (4)
+///   × output selects (5)
+///   = ≤ 8 × 49 × 3 × 6 × 4 × 5 = 141,120 candidates (17,640 at arity 1).
+///
+/// Each candidate replays all trace steps, so a typical task (3 traces ×
+/// ~10 steps) costs ≤ ~4.2M step evaluations — well under the 10^7 budget.
+pub fn synthesize_program_v3(
+    traces: &[(&[f32], &[f32])],
+    arity: u32,
+    tol: f32,
+) -> Option<SynthesisResultV3> {
+    if traces.is_empty() || arity == 0 || arity > MAX_ARITY {
+        return None;
+    }
+    let a = arity as usize;
+    let mut total_steps = 0usize;
+    for (data, expected) in traces {
+        if expected.is_empty() || data.len() != expected.len() * a {
+            return None;
+        }
+        if data.iter().any(|v| !v.is_finite()) || expected.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        total_steps += expected.len();
+    }
+    // Reset thresholds are mined from the traces' input records — the same
+    // emergent-vocabulary discipline as v2 (reuse `mine_thresholds`, which
+    // only reads the data side of its example pairs).
+    let adapted: Vec<(&[f32], f32)> = traces.iter().map(|(d, _)| (*d, 0.0)).collect();
+    let thresholds = mine_thresholds(&adapted);
+    let target_scale = traces
+        .iter()
+        .flat_map(|(_, e)| e.iter())
+        .map(|t| t.abs())
+        .fold(1.0f32, f32::max);
+    let accept = tol * target_scale;
+
+    let combines: Vec<u32> = if arity == 1 {
+        vec![0]
+    } else {
+        (0..N_COMBINES).collect()
+    };
+    // Reset options: (0, _) = never, plus every (comparison, mined t) pair.
+    let mut reset_options: Vec<(u32, f32)> = vec![(0, 0.0)];
+    for reset_guard_idx in 1..N_RESET_GUARDS {
+        for &t in &thresholds {
+            reset_options.push((reset_guard_idx, t));
+        }
+    }
+
+    let mut best: Option<(ProgramV3, f32, u32)> = None;
+    let mut n_consistent = 0u32;
+    let mut n_searched = 0u32;
+
+    for &combine_idx in &combines {
+        // Hoist the combine stage: it is identical for every candidate that
+        // shares `combine_idx`.
+        let combined: Vec<Vec<f32>> = traces
+            .iter()
+            .map(|(data, expected)| {
+                (0..expected.len())
+                    .map(|i| apply_combine(&data[i * a..(i + 1) * a], combine_idx))
+                    .collect()
+            })
+            .collect();
+        for &(reset_guard_idx, reset_threshold) in &reset_options {
+            for state_init_idx in 0..N_INITS {
+                for update_transform_idx in 0..N_TRANSFORMS {
+                    for update_reduce_idx in 0..N_REDUCES {
+                        for output_idx in 0..N_OUTPUTS_V3 {
+                            n_searched += 1;
+                            let base = ProgramV3 {
+                                arity,
+                                combine_idx,
+                                guard_idx: 0,
+                                guard_threshold: 0.0,
+                                reset_guard_idx,
+                                reset_threshold,
+                                state_init_idx,
+                                update_transform_idx,
+                                update_reduce_idx,
+                                post_scale_idx: 0,
+                                output_idx,
+                                offset: 0.0,
+                            };
+                            // Replay traces; closed-form offset = mean
+                            // residual over every step of every trace.
+                            let mut raw: Vec<f32> = Vec::with_capacity(total_steps);
+                            let mut residual_sum = 0.0f32;
+                            let mut ok = true;
+                            'traces: for (ti, (_, expected)) in traces.iter().enumerate() {
+                                let vs = &combined[ti];
+                                let mut s = init_value(state_init_idx);
+                                for (i, &v) in vs.iter().enumerate() {
+                                    if reset_fires(v, reset_guard_idx, reset_threshold) {
+                                        s = init_value(state_init_idx);
+                                    }
+                                    s = apply_reduce(
+                                        s,
+                                        apply_transform(v, update_transform_idx),
+                                        update_reduce_idx,
+                                    );
+                                    let y = output_select_v3(&base, s, v);
+                                    if !y.is_finite() {
+                                        ok = false;
+                                        break 'traces;
+                                    }
+                                    raw.push(y);
+                                    residual_sum += expected[i] - y;
+                                }
+                            }
+                            if !ok {
+                                continue;
+                            }
+                            let mut offset = residual_sum / total_steps as f32;
+                            if offset.abs() < accept.max(1e-6) {
+                                offset = 0.0;
+                            }
+                            let mut max_err = 0.0f32;
+                            let mut cursor = 0usize;
+                            for (_, expected) in traces {
+                                for &target in *expected {
+                                    max_err = max_err.max((raw[cursor] + offset - target).abs());
+                                    cursor += 1;
+                                }
+                            }
+                            if max_err <= accept {
+                                n_consistent += 1;
+                                let candidate = ProgramV3 { offset, ..base };
+                                let cx = complexity_v3(&candidate);
+                                let better = match &best {
+                                    None => true,
+                                    Some((_, be, bc)) => {
+                                        cx < *bc || (cx == *bc && max_err < *be)
+                                    }
+                                };
+                                if better {
+                                    best = Some((candidate, max_err, cx));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    best.map(|(program, max_err, _)| SynthesisResultV3 {
+        program,
+        max_err,
+        n_consistent,
+        n_searched,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Multi-language source rendering. One discovered program, five working
 // implementations — the synthesized artifact is an IR, not a string.
@@ -1041,6 +1519,249 @@ pub fn program_source_v2(name: &str, p: &ProgramV2, lang: Lang) -> String {
     }
 }
 
+fn reduce_stmt_v3(reduce_idx: u32, acc: &str, f: &str, lang: Lang) -> String {
+    match reduce_idx {
+        1 => format!("{acc} *= {f}"),
+        2 => match lang {
+            Lang::Rust => format!("{acc} = {acc}.max({f})"),
+            Lang::Python => format!("{acc} = max({acc}, {f})"),
+            Lang::C => format!("{acc} = fmaxf({acc}, {f})"),
+            _ => format!("{acc} = Math.max({acc}, {f})"),
+        },
+        3 => match lang {
+            Lang::Rust => format!("{acc} = {acc}.min({f})"),
+            Lang::Python => format!("{acc} = min({acc}, {f})"),
+            Lang::C => format!("{acc} = fminf({acc}, {f})"),
+            _ => format!("{acc} = Math.min({acc}, {f})"),
+        },
+        _ => format!("{acc} += {f}"),
+    }
+}
+
+fn output_expr_v3(p: &ProgramV3, lang: Lang) -> String {
+    match p.output_idx {
+        1 => "v".to_string(),
+        2 => "s + v".to_string(),
+        3 => "s * v".to_string(),
+        4 => match lang {
+            Lang::Rust => "s.abs()".to_string(),
+            Lang::Python => "abs(s)".to_string(),
+            Lang::C => "fabsf(s)".to_string(),
+            _ => "Math.abs(s)".to_string(),
+        },
+        _ => "s".to_string(),
+    }
+}
+
+/// Render a discovered v3 program in any supported language: a loop with a
+/// mutable state cell emitting one output per step. Full fidelity with
+/// `execute_program_v3`, including the inclusion-guard / post-scale stages
+/// carried for v2-lifted programs (synthesized v3 programs keep both
+/// neutral, so the common rendering is a clean stateful loop).
+pub fn program_source_v3(name: &str, p: &ProgramV3, lang: Lang) -> String {
+    let init = match p.state_init_idx {
+        1 => "1.0".to_string(),
+        2 => "-20.0".to_string(),
+        _ => "0.0".to_string(),
+    };
+    // Reuse the v2 expression renderers through a v2 view of the shared
+    // stages (combine + inclusion guard); the reset guard reuses the same
+    // comparison vocabulary via a second view.
+    let v2_view = ProgramV2 {
+        arity: p.arity,
+        combine_idx: p.combine_idx,
+        guard_idx: p.guard_idx,
+        guard_threshold: p.guard_threshold,
+        init_idx: p.state_init_idx,
+        transform_idx: p.update_transform_idx,
+        reduce_idx: p.update_reduce_idx,
+        post_scale_idx: p.post_scale_idx,
+        offset: p.offset,
+    };
+    let reset_view = ProgramV2 { guard_idx: p.reset_guard_idx, guard_threshold: p.reset_threshold, ..v2_view };
+    let combine = combine_expr(&v2_view, lang);
+    let guard = guard_expr(&v2_view, lang);
+    let reset = guard_expr(&reset_view, lang);
+    let transform = transform_expr(p.update_transform_idx, lang);
+    let needs_n = p.post_scale_idx == 1;
+    let y_expr = {
+        let y = output_expr_v3(p, lang);
+        match p.post_scale_idx {
+            1 => match lang {
+                Lang::Rust => format!("({y}) / n.max(1.0)"),
+                Lang::Python => format!("({y}) / max(n, 1)"),
+                Lang::C => format!("({y}) / fmaxf(n, 1.0f)"),
+                _ => format!("({y}) / Math.max(n, 1)"),
+            },
+            2 => match lang {
+                Lang::Rust => format!("({y}).clamp(-30.0, 30.0).exp()"),
+                Lang::Python => format!("math.exp(max(-30.0, min(30.0, {y})))"),
+                Lang::C => format!("expf(fminf(fmaxf({y}, -30.0f), 30.0f))"),
+                _ => format!("Math.exp(Math.max(-30, Math.min(30, {y})))"),
+            },
+            _ => y,
+        }
+    };
+    let offset_suffix = if p.offset != 0.0 {
+        format!(" + {:.6}", p.offset)
+    } else {
+        String::new()
+    };
+
+    // The state-update block (reset check, included counter, fold), shared
+    // shape across languages; wrapped in the inclusion guard when present.
+    let update_lines = |indent: &str, lang: Lang| -> String {
+        let mut lines = String::new();
+        if let Some(r) = &reset {
+            match lang {
+                Lang::Python => {
+                    lines.push_str(&format!("{indent}if {r}:\n"));
+                    lines.push_str(&format!("{indent}    s = {init}\n"));
+                    if needs_n {
+                        lines.push_str(&format!("{indent}    n = 0\n"));
+                    }
+                }
+                _ => {
+                    let n_reset = if needs_n {
+                        if lang == Lang::C { " n = 0.0f;" } else { " n = 0.0;" }
+                    } else {
+                        ""
+                    };
+                    let init_lit = if lang == Lang::C { format!("{init}f") } else { init.clone() };
+                    lines.push_str(&format!("{indent}if ({r}) {{ s = {init_lit};{n_reset} }}\n"));
+                }
+            }
+        }
+        if needs_n {
+            match lang {
+                Lang::Python => lines.push_str(&format!("{indent}n += 1\n")),
+                Lang::C => lines.push_str(&format!("{indent}n += 1.0f;\n")),
+                _ => lines.push_str(&format!("{indent}n += 1.0;\n")),
+            }
+        }
+        let stmt = reduce_stmt_v3(p.update_reduce_idx, "s", &transform, lang);
+        match lang {
+            Lang::Python => lines.push_str(&format!("{indent}{stmt}\n")),
+            _ => lines.push_str(&format!("{indent}{stmt};\n")),
+        }
+        lines
+    };
+
+    match lang {
+        Lang::Rust => {
+            let mut body = String::new();
+            body.push_str(&format!(
+                "fn {name}(points: &[[f32; {}]]) -> Vec<f32> {{\n",
+                p.arity
+            ));
+            body.push_str(&format!("    let mut s: f32 = {init};\n"));
+            if needs_n {
+                body.push_str("    let mut n: f32 = 0.0;\n");
+            }
+            body.push_str("    let mut out: Vec<f32> = Vec::with_capacity(points.len());\n");
+            body.push_str("    for pt in points {\n");
+            body.push_str(&format!("        let v = {combine};\n"));
+            if let Some(g) = &guard {
+                body.push_str(&format!("        if {g} {{\n"));
+                body.push_str(&update_lines("            ", lang));
+                body.push_str("        }\n");
+            } else {
+                body.push_str(&update_lines("        ", lang));
+            }
+            body.push_str(&format!("        out.push({y_expr}{offset_suffix});\n"));
+            body.push_str("    }\n    out\n}");
+            body
+        }
+        Lang::Python => {
+            let mut body = String::new();
+            if p.update_transform_idx == 5 || p.combine_idx == 3 || p.post_scale_idx == 2 {
+                body.push_str("import math\n\n");
+            }
+            body.push_str(&format!(
+                "def {name}(points):  # each point: {} value(s)\n",
+                p.arity
+            ));
+            body.push_str(&format!("    s = {init}\n"));
+            if needs_n {
+                body.push_str("    n = 0\n");
+            }
+            body.push_str("    out = []\n");
+            body.push_str("    for pt in points:\n");
+            body.push_str(&format!("        v = {combine}\n"));
+            if let Some(g) = &guard {
+                body.push_str(&format!("        if {g}:\n"));
+                body.push_str(&update_lines("            ", lang));
+            } else {
+                body.push_str(&update_lines("        ", lang));
+            }
+            body.push_str(&format!("        out.append({y_expr}{offset_suffix})\n"));
+            body.push_str("    return out\n");
+            body
+        }
+        Lang::JavaScript | Lang::TypeScript => {
+            let sig = if lang == Lang::TypeScript {
+                format!("function {name}(points: number[][]): number[] {{")
+            } else {
+                format!("function {name}(points) {{")
+            };
+            let mut body = String::new();
+            body.push_str(&format!("{sig}\n"));
+            body.push_str(&format!("  let s = {init};\n"));
+            if needs_n {
+                body.push_str("  let n = 0;\n");
+            }
+            let out_decl = if lang == Lang::TypeScript {
+                "  const out: number[] = [];\n"
+            } else {
+                "  const out = [];\n"
+            };
+            body.push_str(out_decl);
+            body.push_str("  for (const pt of points) {\n");
+            body.push_str(&format!("    const v = {combine};\n"));
+            if let Some(g) = &guard {
+                body.push_str(&format!("    if ({g}) {{\n"));
+                body.push_str(&update_lines("      ", lang));
+                body.push_str("    }\n");
+            } else {
+                body.push_str(&update_lines("    ", lang));
+            }
+            body.push_str(&format!("    out.push({y_expr}{offset_suffix});\n"));
+            body.push_str("  }\n  return out;\n}");
+            body
+        }
+        Lang::C => {
+            let mut body = String::new();
+            body.push_str("#include <math.h>\n\n");
+            if p.combine_idx == 2 || p.combine_idx == 3 || p.combine_idx >= 6 {
+                body.push_str("static float sum_fields(const float* pt, int k) { float s = 0; for (int j = 0; j < k; j++) s += pt[j]; return s; }\n");
+                body.push_str("static float prod_fields(const float* pt, int k) { float s = 1; for (int j = 0; j < k; j++) s *= pt[j]; return s; }\n");
+                body.push_str("static float min_fields(const float* pt, int k) { float s = pt[0]; for (int j = 1; j < k; j++) s = fminf(s, pt[j]); return s; }\n");
+                body.push_str("static float max_fields(const float* pt, int k) { float s = pt[0]; for (int j = 1; j < k; j++) s = fmaxf(s, pt[j]); return s; }\n\n");
+            }
+            body.push_str(&format!(
+                "void {name}(const float* data, int n_steps, float* out) {{\n    const int k = {};\n    float s = {init}f;\n",
+                p.arity
+            ));
+            if needs_n {
+                body.push_str("    float n = 0.0f;\n");
+            }
+            body.push_str("    for (int i = 0; i < n_steps; i++) {\n");
+            body.push_str("        const float* pt = data + i * k;\n");
+            body.push_str(&format!("        float v = {combine};\n"));
+            if let Some(g) = &guard {
+                body.push_str(&format!("        if ({g}) {{\n"));
+                body.push_str(&update_lines("            ", lang));
+                body.push_str("        }\n");
+            } else {
+                body.push_str(&update_lines("        ", lang));
+            }
+            body.push_str(&format!("        out[i] = {y_expr}{offset_suffix};\n"));
+            body.push_str("    }\n}");
+            body
+        }
+    }
+}
+
 /// Render a program as readable Rust-style source (mirrors executor semantics).
 pub fn program_source(name: &str, p: &DiscreteProgram) -> String {
     let init = match p.init_idx {
@@ -1077,19 +1798,30 @@ pub fn program_source(name: &str, p: &DiscreteProgram) -> String {
     )
 }
 
-/// Serialize an index back to canonical library JSON. Pure-v1 libraries are
-/// emitted in the v1 format so every existing runtime loads them; libraries
-/// containing any v2 capability (records, guards) are emitted as
-/// `"format": 2` with `program_v2` keys, which v1 loaders reject cleanly
-/// instead of silently mis-executing.
+/// Serialize an index back to canonical library JSON at the LOWEST loadable
+/// format. Pure-v1 libraries are emitted in the v1 format so every existing
+/// runtime loads them; libraries containing any v2 capability (records,
+/// guards) are emitted as `"format": 2` with `program_v2` keys; libraries
+/// containing any v3 capability (state resets, non-fold outputs) are emitted
+/// as `"format": 3` with `program_v3` keys. In a higher-format file every
+/// entry is lifted to that format entry-wise (lifting is exact — see
+/// `ProgramV2::from_v1` / `ProgramV3::from_v2`), and lower-format loaders
+/// reject the file cleanly instead of silently mis-executing.
 pub fn library_to_json(index: &NativeIndex) -> String {
-    let needs_v2 = index
+    let needs_v3 = index
         .entries
         .iter()
-        .any(|e| e.program_v2.map(|p| !p.is_v1()).unwrap_or(false));
+        .any(|e| e.program_v3.map(|p| !p.is_v2()).unwrap_or(false));
+    let needs_v2 = !needs_v3
+        && index
+            .entries
+            .iter()
+            .any(|e| e.program_v2.map(|p| !p.is_v1()).unwrap_or(false));
     let mut out = String::new();
     out.push_str("{\n");
-    if needs_v2 {
+    if needs_v3 {
+        out.push_str("  \"format\": 3,\n");
+    } else if needs_v2 {
         out.push_str("  \"format\": 2,\n");
     }
     out.push_str(&format!(
@@ -1100,7 +1832,17 @@ pub fn library_to_json(index: &NativeIndex) -> String {
     for (i, e) in index.entries.iter().enumerate() {
         let sig: Vec<String> = e.signature.iter().map(|v| format!("{v}")).collect();
         let trailing = if i + 1 == index.entries.len() { "" } else { "," };
-        if needs_v2 {
+        if needs_v3 {
+            let p = e.effective_program_v3();
+            out.push_str(&format!(
+                "    {{\"signature\": [{}], \"program_v3\": {{\"arity\": {}, \"combine_idx\": {}, \"guard_idx\": {}, \"guard_threshold\": {}, \"reset_guard_idx\": {}, \"reset_threshold\": {}, \"state_init_idx\": {}, \"update_transform_idx\": {}, \"update_reduce_idx\": {}, \"post_scale_idx\": {}, \"output_idx\": {}, \"offset\": {}}}, \"hit_count\": 0, \"task_name\": \"entry_{i}\", \"cached_at_step\": null, \"convergence_gap\": null}}{trailing}\n",
+                sig.join(", "),
+                p.arity, p.combine_idx, p.guard_idx, p.guard_threshold,
+                p.reset_guard_idx, p.reset_threshold, p.state_init_idx,
+                p.update_transform_idx, p.update_reduce_idx, p.post_scale_idx,
+                p.output_idx, p.offset,
+            ));
+        } else if needs_v2 {
             let p = e.effective_program();
             out.push_str(&format!(
                 "    {{\"signature\": [{}], \"program_v2\": {{\"arity\": {}, \"combine_idx\": {}, \"guard_idx\": {}, \"guard_threshold\": {}, \"init_idx\": {}, \"transform_idx\": {}, \"reduce_idx\": {}, \"post_scale_idx\": {}, \"offset\": {}}}, \"hit_count\": 0, \"task_name\": \"entry_{i}\", \"cached_at_step\": null, \"convergence_gap\": null}}{trailing}\n",
@@ -1208,6 +1950,7 @@ impl NpcotRuntime {
                 offset,
             },
             program_v2: None,
+            program_v3: None,
         });
     }
 
@@ -1299,7 +2042,139 @@ impl NpcotRuntime {
                 offset,
             },
             program_v2: Some(v2),
+            program_v3: None,
         });
+    }
+
+    /// v3 synthesis over stateful TRACES.
+    ///
+    /// Flat trace encoding:
+    /// * `data` — all traces' input records back to back. Trace `i`
+    ///   contributes `point_counts[i]` records of `arity` floats each
+    ///   (so trace `i` occupies `point_counts[i] * arity` floats).
+    /// * `point_counts[i]` — number of steps in trace `i`.
+    /// * `expected` — all traces' per-step expected outputs back to back:
+    ///   trace `i` contributes `point_counts[i]` floats. Total length must
+    ///   equal `sum(point_counts)`.
+    ///
+    /// Every trace restarts state. Returns JSON with the discovered
+    /// program's fields, search stats, and rendered source in all five
+    /// supported languages — or `None` when no program in the v3 space
+    /// reproduces every step of every trace (refusal, not approximation).
+    #[allow(clippy::too_many_arguments)]
+    pub fn synthesize_v3(
+        &self,
+        data: Vec<f32>,
+        point_counts: Vec<u32>,
+        expected: Vec<f32>,
+        arity: u32,
+        name: String,
+    ) -> Option<String> {
+        if point_counts.is_empty() || arity == 0 {
+            return None;
+        }
+        let total_steps: usize = point_counts.iter().map(|l| *l as usize).sum();
+        let total_floats: usize = total_steps * arity as usize;
+        if total_floats != data.len() || total_steps != expected.len() {
+            return None;
+        }
+        let mut traces: Vec<(&[f32], &[f32])> = Vec::with_capacity(point_counts.len());
+        let mut d_cursor = 0usize;
+        let mut e_cursor = 0usize;
+        for n_points in &point_counts {
+            let d_end = d_cursor + (*n_points * arity) as usize;
+            let e_end = e_cursor + *n_points as usize;
+            traces.push((&data[d_cursor..d_end], &expected[e_cursor..e_end]));
+            d_cursor = d_end;
+            e_cursor = e_end;
+        }
+        let result = synthesize_program_v3(&traces, arity, 1e-3)?;
+        let p = result.program;
+        let esc = |s: String| s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        let sources: Vec<String> = [
+            ("rust", Lang::Rust),
+            ("python", Lang::Python),
+            ("javascript", Lang::JavaScript),
+            ("c", Lang::C),
+            ("typescript", Lang::TypeScript),
+        ]
+        .iter()
+        .map(|(label, lang)| {
+            format!("\"{label}\": \"{}\"", esc(program_source_v3(&name, &p, *lang)))
+        })
+        .collect();
+        Some(format!(
+            "{{\"arity\": {}, \"combine_idx\": {}, \"reset_guard_idx\": {}, \"reset_threshold\": {}, \"state_init_idx\": {}, \"update_transform_idx\": {}, \"update_reduce_idx\": {}, \"output_idx\": {}, \"offset\": {}, \"max_err\": {}, \"n_consistent\": {}, \"n_searched\": {}, \"sources\": {{{}}}}}",
+            p.arity, p.combine_idx, p.reset_guard_idx, p.reset_threshold,
+            p.state_init_idx, p.update_transform_idx, p.update_reduce_idx,
+            p.output_idx, p.offset,
+            result.max_err, result.n_consistent, result.n_searched,
+            sources.join(", ")
+        ))
+    }
+
+    /// Insert a stateful (v3) skill from the synthesized v3 space into the
+    /// live library. The inclusion-guard and post-scale stages stay neutral
+    /// (they exist only for v2 lifting); to insert a stateless guarded fold
+    /// use `insert_skill_v2`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_skill_v3(
+        &mut self,
+        signature: Vec<f32>,
+        arity: u32,
+        combine_idx: u32,
+        reset_guard_idx: u32,
+        reset_threshold: f32,
+        state_init_idx: u32,
+        update_transform_idx: u32,
+        update_reduce_idx: u32,
+        output_idx: u32,
+        offset: f32,
+    ) {
+        let v3 = ProgramV3 {
+            arity: arity.clamp(1, MAX_ARITY),
+            combine_idx,
+            guard_idx: 0,
+            guard_threshold: 0.0,
+            reset_guard_idx,
+            reset_threshold,
+            state_init_idx,
+            update_transform_idx,
+            update_reduce_idx,
+            post_scale_idx: 0,
+            output_idx,
+            offset,
+        };
+        self.index.insert(NativeEntry {
+            signature,
+            program: DiscreteProgram {
+                init_idx: state_init_idx,
+                transform_idx: update_transform_idx,
+                reduce_idx: update_reduce_idx,
+                post_scale_idx: 0,
+                offset,
+            },
+            program_v2: v3.to_v2(),
+            program_v3: Some(v3),
+        });
+    }
+
+    /// Consult path for stateful skills: similarity lookup on `hidden`,
+    /// then replay the matched program over `n_steps` records of `arity`
+    /// floats in `inputs`, returning ALL per-step outputs (a `Float32Array`
+    /// of length `n_steps`). v1/v2 entries answer too (lifted exactly; their
+    /// per-step outputs are the running fold — the last element equals what
+    /// `consult` returns). `None` on lookup miss or arity mismatch. For a
+    /// single final output, `consult` also accepts v3 entries and returns
+    /// the last step's output.
+    pub fn consult_v3(
+        &self,
+        hidden: Vec<f32>,
+        inputs: Vec<f32>,
+        arity: u32,
+        n_steps: u32,
+    ) -> Option<Vec<f32>> {
+        consult_native_v3(&self.index, &hidden, &inputs, arity, n_steps)
     }
 
     /// Export the current library (including skills learned this session) as
@@ -1472,6 +2347,7 @@ mod tests {
                 offset: 2.5,
             },
             program_v2: None,
+            program_v3: None,
         });
         let json = library_to_json(&index);
         let (thr, parsed) = load_library_json(&json).expect("round trip");
@@ -1597,6 +2473,7 @@ mod tests {
                 post_scale_idx: 0,
                 offset: 0.0,
             }),
+            program_v3: None,
         });
         let json = library_to_json(&index);
         assert!(json.contains("\"format\": 2"));
@@ -1624,6 +2501,7 @@ mod tests {
                 offset: 0.0,
             },
             program_v2: None,
+            program_v3: None,
         });
         let json = library_to_json(&index);
         assert!(!json.contains("format"));
@@ -1706,5 +2584,275 @@ mod tests {
 }"##;
         let (_thr, index) = load_library_json(library_json).expect("parse");
         assert!(consult_native(&index, &[0.0, 1.0, 0.0], &[1.0], 1).is_none());
+    }
+
+    // ------------------------------------------------------------- v3 tests
+
+    #[test]
+    fn v3_discovers_running_counter() {
+        // y_t = t+1 regardless of input values: transform=const-1 + reduce=add
+        // + output=state. Inputs include a negative and a zero so the
+        // indicator transform (x>0) cannot masquerade as const-1.
+        let inputs = [5.0, -2.0, 0.0, 9.0];
+        let expected = [1.0, 2.0, 3.0, 4.0];
+        let traces: Vec<(&[f32], &[f32])> = vec![(&inputs, &expected)];
+        let r = synthesize_program_v3(&traces, 1, 1e-3).expect("running counter");
+        let p = r.program;
+        assert_eq!(p.update_transform_idx, 3, "const-1 transform");
+        assert_eq!(p.update_reduce_idx, 0, "add reduce");
+        assert_eq!(p.output_idx, 0, "output = state");
+        assert_eq!(p.reset_guard_idx, 0, "no reset needed");
+        assert_eq!(p.offset, 0.0);
+        // Held-out replay.
+        let held = [0.5, 0.5, -3.0, 100.0, 0.0, 7.0];
+        let out = execute_program_v3(p, &held, 6);
+        assert_eq!(out, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn v3_discovers_running_max_with_mined_reset() {
+        // Running max that restarts when a sentinel (-10) arrives. The reset
+        // threshold must come out of the trace data (mine_thresholds), and
+        // the separating values (-8 / -10) are NOT the anchored zero — a
+        // hardcoded-zero guard would fire on the ordinary negatives too.
+        let in1 = [3.0, -5.0, 7.0, -10.0, 2.0, -8.0, 4.0];
+        let ex1 = [3.0, 3.0, 7.0, -10.0, 2.0, 2.0, 4.0];
+        // Second trace also proves state restarts between traces: carrying
+        // trace 1's final state (4.0) would give max(4,1)=4, not 1.
+        let in2 = [1.0, 3.0, -10.0, 2.0, -8.0];
+        let ex2 = [1.0, 3.0, -10.0, 2.0, 2.0];
+        let traces: Vec<(&[f32], &[f32])> = vec![(&in1, &ex1), (&in2, &ex2)];
+        let r = synthesize_program_v3(&traces, 1, 1e-3).expect("running max with reset");
+        let p = r.program;
+        assert_eq!(p.update_reduce_idx, 2, "max reduce");
+        assert_ne!(p.reset_guard_idx, 0, "reset guard must be active");
+        // The threshold is mined from the data: the only consistent
+        // separators are -8 (v < t) and -10 (v == t); zero cannot work.
+        assert!(
+            (p.reset_threshold - -8.0).abs() < 1e-5 || (p.reset_threshold - -10.0).abs() < 1e-5,
+            "threshold {} must be a mined data value",
+            p.reset_threshold
+        );
+        let mined = mine_thresholds(&[(&in1[..], 0.0), (&in2[..], 0.0)]);
+        assert!(
+            mined.iter().any(|t| (t - p.reset_threshold).abs() < 1e-6),
+            "threshold {} not in mined set {:?}",
+            p.reset_threshold,
+            mined
+        );
+        // Held-out replay.
+        let held = [5.0, 2.0, -10.0, 1.0, 0.0];
+        let out = execute_program_v3(p, &held, 5);
+        assert_eq!(out, vec![5.0, 5.0, -10.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn v3_refuses_two_step_delay() {
+        // y_t = x_{t-2} needs a 2-deep shift register; one f32 state cell
+        // under {add,mul,max,min} folds cannot express it. Honest refusal.
+        let in1 = [2.0, 9.0, 4.0, 7.0, 1.0];
+        let ex1 = [0.0, 0.0, 2.0, 9.0, 4.0];
+        let in2 = [5.0, 3.0, 8.0];
+        let ex2 = [0.0, 0.0, 5.0];
+        let traces: Vec<(&[f32], &[f32])> = vec![(&in1, &ex1), (&in2, &ex2)];
+        assert!(synthesize_program_v3(&traces, 1, 1e-3).is_none());
+    }
+
+    #[test]
+    fn v3_lift_matches_v2_exactly_across_grid() {
+        // v2 is the exact special case of v3 (reset=never, output=state):
+        // the final step of the v3 replay must equal the v2 fold for EVERY
+        // v2 program, including guards and post-scales.
+        let data = [3.0, -1.5, 4.0, 0.0, 9.0, 2.0, -2.0, 5.0]; // 4 points, arity 2
+        for combine_idx in 0..N_COMBINES {
+            for guard_idx in 0..N_GUARDS {
+                for &guard_threshold in &[0.0f32, 2.0] {
+                    for init_idx in 0..N_INITS {
+                        for transform_idx in 0..N_TRANSFORMS {
+                            for reduce_idx in 0..N_REDUCES {
+                                for post_scale_idx in 0..N_POST_SCALES {
+                                    let v2 = ProgramV2 {
+                                        arity: 2,
+                                        combine_idx,
+                                        guard_idx,
+                                        guard_threshold,
+                                        init_idx,
+                                        transform_idx,
+                                        reduce_idx,
+                                        post_scale_idx,
+                                        offset: 0.25,
+                                    };
+                                    let a = execute_program_v2(v2, &data, 4);
+                                    let b = execute_program_v3_final(ProgramV3::from_v2(v2), &data, 4);
+                                    if a.is_finite() && b.is_finite() {
+                                        assert!(
+                                            (a - b).abs() < 1e-5,
+                                            "v2/v3 divergence at c{combine_idx} g{guard_idx} t{guard_threshold} i{init_idx} tr{transform_idx} r{reduce_idx} p{post_scale_idx}: {a} vs {b}"
+                                        );
+                                    }
+                                    // Empty trace mirrors v2's empty fold.
+                                    let ae = execute_program_v2(v2, &[], 0);
+                                    let be = execute_program_v3_final(ProgramV3::from_v2(v2), &[], 0);
+                                    if ae.is_finite() && be.is_finite() {
+                                        assert!((ae - be).abs() < 1e-5, "empty-trace divergence: {ae} vs {be}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn v3_stateless_output_matches_v2_combine_stage() {
+        // A v3 program whose output ignores state (output = v) reproduces
+        // the v2 combine stage per step on the same base fields, whatever
+        // the state machinery does.
+        let p = ProgramV3 {
+            arity: 2,
+            combine_idx: 4, // f0 - f1
+            guard_idx: 0,
+            guard_threshold: 0.0,
+            reset_guard_idx: 3, // arbitrary state machinery — must not matter
+            reset_threshold: 1.0,
+            state_init_idx: 1,
+            update_transform_idx: 1,
+            update_reduce_idx: 1,
+            post_scale_idx: 0,
+            output_idx: 1, // y = v
+            offset: 0.5,
+        };
+        let data = [5.0, 2.0, 1.0, 4.0, -3.0, -3.0]; // (5,2),(1,4),(-3,-3)
+        let out = execute_program_v3(p, &data, 3);
+        for (i, y) in out.iter().enumerate() {
+            let fields = &data[i * 2..(i + 1) * 2];
+            let expected = apply_combine(fields, p.combine_idx) + p.offset;
+            assert!((y - expected).abs() < 1e-6, "step {i}: {y} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn v3_library_round_trips_and_v1_v2_loaders_reject_it() {
+        let mut index = NativeIndex::new(0.85);
+        // v1 entry (sum), v2 entry (dot product), v3 entry (running max with
+        // reset) — the v3 entry forces format 3 and the lower entries lift.
+        index.insert(NativeEntry {
+            signature: vec![1.0, 0.0, 0.0],
+            program: DiscreteProgram { init_idx: 0, transform_idx: 0, reduce_idx: 0, post_scale_idx: 0, offset: 0.0 },
+            program_v2: None,
+            program_v3: None,
+        });
+        index.insert(NativeEntry {
+            signature: vec![0.0, 1.0, 0.0],
+            program: DiscreteProgram { init_idx: 0, transform_idx: 0, reduce_idx: 0, post_scale_idx: 0, offset: 0.0 },
+            program_v2: Some(ProgramV2 {
+                arity: 2, combine_idx: 3, guard_idx: 0, guard_threshold: 0.0,
+                init_idx: 0, transform_idx: 0, reduce_idx: 0, post_scale_idx: 0, offset: 0.0,
+            }),
+            program_v3: None,
+        });
+        let v3 = ProgramV3 {
+            arity: 1, combine_idx: 0, guard_idx: 0, guard_threshold: 0.0,
+            reset_guard_idx: 2, reset_threshold: -8.0, state_init_idx: 2,
+            update_transform_idx: 0, update_reduce_idx: 2, post_scale_idx: 0,
+            output_idx: 0, offset: 0.0,
+        };
+        index.insert(NativeEntry {
+            signature: vec![0.0, 0.0, 1.0],
+            program: DiscreteProgram { init_idx: 2, transform_idx: 0, reduce_idx: 2, post_scale_idx: 0, offset: 0.0 },
+            program_v2: None,
+            program_v3: Some(v3),
+        });
+        let json = library_to_json(&index);
+        assert!(json.contains("\"format\": 3"));
+        assert!(json.contains("program_v3"));
+        // Entry-wise lifting: NO v1/v2 program keys remain, so v1 loaders
+        // (which require `"program"`) and v2 loaders (which require
+        // `"program_v2"`) both fail closed on this file. This is exactly
+        // what the old parsers grep for:
+        assert!(!json.contains("\"program\":"), "v3 export must not carry a v1 program key");
+        assert!(!json.contains("\"program_v2\":"), "v3 export must not carry a v2 program key");
+        assert!(find_object_value(&json, "\"program\"").is_none());
+        assert!(find_object_value(&json, "\"program_v2\"").is_none());
+
+        // New loader round-trips all three entries.
+        let (_thr, parsed) = load_library_json(&json).expect("v3 round trip");
+        assert_eq!(parsed.entries.len(), 3);
+        // Lifted v1 entry still sums (consult = final fold output).
+        let r = consult_native(&parsed, &[1.0, 0.0, 0.0], &[1.0, 2.0, 3.0, 4.0], 4).expect("hit");
+        assert!((r - 10.0).abs() < 1e-4);
+        // Lifted v2 entry still answers the dot product.
+        let r = consult_native(&parsed, &[0.0, 1.0, 0.0], &[2.0, 3.0, 4.0, 0.5], 2).expect("hit");
+        assert!((r - 8.0).abs() < 1e-4);
+        // v3 entry replays per-step through consult_native_v3...
+        let steps = consult_native_v3(&parsed, &[0.0, 0.0, 1.0], &[5.0, 2.0, -10.0, 1.0], 1, 4)
+            .expect("v3 hit");
+        assert_eq!(steps, vec![5.0, 5.0, -10.0, 1.0]);
+        // ...refuses on arity mismatch...
+        assert!(consult_native_v3(&parsed, &[0.0, 0.0, 1.0], &[5.0, 2.0], 2, 1).is_none());
+        // ...and the scalar consult answers with the final step.
+        let r = consult_native(&parsed, &[0.0, 0.0, 1.0], &[5.0, 2.0, -10.0, 1.0], 4).expect("hit");
+        assert!((r - 1.0).abs() < 1e-4);
+        // Re-export stays format 3 (stable round trip).
+        assert!(library_to_json(&parsed).contains("\"format\": 3"));
+    }
+
+    #[test]
+    fn v3_export_demotes_to_v2_when_no_state_used() {
+        // A v3 program with reset=never and output=state IS a v2 fold; the
+        // export must stay at the lowest loadable format.
+        let v3 = ProgramV3 {
+            arity: 2, combine_idx: 3, guard_idx: 1, guard_threshold: 0.5,
+            reset_guard_idx: 0, reset_threshold: 0.0, state_init_idx: 0,
+            update_transform_idx: 0, update_reduce_idx: 0, post_scale_idx: 0,
+            output_idx: 0, offset: 0.0,
+        };
+        assert!(v3.is_v2());
+        let mut index = NativeIndex::new(0.85);
+        index.insert(NativeEntry {
+            signature: vec![1.0, 0.0],
+            program: DiscreteProgram { init_idx: 0, transform_idx: 0, reduce_idx: 0, post_scale_idx: 0, offset: 0.0 },
+            program_v2: v3.to_v2(),
+            program_v3: Some(v3),
+        });
+        let json = library_to_json(&index);
+        assert!(json.contains("\"format\": 2"));
+        assert!(json.contains("program_v2"));
+        assert!(!json.contains("program_v3"));
+    }
+
+    #[test]
+    fn v3_sources_render_rust_python_typescript() {
+        // Running max with reset — the canonical stateful skill.
+        let p = ProgramV3 {
+            arity: 1, combine_idx: 0, guard_idx: 0, guard_threshold: 0.0,
+            reset_guard_idx: 2, reset_threshold: -8.0, state_init_idx: 2,
+            update_transform_idx: 0, update_reduce_idx: 2, post_scale_idx: 0,
+            output_idx: 0, offset: 0.0,
+        };
+        let rust = program_source_v3("running_max", &p, Lang::Rust);
+        assert!(rust.contains("fn running_max"), "{rust}");
+        assert!(rust.contains("let mut s"), "{rust}");
+        assert!(rust.contains("v < -8"), "{rust}");
+        assert!(rust.contains("s = s.max(v)"), "{rust}");
+        assert!(rust.contains("out.push(s)"), "{rust}");
+        let py = program_source_v3("running_max", &p, Lang::Python);
+        assert!(py.contains("def running_max"), "{py}");
+        assert!(py.contains("if v < -8:"), "{py}");
+        assert!(py.contains("s = max(s, v)"), "{py}");
+        assert!(py.contains("out.append(s)"), "{py}");
+        let ts = program_source_v3("running_max", &p, Lang::TypeScript);
+        assert!(ts.contains("points: number[][]"), "{ts}");
+        assert!(ts.contains("): number[]"), "{ts}");
+        assert!(ts.contains("let s = -20.0"), "{ts}");
+        assert!(ts.contains("s = Math.max(s, v)"), "{ts}");
+        // JS and C render too (smoke).
+        let js = program_source_v3("running_max", &p, Lang::JavaScript);
+        assert!(js.contains("function running_max(points)"), "{js}");
+        let c = program_source_v3("running_max", &p, Lang::C);
+        assert!(c.contains("void running_max"), "{c}");
+        assert!(c.contains("out[i] = s"), "{c}");
     }
 }
