@@ -1,21 +1,12 @@
-# Training Directory
+# Training
 
-This directory is for local training artifacts produced by the SOME controller pipeline:
+Training pipelines, data generators, and model scripts for nCPU components.
 
-- prepared JSONL datasets
-- bundle templates
-- controller checkpoints
-- proof-run outputs
+## Structure
+- `scripts/`: Main training and generation scripts (.py, .sh).
+- `data/`: Data files, bootstrap configs, internal artifacts.
+- `models/`: (future) Saved model checkpoints and related.
 
-These artifact trees are intentionally gitignored. The repository should track:
+Outputs often go to external storage or training_results/ (gitignored).
 
-- the code that generates them
-- the documentation that explains them
-- concise summary results that are worth citing
-
-The current tracked entry points are under `ncpu/self_optimizing/`, especially:
-
-- `prepare_internal_training_data.py`
-- `controller_training.py`
-- `train_internal_controller.py`
-- `run_real_memory_proof.py`
+See root README for how this fits the overall hero thesis (research layer feeding the performance layer).
