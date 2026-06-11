@@ -1,0 +1,1087 @@
+{
+ "next_pos": {
+  "verified": true,
+  "method": "search_scalar_expr",
+  "iterations": 1,
+  "mog": "fn next_pos(a: i64, b: i64) -> i64 {\n    return (b + a);\n}\n",
+  "ts": "function next_pos(a: number, b: number): number {\n    return (b + a);\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     10,
+     2
+    ],
+    "expected": 12
+   },
+   {
+    "inputs": [
+     5,
+     -3
+    ],
+    "expected": 2
+   },
+   {
+    "inputs": [
+     0,
+     4
+    ],
+    "expected": 4
+   },
+   {
+    "inputs": [
+     100,
+     -7
+    ],
+    "expected": 93
+   },
+   {
+    "inputs": [
+     42,
+     0
+    ],
+    "expected": 42
+   },
+   {
+    "inputs": [
+     799,
+     11
+    ],
+    "expected": 810
+   },
+   {
+    "inputs": [
+     -5,
+     -11
+    ],
+    "expected": -16
+   },
+   {
+    "inputs": [
+     600,
+     1
+    ],
+    "expected": 601
+   }
+  ],
+  "domainCases": 11781,
+  "elapsedSec": 0.1
+ },
+ "select": {
+  "verified": true,
+  "signature": "fn select(c: i64, a: i64, b: i64) -> i64",
+  "method": "synth_gradient",
+  "iterations": 1,
+  "mog": "fn select(a: i64, b: i64, c: i64) -> i64 {\n    v0: i64 = c;\n    if a != 0 {\n        v0 = b;\n    }\n    result: i64 = v0;\n    if v0 >= 2 {\n        result = v0;\n    }\n    return result;\n}\n",
+  "ts": "function select(a: number, b: number, c: number): number {\n    let v0: number = c;\n    if (a != 0) {\n        v0 = b;\n    }\n    let result: number = v0;\n    if (v0 >= 2) {\n        result = v0;\n    }\n    return result;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     1,
+     5,
+     9
+    ],
+    "expected": 5
+   },
+   {
+    "inputs": [
+     0,
+     5,
+     9
+    ],
+    "expected": 9
+   },
+   {
+    "inputs": [
+     1,
+     -3,
+     7
+    ],
+    "expected": -3
+   },
+   {
+    "inputs": [
+     0,
+     -3,
+     7
+    ],
+    "expected": 7
+   },
+   {
+    "inputs": [
+     2,
+     100,
+     200
+    ],
+    "expected": 100
+   },
+   {
+    "inputs": [
+     0,
+     0,
+     1
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     1,
+     0,
+     1
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     0,
+     -50,
+     50
+    ],
+    "expected": 50
+   },
+   {
+    "inputs": [
+     1,
+     400,
+     300
+    ],
+    "expected": 400
+   },
+   {
+    "inputs": [
+     0,
+     400,
+     300
+    ],
+    "expected": 300
+   }
+  ],
+  "domainCases": 8978,
+  "elapsedSec": 0.2
+ },
+ "flag_and": {
+  "verified": true,
+  "method": "search_scalar_expr",
+  "iterations": 1,
+  "mog": "fn flag_and(a: i64, b: i64) -> i64 {\n    return (a * b);\n}\n",
+  "ts": "function flag_and(a: number, b: number): number {\n    return (a * b);\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     0,
+     0
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     0,
+     1
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     1,
+     0
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     1,
+     1
+    ],
+    "expected": 1
+   }
+  ],
+  "domainCases": 4,
+  "elapsedSec": 0.2
+ },
+ "flag_or": {
+  "verified": true,
+  "method": "synth_gradient",
+  "iterations": 1,
+  "mog": "fn flag_or(a: i64, b: i64) -> i64 {\n    if 0 != a {\n        return 1;\n    }\n    if a != a {\n        return a;\n    }\n    if a != a {\n        return a;\n    }\n    return b / 1;\n}\n",
+  "ts": "function flag_or(a: number, b: number): number {\n    if (0 != a) {\n        return 1;\n    }\n    if (a != a) {\n        return a;\n    }\n    if (a != a) {\n        return a;\n    }\n    return b / 1;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     0,
+     0
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     0,
+     1
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     1,
+     0
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     1,
+     1
+    ],
+    "expected": 1
+   }
+  ],
+  "domainCases": 4,
+  "elapsedSec": 5.7
+ },
+ "moving_down": {
+  "verified": true,
+  "signature": "fn moving_down(vy: i64) -> i64",
+  "method": "synth_gradient",
+  "iterations": 1,
+  "mog": "fn moving_down(a: i64) -> i64 {\n    if a > 0 {\n        return 1;\n    }\n    if a != a {\n        return a;\n    }\n    if a != a {\n        return a;\n    }\n    return 0;\n}\n",
+  "ts": "function moving_down(a: number): number {\n    if (a > 0) {\n        return 1;\n    }\n    if (a != a) {\n        return a;\n    }\n    if (a != a) {\n        return a;\n    }\n    return 0;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     -1
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     0
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     1
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     -5
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     7
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     -11
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     11
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     3
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     -12
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     12
+    ],
+    "expected": 1
+   }
+  ],
+  "domainCases": 51,
+  "elapsedSec": 1.7
+ },
+ "exited_left": {
+  "verified": true,
+  "signature": "fn exited_left(x: i64) -> i64",
+  "method": "synth_gradient",
+  "iterations": 1,
+  "mog": "fn exited_left(a: i64) -> i64 {\n    x: i64 = a;\n    acc: i64 = 1;\n    if x == 0 {\n        return 0;\n    }\n    while x > 0 {\n        d: i64 = x % 10;\n        x = x / 10;\n        if acc != 3 {\n            acc = acc / 2;\n        }\n    }\n    return acc;\n}\n",
+  "ts": "function exited_left(a: number): number {\n    let x: number = a;\n    let acc: number = 1;\n    if (x == 0) {\n        return 0;\n    }\n    while (x > 0) {\n        let d: number = x % 10;\n        x = Math.trunc(x / 10);\n        if (acc != 3) {\n            acc = Math.trunc(acc / 2);\n        }\n    }\n    return acc;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     -1
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     0
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     1
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -10
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     400
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     800
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -3
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     12
+    ],
+    "expected": 0
+   }
+  ],
+  "domainCases": 461,
+  "elapsedSec": 0.3
+ },
+ "exited_right": {
+  "verified": true,
+  "signature": "fn exited_right(x: i64, w: i64) -> i64",
+  "method": "search_single_branch",
+  "iterations": 1,
+  "mog": "fn exited_right(a: i64, b: i64) -> i64 {\n    if a != b {\n        return (a / b);\n    }\n    return 0;\n}\n",
+  "ts": "function exited_right(a: number, b: number): number {\n    if (a != b) {\n        return (Math.trunc(a / b));\n    }\n    return 0;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     801,
+     800
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     800,
+     800
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     799,
+     800
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     810,
+     800
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     0,
+     800
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -5,
+     800
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     401,
+     400
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     400,
+     400
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     200,
+     400
+    ],
+    "expected": 0
+   }
+  ],
+  "domainCases": 461,
+  "elapsedSec": 0
+ },
+ "hit_bottom": {
+  "verified": true,
+  "signature": "fn hit_bottom(y: i64, h: i64) -> i64",
+  "method": "search_single_branch",
+  "iterations": 1,
+  "mog": "fn hit_bottom(a: i64, b: i64) -> i64 {\n    if (a % 10) != 0 {\n        return (a / b);\n    }\n    return (a / b);\n}\n",
+  "ts": "function hit_bottom(a: number, b: number): number {\n    if ((a % 10) != 0) {\n        return (Math.trunc(a / b));\n    }\n    return (Math.trunc(a / b));\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     600,
+     600
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     599,
+     600
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     601,
+     600
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     610,
+     600
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     0,
+     600
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     300,
+     600
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     400,
+     400
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     399,
+     400
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     405,
+     400
+    ],
+    "expected": 1
+   }
+  ],
+  "domainCases": 361,
+  "elapsedSec": 0
+ },
+ "moving_up": {
+  "verified": true,
+  "signature": "fn moving_up(vy: i64) -> i64",
+  "method": "synth_gradient",
+  "iterations": 1,
+  "mog": "fn moving_up(a: i64) -> i64 {\n    acc: i64 = 1;\n    i: i64 = 0;\n    while i <= a {\n        acc = acc / 3;\n        i = i + 1;\n    }\n    return acc;\n}\n",
+  "ts": "function moving_up(a: number): number {\n    let acc: number = 1;\n    let i: number = 0;\n    while (i <= a) {\n        acc = Math.trunc(acc / 3);\n        i = i + 1;\n    }\n    return acc;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     -1
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     0
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     1
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -5
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     7
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -11
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     11
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     3
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -12
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     12
+    ],
+    "expected": 0
+   }
+  ],
+  "domainCases": 51,
+  "elapsedSec": 0
+ },
+ "crossed_left": {
+  "verified": true,
+  "signature": "fn crossed_left(prev: i64, next: i64, plane: i64) -> i64",
+  "method": "search_two_branch",
+  "iterations": 1,
+  "mog": "fn crossed_left(a: i64, b: i64, c: i64) -> i64 {\n    if (2 + c) < a {\n        return (c / b);\n    }\n    if a <= c {\n        return 0;\n    }\n    return (c / b);\n}\n",
+  "ts": "function crossed_left(a: number, b: number, c: number): number {\n    if ((2 + c) < a) {\n        return (Math.trunc(c / b));\n    }\n    if (a <= c) {\n        return 0;\n    }\n    return (Math.trunc(c / b));\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     40,
+     30,
+     34
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     40,
+     34,
+     34
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     40,
+     35,
+     34
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     34,
+     30,
+     34
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     33,
+     28,
+     34
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     50,
+     45,
+     34
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     35,
+     20,
+     34
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     100,
+     90,
+     34
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     30,
+     36,
+     34
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     36,
+     36,
+     34
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     60,
+     50,
+     55
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     56,
+     55,
+     55
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     55,
+     50,
+     55
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     54,
+     60,
+     55
+    ],
+    "expected": 0
+   }
+  ],
+  "domainCases": 3525,
+  "elapsedSec": 0
+ },
+ "neg": {
+  "verified": true,
+  "method": "synth_gradient",
+  "mog": "fn neg(a: i64) -> i64 {\n    v0: i64 = a * a;\n    return 0 - a;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     3
+    ],
+    "expected": -3
+   },
+   {
+    "inputs": [
+     -2
+    ],
+    "expected": 2
+   },
+   {
+    "inputs": [
+     5
+    ],
+    "expected": -5
+   },
+   {
+    "inputs": [
+     0
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -11
+    ],
+    "expected": 11
+   },
+   {
+    "inputs": [
+     7
+    ],
+    "expected": -7
+   }
+  ],
+  "elapsedSec": 0,
+  "error": null,
+  "signature": null,
+  "ts": "function neg(a: number): number {\n    let v0: number = a * a;\n    return 0 - a;\n}\n\n",
+  "iterations": 1,
+  "domainCases": 4001
+ },
+ "sub2": {
+  "verified": true,
+  "method": "synth_gradient (CEGIS iter 1)",
+  "mog": "fn sub2(a: i64, b: i64) -> i64 {\n    return a - b;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     7,
+     3
+    ],
+    "expected": 4
+   },
+   {
+    "inputs": [
+     2,
+     5
+    ],
+    "expected": -3
+   },
+   {
+    "inputs": [
+     0,
+     0
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     10,
+     -4
+    ],
+    "expected": 14
+   },
+   {
+    "inputs": [
+     -3,
+     -8
+    ],
+    "expected": 5
+   },
+   {
+    "inputs": [
+     100,
+     1
+    ],
+    "expected": 99
+   },
+   {
+    "inputs": [
+     -300,
+     -300
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -270,
+     -300
+    ],
+    "expected": 30
+   },
+   {
+    "inputs": [
+     -240,
+     -300
+    ],
+    "expected": 60
+   },
+   {
+    "inputs": [
+     -210,
+     -300
+    ],
+    "expected": 90
+   },
+   {
+    "inputs": [
+     -180,
+     -300
+    ],
+    "expected": 120
+   },
+   {
+    "inputs": [
+     -150,
+     -300
+    ],
+    "expected": 150
+   },
+   {
+    "inputs": [
+     -120,
+     -300
+    ],
+    "expected": 180
+   },
+   {
+    "inputs": [
+     -90,
+     -300
+    ],
+    "expected": 210
+   },
+   {
+    "inputs": [
+     -60,
+     -300
+    ],
+    "expected": 240
+   },
+   {
+    "inputs": [
+     -30,
+     -300
+    ],
+    "expected": 270
+   }
+  ],
+  "elapsedSec": 192.9,
+  "error": null,
+  "signature": null,
+  "ts": "function sub2(a: number, b: number): number {\n    return a - b;\n}\n\n",
+  "iterations": 1,
+  "domainCases": 160801
+ },
+ "min2": {
+  "verified": true,
+  "method": "synth_gradient",
+  "mog": "fn min2(a: i64, b: i64) -> i64 {\n    v0: i64 = b;\n    if b >= a { v0 = a; }\n    result: i64 = v0;\n    if -2 >= a { result = v0; }\n    return result;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     3,
+     7
+    ],
+    "expected": 3
+   },
+   {
+    "inputs": [
+     9,
+     2
+    ],
+    "expected": 2
+   },
+   {
+    "inputs": [
+     4,
+     4
+    ],
+    "expected": 4
+   },
+   {
+    "inputs": [
+     -5,
+     -2
+    ],
+    "expected": -5
+   },
+   {
+    "inputs": [
+     0,
+     -9
+    ],
+    "expected": -9
+   },
+   {
+    "inputs": [
+     12,
+     15
+    ],
+    "expected": 12
+   }
+  ],
+  "elapsedSec": 84.2,
+  "error": null,
+  "signature": null,
+  "ts": "function min2(a: number, b: number): number {\n    let v0: number = b;\n    if (b >= a) { v0 = a; }\n    let result: number = v0;\n    if (-2 >= a) { result = v0; }\n    return result;\n}\n\n",
+  "iterations": 1,
+  "domainCases": 160801
+ },
+ "hit_top": {
+  "verified": true,
+  "method": "synth_gradient",
+  "mog": "fn hit_top(a: i64) -> i64 {\n    x: i64 = a;\n    acc: i64 = 1;\n    if x == 0 {\n        return 1;\n    }\n    while x > 0 {\n        d: i64 = x % 11;\n        x = x / 11;\n        if acc != 11 {\n            acc = acc / 2;\n        }\n    }\n    return acc;\n}\n",
+  "examples": [
+   {
+    "inputs": [
+     0
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     -1
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     -5
+    ],
+    "expected": 1
+   },
+   {
+    "inputs": [
+     1
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     3
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     100
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     600
+    ],
+    "expected": 0
+   },
+   {
+    "inputs": [
+     -20
+    ],
+    "expected": 1
+   }
+  ],
+  "elapsedSec": 105.7,
+  "error": null,
+  "signature": null,
+  "ts": "function hit_top(a: number): number {\n    let x: number = a;\n    let acc: number = 1;\n    if (x == 0) {\n        return 1;\n    }\n    while (x > 0) {\n        let d: number = x % 11;\n        x = Math.trunc(x / 11);\n        if (acc != 11) {\n            acc = Math.trunc(acc / 2);\n        }\n    }\n    return acc;\n}\n\n",
+  "iterations": 1,
+  "domainCases": 1521
+ },
+ "gte": {
+  "verified": true,
+  "method": "composed: hit_top(sub2(b, a))",
+  "iterations": 0,
+  "mog": "// No new program synthesized — pure reuse of verified skills:\n//   gte = hit_top(sub2(b, a))\n// Primitives used: hit_top, sub2 (each synthesized + swept independently).",
+  "ts": "function gte(a: number, b: number): number {\n    return hit_top(sub2(b, a));\n}\n",
+  "examples": [],
+  "domainCases": 58081,
+  "composed": true
+ },
+ "crossed_right": {
+  "verified": true,
+  "method": "composed: flag_and(gte(plane, next_pos(prev, 1)), gte(next, plane))",
+  "iterations": 0,
+  "mog": "// No new program synthesized — pure reuse of verified skills:\n//   crossed_right = flag_and(gte(plane, next_pos(prev, 1)), gte(next, plane))\n// Primitives used: flag_and, gte, next_pos (each synthesized + swept independently).",
+  "ts": "function crossed_right(prev: number, next: number, plane: number): number {\n    return flag_and(gte(plane, next_pos(prev, 1)), gte(next, plane));\n}\n",
+  "examples": [],
+  "domainCases": 3025,
+  "composed": true
+ },
+ "score_if_out_right": {
+  "verified": true,
+  "method": "composed: next_pos(score, exited_right(ball_x, w))",
+  "iterations": 0,
+  "mog": "// No new program synthesized — pure reuse of verified skills:\n//   score_if_out_right = next_pos(score, exited_right(ball_x, w))\n// Primitives used: next_pos, exited_right (each synthesized + swept independently).",
+  "ts": "function score_if_out_right(score: number, ball_x: number, w: number): number {\n    return next_pos(score, exited_right(ball_x, w));\n}\n",
+  "examples": [],
+  "domainCases": 11986,
+  "composed": true
+ },
+ "score_if_out_left": {
+  "verified": true,
+  "method": "composed: next_pos(score, exited_left(ball_x))",
+  "iterations": 0,
+  "mog": "// No new program synthesized — pure reuse of verified skills:\n//   score_if_out_left = next_pos(score, exited_left(ball_x))\n// Primitives used: next_pos, exited_left (each synthesized + swept independently).",
+  "ts": "function score_if_out_left(score: number, ball_x: number): number {\n    return next_pos(score, exited_left(ball_x));\n}\n",
+  "examples": [],
+  "domainCases": 11986,
+  "composed": true
+ },
+ "max2": {
+  "verified": true,
+  "method": "composed: neg(min2(neg(a), neg(b)))",
+  "iterations": 0,
+  "mog": "// No new program synthesized — pure reuse of verified skills:\n//   max2 = neg(min2(neg(a), neg(b)))\n// Primitives used: neg, min2 (each synthesized + swept independently).",
+  "ts": "function max2(a: number, b: number): number {\n    return neg(min2(neg(a), neg(b)));\n}\n",
+  "examples": [],
+  "domainCases": 160801,
+  "composed": true
+ },
+ "abs2": {
+  "verified": true,
+  "method": "composed: neg(min2(neg(v), v))",
+  "iterations": 0,
+  "mog": "// No new program synthesized — pure reuse of verified skills:\n//   abs2 = neg(min2(neg(v), v))\n// Primitives used: neg, min2 (each synthesized + swept independently).",
+  "ts": "function abs2(v: number): number {\n    return neg(min2(neg(v), v));\n}\n",
+  "examples": [],
+  "domainCases": 4001,
+  "composed": true
+ },
+ "reflect_x": {
+  "verified": true,
+  "method": "composed: select(hit, neg(vx), vx)",
+  "iterations": 0,
+  "mog": "// No new program synthesized — pure reuse of verified skills:\n//   reflect_x = select(hit, neg(vx), vx)\n// Primitives used: select, neg (each synthesized + swept independently).",
+  "ts": "function reflect_x(vx: number, hit: number): number {\n    return select(hit, neg(vx), vx);\n}\n",
+  "examples": [],
+  "domainCases": 102,
+  "composed": true
+ },
+ "grow": {
+  "verified": true,
+  "method": "composed: select(gte(v, 1), next_pos(v, 1), next_pos(v, -1))",
+  "iterations": 0,
+  "mog": "// No new program synthesized — pure reuse of verified skills:\n//   grow = select(gte(v, 1), next_pos(v, 1), next_pos(v, -1))\n// Primitives used: select, gte, next_pos (each synthesized + swept independently).",
+  "ts": "function grow(v: number): number {\n    return select(gte(v, 1), next_pos(v, 1), next_pos(v, -1));\n}\n",
+  "examples": [],
+  "domainCases": 51,
+  "composed": true
+ }
+}

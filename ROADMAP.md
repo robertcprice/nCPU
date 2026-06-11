@@ -37,6 +37,13 @@ bounds checks. The human-written part is only the dumb canvas/event loop.
 DoD: `pnpm build` green; Playwright drives a paddle, ball bounces, score
 increments; page shows per-rule synthesized source. Screenshot artifact.
 
+STATUS: ✅ shipped (sms-hub `7c46bc9`). 22 rules: 14 synthesized + 8
+composed from synthesized primitives, all domain-swept. Full provenance,
+the exact training inputs, and the reproduction harness live in
+`tools/pong_synthesis/` (committed artifact `pong_rules_final.json`;
+`finalize_pong_rules.mjs` regenerates the site's synthesized.ts
+byte-identically and fails loudly on any sweep mismatch).
+
 ## Rung 2 — Stateful skills (format v3)
 
 Today's programs are stateless folds. v3 adds a persistent state vector:
