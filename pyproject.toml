@@ -14,6 +14,7 @@ authors = [{name = "Robert Price"}]
 dependencies = []
 
 [project.scripts]
+ncpu = "ncpu.__main__:main"
 ncpu-lab = "ncpu.lab:main"
 
 [project.optional-dependencies]
