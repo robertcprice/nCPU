@@ -94,6 +94,117 @@ pub fn execute_program(program: DiscreteProgram, array: &[f32], length: u32) -> 
 }
 
 // ---------------------------------------------------------------------------
+// Format v2 — multi-field data points + predicate guards.
+//
+// A v2 data point is a record of `arity` floats laid out contiguously
+// (x0,y0, x1,y1, ...). Execution adds two stages in front of the v1
+// pipeline:
+//
+//   combine: record -> scalar   (field select / sum / product / diff / ...)
+//   guard:   scalar -> include? (always / >t / <t / |v|>t / ==t)
+//
+// then transform/reduce/post/offset run exactly as v1. A v1 program is the
+// special case arity=1, combine=field0, guard=always — `ProgramV2::from_v1`
+// is exact, so v1 libraries execute identically under the v2 engine.
+//
+// v2 libraries serialize with `"format": 2` and a `program_v2` key. v1
+// loaders fail closed on them (their parser requires a `program` object),
+// so an old runtime can never silently mis-execute a guarded program.
+// ---------------------------------------------------------------------------
+
+pub const N_COMBINES: u32 = 8;
+pub const N_GUARDS: u32 = 5;
+pub const MAX_ARITY: u32 = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProgramV2 {
+    /// Fields per data point (1..=MAX_ARITY).
+    pub arity: u32,
+    /// 0=f0, 1=f1, 2=Σfields, 3=Πfields, 4=f0-f1, 5=|f0-f1|, 6=min, 7=max
+    pub combine_idx: u32,
+    /// 0=always, 1=v>t, 2=v<t, 3=|v|>t, 4=v==t (1e-4 tolerance)
+    pub guard_idx: u32,
+    pub guard_threshold: f32,
+    pub init_idx: u32,
+    pub transform_idx: u32,
+    pub reduce_idx: u32,
+    pub post_scale_idx: u32,
+    pub offset: f32,
+}
+
+impl ProgramV2 {
+    pub fn from_v1(p: DiscreteProgram) -> Self {
+        ProgramV2 {
+            arity: 1,
+            combine_idx: 0,
+            guard_idx: 0,
+            guard_threshold: 0.0,
+            init_idx: p.init_idx,
+            transform_idx: p.transform_idx,
+            reduce_idx: p.reduce_idx,
+            post_scale_idx: p.post_scale_idx,
+            offset: p.offset,
+        }
+    }
+
+    /// True when expressible in the v1 format (so exports can stay
+    /// backward-compatible whenever possible).
+    pub fn is_v1(&self) -> bool {
+        self.arity == 1 && self.combine_idx == 0 && self.guard_idx == 0
+    }
+}
+
+#[inline]
+fn apply_combine(fields: &[f32], idx: u32) -> f32 {
+    match idx {
+        1 => fields.get(1).copied().unwrap_or(0.0),
+        2 => fields.iter().sum(),
+        3 => fields.iter().product(),
+        4 => fields.first().copied().unwrap_or(0.0) - fields.get(1).copied().unwrap_or(0.0),
+        5 => (fields.first().copied().unwrap_or(0.0) - fields.get(1).copied().unwrap_or(0.0)).abs(),
+        6 => fields.iter().copied().fold(f32::INFINITY, f32::min),
+        7 => fields.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        _ => fields.first().copied().unwrap_or(0.0),
+    }
+}
+
+#[inline]
+fn guard_passes(v: f32, idx: u32, t: f32) -> bool {
+    match idx {
+        1 => v > t,
+        2 => v < t,
+        3 => v.abs() > t,
+        4 => (v - t).abs() < 1e-4,
+        _ => true,
+    }
+}
+
+/// Execute a v2 program over `n_points` records of `arity` floats laid out
+/// contiguously in `data`. The mean post-scale divides by the number of
+/// guard-INCLUDED points (mean of what was aggregated), not raw length.
+pub fn execute_program_v2(p: ProgramV2, data: &[f32], n_points: u32) -> f32 {
+    let arity = p.arity.max(1) as usize;
+    let usable = (n_points as usize).min(data.len() / arity);
+    let mut acc = init_value(p.init_idx);
+    let mut included = 0u32;
+    for i in 0..usable {
+        let fields = &data[i * arity..(i + 1) * arity];
+        let v = apply_combine(fields, p.combine_idx);
+        if !guard_passes(v, p.guard_idx, p.guard_threshold) {
+            continue;
+        }
+        included += 1;
+        acc = apply_reduce(acc, apply_transform(v, p.transform_idx), p.reduce_idx);
+    }
+    let post = match p.post_scale_idx {
+        0 => acc,
+        1 => acc / (included as f32).max(1.0),
+        _ => acc.max(-30.0).min(30.0).exp(),
+    };
+    post + p.offset
+}
+
+// ---------------------------------------------------------------------------
 // Minimal lookup index — linear scan. Libraries shipped to browsers / edge
 // devices are small (tens to low hundreds of entries); the sharded index
 // from the heavy crate is overkill at that scale.
@@ -103,6 +214,16 @@ pub fn execute_program(program: DiscreteProgram, array: &[f32], length: u32) -> 
 pub struct NativeEntry {
     pub signature: Vec<f32>,
     pub program: DiscreteProgram,
+    /// Present when the entry uses v2 capabilities (records, guards). When
+    /// `Some`, execution goes through the v2 engine; `program` is a
+    /// placeholder kept for struct compatibility.
+    pub program_v2: Option<ProgramV2>,
+}
+
+impl NativeEntry {
+    pub fn effective_program(&self) -> ProgramV2 {
+        self.program_v2.unwrap_or_else(|| ProgramV2::from_v1(self.program))
+    }
 }
 
 pub struct NativeIndex {
@@ -177,7 +298,10 @@ pub fn consult_native(
     }
     let normalized: Vec<f32> = hidden.iter().map(|v| v / norm).collect();
     let entry = index.lookup(&normalized)?;
-    Some(execute_program(entry.program, array, length))
+    let p = entry.effective_program();
+    // `length` counts data points; v1 entries have arity 1 so this is the
+    // exact v1 semantics, and v2 entries interpret `array` as records.
+    Some(execute_program_v2(p, array, length))
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +388,31 @@ fn find_matching(text: &str, open: char, close: char) -> Option<usize> {
 
 fn parse_entry(obj: &str) -> Result<NativeEntry, String> {
     let signature = parse_float_array(obj, "\"signature\"")?;
+    // v2 entries carry a `program_v2` object; v1 entries carry `program`.
+    if let Some(v2_obj) = find_object_value(obj, "\"program_v2\"") {
+        let program_v2 = ProgramV2 {
+            arity: (parse_int_field(v2_obj, "\"arity\"")? as u32).clamp(1, MAX_ARITY),
+            combine_idx: parse_int_field(v2_obj, "\"combine_idx\"")? as u32,
+            guard_idx: parse_int_field(v2_obj, "\"guard_idx\"")? as u32,
+            guard_threshold: parse_float_field(v2_obj, "\"guard_threshold\"")?,
+            init_idx: parse_int_field(v2_obj, "\"init_idx\"")? as u32,
+            transform_idx: parse_int_field(v2_obj, "\"transform_idx\"")? as u32,
+            reduce_idx: parse_int_field(v2_obj, "\"reduce_idx\"")? as u32,
+            post_scale_idx: parse_int_field(v2_obj, "\"post_scale_idx\"")? as u32,
+            offset: parse_float_field(v2_obj, "\"offset\"")?,
+        };
+        return Ok(NativeEntry {
+            signature,
+            program: DiscreteProgram {
+                init_idx: program_v2.init_idx,
+                transform_idx: program_v2.transform_idx,
+                reduce_idx: program_v2.reduce_idx,
+                post_scale_idx: program_v2.post_scale_idx,
+                offset: program_v2.offset,
+            },
+            program_v2: Some(program_v2),
+        });
+    }
     let program_start = find_object_value(obj, "\"program\"").ok_or("no program")?;
     let program = DiscreteProgram {
         init_idx: parse_int_field(program_start, "\"init_idx\"")? as u32,
@@ -272,7 +421,7 @@ fn parse_entry(obj: &str) -> Result<NativeEntry, String> {
         post_scale_idx: parse_int_field(program_start, "\"post_scale_idx\"")? as u32,
         offset: parse_float_field(program_start, "\"offset\"")?,
     };
-    Ok(NativeEntry { signature, program })
+    Ok(NativeEntry { signature, program, program_v2: None })
 }
 
 fn find_object_value<'a>(obj: &'a str, key: &str) -> Option<&'a str> {
@@ -467,6 +616,431 @@ pub fn synthesize_program(examples: &[(&[f32], f32)], tol: f32) -> Option<Synthe
     })
 }
 
+/// Mine guard-threshold candidates from the examples themselves — the same
+/// emergent-vocabulary idea as nsynth's `discover_useful_consts`: no
+/// hardcoded magic numbers, the data proposes its own thresholds. Candidates
+/// are every distinct field value plus 0, capped to keep the search bounded.
+pub fn mine_thresholds(examples: &[(&[f32], f32)]) -> Vec<f32> {
+    const CAP: usize = 12;
+    let mut seen: Vec<f32> = vec![0.0];
+    for (data, _) in examples {
+        for &v in *data {
+            if v.is_finite() && !seen.iter().any(|s| (s - v).abs() < 1e-6) {
+                seen.push(v);
+            }
+        }
+    }
+    // Prefer small-magnitude thresholds (more likely structural).
+    seen.sort_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    seen.truncate(CAP);
+    seen
+}
+
+fn complexity_v2(p: &ProgramV2) -> u32 {
+    let mut c = 0;
+    if p.combine_idx != 0 {
+        c += 1;
+    }
+    if p.guard_idx != 0 {
+        c += 2;
+    }
+    if p.init_idx != 0 {
+        c += 1;
+    }
+    if p.transform_idx != 0 {
+        c += 1;
+    }
+    if p.reduce_idx != 0 {
+        c += 1;
+    }
+    if p.post_scale_idx != 0 {
+        c += 2;
+    }
+    if p.offset != 0.0 {
+        c += 2;
+    }
+    c
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SynthesisResultV2 {
+    pub program: ProgramV2,
+    pub max_err: f32,
+    pub n_consistent: u32,
+    pub n_searched: u32,
+}
+
+/// v2 synthesis: exhaustive search over combine × guard × threshold ×
+/// transform × reduce × post × init with closed-form offset fitting.
+/// `examples` hold flat records (`arity` floats per point). Same refusal
+/// contract as v1: `None` when nothing in the space explains every example.
+pub fn synthesize_program_v2(
+    examples: &[(&[f32], f32)],
+    arity: u32,
+    tol: f32,
+) -> Option<SynthesisResultV2> {
+    if examples.is_empty() || arity == 0 || arity > MAX_ARITY {
+        return None;
+    }
+    for (data, target) in examples {
+        if !target.is_finite() || data.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        if data.len() % arity as usize != 0 {
+            return None;
+        }
+    }
+    let thresholds = mine_thresholds(examples);
+    let target_scale = examples.iter().map(|(_, t)| t.abs()).fold(1.0f32, f32::max);
+    let accept = tol * target_scale;
+
+    // Combine ops that reference field 1 are meaningless at arity 1.
+    let combines: Vec<u32> = if arity == 1 {
+        vec![0]
+    } else {
+        (0..N_COMBINES).collect()
+    };
+
+    let mut best: Option<(ProgramV2, f32, u32)> = None;
+    let mut n_consistent = 0u32;
+    let mut n_searched = 0u32;
+
+    for &combine_idx in &combines {
+        for guard_idx in 0..N_GUARDS {
+            let guard_thresholds: &[f32] = if guard_idx == 0 { &[0.0] } else { &thresholds };
+            for &guard_threshold in guard_thresholds {
+                for init_idx in 0..N_INITS {
+                    for transform_idx in 0..N_TRANSFORMS {
+                        for reduce_idx in 0..N_REDUCES {
+                            for post_scale_idx in 0..N_POST_SCALES {
+                                n_searched += 1;
+                                let base = ProgramV2 {
+                                    arity,
+                                    combine_idx,
+                                    guard_idx,
+                                    guard_threshold,
+                                    init_idx,
+                                    transform_idx,
+                                    reduce_idx,
+                                    post_scale_idx,
+                                    offset: 0.0,
+                                };
+                                let mut raw_outputs: Vec<f32> = Vec::with_capacity(examples.len());
+                                let mut residual_sum = 0.0f32;
+                                let mut ok = true;
+                                for (data, target) in examples {
+                                    let n_points = (data.len() / arity as usize) as u32;
+                                    let raw = execute_program_v2(base, data, n_points);
+                                    if !raw.is_finite() {
+                                        ok = false;
+                                        break;
+                                    }
+                                    raw_outputs.push(raw);
+                                    residual_sum += target - raw;
+                                }
+                                if !ok {
+                                    continue;
+                                }
+                                let mut offset = residual_sum / examples.len() as f32;
+                                if offset.abs() < accept.max(1e-6) {
+                                    offset = 0.0;
+                                }
+                                let mut max_err = 0.0f32;
+                                for (i, (_, target)) in examples.iter().enumerate() {
+                                    max_err = max_err.max((raw_outputs[i] + offset - target).abs());
+                                }
+                                if max_err <= accept {
+                                    n_consistent += 1;
+                                    let candidate = ProgramV2 { offset, ..base };
+                                    let cx = complexity_v2(&candidate);
+                                    let better = match &best {
+                                        None => true,
+                                        Some((_, be, bc)) => cx < *bc || (cx == *bc && max_err < *be),
+                                    };
+                                    if better {
+                                        best = Some((candidate, max_err, cx));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    best.map(|(program, max_err, _)| SynthesisResultV2 {
+        program,
+        max_err,
+        n_consistent,
+        n_searched,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Multi-language source rendering. One discovered program, five working
+// implementations — the synthesized artifact is an IR, not a string.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Lang {
+    Rust,
+    Python,
+    JavaScript,
+    C,
+    TypeScript,
+}
+
+impl Lang {
+    pub fn from_name(name: &str) -> Option<Lang> {
+        match name {
+            "rust" => Some(Lang::Rust),
+            "python" => Some(Lang::Python),
+            "javascript" | "js" => Some(Lang::JavaScript),
+            "c" => Some(Lang::C),
+            "typescript" | "ts" => Some(Lang::TypeScript),
+            _ => None,
+        }
+    }
+}
+
+fn combine_expr(p: &ProgramV2, lang: Lang) -> String {
+    let abs = |e: String| match lang {
+        Lang::Rust => format!("({e}).abs()"),
+        Lang::Python => format!("abs({e})"),
+        Lang::C => format!("fabsf({e})"),
+        _ => format!("Math.abs({e})"),
+    };
+    let minmax = |f: &str| match lang {
+        Lang::Rust => format!("pt.iter().copied().fold(f32::{}, f32::{})", if f == "min" { "INFINITY" } else { "NEG_INFINITY" }, f),
+        Lang::Python => format!("{f}(pt)"),
+        Lang::C => format!("/* {f} over fields */ {f}_fields(pt, k)"),
+        _ => format!("Math.{f}(...pt)"),
+    };
+    match p.combine_idx {
+        1 => "pt[1]".to_string(),
+        2 => match lang {
+            Lang::Rust => "pt.iter().sum::<f32>()".to_string(),
+            Lang::Python => "sum(pt)".to_string(),
+            Lang::C => "sum_fields(pt, k)".to_string(),
+            _ => "pt.reduce((a, b) => a + b, 0)".to_string(),
+        },
+        3 => match lang {
+            Lang::Rust => "pt.iter().product::<f32>()".to_string(),
+            Lang::Python => "math.prod(pt)".to_string(),
+            Lang::C => "prod_fields(pt, k)".to_string(),
+            _ => "pt.reduce((a, b) => a * b, 1)".to_string(),
+        },
+        4 => "pt[0] - pt[1]".to_string(),
+        5 => abs("pt[0] - pt[1]".to_string()),
+        6 => minmax("min"),
+        7 => minmax("max"),
+        _ => if p.arity == 1 { "pt[0]".to_string() } else { "pt[0]".to_string() },
+    }
+}
+
+fn transform_expr(idx: u32, lang: Lang) -> String {
+    match idx {
+        1 => "v * v".to_string(),
+        2 => match lang {
+            Lang::Rust => "v.abs()".to_string(),
+            Lang::Python => "abs(v)".to_string(),
+            Lang::C => "fabsf(v)".to_string(),
+            _ => "Math.abs(v)".to_string(),
+        },
+        3 => "1.0".to_string(),
+        4 => match lang {
+            Lang::Python => "(1.0 if v > 0 else 0.0)".to_string(),
+            Lang::Rust => "if v > 0.0 { 1.0 } else { 0.0 }".to_string(),
+            Lang::C => "(v > 0.0f ? 1.0f : 0.0f)".to_string(),
+            _ => "(v > 0 ? 1.0 : 0.0)".to_string(),
+        },
+        5 => match lang {
+            Lang::Rust => "(v.abs() + 1e-6).ln()".to_string(),
+            Lang::Python => "math.log(abs(v) + 1e-6)".to_string(),
+            Lang::C => "logf(fabsf(v) + 1e-6f)".to_string(),
+            _ => "Math.log(Math.abs(v) + 1e-6)".to_string(),
+        },
+        _ => "v".to_string(),
+    }
+}
+
+fn guard_expr(p: &ProgramV2, lang: Lang) -> Option<String> {
+    let t = p.guard_threshold;
+    let abs_v = match lang {
+        Lang::Rust => "v.abs()".to_string(),
+        Lang::Python => "abs(v)".to_string(),
+        Lang::C => "fabsf(v)".to_string(),
+        _ => "Math.abs(v)".to_string(),
+    };
+    match p.guard_idx {
+        1 => Some(format!("v > {t}")),
+        2 => Some(format!("v < {t}")),
+        3 => Some(format!("{abs_v} > {t}")),
+        4 => Some(match lang {
+            Lang::Rust => format!("(v - {t}).abs() < 1e-4"),
+            Lang::Python => format!("abs(v - {t}) < 1e-4"),
+            Lang::C => format!("fabsf(v - {t}f) < 1e-4f"),
+            _ => format!("Math.abs(v - {t}) < 1e-4"),
+        }),
+        _ => None,
+    }
+}
+
+/// Render a discovered v2 program in any supported language. Output is a
+/// complete, runnable function over `points` (each point = `arity` floats).
+pub fn program_source_v2(name: &str, p: &ProgramV2, lang: Lang) -> String {
+    let init = match p.init_idx {
+        1 => "1.0".to_string(),
+        2 => "-20.0".to_string(),
+        _ => "0.0".to_string(),
+    };
+    let combine = combine_expr(p, lang);
+    let transform = transform_expr(p.transform_idx, lang);
+    let guard = guard_expr(p, lang);
+    let reduce_stmt = |acc: &str, f: &str, lang: Lang| match p.reduce_idx {
+        1 => format!("{acc} *= {f}"),
+        2 => match lang {
+            Lang::Rust => format!("{acc} = {acc}.max({f})"),
+            Lang::Python => format!("{acc} = max({acc}, {f})"),
+            Lang::C => format!("{acc} = fmaxf({acc}, {f})"),
+            _ => format!("{acc} = Math.max({acc}, {f})"),
+        },
+        3 => match lang {
+            Lang::Rust => format!("{acc} = {acc}.min({f})"),
+            Lang::Python => format!("{acc} = min({acc}, {f})"),
+            Lang::C => format!("{acc} = fminf({acc}, {f})"),
+            _ => format!("{acc} = Math.min({acc}, {f})"),
+        },
+        _ => format!("{acc} += {f}"),
+    };
+    let offset_suffix = if p.offset != 0.0 {
+        format!(" + {:.6}", p.offset)
+    } else {
+        String::new()
+    };
+
+    match lang {
+        Lang::Rust => {
+            let mut body = String::new();
+            body.push_str(&format!("fn {name}(points: &[[f32; {}]]) -> f32 {{\n", p.arity));
+            body.push_str(&format!("    let mut acc: f32 = {init};\n"));
+            if p.post_scale_idx == 1 {
+                body.push_str("    let mut n: f32 = 0.0;\n");
+            }
+            body.push_str("    for pt in points {\n");
+            body.push_str(&format!("        let v = {combine};\n"));
+            if let Some(g) = &guard {
+                body.push_str(&format!("        if !({g}) {{ continue; }}\n"));
+            }
+            if p.post_scale_idx == 1 {
+                body.push_str("        n += 1.0;\n");
+            }
+            body.push_str(&format!("        {};\n", reduce_stmt("acc", &transform, lang)));
+            body.push_str("    }\n");
+            if p.post_scale_idx == 1 {
+                body.push_str("    acc /= n.max(1.0);\n");
+            } else if p.post_scale_idx == 2 {
+                body.push_str("    acc = acc.clamp(-30.0, 30.0).exp();\n");
+            }
+            body.push_str(&format!("    acc{offset_suffix}\n}}"));
+            body
+        }
+        Lang::Python => {
+            let mut body = String::new();
+            if p.transform_idx == 5 || p.combine_idx == 3 {
+                body.push_str("import math\n\n");
+            }
+            body.push_str(&format!("def {name}(points):  # each point: {} value(s)\n", p.arity));
+            body.push_str(&format!("    acc = {init}\n"));
+            if p.post_scale_idx == 1 {
+                body.push_str("    n = 0\n");
+            }
+            body.push_str("    for pt in points:\n");
+            body.push_str(&format!("        v = {combine}\n"));
+            if let Some(g) = &guard {
+                body.push_str(&format!("        if not ({g}):\n            continue\n"));
+            }
+            if p.post_scale_idx == 1 {
+                body.push_str("        n += 1\n");
+            }
+            body.push_str(&format!("        {}\n", reduce_stmt("acc", &transform, lang)));
+            if p.post_scale_idx == 1 {
+                body.push_str("    acc /= max(n, 1)\n");
+            } else if p.post_scale_idx == 2 {
+                body.push_str("    acc = math.exp(max(-30.0, min(30.0, acc)))\n");
+            }
+            body.push_str(&format!("    return acc{offset_suffix}\n"));
+            body
+        }
+        Lang::JavaScript | Lang::TypeScript => {
+            let sig = if lang == Lang::TypeScript {
+                format!("function {name}(points: number[][]): number {{")
+            } else {
+                format!("function {name}(points) {{")
+            };
+            let mut body = String::new();
+            body.push_str(&format!("{sig}\n"));
+            body.push_str(&format!("  let acc = {init};\n"));
+            if p.post_scale_idx == 1 {
+                body.push_str("  let n = 0;\n");
+            }
+            body.push_str("  for (const pt of points) {\n");
+            body.push_str(&format!("    const v = {combine};\n"));
+            if let Some(g) = &guard {
+                body.push_str(&format!("    if (!({g})) continue;\n"));
+            }
+            if p.post_scale_idx == 1 {
+                body.push_str("    n += 1;\n");
+            }
+            body.push_str(&format!("    {};\n", reduce_stmt("acc", &transform, lang)));
+            body.push_str("  }\n");
+            if p.post_scale_idx == 1 {
+                body.push_str("  acc /= Math.max(n, 1);\n");
+            } else if p.post_scale_idx == 2 {
+                body.push_str("  acc = Math.exp(Math.max(-30, Math.min(30, acc)));\n");
+            }
+            body.push_str(&format!("  return acc{offset_suffix};\n}}"));
+            body
+        }
+        Lang::C => {
+            let mut body = String::new();
+            body.push_str("#include <math.h>\n\n");
+            if p.combine_idx == 2 || p.combine_idx == 3 || p.combine_idx >= 6 {
+                body.push_str("static float sum_fields(const float* pt, int k) { float s = 0; for (int j = 0; j < k; j++) s += pt[j]; return s; }\n");
+                body.push_str("static float prod_fields(const float* pt, int k) { float s = 1; for (int j = 0; j < k; j++) s *= pt[j]; return s; }\n");
+                body.push_str("static float min_fields(const float* pt, int k) { float s = pt[0]; for (int j = 1; j < k; j++) s = fminf(s, pt[j]); return s; }\n");
+                body.push_str("static float max_fields(const float* pt, int k) { float s = pt[0]; for (int j = 1; j < k; j++) s = fmaxf(s, pt[j]); return s; }\n\n");
+            }
+            body.push_str(&format!(
+                "float {name}(const float* data, int n_points) {{\n    const int k = {};\n    float acc = {init}f;\n",
+                p.arity
+            ));
+            if p.post_scale_idx == 1 {
+                body.push_str("    float n = 0.0f;\n");
+            }
+            body.push_str("    for (int i = 0; i < n_points; i++) {\n");
+            body.push_str("        const float* pt = data + i * k;\n");
+            body.push_str(&format!("        float v = {combine};\n"));
+            if let Some(g) = &guard {
+                body.push_str(&format!("        if (!({g})) continue;\n"));
+            }
+            if p.post_scale_idx == 1 {
+                body.push_str("        n += 1.0f;\n");
+            }
+            body.push_str(&format!("        {};\n", reduce_stmt("acc", &transform, lang)));
+            body.push_str("    }\n");
+            if p.post_scale_idx == 1 {
+                body.push_str("    acc /= fmaxf(n, 1.0f);\n");
+            } else if p.post_scale_idx == 2 {
+                body.push_str("    acc = expf(fminf(fmaxf(acc, -30.0f), 30.0f));\n");
+            }
+            body.push_str(&format!("    return acc{offset_suffix};\n}}"));
+            body
+        }
+    }
+}
+
 /// Render a program as readable Rust-style source (mirrors executor semantics).
 pub fn program_source(name: &str, p: &DiscreteProgram) -> String {
     let init = match p.init_idx {
@@ -503,27 +1077,48 @@ pub fn program_source(name: &str, p: &DiscreteProgram) -> String {
     )
 }
 
-/// Serialize an index back to the canonical library JSON format so a library
-/// grown on-device can be exported, signed, and shipped to other runtimes.
+/// Serialize an index back to canonical library JSON. Pure-v1 libraries are
+/// emitted in the v1 format so every existing runtime loads them; libraries
+/// containing any v2 capability (records, guards) are emitted as
+/// `"format": 2` with `program_v2` keys, which v1 loaders reject cleanly
+/// instead of silently mis-executing.
 pub fn library_to_json(index: &NativeIndex) -> String {
+    let needs_v2 = index
+        .entries
+        .iter()
+        .any(|e| e.program_v2.map(|p| !p.is_v1()).unwrap_or(false));
     let mut out = String::new();
+    out.push_str("{\n");
+    if needs_v2 {
+        out.push_str("  \"format\": 2,\n");
+    }
     out.push_str(&format!(
-        "{{\n  \"config\": {{\"similarity_threshold\": {}, \"max_entries\": {}, \"normalize_epsilon\": 1e-08}},\n  \"entries\": [\n",
+        "  \"config\": {{\"similarity_threshold\": {}, \"max_entries\": {}, \"normalize_epsilon\": 1e-08}},\n  \"entries\": [\n",
         index.similarity_threshold,
         index.entries.len().max(16)
     ));
     for (i, e) in index.entries.iter().enumerate() {
         let sig: Vec<String> = e.signature.iter().map(|v| format!("{v}")).collect();
-        out.push_str(&format!(
-            "    {{\"signature\": [{}], \"program\": {{\"init_idx\": {}, \"transform_idx\": {}, \"reduce_idx\": {}, \"post_scale_idx\": {}, \"offset\": {}}}, \"hit_count\": 0, \"task_name\": \"entry_{i}\", \"cached_at_step\": null, \"convergence_gap\": null}}{}\n",
-            sig.join(", "),
-            e.program.init_idx,
-            e.program.transform_idx,
-            e.program.reduce_idx,
-            e.program.post_scale_idx,
-            e.program.offset,
-            if i + 1 == index.entries.len() { "" } else { "," }
-        ));
+        let trailing = if i + 1 == index.entries.len() { "" } else { "," };
+        if needs_v2 {
+            let p = e.effective_program();
+            out.push_str(&format!(
+                "    {{\"signature\": [{}], \"program_v2\": {{\"arity\": {}, \"combine_idx\": {}, \"guard_idx\": {}, \"guard_threshold\": {}, \"init_idx\": {}, \"transform_idx\": {}, \"reduce_idx\": {}, \"post_scale_idx\": {}, \"offset\": {}}}, \"hit_count\": 0, \"task_name\": \"entry_{i}\", \"cached_at_step\": null, \"convergence_gap\": null}}{trailing}\n",
+                sig.join(", "),
+                p.arity, p.combine_idx, p.guard_idx, p.guard_threshold,
+                p.init_idx, p.transform_idx, p.reduce_idx, p.post_scale_idx, p.offset,
+            ));
+        } else {
+            out.push_str(&format!(
+                "    {{\"signature\": [{}], \"program\": {{\"init_idx\": {}, \"transform_idx\": {}, \"reduce_idx\": {}, \"post_scale_idx\": {}, \"offset\": {}}}, \"hit_count\": 0, \"task_name\": \"entry_{i}\", \"cached_at_step\": null, \"convergence_gap\": null}}{trailing}\n",
+                sig.join(", "),
+                e.program.init_idx,
+                e.program.transform_idx,
+                e.program.reduce_idx,
+                e.program.post_scale_idx,
+                e.program.offset,
+            ));
+        }
     }
     out.push_str("  ]\n}");
     out
@@ -612,6 +1207,98 @@ impl NpcotRuntime {
                 post_scale_idx,
                 offset,
             },
+            program_v2: None,
+        });
+    }
+
+    /// v2 synthesis over multi-field data points. `data` holds all examples'
+    /// records back to back; `point_counts[i]` gives example i's number of
+    /// points (each point = `arity` floats); `targets[i]` its expected
+    /// output. Returns JSON with the program, search stats, and rendered
+    /// source in all five supported languages.
+    #[allow(clippy::too_many_arguments)]
+    pub fn synthesize_v2(
+        &self,
+        data: Vec<f32>,
+        point_counts: Vec<u32>,
+        targets: Vec<f32>,
+        arity: u32,
+        name: String,
+    ) -> Option<String> {
+        if point_counts.len() != targets.len() || point_counts.is_empty() {
+            return None;
+        }
+        let total: usize = point_counts.iter().map(|l| (*l * arity) as usize).sum();
+        if total != data.len() {
+            return None;
+        }
+        let mut examples: Vec<(&[f32], f32)> = Vec::with_capacity(point_counts.len());
+        let mut cursor = 0usize;
+        for (i, n_points) in point_counts.iter().enumerate() {
+            let end = cursor + (*n_points * arity) as usize;
+            examples.push((&data[cursor..end], targets[i]));
+            cursor = end;
+        }
+        let result = synthesize_program_v2(&examples, arity, 1e-3)?;
+        let p = result.program;
+        let esc = |s: String| s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        let sources: Vec<String> = [
+            ("rust", Lang::Rust),
+            ("python", Lang::Python),
+            ("javascript", Lang::JavaScript),
+            ("c", Lang::C),
+            ("typescript", Lang::TypeScript),
+        ]
+        .iter()
+        .map(|(label, lang)| {
+            format!("\"{label}\": \"{}\"", esc(program_source_v2(&name, &p, *lang)))
+        })
+        .collect();
+        Some(format!(
+            "{{\"arity\": {}, \"combine_idx\": {}, \"guard_idx\": {}, \"guard_threshold\": {}, \"init_idx\": {}, \"transform_idx\": {}, \"reduce_idx\": {}, \"post_scale_idx\": {}, \"offset\": {}, \"max_err\": {}, \"n_consistent\": {}, \"n_searched\": {}, \"sources\": {{{}}}}}",
+            p.arity, p.combine_idx, p.guard_idx, p.guard_threshold,
+            p.init_idx, p.transform_idx, p.reduce_idx, p.post_scale_idx, p.offset,
+            result.max_err, result.n_consistent, result.n_searched,
+            sources.join(", ")
+        ))
+    }
+
+    /// Insert a v2 skill (records + guards) into the live library.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_skill_v2(
+        &mut self,
+        signature: Vec<f32>,
+        arity: u32,
+        combine_idx: u32,
+        guard_idx: u32,
+        guard_threshold: f32,
+        init_idx: u32,
+        transform_idx: u32,
+        reduce_idx: u32,
+        post_scale_idx: u32,
+        offset: f32,
+    ) {
+        let v2 = ProgramV2 {
+            arity: arity.clamp(1, MAX_ARITY),
+            combine_idx,
+            guard_idx,
+            guard_threshold,
+            init_idx,
+            transform_idx,
+            reduce_idx,
+            post_scale_idx,
+            offset,
+        };
+        self.index.insert(NativeEntry {
+            signature,
+            program: DiscreteProgram {
+                init_idx,
+                transform_idx,
+                reduce_idx,
+                post_scale_idx,
+                offset,
+            },
+            program_v2: Some(v2),
         });
     }
 
@@ -784,6 +1471,7 @@ mod tests {
                 post_scale_idx: 0,
                 offset: 2.5,
             },
+            program_v2: None,
         });
         let json = library_to_json(&index);
         let (thr, parsed) = load_library_json(&json).expect("round trip");
@@ -795,6 +1483,196 @@ mod tests {
         // Round-tripped library still answers consults.
         let r = consult_native(&parsed, &[1.0, 0.0, 0.0], &[1.0, 2.0, 3.0], 3).expect("hit");
         assert!((r - (14.0 + 2.5)).abs() < 1e-4);
+    }
+
+    // ------------------------------------------------------------- v2 tests
+
+    #[test]
+    fn v2_discovers_dot_product() {
+        // points (x,y); target = Σ x*y
+        let e1 = [1.0, 2.0, 3.0, 4.0]; // (1,2),(3,4) -> 2+12=14
+        let e2 = [2.0, 5.0]; // (2,5) -> 10
+        let examples: Vec<(&[f32], f32)> = vec![(&e1, 14.0), (&e2, 10.0)];
+        let r = synthesize_program_v2(&examples, 2, 1e-3).expect("dot product");
+        let p = r.program;
+        assert_eq!(p.combine_idx, 3, "product of fields");
+        assert_eq!(p.reduce_idx, 0, "sum reduce");
+        // Held-out check.
+        let held = [10.0, 0.5, 4.0, 0.25];
+        assert!((execute_program_v2(p, &held, 2) - 6.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn v2_discovers_guarded_sum_with_mined_threshold() {
+        // sum of values above 10 — threshold 10 must be mined from the data.
+        let e1 = [3.0, 12.0, 10.0, 20.0]; // 12+20=32
+        let e2 = [11.0, 2.0]; // 11
+        let e3 = [1.0, 4.0]; // 0
+        let examples: Vec<(&[f32], f32)> = vec![(&e1, 32.0), (&e2, 11.0), (&e3, 0.0)];
+        let r = synthesize_program_v2(&examples, 1, 1e-3).expect("guarded sum");
+        let p = r.program;
+        assert_eq!(p.guard_idx, 1, "v > t guard");
+        assert!((p.guard_threshold - 10.0).abs() < 1e-5, "mined threshold {}", p.guard_threshold);
+        let held = [9.0, 15.0, 30.0];
+        assert!((execute_program_v2(p, &held, 3) - 45.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn v2_discovers_manhattan_distance() {
+        // Σ |x - y| over point pairs
+        let e1 = [1.0, 4.0, 10.0, 7.0]; // 3 + 3 = 6
+        let e2 = [0.0, 5.0]; // 5
+        let examples: Vec<(&[f32], f32)> = vec![(&e1, 6.0), (&e2, 5.0)];
+        let r = synthesize_program_v2(&examples, 2, 1e-3).expect("manhattan");
+        let held = [2.0, 2.5, -1.0, 1.0];
+        assert!((execute_program_v2(r.program, &held, 2) - 2.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn v2_guarded_mean_divides_by_included() {
+        let p = ProgramV2 {
+            arity: 1,
+            combine_idx: 0,
+            guard_idx: 1,
+            guard_threshold: 0.0,
+            init_idx: 0,
+            transform_idx: 0,
+            reduce_idx: 0,
+            post_scale_idx: 1,
+            offset: 0.0,
+        };
+        // mean of positives: (4 + 6) / 2 = 5, NOT (4+6)/4
+        let data = [4.0, -2.0, 6.0, -8.0];
+        assert!((execute_program_v2(p, &data, 4) - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn v2_arity1_unguarded_matches_v1_exactly() {
+        for init_idx in 0..N_INITS {
+            for transform_idx in 0..N_TRANSFORMS {
+                for reduce_idx in 0..N_REDUCES {
+                    for post_scale_idx in 0..N_POST_SCALES {
+                        let v1 = DiscreteProgram {
+                            init_idx,
+                            transform_idx,
+                            reduce_idx,
+                            post_scale_idx,
+                            offset: 0.25,
+                        };
+                        let data = [3.0, -1.5, 4.0, 0.0, 9.0];
+                        let a = execute_program(v1, &data, 5);
+                        let b = execute_program_v2(ProgramV2::from_v1(v1), &data, 5);
+                        if a.is_finite() && b.is_finite() {
+                            assert!(
+                                (a - b).abs() < 1e-5,
+                                "v1/v2 divergence at {init_idx}/{transform_idx}/{reduce_idx}/{post_scale_idx}: {a} vs {b}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn v2_library_round_trips_and_v1_loader_rejects_it() {
+        let mut index = NativeIndex::new(0.85);
+        index.insert(NativeEntry {
+            signature: vec![0.0, 1.0, 0.0],
+            program: DiscreteProgram {
+                init_idx: 0,
+                transform_idx: 0,
+                reduce_idx: 0,
+                post_scale_idx: 0,
+                offset: 0.0,
+            },
+            program_v2: Some(ProgramV2 {
+                arity: 2,
+                combine_idx: 3,
+                guard_idx: 0,
+                guard_threshold: 0.0,
+                init_idx: 0,
+                transform_idx: 0,
+                reduce_idx: 0,
+                post_scale_idx: 0,
+                offset: 0.0,
+            }),
+        });
+        let json = library_to_json(&index);
+        assert!(json.contains("\"format\": 2"));
+        assert!(json.contains("program_v2"));
+        assert!(!json.contains("\"program\":"), "v2 export must not carry a v1 program key");
+        // New loader round-trips it.
+        let (_thr, parsed) = load_library_json(&json).expect("v2 round trip");
+        let p = parsed.entries[0].effective_program();
+        assert_eq!((p.arity, p.combine_idx), (2, 3));
+        // Consult executes dot product through the v2 engine.
+        let r = consult_native(&parsed, &[0.0, 1.0, 0.0], &[2.0, 3.0, 4.0, 0.5], 2).expect("hit");
+        assert!((r - 8.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn v1_export_stays_v1_for_pure_v1_library() {
+        let mut index = NativeIndex::new(0.85);
+        index.insert(NativeEntry {
+            signature: vec![1.0, 0.0],
+            program: DiscreteProgram {
+                init_idx: 0,
+                transform_idx: 1,
+                reduce_idx: 0,
+                post_scale_idx: 0,
+                offset: 0.0,
+            },
+            program_v2: None,
+        });
+        let json = library_to_json(&index);
+        assert!(!json.contains("format"));
+        assert!(json.contains("\"program\":"));
+    }
+
+    #[test]
+    fn v2_refuses_outside_space() {
+        // target = x*y only when y > x else 0, per-point conditional on a
+        // cross-field comparison — not expressible.
+        let e1 = [1.0, 5.0, 9.0, 2.0]; // 5 + 0 = 5
+        let e2 = [3.0, 4.0, 8.0, 1.0, 2.0, 7.0]; // 12 + 0 + 14 = 26
+        let e3 = [6.0, 1.0]; // 0
+        let examples: Vec<(&[f32], f32)> = vec![(&e1, 5.0), (&e2, 26.0), (&e3, 0.0)];
+        assert!(synthesize_program_v2(&examples, 2, 1e-3).is_none());
+    }
+
+    #[test]
+    fn v2_sources_render_in_all_languages() {
+        let p = ProgramV2 {
+            arity: 2,
+            combine_idx: 3,
+            guard_idx: 1,
+            guard_threshold: 10.0,
+            init_idx: 0,
+            transform_idx: 0,
+            reduce_idx: 0,
+            post_scale_idx: 0,
+            offset: 0.0,
+        };
+        let rust = program_source_v2("weighted", &p, Lang::Rust);
+        assert!(rust.contains("fn weighted") && rust.contains("v > 10"));
+        let py = program_source_v2("weighted", &p, Lang::Python);
+        assert!(py.contains("def weighted") && py.contains("math.prod(pt)"));
+        let js = program_source_v2("weighted", &p, Lang::JavaScript);
+        assert!(js.contains("function weighted") && js.contains("continue"));
+        let c = program_source_v2("weighted", &p, Lang::C);
+        assert!(c.contains("float weighted") && c.contains("prod_fields"));
+        let ts = program_source_v2("weighted", &p, Lang::TypeScript);
+        assert!(ts.contains("points: number[][]"));
+    }
+
+    #[test]
+    fn mined_thresholds_anchor_zero_and_dedupe() {
+        let e1 = [3.0, 12.0, 10.0, 12.0];
+        let examples: Vec<(&[f32], f32)> = vec![(&e1, 0.0)];
+        let t = mine_thresholds(&examples);
+        assert!(t.contains(&0.0));
+        assert_eq!(t.iter().filter(|v| (**v - 12.0).abs() < 1e-6).count(), 1);
     }
 
     #[test]
