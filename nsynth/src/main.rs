@@ -157,6 +157,26 @@ fn main() {
         return;
     }
 
+    // --transpile <python|rust|typescript>: read Mog source from stdin and
+    // print the transpiled program on stdout. Additive flag for the
+    // synthesis API server (ncpu/synthesis_api); touches nothing else.
+    if let Some(target) = arg_value(&args, "--transpile") {
+        use std::io::Read;
+        let mut mog = String::new();
+        std::io::stdin().read_to_string(&mut mog).unwrap_or_default();
+        let out = match target.as_str() {
+            "python" => mog_synth::mog_transpile::to_python(&mog),
+            "rust" => mog_synth::mog_transpile::to_rust(&mog),
+            "typescript" => mog_synth::mog_transpile::to_typescript(&mog),
+            other => {
+                eprintln!("unknown transpile target: {other} (expected python|rust|typescript)");
+                std::process::exit(1);
+            }
+        };
+        println!("{out}");
+        return;
+    }
+
     // --problem-json: accept arbitrary problem from stdin or argument
     if has_flag(&args, "--problem-json") {
         let json_str = if arg_value(&args, "--problem-json").as_deref() == Some("-") {
