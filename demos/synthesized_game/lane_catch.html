@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Lane Catch — every rule synthesized by nCPU</title>
+<style>
+  :root{--slate:#0C1015;--panel:#151B23;--line:#2A3340;--ink:#DCE3EA;--dim:#8A99A9;--amber:#FFB454;--cyan:#7DD3FC;--rose:#E0708C;}
+  *{box-sizing:border-box} html,body{margin:0;background:var(--slate);color:var(--ink);font-family:'JetBrains Mono',ui-monospace,monospace}
+  .wrap{max-width:880px;margin:0 auto;padding:24px}
+  h1{font-size:22px;letter-spacing:-.5px;margin:0 0 4px} .sub{color:var(--dim);font-size:13px;margin-bottom:18px}
+  .amber{color:var(--amber)} .cyan{color:var(--cyan)}
+  canvas{background:var(--panel);border:1px solid var(--line);display:block;margin:0 auto;border-radius:4px}
+  .hud{display:flex;gap:20px;justify-content:center;margin:12px 0;font-size:14px}
+  .hud b{color:var(--amber)}
+  .hint{text-align:center;color:var(--dim);font-size:12px;margin-top:6px}
+  table{width:100%;border-collapse:collapse;margin-top:22px;font-size:12px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);text-transform:uppercase;letter-spacing:.1em;font-size:10px;font-weight:400}
+  td.r{color:var(--amber)} td.m{color:var(--cyan)} td.c.high{color:#7CFFA0} td.c.medium{color:var(--amber)} td.c.low{color:var(--dim)}
+  .prov-h{margin-top:26px;font-size:14px}
+  .badge{display:inline-block;border:1px solid var(--line);padding:2px 8px;border-radius:3px;color:var(--dim);font-size:11px}
+</style></head>
+<body><div class="wrap">
+  <h1>Lane Catch <span class="badge">no human wrote the rules</span></h1>
+  <p class="sub">Move the <span class="amber">basket</span> with ← → (or A/D). Catch falling blocks, don't miss.
+  Every gameplay rule below was <span class="cyan">discovered by gradient/search</span> from input/output examples,
+  then CEGIS-verified against its reference across the whole input domain — assembled into this game. (Basket edge-bounding is plain presentation, not a synthesized rule.)</p>
+  <div class="hud">score <b id="score">0</b> &nbsp; lives <b id="lives">3</b> &nbsp; <span id="state" class="cyan">playing</span></div>
+  <canvas id="c" width="480" height="420"></canvas>
+  <p class="hint">← → / A D to move · R to restart</p>
+
+  <div class="prov-h">❯ rule provenance — each function below is machine-synthesized, verified, transpiled</div>
+  <table><thead><tr><th>rule</th><th>english spec</th><th>solver method</th><th>cegis rounds</th><th>verified</th></tr></thead>
+  <tbody><tr><td class="r">is_caught</td><td>Given the absolute lane distance between basket and item, return 1 when they are in the same lane (distance zero), else 0.</td><td class="m">synth_gradient</td><td>0</td><td class="c high">✓ domain-verified</td></tr>
+<tr><td class="r">score_after_catch</td><td>Increment the score by one after a successful catch.</td><td class="m">enumerative</td><td>0</td><td class="c high">✓ domain-verified</td></tr>
+<tr><td class="r">lives_after_miss</td><td>Decrease the remaining lives by one after a missed item.</td><td class="m">enumerative</td><td>0</td><td class="c high">✓ domain-verified</td></tr>
+<tr><td class="r">is_game_over</td><td>Return 1 when no lives remain (lives equals zero), else 0.</td><td class="m">synth_gradient</td><td>0</td><td class="c high">✓ domain-verified</td></tr>
+<tr><td class="r">fall_speed</td><td>How fast items fall (pixels per frame): a base of three plus one per point of score.</td><td class="m">enumerative</td><td>0</td><td class="c high">✓ domain-verified</td></tr></tbody></table>
+</div>
+<script>
+/* ===== synthesized + verified game logic (nobody wrote these bodies) ===== */
+function is_caught(a) {
+    let v0 = 1 + 0;
+    let v1 = v0 + a;
+    return Math.trunc(v0 / v1);
+}
+
+function score_after_catch(a) {
+    return a + 1;
+}
+
+function lives_after_miss(a) {
+    return a - 1;
+}
+
+function is_game_over(a) {
+    let v0 = a % 2;
+    if (a == 0) {
+        return 1;
+    }
+    if (a != a) {
+        return -2;
+    }
+    if (a != a) {
+        return 0;
+    }
+    return 0;
+}
+
+function fall_speed(a) {
+    return a + 3;
+}
+/* ===== thin presentation shell wiring the synthesized rules ===== */
+const LANES=4, W=480, H=420, lw=W/LANES;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const SPAWN_FRAMES=26;
+let basket, score, lives, items, frame, over;
+function reset(){ basket=1; score=0; lives=3; items=[]; frame=0; over=false;
+  document.getElementById('state').textContent='playing'; document.getElementById('state').className='cyan'; }
+reset();
+const clampLane = v => Math.max(0, Math.min(LANES-1, v)); // presentation bound (not a synthesized rule)
+addEventListener('keydown',e=>{
+  if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') basket=clampLane(basket-1);
+  if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') basket=clampLane(basket+1);
+  if(e.key==='r'||e.key==='R') reset();
+});
+function step(){
+  frame++;
+  if(!over && frame>=SPAWN_FRAMES){ items.push({lane:(Math.random()*LANES)|0, y:-20}); frame=0; }
+  const vy = fall_speed(score);   // synthesized difficulty ramp
+  for(const it of items) it.y += vy;
+  for(const it of items){
+    if(it.y>=H-46 && it.y<H-10 && !it.done){
+      it.done=true;
+      if(is_caught(Math.abs(basket - it.lane))===1){ score=score_after_catch(score); }
+      else { lives=lives_after_miss(lives); }
+    }
+  }
+  items = items.filter(it=>it.y<H+20);
+  if(!over && is_game_over(lives)===1){ over=true;
+    document.getElementById('state').textContent='game over — R to restart';
+    document.getElementById('state').className=''; document.getElementById('state').style.color='var(--rose)'; }
+  document.getElementById('score').textContent=score;
+  document.getElementById('lives').textContent=Math.max(0,lives);
+}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle='#2A3340'; for(let i=1;i<LANES;i++){ctx.beginPath();ctx.moveTo(i*lw,0);ctx.lineTo(i*lw,H);ctx.stroke();}
+  for(const it of items){ ctx.fillStyle=it.done?'#3a4350':'#7DD3FC'; ctx.fillRect(it.lane*lw+lw/2-10, it.y, 20, 20); }
+  ctx.fillStyle='#FFB454'; ctx.fillRect(basket*lw+lw/2-26, H-40, 52, 16);
+}
+function loop(){ if(!over) step(); draw(); requestAnimationFrame(loop); }
+loop();
+</script></body></html>

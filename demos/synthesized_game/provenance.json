@@ -1,0 +1,42 @@
+[
+  {
+    "rule": "is_caught",
+    "english": "Given the absolute lane distance between basket and item, return 1 when they are in the same lane (distance zero), else 0.",
+    "method": "synth_gradient",
+    "cegis_rounds": 0,
+    "domain_verified": "\u2713 matches reference on full domain",
+    "code": "function is_caught(a: number): number {\n    let v0: number = 1 + 0;\n    let v1: number = v0 + a;\n    return Math.trunc(v0 / v1);\n}"
+  },
+  {
+    "rule": "score_after_catch",
+    "english": "Increment the score by one after a successful catch.",
+    "method": "enumerative",
+    "cegis_rounds": 0,
+    "domain_verified": "\u2713 matches reference on full domain",
+    "code": "function score_after_catch(a: number): number {\n    return a + 1;\n}"
+  },
+  {
+    "rule": "lives_after_miss",
+    "english": "Decrease the remaining lives by one after a missed item.",
+    "method": "enumerative",
+    "cegis_rounds": 0,
+    "domain_verified": "\u2713 matches reference on full domain",
+    "code": "function lives_after_miss(a: number): number {\n    return a - 1;\n}"
+  },
+  {
+    "rule": "is_game_over",
+    "english": "Return 1 when no lives remain (lives equals zero), else 0.",
+    "method": "synth_gradient",
+    "cegis_rounds": 0,
+    "domain_verified": "\u2713 matches reference on full domain",
+    "code": "function is_game_over(a: number): number {\n    let v0: number = a % 2;\n    if (a == 0) {\n        return 1;\n    }\n    if (a != a) {\n        return -2;\n    }\n    if (a != a) {\n        return 0;\n    }\n    return 0;\n}"
+  },
+  {
+    "rule": "fall_speed",
+    "english": "How fast items fall (pixels per frame): a base of three plus one per point of score.",
+    "method": "enumerative",
+    "cegis_rounds": 0,
+    "domain_verified": "\u2713 matches reference on full domain",
+    "code": "function fall_speed(a: number): number {\n    return a + 3;\n}"
+  }
+]
