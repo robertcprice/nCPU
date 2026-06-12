@@ -6,6 +6,8 @@ Verbs
 * ``mine`` — read an eval JSON, append hard-fails to the work queue.
 * ``run-once`` — consume the queue once under a budget.
 * ``status`` — print session + artifact summary.
+* ``distill`` — offline 5-tuple translation pass over solved_programs.jsonl
+  (pure Python, no torch; pending entries land next to the library).
 
 All artifacts default to ``.nCPU_autoresearch/`` in the current working
 directory.
@@ -32,7 +34,12 @@ from pathlib import Path
 from typing import Optional
 
 from ncpu.autoresearch.cascade import CascadeConfig, run_cascade
-from ncpu.autoresearch.distiller import dedupe_solved, load_solved, summarize_solved
+from ncpu.autoresearch.distiller import (
+    dedupe_solved,
+    distill_solved,
+    load_solved,
+    summarize_solved,
+)
 from ncpu.autoresearch.miner import load_queue, mine
 from ncpu.autoresearch.runner import run_session
 from ncpu.autoresearch.types import Budget, DEFAULT_ARTIFACT_DIR
@@ -128,6 +135,26 @@ def cmd_dedupe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_distill(args: argparse.Namespace) -> int:
+    """Offline 5-tuple distillation over an existing solved_programs.jsonl.
+
+    Pure Python (no torch): translatable solves are parked in
+    ``pending_distill.json`` next to the library — see
+    :func:`distiller.distill_solved` for why signature-less entries can't
+    go straight into the library JSON.
+    """
+    if not args.solved.exists():
+        print(f"solved log {args.solved} not found", file=sys.stderr)
+        return 2
+    items = load_solved(args.solved)
+    work_items = None
+    if args.queue is not None:
+        work_items = {it.task_id: it for it in load_queue(args.queue)}
+    summary = distill_solved(items, args.library, work_items=work_items)
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
 def cmd_user(args: argparse.Namespace) -> int:
     """Solve a single user prompt end-to-end via the cascade.
 
@@ -211,6 +238,17 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     d = sub.add_parser("dedupe", help="dedupe the solved_programs.jsonl")
     d.set_defaults(func=cmd_dedupe)
+
+    di = sub.add_parser(
+        "distill",
+        help="offline 5-tuple distillation pass over a solved_programs.jsonl",
+    )
+    di.add_argument("--solved", type=Path, required=True)
+    di.add_argument("--library", type=Path, required=True)
+    di.add_argument("--queue", type=Path, default=None,
+                    help="optional WorkItem queue JSONL — recovers "
+                         "prompts/entry points/io_pairs for body-style programs")
+    di.set_defaults(func=cmd_distill)
 
     u = sub.add_parser("user",
                        help="extract tests from a user prompt and solve it end-to-end")
