@@ -124,27 +124,18 @@ Expected: **32 passed, 0 failed** in <1 s (24 as of format v2, commit `b0622a5`;
 |---|---|
 | Paper section | `paper/sections/section_synthesized_software.md` §20.3 |
 | Implementation | `nsynth/src/rejected_cache.rs` (commit `1d2ed2f`), wired via RAII `RejectionRecorder` in `nsynth/src/synthesis/universal_array.rs` |
-| Artifact | `~/.nsynth_rejected_programs.tsv` (per-run; path overridable via `NSYNTH_REJECTED_PATH`) |
-| Regression | `cargo test rejected_cache` in `nsynth/` (6 unit tests: persistence round-trip, cap eviction, per-fingerprint isolation) |
+| Harness | `benchmarks/benchmark_negative_memory.py` — automates the cold/warm measurement: runs a novel out-of-space problem (`sum_above_first`, embedded in the script and artifact) twice with every nsynth bank isolated under a temp dir, verifies both runs end in honest refusals, and counts rejection hashes in the TSV after each run |
+| Artifact | `artifacts/negative_memory_benchmark.json` (`cold_rejections` / `warm_new_rejections` / `converged`, plus the exact problem, wall times, and refusal reason) |
+| Regression | `cargo test rejected_cache` in `nsynth/` (6 unit tests: persistence round-trip, cap eviction, per-fingerprint isolation) · `pytest tests/test_negative_memory_benchmark.py` (4 fast tests pin artifact shape + `converged == true`; the full ~5 min cold/warm rerun is opt-in via `NCPU_NEGMEM_FULL=1`) |
 
 ```bash
 (cd nsynth && cargo test rejected_cache)
+python3 -m pytest tests/test_negative_memory_benchmark.py        # fast: validates the committed artifact
+python3 benchmarks/benchmark_negative_memory.py                  # regenerate the artifact (2 solver runs, ~2-3 min each)
+NCPU_NEGMEM_FULL=1 python3 -m pytest tests/test_negative_memory_benchmark.py  # end-to-end rerun under pytest
 ```
 
-Cold/warm measurement procedure (reproduces the 1,415-cold / 0-new-warm claim):
-
-```bash
-# 1. Point the bank at a fresh file and run a novel out-of-space problem
-#    (one the portfolio cannot solve, so the gradient search runs to exhaustion):
-NSYNTH_REJECTED_PATH=/tmp/neg.tsv nsynth/target/release/mog_synth --problem-json problem.json
-cut -f2 /tmp/neg.tsv | tr ',' '\n' | wc -l   # total rejection hashes after the cold run
-                                             # (TSV row format: last_used \t comma-joined-hashes \t fingerprint)
-
-# 2. Rerun the identical problem; the hash count must not grow:
-NSYNTH_REJECTED_PATH=/tmp/neg.tsv nsynth/target/release/mog_synth --problem-json problem.json
-```
-
-Measured at commit `1d2ed2f`: cold run persisted 1,415 rejections; the warm rerun added zero — the entire failed search deduplicated across runs.
+Measured by the harness on 2026-06-11 (`sum_above_first`: sum of elements strictly greater than the first — outside the solver portfolio, refused after full cascade exhaustion): cold run persisted **1,483** rejections in 126.1 s; the warm rerun added **zero** in 60.6 s — the entire failed search deduplicated across runs. (Original manual measurement at commit `1d2ed2f`: 1,415 cold / 0 new warm.)
 
 ### Claim 8: Synthesized Pong — 22 rules, zero domain-sweep mismatches
 

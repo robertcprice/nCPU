@@ -1,0 +1,105 @@
+{
+  "claim": "nSynth persistent negative memory: failed search never repeats",
+  "problem": {
+    "name": "sum_above_first",
+    "signature": "fn sum_above_first(xs: &[i64]) -> i64",
+    "examples": [
+      {
+        "inputs": [
+          [
+            3,
+            1,
+            4,
+            1,
+            5
+          ]
+        ],
+        "expected": 9
+      },
+      {
+        "inputs": [
+          [
+            10,
+            2,
+            3
+          ]
+        ],
+        "expected": 0
+      },
+      {
+        "inputs": [
+          [
+            1,
+            2,
+            3,
+            4
+          ]
+        ],
+        "expected": 9
+      },
+      {
+        "inputs": [
+          [
+            5,
+            5,
+            5
+          ]
+        ],
+        "expected": 0
+      },
+      {
+        "inputs": [
+          [
+            2,
+            7,
+            1,
+            8
+          ]
+        ],
+        "expected": 15
+      },
+      {
+        "inputs": [
+          [
+            0,
+            -1,
+            3,
+            0,
+            2
+          ]
+        ],
+        "expected": 5
+      }
+    ],
+    "holdouts": [
+      {
+        "inputs": [
+          [
+            4,
+            9,
+            9,
+            1
+          ]
+        ],
+        "expected": 18
+      },
+      {
+        "inputs": [
+          [
+            7
+          ]
+        ],
+        "expected": 0
+      }
+    ]
+  },
+  "cold_rejections": 1483,
+  "warm_new_rejections": 0,
+  "warm_total_rejections": 1483,
+  "converged": true,
+  "wall_cold_s": 126.1,
+  "wall_warm_s": 60.6,
+  "cold_refusal_error": "differentiable solver currently supports scalar numeric problems only",
+  "binary": "nsynth/target/release/mog_synth",
+  "generated_unix": 1781227654
+}
