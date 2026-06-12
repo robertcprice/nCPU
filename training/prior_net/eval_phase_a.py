@@ -266,8 +266,12 @@ def main() -> None:
     md.append(f"- Total bench wall: OFF {wall_off:.0f}s → ON {wall_on:.0f}s "
               f"(delta {wall_on - wall_off:+.0f}s)")
     fd = artifact["focus_wall_delta"]
-    md.append(f"- Wall delta on the {len(focus)} universal-array/prior-touched problems: "
-              f"mean {fd['mean']}s, median {fd['median']}s, sum {fd['sum']}s")
+    if focus:
+        md.append(f"- Wall delta on the {len(focus)} universal-array/prior-touched problems: "
+                  f"mean {fd['mean']}s, median {fd['median']}s, sum {fd['sum']}s")
+    else:
+        md.append("- No problem in the full bench reached the universal-array fallback "
+                  "(search stages pre-empt it) — see the direct head-to-head below.")
     md.append("")
     md.append("## Direct fallback head-to-head (search stages bypassed)")
     md.append("")

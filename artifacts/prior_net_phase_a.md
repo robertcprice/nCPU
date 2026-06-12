@@ -6,7 +6,7 @@ Generated 2026-06-11T21:48:43. Fresh isolated banks; solved-cache disabled.
 - Zero-search solves (prior proposal verified verbatim): **0**
 - Warm-refine solves (proposal + ≤120 Adam steps): **0**
 - Total bench wall: OFF 57s → ON 61s (delta +4s)
-- Wall delta on the 0 universal-array/prior-touched problems: mean Nones, median Nones, sum Nones
+- No problem in the full bench reached the universal-array fallback (search stages pre-empt it) — see the direct head-to-head below.
 
 ## Direct fallback head-to-head (search stages bypassed)
 
