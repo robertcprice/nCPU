@@ -93,4 +93,4 @@ nsynth/.mog_synth_memory/
 paper/generated/
 
 # prior-net training data (regenerate via: cargo run --release --bin gen_prior_data)
-nsynth/data/prior_net_train.jsonl
+nsynth/data/prior_net_train*.jsonl

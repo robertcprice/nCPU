@@ -404,12 +404,169 @@ fn program_from_description(desc: &UArrDescription) -> SoftUniversalArrayProgram
     SoftUniversalArrayProgram::from_description(desc)
 }
 
-// ── Tier-0 proposer wiring (stage A3) ────────────────────────────────────────
+// ── Tier-0 proposer wiring (stage A3; v1 persistent server + gate) ───────────
 
 /// Master switch for the prior-net tier-0 proposer. Anything other than
 /// `NSYNTH_PRIOR_NET=1` leaves the solver byte-identical to before.
 pub(in crate::synthesis) fn prior_net_enabled() -> bool {
     std::env::var("NSYNTH_PRIOR_NET").map(|v| v == "1").unwrap_or(false)
+}
+
+/// Default confidence gate (Phase A v1). Calibrated on the held-out
+/// generated split via `training/prior_net/calibrate.py` (see
+/// `training/prior_net/confidence_calibration.json`): the gate signal is
+/// the argmax proposal's mean max-softmax across the 60 heads; below tau
+/// the server returns no proposals and the solver pays only the ~ms
+/// round-trip before falling through to its cascade. Override via
+/// `NSYNTH_PRIOR_NET_TAU`.
+const DEFAULT_PRIOR_TAU: f64 = 0.62;
+
+fn prior_tau() -> f64 {
+    std::env::var("NSYNTH_PRIOR_NET_TAU")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(DEFAULT_PRIOR_TAU)
+}
+
+/// Persistent proposer process (v1 overhead cut). v0 spawned
+/// `python3 propose.py` per problem, paying the torch import + model load
+/// (~1-3 s) on every call — that overhead alone exceeded the prior's
+/// zero-search savings. v1 keeps one `propose.py --serve` child alive for
+/// the process lifetime: line-buffered JSON request/response over
+/// stdin/stdout, model loaded once behind a `{"ready": true}` handshake.
+struct PriorServer {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+}
+
+enum ServerState {
+    /// No spawn attempted yet this process.
+    Untried,
+    /// Spawn or protocol failed — never retried (fail-soft, no respawn storm).
+    Failed,
+    Running(Box<PriorServer>),
+}
+
+fn prior_server() -> &'static std::sync::Mutex<ServerState> {
+    static SERVER: std::sync::OnceLock<std::sync::Mutex<ServerState>> =
+        std::sync::OnceLock::new();
+    SERVER.get_or_init(|| std::sync::Mutex::new(ServerState::Untried))
+}
+
+/// Test seam: kill any live server child and reset to `Untried` so tests
+/// that redirect `NSYNTH_PRIOR_NET_SCRIPT` get a fresh spawn.
+#[cfg(test)]
+fn reset_prior_server() {
+    if let Ok(mut guard) = prior_server().lock() {
+        if let ServerState::Running(server) = &mut *guard {
+            let _ = server.child.kill();
+            let _ = server.child.wait();
+        }
+        *guard = ServerState::Untried;
+    }
+}
+
+fn spawn_prior_server() -> Option<PriorServer> {
+    use std::io::BufRead as _;
+    use std::process::{Command, Stdio};
+    let (script, model) = find_prior_net_assets()?;
+    let mut child = match Command::new("python3")
+        .arg(&script)
+        .arg("--serve")
+        .arg("--model")
+        .arg(&model)
+        .arg("--tau")
+        .arg(format!("{}", prior_tau()))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[prior_net] serve spawn failed: {e}");
+            return None;
+        }
+    };
+    let stdin = child.stdin.take()?;
+    let stdout = std::io::BufReader::new(child.stdout.take()?);
+    let mut server = PriorServer {
+        child,
+        stdin,
+        stdout,
+    };
+    // One-time ready handshake — covers the torch import + checkpoint load,
+    // paid once per process lifetime instead of once per problem.
+    let mut line = String::new();
+    match server.stdout.read_line(&mut line) {
+        Ok(n) if n > 0 => {}
+        _ => {
+            eprintln!("[prior_net] server exited before ready line");
+            let _ = server.child.kill();
+            return None;
+        }
+    }
+    let ready: serde_json::Value = match serde_json::from_str(line.trim()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[prior_net] bad ready line: {e}");
+            let _ = server.child.kill();
+            return None;
+        }
+    };
+    if ready.get("ready").and_then(|r| r.as_bool()) != Some(true) {
+        eprintln!("[prior_net] server not ready: {}", line.trim());
+        let _ = server.child.kill();
+        return None;
+    }
+    Some(server)
+}
+
+/// One request/response round-trip on the live server. `None` on any
+/// protocol failure — the caller demotes the server to `Failed`.
+fn server_request(
+    server: &mut PriorServer,
+    req: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    use std::io::{BufRead as _, Write as _};
+    let mut line = req.to_string();
+    line.push('\n');
+    server.stdin.write_all(line.as_bytes()).ok()?;
+    server.stdin.flush().ok()?;
+    let mut resp = String::new();
+    let n = server.stdout.read_line(&mut resp).ok()?;
+    if n == 0 {
+        return None;
+    }
+    serde_json::from_str(resp.trim()).ok()
+}
+
+/// Send `req` through the persistent server, spawning it on first use.
+/// Fail-soft: any failure marks the server `Failed` for the rest of the
+/// process and returns `None`.
+fn prior_server_propose(req: &serde_json::Value) -> Option<serde_json::Value> {
+    let mut guard = prior_server().lock().ok()?;
+    if matches!(*guard, ServerState::Untried) {
+        *guard = match spawn_prior_server() {
+            Some(s) => ServerState::Running(Box::new(s)),
+            None => ServerState::Failed,
+        };
+    }
+    let server = match &mut *guard {
+        ServerState::Running(s) => s,
+        _ => return None,
+    };
+    match server_request(server, req) {
+        Some(resp) => Some(resp),
+        None => {
+            eprintln!("[prior_net] server protocol failure — disabling for this run");
+            let _ = server.child.kill();
+            let _ = server.child.wait();
+            *guard = ServerState::Failed;
+            None
+        }
+    }
 }
 
 /// Locate the propose.py bridge script and the trained model checkpoint.
@@ -444,9 +601,14 @@ fn find_prior_net_assets() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
         _ => {
             // script = <nsynth>/scripts/prior_net/propose.py
             let nsynth_root = script.parent()?.parent()?.parent()?;
-            nsynth_root
-                .parent()?
-                .join("training/prior_net/prior_net_v0.pt")
+            let dir = nsynth_root.parent()?.join("training/prior_net");
+            // Prefer the newest trained checkpoint generation.
+            let v1 = dir.join("prior_net_v1.pt");
+            if v1.exists() {
+                v1
+            } else {
+                dir.join("prior_net_v0.pt")
+            }
         }
     };
     if script.exists() && model.exists() {
@@ -456,12 +618,16 @@ fn find_prior_net_assets() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     }
 }
 
-/// Tier-0 of the universal-array cascade: ask the Program Prior Net for K
-/// proposed discrete programs, try each with a zero-step discretize+verify,
-/// then a cheap warm-refine. Verified-or-discarded — a miss falls through
-/// to the existing cascade, so coverage can never regress. Any bridge
-/// failure (missing python, malformed JSON, model errors) logs to stderr
-/// and returns `None` (fail-soft).
+/// Tier-0 of the universal-array cascade (v1): ask the persistent Program
+/// Prior Net server for K proposed discrete programs. The server applies
+/// the calibrated confidence gate — below tau it returns no proposals, so
+/// a gated miss costs only the ~ms round-trip. Gate-open proposals are each
+/// tried zero-step (discretize+verify); warm refine (≤120 Adam steps) runs
+/// only on the single highest-confidence proposal (v0 measured 0 warm wins
+/// from refining all K — the other three refines were pure overhead).
+/// Verified-or-discarded — a miss falls through to the existing cascade, so
+/// coverage can never regress. Any bridge failure (missing python, malformed
+/// JSON, model errors) logs to stderr and returns `None` (fail-soft).
 pub(in crate::synthesis) fn try_prior_net_proposals(
     problem: &Problem,
     examples: &[ArrExample],
@@ -471,10 +637,7 @@ pub(in crate::synthesis) fn try_prior_net_proposals(
     rejected_codes: &mut std::collections::HashSet<String>,
     neg: &mut crate::rejected_cache::RejectionRecorder,
 ) -> Option<SolveResult> {
-    use std::process::{Command, Stdio};
-
-    let (script, model) = find_prior_net_assets()?;
-
+    let t0 = std::time::Instant::now();
     let exs: Vec<serde_json::Value> = examples
         .iter()
         .map(|ex| {
@@ -486,62 +649,40 @@ pub(in crate::synthesis) fn try_prior_net_proposals(
         .collect();
     let req = serde_json::json!({"n_scalar": n_scalar, "examples": exs});
 
-    let child = Command::new("python3")
-        .arg(&script)
-        .arg("--model")
-        .arg(&model)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-    let mut child = match child {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[prior_net] spawn failed: {e}");
-            return None;
-        }
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write as _;
-        if let Err(e) = stdin.write_all(req.to_string().as_bytes()) {
-            eprintln!("[prior_net] stdin write failed: {e}");
-        }
+    let resp = prior_server_propose(&req)?;
+    let confidence = resp.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.0);
+    if resp.get("gated").and_then(|g| g.as_bool()) == Some(true) {
+        eprintln!(
+            "[prior_net] {fn_name}: GATED (conf {confidence:.3} < tau {:.3}) in {:.0}ms",
+            prior_tau(),
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+        return None;
     }
-    let output = match child.wait_with_output() {
-        Ok(o) if o.status.success() => o,
-        Ok(o) => {
-            eprintln!("[prior_net] propose.py exited with {}", o.status);
-            return None;
-        }
-        Err(e) => {
-            eprintln!("[prior_net] wait failed: {e}");
-            return None;
-        }
-    };
-    let resp: serde_json::Value = match serde_json::from_slice(&output.stdout) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("[prior_net] bad response JSON: {e}");
-            return None;
-        }
-    };
     let proposals = match resp.get("proposals").and_then(|p| p.as_array()) {
         Some(p) if !p.is_empty() => p.clone(),
         _ => return None,
     };
 
+    // Pass 1 — zero-step: verify each proposal's discrete program verbatim
+    // (cheap: one parse + one run of a tiny Mog program per proposal).
+    let mut progs: Vec<Option<SoftUniversalArrayProgram>> = Vec::new();
     for (k, prop) in proposals.iter().enumerate() {
         let Some(desc) = description_from_proposal(prop, n_scalar) else {
             eprintln!("[prior_net] proposal {k} malformed — skipped");
+            progs.push(None);
             continue;
         };
         let prog = SoftUniversalArrayProgram::from_description(&desc);
         let code = prog.discretize_and_emit(fn_name, scalar_names);
 
-        // Zero-step: verify the proposal's discrete program verbatim.
         if !rejected_codes.contains(&code) && !neg.known_bad(&code) {
             if verify_problem_code_strict(problem, &code).is_ok() {
-                eprintln!("[prior_net] {fn_name}: proposal {k} verified ZERO-SEARCH");
+                eprintln!(
+                    "[prior_net] {fn_name}: proposal {k} verified ZERO-SEARCH \
+                     (conf {confidence:.3}) in {:.0}ms",
+                    t0.elapsed().as_secs_f64() * 1000.0
+                );
                 crate::learned_biases::record_success(
                     n_scalar,
                     prog.params.clone(),
@@ -558,8 +699,14 @@ pub(in crate::synthesis) fn try_prior_net_proposals(
             neg.note_rejection(&code);
             rejected_codes.insert(code);
         }
+        progs.push(Some(prog));
+    }
 
-        // Warm refine: a few Adam steps from the proposal as init.
+    // Pass 2 — warm refine the top-confidence proposal only (index 0 = the
+    // argmax; sampled proposals start from the same logits and v0 showed
+    // refining them never converted, so the extra ≤360 Adam steps per miss
+    // were pure overhead).
+    if let Some(Some(prog)) = progs.first() {
         if let Some(mut result) = super::warm_refine_from_bias(
             &prog.params,
             problem,
@@ -568,19 +715,25 @@ pub(in crate::synthesis) fn try_prior_net_proposals(
             fn_name,
             scalar_names,
         ) {
-            eprintln!("[prior_net] {fn_name}: proposal {k} verified after warm refine");
+            eprintln!(
+                "[prior_net] {fn_name}: argmax proposal verified after warm refine \
+                 in {:.0}ms",
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
             crate::learned_biases::record_success(
                 n_scalar,
                 prog.params.clone(),
-                format!("prior_net:{k}:warm"),
+                "prior_net:0:warm".to_string(),
             );
             result.method = "prior_net_warm".to_string();
             return Some(result);
         }
     }
     eprintln!(
-        "[prior_net] {fn_name}: {} proposals, none verified — falling through to cascade",
-        proposals.len()
+        "[prior_net] {fn_name}: {} proposals (conf {confidence:.3}), none verified \
+         in {:.0}ms — falling through to cascade",
+        proposals.len(),
+        t0.elapsed().as_secs_f64() * 1000.0
     );
     None
 }
@@ -721,10 +874,12 @@ mod tests {
 
     #[test]
     fn tier0_stub_bridge_zero_search_solves_sum() {
-        // End-to-end A3 wiring test with a stub propose.py: the stub echoes
-        // a proposal that is exactly the describe() of the hand-coded sum
-        // shape (restart 1). try_prior_net_proposals must subprocess the
-        // stub, rebuild the program, verify it zero-step, and return
+        // End-to-end wiring test with a stub propose.py speaking the v1
+        // persistent line protocol: ready handshake, then one response per
+        // request line. The stub echoes a proposal that is exactly the
+        // describe() of the hand-coded sum shape (restart 1).
+        // try_prior_net_proposals must spawn the server, round-trip the
+        // request, rebuild the program, verify it zero-step, and return
         // method == "prior_net".
         let consts = [0i64, 1, -1, 2, -2, 10];
         let mut prog = SoftUniversalArrayProgram::new_with_consts(0, &consts);
@@ -739,9 +894,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             "body_init": desc.body_init.clone(),
             "ret": desc.ret,
+            "confidence": 0.99,
         });
         let stub = format!(
-            "#!/usr/bin/env python3\nimport sys, json\nsys.stdin.read()\nprint(json.dumps({{\"proposals\": [{proposal}]}}))\n"
+            "#!/usr/bin/env python3\nimport sys, json\n\
+             print(json.dumps({{\"ready\": True}}), flush=True)\n\
+             for line in sys.stdin:\n\
+            \x20    json.loads(line)\n\
+            \x20    print(json.dumps({{\"proposals\": [{proposal}], \
+             \"confidence\": 0.99, \"gated\": False}}), flush=True)\n"
         );
         let script_path = std::env::temp_dir().join(format!(
             "pn_stub_{}_{}.py",
@@ -756,6 +917,9 @@ mod tests {
         // stub ignores --model entirely.
         std::env::set_var("NSYNTH_PRIOR_NET_SCRIPT", &script_path);
         std::env::set_var("NSYNTH_PRIOR_NET_MODEL", &script_path);
+        // The server is process-global; force a fresh spawn so the stub env
+        // vars take effect even if another test already started a server.
+        reset_prior_server();
 
         let mk = |arr: &[i64], expected: i64| crate::benchmark::Example {
             inputs: vec![crate::benchmark::Value::Array(arr.to_vec())],
@@ -802,6 +966,7 @@ mod tests {
         );
         let result =
             try_prior_net_proposals(&problem, &examples, 0, "f", &[], &mut rejected, &mut neg);
+        reset_prior_server();
         std::env::remove_var("NSYNTH_PRIOR_NET_SCRIPT");
         std::env::remove_var("NSYNTH_PRIOR_NET_MODEL");
         let _ = std::fs::remove_file(&script_path);
@@ -812,6 +977,63 @@ mod tests {
             crate::runtime::verify_problem_code_strict(&problem, &result.code).is_ok(),
             "returned code must verify"
         );
+    }
+
+    /// Utility (ignored): dump one prior-net request JSON per array-input
+    /// benchmark problem to /tmp/prior_bench_requests.jsonl so the gate
+    /// threshold can be sanity-checked offline against the model:
+    ///   cargo test -p mog_synth --release dump_bench_fallback_requests \
+    ///     -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn dump_bench_fallback_requests() {
+        let problems = crate::benchmark::get_benchmark(1);
+        let mut out = String::new();
+        for problem in &problems {
+            let first = match problem.examples.first() {
+                Some(f) => f,
+                None => continue,
+            };
+            if !matches!(first.inputs.first(), Some(crate::benchmark::Value::Array(_))) {
+                continue;
+            }
+            let n_scalar = first.inputs.len().saturating_sub(1);
+            let mut exs = Vec::new();
+            let mut ok = true;
+            for ex in &problem.examples {
+                let arr = match &ex.inputs[0] {
+                    crate::benchmark::Value::Array(a) => a.clone(),
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                };
+                let mut scalars = Vec::new();
+                for v in &ex.inputs[1..] {
+                    match v {
+                        crate::benchmark::Value::Int(iv) => scalars.push(*iv),
+                        _ => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                exs.push(serde_json::json!({
+                    "array": arr, "scalars": scalars, "expected": ex.expected,
+                }));
+            }
+            if !ok {
+                continue;
+            }
+            out.push_str(
+                &serde_json::json!({
+                    "name": problem.name, "n_scalar": n_scalar, "examples": exs,
+                })
+                .to_string(),
+            );
+            out.push('\n');
+        }
+        std::fs::write("/tmp/prior_bench_requests.jsonl", out).unwrap();
     }
 
     #[test]
