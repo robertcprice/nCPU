@@ -292,3 +292,60 @@ constants conditioned on `discover_useful_consts`, K>4 with batched
 inference), cut the overhead (persistent bridge process instead of
 per-problem model load; skip warm-refine when proposal confidence is low),
 and gate tier-0 on predicted-success probability so misses cost ~0.
+
+## Phase A v1 notes (2026-06-12): confidence gate + persistent server
+
+v1 took v0's +33 s overhead loss and flipped it to a measured net win,
+with the same 2 zero-search wins and full coverage. Three changes:
+
+- **Persistent async proposer server.** `propose.py --serve` loads torch +
+  the checkpoint once and speaks one-line-JSON request/response over
+  stdin/stdout. The Rust side (`prior_gen.rs`) keeps the child in a
+  process-global state machine (`Untried -> Spawning -> Running/Failed`);
+  the spawn + ready handshake runs on a background thread, and requests
+  arriving before ready return `None` (cascade proceeds), so startup costs
+  ~0 wall time. Measured (`artifacts/prior_net_proposer_cost.json`):
+  startup 2.55 s idle (12 s contended), then **4.2 ms median per request**
+  vs v0's one-shot subprocess at 0.68 s idle / ~7 s contended per problem —
+  a ~160-1,600x per-problem cut. Fail-soft: any protocol failure demotes
+  the server to `Failed` for the process lifetime (no respawn storm).
+- **Calibrated confidence gate.** `calibrate.py` evaluates four candidate
+  signals over the 60 n_scalar-masked heads (mean max-softmax, mean margin,
+  mean log max-softmax, min max-softmax) on the 10k held-out rows of the
+  300k generated split; `mean_logp` wins the exact-vs-miss rank-AUC contest
+  (0.743). Deployment tau comes from the **hit-recall rule** — the largest
+  tau keeping >= 90% of held-out exact hits firing (tau = -0.2473, baked
+  into `DEFAULT_PRIOR_TAU`/`DEFAULT_PRIOR_SIGNAL`, regression-pinned
+  against `confidence_calibration.json`). The utility-max rule is reported
+  as a diagnostic only: on the generated holdout (~0.7% base exact rate) it
+  degenerates to an extreme-tail tau that fires on ~nothing real, because
+  that distribution badly understates the bench fallback population's hit
+  rate (12.5%). At the chosen tau the gate fires on 16/42 array bench
+  problems — including both historically verified winners.
+- **Warm refine removed from tier-0.** v0 measured 0 conversions from 64
+  warm-refine attempts at ~0.4-1 s each; every win came from zero-step
+  verification. A gate-open miss now costs ~0.2 s (round-trip + K=4
+  zero-step verifies); a gated miss ~5-10 ms.
+
+**Retrain = honest null result.** A 300k-row dataset (94,857 distinct
+programs; stats post-hoc in `artifacts/prior_net_gen_stats_300k.json`) was
+trained for the 1 h time-box (best epoch 11): held-out exact rate 0.65% vs
+v0's 0.66% on the identical 10k holdout — no lift — and its bench fire set
+drops `longest_increasing_run`. The v0 checkpoint stays deployed; the
+rejected checkpoint is kept untracked.
+
+**Measured result (A4 protocol, fresh isolated banks, idle machine):**
+full bench 105/105 both runs (tier-0 still pre-empted by the search-teacher
+catalog). Direct fallback head-to-head on the 16 universal-array problems:
+16/16 both ways, zero-search wins **2** (`longest_increasing_run` 3.15 s ->
+**8 ms**, `count_peaks` 3.02 s -> **23 ms**), wall **OFF 36.3 s -> ON
+31.6 s (-4.7 s)**. v0 history preserved in
+`artifacts/prior_net_phase_a.{json,md}`; success criteria are pinned by
+`tests/test_prior_net_phase_a.py`.
+
+**What's next (before Phase B):** hit rate is still the binding constraint
+— 2/16 verbatim. The gate and server made misses nearly free, so the next
+lever is training on the bench-problem distribution (solved-cache replay),
+conditioning constants on `discover_useful_consts`, and K>4 batched
+proposals now that each extra proposal costs ~15 ms to verify rather than
+a warm refine.
