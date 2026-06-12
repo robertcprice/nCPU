@@ -1,0 +1,34 @@
+# Synthesis-as-a-Service container: nsynth Rust synthesizer behind the
+# stdlib-only HTTP server in ncpu/synthesis_api. Built for Cloud Run.
+#
+#   gcloud builds submit --config cloudbuild.synthesis-api.yaml .
+#
+# Stage 1 compiles the mog_synth release binary; stage 2 is a slim Python
+# runtime that shells out to it. No torch, no pip installs — the server is
+# stdlib-only by design.
+
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY nsynth ./nsynth
+RUN cargo build --release --manifest-path nsynth/Cargo.toml --bin mog_synth
+
+FROM python:3.12-slim
+WORKDIR /app
+# default_backend_path() resolves <repo>/nsynth/target/release/mog_synth
+# relative to the server module, so mirror that layout.
+COPY --from=build /src/nsynth/target/release/mog_synth /app/nsynth/target/release/mog_synth
+COPY ncpu/__init__.py /app/ncpu/__init__.py
+COPY ncpu/synthesis_api /app/ncpu/synthesis_api
+
+# Memory banks land in $HOME — /tmp is the only writable fs on Cloud Run.
+# Banks persist for the instance lifetime: warm instances answer repeat
+# problems from the solved cache in milliseconds.
+ENV HOME=/tmp
+EXPOSE 8080
+
+# Public-tier limits: 30s default solve, 60s hard ceiling, 2 concurrent
+# solves (excess → 429), CORS open (read-only compute, no credentials).
+CMD exec python3 -m ncpu.synthesis_api.server \
+    --host 0.0.0.0 --port ${PORT:-8080} \
+    --timeout 30 --max-timeout 60 --max-concurrency 2 \
+    --cors-origin '*'

@@ -1,0 +1,14 @@
+# Whitelist build context for the synthesis-api container — the repo
+# carries ~1.5 GB of models/datasets that must never ship to Cloud Build.
+*
+!Dockerfile.synthesis-api
+!cloudbuild.synthesis-api.yaml
+!nsynth/**
+!ncpu/
+!ncpu/__init__.py
+!ncpu/synthesis_api/**
+# re-exclude the heavy nsynth dirs the whitelist pulled back in
+nsynth/data/
+nsynth/target/
+nsynth/**/__pycache__/
+ncpu/synthesis_api/__pycache__/

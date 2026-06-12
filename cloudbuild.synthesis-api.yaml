@@ -1,0 +1,17 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.synthesis-api
+      - -t
+      - us-central1-docker.pkg.dev/$PROJECT_ID/ncpu/synthesis-api:$SHORT_SHA
+      - -t
+      - us-central1-docker.pkg.dev/$PROJECT_ID/ncpu/synthesis-api:latest
+      - .
+images:
+  - us-central1-docker.pkg.dev/$PROJECT_ID/ncpu/synthesis-api:$SHORT_SHA
+  - us-central1-docker.pkg.dev/$PROJECT_ID/ncpu/synthesis-api:latest
+options:
+  machineType: E2_HIGHCPU_8
+timeout: 1800s

@@ -57,8 +57,9 @@ import logging
 import os
 import subprocess
 import time
+import threading
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 
@@ -66,9 +67,14 @@ from typing import Any, Optional
 log = logging.getLogger("synthesis_api")
 
 # Hard ceiling on per-request solver time. Requests may lower the limit
-# via `timeout_s` but can never raise it past this.
+# via `timeout_s` but can never raise it past this (a deployment may set
+# a tighter ceiling via SynthConfig.max_timeout_s / --max-timeout).
 MAX_TIMEOUT_S = 300.0
 DEFAULT_TIMEOUT_S = 120.0
+
+# Largest accepted /synthesize body. Example sets are tiny; anything
+# bigger is abuse or a bug.
+MAX_BODY_BYTES = 64 * 1024
 
 # i64 bounds — the Rust side silently drops examples whose numbers don't
 # fit in an i64, which would corrupt the problem. Reject them up front.
@@ -91,6 +97,16 @@ class SynthConfig:
 
     backend: Path = field(default_factory=default_backend_path)
     timeout_s: float = DEFAULT_TIMEOUT_S
+    # Deployment-level ceiling on request-supplied `timeout_s`. Public
+    # deployments set this well below MAX_TIMEOUT_S so a client cannot
+    # pin a CPU for five minutes per request.
+    max_timeout_s: float = MAX_TIMEOUT_S
+    # `Access-Control-Allow-Origin` value; empty string disables CORS
+    # headers entirely (the default for local/embedded use).
+    cors_origin: str = ""
+    # Maximum concurrent backend solves; further requests get 429 rather
+    # than queueing unboundedly.
+    max_concurrency: int = 2
     # Optional overrides for the backend's three persistent memory banks.
     # `None` → inherit the calling environment (which itself defaults to
     # `$HOME/.nsynth_*` inside the Rust binary).
@@ -304,7 +320,7 @@ def handle_synthesize_request(
         return 503, {"error": f"backend binary not found: {config.backend}"}
 
     timeout_s = timeout_override if timeout_override is not None else config.timeout_s
-    timeout_s = min(timeout_s, MAX_TIMEOUT_S)
+    timeout_s = min(timeout_s, MAX_TIMEOUT_S, config.max_timeout_s)
 
     start = time.perf_counter()
 
@@ -420,18 +436,33 @@ def read_bank_stats(config: SynthConfig) -> dict[str, int]:
 
 class SynthesisRequestHandler(BaseHTTPRequestHandler):
     config: SynthConfig  # set by start_server
+    solve_slots: threading.Semaphore  # set by start_server
 
     def log_message(self, format, *args):
         # Route BaseHTTPRequestHandler logs through the module logger.
         log.info("%s - %s", self.address_string(), format % args)
+
+    def _cors_headers(self) -> None:
+        if self.config.cors_origin:
+            self.send_header("Access-Control-Allow-Origin", self.config.cors_origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Max-Age", "86400")
 
     def _send_json(self, status: int, payload: Any) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self._cors_headers()
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self._cors_headers()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self) -> None:
         if self.path == "/health":
@@ -457,17 +488,29 @@ class SynthesisRequestHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._send_json(400, {"error": "bad Content-Length header"})
             return
+        if length > MAX_BODY_BYTES:
+            self._send_json(
+                413, {"error": f"body too large (max {MAX_BODY_BYTES} bytes)"}
+            )
+            return
         raw = self.rfile.read(length).decode("utf-8", errors="replace")
         try:
             request = json.loads(raw)
         except json.JSONDecodeError as exc:
             self._send_json(400, {"error": f"bad json: {exc}"})
             return
+        if not self.solve_slots.acquire(blocking=False):
+            self._send_json(
+                429, {"error": "server at synthesis capacity, retry shortly"}
+            )
+            return
         try:
             status, payload = handle_synthesize_request(request, self.config)
         except Exception as exc:  # pragma: no cover — defensive last resort
             log.exception("unexpected error handling /synthesize")
             status, payload = 500, {"error": f"internal error: {exc}"}
+        finally:
+            self.solve_slots.release()
         self._send_json(status, payload)
 
 
@@ -476,10 +519,16 @@ def start_server(
     *,
     host: str = "127.0.0.1",
     port: int = 8093,
-) -> HTTPServer:
-    """Create the HTTP server — call `.serve_forever()` to block."""
+) -> ThreadingHTTPServer:
+    """Create the HTTP server — call `.serve_forever()` to block.
+
+    Threaded so /health stays responsive while solves run; actual solver
+    concurrency is bounded by `config.max_concurrency` (excess → 429)."""
     SynthesisRequestHandler.config = config
-    server = HTTPServer((host, port), SynthesisRequestHandler)
+    SynthesisRequestHandler.solve_slots = threading.Semaphore(
+        max(1, config.max_concurrency)
+    )
+    server = ThreadingHTTPServer((host, port), SynthesisRequestHandler)
     log.info("synthesis API listening on %s:%d", host, port)
     log.info(
         "  backend: %s (present=%s)", config.backend, config.backend.is_file()
@@ -502,6 +551,23 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=float,
         default=DEFAULT_TIMEOUT_S,
         help=f"default per-request solver timeout in seconds (max {MAX_TIMEOUT_S:.0f})",
+    )
+    parser.add_argument(
+        "--max-timeout",
+        type=float,
+        default=MAX_TIMEOUT_S,
+        help="ceiling for request-supplied timeout_s (public deployments set this low)",
+    )
+    parser.add_argument(
+        "--cors-origin",
+        default="",
+        help="Access-Control-Allow-Origin value; empty disables CORS headers",
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=2,
+        help="max concurrent backend solves; excess requests get 429",
     )
     parser.add_argument(
         "--solved-cache",
@@ -528,6 +594,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     config = SynthConfig(
         backend=args.backend,
         timeout_s=min(args.timeout, MAX_TIMEOUT_S),
+        max_timeout_s=min(args.max_timeout, MAX_TIMEOUT_S),
+        cors_origin=args.cors_origin,
+        max_concurrency=args.max_concurrency,
         solved_cache=args.solved_cache,
         bias_bank=args.bias_bank,
         rejected_cache=args.rejected_cache,
