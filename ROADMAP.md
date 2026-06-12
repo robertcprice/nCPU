@@ -131,6 +131,57 @@ cycle on a small problem set with before/after cache sizes.
 
 DoD: arXiv ID exists; pip install ncpu works; ncpu.ai serves the demo.
 
+## Rung 7 — Natural-language → verified-program engine (MCP server)
+
+The end-state product: a coding tool where a natural-language request is
+converted to I/O examples, the cascade synthesizes a verified program, and
+the answer ships with its proof. Delivery vehicle: an **MCP server** — it
+plugs into Claude Code, Claude Desktop, Cursor, and any MCP client
+instantly, which beats building a bespoke agent UI.
+
+Pieces that already exist:
+- NL → work item: `ncpu/autoresearch/prompt_parser.py` (the prompt→WorkItem
+  extractor: mines I/O pairs from arrow notation, doctests, fenced asserts).
+  Known bug to fix: `_accept` crashes on list-valued args (unhashable
+  tuple; `_freeze` applied to expected but not args).
+- Examples → program: nsynth via `mog_synth --problem-json` (solver
+  portfolio + three persistent memory banks) and the HTTP wrapper in
+  `ncpu/synthesis_api/`.
+- Program → user's language: `--transpile {python,rust,typescript}`.
+- Verified cache: solved bank + registry (`tools/registry/`).
+
+MCP tools to expose:
+1. `synthesize_from_examples(name, examples, language?)` → verified code +
+   method + proof metadata (examples checked, sweep counts), or honest
+   refusal.
+2. `synthesize_from_prompt(prompt, language?)` → extract I/O pairs from the
+   prompt text (and confirm them back to the caller), then tool 1. When
+   extraction finds no pairs, return the pairs it needs — the LLM client
+   supplies them; the human-in-the-loop never writes code, only examples.
+3. `consult_library(examples)` → instant answer when a cached verified
+   skill already matches (fingerprint or signature similarity).
+4. `library_stats()` → solved/bias/rejected bank sizes (observable learning).
+
+DoD: stdio MCP server (`ncpu/mcp_server/`), registered in a
+`.mcp.json`-style config, pytest suite covering all four tools incl. an
+end-to-end "NL prompt with arrow examples → verified Python function"
+case and an honest-refusal case; prompt_parser list-args bug fixed with a
+regression test; README with client-setup instructions.
+
+## Rung 8 — Reunify with the neural computer
+
+NPCoT/synthesis is one pillar of nCPU, not the whole project. Once Rungs
+1-7 are online, re-center the public story so the neural computer (neural
+ALU, neurOS, GPU-as-computer running Alpine/self-hosting C compiler, JEPA
+machine dynamics) is co-headline, not background:
+- Site: dedicated /computer page (GPU hero demo transcript, neural OS
+  accuracy tables, MUXLEQ Turing proof) + homepage rebalanced to the
+  five-pillar structure the README already uses.
+- Bridge demo: a synthesized program compiled and executed ON the GPU
+  ARM64 computer — connects the two halves in one artifact.
+- Paper remains the umbrella: synthesis sections already live alongside
+  the neural-computer sections.
+
 ## Standing rules
 
 1. Verification gates everything: no rung ships without its DoD test green.
