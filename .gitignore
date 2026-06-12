@@ -46,6 +46,8 @@ training_results/
 *.remote_snapshot
 *_results.json
 *_benchmark*.json
+# ...except committed reproducibility artifacts cited by REPRODUCIBILITY.md
+!artifacts/negative_memory_benchmark.json
 benchmarks/results/
 *.tar.gz
 .hermes-lab-data/
@@ -89,3 +91,6 @@ nsynth/.mog_synth_memory/
 # autoresearch local artifacts
 .nCPU_autoresearch/
 paper/generated/
+
+# prior-net training data (regenerate via: cargo run --release --bin gen_prior_data)
+nsynth/data/prior_net_train.jsonl

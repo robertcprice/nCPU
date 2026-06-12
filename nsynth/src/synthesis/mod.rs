@@ -20,6 +20,7 @@ mod universal_array;
 pub(crate) use common::*;
 
 pub use array::{synthesize_array, synthesize_array_from_teacher};
+pub use universal_array::prior_gen;
 pub use register_machine::synthesize_register_machine;
 
 // Re-exported so sibling modules (register_machine, universal_array) pick it

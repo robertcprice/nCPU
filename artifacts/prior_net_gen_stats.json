@@ -1,0 +1,15 @@
+{
+  "attempts": 712798,
+  "distinct_codes": 41688,
+  "hand_rows": 75610,
+  "random_rows": 24390,
+  "rejected_constant": 109106,
+  "rejected_dup_cap": 285129,
+  "rejected_exec_error": 218551,
+  "rejected_magnitude": 12,
+  "seconds": 104.946,
+  "seed": 42,
+  "written": 100000,
+  "out": "nsynth/data/prior_net_train.jsonl",
+  "generator": "cargo run --release --bin gen_prior_data -- --rows 100000 --seed 42"
+}

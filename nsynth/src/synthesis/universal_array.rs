@@ -1,6 +1,11 @@
 use super::*;
 use std::fmt::Write as _;
 
+/// Prior-net data generation + proposal handling (ROADMAP Rung 9 Phase A).
+/// A child module so it can reach the private soft-program internals
+/// without widening their visibility.
+pub mod prior_gen;
+
 const N_ARR_PRE: usize = 1;
 const N_ARR_BODY: usize = 4;
 const N_ARR_POST: usize = 1;
@@ -863,6 +868,417 @@ impl SoftUniversalArrayProgram {
 /// transfer). Kept small because the whole point is to be cheap.
 const WARM_REFINE_STEPS: usize = 120;
 
+/// Discrete description of a universal-array program: the argmax of every
+/// softmax group in the parameter vector plus the (rounded) constant pool.
+/// This is the label space for the Program Prior Net (ROADMAP Rung 9 Phase
+/// A): `describe()` extracts it from a soft program, `from_description()`
+/// rebuilds a soft program whose argmax structure reproduces it exactly —
+/// the two are mutual inverses (see `prior_roundtrip_tests`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UArrSlotDesc {
+    pub op: usize,  // 0..=N_OPS (N_OPS = identity / no-op)
+    pub s1: usize,  // pool index
+    pub s2: usize,  // pool index
+    pub cmp: usize, // 0..N_CMPS
+    pub gl: usize,  // pool index
+    pub gr: usize,  // pool index
+    pub el: usize,  // pool index
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UArrDescription {
+    pub n_scalar: usize,
+    pub consts: [i64; N_CONSTS],
+    pub slots: Vec<UArrSlotDesc>,      // N_ARR_SLOTS entries
+    pub body_init: Vec<usize>,         // N_ARR_BODY entries, each < lip
+    pub ret: usize,                    // pool index
+}
+
+impl SoftUniversalArrayProgram {
+    /// Extract the discrete (argmax) description of this soft program.
+    fn describe(&self) -> UArrDescription {
+        let pool = self.pool();
+        let lip = self.lip();
+        let co = self.consts_off();
+        let mut consts = [0i64; N_CONSTS];
+        for (i, c) in consts.iter_mut().enumerate() {
+            *c = self.params[co + i].round() as i64;
+        }
+        let mut slots = Vec::with_capacity(N_ARR_SLOTS);
+        for slot in 0..N_ARR_SLOTS {
+            let off = self.slot_off(slot);
+            let cb = off + N_OPS + 1 + 2 * pool;
+            slots.push(UArrSlotDesc {
+                op: argmax(&self.params[off..off + N_OPS + 1]),
+                s1: argmax(&self.params[off + N_OPS + 1..off + N_OPS + 1 + pool]),
+                s2: argmax(&self.params[off + N_OPS + 1 + pool..off + N_OPS + 1 + 2 * pool]),
+                cmp: argmax(&self.params[cb..cb + N_CMPS]),
+                gl: argmax(&self.params[cb + N_CMPS..cb + N_CMPS + pool]),
+                gr: argmax(&self.params[cb + N_CMPS + pool..cb + N_CMPS + 2 * pool]),
+                el: argmax(&self.params[cb + N_CMPS + 2 * pool..cb + N_CMPS + 3 * pool]),
+            });
+        }
+        let mut body_init = Vec::with_capacity(N_ARR_BODY);
+        for bs in 0..N_ARR_BODY {
+            let io = self.body_init_off(bs);
+            body_init.push(argmax(&self.params[io..io + lip]));
+        }
+        let ro = self.return_off();
+        let ret = argmax(&self.params[ro..ro + pool]);
+        UArrDescription {
+            n_scalar: self.n_scalar,
+            consts,
+            slots,
+            body_init,
+            ret,
+        }
+    }
+
+    /// Build a soft program whose argmax structure reproduces `desc` exactly.
+    /// Spike weight 6.0 dominates the base-init weights (1.0 / 2.0), so the
+    /// emitted discrete program is byte-identical to one whose `describe()`
+    /// produced `desc`. Out-of-range indices are clamped to the valid pool
+    /// so malformed (e.g. net-proposed) descriptions fail soft, not loud.
+    fn from_description(desc: &UArrDescription) -> Self {
+        let mut prog = Self::new_with_consts(desc.n_scalar, &desc.consts);
+        let pool = prog.pool();
+        let lip = prog.lip();
+        const SPIKE: f32 = 6.0;
+        for (slot, d) in desc.slots.iter().take(N_ARR_SLOTS).enumerate() {
+            let off = prog.slot_off(slot);
+            let cb = off + N_OPS + 1 + 2 * pool;
+            prog.params[off + d.op.min(N_OPS)] = SPIKE;
+            prog.params[off + N_OPS + 1 + d.s1.min(pool - 1)] = SPIKE;
+            prog.params[off + N_OPS + 1 + pool + d.s2.min(pool - 1)] = SPIKE;
+            prog.params[cb + d.cmp.min(N_CMPS - 1)] = SPIKE;
+            prog.params[cb + N_CMPS + d.gl.min(pool - 1)] = SPIKE;
+            prog.params[cb + N_CMPS + pool + d.gr.min(pool - 1)] = SPIKE;
+            prog.params[cb + N_CMPS + 2 * pool + d.el.min(pool - 1)] = SPIKE;
+        }
+        for (bs, &idx) in desc.body_init.iter().take(N_ARR_BODY).enumerate() {
+            let io = prog.body_init_off(bs);
+            prog.params[io + idx.min(lip - 1)] = SPIKE;
+        }
+        let ro = prog.return_off();
+        prog.params[ro + desc.ret.min(pool - 1)] = SPIKE;
+        prog
+    }
+}
+
+/// Spike one body slot of `prog` toward a specific (op, sources, compare,
+/// else) combination. Shared by the hand-coded restart cascade in
+/// `synthesize_universal_array_fallback` and the prior-net data generator —
+/// both must produce identical parameter patterns for the same shape.
+fn bias_body_slot(
+    prog: &mut SoftUniversalArrayProgram,
+    bs: usize,
+    op: usize,
+    s1: usize,
+    s2: usize,
+    cmp: usize,
+    gl: usize,
+    gr: usize,
+    el: usize,
+) {
+    let pool = prog.pool();
+    let slot = N_ARR_PRE + bs;
+    let off = prog.slot_off(slot);
+    prog.params[off + op] = 4.0;
+    prog.params[off + N_OPS + 1 + s1] = 4.0;
+    prog.params[off + N_OPS + 1 + pool + s2] = 4.0;
+    let cb = off + N_OPS + 1 + 2 * pool;
+    prog.params[cb + cmp] = 4.0;
+    prog.params[cb + N_CMPS + gl] = 4.0;
+    prog.params[cb + N_CMPS + pool + gr] = 4.0;
+    prog.params[cb + N_CMPS + 2 * pool + el] = 4.0;
+}
+
+/// Apply hand-coded restart bias number `restart` (1..=25) to a freshly
+/// initialized program. Extracted verbatim from the restart cascade in
+/// `synthesize_universal_array_fallback` so the prior-net data generator can
+/// sample exactly the same "realistic" program shapes the solver searches.
+/// Restarts 6 and 14 require `n_scalar >= 1` and are no-ops otherwise;
+/// restart numbers with no matching shape (0, >25) are no-ops too.
+fn apply_handcoded_restart_bias(prog: &mut SoftUniversalArrayProgram, restart: usize) {
+    let n_scalar = prog.n_scalar;
+    let pool = prog.pool();
+    let s0_idx = prog.body_reg_start();
+    if restart == 1 {
+        let bio = prog.body_init_off(0);
+        prog.params[bio + 1] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, 0, 1, 1, 1, s0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s0_idx] = 4.0;
+    } else if restart == 2 {
+        let bio = prog.body_init_off(0);
+        prog.params[bio + 1] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, 5, 4, 0, 4, s0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s0_idx] = 4.0;
+    } else if restart == 3 {
+        let bio = prog.body_init_off(0);
+        prog.params[bio] = 4.0;
+        bias_body_slot(prog, 0, 5, 0, 0, 4, 0, s0_idx, s0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s0_idx] = 4.0;
+    } else if restart == 4 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio0] = 4.0;
+        prog.params[bio1] = 4.0;
+        bias_body_slot(prog, 0, 5, 0, 0, 0, 0, s0_idx, s0_idx);
+        bias_body_slot(prog, 1, 5, 0, 0, 4, 0, s1_idx, s1_idx);
+        let ro = prog.return_off();
+        let post_slot = N_ARR_PRE + N_ARR_BODY;
+        let p_off = prog.slot_off(post_slot);
+        prog.params[p_off + 1] = 4.0;
+        prog.params[p_off + N_OPS + 1 + s1_idx] = 4.0;
+        prog.params[p_off + N_OPS + 1 + pool + s0_idx] = 4.0;
+        let pcb = p_off + N_OPS + 1 + 2 * pool;
+        prog.params[pcb + 1] = 4.0;
+        prog.params[pcb + N_CMPS + 1] = 4.0;
+        prog.params[pcb + N_CMPS + pool + 1] = 4.0;
+        prog.params[pcb + N_CMPS + 2 * pool + s1_idx] = 4.0;
+        let p0_idx = prog.post_reg_start();
+        prog.params[ro + p0_idx] = 4.0;
+    } else if restart == 5 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio1 + 1] = 4.0;
+        bias_body_slot(prog, 0, 2, 0, 0, 1, 1, 1, s0_idx);
+        bias_body_slot(prog, 1, 0, s1_idx, s0_idx, 1, 1, 1, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 6 && n_scalar >= 1 {
+        let k_idx = N_ARR_FIXED + N_CONSTS;
+        let bio = prog.body_init_off(0);
+        prog.params[bio + 1] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, N_ARR_FIXED + 1, 4, 0, k_idx, s0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s0_idx] = 4.0;
+    } else if restart == 7 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let c0_idx = N_ARR_FIXED;
+        bias_body_slot(prog, 0, 1, c0_idx, 0, 1, 1, 1, s0_idx);
+        let s2_idx = prog.body_reg_start() + 2;
+        let bio2 = prog.body_init_off(2);
+        prog.params[bio2 + 1] = 4.0;
+        bias_body_slot(prog, 1, 5, 0, 0, 3, 0, c0_idx, s0_idx);
+        bias_body_slot(prog, 2, 0, s2_idx, s1_idx, 1, 1, 1, s2_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s2_idx] = 4.0;
+    } else if restart == 8 {
+        let c1_idx = N_ARR_FIXED + 1;
+        let bio = prog.body_init_off(0);
+        prog.params[bio + 1] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, c1_idx, 4, 4, N_ARR_FIXED, s0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s0_idx] = 4.0;
+    } else if restart == 9 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio1 + 1] = 4.0;
+        bias_body_slot(prog, 0, 2, 2, 0, 1, 1, 1, s0_idx);
+        bias_body_slot(prog, 1, 0, s1_idx, s0_idx, 1, 1, 1, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 10 {
+        let c3_idx = N_ARR_FIXED + 3;
+        let s1_idx = prog.body_reg_start() + 1;
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio1 + 1] = 4.0;
+        bias_body_slot(prog, 0, 2, 0, c3_idx, 1, 1, 1, s0_idx);
+        bias_body_slot(prog, 1, 0, s1_idx, s0_idx, 1, 1, 1, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 11 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio0] = 4.0;
+        prog.params[bio1 + 1] = 4.0;
+        bias_body_slot(prog, 0, 5, 0, 0, 4, 0, s0_idx, s0_idx);
+        bias_body_slot(prog, 1, 0, s1_idx, s0_idx, 1, 1, 1, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 12 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let s2_idx = prog.body_reg_start() + 2;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio0] = 4.0;
+        prog.params[bio1 + 1] = 4.0;
+        bias_body_slot(prog, 0, 5, 0, 0, 0, 0, s0_idx, s0_idx);
+        bias_body_slot(prog, 1, 1, 0, s0_idx, 1, 1, 1, s2_idx);
+        bias_body_slot(prog, 2, 5, s2_idx, s2_idx, 4, s2_idx, s1_idx, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 13 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let s2_idx = prog.body_reg_start() + 2;
+        let c0_idx = N_ARR_FIXED;
+        let bio2 = prog.body_init_off(2);
+        prog.params[bio2 + 1] = 4.0;
+        bias_body_slot(prog, 0, 1, c0_idx, 0, 1, 1, 1, s0_idx);
+        bias_body_slot(prog, 1, 5, 0, 0, 3, 0, c0_idx, s0_idx);
+        bias_body_slot(prog, 2, 5, s1_idx, s1_idx, 4, s1_idx, s2_idx, s2_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s2_idx] = 4.0;
+    } else if restart == 14 && n_scalar >= 1 {
+        let k_idx = N_ARR_FIXED + N_CONSTS;
+        let bio = prog.body_init_off(0);
+        prog.params[bio + 1] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, 0, 0, 1, k_idx, s0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s0_idx] = 4.0;
+    } else if restart == 15 {
+        let bio = prog.body_init_off(0);
+        prog.params[bio + 2] = 4.0;
+        let c0_idx = N_ARR_FIXED;
+        bias_body_slot(prog, 0, 5, c0_idx, c0_idx, 0, 0, 5, s0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s0_idx] = 4.0;
+    } else if restart == 16 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let c0_idx = N_ARR_FIXED;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio0 + 1] = 4.0;
+        prog.params[bio1] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, 0, 4, s0_idx, c0_idx, 0);
+        bias_body_slot(prog, 1, 5, s0_idx, s0_idx, 4, s0_idx, s1_idx, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 17 {
+        let s0_idx = prog.body_reg_start();
+        let s1_idx = prog.body_reg_start() + 1;
+        let s2_idx = prog.body_reg_start() + 2;
+        let s3_idx = prog.body_reg_start() + 3;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        let bio2 = prog.body_init_off(2);
+        let bio3 = prog.body_init_off(3);
+        prog.params[bio0] = 4.0;
+        prog.params[bio1] = 4.0;
+        prog.params[bio2] = 4.0;
+        prog.params[bio3] = 4.0;
+        bias_body_slot(prog, 0, 5, s2_idx, s2_idx, 1, 1, 1, s0_idx);
+        bias_body_slot(prog, 1, 5, 0, 0, 4, 0, s3_idx, s3_idx);
+        bias_body_slot(prog, 2, 5, 0, 0, 4, 0, s2_idx, s2_idx);
+        bias_body_slot(prog, 3, 5, s0_idx, s0_idx, 4, 0, s0_idx, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s3_idx] = 4.0;
+    } else if restart == 18 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let s2_idx = prog.body_reg_start() + 2;
+        let bio0 = prog.body_init_off(0);
+        let bio2 = prog.body_init_off(2);
+        prog.params[bio0] = 4.0;
+        prog.params[bio2 + 1] = 4.0;
+        bias_body_slot(prog, 0, 5, 0, 0, 0, 0, s0_idx, s0_idx);
+        bias_body_slot(prog, 1, 1, 0, s0_idx, 1, 1, 1, s1_idx);
+        bias_body_slot(prog, 2, 5, s1_idx, s1_idx, 4, s1_idx, s2_idx, s2_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s2_idx] = 4.0;
+    } else if restart == 19 {
+        let co = prog.consts_off();
+        prog.params[co + 5] = 1_000_000.0;
+        let s0_idx = prog.body_reg_start();
+        let s1_idx = prog.body_reg_start() + 1;
+        let s2_idx = prog.body_reg_start() + 2;
+        let s3_idx = prog.body_reg_start() + 3;
+        let c0_idx = N_ARR_FIXED;
+        let c_big_idx = N_ARR_FIXED + 5;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        let bio2 = prog.body_init_off(2);
+        let bio3 = prog.body_init_off(3);
+        prog.params[bio0 + 6] = 4.0;
+        prog.params[bio1 + 6] = 4.0;
+        prog.params[bio2 + 6] = 4.0;
+        prog.params[bio3 + 1] = 4.0;
+        bias_body_slot(prog, 0, 5, s3_idx, s3_idx, 4, s3_idx, c0_idx, c_big_idx);
+        bias_body_slot(prog, 1, 5, 0, 0, 4, 0, c0_idx, c_big_idx);
+        bias_body_slot(prog, 2, 5, s1_idx, s1_idx, 0, s1_idx, s0_idx, s0_idx);
+        bias_body_slot(prog, 3, 5, s2_idx, s2_idx, 0, s2_idx, c_big_idx, c0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s3_idx] = 4.0;
+    } else if restart == 20 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let c0_idx = N_ARR_FIXED;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio0 + 1] = 4.0;
+        prog.params[bio1] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, 0, 0, s0_idx, c0_idx, 0);
+        bias_body_slot(prog, 1, 5, s0_idx, s0_idx, 0, s0_idx, s1_idx, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 21 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let c1_idx = N_ARR_FIXED + 1;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio0 + 2] = 4.0;
+        prog.params[bio1 + 2] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, c1_idx, 4, 0, 5, c1_idx);
+        bias_body_slot(prog, 1, 5, s0_idx, s0_idx, 4, s0_idx, s1_idx, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 22 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let c1_idx = N_ARR_FIXED + 1;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        prog.params[bio0 + 1] = 4.0;
+        prog.params[bio1 + 2] = 4.0;
+        bias_body_slot(prog, 0, 0, s0_idx, c1_idx, 2, 0, 5, c1_idx);
+        bias_body_slot(prog, 1, 5, s0_idx, s0_idx, 4, s0_idx, s1_idx, s1_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s1_idx] = 4.0;
+    } else if restart == 23 {
+        let s1_idx = prog.body_reg_start() + 1;
+        let s2_idx = prog.body_reg_start() + 2;
+        let c0_idx = N_ARR_FIXED;
+        let bio2 = prog.body_init_off(2);
+        prog.params[bio2 + 1] = 4.0;
+        bias_body_slot(prog, 0, 1, 0, 5, 1, 1, 1, s0_idx);
+        bias_body_slot(prog, 1, 1, c0_idx, s0_idx, 0, s0_idx, c0_idx, s0_idx);
+        bias_body_slot(prog, 2, 5, s1_idx, s1_idx, 4, s1_idx, s2_idx, s2_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s2_idx] = 4.0;
+    } else if restart == 24 {
+        let s0_idx = prog.body_reg_start();
+        let s1_idx = prog.body_reg_start() + 1;
+        let s2_idx = prog.body_reg_start() + 2;
+        let s3_idx = prog.body_reg_start() + 3;
+        let c0_idx = N_ARR_FIXED;
+        let c1_idx = N_ARR_FIXED + 1;
+        let bio0 = prog.body_init_off(0);
+        let bio1 = prog.body_init_off(1);
+        let bio2 = prog.body_init_off(2);
+        let bio3 = prog.body_init_off(3);
+        prog.params[bio0 + 1] = 4.0;
+        prog.params[bio1 + 1] = 4.0;
+        prog.params[bio2 + 1] = 4.0;
+        prog.params[bio3 + 1] = 4.0;
+        bias_body_slot(prog, 0, 5, c1_idx, c1_idx, 4, 0, 5, c0_idx);
+        bias_body_slot(prog, 1, 5, s0_idx, s0_idx, 4, 0, 6, c0_idx);
+        bias_body_slot(prog, 2, 5, s3_idx, s3_idx, 1, 1, 1, s2_idx);
+        bias_body_slot(prog, 3, 0, s2_idx, s1_idx, 1, 1, 1, s3_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s3_idx] = 4.0;
+    } else if restart == 25 {
+        let c0_idx = N_ARR_FIXED;
+        let bio0 = prog.body_init_off(0);
+        prog.params[bio0 + 2] = 4.0;
+        bias_body_slot(prog, 0, 5, c0_idx, c0_idx, 5, 0, 7, s0_idx);
+        let ro = prog.return_off();
+        prog.params[ro + s0_idx] = 4.0;
+    }
+}
+
 /// Generate a "random body-slot bias" — pick one program slot at random,
 /// emphasize a random op/source/compare/else combination with a strong
 /// weight, and zero-lean the return pointer toward a random pool index.
@@ -1113,6 +1529,27 @@ pub(super) fn synthesize_universal_array_fallback(
         crate::solved_cache::examples_fingerprint(&problem.examples),
     );
 
+    // Tier-0 (ROADMAP Rung 9, Phase A): Program Prior Net proposals. The
+    // net amortizes the restart cascade — it reads the I/O examples and
+    // proposes K discrete programs, each tried zero-step then warm-refined.
+    // Strictly verified-or-discarded and gated behind NSYNTH_PRIOR_NET=1,
+    // so default behavior is byte-identical with the flag unset. Runs
+    // BEFORE the learned-bias replay: the amortized prior gets first shot,
+    // and its successes feed the same bias bank.
+    if prior_gen::prior_net_enabled() {
+        if let Some(result) = prior_gen::try_prior_net_proposals(
+            problem,
+            examples,
+            n_scalar,
+            fn_name,
+            scalar_names,
+            &mut rejected_codes,
+            &mut neg,
+        ) {
+            return Some(result);
+        }
+    }
+
     // Phase 0: replay the K most-recent biases that *previously* led to a
     // successful solve of any compatible-shape problem. Each learned bias is
     // a full parameter vector; we try a zero-step discretize+verify, which
@@ -1155,28 +1592,6 @@ pub(super) fn synthesize_universal_array_fallback(
         rejected_codes.insert(code);
     }
 
-    let bias_body_slot = |prog: &mut SoftUniversalArrayProgram,
-                          bs: usize,
-                          op: usize,
-                          s1: usize,
-                          s2: usize,
-                          cmp: usize,
-                          gl: usize,
-                          gr: usize,
-                          el: usize| {
-        let pool = prog.pool();
-        let slot = N_ARR_PRE + bs;
-        let off = prog.slot_off(slot);
-        prog.params[off + op] = 4.0;
-        prog.params[off + N_OPS + 1 + s1] = 4.0;
-        prog.params[off + N_OPS + 1 + pool + s2] = 4.0;
-        let cb = off + N_OPS + 1 + 2 * pool;
-        prog.params[cb + cmp] = 4.0;
-        prog.params[cb + N_CMPS + gl] = 4.0;
-        prog.params[cb + N_CMPS + pool + gr] = 4.0;
-        prog.params[cb + N_CMPS + 2 * pool + el] = 4.0;
-    };
-
     // Restarts run serially on purpose. The biased inits in restart 0..~5
     // target the most common program shapes (identity accumulator, branched
     // accumulator, two-reg loops) and usually succeed within a few seconds,
@@ -1188,8 +1603,6 @@ pub(super) fn synthesize_universal_array_fallback(
     let total_restarts = N_UNIV_ARR_RESTARTS + n_random_restarts;
     for restart in 0..total_restarts {
         let mut prog;
-        let pool;
-        let s0_idx;
 
         if restart >= N_UNIV_ARR_RESTARTS {
             // Emergent phase: pure random bias. No hand-picked slot / op /
@@ -1199,302 +1612,14 @@ pub(super) fn synthesize_universal_array_fallback(
             let seed = (restart as u64).wrapping_mul(0x9E3779B97F4A7C15)
                 ^ (fn_name.len() as u64).wrapping_mul(0xBF58476D1CE4E5B9);
             prog = random_bias_init(n_scalar, seed, &discovered_consts);
-            pool = prog.pool();
-            s0_idx = prog.body_reg_start();
         } else {
             prog = SoftUniversalArrayProgram::new_with_consts(n_scalar, &discovered_consts);
-            pool = prog.pool();
-            s0_idx = prog.body_reg_start();
+            // Hand-coded restart shapes 1..=25, extracted into a shared
+            // function so the prior-net data generator samples the exact
+            // same parameter patterns (restart 0 is a no-op plain init).
+            apply_handcoded_restart_bias(&mut prog, restart);
         }
 
-        if restart == 1 {
-            let bio = prog.body_init_off(0);
-            prog.params[bio + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 0, s0_idx, 0, 1, 1, 1, s0_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s0_idx] = 4.0;
-        } else if restart == 2 {
-            let bio = prog.body_init_off(0);
-            prog.params[bio + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 0, s0_idx, 5, 4, 0, 4, s0_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s0_idx] = 4.0;
-        } else if restart == 3 {
-            let bio = prog.body_init_off(0);
-            prog.params[bio] = 4.0;
-            bias_body_slot(&mut prog, 0, 5, 0, 0, 4, 0, s0_idx, s0_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s0_idx] = 4.0;
-        } else if restart == 4 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio0] = 4.0;
-            prog.params[bio1] = 4.0;
-            bias_body_slot(&mut prog, 0, 5, 0, 0, 0, 0, s0_idx, s0_idx);
-            bias_body_slot(&mut prog, 1, 5, 0, 0, 4, 0, s1_idx, s1_idx);
-            let ro = prog.return_off();
-            let post_slot = N_ARR_PRE + N_ARR_BODY;
-            let p_off = prog.slot_off(post_slot);
-            prog.params[p_off + 1] = 4.0;
-            prog.params[p_off + N_OPS + 1 + s1_idx] = 4.0;
-            prog.params[p_off + N_OPS + 1 + pool + s0_idx] = 4.0;
-            let pcb = p_off + N_OPS + 1 + 2 * pool;
-            prog.params[pcb + 1] = 4.0;
-            prog.params[pcb + N_CMPS + 1] = 4.0;
-            prog.params[pcb + N_CMPS + pool + 1] = 4.0;
-            prog.params[pcb + N_CMPS + 2 * pool + s1_idx] = 4.0;
-            let p0_idx = prog.post_reg_start();
-            prog.params[ro + p0_idx] = 4.0;
-        } else if restart == 5 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio1 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 2, 0, 0, 1, 1, 1, s0_idx);
-            bias_body_slot(&mut prog, 1, 0, s1_idx, s0_idx, 1, 1, 1, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 6 && n_scalar >= 1 {
-            let k_idx = N_ARR_FIXED + N_CONSTS;
-            let bio = prog.body_init_off(0);
-            prog.params[bio + 1] = 4.0;
-            bias_body_slot(
-                &mut prog,
-                0,
-                0,
-                s0_idx,
-                N_ARR_FIXED + 1,
-                4,
-                0,
-                k_idx,
-                s0_idx,
-            );
-            let ro = prog.return_off();
-            prog.params[ro + s0_idx] = 4.0;
-        } else if restart == 7 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let c0_idx = N_ARR_FIXED;
-            bias_body_slot(&mut prog, 0, 1, c0_idx, 0, 1, 1, 1, s0_idx);
-            let s2_idx = prog.body_reg_start() + 2;
-            let bio2 = prog.body_init_off(2);
-            prog.params[bio2 + 1] = 4.0;
-            bias_body_slot(&mut prog, 1, 5, 0, 0, 3, 0, c0_idx, s0_idx);
-            bias_body_slot(&mut prog, 2, 0, s2_idx, s1_idx, 1, 1, 1, s2_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s2_idx] = 4.0;
-        } else if restart == 8 {
-            let c1_idx = N_ARR_FIXED + 1;
-            let bio = prog.body_init_off(0);
-            prog.params[bio + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 0, s0_idx, c1_idx, 4, 4, N_ARR_FIXED, s0_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s0_idx] = 4.0;
-        } else if restart == 9 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio1 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 2, 2, 0, 1, 1, 1, s0_idx);
-            bias_body_slot(&mut prog, 1, 0, s1_idx, s0_idx, 1, 1, 1, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 10 {
-            let c3_idx = N_ARR_FIXED + 3;
-            let s1_idx = prog.body_reg_start() + 1;
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio1 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 2, 0, c3_idx, 1, 1, 1, s0_idx);
-            bias_body_slot(&mut prog, 1, 0, s1_idx, s0_idx, 1, 1, 1, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 11 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio0] = 4.0;
-            prog.params[bio1 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 5, 0, 0, 4, 0, s0_idx, s0_idx);
-            bias_body_slot(&mut prog, 1, 0, s1_idx, s0_idx, 1, 1, 1, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 12 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let s2_idx = prog.body_reg_start() + 2;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio0] = 4.0;
-            prog.params[bio1 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 5, 0, 0, 0, 0, s0_idx, s0_idx);
-            bias_body_slot(&mut prog, 1, 1, 0, s0_idx, 1, 1, 1, s2_idx);
-            bias_body_slot(&mut prog, 2, 5, s2_idx, s2_idx, 4, s2_idx, s1_idx, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 13 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let s2_idx = prog.body_reg_start() + 2;
-            let c0_idx = N_ARR_FIXED;
-            let bio2 = prog.body_init_off(2);
-            prog.params[bio2 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 1, c0_idx, 0, 1, 1, 1, s0_idx);
-            bias_body_slot(&mut prog, 1, 5, 0, 0, 3, 0, c0_idx, s0_idx);
-            bias_body_slot(&mut prog, 2, 5, s1_idx, s1_idx, 4, s1_idx, s2_idx, s2_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s2_idx] = 4.0;
-        } else if restart == 14 && n_scalar >= 1 {
-            let k_idx = N_ARR_FIXED + N_CONSTS;
-            let bio = prog.body_init_off(0);
-            prog.params[bio + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 0, s0_idx, 0, 0, 1, k_idx, s0_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s0_idx] = 4.0;
-        } else if restart == 15 {
-            let bio = prog.body_init_off(0);
-            prog.params[bio + 2] = 4.0;
-            let c0_idx = N_ARR_FIXED;
-            bias_body_slot(&mut prog, 0, 5, c0_idx, c0_idx, 0, 0, 5, s0_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s0_idx] = 4.0;
-        } else if restart == 16 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let c0_idx = N_ARR_FIXED;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio0 + 1] = 4.0;
-            prog.params[bio1] = 4.0;
-            bias_body_slot(&mut prog, 0, 0, s0_idx, 0, 4, s0_idx, c0_idx, 0);
-            bias_body_slot(&mut prog, 1, 5, s0_idx, s0_idx, 4, s0_idx, s1_idx, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 17 {
-            let s0_idx = prog.body_reg_start();
-            let s1_idx = prog.body_reg_start() + 1;
-            let s2_idx = prog.body_reg_start() + 2;
-            let s3_idx = prog.body_reg_start() + 3;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            let bio2 = prog.body_init_off(2);
-            let bio3 = prog.body_init_off(3);
-            prog.params[bio0] = 4.0;
-            prog.params[bio1] = 4.0;
-            prog.params[bio2] = 4.0;
-            prog.params[bio3] = 4.0;
-            bias_body_slot(&mut prog, 0, 5, s2_idx, s2_idx, 1, 1, 1, s0_idx);
-            bias_body_slot(&mut prog, 1, 5, 0, 0, 4, 0, s3_idx, s3_idx);
-            bias_body_slot(&mut prog, 2, 5, 0, 0, 4, 0, s2_idx, s2_idx);
-            bias_body_slot(&mut prog, 3, 5, s0_idx, s0_idx, 4, 0, s0_idx, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s3_idx] = 4.0;
-        } else if restart == 18 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let s2_idx = prog.body_reg_start() + 2;
-            let bio0 = prog.body_init_off(0);
-            let bio2 = prog.body_init_off(2);
-            prog.params[bio0] = 4.0;
-            prog.params[bio2 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 5, 0, 0, 0, 0, s0_idx, s0_idx);
-            bias_body_slot(&mut prog, 1, 1, 0, s0_idx, 1, 1, 1, s1_idx);
-            bias_body_slot(&mut prog, 2, 5, s1_idx, s1_idx, 4, s1_idx, s2_idx, s2_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s2_idx] = 4.0;
-        } else if restart == 19 {
-            let co = prog.consts_off();
-            prog.params[co + 5] = 1_000_000.0;
-            let s0_idx = prog.body_reg_start();
-            let s1_idx = prog.body_reg_start() + 1;
-            let s2_idx = prog.body_reg_start() + 2;
-            let s3_idx = prog.body_reg_start() + 3;
-            let c0_idx = N_ARR_FIXED;
-            let c_big_idx = N_ARR_FIXED + 5;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            let bio2 = prog.body_init_off(2);
-            let bio3 = prog.body_init_off(3);
-            prog.params[bio0 + 6] = 4.0;
-            prog.params[bio1 + 6] = 4.0;
-            prog.params[bio2 + 6] = 4.0;
-            prog.params[bio3 + 1] = 4.0;
-            bias_body_slot(
-                &mut prog, 0, 5, s3_idx, s3_idx, 4, s3_idx, c0_idx, c_big_idx,
-            );
-            bias_body_slot(&mut prog, 1, 5, 0, 0, 4, 0, c0_idx, c_big_idx);
-            bias_body_slot(&mut prog, 2, 5, s1_idx, s1_idx, 0, s1_idx, s0_idx, s0_idx);
-            bias_body_slot(
-                &mut prog, 3, 5, s2_idx, s2_idx, 0, s2_idx, c_big_idx, c0_idx,
-            );
-            let ro = prog.return_off();
-            prog.params[ro + s3_idx] = 4.0;
-        } else if restart == 20 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let c0_idx = N_ARR_FIXED;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio0 + 1] = 4.0;
-            prog.params[bio1] = 4.0;
-            bias_body_slot(&mut prog, 0, 0, s0_idx, 0, 0, s0_idx, c0_idx, 0);
-            bias_body_slot(&mut prog, 1, 5, s0_idx, s0_idx, 0, s0_idx, s1_idx, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 21 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let c1_idx = N_ARR_FIXED + 1;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio0 + 2] = 4.0;
-            prog.params[bio1 + 2] = 4.0;
-            bias_body_slot(&mut prog, 0, 0, s0_idx, c1_idx, 4, 0, 5, c1_idx);
-            bias_body_slot(&mut prog, 1, 5, s0_idx, s0_idx, 4, s0_idx, s1_idx, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 22 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let c1_idx = N_ARR_FIXED + 1;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            prog.params[bio0 + 1] = 4.0;
-            prog.params[bio1 + 2] = 4.0;
-            bias_body_slot(&mut prog, 0, 0, s0_idx, c1_idx, 2, 0, 5, c1_idx);
-            bias_body_slot(&mut prog, 1, 5, s0_idx, s0_idx, 4, s0_idx, s1_idx, s1_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s1_idx] = 4.0;
-        } else if restart == 23 {
-            let s1_idx = prog.body_reg_start() + 1;
-            let s2_idx = prog.body_reg_start() + 2;
-            let c0_idx = N_ARR_FIXED;
-            let bio2 = prog.body_init_off(2);
-            prog.params[bio2 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 1, 0, 5, 1, 1, 1, s0_idx);
-            bias_body_slot(&mut prog, 1, 1, c0_idx, s0_idx, 0, s0_idx, c0_idx, s0_idx);
-            bias_body_slot(&mut prog, 2, 5, s1_idx, s1_idx, 4, s1_idx, s2_idx, s2_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s2_idx] = 4.0;
-        } else if restart == 24 {
-            let s0_idx = prog.body_reg_start();
-            let s1_idx = prog.body_reg_start() + 1;
-            let s2_idx = prog.body_reg_start() + 2;
-            let s3_idx = prog.body_reg_start() + 3;
-            let c0_idx = N_ARR_FIXED;
-            let c1_idx = N_ARR_FIXED + 1;
-            let bio0 = prog.body_init_off(0);
-            let bio1 = prog.body_init_off(1);
-            let bio2 = prog.body_init_off(2);
-            let bio3 = prog.body_init_off(3);
-            prog.params[bio0 + 1] = 4.0;
-            prog.params[bio1 + 1] = 4.0;
-            prog.params[bio2 + 1] = 4.0;
-            prog.params[bio3 + 1] = 4.0;
-            bias_body_slot(&mut prog, 0, 5, c1_idx, c1_idx, 4, 0, 5, c0_idx);
-            bias_body_slot(&mut prog, 1, 5, s0_idx, s0_idx, 4, 0, 6, c0_idx);
-            bias_body_slot(&mut prog, 2, 5, s3_idx, s3_idx, 1, 1, 1, s2_idx);
-            bias_body_slot(&mut prog, 3, 0, s2_idx, s1_idx, 1, 1, 1, s3_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s3_idx] = 4.0;
-        } else if restart == 25 {
-            let c0_idx = N_ARR_FIXED;
-            let bio0 = prog.body_init_off(0);
-            prog.params[bio0 + 2] = 4.0;
-            bias_body_slot(&mut prog, 0, 5, c0_idx, c0_idx, 5, 0, 7, s0_idx);
-            let ro = prog.return_off();
-            prog.params[ro + s0_idx] = 4.0;
-        }
 
         if restart > 0 {
             let code = SoftUniversalArrayProgram {
