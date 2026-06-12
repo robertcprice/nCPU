@@ -18,12 +18,17 @@ Response JSON:
    "confidence": f,        # argmax-proposal confidence (mean max-softmax)
    "gated": bool}          # true when confidence < --tau (proposals emptied)
 
-Confidence (v1 gate): mean max-softmax probability across the 60 heads after
-n_scalar masking, for the argmax proposal. Calibrated offline on the held-out
-generated split (training/prior_net/calibrate.py); below --tau the server
-returns no proposals so the Rust caller pays only the ~ms inference cost and
-falls straight through to its cascade. The prior proposes only when sure;
-search disposes.
+Confidence (v1 gate): a per-head statistic aggregated across the 60 heads
+after n_scalar masking, for the argmax proposal. The statistic is selected
+by --signal (default: the best-AUC signal from
+training/prior_net/calibrate.py — see confidence_calibration.json):
+  mean_max     mean max-softmax probability
+  mean_margin  mean (p_top1 - p_top2)
+  mean_logp    mean log max-softmax
+  min_max      min max-softmax across heads
+Below --tau the server returns no proposals so the Rust caller pays only the
+~ms inference cost and falls straight through to its cascade. The prior
+proposes only when sure; search disposes.
 
 Proposal 0 is the per-head argmax; the rest are temperature samples
 (deterministic via --seed). Invalid pool/lip indices for the problem's
@@ -76,7 +81,25 @@ def _load_runtime(model_path: str):
     return ctx
 
 
-def _propose(ctx: dict, req: dict, k: int, temp: float, tau: float) -> dict:
+def _gate_signal(probs: list, n_heads: int, signal: str) -> float:
+    """Aggregate per-head argmax statistics into the calibrated gate signal."""
+    import math
+
+    tops = []
+    for p in probs:
+        top2 = p.topk(2)
+        tops.append((float(top2.values[0]), float(top2.values[1])))
+    if signal == "mean_margin":
+        return sum(a - b for a, b in tops) / n_heads
+    if signal == "mean_logp":
+        return sum(math.log(max(a, 1e-9)) for a, _ in tops) / n_heads
+    if signal == "min_max":
+        return min(a for a, _ in tops)
+    return sum(a for a, _ in tops) / n_heads  # mean_max
+
+
+def _propose(ctx: dict, req: dict, k: int, temp: float, tau: float,
+             signal: str = "mean_max") -> dict:
     """Run one inference and build the response dict (may raise)."""
     torch = ctx["torch"]
     model = ctx["model"]
@@ -99,6 +122,14 @@ def _propose(ctx: dict, req: dict, k: int, temp: float, tau: float) -> dict:
 
     probs = [torch.softmax(l, dim=-1) for l in logits]
 
+    def picks_confidence(picks: list[int]) -> float:
+        """Mean probability the model assigns to the picked class per head
+        (per-proposal diagnostic; the gate uses _gate_signal on the argmax)."""
+        return float(
+            sum(probs[h][picks[h]].item() for h in range(ctx["N_HEADS"]))
+            / ctx["N_HEADS"]
+        )
+
     def decode(picks: list[int], conf: float) -> dict:
         i = 0
         slots = []
@@ -118,16 +149,9 @@ def _propose(ctx: dict, req: dict, k: int, temp: float, tau: float) -> dict:
             "confidence": round(conf, 4),
         }
 
-    def picks_confidence(picks: list[int]) -> float:
-        """Mean probability the model assigns to the picked class per head."""
-        return float(
-            sum(probs[h][picks[h]].item() for h in range(ctx["N_HEADS"]))
-            / ctx["N_HEADS"]
-        )
-
-    # Proposal 0: argmax. Its confidence is the gate signal.
+    # Proposal 0: argmax. The calibrated signal over its heads is the gate.
     argmax_picks = [int(p.argmax().item()) for p in probs]
-    confidence = picks_confidence(argmax_picks)
+    confidence = _gate_signal(probs, ctx["N_HEADS"], signal)
 
     if confidence < tau:
         return {"proposals": [], "confidence": round(confidence, 4), "gated": True}
@@ -156,6 +180,9 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tau", type=float, default=0.0,
                     help="confidence gate: below this, return no proposals")
+    ap.add_argument("--signal", default="mean_max",
+                    choices=["mean_max", "mean_margin", "mean_logp", "min_max"],
+                    help="gate signal (must match the calibration that chose --tau)")
     ap.add_argument("--serve", action="store_true",
                     help="persistent mode: one request JSON per stdin line")
     args = ap.parse_args()
@@ -166,7 +193,7 @@ def main() -> int:
             ctx = _load_runtime(args.model)
             ctx["torch"].manual_seed(args.seed)
             req = json.loads(sys.stdin.read())
-            resp = _propose(ctx, req, args.k, args.temp, args.tau)
+            resp = _propose(ctx, req, args.k, args.temp, args.tau, args.signal)
             print(json.dumps(resp))
         except Exception as e:  # noqa: BLE001 — fail soft by contract
             print(f"[prior_net propose] error: {e}", file=sys.stderr)
@@ -189,7 +216,7 @@ def main() -> int:
             continue
         try:
             req = json.loads(line)
-            resp = _propose(ctx, req, args.k, args.temp, args.tau)
+            resp = _propose(ctx, req, args.k, args.temp, args.tau, args.signal)
         except Exception as e:  # noqa: BLE001 — fail soft per request
             print(f"[prior_net serve] request error: {e}", file=sys.stderr)
             resp = {"proposals": [], "confidence": 0.0, "gated": False}

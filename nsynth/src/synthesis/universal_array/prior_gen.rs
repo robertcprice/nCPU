@@ -421,11 +421,22 @@ pub(in crate::synthesis) fn prior_net_enabled() -> bool {
 /// `NSYNTH_PRIOR_NET_TAU`.
 const DEFAULT_PRIOR_TAU: f64 = 0.62;
 
+/// Gate signal name passed to propose.py --signal. Must match the signal the
+/// calibration JSON chose tau for. Override via `NSYNTH_PRIOR_NET_SIGNAL`.
+const DEFAULT_PRIOR_SIGNAL: &str = "mean_max";
+
 fn prior_tau() -> f64 {
     std::env::var("NSYNTH_PRIOR_NET_TAU")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(DEFAULT_PRIOR_TAU)
+}
+
+fn prior_signal() -> String {
+    std::env::var("NSYNTH_PRIOR_NET_SIGNAL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_PRIOR_SIGNAL.to_string())
 }
 
 /// Persistent proposer process (v1 overhead cut). v0 spawned
@@ -443,6 +454,11 @@ struct PriorServer {
 enum ServerState {
     /// No spawn attempted yet this process.
     Untried,
+    /// Background thread is doing the spawn + ready handshake. Requests
+    /// arriving in this window return `None` immediately (fall through to
+    /// the cascade) so the ~10 s torch-import startup overlaps the first
+    /// problems' search instead of blocking inside the first tier-0 call.
+    Spawning,
     /// Spawn or protocol failed — never retried (fail-soft, no respawn storm).
     Failed,
     Running(Box<PriorServer>),
@@ -454,10 +470,33 @@ fn prior_server() -> &'static std::sync::Mutex<ServerState> {
     SERVER.get_or_init(|| std::sync::Mutex::new(ServerState::Untried))
 }
 
+/// Test seam: wait until the async spawn settles (Running or Failed).
+/// Returns true if the server is Running.
+#[cfg(test)]
+fn wait_for_prior_server(timeout: std::time::Duration) -> bool {
+    let t0 = std::time::Instant::now();
+    loop {
+        if let Ok(guard) = prior_server().lock() {
+            match &*guard {
+                ServerState::Running(_) => return true,
+                // Untried and Failed are both settled (no spawn in flight).
+                ServerState::Failed | ServerState::Untried => return false,
+                ServerState::Spawning => {}
+            }
+        }
+        if t0.elapsed() > timeout {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// Test seam: kill any live server child and reset to `Untried` so tests
-/// that redirect `NSYNTH_PRIOR_NET_SCRIPT` get a fresh spawn.
+/// that redirect `NSYNTH_PRIOR_NET_SCRIPT` get a fresh spawn. Waits out an
+/// in-flight async spawn first so a stale child can't overwrite the reset.
 #[cfg(test)]
 fn reset_prior_server() {
+    let _ = wait_for_prior_server(std::time::Duration::from_secs(30));
     if let Ok(mut guard) = prior_server().lock() {
         if let ServerState::Running(server) = &mut *guard {
             let _ = server.child.kill();
@@ -478,6 +517,8 @@ fn spawn_prior_server() -> Option<PriorServer> {
         .arg(&model)
         .arg("--tau")
         .arg(format!("{}", prior_tau()))
+        .arg("--signal")
+        .arg(prior_signal())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -542,16 +583,26 @@ fn server_request(
     serde_json::from_str(resp.trim()).ok()
 }
 
-/// Send `req` through the persistent server, spawning it on first use.
-/// Fail-soft: any failure marks the server `Failed` for the rest of the
-/// process and returns `None`.
+/// Send `req` through the persistent server, kicking off an async spawn on
+/// first use. While the spawn + ready handshake runs in the background the
+/// caller gets `None` (cascade proceeds normally), so server startup costs
+/// ~0 wall time. Fail-soft: any failure marks the server `Failed` for the
+/// rest of the process and returns `None`.
 fn prior_server_propose(req: &serde_json::Value) -> Option<serde_json::Value> {
     let mut guard = prior_server().lock().ok()?;
     if matches!(*guard, ServerState::Untried) {
-        *guard = match spawn_prior_server() {
-            Some(s) => ServerState::Running(Box::new(s)),
-            None => ServerState::Failed,
-        };
+        *guard = ServerState::Spawning;
+        drop(guard);
+        std::thread::spawn(|| {
+            let state = match spawn_prior_server() {
+                Some(s) => ServerState::Running(Box::new(s)),
+                None => ServerState::Failed,
+            };
+            if let Ok(mut g) = prior_server().lock() {
+                *g = state;
+            }
+        });
+        return None;
     }
     let server = match &mut *guard {
         ServerState::Running(s) => s,
@@ -963,6 +1014,15 @@ mod tests {
         let mut rejected = std::collections::HashSet::new();
         let mut neg = crate::rejected_cache::RejectionRecorder::new(
             crate::solved_cache::examples_fingerprint(&problem.examples),
+        );
+        // First call kicks the async spawn and returns None (the production
+        // behavior that makes server startup cost ~0 wall time).
+        let first =
+            try_prior_net_proposals(&problem, &examples, 0, "f", &[], &mut rejected, &mut neg);
+        assert!(first.is_none(), "first call must return None while spawning");
+        assert!(
+            wait_for_prior_server(std::time::Duration::from_secs(20)),
+            "stub server failed to become ready"
         );
         let result =
             try_prior_net_proposals(&problem, &examples, 0, "f", &[], &mut rejected, &mut neg);
