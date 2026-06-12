@@ -47,7 +47,7 @@ def load_requests(path: Path) -> list[dict]:
 def measure_server(model: str, requests: list[dict]) -> dict:
     t0 = time.time()
     proc = subprocess.Popen(
-        [sys.executable, str(PROPOSE), "--serve", "--model", model, "--tau", "0"],
+        [sys.executable, str(PROPOSE), "--serve", "--model", model, "--tau", "-1e9"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -93,7 +93,7 @@ def measure_oneshot(model: str, requests: list[dict], n: int) -> dict:
         payload = {"n_scalar": req["n_scalar"], "examples": req["examples"]}
         t0 = time.time()
         subprocess.run(
-            [sys.executable, str(PROPOSE), "--model", model, "--tau", "0"],
+            [sys.executable, str(PROPOSE), "--model", model, "--tau", "-1e9"],
             input=json.dumps(payload),
             capture_output=True,
             text=True,

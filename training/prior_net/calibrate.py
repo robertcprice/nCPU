@@ -23,13 +23,14 @@ Threshold rules (both reported):
     under the measured cost model (--save-per-hit / --cost-zero-miss /
     --cost-warm). On a distribution where precision never clears the
     break-even rate this rule yields "never fire" — reported honestly.
-  - hit_recall: the largest tau that keeps >= --hit-recall of held-out
-    exact hits firing (default 0.9, i.e. tau = q10 of the exact rows'
-    signal). This is the deployment rule: the holdout's base exact rate
-    (~2%, random generated programs) badly understates the bench fallback
+  - hit_recall (DEPLOYMENT RULE — chosen_tau): the largest tau that keeps
+    >= --hit-recall of held-out exact hits firing (default 0.9, i.e. tau =
+    q10 of the exact rows' signal). The holdout's base exact rate (~1-2%,
+    random generated programs) badly understates the bench fallback
     population's hit rate (12.5% measured in v0), so utility-on-holdout is
-    a lower bound, not the decision signal. The gate's job is to keep true
-    hits while cutting the bulk of confident-miss overhead.
+    a lower-bound diagnostic, not the decision signal (it degenerates to an
+    extreme-tail tau that fires on ~nothing). The gate's job is to keep
+    true hits while cutting the bulk of confident-miss overhead.
 
 Optionally (--bench-requests) runs the model on real bench request rows
 (dumped by the ignored Rust test `dump_bench_fallback_requests`) and
@@ -271,8 +272,14 @@ def main() -> None:
     else:
         recall_tau = None
 
-    chosen_tau = util_tau if util_tau is not None else recall_tau
-    chosen_rule = "utility" if util_tau is not None else "hit_recall"
+    # Deployment rule: hit_recall. The utility rule is reported as a
+    # diagnostic only — on the generated-holdout distribution it either
+    # finds nothing or picks a degenerate extreme-tail tau (positive utility
+    # on a handful of rows, fires on ~nothing real), because the holdout's
+    # ~1-2% base exact rate badly understates the bench fallback
+    # population's hit rate (12.5% measured in v0).
+    chosen_tau = recall_tau if recall_tau is not None else util_tau
+    chosen_rule = "hit_recall" if recall_tau is not None else "utility"
 
     q = lambda t, qs: [round(torch.quantile(t, qq).item(), 4) for qq in qs]
     quantiles = [0.1, 0.25, 0.5, 0.75, 0.9, 0.99]

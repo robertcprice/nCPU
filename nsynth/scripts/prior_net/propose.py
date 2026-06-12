@@ -98,8 +98,8 @@ def _gate_signal(probs: list, n_heads: int, signal: str) -> float:
     return sum(a for a, _ in tops) / n_heads  # mean_max
 
 
-def _propose(ctx: dict, req: dict, k: int, temp: float, tau: float,
-             signal: str = "mean_max") -> dict:
+def _propose(ctx: dict, req: dict, k: int, temp: float, tau: float | None,
+             signal: str = "mean_logp") -> dict:
     """Run one inference and build the response dict (may raise)."""
     torch = ctx["torch"]
     model = ctx["model"]
@@ -153,7 +153,7 @@ def _propose(ctx: dict, req: dict, k: int, temp: float, tau: float,
     argmax_picks = [int(p.argmax().item()) for p in probs]
     confidence = _gate_signal(probs, ctx["N_HEADS"], signal)
 
-    if confidence < tau:
+    if tau is not None and confidence < tau:
         return {"proposals": [], "confidence": round(confidence, 4), "gated": True}
 
     proposals = [decode(argmax_picks, confidence)]
@@ -178,11 +178,13 @@ def main() -> int:
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--temp", type=float, default=0.8)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--tau", type=float, default=0.0,
-                    help="confidence gate: below this, return no proposals")
-    ap.add_argument("--signal", default="mean_max",
+    ap.add_argument("--tau", type=float, default=None,
+                    help="confidence gate: below this, return no proposals "
+                         "(omit to disable gating; NB mean_logp is <= 0)")
+    ap.add_argument("--signal", default="mean_logp",
                     choices=["mean_max", "mean_margin", "mean_logp", "min_max"],
-                    help="gate signal (must match the calibration that chose --tau)")
+                    help="gate signal (must match the calibration that chose --tau; "
+                         "default = the calibrated signal, see confidence_calibration.json)")
     ap.add_argument("--serve", action="store_true",
                     help="persistent mode: one request JSON per stdin line")
     args = ap.parse_args()

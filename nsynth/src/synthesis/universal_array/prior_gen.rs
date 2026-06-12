@@ -412,18 +412,20 @@ pub(in crate::synthesis) fn prior_net_enabled() -> bool {
     std::env::var("NSYNTH_PRIOR_NET").map(|v| v == "1").unwrap_or(false)
 }
 
-/// Default confidence gate (Phase A v1). Calibrated on the held-out
-/// generated split via `training/prior_net/calibrate.py` (see
-/// `training/prior_net/confidence_calibration.json`): the gate signal is
-/// the argmax proposal's mean max-softmax across the 60 heads; below tau
-/// the server returns no proposals and the solver pays only the ~ms
-/// round-trip before falling through to its cascade. Override via
-/// `NSYNTH_PRIOR_NET_TAU`.
-const DEFAULT_PRIOR_TAU: f64 = 0.62;
+/// Default confidence gate (Phase A v1). Calibrated on the 10k held-out
+/// rows of the 300k generated split via `training/prior_net/calibrate.py`
+/// (see `training/prior_net/confidence_calibration.json`): the gate signal
+/// is `mean_logp` — the argmax proposal's mean log max-softmax across the
+/// 60 heads (best exact-vs-miss AUC, 0.743) — and tau is the hit-recall
+/// rule's choice (largest tau keeping >= 90% of held-out exact hits
+/// firing). Below tau the server returns no proposals and the solver pays
+/// only the ~ms round-trip before falling through to its cascade.
+/// Override via `NSYNTH_PRIOR_NET_TAU`.
+const DEFAULT_PRIOR_TAU: f64 = -0.2473;
 
 /// Gate signal name passed to propose.py --signal. Must match the signal the
 /// calibration JSON chose tau for. Override via `NSYNTH_PRIOR_NET_SIGNAL`.
-const DEFAULT_PRIOR_SIGNAL: &str = "mean_max";
+const DEFAULT_PRIOR_SIGNAL: &str = "mean_logp";
 
 fn prior_tau() -> f64 {
     std::env::var("NSYNTH_PRIOR_NET_TAU")
@@ -673,9 +675,10 @@ fn find_prior_net_assets() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
 /// Prior Net server for K proposed discrete programs. The server applies
 /// the calibrated confidence gate — below tau it returns no proposals, so
 /// a gated miss costs only the ~ms round-trip. Gate-open proposals are each
-/// tried zero-step (discretize+verify); warm refine (≤120 Adam steps) runs
-/// only on the single highest-confidence proposal (v0 measured 0 warm wins
-/// from refining all K — the other three refines were pure overhead).
+/// tried zero-step (discretize+verify, ~65 ms total for K=4). There is no
+/// warm-refine pass in v1: v0 measured 0 conversions from 64 warm-refine
+/// attempts (4 per miss x 16 problems) at ~0.4-1 s each — every measured
+/// win came from zero-step verification, so warm refine was pure overhead.
 /// Verified-or-discarded — a miss falls through to the existing cascade, so
 /// coverage can never regress. Any bridge failure (missing python, malformed
 /// JSON, model errors) logs to stderr and returns `None` (fail-soft).
@@ -715,13 +718,11 @@ pub(in crate::synthesis) fn try_prior_net_proposals(
         _ => return None,
     };
 
-    // Pass 1 — zero-step: verify each proposal's discrete program verbatim
+    // Zero-step: verify each proposal's discrete program verbatim
     // (cheap: one parse + one run of a tiny Mog program per proposal).
-    let mut progs: Vec<Option<SoftUniversalArrayProgram>> = Vec::new();
     for (k, prop) in proposals.iter().enumerate() {
         let Some(desc) = description_from_proposal(prop, n_scalar) else {
             eprintln!("[prior_net] proposal {k} malformed — skipped");
-            progs.push(None);
             continue;
         };
         let prog = SoftUniversalArrayProgram::from_description(&desc);
@@ -749,35 +750,6 @@ pub(in crate::synthesis) fn try_prior_net_proposals(
             }
             neg.note_rejection(&code);
             rejected_codes.insert(code);
-        }
-        progs.push(Some(prog));
-    }
-
-    // Pass 2 — warm refine the top-confidence proposal only (index 0 = the
-    // argmax; sampled proposals start from the same logits and v0 showed
-    // refining them never converted, so the extra ≤360 Adam steps per miss
-    // were pure overhead).
-    if let Some(Some(prog)) = progs.first() {
-        if let Some(mut result) = super::warm_refine_from_bias(
-            &prog.params,
-            problem,
-            examples,
-            n_scalar,
-            fn_name,
-            scalar_names,
-        ) {
-            eprintln!(
-                "[prior_net] {fn_name}: argmax proposal verified after warm refine \
-                 in {:.0}ms",
-                t0.elapsed().as_secs_f64() * 1000.0
-            );
-            crate::learned_biases::record_success(
-                n_scalar,
-                prog.params.clone(),
-                "prior_net:0:warm".to_string(),
-            );
-            result.method = "prior_net_warm".to_string();
-            return Some(result);
         }
     }
     eprintln!(

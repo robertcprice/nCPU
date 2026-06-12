@@ -1,0 +1,274 @@
+{
+  "model": "training/prior_net/prior_net_v0.pt",
+  "n_requests": 42,
+  "v1_server": {
+    "startup_seconds": 2.55,
+    "per_request_ms": {
+      "mean": 7.1,
+      "median": 4.2,
+      "max": 126.3
+    },
+    "rows": [
+      {
+        "name": "array_sum_v0",
+        "ms": 126.3,
+        "confidence": -0.3366,
+        "n_proposals": 4
+      },
+      {
+        "name": "array_max_v0",
+        "ms": 4.4,
+        "confidence": -0.4493,
+        "n_proposals": 4
+      },
+      {
+        "name": "count_occurrences_v0",
+        "ms": 4.6,
+        "confidence": -0.2273,
+        "n_proposals": 4
+      },
+      {
+        "name": "closure_map_sum_v0",
+        "ms": 4.3,
+        "confidence": -0.3216,
+        "n_proposals": 4
+      },
+      {
+        "name": "count_positive_v0",
+        "ms": 4.2,
+        "confidence": -0.4148,
+        "n_proposals": 4
+      },
+      {
+        "name": "reverse_sum_v0",
+        "ms": 3.7,
+        "confidence": -0.3526,
+        "n_proposals": 4
+      },
+      {
+        "name": "array_max_elem_v0",
+        "ms": 3.9,
+        "confidence": -0.4396,
+        "n_proposals": 4
+      },
+      {
+        "name": "max_pair_diff_v0",
+        "ms": 4.3,
+        "confidence": -0.2595,
+        "n_proposals": 4
+      },
+      {
+        "name": "sum_negatives_v0",
+        "ms": 3.8,
+        "confidence": -0.3078,
+        "n_proposals": 4
+      },
+      {
+        "name": "interactive_sum_v0",
+        "ms": 4.1,
+        "confidence": -0.3526,
+        "n_proposals": 4
+      },
+      {
+        "name": "second_max_v0",
+        "ms": 3.8,
+        "confidence": -0.4963,
+        "n_proposals": 4
+      },
+      {
+        "name": "array_range_v0",
+        "ms": 3.8,
+        "confidence": -0.354,
+        "n_proposals": 4
+      },
+      {
+        "name": "count_zeros_v0",
+        "ms": 4.2,
+        "confidence": -0.1211,
+        "n_proposals": 4
+      },
+      {
+        "name": "max_consecutive_sum_v0",
+        "ms": 4.0,
+        "confidence": -0.3455,
+        "n_proposals": 4
+      },
+      {
+        "name": "min_consecutive_sum_v0",
+        "ms": 4.4,
+        "confidence": -0.4072,
+        "n_proposals": 4
+      },
+      {
+        "name": "kth_smallest_v0",
+        "ms": 4.3,
+        "confidence": -0.0838,
+        "n_proposals": 4
+      },
+      {
+        "name": "max_stock_profit_v0",
+        "ms": 4.2,
+        "confidence": -0.4842,
+        "n_proposals": 4
+      },
+      {
+        "name": "is_sorted_v0",
+        "ms": 4.0,
+        "confidence": -0.3214,
+        "n_proposals": 4
+      },
+      {
+        "name": "longest_increasing_run_v0",
+        "ms": 4.7,
+        "confidence": -0.197,
+        "n_proposals": 4
+      },
+      {
+        "name": "two_sum_exists_v0",
+        "ms": 4.7,
+        "confidence": -0.0773,
+        "n_proposals": 4
+      },
+      {
+        "name": "count_distinct_v0",
+        "ms": 4.2,
+        "confidence": -0.2164,
+        "n_proposals": 4
+      },
+      {
+        "name": "binary_search_v0",
+        "ms": 3.8,
+        "confidence": -0.3642,
+        "n_proposals": 4
+      },
+      {
+        "name": "longest_plateau_v0",
+        "ms": 4.4,
+        "confidence": -0.1761,
+        "n_proposals": 4
+      },
+      {
+        "name": "prefix_max_sum_v0",
+        "ms": 4.1,
+        "confidence": -0.1416,
+        "n_proposals": 4
+      },
+      {
+        "name": "arr_sum_squares_v0",
+        "ms": 4.0,
+        "confidence": -0.1136,
+        "n_proposals": 4
+      },
+      {
+        "name": "min_element_v0",
+        "ms": 4.1,
+        "confidence": -0.4397,
+        "n_proposals": 4
+      },
+      {
+        "name": "sum_absolute_v0",
+        "ms": 4.3,
+        "confidence": -0.1055,
+        "n_proposals": 4
+      },
+      {
+        "name": "count_evens_v0",
+        "ms": 4.4,
+        "confidence": -0.0999,
+        "n_proposals": 4
+      },
+      {
+        "name": "sum_positives_v0",
+        "ms": 3.8,
+        "confidence": -0.3355,
+        "n_proposals": 4
+      },
+      {
+        "name": "sum_at_even_indices_v0",
+        "ms": 4.1,
+        "confidence": -0.1098,
+        "n_proposals": 4
+      },
+      {
+        "name": "kth_from_end_v0",
+        "ms": 4.3,
+        "confidence": -0.4509,
+        "n_proposals": 4
+      },
+      {
+        "name": "max_abs_v0",
+        "ms": 4.5,
+        "confidence": -0.4607,
+        "n_proposals": 4
+      },
+      {
+        "name": "min_positive_v0",
+        "ms": 4.3,
+        "confidence": -0.4372,
+        "n_proposals": 4
+      },
+      {
+        "name": "count_peaks_v0",
+        "ms": 3.9,
+        "confidence": -0.1341,
+        "n_proposals": 4
+      },
+      {
+        "name": "alternating_sum_v0",
+        "ms": 4.1,
+        "confidence": -0.3976,
+        "n_proposals": 4
+      },
+      {
+        "name": "count_greater_than_v0",
+        "ms": 4.1,
+        "confidence": -0.3164,
+        "n_proposals": 4
+      },
+      {
+        "name": "prefix_sum_k_v0",
+        "ms": 5.3,
+        "confidence": -0.1876,
+        "n_proposals": 4
+      },
+      {
+        "name": "is_palindrome_arr_v0",
+        "ms": 4.2,
+        "confidence": -0.31,
+        "n_proposals": 4
+      },
+      {
+        "name": "sum_odd_indexed_v0",
+        "ms": 4.1,
+        "confidence": -0.286,
+        "n_proposals": 4
+      },
+      {
+        "name": "run_length_decode_sum_v0",
+        "ms": 5.6,
+        "confidence": -0.1825,
+        "n_proposals": 4
+      },
+      {
+        "name": "count_adjacent_diff_v0",
+        "ms": 4.8,
+        "confidence": -0.3541,
+        "n_proposals": 4
+      },
+      {
+        "name": "priority_pop_v0",
+        "ms": 4.0,
+        "confidence": -0.2167,
+        "n_proposals": 4
+      }
+    ]
+  },
+  "v0_oneshot": {
+    "samples": 4,
+    "per_call_seconds": {
+      "mean": 0.68,
+      "median": 0.68
+    }
+  },
+  "generated_at": "2026-06-12T01:29:43"
+}

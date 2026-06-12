@@ -123,7 +123,7 @@ def test_calibration_consistent_with_rust_defaults():
     assert tau is not None, "calibration found no usable tau"
 
     src = PRIOR_GEN_RS.read_text()
-    m_tau = re.search(r"DEFAULT_PRIOR_TAU:\s*f64\s*=\s*([0-9.+-eE]+)", src)
+    m_tau = re.search(r"DEFAULT_PRIOR_TAU:\s*f64\s*=\s*([-+0-9.eE]+)\s*;", src)
     m_sig = re.search(r'DEFAULT_PRIOR_SIGNAL:\s*&str\s*=\s*"(\w+)"', src)
     assert m_tau and m_sig, "prior_gen.rs gate constants not found"
     assert abs(float(m_tau.group(1)) - float(tau)) < 1e-9, (

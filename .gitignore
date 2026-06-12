@@ -94,3 +94,4 @@ paper/generated/
 
 # prior-net training data (regenerate via: cargo run --release --bin gen_prior_data)
 nsynth/data/prior_net_train*.jsonl
+training/prior_net/prior_net_v1_rejected*.pt

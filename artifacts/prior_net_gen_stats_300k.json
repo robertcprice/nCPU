@@ -1,0 +1,14 @@
+{
+  "written": 300000,
+  "distinct_codes": 94857,
+  "n_scalar": {
+    "0": 94769,
+    "1": 96505,
+    "2": 108726
+  },
+  "origin": {
+    "hand": 228682,
+    "random": 71318
+  },
+  "source": "computed post-hoc from nsynth/data/prior_net_train_300k.jsonl (generator stats lost with interrupted session)"
+}
