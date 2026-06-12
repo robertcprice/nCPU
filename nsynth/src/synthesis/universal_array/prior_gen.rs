@@ -349,7 +349,7 @@ pub fn generate_prior_data(
 /// Parse a prior-net proposal (the JSON shape emitted by
 /// `nsynth/scripts/prior_net/propose.py`) into a [`UArrDescription`].
 /// Returns `None` on any malformed field — callers fail soft.
-pub(in crate::synthesis) fn description_from_proposal(
+fn description_from_proposal(
     v: &serde_json::Value,
     n_scalar: usize,
 ) -> Option<UArrDescription> {
@@ -398,12 +398,9 @@ pub(in crate::synthesis) fn description_from_proposal(
     })
 }
 
-/// Build the soft program for a proposal description. Exposed to the
-/// synthesis module for the tier-0 wiring in
-/// `synthesize_universal_array_fallback`.
-pub(in crate::synthesis) fn program_from_description(
-    desc: &UArrDescription,
-) -> SoftUniversalArrayProgram {
+/// Build the soft program for a proposal description (test seam for the
+/// tier-0 wiring; production path calls `from_description` directly).
+fn program_from_description(desc: &UArrDescription) -> SoftUniversalArrayProgram {
     SoftUniversalArrayProgram::from_description(desc)
 }
 
@@ -581,7 +578,97 @@ pub(in crate::synthesis) fn try_prior_net_proposals(
             return Some(result);
         }
     }
+    eprintln!(
+        "[prior_net] {fn_name}: {} proposals, none verified — falling through to cascade",
+        proposals.len()
+    );
     None
+}
+
+// ── Direct-fallback eval harness (stage A4) ──────────────────────────────────
+
+/// Run `synthesize_universal_array_fallback` in isolation on named benchmark
+/// problems (bypassing the search-teacher stages that normally pre-empt it)
+/// and report per-problem method + wall time. This measures the tier-0
+/// prior against the 26-restart cascade on the program space the prior was
+/// trained for — the metric ROADMAP Rung 9 Phase A actually asks for.
+/// Honors `NSYNTH_PRIOR_NET` like production, so callers can diff OFF/ON.
+pub fn eval_fallback_direct(names: &[String]) -> Vec<serde_json::Value> {
+    let problems = crate::benchmark::get_benchmark(1);
+    let mut rows = Vec::new();
+    for problem in &problems {
+        if !names.is_empty() && !names.iter().any(|n| &problem.name == n) {
+            continue;
+        }
+        // Same extraction the native_array entry point performs.
+        let first = match problem.examples.first() {
+            Some(f) => f,
+            None => continue,
+        };
+        if !matches!(first.inputs.first(), Some(crate::benchmark::Value::Array(_))) {
+            continue;
+        }
+        let n_scalar = first.inputs.len().saturating_sub(1);
+        let mut examples = Vec::new();
+        let mut ok = true;
+        for ex in &problem.examples {
+            let arr = match &ex.inputs[0] {
+                crate::benchmark::Value::Array(a) => a.clone(),
+                _ => {
+                    ok = false;
+                    break;
+                }
+            };
+            let mut padded = vec![0f32; MAX_ARR];
+            for (i, v) in arr.iter().enumerate() {
+                if i < MAX_ARR {
+                    padded[i] = *v as f32;
+                }
+            }
+            let mut scalar_args = Vec::with_capacity(n_scalar);
+            for v in &ex.inputs[1..] {
+                match v {
+                    crate::benchmark::Value::Int(iv) => scalar_args.push(*iv as f32),
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            examples.push(ArrExample {
+                arr: padded,
+                arr_len: arr.len() as f32,
+                scalar_args,
+                expected: ex.expected as f32,
+            });
+        }
+        if !ok {
+            continue;
+        }
+        let scalar_names: Vec<&str> = match n_scalar {
+            0 => vec![],
+            1 => vec!["k"],
+            n => ["a", "b", "c", "d", "e", "f"].iter().take(n).copied().collect(),
+        };
+        let fn_name = problem.function_name();
+        let t0 = std::time::Instant::now();
+        let result = super::synthesize_universal_array_fallback(
+            problem,
+            &examples,
+            n_scalar,
+            fn_name,
+            &scalar_names,
+        );
+        let secs = t0.elapsed().as_secs_f64();
+        rows.push(serde_json::json!({
+            "name": problem.name,
+            "n_scalar": n_scalar,
+            "solved": result.is_some(),
+            "method": result.as_ref().map(|r| r.method.clone()),
+            "seconds": (secs * 1000.0).round() / 1000.0,
+        }));
+    }
+    rows
 }
 
 #[cfg(test)]

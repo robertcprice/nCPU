@@ -223,3 +223,72 @@ supplies differentiable execution substrates (neural ALU, soft truth
 tables, JEPA dynamics for latent speculation); the synthesis stack
 supplies the program space, verification discipline, and memory banks.
 The native model is both pillars in one artifact.
+
+## Phase A implementation notes (2026-06-11)
+
+Phase A is built and measured. The Program Prior Net runs as an
+env-gated tier-0 proposer inside nsynth's universal-array fallback.
+
+**What was built, where:**
+
+- **A1 — data generator** (`nsynth/src/synthesis/universal_array/prior_gen.rs`,
+  bin `nsynth/src/bin/gen_prior_data.rs`): samples programs from the
+  universal-array space — the 25 hand-coded restart shapes (extracted
+  verbatim into `apply_handcoded_restart_bias`, now shared with the solver
+  cascade) and the `random_bias_init` emergent sampler, 40% of rows with
+  extra random spike mutations — executes the *discretized* Mog code through
+  the exact verifier runtime, and emits `(examples -> discrete description)`
+  JSONL. `describe()`/`from_description()` give a lossless discrete round
+  trip over the soft program space (unit-tested for all 25 shapes ×
+  n_scalar 0..2). Generated 100,000 clean rows in 105 s (712,798 attempts:
+  218,551 exec-error, 109,106 constant-output, 285,129 dup-cap, 12 magnitude
+  rejections; 41,688 distinct programs; 76% hand / 24% random after
+  filtering; n_scalar 31k/32k/37k). Stats:
+  `artifacts/prior_net_gen_stats.json`. Dataset gitignored (regenerable).
+- **A2 — prior net v0** (`nsynth/scripts/prior_net/prior_net_model.py`,
+  `training/prior_net/train.py`): 3,461,961-param TransformerEncoder
+  (linear per-example embed → 4 layers, d_model 256 → 60 classification
+  heads over slots/body-inits/return/constants; lineage: v5 meta-learner).
+  Trained on MPS, 95k/5k split, early stop epoch 18 (~12 min). Held-out
+  slot accuracy: op 91.2%, cmp 89.2%, else 88.7%, gate 85.7%, src 85.6%,
+  body_init 75.0%, ret 67.9%, const 41.9%; full 60-head exact match 1.9%.
+  Checkpoint: `training/prior_net/prior_net_v0.pt` (13.9 MB) + eval report.
+- **A3 — tier-0 wiring** (`nsynth/scripts/prior_net/propose.py` +
+  `synthesize_universal_array_fallback`): with `NSYNTH_PRIOR_NET=1`, the
+  solver subprocesses propose.py once per problem (K=4 proposals: argmax +
+  3 temperature samples, n_scalar-masked), tries each zero-step
+  (discretize+verify, method `prior_net`) then warm-refines ≤120 Adam steps
+  (method `prior_net_warm`). Verified-or-discarded; all failures fall
+  through to the existing cascade; flag unset = byte-identical default.
+  Stub-bridge unit test covers the full subprocess round trip.
+- **A4 — eval** (`training/prior_net/eval_phase_a.py`,
+  `artifacts/prior_net_phase_a.{json,md}`,
+  `tests/test_prior_net_phase_a.py`): 105-problem bench OFF/ON with fresh
+  isolated banks, plus a direct head-to-head on the 16 universal-array
+  problems with the search stages bypassed
+  (`gen_prior_data --eval-fallback`).
+
+**Measured result (honest, mixed):**
+
+- Full bench: **105/105 both runs** (coverage cannot regress — pinned by
+  regression test). The tier-0 never fires on the standard bench: the 2026
+  search-teacher catalog pre-empts the universal-array fallback on all 105
+  problems (bench wall 57.3 s OFF vs 61.3 s ON, delta within contention
+  noise). The integration result on this bench is **null by pre-emption**,
+  not by failure.
+- Direct fallback head-to-head (16 problems, fresh banks): 16/16 solved
+  both ways. **Zero-search solves: 2/16** — the net read raw I/O examples
+  and emitted verbatim-correct programs for `longest_increasing_run`
+  (9.04 s → 1.56 s) and `count_peaks` (7.12 s → 3.26 s). The other 14
+  proposals missed; each miss costs ~2-4 s (bridge subprocess + 4 × 120
+  warm-refine steps), netting +33.3 s total (83.5 → 116.9 s). The prior
+  *works* — amortized I/O→program inference verifiably solves real bench
+  problems with zero search — but at v0 hit rate (12.5%) the overhead
+  exceeds the savings.
+
+**What's next (Phase A follow-ups before Phase B):** raise the hit rate
+(train on the bench-problem distribution via solved-cache replay, predict
+constants conditioned on `discover_useful_consts`, K>4 with batched
+inference), cut the overhead (persistent bridge process instead of
+per-problem model load; skip warm-refine when proposal confidence is low),
+and gate tier-0 on predicted-success probability so misses cost ~0.
