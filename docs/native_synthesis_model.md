@@ -125,6 +125,51 @@ The data engine requires no human labels and no scraped code:
   Mitigation: the prior proposes, search + verification dispose — worst
   case degrades to today's (already 100%-coverage) search, never below.
 
+## Reasoning in code — the core principle (no semantic fallback)
+
+Clarified intent: the model does not "fall back to an LLM" when a task is
+outside its library, because the model has no word-thinking component to
+fall back to. **Every reasoning step is a program — an object with
+executable semantics — never a sentence.** Natural language exists only
+at the boundary (the text encoder maps a prompt into task-latent space);
+from that point inward, thought is program-space manipulation:
+
+1. **Composition search.** A novel task is first attacked as a
+   composition of known skills. Pong's `gte = hit_top ∘ sub2` was found
+   mechanically; the recursive library embeddings make that search
+   guided rather than blind. Composition over a verified library is the
+   cheapest form of out-of-domain generalization — and it produces
+   artifacts that are correct by construction of their parts plus a
+   final sweep.
+2. **Program rewriting as chain of thought.** Intermediate "thoughts"
+   are program transformations with defined semantics: specialize an
+   argument, generalize a constant into a parameter, invert a known
+   skill, fuse two passes, wrap with a guard. Each step is executable,
+   so each step is CHECKABLE — a chain of thought that cannot drift,
+   because every link either runs correctly on the evidence or is
+   discarded. This is what "Neural-Physical" in NPCoT means, promoted
+   from cache-lookup to the reasoning loop itself.
+3. **Sketch-and-fill.** The prior net proposes program *sketches* —
+   structure with typed holes — and holes are closed by local search /
+   gradient descent (the nsynth machinery). Thinking = refining an
+   executable hypothesis, not narrating one.
+4. **Abstraction growth (wake-sleep).** When several library programs
+   share structure, anti-unify them into a new parameterized primitive
+   and add it to the DSL — the system grows its own language from its
+   own solutions (the DreamCoder insight, here with NPCoT's verification
+   discipline and persistent banks). This is the deep answer to
+   "out of known domain": **the domain is not fixed.** Every solved
+   frontier task becomes vocabulary; the reachable space expands
+   bottom-up, permanently, with proofs.
+5. **JEPA intuition over semantics of code, not words** (next section):
+   predicted execution outcomes prune the search — the system "imagines
+   running it" rather than "talks itself through it."
+
+The external LLM cascade (MCP verify_candidate tier) remains as
+*bootstrap scaffolding* while the native model matures — every
+client-LLM draft that passes verification becomes training data and
+library content for the code-native reasoner that replaces it.
+
 ## JEPA integration — imagination before execution
 
 The repo's JEPA machinery (ncpu/jepa_neural_cpu, ncpu/world_model,
