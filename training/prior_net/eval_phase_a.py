@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase A eval (stage A4): 105-problem bench with prior net OFF vs ON.
+"""Phase A eval (stage A4, v1): 105-problem bench with prior net OFF vs ON.
 
 Runs the nsynth Rust bench twice with fresh, isolated memory banks
 (solved-cache disabled, fresh bias bank, fresh rejected bank) so the
@@ -8,11 +8,15 @@ measurement captures the prior itself, not the persistent caches:
   OFF: NSYNTH_PRIOR_NET=0
   ON:  NSYNTH_PRIOR_NET=1
 
+v1 artifact schema: {"v1": <current run>, "v0": <2026-06-11 baseline>} —
+the v0 history is preserved verbatim on every rerun. The v1 run records the
+gate config (tau / signal / model) from confidence_calibration.json.
+
 Writes artifacts/prior_net_phase_a.json + artifacts/prior_net_phase_a.md.
 Honesty rule: the measured delta is reported whatever it is.
 
 Usage:
-  python3 training/prior_net/eval_phase_a.py [--binary path] [--skip-build]
+  python3 training/prior_net/eval_phase_a.py [--skip-build]
 """
 
 from __future__ import annotations
@@ -30,6 +34,35 @@ NSYNTH = PROJECT_ROOT / "nsynth"
 BINARY = NSYNTH / "target/release/mog_synth"
 ARTIFACT_JSON = PROJECT_ROOT / "artifacts/prior_net_phase_a.json"
 ARTIFACT_MD = PROJECT_ROOT / "artifacts/prior_net_phase_a.md"
+CALIBRATION = PROJECT_ROOT / "training/prior_net/confidence_calibration.json"
+PROPOSER_COST = PROJECT_ROOT / "artifacts/prior_net_proposer_cost.json"
+
+
+def prior_config() -> dict:
+    """The gate config the ON run uses (mirrors prior_gen.rs resolution)."""
+    cfg = {"tau_env": os.environ.get("NSYNTH_PRIOR_NET_TAU"),
+           "signal_env": os.environ.get("NSYNTH_PRIOR_NET_SIGNAL")}
+    if CALIBRATION.exists():
+        cal = json.loads(CALIBRATION.read_text())
+        cfg["calibration"] = {
+            "chosen_tau": cal.get("chosen_tau"),
+            "chosen_rule": cal.get("chosen_rule"),
+            "signal": cal.get("signal"),
+            "model": cal.get("model"),
+        }
+    for name in ("prior_net_v1.pt", "prior_net_v0.pt"):
+        p = PROJECT_ROOT / "training/prior_net" / name
+        if p.exists():
+            cfg["model_resolved"] = str(p)
+            break
+    if PROPOSER_COST.exists():
+        cost = json.loads(PROPOSER_COST.read_text())
+        cfg["proposer_cost"] = {
+            "v1_server_startup_seconds": cost["v1_server"]["startup_seconds"],
+            "v1_server_per_request_ms": cost["v1_server"]["per_request_ms"],
+            "v0_oneshot_per_call_seconds": cost["v0_oneshot"]["per_call_seconds"],
+        }
+    return cfg
 
 
 def run_bench(label: str, prior_on: bool) -> tuple[list[dict], dict, float]:
@@ -197,6 +230,7 @@ def main() -> None:
 
     artifact = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "prior_config": prior_config(),
         "direct_fallback": {
             "problems": len(fb_rows),
             "solved": {
@@ -251,11 +285,27 @@ def main() -> None:
             "NSYNTH_REJECTED_PATH": "/tmp/prior_eval_rej_{off,on}.jsonl (fresh)",
         },
     }
-    ARTIFACT_JSON.write_text(json.dumps(artifact, indent=2))
+    # Versioned artifact: keep the v0 (2026-06-11) baseline verbatim.
+    v0_history = None
+    if ARTIFACT_JSON.exists():
+        old = json.loads(ARTIFACT_JSON.read_text())
+        v0_history = old.get("v0", old if "v1" not in old else None)
+    ARTIFACT_JSON.write_text(json.dumps({"v1": artifact, "v0": v0_history}, indent=2))
     print(f"[phase_a] wrote {ARTIFACT_JSON}")
 
     cov = artifact["coverage_both_runs"]
     md = ["# Prior Net Phase A — measured result (stage A4)", ""]
+    md.append("## v1 (confidence gate + persistent async server)")
+    md.append("")
+    pc = artifact["prior_config"]
+    cal = pc.get("calibration") or {}
+    md.append(f"- Gate: signal `{cal.get('signal')}`, tau {cal.get('chosen_tau')} "
+              f"(rule: {cal.get('chosen_rule')}); model `{Path(pc.get('model_resolved', '?')).name}`")
+    if "proposer_cost" in pc:
+        c = pc["proposer_cost"]
+        md.append(f"- Proposer cost: server startup {c['v1_server_startup_seconds']}s "
+                  f"(async, off the solve path) + {c['v1_server_per_request_ms']['median']}ms/request "
+                  f"median, vs v0 one-shot {c['v0_oneshot_per_call_seconds']['median']}s/problem")
     md.append(f"Generated {artifact['generated_at']}. Fresh isolated banks; solved-cache disabled.")
     md.append("")
     md.append(f"- Coverage OFF: **{cov['off']}/{cov['total']}**, ON: **{cov['on']}/{cov['total']}**")
@@ -304,6 +354,20 @@ def main() -> None:
                 f"| {p['seconds_off']} | {p['seconds_on']} | {p['delta_seconds']:+} |"
             )
     md.append("")
+    if v0_history:
+        v0fb = v0_history.get("direct_fallback", {})
+        v0w = v0fb.get("wall_seconds", {})
+        v0cov = v0_history.get("coverage_both_runs", {})
+        md.append("## v0 history (2026-06-11 — one-shot subprocess, ungated)")
+        md.append("")
+        md.append(f"- Coverage OFF {v0cov.get('off')}/{v0cov.get('total')}, "
+                  f"ON {v0cov.get('on')}/{v0cov.get('total')}; full bench never reached "
+                  "the fallback (search stages pre-empt).")
+        md.append(f"- Direct fallback head-to-head: {v0fb.get('zero_search_solves')} zero-search wins "
+                  f"({', '.join(v0fb.get('zero_search_names', []))}); wall OFF {v0w.get('off')}s -> "
+                  f"ON {v0w.get('on')}s ({v0w.get('delta'):+}s). Net negative: each miss paid the "
+                  "~7s torch import + model load in a fresh subprocess, plus K=4 warm refines.")
+        md.append("")
     ARTIFACT_MD.write_text("\n".join(md) + "\n")
     print(f"[phase_a] wrote {ARTIFACT_MD}")
 
