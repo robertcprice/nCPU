@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ncpu-synth": {
+      "command": "python3",
+      "args": ["-m", "ncpu.mcp_server"]
+    }
+  }
+}
