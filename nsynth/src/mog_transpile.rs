@@ -567,6 +567,30 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
     // TypeScript requires parens around the condition.
     if line.starts_with("if ") {
         let cond_plus_brace = line.strip_prefix("if ").unwrap_or(line);
+        // Inline single-line form `if COND { STMT; }` (the gradient backend
+        // emits these). The previous logic treated the whole tail as the
+        // condition, producing `if (COND { STMT; })`. Split at the first
+        // `{` instead and rewrite the inner statement(s) recursively.
+        if let Some(brace) = cond_plus_brace.find('{') {
+            if cond_plus_brace.trim_end().ends_with('}') {
+                let cond = cond_plus_brace[..brace].trim();
+                let inner = cond_plus_brace[brace + 1..]
+                    .trim_end()
+                    .trim_end_matches('}')
+                    .trim();
+                let stmts: Vec<String> = inner
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| rewrite_body_line(s, target))
+                    .collect();
+                return match target {
+                    Target::Python => format!("if {}: {}", cond, stmts.join("; ")),
+                    Target::Rust => format!("if {} {{ {} }}", cond, stmts.join(" ")),
+                    Target::TypeScript => format!("if ({}) {{ {} }}", cond, stmts.join(" ")),
+                };
+            }
+        }
         let cond = cond_plus_brace.trim_end_matches('{').trim();
         return match target {
             Target::Python | Target::Rust => line.to_string(),
@@ -764,5 +788,31 @@ mod tests {
         assert!(to_rust(mog).contains("fn double(a: i64) -> i64"));
         assert!(to_rust(mog).contains("return a * 2;"));
         assert!(to_typescript(mog).contains("function double(a: number): number"));
+    }
+}
+
+#[cfg(test)]
+mod inline_if_tests {
+    use super::*;
+
+    const MOG: &str = "fn min2(a: i64, b: i64) -> i64 {\n    v0: i64 = b;\n    if b >= a { v0 = a; }\n    return v0;\n}\n";
+
+    #[test]
+    fn inline_if_typescript() {
+        let ts = to_typescript(MOG);
+        assert!(ts.contains("if (b >= a) { v0 = a; }"), "got: {ts}");
+        assert!(!ts.contains("if (b >= a {"), "broken paren wrap survived: {ts}");
+    }
+
+    #[test]
+    fn inline_if_python() {
+        let py = to_python(MOG);
+        assert!(py.contains("if b >= a: v0 = a"), "got: {py}");
+    }
+
+    #[test]
+    fn inline_if_rust() {
+        let rs = to_rust(MOG);
+        assert!(rs.contains("if b >= a { v0 = a; }"), "got: {rs}");
     }
 }
