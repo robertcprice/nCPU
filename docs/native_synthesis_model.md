@@ -349,3 +349,45 @@ lever is training on the bench-problem distribution (solved-cache replay),
 conditioning constants on `discover_useful_consts`, and K>4 batched
 proposals now that each extra proposal costs ~15 ms to verify rather than
 a warm refine.
+
+## Phase B groundwork (2026-06-12): the program-space corpus
+
+Phase B needs a corpus of aligned `(natural-language → verified program →
+I/O)` triples. The first build of it ships in `ncpu/phase_b/`.
+
+**Why the representation is Mog, not the 5-tuple fold.** A diagnostic on
+the 30 autoresearch HumanEval rescues showed *why* the array→scalar fold
+space (`DiscreteArrayProgram`, 288 programs) is the wrong target for Phase
+B: of the 10 rescues that reached the discrete search, most don't even
+return a scalar — they return lists (`rolling_max`, `remove_duplicates`,
+`sort_array`), tuples (`largest_smallest_integers`), or booleans
+(`move_one_ball`). No amount of init/transform/reduce expansion expresses
+those. So Phase B reasons in a Turing-complete representation (Mog /
+register machine) from day one; the fold space is a toy subset kept only
+for the NPCoT library's fast path.
+
+**The corpus generator** (`ncpu/phase_b/generate.py`) draws from two
+verified sources, unified into `CorpusRecord`:
+
+- **egdc_factory** — the differentiable-Mog-compiler benchmark (63
+  factories × variants). Each yields an NL `description`, a Mog
+  `reference_solution`, and concrete `test_cases`. The reference is
+  *verified in-process* by the pure-Python Mog interpreter
+  (`egdc.mog.lang.interpreter`, no external toolchain) before emission.
+- **autoresearch_humaneval** — the verified HumanEval solves
+  (`solved_programs.jsonl` joined with the work-queue's parsed I/O pairs).
+  Programs are Python; `verified` carries the cascade's verdict.
+
+`python -m ncpu.phase_b.generate --source all --variants 5 --out
+artifacts/phase_b_corpus.jsonl` produces **345 records, 345/345 verified**
+(315 Mog + 30 Python), 1,795 I/O pairs across 11 categories (arithmetic,
+control_flow, arrays, strings, structs, result_optional, recursion,
+higher_order, loops, algorithms, humaneval). The corpus is honest by
+construction: a program is never in it unless it reproduces every one of
+its I/O pairs. Committed artifact: `artifacts/phase_b_corpus.jsonl`.
+
+**What's next (the encoder):** a small text encoder mapping `nl_prompt` →
+a point in the Mog program-latent space, trained on this corpus, with the
+synthesizer as the verifier on every prediction. The corpus is the
+flywheel input; each new verified solve (from the live `/prompt` endpoint
+or autoresearch) appends a record, so the training set grows with usage.
