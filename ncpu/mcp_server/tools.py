@@ -1,4 +1,4 @@
-"""The four MCP tools: NL → I/O pairs → verified program → user's language.
+"""The six MCP tools: NL → I/O pairs → verified program → actual output.
 
 Every heavy piece is reused, not reimplemented:
 
@@ -10,10 +10,16 @@ Every heavy piece is reused, not reimplemented:
 - bank stats: ``ncpu.synthesis_api.server.read_bank_stats``.
 - library lookup: ``ncpu.mcp_server.fingerprint`` mirrors the Rust
   solved-cache fingerprint so hits are answered without a subprocess.
+- candidate verification / execution: ``ncpu.mcp_server.sandbox`` runs
+  client-drafted code in a subprocess sandbox against the same examples
+  (tools 5 and 6, re-exported here).
 
 The honest-refusal contract: when the synthesizer cannot find a program
 that reproduces *every* example, the tool returns ``verified: false``
-with the backend's reason. It never fabricates code.
+with the backend's reason — plus the full out-of-domain protocol: the
+client should draft the function itself and submit it through
+``verify_candidate`` with the same examples (echoed in the refusal
+payload), so the only code ever shown to the user is example-verified.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from ncpu.autoresearch.prompt_parser import (
 )
 from ncpu.autoresearch.types import IoPair
 from ncpu.mcp_server.fingerprint import examples_fingerprint, lookup_solved
+from ncpu.mcp_server.sandbox import run_program, verify_candidate
 from ncpu.synthesis_api.server import (
     MAX_TIMEOUT_S,
     SynthConfig,
@@ -43,8 +50,30 @@ _GUIDANCE = (
     "Provide concrete input/output examples like: f(2,3) -> 5. "
     "Arrow notation (fn(args) -> out), doctests (>>> fn(args)), and "
     "asserts (assert fn(args) == out) are all understood. nsynth solves "
-    "over int, [int], and str inputs with int outputs."
+    "over int, [int], and str inputs with int outputs. If synthesis "
+    "still refuses once examples exist, draft the function yourself and "
+    "submit it through verify_candidate with those same examples; only "
+    "verified code should be shown to the user."
 )
+
+# The full out-of-domain protocol, attached to every synthesis refusal
+# together with the examples (so the client never has to re-parse them).
+_REFUSAL_PROTOCOL = (
+    "synthesis refused; draft the function yourself and submit it "
+    "through verify_candidate with these same examples; only verified "
+    "code should be shown to the user. Use run_program to execute the "
+    "verified function on new inputs."
+)
+
+
+def _refusal(reason: str, examples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Honest refusal carrying the full cascade protocol + the examples."""
+    return {
+        "verified": False,
+        "reason": reason,
+        "guidance": _REFUSAL_PROTOCOL,
+        "examples": examples,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -61,11 +90,11 @@ def synthesize_from_examples(
 ) -> dict[str, Any]:
     """Examples in, proof-carrying code out — or an honest refusal."""
     if language not in _LANGUAGES:
-        return {
-            "verified": False,
-            "reason": f"unsupported language {language!r} "
+        return _refusal(
+            f"unsupported language {language!r} "
             f"(expected one of {', '.join(_LANGUAGES)})",
-        }
+            examples,
+        )
 
     request: dict[str, Any] = {"name": name, "examples": examples}
     if timeout_s is not None:
@@ -74,11 +103,11 @@ def synthesize_from_examples(
     status, body = handle_synthesize_request(request, config)
     if status != 200:
         # Malformed input (400) or backend unavailable (503).
-        return {"verified": False, "reason": str(body.get("error", "bad request"))}
+        return _refusal(str(body.get("error", "bad request")), examples)
 
     if not body.get("success"):
         reason = body.get("error") or body.get("method") or "no program found"
-        return {"verified": False, "reason": str(reason)}
+        return _refusal(str(reason), examples)
 
     transpiled = body.get("transpiled") or {}
     code = transpiled.get(language)
@@ -179,13 +208,22 @@ def synthesize_from_prompt(
     ]
 
     if not examples:
+        # Out of the synthesizer's domain, but not out of the cascade's:
+        # echo the pairs in verify_candidate-ready form so the client can
+        # draft code and push it through the same verification gate.
+        verify_ready = [
+            {"inputs": p.args, "expected": p.expected}
+            for p in report.io_pairs
+            if not p.kwargs
+        ]
         return {
             "verified": False,
             "reason": (
                 "examples found but none are representable: nsynth solves "
                 "over int, [int], and str inputs with int outputs"
             ),
-            "guidance": _GUIDANCE,
+            "guidance": _REFUSAL_PROTOCOL,
+            "examples": verify_ready,
             "function_name": entry_point,
             "extracted_examples": extracted,
         }
@@ -256,4 +294,6 @@ __all__ = [
     "synthesize_from_prompt",
     "consult_library",
     "library_stats",
+    "verify_candidate",
+    "run_program",
 ]

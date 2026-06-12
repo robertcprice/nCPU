@@ -34,16 +34,18 @@ def test_initialize_handshake(client):
     assert response["result"] == {}
 
 
-def test_tools_list_returns_four_tools(client):
+def test_tools_list_returns_six_tools(client):
     response = client.request("tools/list", timeout_s=30.0)
     tools = response["result"]["tools"]
-    assert len(tools) == 4
+    assert len(tools) == 6
     names = {t["name"] for t in tools}
     assert names == {
         "synthesize_from_examples",
         "synthesize_from_prompt",
         "consult_library",
         "library_stats",
+        "verify_candidate",
+        "run_program",
     }
     for tool in tools:
         assert tool["description"]

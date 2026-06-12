@@ -17,8 +17,10 @@ from ncpu.mcp_server.server import (
 from ncpu.mcp_server.tools import (
     consult_library,
     library_stats,
+    run_program,
     synthesize_from_examples,
     synthesize_from_prompt,
+    verify_candidate,
 )
 
 __all__ = [
@@ -33,4 +35,6 @@ __all__ = [
     "synthesize_from_prompt",
     "consult_library",
     "library_stats",
+    "verify_candidate",
+    "run_program",
 ]
