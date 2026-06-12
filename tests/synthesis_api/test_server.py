@@ -88,8 +88,16 @@ def _request(
 
 
 @pytest.fixture(scope="module")
-def server(tmp_path_factory):
-    """A live server on a free port with isolated memory banks."""
+def server(tmp_path_factory, nsynth_isolated_env):
+    """A live server on a free port with isolated memory banks.
+
+    The explicit ``--*-cache`` flags cover the three banks the server
+    manages directly; ``nsynth_isolated_env`` (see conftest) isolates
+    every remaining ``NSYNTH_*`` bank — most importantly the method
+    router, which would otherwise be read from the user's real
+    ``~/.nsynth_method_router.json`` and reroute the easy problems in
+    this suite onto slow solver paths.
+    """
     banks = tmp_path_factory.mktemp("nsynth_banks")
     port = _free_port()
     proc = subprocess.Popen(
@@ -111,6 +119,7 @@ def server(tmp_path_factory):
         cwd=REPO_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        env=nsynth_isolated_env,
     )
     base_url = f"http://127.0.0.1:{port}"
     try:
