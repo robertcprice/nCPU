@@ -103,6 +103,80 @@ Expected: threshold=0 produces ~24.7 μs/iter; threshold=3 produces ~20.4 μs/it
 
 The portfolio argument is self-verifying: the per-method counts in both artifacts add up to the total coverage, so any third party can recompute family proportions directly from the committed JSON.
 
+### Claim 6: NPCoT skill formats v2 + v3 (fail-closed versioning, 32 tests)
+
+| Component | Path |
+|---|---|
+| Paper section | `paper/sections/section_synthesized_software.md` §20.1 |
+| Harness | `cargo test` in `kernels/npcot_wasm/` |
+| Artifact | `kernels/npcot_wasm/pkg/npcot_wasm_bg.wasm` (133,262 bytes, wasm-pack release build) |
+| Regression | the full cargo suite: v1/v2 equivalence sweep (all 216 v1 programs), v2/v3 lift grid, v1/v2 fail-closed rejection of higher formats, lowest-format export demotion, mined-threshold guard + reset discovery, honest refusals, 5-language rendering |
+
+```bash
+(cd kernels/npcot_wasm && cargo test)
+```
+
+Expected: **32 passed, 0 failed** in <1 s (24 as of format v2, commit `b0622a5`; 32 as of format v3, commit `d4bb6a5`).
+
+### Claim 7: nSynth persistent negative memory (failed search never repeats)
+
+| Component | Path |
+|---|---|
+| Paper section | `paper/sections/section_synthesized_software.md` §20.3 |
+| Implementation | `nsynth/src/rejected_cache.rs` (commit `1d2ed2f`), wired via RAII `RejectionRecorder` in `nsynth/src/synthesis/universal_array.rs` |
+| Artifact | `~/.nsynth_rejected_programs.tsv` (per-run; path overridable via `NSYNTH_REJECTED_PATH`) |
+| Regression | `cargo test rejected_cache` in `nsynth/` (6 unit tests: persistence round-trip, cap eviction, per-fingerprint isolation) |
+
+```bash
+(cd nsynth && cargo test rejected_cache)
+```
+
+Cold/warm measurement procedure (reproduces the 1,415-cold / 0-new-warm claim):
+
+```bash
+# 1. Point the bank at a fresh file and run a novel out-of-space problem
+#    (one the portfolio cannot solve, so the gradient search runs to exhaustion):
+NSYNTH_REJECTED_PATH=/tmp/neg.tsv nsynth/target/release/mog_synth --problem-json problem.json
+cut -f2 /tmp/neg.tsv | tr ',' '\n' | wc -l   # total rejection hashes after the cold run
+                                             # (TSV row format: last_used \t comma-joined-hashes \t fingerprint)
+
+# 2. Rerun the identical problem; the hash count must not grow:
+NSYNTH_REJECTED_PATH=/tmp/neg.tsv nsynth/target/release/mog_synth --problem-json problem.json
+```
+
+Measured at commit `1d2ed2f`: cold run persisted 1,415 rejections; the warm rerun added zero — the entire failed search deduplicated across runs.
+
+### Claim 8: Synthesized Pong — 22 rules, zero domain-sweep mismatches
+
+| Component | Path |
+|---|---|
+| Paper section | `paper/sections/section_synthesized_software.md` §20.4 |
+| Harness | `node tools/pong_synthesis/finalize_pong_rules.mjs` (domain-sweeps every rule, CEGIS retry on failure, verifies all 8 compositions, fails loudly on any mismatch) |
+| Artifact | `tools/pong_synthesis/pong_rules_final.json` (per rule: method, Mog + TypeScript source, the exact training examples, swept case count) |
+| Regression | byte-identical regeneration of the site's `synthesized.ts`; sweeps span 4 (exhaustive boolean tables) to 160,801 cases per rule, bounded to reachable game physics |
+
+```bash
+(cd nsynth && cargo build --release)   # provides mog_synth + --transpile
+node tools/pong_synthesis/finalize_pong_rules.mjs
+```
+
+Expected: 22/22 rules verified (14 synthesized + 8 composed), zero sweep mismatches. With the solver memory banks populated, the rerun is near-instant.
+
+### Claim 9: Delivery surfaces — synthesis API, verified-skill registry, MCP server
+
+| Component | Path |
+|---|---|
+| Paper section | `paper/sections/section_synthesized_software.md` §20.5 |
+| Harnesses | `pytest tests/synthesis_api/` (21 tests, live HTTP server) · `pytest tests/registry/` (19 tests, incl. `--verify-all` trust sweep + corruption detection) · `pytest tests/mcp_server/` (24 tests, real stdio subprocess; count as committed at `dd650ae` — the server is under active extension) |
+| Implementations | `ncpu/synthesis_api/` (commit `9061d14`) · `tools/registry/` (commit `18ede07`) · `ncpu/mcp_server/` (commit `dd650ae`) |
+| Regression | all three suites isolate the three nsynth memory banks under tmp paths; the MCP suite cross-checks the Python and Rust examples-fingerprints |
+
+```bash
+python3 -m pytest tests/synthesis_api/ tests/registry/ tests/mcp_server/ -q
+```
+
+Expected (at the commits above): 21 + 19 + 24 all green. Requires `nsynth/target/release/mog_synth` to be built.
+
 ## Optional Long-Running Claims (User-Green-Lit)
 
 ### Gradient-first nSynth survey (overnight)
