@@ -192,6 +192,27 @@ program generation and compositional library embeddings. Full design:
 `docs/native_synthesis_model.md`. Phase A (meta-learner → Program Prior
 Net as nsynth tier-0 proposer) is buildable now from existing components.
 
+Phase A work breakdown (IN PROGRESS):
+- A1 data generator: sample random programs from the universal-array space
+  (random_bias_init + discover_useful_consts already exist in
+  nsynth/src/synthesis/universal_array.rs), execute on random arrays via
+  the exact executor, emit (examples -> program description) JSONL.
+  Perfect ground truth, unlimited volume.
+- A2 prior net v0: TransformerEncoder over tokenized I/O examples ->
+  program-slot logits (architecture lineage: the v5 meta-learner that hit
+  23/24 on the 1-arg scalar space). Train locally (MPS), ~100k samples.
+- A3 tier-0 wiring: extend the existing Python warm-start bridge pattern
+  (nsynth py_warmstart subprocess; try_python_warmstart call site in
+  solver.rs) so the prior proposes parameter initializations / discrete
+  programs BEFORE the hand-coded restart cascade. Verified-or-discarded:
+  coverage can never regress below the search baseline.
+- A4 eval: 105-problem bench with prior on/off — % solved zero-search,
+  mean gradient steps saved, wall time; artifact JSON + regression test.
+  Honest reporting either way.
+
+DoD: A4 artifact committed showing the measured delta; bench coverage
+stays 105/105; all existing nsynth tests green.
+
 ## Standing rules
 
 1. Verification gates everything: no rung ships without its DoD test green.
