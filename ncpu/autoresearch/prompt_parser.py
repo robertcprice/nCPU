@@ -265,7 +265,7 @@ def extract_from_prompt(
     sources: dict[str, int] = {}
 
     def _accept(p: IoPair, tag: str) -> None:
-        key = (tuple(p.args), tuple(sorted(p.kwargs.items())), _freeze(p.expected))
+        key = _pair_key(p)
         if key in seen:
             return
         seen.add(key)
@@ -305,6 +305,21 @@ def _freeze(value: Any) -> Any:
     return value
 
 
+def _pair_key(p: IoPair) -> tuple:
+    """Hashable dedupe key for an IoPair.
+
+    ``_freeze`` must be applied to *every* component — args and kwarg
+    values as well as ``expected`` — otherwise list-valued args (e.g.
+    ``sum_list([1, 2, 3]) -> 6``) produce an unhashable tuple and the
+    ``key in seen`` check raises ``TypeError``.
+    """
+    return (
+        tuple(_freeze(a) for a in p.args),
+        tuple(sorted((k, _freeze(v)) for k, v in p.kwargs.items())),
+        _freeze(p.expected),
+    )
+
+
 def build_work_item(
     prompt: str,
     *,
@@ -328,12 +343,9 @@ def build_work_item(
 
     all_pairs = list(report.io_pairs)
     if extra_io_pairs:
-        seen: set[tuple] = {
-            (tuple(p.args), tuple(sorted(p.kwargs.items())), _freeze(p.expected))
-            for p in all_pairs
-        }
+        seen: set[tuple] = {_pair_key(p) for p in all_pairs}
         for p in extra_io_pairs:
-            key = (tuple(p.args), tuple(sorted(p.kwargs.items())), _freeze(p.expected))
+            key = _pair_key(p)
             if key not in seen:
                 seen.add(key)
                 all_pairs.append(p)
