@@ -182,6 +182,16 @@ machine dynamics) is co-headline, not background:
 - Paper remains the umbrella: synthesis sections already live alongside
   the neural-computer sections.
 
+## Rung 9 — Program-native coding model (bottom-up)
+
+Build the model where NPCoT is the substrate, not an attachment: reasoning
+in program space, NL/source code as I/O renderings, transpiler-only output
+path (cannot hallucinate), verification in the loop, JEPA latent
+speculation for candidate pruning, recursive networks for tree-structured
+program generation and compositional library embeddings. Full design:
+`docs/native_synthesis_model.md`. Phase A (meta-learner → Program Prior
+Net as nsynth tier-0 proposer) is buildable now from existing components.
+
 ## Standing rules
 
 1. Verification gates everything: no rung ships without its DoD test green.
