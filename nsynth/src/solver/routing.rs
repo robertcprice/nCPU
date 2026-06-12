@@ -229,6 +229,29 @@ pub(super) fn recommended_post_enumerative_routes(
     routes
 }
 
+/// Routes whose per-problem cost dwarfs the enumerative guard stage.
+///
+/// The enumerative pass is a cheap *guard*: on array/scalar problems it
+/// either matches a closed-form fold/expression in well under 0.1s or bails
+/// immediately (measured: enumerative-array wins ≤0.05s, misses ~0.0s). The
+/// gradient routes, by contrast, run thousands of Adam steps and routinely
+/// take 20–60s on the array-reduction family.
+///
+/// The router's "skip enumerative" short-circuit exists to preempt the
+/// enumerative grind for problems a cheaper downstream stage will solve
+/// anyway (e.g. the ms-scale `search_teacher`). Letting it skip the guard in
+/// favour of a *slower* route is strictly backwards: when enumerative would
+/// have solved the problem in 0.02s, skipping it forces the full gradient
+/// descent first. This caused array_sum/interactive_sum/reverse_sum variants
+/// to regress from 0.02s (enumerative-array) to 20–60s (arr_gradient) once
+/// the in-run router had accumulated enough array_gradient wins to favour it.
+fn route_dwarfs_enumerative_guard(route: &'static str) -> bool {
+    matches!(
+        route,
+        ROUTE_SCALAR_GRADIENT | ROUTE_ARRAY_GRADIENT | ROUTE_BRIDGE_GRADIENT
+    )
+}
+
 pub(super) fn should_try_enumerative(
     problem: &Problem,
     ctx: &PostEnumerativeContext,
@@ -247,6 +270,12 @@ pub(super) fn should_try_enumerative(
         return true;
     };
     if top.route == ROUTE_ENUMERATIVE {
+        return true;
+    }
+    // Never trade away the cheap enumerative guard for a route that is far
+    // more expensive than running enumerative itself. Enumerative is a
+    // sub-0.1s pass; if it solves, we skip the 20–60s gradient grind entirely.
+    if route_dwarfs_enumerative_guard(top.route) {
         return true;
     }
     if top.wins < ENUMERATION_SKIP_MIN_WINS {

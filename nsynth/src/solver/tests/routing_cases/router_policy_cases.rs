@@ -209,6 +209,51 @@ fn method_router_can_skip_enumerative_after_repeated_late_stage_wins() {
 }
 
 #[test]
+fn method_router_keeps_enumerative_when_top_route_is_slow_array_gradient() {
+    // Regression for the array-sum misroute: once the in-run router
+    // accumulated several array_gradient wins for the (arrays, array-input)
+    // bucket, `should_try_enumerative` used to skip the ~0.02s enumerative
+    // guard in favour of the 20–60s array-gradient route. Skipping a free
+    // guard for a slow route is strictly backwards — the guard must always
+    // run, because if it solves we avoid the gradient grind entirely. This
+    // pins that array_gradient (a `route_dwarfs_enumerative_guard` route)
+    // can NEVER trigger the enumerative skip, regardless of win count.
+    with_scratch_method_router(|| {
+        let problem = Problem {
+            name: "router_slow_route_keep_enum_v0".to_string(),
+            category: "arrays",
+            description: "Return the sum of all entries in the array.",
+            signature: "fn router_slow_route_keep_enum(arr: [i64]) -> i64",
+            examples: vec![
+                Example {
+                    inputs: vec![Value::Array(vec![1, 2, 3])],
+                    expected: 6,
+                },
+                Example {
+                    inputs: vec![Value::Array(vec![-5, 5])],
+                    expected: 0,
+                },
+            ],
+            holdouts: vec![],
+            reference_code: "",
+        };
+
+        // Many high-confidence array_gradient wins — would have crossed the
+        // ENUMERATION_SKIP thresholds under the old policy.
+        for _ in 0..8 {
+            crate::method_router::record_win(&problem, ROUTE_ARRAY_GRADIENT);
+        }
+
+        let ctx = post_enumerative_context(&problem);
+        assert!(
+            should_try_enumerative(&problem, &ctx, false, false),
+            "enumerative guard must run even when the router strongly favors \
+             the slow array_gradient route"
+        );
+    });
+}
+
+#[test]
 fn method_router_keeps_enumerative_when_enum_has_the_bucket() {
     with_scratch_method_router(|| {
         let problem = Problem {
@@ -330,7 +375,23 @@ fn solve_problem_can_bypass_cache_and_upgrade_to_router_preferred_route() {
 
         let result = solve_problem(&problem);
         assert!(result.success, "{:?}", result.error);
-        assert_eq!(result.method, "arr_gradient");
+        // The router's 4 array_gradient wins make `solve_problem` bypass the
+        // cached `search_array_sum` entry. The cheap enumerative guard then
+        // runs *before* the slow array-gradient route (see
+        // `route_dwarfs_enumerative_guard`) and recognises the closed-form
+        // sum fold in microseconds — strictly better than grinding gradient
+        // descent. The key assertion is that we did NOT return the cached
+        // method, i.e. the bypass fired and a fresh route solved the problem.
+        assert_ne!(
+            result.method, "search_array_sum",
+            "cache bypass should have re-solved with a non-cached route"
+        );
+        assert_eq!(
+            result.method, "enumerative-array",
+            "expected the cheap enumerative guard to preempt the slow \
+             array-gradient route on a simple sum fold, got {}",
+            result.method
+        );
     });
 }
 
@@ -364,9 +425,15 @@ fn solve_problem_uses_array_gradient_for_simple_sum_fold() {
     };
     let result = solve_problem_after_enumeration(&problem, std::time::Instant::now(), None);
     assert!(result.success, "{:?}", result.error);
-    assert_eq!(
-        result.method, "arr_gradient",
-        "expected array gradient to solve simple fold warm start, got {}",
+    // Either native (`arr_gradient`) or universal (`univ_arr_gradient`) array
+    // gradient is acceptable — both are the array-gradient family and the
+    // warm-start path may discretize into either depending on which restart
+    // converges first. (Matches the convention already used in
+    // `synthesis::core_impl` tests.)
+    assert!(
+        result.method == "arr_gradient" || result.method == "univ_arr_gradient",
+        "expected an array gradient method to solve the simple fold warm \
+         start, got {}",
         result.method
     );
 }
