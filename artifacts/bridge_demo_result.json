@@ -1,0 +1,133 @@
+{
+  "demo": "bridge_rung8_synthesized_on_gpu",
+  "problem": {
+    "name": "sum_of_squares",
+    "train_examples": [
+      [
+        1,
+        1
+      ],
+      [
+        2,
+        5
+      ],
+      [
+        3,
+        14
+      ],
+      [
+        4,
+        30
+      ],
+      [
+        5,
+        55
+      ],
+      [
+        6,
+        91
+      ]
+    ],
+    "nsynth_holdouts": [
+      [
+        7,
+        140
+      ],
+      [
+        10,
+        385
+      ]
+    ],
+    "unseen_inputs": [
+      12,
+      20
+    ]
+  },
+  "synthesis": {
+    "method": "synth_gradient",
+    "seconds": 9.41,
+    "cache_allowed": false
+  },
+  "mog": "fn sum_of_squares(a: i64) -> i64 {\n    acc: i64 = 0;\n    i: i64 = 1;\n    while i <= a {\n        acc = acc + i * i;\n        i = i + 1;\n    }\n    return acc;\n}\n",
+  "c_source": "/* AUTO-GENERATED bridge demo program.\n * The function `sum_of_squares` below was SYNTHESIZED by nsynth from I/O\n * examples (no human wrote it) and machine-transpiled from Mog to C.\n * The driver (print_num/main) is generic test scaffolding.\n */\n\nlong sum_of_squares(long a) {\n    long acc = 0;\n    long i = 1;\n    while (i <= a) {\n        acc = acc + i * i;\n        i = i + 1;\n    }\n    return acc;\n}\n\nvoid print_num(long v) {\n    char buf[24];\n    int pos = 23;\n    buf[pos] = 10;\n    pos = pos - 1;\n    if (v == 0) { buf[pos] = 48; pos = pos - 1; }\n    while (v > 0) {\n        buf[pos] = 48 + v % 10;\n        v = v / 10;\n        pos = pos - 1;\n    }\n    __syscall(64, 1, buf + pos + 1, 23 - pos);\n}\n\nint main(void) {\n    long inputs[10];\n    inputs[0] = 1;\n    inputs[1] = 2;\n    inputs[2] = 3;\n    inputs[3] = 4;\n    inputs[4] = 5;\n    inputs[5] = 6;\n    inputs[6] = 7;\n    inputs[7] = 10;\n    inputs[8] = 12;\n    inputs[9] = 20;\n    int k = 0;\n    while (k < 10) {\n        print_num(sum_of_squares(inputs[k]));\n        k = k + 1;\n    }\n    return 0;\n}\n",
+  "gpu_compile": {
+    "cycles": 171715,
+    "seconds": 0.375,
+    "binary_bytes": 1108,
+    "binary_sha256": "94210cc3a1390bdad3adb3b65f105b268822c2fc15b23dd6fad1bf63dd81c6a8",
+    "wrapped_elf_bytes": 5204
+  },
+  "gpu_execute": {
+    "cycles": 3195,
+    "seconds": 0.0214,
+    "exit_code": 0,
+    "stop_reason": "EXIT"
+  },
+  "inputs": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    10,
+    12,
+    20
+  ],
+  "gpu_outputs": [
+    1,
+    5,
+    14,
+    30,
+    55,
+    91,
+    140,
+    385,
+    650,
+    2870
+  ],
+  "expected": [
+    1,
+    5,
+    14,
+    30,
+    55,
+    91,
+    140,
+    385,
+    650,
+    2870
+  ],
+  "local_clang_outputs": [
+    1,
+    5,
+    14,
+    30,
+    55,
+    91,
+    140,
+    385,
+    650,
+    2870
+  ],
+  "python_transpile_outputs": [
+    1,
+    5,
+    14,
+    30,
+    55,
+    91,
+    140,
+    385,
+    650,
+    2870
+  ],
+  "checks": {
+    "gpu_vs_oracle": true,
+    "gpu_vs_local_clang": true,
+    "gpu_vs_python_transpile": true
+  },
+  "match": true,
+  "runtime_path": "nsynth(synth_gradient) -> Mog -> C -> host gcc(cc.c only) -> self-hosting cc ON rust_metal GPU (ncpu_metal.run_elf + VFS) -> minimal-ELF wrap -> execute ON rust_metal GPU (ncpu_metal.run_elf)"
+}

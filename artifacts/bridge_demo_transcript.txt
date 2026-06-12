@@ -1,0 +1,59 @@
+========================================================================
+  BRIDGE DEMO — a program no human wrote, running on the GPU computer
+========================================================================
+
+[1] SYNTHESIZE — nsynth sees only I/O pairs [(1, 1), (2, 5), (3, 14), (4, 30), (5, 55), (6, 91)] (+ holdouts [(7, 140), (10, 385)])
+    method: synth_gradient   time: 9.41s   (cache disabled — fresh synthesis)
+    synthesized Mog program:
+      fn sum_of_squares(a: i64) -> i64 {
+          acc: i64 = 0;
+          i: i64 = 1;
+          while i <= a {
+              acc = acc + i * i;
+              i = i + 1;
+          }
+          return acc;
+      }
+
+[2] TRANSPILE — Mog -> C (deterministic rewrite)
+    synthesized function as C:
+      long sum_of_squares(long a) {
+          long acc = 0;
+          long i = 1;
+          while (i <= a) {
+              acc = acc + i * i;
+              i = i + 1;
+          }
+          return acc;
+      }
+
+[3] GPU COMPILE — self-hosting cc.c runs on the rust_metal Metal kernel
+    host gcc -> cc.elf (126,256 bytes) [Layer 1]
+    GPU compiled /tmp/prog.c -> /bin/prog (1,108 bytes) in 171,715 GPU cycles (0.375s) [Layer 2]
+
+[4] GPU EXECUTE — GPU-compiled binary runs on the rust_metal kernel
+    stop=EXIT exit=0 cycles=3,195 (0.0214s) [Layer 3]
+    GPU outputs: [1, 5, 14, 30, 55, 91, 140, 385, 650, 2870]
+
+[5] VERIFY
+    n=1   [ train ]  gpu=1      expected=1      OK
+    n=2   [ train ]  gpu=5      expected=5      OK
+    n=3   [ train ]  gpu=14     expected=14     OK
+    n=4   [ train ]  gpu=30     expected=30     OK
+    n=5   [ train ]  gpu=55     expected=55     OK
+    n=6   [ train ]  gpu=91     expected=91     OK
+    n=7   [holdout]  gpu=140    expected=140    OK
+    n=10  [holdout]  gpu=385    expected=385    OK
+    n=12  [UNSEEN ]  gpu=650    expected=650    OK
+    n=20  [UNSEEN ]  gpu=2870   expected=2870   OK
+    gpu_vs_oracle: OK
+    gpu_vs_local_clang: OK
+    gpu_vs_python_transpile: OK
+
+========================================================================
+  RESULT: MATCH — the synthesized program ran on the GPU computer
+  and produced correct outputs on every input, including inputs
+  the synthesizer never saw.
+========================================================================
+
+Artifacts: artifacts/bridge_demo_result.json, artifacts/bridge_demo_transcript.txt
