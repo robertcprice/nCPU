@@ -111,7 +111,7 @@ class TestArgmaxCollapseConvergence(unittest.TestCase):
 
         # Force a one-hot discrete program in place of the head.
         distributions = {
-            "init": torch.tensor([[1.0, 0.0, 0.0]]),
+            "init": torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
             "transform": torch.tensor([[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]]),
             "reduce": torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
             "post_scale": torch.tensor([[1.0, 0.0, 0.0]]),
@@ -143,7 +143,7 @@ class TestArgmaxCollapseConvergence(unittest.TestCase):
         lengths = torch.tensor([6.0])
 
         distributions = {
-            "init": torch.tensor([[1.0, 0.0, 0.0]]),
+            "init": torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
             "transform": torch.tensor([[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]]),
             "reduce": torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
             "post_scale": torch.tensor([[1.0, 0.0, 0.0]]),

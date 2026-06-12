@@ -35,7 +35,12 @@ from ncpu.self_optimizing.latent_heads.state_patch_head import (
 )
 
 
-_INIT_CHOICES = ("0", "1", "-large")
+# Init choices are APPEND-ONLY: indices 0-2 are frozen so existing library
+# JSONs and trained checkpoints keep their meaning. Index 3 (`+large`) was
+# added to unlock the min/argmin reduction family — a min-reduce needs an
+# accumulator that starts *above* every realistic element, which `0`/`1`/
+# `-large` could never provide.
+_INIT_CHOICES = ("0", "1", "-large", "+large")
 _ELEM_TRANSFORMS = ("x", "x*x", "|x|", "1", "1{x>0}", "log|x|")
 _REDUCE_OPS = ("+", "*", "max", "min")
 _POST_SCALES = ("acc", "acc/len", "exp(acc)")
@@ -45,6 +50,11 @@ _LOG_EPS = 1e-6
 # element, but small enough that partial softmax weight doesn't destabilize
 # the initial loss. -20 covers value ranges commonly seen in smoke training.
 _NEG_LARGE = -20.0
+# Init sentinel for `min` reductions — the positive-infinity proxy mirroring
+# `_NEG_LARGE`. Must sit *above* every realistic element so a min-fold starts
+# high enough to be pulled down to the true minimum. Same magnitude as
+# `_NEG_LARGE` (positive) so the two sentinels are symmetric.
+_POS_LARGE = 20.0
 
 
 @dataclass
@@ -63,6 +73,17 @@ class ArrayExecutableThoughtHeadConfig:
     init_prior_zero: float = 2.0
     transform_prior_x: float = 2.0
     reduce_prior_sum: float = 2.0
+    # The `+large` init (idx 3) is a min-reduce sentinel. Like `-large`, mixing
+    # it into the soft accumulator at uniform weight destabilizes the soft
+    # forward (a +20 starting acc explodes the `*` / `exp(acc)` paths). A
+    # negative prior keeps it logit-suppressed by default — it only earns
+    # weight when the hidden state actively drives a min reduction — which also
+    # makes the new init "start un-preferred" for backward compatibility. -6.0
+    # was tuned so the standard sum/max/count curriculum is unperturbed (the
+    # +20 sentinel stays out of the soft accumulator), while a hidden state
+    # that wants a min reduction can still drive `+large` to win — the prior is
+    # only an additive bias a sufficiently strong logit overrides.
+    init_prior_pos_large: float = -6.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -114,6 +135,102 @@ def _param_slice(name: str) -> tuple[int, int]:
     raise KeyError(name)
 
 
+# Number of init choices a *legacy* (pre-`+large`) checkpoint was trained with.
+# Index ordering inside `_TOTAL_PARAMS` is init, transform, reduce, post_scale,
+# post_offset, so a 3-init checkpoint packs 3 + 6 + 4 + 3 + 1 = 17 rows into
+# `param_projector.{weight,bias}` and `_param_prior`.
+_LEGACY_N_INIT = 3
+_LEGACY_TOTAL_PARAMS = (
+    _LEGACY_N_INIT
+    + len(_ELEM_TRANSFORMS)
+    + len(_REDUCE_OPS)
+    + len(_POST_SCALES)
+    + 1  # post_offset
+)
+
+
+def upgrade_state_dict_for_init_expansion(
+    state_dict: dict[str, torch.Tensor],
+    *,
+    prior_pos_large: float = -6.0,
+) -> tuple[dict[str, torch.Tensor], bool]:
+    """Upgrade a legacy (3-init) array-thought state dict to the current space.
+
+    The init enumeration grew from 3 (`0`, `1`, `-large`) to 4 by appending
+    `+large`. Because `init` is the *first* slot in `_TOTAL_PARAMS`, that change
+    shifts every downstream slice (transform/reduce/post_scale/post_offset) by
+    one row inside ``param_projector.weight`` (shape ``(_TOTAL_PARAMS,
+    hidden_dim)``), ``param_projector.bias`` and ``_param_prior`` (both shape
+    ``(_TOTAL_PARAMS,)``), and lengthens ``_init_values`` from 3 to 4.
+
+    A plain ``load_state_dict`` of a legacy checkpoint into a 4-init head fails
+    on those shape mismatches. This helper produces an upgraded copy that:
+
+    * preserves the 3 existing init rows (indices 0-2) byte-for-byte,
+    * inserts a fresh `+large` init row at index 3 whose **projector weight and
+      bias are zero** — the new init contributes nothing of its own to the
+      hidden-state projection, so the legacy model's behavior is unchanged,
+    * inserts the **negative `init_prior_pos_large` prior** for the new init in
+      ``_param_prior`` (default -6.0) so `+large` is logit-suppressed by
+      default and only earns softmax mass once the hidden state actively
+      drives a min reduction — i.e. it "starts un-preferred",
+    * leaves transform/reduce/post_scale/post_offset rows identical (just
+      re-indexed),
+    * extends ``_init_values`` to ``[0, 1, _NEG_LARGE, _POS_LARGE]``.
+
+    Returns ``(upgraded_state_dict, upgraded)`` where ``upgraded`` is True iff a
+    legacy layout was detected and rewritten. A state dict already at the
+    current dimension is returned unchanged with ``upgraded=False``.
+    """
+    weight_key = "param_projector.weight"
+    if weight_key not in state_dict:
+        return dict(state_dict), False
+
+    legacy_rows = int(state_dict[weight_key].shape[0])
+    if legacy_rows == _TOTAL_PARAMS:
+        return dict(state_dict), False
+    if legacy_rows != _LEGACY_TOTAL_PARAMS:
+        raise ValueError(
+            "cannot upgrade array-thought state dict: param_projector has "
+            f"{legacy_rows} rows, expected {_LEGACY_TOTAL_PARAMS} (legacy) or "
+            f"{_TOTAL_PARAMS} (current)"
+        )
+
+    # Insert position = right after the legacy init rows (0.._LEGACY_N_INIT-1).
+    insert_at = _LEGACY_N_INIT
+    upgraded: dict[str, torch.Tensor] = dict(state_dict)
+
+    def _insert_row(tensor: torch.Tensor, fill: float) -> torch.Tensor:
+        # tensor: (_LEGACY_TOTAL_PARAMS, ...) → (_TOTAL_PARAMS, ...) with a row
+        # spliced in at `insert_at`, filled with `fill`.
+        row_shape = (1,) + tuple(tensor.shape[1:])
+        row = torch.full(row_shape, fill, dtype=tensor.dtype, device=tensor.device)
+        return torch.cat([tensor[:insert_at], row, tensor[insert_at:]], dim=0)
+
+    # Learned projection rows are zero — the new init contributes nothing of
+    # its own to the hidden-state projection (logit-neutral learned part).
+    upgraded[weight_key] = _insert_row(state_dict[weight_key], 0.0)
+    bias_key = "param_projector.bias"
+    if bias_key in state_dict:
+        upgraded[bias_key] = _insert_row(state_dict[bias_key], 0.0)
+    # The prior row is the negative `init_prior_pos_large` (default -6.0) so the
+    # new init starts logit-suppressed — same value a fresh 4-init head sets.
+    prior_key = "_param_prior"
+    if prior_key in state_dict:
+        upgraded[prior_key] = _insert_row(
+            state_dict[prior_key], float(prior_pos_large)
+        )
+    init_values_key = "_init_values"
+    if init_values_key in state_dict:
+        legacy_vals = state_dict[init_values_key]
+        upgraded[init_values_key] = torch.tensor(
+            [0.0, 1.0, _NEG_LARGE, _POS_LARGE],
+            dtype=legacy_vals.dtype,
+            device=legacy_vals.device,
+        )
+    return upgraded, True
+
+
 class ArrayExecutableThoughtHead(nn.Module):
     """Hidden state -> soft array reduction -> hidden-state patch."""
 
@@ -153,11 +270,17 @@ class ArrayExecutableThoughtHead(nn.Module):
         transform_start, _ = _param_slice("transform")
         reduce_start, _ = _param_slice("reduce")
         prior[init_start + 0] = config.init_prior_zero
+        # `+large` init (idx 3): negative prior so it starts logit-suppressed
+        # and only earns mass when the hidden state drives a min reduction.
+        if len(_INIT_CHOICES) > 3:
+            prior[init_start + 3] = config.init_prior_pos_large
         prior[transform_start + 0] = config.transform_prior_x
         prior[reduce_start + 0] = config.reduce_prior_sum
         self.register_buffer("_param_prior", prior)
 
-        self._init_values = torch.tensor([0.0, 1.0, _NEG_LARGE], dtype=torch.float32)
+        self._init_values = torch.tensor(
+            [0.0, 1.0, _NEG_LARGE, _POS_LARGE], dtype=torch.float32
+        )
 
     def _coerce(self, hidden_state: torch.Tensor) -> tuple[torch.Tensor, bool]:
         if hidden_state.ndim == 1:
@@ -838,7 +961,15 @@ def load_array_thought_head(
         raise ValueError("Array thought head checkpoint missing config")
     head = ArrayExecutableThoughtHead(resolved_config, state_patch_head=state_patch_head)
     state_dict = payload["state_dict"] if isinstance(payload, dict) and "state_dict" in payload else payload
-    head.load_state_dict(state_dict)
+    # Tolerant load: upgrade legacy (3-init) checkpoints to the current
+    # (4-init, `+large`) projector layout. New init's learned rows are zero and
+    # its prior is the configured negative `init_prior_pos_large`, so it starts
+    # un-preferred and the legacy model's behavior is preserved. No-op for the
+    # current dim.
+    upgraded_state_dict, _ = upgrade_state_dict_for_init_expansion(
+        state_dict, prior_pos_large=resolved_config.init_prior_pos_large
+    )
+    head.load_state_dict(upgraded_state_dict)
     head = head.to(device)
     head.eval()
     return head
@@ -853,6 +984,7 @@ __all__ = [
     "run_array_thought_smoke_train",
     "train_array_thought_head",
     "load_array_thought_head",
+    "upgrade_state_dict_for_init_expansion",
     "_DEFAULT_OPERATIONS",
     "_EXTENDED_OPERATIONS",
     "_compute_operation_target",

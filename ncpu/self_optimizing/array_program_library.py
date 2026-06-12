@@ -37,12 +37,17 @@ from ncpu.self_optimizing.array_executable_thought_head import (
     _INIT_CHOICES,
     _LOG_EPS,
     _NEG_LARGE,
+    _POS_LARGE,
     _POST_SCALES,
     _REDUCE_OPS,
 )
 
 
-_INIT_VALUES: tuple[float, ...] = (0.0, 1.0, _NEG_LARGE)
+# Mirrors `_INIT_CHOICES` index-for-index: "0", "1", "-large", "+large".
+# `+large` is the positive-infinity proxy that lets a `min` reduce start above
+# every realistic element. Append-only — indices 0-2 are frozen so existing
+# library JSONs keep their meaning.
+_INIT_VALUES: tuple[float, ...] = (0.0, 1.0, _NEG_LARGE, _POS_LARGE)
 
 
 def _try_load_native_backend() -> Optional[Any]:

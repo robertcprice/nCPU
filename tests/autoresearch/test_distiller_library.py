@@ -62,8 +62,9 @@ def _work_item(task_id: str, prompt: str, entry_point: str, io_pairs) -> WorkIte
 
 class TestTranslateTo5Tuple(unittest.TestCase):
     def test_program_space_size(self):
-        # init(3) x transform(6) x reduce(4) x post_scale(3) discrete shapes.
-        self.assertEqual(PROGRAM_SPACE_SIZE, 216)
+        # init(4) x transform(6) x reduce(4) x post_scale(3) discrete shapes.
+        # init grew 3->4 with the `+large` positive-infinity proxy (216->288).
+        self.assertEqual(PROGRAM_SPACE_SIZE, 288)
 
     def test_probe_set_coverage(self):
         self.assertGreaterEqual(len(_PROBE_ARRAYS), 30)
@@ -153,13 +154,37 @@ class TestTranslateTo5Tuple(unittest.TestCase):
         )
         self.assertIsNone(five)
 
-    def test_refuses_inexpressible_min(self):
-        # min(arr) is NOT expressible: init choices are {0, 1, -20}, so a
-        # min-reduce can never reproduce min over all-positive probe arrays.
+    def test_translates_min(self):
+        # min(arr) IS now expressible: the `+large` init (idx 3) starts the
+        # accumulator above every realistic element, so a min-reduce folds
+        # down to the true minimum. This is the payoff of the 216->288
+        # expansion — the min/argmin family was previously inexpressible.
         five = translate_to_5tuple(
             _solved("def smallest(arr):\n    return min(arr)\n"),
-            _pairs(min, [[3, 1, 2]]),
+            _pairs(min, [[3, 1, 2], [5, 4, 3, 2, 1]]),
             entry_point="smallest",
+        )
+        # init "+large" (idx 3), transform x, reduce min (idx 3), post acc.
+        self.assertEqual(five, {
+            "init_idx": 3, "transform_idx": 0, "reduce_idx": 3,
+            "post_scale_idx": 0, "offset": 0.0,
+        })
+
+    def test_refuses_argmin_index_behavior(self):
+        # argmin returns the *index* of the minimum, not its value. The
+        # reduction space has no position-tracking accumulator, so index-of-
+        # extremum stays genuinely inexpressible even after the `+large`
+        # expansion — translation must refuse rather than approximate.
+        def argmin(a):  # noqa: E731
+            return min(range(len(a)), key=lambda i: a[i])
+
+        five = translate_to_5tuple(
+            _solved(
+                "def amin(arr):\n"
+                "    return min(range(len(arr)), key=lambda i: arr[i])\n"
+            ),
+            _pairs(argmin, [[3, 1, 2], [5, 4, 3, 2, 1], [9, 0, 7]]),
+            entry_point="amin",
         )
         self.assertIsNone(five)
 
@@ -223,17 +248,22 @@ class TestPureExecutorMirrorsTorch(unittest.TestCase):
             _INIT_CHOICES,
             _LOG_EPS,
             _NEG_LARGE,
+            _POS_LARGE,
             _POST_SCALES,
             _REDUCE_OPS,
         )
         from ncpu.autoresearch import distiller
 
         self.assertEqual(distiller._N_INIT, len(_INIT_CHOICES))
+        self.assertEqual(distiller._N_INIT, 4)  # init grew 3 -> 4 (`+large`)
         self.assertEqual(distiller._N_TRANSFORM, len(_ELEM_TRANSFORMS))
         self.assertEqual(distiller._N_REDUCE, len(_REDUCE_OPS))
         self.assertEqual(distiller._N_POST_SCALE, len(_POST_SCALES))
         self.assertEqual(distiller._PURE_LOG_EPS, _LOG_EPS)
         self.assertEqual(distiller._PURE_INIT_VALUES[2], _NEG_LARGE)
+        # New `+large` init mirrors `_POS_LARGE` index-for-index.
+        self.assertEqual(distiller._PURE_INIT_VALUES[3], _POS_LARGE)
+        self.assertEqual(len(distiller._PURE_INIT_VALUES), len(_INIT_CHOICES))
 
     def test_mirror_matches_torch_executor_on_random_programs(self):
         import math
@@ -244,9 +274,10 @@ class TestPureExecutorMirrorsTorch(unittest.TestCase):
 
         rng = random.Random(1234)
         checked = 0
-        for _ in range(80):
+        init_3_checked = 0
+        for _ in range(160):
             program = {
-                "init_idx": rng.randrange(3),
+                "init_idx": rng.randrange(4),  # now spans the new `+large` init
                 "transform_idx": rng.randrange(6),
                 "reduce_idx": rng.randrange(4),
                 "post_scale_idx": rng.randrange(3),
@@ -268,7 +299,56 @@ class TestPureExecutorMirrorsTorch(unittest.TestCase):
                     f"torch={got_torch} pure={got_pure}",
             )
             checked += 1
-        self.assertEqual(checked, 80)
+            if program["init_idx"] == 3:
+                init_3_checked += 1
+        self.assertEqual(checked, 160)
+        # The new `+large` init (idx 3) must actually be exercised by the
+        # cross-check, otherwise this test silently skips the new behavior.
+        self.assertGreater(init_3_checked, 0)
+
+    def test_mirror_matches_torch_on_min_family_explicitly(self):
+        # Exhaustively cross-check every program shape that uses the new
+        # `+large` init (idx 3) — all transform x reduce x post_scale combos —
+        # against the torch executor on a min-friendly probe array. This pins
+        # init-3 parity directly rather than relying on random sampling.
+        import math
+
+        import torch
+
+        from ncpu.self_optimizing.array_program_library import DiscreteArrayProgram
+
+        values_sets = [[3, 1, 2], [-5, 3, -2, 8, 0], [7], [4, 4, 4, 4]]
+        checked = 0
+        for transform_idx in range(6):
+            for reduce_idx in range(4):
+                for post_scale_idx in range(3):
+                    program = {
+                        "init_idx": 3,
+                        "transform_idx": transform_idx,
+                        "reduce_idx": reduce_idx,
+                        "post_scale_idx": post_scale_idx,
+                        "offset": 0.0,
+                    }
+                    torch_program = DiscreteArrayProgram.from_dict(program)
+                    for values in values_sets:
+                        arrays = torch.zeros(1, 8)
+                        arrays[0, : len(values)] = torch.tensor(
+                            values, dtype=torch.float32
+                        )
+                        lengths = torch.tensor([len(values)])
+                        got_torch = float(
+                            torch_program.execute(arrays, lengths).item()
+                        )
+                        got_pure = execute_program_pure(program, values)
+                        self.assertTrue(
+                            math.isclose(
+                                got_torch, got_pure, rel_tol=1e-3, abs_tol=1e-3
+                            ),
+                            msg=f"init-3 mismatch for {program} on {values}: "
+                            f"torch={got_torch} pure={got_pure}",
+                        )
+                        checked += 1
+        self.assertEqual(checked, 6 * 4 * 3 * len(values_sets))
 
     def test_translated_program_executes_on_torch(self):
         import torch

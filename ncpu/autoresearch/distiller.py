@@ -105,8 +105,11 @@ def summarize_solved(items: Iterable[SolvedItem]) -> dict:
 # without torch. test_distiller_library.py cross-checks both the constants
 # and the executor semantics against the torch implementation.
 
-_PURE_INIT_VALUES: tuple[float, ...] = (0.0, 1.0, -20.0)  # "0", "1", "-large"
-_N_INIT = 3        # len(_INIT_CHOICES)
+# "0", "1", "-large", "+large". `+large` (+20.0) is the positive-infinity
+# proxy mirroring `-large` (-20.0); it lets a `min` reduce start above every
+# realistic element. Append-only — indices 0-2 are frozen.
+_PURE_INIT_VALUES: tuple[float, ...] = (0.0, 1.0, -20.0, 20.0)
+_N_INIT = 4        # len(_INIT_CHOICES): 0, 1, -large, +large
 _N_TRANSFORM = 6   # len(_ELEM_TRANSFORMS): x, x*x, |x|, 1, 1{x>0}, log|x|
 _N_REDUCE = 4      # len(_REDUCE_OPS): +, *, max, min
 _N_POST_SCALE = 3  # len(_POST_SCALES): acc, acc/len, exp(acc)
@@ -114,7 +117,7 @@ _PURE_LOG_EPS = 1e-6
 _PURE_EXP_CLAMP = 30.0
 
 PROGRAM_SPACE_SIZE = _N_INIT * _N_TRANSFORM * _N_REDUCE * _N_POST_SCALE
-"""Number of discrete program shapes (216); offset is the continuous 5th."""
+"""Number of discrete program shapes (288); offset is the continuous 5th."""
 
 
 def _pure_transform(x: float, idx: int) -> float:
@@ -368,7 +371,7 @@ def translate_to_5tuple(
     argument, numeric output) — the shape ``DiscreteArrayProgram`` executes.
     The solved source is exec'd in a restricted namespace; the resulting
     callable is treated as ground truth over the given ``io_pairs`` plus the
-    deterministic ``_PROBE_ARRAYS`` set; the 216-shape discrete space is
+    deterministic ``_PROBE_ARRAYS`` set; the 288-shape discrete space is
     enumerated exhaustively (offset fitted per shape) and the first program
     matching the callable *exactly on every probe* is returned as a
     ``DiscreteArrayProgram.from_dict``-compatible dict. Returns None on any

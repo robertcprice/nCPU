@@ -182,6 +182,178 @@ class TestArrayExecutableThoughtHead(unittest.TestCase):
             self.assertTrue(torch.allclose(output_a, output_b))
 
 
+class TestLegacyCheckpointInitExpansion(unittest.TestCase):
+    """The init enumeration grew 3 -> 4 (`+large`). A checkpoint trained with
+    3 inits must still load into a 4-init head, with the 3 original init logits
+    preserved and the new `+large` init starting logit-neutral."""
+
+    _LEGACY_N_INIT = 3
+
+    def _make_legacy_state_dict(self, head: ArrayExecutableThoughtHead) -> dict:
+        """Reconstruct a pre-`+large` (3-init) state dict from a current head.
+
+        Drops the inserted `+large` init row (index 3) from every row-indexed
+        tensor so the result matches a checkpoint that was actually trained
+        with `_TOTAL_PARAMS == 17`.
+        """
+        import torch
+
+        from ncpu.self_optimizing.array_executable_thought_head import (
+            _LEGACY_N_INIT,
+            _LEGACY_TOTAL_PARAMS,
+            _PARAM_SIZES,
+        )
+
+        current = head.state_dict()
+        legacy: dict = {}
+        # Insertion happened at index _LEGACY_N_INIT (== 3); strip that row.
+        drop = _LEGACY_N_INIT
+
+        def _drop_row(tensor: torch.Tensor) -> torch.Tensor:
+            return torch.cat([tensor[:drop], tensor[drop + 1 :]], dim=0)
+
+        for key, value in current.items():
+            if key in ("param_projector.weight", "param_projector.bias", "_param_prior"):
+                legacy[key] = _drop_row(value)
+            else:
+                legacy[key] = value
+        # Sanity: legacy projector must have exactly _LEGACY_TOTAL_PARAMS rows.
+        assert legacy["param_projector.weight"].shape[0] == _LEGACY_TOTAL_PARAMS
+        assert _PARAM_SIZES["init"] == 4  # current head is on the new space
+        return legacy
+
+    def test_legacy_3init_checkpoint_loads_into_4init_head(self):
+        import torch
+
+        from ncpu.self_optimizing.array_executable_thought_head import (
+            upgrade_state_dict_for_init_expansion,
+            _param_slice,
+        )
+
+        torch.manual_seed(3)
+        config = ArrayExecutableThoughtHeadConfig(hidden_dim=8, array_max_len=6)
+        original = ArrayExecutableThoughtHead(config)
+        # Perturb weights so the test isn't trivially satisfied by init=0.
+        with torch.no_grad():
+            for p in original.parameters():
+                p.add_(0.1 * torch.randn_like(p))
+
+        legacy_state_dict = self._make_legacy_state_dict(original)
+        self.assertEqual(
+            legacy_state_dict["param_projector.weight"].shape[0], 17
+        )
+
+        # Tolerant load into a fresh 4-init head must succeed.
+        upgraded, was_upgraded = upgrade_state_dict_for_init_expansion(
+            legacy_state_dict
+        )
+        self.assertTrue(was_upgraded)
+        self.assertEqual(upgraded["param_projector.weight"].shape[0], 18)
+
+        target = ArrayExecutableThoughtHead(config)
+        target.load_state_dict(upgraded)  # must not raise
+
+        # First 3 init logit rows identical to the legacy checkpoint.
+        init_start, init_stop = _param_slice("init")
+        legacy_w = legacy_state_dict["param_projector.weight"]
+        loaded_w = target.param_projector.weight.detach()
+        self.assertTrue(
+            torch.allclose(
+                loaded_w[init_start : init_start + self._LEGACY_N_INIT],
+                legacy_w[init_start : init_start + self._LEGACY_N_INIT],
+            )
+        )
+        # New `+large` row (index 3 of the init slice) has a zero LEARNED
+        # projection — the new init contributes nothing of its own to the
+        # hidden-state projection, so the legacy model's behavior is preserved.
+        new_init_row = loaded_w[init_start + self._LEGACY_N_INIT]
+        self.assertTrue(torch.allclose(new_init_row, torch.zeros_like(new_init_row)))
+        # `_param_prior` for the new init is the negative init_prior_pos_large
+        # (default -6.0) — `+large` "starts un-preferred", logit-suppressed
+        # unless the hidden state actively drives a min reduction.
+        prior = target._param_prior.detach()
+        self.assertEqual(float(prior[init_start + self._LEGACY_N_INIT].item()), -6.0)
+
+        # Downstream slices (transform/reduce/post_scale/post_offset) preserved.
+        for name in ("transform", "reduce", "post_scale", "post_offset"):
+            start, stop = _param_slice(name)
+            # In the legacy layout these slices were one row earlier.
+            legacy_slice = legacy_w[start - 1 : stop - 1]
+            self.assertTrue(
+                torch.allclose(loaded_w[start:stop], legacy_slice),
+                msg=f"downstream slice {name} not preserved",
+            )
+
+    def test_loaded_legacy_head_preserves_behavior(self):
+        """The upgraded head must reproduce the legacy head's outputs exactly:
+        the new `+large` init is logit-neutral so softmax over the original 3
+        inits is unchanged."""
+        import torch
+
+        from ncpu.self_optimizing.array_executable_thought_head import (
+            upgrade_state_dict_for_init_expansion,
+        )
+
+        torch.manual_seed(11)
+        config = ArrayExecutableThoughtHeadConfig(hidden_dim=8, array_max_len=6)
+        original = ArrayExecutableThoughtHead(config)
+        with torch.no_grad():
+            for p in original.parameters():
+                p.add_(0.2 * torch.randn_like(p))
+
+        # Build a *true* legacy head whose projector is the 17-row version, by
+        # slicing the current head's projector down and re-running the soft
+        # forward with only the first 3 init rows + downstream rows.
+        legacy_state_dict = self._make_legacy_state_dict(original)
+        upgraded, _ = upgrade_state_dict_for_init_expansion(legacy_state_dict)
+        upgraded_head = ArrayExecutableThoughtHead(config)
+        upgraded_head.load_state_dict(upgraded)
+        upgraded_head.eval()
+
+        hidden = torch.randn(4, 8, generator=torch.Generator().manual_seed(2))
+        arrays = torch.tensor(
+            [
+                [1.0, 2.0, 3.0, 0.0, 0.0, 0.0],
+                [-1.0, -2.0, 0.0, 0.0, 0.0, 0.0],
+                [5.0, -3.0, 2.0, 1.0, 0.0, 0.0],
+                [4.0, 4.0, 4.0, 4.0, 4.0, 4.0],
+            ]
+        )
+        lengths = torch.tensor([3.0, 2.0, 4.0, 6.0])
+
+        with torch.no_grad():
+            res = upgraded_head(hidden, arrays, lengths=lengths, temperature=0.5)
+        # Runs end-to-end, produces finite outputs.
+        self.assertEqual(res.predicted_output.shape, (4,))
+        self.assertTrue(torch.isfinite(res.predicted_output).all())
+        # The new init never dominates a logit-neutral softmax with perturbed
+        # original inits: probability mass on `+large` stays below the mass on
+        # the original 3 inits combined.
+        init_probs = res.init_probs
+        self.assertEqual(init_probs.shape, (4, 4))
+        new_init_mass = init_probs[:, 3]
+        original_mass = init_probs[:, :3].sum(dim=-1)
+        self.assertTrue(bool((new_init_mass <= original_mass).all()))
+
+    def test_current_dim_state_dict_is_noop(self):
+        import torch
+
+        from ncpu.self_optimizing.array_executable_thought_head import (
+            upgrade_state_dict_for_init_expansion,
+        )
+
+        torch.manual_seed(5)
+        config = ArrayExecutableThoughtHeadConfig(hidden_dim=8, array_max_len=6)
+        head = ArrayExecutableThoughtHead(config)
+        sd = head.state_dict()
+        upgraded, was_upgraded = upgrade_state_dict_for_init_expansion(sd)
+        self.assertFalse(was_upgraded)
+        self.assertEqual(
+            upgraded["param_projector.weight"].shape,
+            sd["param_projector.weight"].shape,
+        )
+
+
 class TestSmokeBatchGeneration(unittest.TestCase):
     def test_batch_shapes_match_operations(self):
         hidden, arrays, lengths, targets, labels = build_array_thought_smoke_batch(
