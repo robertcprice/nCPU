@@ -19,6 +19,12 @@ WORKDIR /app
 COPY --from=build /src/nsynth/target/release/mog_synth /app/nsynth/target/release/mog_synth
 COPY ncpu/__init__.py /app/ncpu/__init__.py
 COPY ncpu/synthesis_api /app/ncpu/synthesis_api
+# /prompt pipeline: deterministic prompt parser + cascade (stdlib-only;
+# torch imports in self_optimizing are function-local and never hit on
+# the /prompt verify path).
+COPY ncpu/autoresearch /app/ncpu/autoresearch
+COPY ncpu/self_optimizing/__init__.py /app/ncpu/self_optimizing/__init__.py
+COPY ncpu/self_optimizing/humaneval_runner.py /app/ncpu/self_optimizing/humaneval_runner.py
 
 # Memory banks land in $HOME — /tmp is the only writable fs on Cloud Run.
 # Banks persist for the instance lifetime: warm instances answer repeat

@@ -430,6 +430,140 @@ def read_bank_stats(config: SynthConfig) -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
+# /prompt — natural-language front door
+# ---------------------------------------------------------------------------
+
+# Bounds for the prompt path: prompts are short docstrings/specs, and the
+# verification harness asserts one line per pair — cap both.
+MAX_PROMPT_CHARS = 16_384
+MAX_PROMPT_PAIRS = 64
+
+
+def handle_prompt_request(
+    request: Any, config: SynthConfig
+) -> tuple[int, dict[str, Any]]:
+    """Handle one /prompt body: free-form text → parsed examples → cascade.
+
+    The deterministic prompt parser (no LLM) extracts I/O pairs from
+    asserts, doctests, arrow notation, and "returns" prose. The cascade
+    then tries ``template_match`` (fixed Python template library) and
+    ``nsynth_fast`` (the Rust synthesizer via this module's own handler).
+    Every candidate is verified against an assert harness built from the
+    parsed pairs before it is returned. No examples → honest refusal,
+    never fabricated code.
+    """
+    # Lazy import: the autoresearch package is stdlib-only on this path,
+    # but keeping it lazy means /synthesize works even if it's absent.
+    try:
+        from ncpu.autoresearch.cascade import CascadeConfig, run_cascade
+        from ncpu.autoresearch.prompt_parser import (
+            build_work_item,
+            extract_from_prompt,
+        )
+    except ImportError as exc:  # pragma: no cover — deploy misconfiguration
+        return 503, {"error": f"prompt pipeline unavailable: {exc}"}
+
+    if not isinstance(request, dict):
+        return 400, {"error": "request body must be a JSON object"}
+    prompt = request.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return 400, {"error": "missing required field: prompt (non-empty string)"}
+    if len(prompt) > MAX_PROMPT_CHARS:
+        return 400, {"error": f"prompt too long (max {MAX_PROMPT_CHARS} chars)"}
+    entry_point = request.get("entry_point")
+    if entry_point is not None and not isinstance(entry_point, str):
+        return 400, {"error": "entry_point must be a string when provided"}
+
+    timeout_s = config.timeout_s
+    raw_timeout = request.get("timeout_s")
+    if raw_timeout is not None:
+        if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):
+            return 400, {"error": "timeout_s must be a number"}
+        if raw_timeout <= 0:
+            return 400, {"error": "timeout_s must be positive"}
+        timeout_s = float(raw_timeout)
+    timeout_s = min(timeout_s, MAX_TIMEOUT_S, config.max_timeout_s)
+
+    start = time.perf_counter()
+
+    report = extract_from_prompt(prompt, entry_point=entry_point)
+    base = {
+        "entry_point": report.entry_point,
+        "io_pairs": len(report.io_pairs),
+        "pair_sources": report.sources,
+    }
+    if report.entry_point is None:
+        return 200, {
+            **base,
+            "success": False,
+            "method": None,
+            "code": None,
+            "error": (
+                "no entry point found — include a `def name(...):` stub "
+                "or name the function in your examples"
+            ),
+            "elapsed_ms": round((time.perf_counter() - start) * 1000.0, 3),
+        }
+    if not report.io_pairs:
+        return 200, {
+            **base,
+            "success": False,
+            "method": None,
+            "code": None,
+            "error": (
+                "no examples found — include asserts, doctests, arrow "
+                "notation (f(x) -> y), or 'f(x) returns y' prose"
+            ),
+            "elapsed_ms": round((time.perf_counter() - start) * 1000.0, 3),
+        }
+    if len(report.io_pairs) > MAX_PROMPT_PAIRS:
+        return 400, {"error": f"too many examples (max {MAX_PROMPT_PAIRS})"}
+
+    item = build_work_item(prompt, entry_point=entry_point)
+    if item is None:  # pragma: no cover — report.entry_point was non-None
+        return 200, {
+            **base,
+            "success": False,
+            "method": None,
+            "code": None,
+            "error": "could not build a work item from this prompt",
+            "elapsed_ms": round((time.perf_counter() - start) * 1000.0, 3),
+        }
+
+    cascade_cfg = CascadeConfig(
+        solver_names=["template_match", "nsynth_fast"],
+        per_solver_seconds=timeout_s,
+    )
+    result = run_cascade(item, config=cascade_cfg)
+    elapsed_ms = round((time.perf_counter() - start) * 1000.0, 3)
+
+    if result.solved and result.solved_item is not None:
+        solved = result.solved_item
+        code = solved.program_python
+        # template_match returns a pre-indented bare body — prepend the
+        # runtime prompt's def stub so the client always gets a runnable
+        # function (this mirrors how the verifier composed the module).
+        if "def " not in code:
+            code = item.prompt + code
+        return 200, {
+            **base,
+            "success": True,
+            "method": result.solver,
+            "code": code,
+            "error": None,
+            "elapsed_ms": elapsed_ms,
+        }
+    return 200, {
+        **base,
+        "success": False,
+        "method": None,
+        "code": None,
+        "error": result.error or "no solver produced a verified program",
+        "elapsed_ms": elapsed_ms,
+    }
+
+
+# ---------------------------------------------------------------------------
 # HTTP layer
 # ---------------------------------------------------------------------------
 
@@ -480,7 +614,7 @@ class SynthesisRequestHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": f"unknown path: {self.path}"})
 
     def do_POST(self) -> None:
-        if self.path != "/synthesize":
+        if self.path not in ("/synthesize", "/prompt"):
             self._send_json(404, {"error": f"unknown path: {self.path}"})
             return
         try:
@@ -504,10 +638,15 @@ class SynthesisRequestHandler(BaseHTTPRequestHandler):
                 429, {"error": "server at synthesis capacity, retry shortly"}
             )
             return
+        handler = (
+            handle_prompt_request
+            if self.path == "/prompt"
+            else handle_synthesize_request
+        )
         try:
-            status, payload = handle_synthesize_request(request, self.config)
+            status, payload = handler(request, self.config)
         except Exception as exc:  # pragma: no cover — defensive last resort
-            log.exception("unexpected error handling /synthesize")
+            log.exception("unexpected error handling %s", self.path)
             status, payload = 500, {"error": f"internal error: {exc}"}
         finally:
             self.solve_slots.release()

@@ -12,9 +12,11 @@ Currently shipped:
   matches the work item's extracted I/O pairs. Purely CPU, no GPU, no
   network. Cheap first line of defense for array-reduction-shaped
   problems that slipped past the coprocessor library.
-* ``nsynth_fast`` — placeholder stub, returns ``None``. Integrating
-  nsynth requires translating :class:`IoPair` into its native
-  ``Problem`` format, which is being done lazily.
+* ``nsynth_fast`` — bridges to the nsynth Rust synthesizer through
+  ``ncpu.synthesis_api``'s embeddable handler. I/O pairs whose values fit
+  nsynth's native types (i64, [i64], string inputs; i64 output) become a
+  ``--problem-json`` request; a verified solve comes back as transpiled
+  Python source. Refusals and unsupported shapes return ``None``.
 * ``llm_resample`` — placeholder stub. Real implementations are injected
   at runtime via ``CascadeConfig.extra_solvers`` (they need model +
   tokenizer handles that can't live at import time).
@@ -169,14 +171,72 @@ def template_match(item: WorkItem, *, budget_seconds: float = 5.0) -> Optional[s
 # placeholder stubs — to be overridden at runtime
 # ----------------------------------------------------------------------
 
-def nsynth_fast(item: WorkItem, *, budget_seconds: float = 15.0) -> Optional[str]:
-    """Placeholder: nsynth integration pending.
+def _nsynth_supported_input(value: object) -> bool:
+    """nsynth's native input types: i64, [i64], string (no bools)."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, str):
+        return True
+    if isinstance(value, list):
+        return all(isinstance(v, int) and not isinstance(v, bool) for v in value)
+    return False
 
-    Returning ``None`` means the cascade skips this stage. When nsynth
-    gains a "synthesize from literal I/O pairs" CLI, this stub will call
-    it via subprocess and translate its 5-tuple program back to Python.
+
+def nsynth_fast(item: WorkItem, *, budget_seconds: float = 15.0) -> Optional[str]:
+    """Synthesize via the nsynth Rust backend (full solver portfolio).
+
+    Translates the item's I/O pairs into a synthesis-API request and runs
+    it through :func:`ncpu.synthesis_api.server.handle_synthesize_request`
+    — the same embeddable path the hosted endpoint uses, including the
+    persistent solved/bias/rejected memory banks. The returned program was
+    already verified against every example by the Rust side; the cascade
+    re-verifies against the item's real test harness anyway.
+
+    Returns ``None`` when the pairs don't fit nsynth's type system
+    (kwargs, bools, floats, non-int outputs), the backend binary is
+    missing, or the synthesizer honestly refuses.
     """
-    return None
+    pairs = item.io_pairs
+    if not pairs:
+        return None
+    examples = []
+    for p in pairs:
+        if p.kwargs:
+            return None
+        if not p.args or not all(_nsynth_supported_input(a) for a in p.args):
+            return None
+        if isinstance(p.expected, bool) or not isinstance(p.expected, int):
+            return None
+        examples.append({"inputs": list(p.args), "expected": p.expected})
+
+    # Lazy import: keeps autoresearch importable even if synthesis_api
+    # moves, and avoids any import cost on the template-only path.
+    try:
+        from ncpu.synthesis_api.server import (
+            SynthConfig,
+            handle_synthesize_request,
+        )
+    except ImportError:
+        return None
+
+    config = SynthConfig(
+        timeout_s=budget_seconds,
+        max_timeout_s=budget_seconds,
+    )
+    if not config.backend.is_file():
+        return None
+
+    request = {"name": item.entry_point, "examples": examples}
+    try:
+        status, payload = handle_synthesize_request(request, config)
+    except Exception:  # noqa: BLE001 — solver contract: never raise
+        return None
+    if status != 200 or not payload.get("success"):
+        return None
+    transpiled = payload.get("transpiled") or {}
+    return transpiled.get("python")
 
 
 def llm_resample_stub(item: WorkItem, *, budget_seconds: float = 60.0) -> Optional[str]:
