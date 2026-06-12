@@ -179,6 +179,9 @@ machine dynamics) is co-headline, not background:
   five-pillar structure the README already uses.
 - Bridge demo: a synthesized program compiled and executed ON the GPU
   ARM64 computer — connects the two halves in one artifact.
+  STATUS (2026-06-12): SHIPPED — `demos/bridge/synthesized_on_gpu.py`; nsynth
+  → Mog → C → self-hosting cc ON rust_metal GPU → GPU execution; 10/10 outputs
+  match incl. 2 never-seen inputs (see `docs/bridge_demo.md`, `artifacts/bridge_demo_result.json`).
 - Paper remains the umbrella: synthesis sections already live alongside
   the neural-computer sections.
 
