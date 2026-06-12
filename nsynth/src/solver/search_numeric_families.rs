@@ -10,10 +10,19 @@ pub(super) fn search_power_loop(problem: &Problem, fn_name: &str) -> Option<Solv
     if !validate_binary_int(
         problem,
         |base, exp| {
+            // Integer power, overflow-safe. An unchecked `base.pow(exp as u32)`
+            // panics in debug builds for any example whose base^exp exceeds
+            // i64 (and `exp as u32` silently truncates a huge exponent). A
+            // power whose true result overflows i64 can never be the answer
+            // to one of these benchmark problems (their outputs fit i64), so
+            // map overflow / out-of-range exponent to a sentinel that simply
+            // fails the match rather than crashing the whole pipeline.
             if exp < 0 {
                 0
+            } else if let Ok(e) = u32::try_from(exp) {
+                base.checked_pow(e).unwrap_or(i64::MIN)
             } else {
-                base.pow(exp as u32)
+                i64::MIN
             }
         },
     ) {
