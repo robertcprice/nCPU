@@ -219,6 +219,28 @@ RULES: list[tuple[str, RequirementsIR]] = [
             "    return 18000 + (calls - 10000)",
         ),
     ),
+    (
+        "Each account pays twelve dollars per seat per month, plus storage: the "
+        "first fifty gigabytes are included, and every gigabyte beyond that costs "
+        "five dollars. Given the number of seats and the gigabytes used, return "
+        "the monthly bill in dollars.",
+        _ir(
+            "team_bill",
+            "Twelve dollars per seat plus five dollars per GB over a 50 GB "
+            "free allowance — a two-argument rule, tiered on storage.",
+            [("seats", "i64"), ("gb_used", "i64")], "i64",
+            # 12*seats + max(0, gb-50)*5 ; both arguments matter, threshold on gb.
+            [([1, 0], 12), ([2, 40], 24), ([3, 50], 36), ([1, 51], 17),
+             ([2, 60], 74), ([5, 100], 310), ([10, 200], 870), ([4, 55], 73),
+             ([7, 80], 234), ([0, 300], 1250), ([3, 45], 36), ([6, 500], 2322)],
+            ["twelve dollars per seat", "first 50 GB free, then five dollars per GB",
+             "both seats and storage contribute"],
+            ["a seat with no storage over the limit pays only the seat fee"],
+            "def team_bill(seats, gb_used):\n"
+            "    over = gb_used - 50\n"
+            "    return 12 * seats + (5 * over if over > 0 else 0)",
+        ),
+    ),
 ]
 
 
@@ -427,7 +449,7 @@ def build_html(results) -> str:
             "entry": ir.entry_point,
             "english": english,
             "desc": ir.description,
-            "param": ir.params[0].name if ir.params else "x",
+            "params": [p.name for p in ir.params] or ["x"],
             "ok": ok,
             "status": res.status,
             "method": res.method or "-",
@@ -496,17 +518,18 @@ CARDS.forEach(c => {
   const el = document.createElement('div');
   el.className = 'card' + (c.ok ? '' : ' bad');
   const fn = FNS[c.entry];
-  const compute = (v) => {
+  const inputsHtml = c.params.map((p,i) =>
+    `<label>${p}</label><input type="number" value="0" data-i="${i}">`).join('<span>,</span>');
+  const compute = (vals) => {
     if (!fn) return c.ok ? '—' : 'not synthesized';
-    try { return fn(parseInt(v||'0',10)); } catch(e){ return 'err'; }
+    try { return fn.apply(null, vals.map(v => parseInt(v||'0',10))); } catch(e){ return 'err'; }
   };
   el.innerHTML = `
     <p class="en">"${c.english}"</p>
     <div class="row">
-      <label>${c.param}</label>
-      <input type="number" value="0" data-entry="${c.entry}">
+      ${inputsHtml}
       <span>→</span>
-      <span class="out" id="out-${c.entry}">${compute(0)}</span>
+      <span class="out" id="out-${c.entry}">${compute(c.params.map(()=>0))}</span>
       <span style="color:var(--mut)">${c.unit}</span>
     </div>
     <div class="meta">
@@ -519,10 +542,11 @@ CARDS.forEach(c => {
     ${c.ts ? `<details><summary>synthesized program (TypeScript)</summary><pre>${
        c.ts.replace(/</g,'&lt;')}</pre></details>` : ''}`;
   grid.appendChild(el);
-  const inp = el.querySelector('input');
-  inp.addEventListener('input', () => {
-    document.getElementById('out-'+c.entry).textContent = compute(inp.value);
-  });
+  const inps = Array.from(el.querySelectorAll('input'));
+  const recompute = () => {
+    document.getElementById('out-'+c.entry).textContent = compute(inps.map(x => x.value));
+  };
+  inps.forEach(x => x.addEventListener('input', recompute));
 });
 </script></body></html>"""
 
@@ -550,14 +574,14 @@ def emit_site_synthesized_ts(results, target_dir: Path) -> Path:
             "entry": ir.entry_point,
             "english": english.strip().replace("\n", " "),
             "desc": ir.description,
-            "param": ir.params[0].name if ir.params else "x",
+            "params": [p.name for p in ir.params] or ["x"],
             "method": res.method or "-",
             "confidence": res.confidence,
             "certified": certified,
             "holdout": f"{res.holdout_passed}/{res.holdout_count}",
             "refAgree": (True if res.synth_vs_reference_agree
                          else False if res.synth_vs_reference_agree is not None else None),
-            "examples": [{"input": e.inputs[0], "expected": e.expected}
+            "examples": [{"inputs": list(e.inputs), "expected": e.expected}
                          for e in ir.io_examples],
             "mog": (res.program or "").strip(),
             "ts": ts,
@@ -576,16 +600,16 @@ def emit_site_synthesized_ts(results, target_dir: Path) -> Path:
     parts = [header, ""]
     for ts in fns:
         parts += [ts, ""]
-    parts.append("export const CALC: Record<string, (x: number) => number> = {")
+    parts.append("export const CALC: Record<string, (...args: number[]) => number> = {")
     parts.append("  " + ", ".join(calc_names) + ",")
     parts.append("}")
     parts.append("")
-    parts.append("export type RuleExample = { input: number; expected: number }")
+    parts.append("export type RuleExample = { inputs: number[]; expected: number }")
     parts.append("export type Rule = {")
     parts.append("  entry: string")
     parts.append("  english: string")
     parts.append("  desc: string")
-    parts.append("  param: string")
+    parts.append("  params: string[]")
     parts.append("  method: string")
     parts.append("  confidence: 'high' | 'medium' | 'low' | 'none'")
     parts.append("  certified: boolean")

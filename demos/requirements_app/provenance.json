@@ -719,12 +719,145 @@
         "reference_impl": "def api_bill(calls):\n    if calls <= 1000:\n        return 0\n    if calls <= 10000:\n        return 2 * (calls - 1000)\n    return 18000 + (calls - 10000)",
         "reference_lang": "python"
       }
+    },
+    {
+      "english": "Each account pays twelve dollars per seat per month, plus storage: the first fifty gigabytes are included, and every gigabyte beyond that costs five dollars. Given the number of seats and the gigabytes used, return the monthly bill in dollars.",
+      "status": "synthesized",
+      "program": "fn team_bill(a: i64, b: i64) -> i64 {\n    if b <= 50 {\n        return (12 * a);\n    }\n    return (((12 * a) + (5 * b)) + -250);\n}\n",
+      "program_lang": "mog",
+      "transpiled": {
+        "python": "def team_bill(a: int, b: int):\n    if b <= 50:\n        return (12 * a)\n    return (((12 * a) + (5 * b)) + -250)",
+        "rust": "fn team_bill(a: i64, b: i64) -> i64 {\n    if b <= 50 {\n        return (12 * a);\n    }\n    return (((12 * a) + (5 * b)) + -250);\n}",
+        "typescript": "function team_bill(a: number, b: number): number {\n    if (b <= 50) {\n        return (12 * a);\n    }\n    return (((12 * a) + (5 * b)) + -250);\n}"
+      },
+      "method": "search_affine_piecewise",
+      "train_count": 8,
+      "holdout_count": 4,
+      "holdout_passed": 4,
+      "reference_holdout_passed": 4,
+      "synth_vs_reference_agree": true,
+      "confidence": "high",
+      "notes": [
+        "Program verified against the train examples by the synthesizer; reproduced 4/4 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 0 counterexample(s) over 0 round(s) before this result."
+      ],
+      "ir": {
+        "entry_point": "team_bill",
+        "description": "Twelve dollars per seat plus five dollars per GB over a 50 GB free allowance \u2014 a two-argument rule, tiered on storage.",
+        "params": [
+          {
+            "name": "seats",
+            "type": "i64"
+          },
+          {
+            "name": "gb_used",
+            "type": "i64"
+          }
+        ],
+        "return_type": "i64",
+        "io_examples": [
+          {
+            "inputs": [
+              1,
+              0
+            ],
+            "expected": 12
+          },
+          {
+            "inputs": [
+              2,
+              40
+            ],
+            "expected": 24
+          },
+          {
+            "inputs": [
+              3,
+              50
+            ],
+            "expected": 36
+          },
+          {
+            "inputs": [
+              1,
+              51
+            ],
+            "expected": 17
+          },
+          {
+            "inputs": [
+              2,
+              60
+            ],
+            "expected": 74
+          },
+          {
+            "inputs": [
+              5,
+              100
+            ],
+            "expected": 310
+          },
+          {
+            "inputs": [
+              10,
+              200
+            ],
+            "expected": 870
+          },
+          {
+            "inputs": [
+              4,
+              55
+            ],
+            "expected": 73
+          },
+          {
+            "inputs": [
+              7,
+              80
+            ],
+            "expected": 234
+          },
+          {
+            "inputs": [
+              0,
+              300
+            ],
+            "expected": 1250
+          },
+          {
+            "inputs": [
+              3,
+              45
+            ],
+            "expected": 36
+          },
+          {
+            "inputs": [
+              6,
+              500
+            ],
+            "expected": 2322
+          }
+        ],
+        "invariants": [
+          "twelve dollars per seat",
+          "first 50 GB free, then five dollars per GB",
+          "both seats and storage contribute"
+        ],
+        "edge_cases": [
+          "a seat with no storage over the limit pays only the seat fee"
+        ],
+        "reference_impl": "def team_bill(seats, gb_used):\n    over = gb_used - 50\n    return 12 * seats + (5 * over if over > 0 else 0)",
+        "reference_lang": "python"
+      }
     }
   ],
   "summary": {
-    "rules": 7,
-    "synthesized": 7,
-    "high_confidence": 7,
+    "rules": 8,
+    "synthesized": 8,
+    "high_confidence": 8,
     "medium_confidence": 0
   }
 }
