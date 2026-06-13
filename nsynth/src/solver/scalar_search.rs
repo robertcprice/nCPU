@@ -64,8 +64,11 @@ pub(super) struct ConditionCandidate {
 pub(super) struct ScalarSearchContext {
     pub(super) param_names: Vec<String>,
     pub(super) target: Vec<i64>,
-    pub(super) expr_candidates: Vec<ExprCandidate>,
     pub(super) cond_candidates: Vec<ConditionCandidate>,
+    /// Deeper expression pool used for branch then/else bodies (and any
+    /// single-expression match). Replaces the old lean then/else pool so
+    /// affine-with-threshold rules are reachable.
+    pub(super) branch_expr_candidates: Vec<ExprCandidate>,
 }
 
 pub(super) fn render_scalar_expr(expr: &ScalarExpr, param_names: &[String]) -> String {
@@ -137,12 +140,44 @@ fn render_condition(cond: &ConditionCandidate, param_names: &[String]) -> String
     )
 }
 
+/// For a guard of the form `x </<=/>/>= k` (a single variable compared to a
+/// constant), the penalty is how far the two arms are from meeting at the
+/// boundary value `k`. Real-world piecewise rules are continuous there — the
+/// free tier ends exactly where the paid rate begins — so when several guard
+/// thresholds fit the training data equally well (which happens when the
+/// boundary example lands in the holdout), the *continuous* one is the honest
+/// generalization. Returns 0 for guards that aren't a simple variable-vs-
+/// constant comparison, or for multi-argument functions.
+fn boundary_continuity_penalty(
+    cond: &ConditionCandidate,
+    then_expr: &ScalarExpr,
+    else_expr: &ScalarExpr,
+    n_params: usize,
+) -> usize {
+    if n_params != 1 {
+        return 0;
+    }
+    let k = match (&cond.lhs, &cond.rhs) {
+        (ScalarExpr::Var(0), ScalarExpr::Const(k)) => *k,
+        (ScalarExpr::Const(k), ScalarExpr::Var(0)) => *k,
+        _ => return 0,
+    };
+    let args = [k];
+    match (
+        eval_scalar_expr(then_expr, args.as_slice()),
+        eval_scalar_expr(else_expr, args.as_slice()),
+    ) {
+        (Some(a), Some(b)) => usize::try_from(a.abs_diff(b)).unwrap_or(usize::MAX),
+        _ => 0,
+    }
+}
+
 pub(super) fn score_single_branch_candidate(
     param_names: &[String],
     cond: &ConditionCandidate,
     then_expr: &ScalarExpr,
     else_expr: &ScalarExpr,
-) -> (usize, usize, usize, usize, String) {
+) -> (usize, usize, usize, usize, usize, String) {
     let mut used = vec![false; param_names.len()];
     scalar_expr_collect_used_vars(&cond.lhs, &mut used);
     scalar_expr_collect_used_vars(&cond.rhs, &mut used);
@@ -164,10 +199,19 @@ pub(super) fn score_single_branch_candidate(
         render_scalar_expr(then_expr, param_names),
         render_scalar_expr(else_expr, param_names)
     );
+    // Occam first: the simplest program that fits is the one most likely to
+    // generalize. A flat region of a piecewise rule is legitimately a constant
+    // (`else 0`); ranking total complexity ahead of the constant-arm count
+    // stops the search from preferring a baroque `(45 * x) % 10` over a plain
+    // `0` just because the former is non-constant. Then continuity at the
+    // guard boundary (real piecewise rules don't jump there), then the const
+    // count, all as tiebreaks among equally-simple candidates.
+    let continuity = boundary_continuity_penalty(cond, then_expr, else_expr, param_names.len());
     (
         missing_params,
-        constant_branches,
         total_complexity,
+        continuity,
+        constant_branches,
         branch_complexity,
         rendered,
     )
@@ -212,10 +256,12 @@ pub(super) fn score_two_branch_candidate(
         render_scalar_expr(second_expr, param_names),
         render_scalar_expr(else_expr, param_names)
     );
+    // Occam first (see score_single_branch_candidate): simplest-fits-best,
+    // const-arm count is a tiebreak only.
     (
         missing_params,
-        constant_branches,
         total_complexity,
+        constant_branches,
         branch_complexity,
         rendered,
     )
@@ -354,18 +400,73 @@ fn insert_expr_candidate(
     seen.entry(outputs).or_insert(expr);
 }
 
+/// Mine a constant pool from the problem's own examples rather than a fixed
+/// hand-picked list. Real-world thresholds (50 GB, 100 minutes, 1000 calls)
+/// and slopes (5, 2) never appear in a global default list — but they *do*
+/// appear in the inputs, the outputs, and their differences. Anchors keep the
+/// cheap universal constants available; the mined values make the search
+/// relevant to the actual problem. Capped (smallest magnitude first) so the
+/// candidate enumeration stays bounded.
+pub(super) fn mine_scalar_constants(examples: &[Vec<i64>], targets: &[i64]) -> Vec<i64> {
+    use std::collections::BTreeSet;
+    let mut set: BTreeSet<i64> = BTreeSet::new();
+    for a in [-1i64, 0, 1, 2, 3, 10, 100] {
+        set.insert(a);
+    }
+    for ex in examples {
+        for &v in ex {
+            set.insert(v);
+        }
+    }
+    for &t in targets {
+        set.insert(t);
+    }
+    // per-example intercept (out - in) and exact slope (out / in) when integral
+    for (ex, &t) in examples.iter().zip(targets.iter()) {
+        if let Some(&x) = ex.first() {
+            set.insert(t - x);
+            if x != 0 && t % x == 0 {
+                set.insert(t / x);
+            }
+        }
+    }
+    // step sizes between sorted distinct outputs (piecewise slopes) and inputs
+    let steps = |mut v: Vec<i64>, set: &mut BTreeSet<i64>| {
+        v.sort_unstable();
+        v.dedup();
+        for w in v.windows(2) {
+            set.insert(w[1] - w[0]);
+        }
+    };
+    steps(targets.to_vec(), &mut set);
+    steps(
+        examples.iter().filter_map(|e| e.first().copied()).collect(),
+        &mut set,
+    );
+    // include negations so `a*x - b` is reachable as `a*x + (-b)`
+    let mut out: Vec<i64> = Vec::new();
+    for &v in &set {
+        out.push(v);
+        out.push(-v);
+    }
+    out.sort_by_key(|v| (v.unsigned_abs(), *v));
+    out.dedup();
+    out.truncate(32);
+    out
+}
+
 fn build_expr_candidates(
     arity: usize,
     examples: &[Vec<i64>],
+    constants: &[i64],
 ) -> (Vec<ExprCandidate>, Vec<ExprCandidate>) {
-    let constants = [-1, 0, 1, 2, 3, 10, 100];
     let mut atoms = Vec::new();
     let mut seen = HashMap::<Vec<Option<i64>>, ScalarExpr>::new();
 
     for index in 0..arity {
         insert_expr_candidate(&mut seen, ScalarExpr::Var(index), examples);
     }
-    for constant in constants {
+    for &constant in constants {
         insert_expr_candidate(&mut seen, ScalarExpr::Const(constant), examples);
     }
 
@@ -409,14 +510,14 @@ fn build_expr_candidates(
 pub(super) fn build_deep_expr_candidates(
     arity: usize,
     examples: &[Vec<i64>],
+    constants: &[i64],
 ) -> Vec<ExprCandidate> {
-    let constants = [-1i64, 0, 1, 2, 3, 10, 100];
     let mut seen = HashMap::<Vec<Option<i64>>, ScalarExpr>::new();
 
     for index in 0..arity {
         insert_expr_candidate(&mut seen, ScalarExpr::Var(index), examples);
     }
-    for &constant in &constants {
+    for &constant in constants {
         insert_expr_candidate(&mut seen, ScalarExpr::Const(constant), examples);
     }
 
@@ -541,12 +642,14 @@ pub(super) fn scalar_search_context(problem: &Problem) -> Option<ScalarSearchCon
     let examples = extract_scalar_examples(problem)?;
     let arity = examples.first()?.len();
     let param_names = scalar_param_names(arity);
-    let target = problem
+    let target: Vec<i64> = problem
         .examples
         .iter()
         .map(|example| example.expected)
         .collect();
-    let (mut atom_candidates, mut expr_candidates) = build_expr_candidates(arity, &examples);
+    let constants = mine_scalar_constants(&examples, &target);
+    let (mut atom_candidates, mut expr_candidates) =
+        build_expr_candidates(arity, &examples, &constants);
     atom_candidates.sort_by_key(|candidate| {
         (
             scalar_expr_complexity(&candidate.expr),
@@ -554,6 +657,41 @@ pub(super) fn scalar_search_context(problem: &Problem) -> Option<ScalarSearchCon
         )
     });
     expr_candidates.sort_by_key(|candidate| {
+        (
+            scalar_expr_complexity(&candidate.expr),
+            render_scalar_expr(&candidate.expr, &param_names),
+        )
+    });
+    // A deeper (two-level) pool used only as then/else branch expressions, so
+    // affine-with-threshold rules like `(x - 50) * 5` are reachable without
+    // blowing up the lean pool that feeds condition enumeration. Ranked by
+    // *target agreement* first — how many example positions the expression
+    // already reproduces the target on — so the pieces of a piecewise function
+    // (each of which matches the target exactly on its own region) rank at the
+    // top and survive the cap, instead of being lost behind lexically-smaller
+    // but useless expressions. Then complexity, then render for determinism.
+    let mut branch_expr_candidates = build_deep_expr_candidates(arity, &examples, &constants);
+    branch_expr_candidates.sort_by_key(|candidate| {
+        let agree = candidate
+            .outputs
+            .iter()
+            .zip(target.iter())
+            .filter(|(out, t)| **out == Some(**t))
+            .count();
+        (
+            std::cmp::Reverse(agree),
+            scalar_expr_complexity(&candidate.expr),
+            render_scalar_expr(&candidate.expr, &param_names),
+        )
+    });
+    branch_expr_candidates.truncate(800);
+    // Agreement decided which expressions survive the cap (so the pieces of a
+    // piecewise rule aren't lost). But branch *selection* should be Occam: when
+    // several survivors satisfy a region's subset constraint, the `.find` below
+    // returns the first, so order the survivors simplest-first. This is what
+    // makes the flat region of `max(0, x-50)*5` resolve to a plain `0` instead
+    // of an equally-valid-on-the-examples but non-generalizing `(x*45) % -10`.
+    branch_expr_candidates.sort_by_key(|candidate| {
         (
             scalar_expr_complexity(&candidate.expr),
             render_scalar_expr(&candidate.expr, &param_names),
@@ -574,8 +712,8 @@ pub(super) fn scalar_search_context(problem: &Problem) -> Option<ScalarSearchCon
     Some(ScalarSearchContext {
         param_names,
         target,
-        expr_candidates,
         cond_candidates,
+        branch_expr_candidates,
     })
 }
 
@@ -706,4 +844,47 @@ pub(super) fn code_scalar_two_branch(
     format!(
         "fn {fn_name}({params}) -> i64 {{\n    if {first_cond} {{\n        return {first_expr};\n    }}\n    if {second_cond} {{\n        return {second_expr};\n    }}\n    return {else_expr};\n}}\n"
     )
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use crate::benchmark::{Example, Problem, Value};
+
+    fn storage_problem() -> Problem {
+        let rows = [(0, 0), (50, 0), (51, 5), (60, 50), (40, 0), (70, 100), (200, 750)];
+        Problem {
+            name: "storage_overage".to_string(),
+            category: "external",
+            description: "",
+            signature: "fn storage_overage(used_gb: i64) -> i64",
+            examples: rows
+                .iter()
+                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: *o })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    // Regression: a threshold-with-affine rule `max(0, x-50)*5` must be
+    // solvable by generic single-branch search. Before example-mined
+    // constants + the deeper agreement-ranked branch pool, this novel
+    // (non-benchmark-named) problem could not be expressed at all.
+    #[test]
+    fn single_branch_solves_threshold_affine() {
+        let p = storage_problem();
+        let consts = mine_scalar_constants(
+            &extract_scalar_examples(&p).unwrap(),
+            &p.examples.iter().map(|e| e.expected).collect::<Vec<_>>(),
+        );
+        assert!(consts.contains(&50), "threshold 50 must be mined from examples");
+        // search_single_branch only returns Some after verified_result has
+        // confirmed the program reproduces every example, so a Some here means
+        // an exact, verified solution.
+        let result = super::search_scalar_families::search_single_branch(&p, "storage_overage")
+            .expect("single_branch must solve max(0,x-50)*5");
+        assert!(result.success);
+        assert!(result.code.contains("if"), "expected a branch program");
+    }
 }

@@ -2,7 +2,7 @@ use super::scalar_search::{
     build_deep_expr_candidates, code_scalar_return_expr, code_scalar_single_branch,
     code_scalar_two_branch, code_unary_range_loop, cond_is_total, cond_selection,
     cond_selection_on_mask, expr_matches_subset, expr_matches_target, extract_scalar_examples,
-    render_scalar_expr, scalar_expr_complexity, scalar_search_context,
+    mine_scalar_constants, render_scalar_expr, scalar_expr_complexity, scalar_search_context,
     score_single_branch_candidate, score_two_branch_candidate, simulate_unary_range_loop,
     RangeAccumOp, RangeLoopCmp, RangeLoopTerm,
 };
@@ -15,7 +15,8 @@ pub(super) fn search_scalar_expr(problem: &Problem, fn_name: &str) -> Option<Sol
     let param_names = scalar_param_names(arity);
     let target: Vec<i64> = problem.examples.iter().map(|ex| ex.expected).collect();
 
-    let mut candidates = build_deep_expr_candidates(arity, &examples);
+    let constants = mine_scalar_constants(&examples, &target);
+    let mut candidates = build_deep_expr_candidates(arity, &examples, &constants);
     candidates.sort_by_key(|c| {
         (
             scalar_expr_complexity(&c.expr),
@@ -150,7 +151,7 @@ pub(super) fn search_polynomial_quadratic(problem: &Problem, fn_name: &str) -> O
 
 pub(super) fn search_single_branch(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let ctx = scalar_search_context(problem)?;
-    let mut best: Option<((usize, usize, usize, usize, String), SolveResult)> = None;
+    let mut best: Option<((usize, usize, usize, usize, usize, String), SolveResult)> = None;
 
     for cond in &ctx.cond_candidates {
         if !cond_is_total(&cond.outputs) {
@@ -163,19 +164,26 @@ pub(super) fn search_single_branch(problem: &Problem, fn_name: &str) -> Option<S
             continue;
         };
         let Some(then_expr) = ctx
-            .expr_candidates
+        .branch_expr_candidates
             .iter()
             .find(|candidate| expr_matches_subset(&candidate.outputs, &ctx.target, &true_mask))
         else {
             continue;
         };
         let Some(else_expr) = ctx
-            .expr_candidates
+        .branch_expr_candidates
             .iter()
             .find(|candidate| expr_matches_subset(&candidate.outputs, &ctx.target, &false_mask))
         else {
             continue;
         };
+        // A branch whose two arms are the same expression is not really a
+        // branch — it's a single expression dressed up with a vacuous guard.
+        // Skip it so a clean unconditional form (search_scalar_expr) wins
+        // instead of emitting `if c { e } else { e }`.
+        if then_expr.expr == else_expr.expr {
+            continue;
+        }
         let code = code_scalar_single_branch(
             fn_name,
             &ctx.param_names,
@@ -217,7 +225,7 @@ pub(super) fn search_two_branch(problem: &Problem, fn_name: &str) -> Option<Solv
         let Some(first_false_mask) = cond_selection(&first_cond.outputs, false) else {
             continue;
         };
-        let Some(first_expr) = ctx.expr_candidates.iter().find(|candidate| {
+        let Some(first_expr) = ctx.branch_expr_candidates.iter().find(|candidate| {
             expr_matches_subset(&candidate.outputs, &ctx.target, &first_true_mask)
         }) else {
             continue;
@@ -234,12 +242,12 @@ pub(super) fn search_two_branch(problem: &Problem, fn_name: &str) -> Option<Solv
             else {
                 continue;
             };
-            let Some(second_expr) = ctx.expr_candidates.iter().find(|candidate| {
+            let Some(second_expr) = ctx.branch_expr_candidates.iter().find(|candidate| {
                 expr_matches_subset(&candidate.outputs, &ctx.target, &second_true_mask)
             }) else {
                 continue;
             };
-            let Some(else_expr) = ctx.expr_candidates.iter().find(|candidate| {
+            let Some(else_expr) = ctx.branch_expr_candidates.iter().find(|candidate| {
                 expr_matches_subset(&candidate.outputs, &ctx.target, &second_false_mask)
             }) else {
                 continue;

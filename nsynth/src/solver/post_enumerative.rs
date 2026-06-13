@@ -108,7 +108,14 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_score_tracker_branch"
         | "search_simulate_gravity_clamp"
         | "search_turn_order_rotate"
-        | "search_vending_change_branch" => true,
+        | "search_vending_change_branch"
+        // Generic scalar branch search: a verified single/two-branch program
+        // is already an exact solution, so it preempts the (slow) gradient
+        // distillation rather than being fed to it as a teacher. This is what
+        // makes novel piecewise rules (thresholds + affine pieces) solve in
+        // milliseconds instead of timing out.
+        | "search_single_branch"
+        | "search_two_branch" => true,
         "search_unary_range_loop" => {
             result.code.contains("acc = acc + i;") || result.code.contains("acc = acc * i;")
         }
