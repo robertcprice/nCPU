@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeterBill — billing rules synthesized from English</title>
+<style>
+  :root{--bg:#0C1015;--panel:#151B23;--ink:#E6EDF3;--mut:#8B98A5;
+        --amber:#FFB454;--cyan:#7DD3FC;--rose:#E0708C;--line:#222B36;}
+  *{box-sizing:border-box;min-width:0}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.5 ui-monospace,'JetBrains Mono',Menlo,monospace;padding:24px}
+  h1{font-size:22px;margin:0 0 4px} .sub{color:var(--mut);margin:0 0 20px;max-width:70ch}
+  .grid{display:grid;grid-template-columns:1fr;gap:16px;max-width:860px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:16px;overflow:hidden}
+  .en{color:var(--cyan);font-size:13px;margin:0 0 10px;font-style:italic}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+  .row label{color:var(--mut)} input{background:#0C1015;color:var(--ink);
+       border:1px solid var(--line);border-radius:7px;padding:6px 9px;width:120px;
+       font:inherit} .out{color:var(--amber);font-weight:600}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;font-size:12px}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:2px 9px;color:var(--mut)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:99px;margin-right:5px;
+       vertical-align:middle}
+  details{margin-top:10px} summary{cursor:pointer;color:var(--mut);font-size:12px}
+  pre{background:#0C1015;border:1px solid var(--line);border-radius:8px;padding:10px;
+      overflow:auto;font-size:12px;color:#cdd6e0}
+  .bad{opacity:.62} .bad .out{color:var(--rose)}
+  .legend{color:var(--mut);font-size:12px;margin:18px 0 0;max-width:70ch}
+</style></head><body>
+<h1>MeterBill</h1>
+<p class="sub">Every charge below was written as one English sentence, turned into a
+verifiable contract by an LLM proposer, then <b>synthesized bottom-up and verified by
+nCPU</b> — program search, a held-out generalization test, and a cross-check against an
+independent reference. The inputs are live: you are running programs that were
+<b>discovered from English</b>, not hand-written.</p>
+<div class="grid" id="grid"></div>
+<p class="legend">Confidence: <span class="dot" style="background:#7DD3FC"></span>high =
+generalized on every held-out case AND agrees with an independent reference &nbsp;
+<span class="dot" style="background:#FFB454"></span>medium = generalized on all holdout &nbsp;
+<span class="dot" style="background:#E0708C"></span>low/none = held out a case it missed,
+or nСPU honestly refused to synthesize this rule.</p>
+<script>
+function seat_cost(x) {
+    if (0 != x) {
+        return (12 * x);
+    }
+    return 0;
+}
+function annual_prepay(x) {
+    if (0 != x) {
+        return (x * 10);
+    }
+    return 0;
+}
+function storage_overage(x) {
+    if (50 < x) {
+        return ((x + -50) * 5);
+    }
+    return 0;
+}
+function call_cost(x) {
+    if (100 < x) {
+        return ((x - 100) * 2);
+    }
+    return 0;
+}
+function support_credit(x) {
+    if (10 < x) {
+        return (-5 * -10);
+    }
+    return (x * 5);
+}
+function loyalty_points(x) {
+    if (100 < x) {
+        return (x - (100 - x));
+    }
+    return x;
+}
+const FNS = {};
+[{"entry": "seat_cost", "english": "We charge twelve dollars per seat per month. Given the number of seats on an account, return the monthly seat charge in dollars.", "desc": "Twelve dollars times the number of seats.", "param": "seats", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function seat_cost(x: number): number {\n    if (0 != x) {\n        return (12 * x);\n    }\n    return 0;\n}"}, {"entry": "annual_prepay", "english": "Customers who prepay for a year get two months free: take their monthly rate, multiply by ten, and that is the annual prepay price. Given the monthly rate in dollars, return the yearly price in dollars.", "desc": "Ten times the monthly rate (twelve months minus two free).", "param": "monthly", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function annual_prepay(x: number): number {\n    if (0 != x) {\n        return (x * 10);\n    }\n    return 0;\n}"}, {"entry": "storage_overage", "english": "Every account includes fifty gigabytes of storage at no cost. Beyond that we bill five dollars for each additional gigabyte; accounts at or under the fifty-gigabyte limit pay nothing. Given the gigabytes used, return the storage overage charge in dollars.", "desc": "Five dollars per gigabyte used above a fifty-gigabyte free limit.", "param": "used_gb", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function storage_overage(x: number): number {\n    if (50 < x) {\n        return ((x + -50) * 5);\n    }\n    return 0;\n}"}, {"entry": "call_cost", "english": "The first one hundred minutes of calls each month are free. Every minute after that costs two cents. Given the total minutes used, return the call cost in cents.", "desc": "Two cents per minute used above a hundred free minutes.", "param": "minutes", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "cents", "ts": "function call_cost(x: number): number {\n    if (100 < x) {\n        return ((x - 100) * 2);\n    }\n    return 0;\n}"}, {"entry": "support_credit", "english": "Each support ticket we resolve within an hour earns the customer a five dollar credit, but the credit is capped at ten fast tickets per month \u2014 fast tickets beyond the tenth earn nothing extra. Given the number of tickets resolved within an hour, return the credit in dollars.", "desc": "Five dollars per fast ticket, counting at most ten of them.", "param": "fast_tickets", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function support_credit(x: number): number {\n    if (10 < x) {\n        return (-5 * -10);\n    }\n    return (x * 5);\n}"}, {"entry": "loyalty_points", "english": "Customers earn one loyalty point for every dollar they spend. On top of that, any portion of a purchase above one hundred dollars earns a second point per dollar. Given a purchase amount in whole dollars, return the loyalty points earned.", "desc": "One point per dollar, plus a second point per dollar above $100.", "param": "amount", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function loyalty_points(x: number): number {\n    if (100 < x) {\n        return (x - (100 - x));\n    }\n    return x;\n}"}, {"entry": "api_bill", "english": "API calls are billed in tiers: the first one thousand calls each month are free, the next nine thousand calls cost two cents each, and every call beyond ten thousand costs one cent each. Given the number of calls, return the bill in cents.", "desc": "Tiered per-call pricing with free / 2c / 1c bands at 1k and 10k.", "param": "calls", "ok": false, "status": "synthesized", "method": "search_single_branch", "confidence": "low", "badge": "#E0708C", "holdout": "2/3", "ref": "DISAGREE", "unit": "dollars", "ts": "function api_bill(x: number): number {\n    if (1001 < x) {\n        return ((8000 % x) + x);\n    }\n    return ((x % -999) % -500);\n}"}].forEach(c => { try { FNS[c.entry] = eval(c.entry); } catch(e){} });
+const CARDS = [{"entry": "seat_cost", "english": "We charge twelve dollars per seat per month. Given the number of seats on an account, return the monthly seat charge in dollars.", "desc": "Twelve dollars times the number of seats.", "param": "seats", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function seat_cost(x: number): number {\n    if (0 != x) {\n        return (12 * x);\n    }\n    return 0;\n}"}, {"entry": "annual_prepay", "english": "Customers who prepay for a year get two months free: take their monthly rate, multiply by ten, and that is the annual prepay price. Given the monthly rate in dollars, return the yearly price in dollars.", "desc": "Ten times the monthly rate (twelve months minus two free).", "param": "monthly", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function annual_prepay(x: number): number {\n    if (0 != x) {\n        return (x * 10);\n    }\n    return 0;\n}"}, {"entry": "storage_overage", "english": "Every account includes fifty gigabytes of storage at no cost. Beyond that we bill five dollars for each additional gigabyte; accounts at or under the fifty-gigabyte limit pay nothing. Given the gigabytes used, return the storage overage charge in dollars.", "desc": "Five dollars per gigabyte used above a fifty-gigabyte free limit.", "param": "used_gb", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function storage_overage(x: number): number {\n    if (50 < x) {\n        return ((x + -50) * 5);\n    }\n    return 0;\n}"}, {"entry": "call_cost", "english": "The first one hundred minutes of calls each month are free. Every minute after that costs two cents. Given the total minutes used, return the call cost in cents.", "desc": "Two cents per minute used above a hundred free minutes.", "param": "minutes", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "cents", "ts": "function call_cost(x: number): number {\n    if (100 < x) {\n        return ((x - 100) * 2);\n    }\n    return 0;\n}"}, {"entry": "support_credit", "english": "Each support ticket we resolve within an hour earns the customer a five dollar credit, but the credit is capped at ten fast tickets per month \u2014 fast tickets beyond the tenth earn nothing extra. Given the number of tickets resolved within an hour, return the credit in dollars.", "desc": "Five dollars per fast ticket, counting at most ten of them.", "param": "fast_tickets", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function support_credit(x: number): number {\n    if (10 < x) {\n        return (-5 * -10);\n    }\n    return (x * 5);\n}"}, {"entry": "loyalty_points", "english": "Customers earn one loyalty point for every dollar they spend. On top of that, any portion of a purchase above one hundred dollars earns a second point per dollar. Given a purchase amount in whole dollars, return the loyalty points earned.", "desc": "One point per dollar, plus a second point per dollar above $100.", "param": "amount", "ok": true, "status": "synthesized", "method": "search_single_branch", "confidence": "high", "badge": "#7DD3FC", "holdout": "3/3", "ref": "agree", "unit": "dollars", "ts": "function loyalty_points(x: number): number {\n    if (100 < x) {\n        return (x - (100 - x));\n    }\n    return x;\n}"}, {"entry": "api_bill", "english": "API calls are billed in tiers: the first one thousand calls each month are free, the next nine thousand calls cost two cents each, and every call beyond ten thousand costs one cent each. Given the number of calls, return the bill in cents.", "desc": "Tiered per-call pricing with free / 2c / 1c bands at 1k and 10k.", "param": "calls", "ok": false, "status": "synthesized", "method": "search_single_branch", "confidence": "low", "badge": "#E0708C", "holdout": "2/3", "ref": "DISAGREE", "unit": "dollars", "ts": "function api_bill(x: number): number {\n    if (1001 < x) {\n        return ((8000 % x) + x);\n    }\n    return ((x % -999) % -500);\n}"}];
+const grid = document.getElementById('grid');
+CARDS.forEach(c => {
+  const el = document.createElement('div');
+  el.className = 'card' + (c.ok ? '' : ' bad');
+  const fn = FNS[c.entry];
+  const compute = (v) => {
+    if (!fn) return c.ok ? '—' : 'not synthesized';
+    try { return fn(parseInt(v||'0',10)); } catch(e){ return 'err'; }
+  };
+  el.innerHTML = `
+    <p class="en">"${c.english}"</p>
+    <div class="row">
+      <label>${c.param}</label>
+      <input type="number" value="0" data-entry="${c.entry}">
+      <span>→</span>
+      <span class="out" id="out-${c.entry}">${compute(0)}</span>
+      <span style="color:var(--mut)">${c.unit}</span>
+    </div>
+    <div class="meta">
+      <span class="pill"><span class="dot" style="background:${c.badge}"></span>${c.confidence}</span>
+      <span class="pill">method: ${c.method}</span>
+      <span class="pill">holdout ${c.holdout}</span>
+      <span class="pill">vs reference: ${c.ref}</span>
+      <span class="pill">${c.status}</span>
+    </div>
+    ${c.ts ? `<details><summary>synthesized program (TypeScript)</summary><pre>${
+       c.ts.replace(/</g,'&lt;')}</pre></details>` : ''}`;
+  grid.appendChild(el);
+  const inp = el.querySelector('input');
+  inp.addEventListener('input', () => {
+    document.getElementById('out-'+c.entry).textContent = compute(inp.value);
+  });
+});
+</script></body></html>

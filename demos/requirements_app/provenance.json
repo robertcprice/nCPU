@@ -1,0 +1,766 @@
+{
+  "product": "MeterBill",
+  "pipeline": "english -> LLM proposer (untrusted) -> RequirementsIR -> nCPU synth+verify (trusted) -> verified program",
+  "rules": [
+    {
+      "english": "We charge twelve dollars per seat per month. Given the number of seats on an account, return the monthly seat charge in dollars.",
+      "status": "synthesized",
+      "program": "fn seat_cost(x: i64) -> i64 {\n    if 0 != x {\n        return (12 * x);\n    }\n    return 0;\n}\n",
+      "program_lang": "mog",
+      "transpiled": {
+        "python": "def seat_cost(x: int):\n    if 0 != x:\n        return (12 * x)\n    return 0",
+        "rust": "fn seat_cost(x: i64) -> i64 {\n    if 0 != x {\n        return (12 * x);\n    }\n    return 0;\n}",
+        "typescript": "function seat_cost(x: number): number {\n    if (0 != x) {\n        return (12 * x);\n    }\n    return 0;\n}"
+      },
+      "method": "search_single_branch",
+      "train_count": 6,
+      "holdout_count": 3,
+      "holdout_passed": 3,
+      "reference_holdout_passed": 3,
+      "synth_vs_reference_agree": true,
+      "confidence": "high",
+      "notes": [
+        "Program verified against the train examples by the synthesizer; reproduced 3/3 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 0 counterexample(s) over 0 round(s) before this result."
+      ],
+      "ir": {
+        "entry_point": "seat_cost",
+        "description": "Twelve dollars times the number of seats.",
+        "params": [
+          {
+            "name": "seats",
+            "type": "i64"
+          }
+        ],
+        "return_type": "i64",
+        "io_examples": [
+          {
+            "inputs": [
+              0
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              1
+            ],
+            "expected": 12
+          },
+          {
+            "inputs": [
+              2
+            ],
+            "expected": 24
+          },
+          {
+            "inputs": [
+              3
+            ],
+            "expected": 36
+          },
+          {
+            "inputs": [
+              5
+            ],
+            "expected": 60
+          },
+          {
+            "inputs": [
+              7
+            ],
+            "expected": 84
+          },
+          {
+            "inputs": [
+              10
+            ],
+            "expected": 120
+          },
+          {
+            "inputs": [
+              25
+            ],
+            "expected": 300
+          },
+          {
+            "inputs": [
+              100
+            ],
+            "expected": 1200
+          }
+        ],
+        "invariants": [
+          "charge is non-negative",
+          "charge scales linearly with seats"
+        ],
+        "edge_cases": [
+          "zero seats costs nothing"
+        ],
+        "reference_impl": "def seat_cost(seats):\n    return 12 * seats",
+        "reference_lang": "python"
+      }
+    },
+    {
+      "english": "Customers who prepay for a year get two months free: take their monthly rate, multiply by ten, and that is the annual prepay price. Given the monthly rate in dollars, return the yearly price in dollars.",
+      "status": "synthesized",
+      "program": "fn annual_prepay(x: i64) -> i64 {\n    if 0 != x {\n        return (x * 10);\n    }\n    return 0;\n}\n",
+      "program_lang": "mog",
+      "transpiled": {
+        "python": "def annual_prepay(x: int):\n    if 0 != x:\n        return (x * 10)\n    return 0",
+        "rust": "fn annual_prepay(x: i64) -> i64 {\n    if 0 != x {\n        return (x * 10);\n    }\n    return 0;\n}",
+        "typescript": "function annual_prepay(x: number): number {\n    if (0 != x) {\n        return (x * 10);\n    }\n    return 0;\n}"
+      },
+      "method": "search_single_branch",
+      "train_count": 6,
+      "holdout_count": 3,
+      "holdout_passed": 3,
+      "reference_holdout_passed": 3,
+      "synth_vs_reference_agree": true,
+      "confidence": "high",
+      "notes": [
+        "Program verified against the train examples by the synthesizer; reproduced 3/3 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 0 counterexample(s) over 0 round(s) before this result."
+      ],
+      "ir": {
+        "entry_point": "annual_prepay",
+        "description": "Ten times the monthly rate (twelve months minus two free).",
+        "params": [
+          {
+            "name": "monthly",
+            "type": "i64"
+          }
+        ],
+        "return_type": "i64",
+        "io_examples": [
+          {
+            "inputs": [
+              0
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              5
+            ],
+            "expected": 50
+          },
+          {
+            "inputs": [
+              10
+            ],
+            "expected": 100
+          },
+          {
+            "inputs": [
+              29
+            ],
+            "expected": 290
+          },
+          {
+            "inputs": [
+              49
+            ],
+            "expected": 490
+          },
+          {
+            "inputs": [
+              99
+            ],
+            "expected": 990
+          },
+          {
+            "inputs": [
+              150
+            ],
+            "expected": 1500
+          },
+          {
+            "inputs": [
+              300
+            ],
+            "expected": 3000
+          },
+          {
+            "inputs": [
+              500
+            ],
+            "expected": 5000
+          }
+        ],
+        "invariants": [
+          "two months are free",
+          "price is ten times the monthly rate"
+        ],
+        "edge_cases": [
+          "a free plan stays free"
+        ],
+        "reference_impl": "def annual_prepay(monthly):\n    return monthly * 10",
+        "reference_lang": "python"
+      }
+    },
+    {
+      "english": "Every account includes fifty gigabytes of storage at no cost. Beyond that we bill five dollars for each additional gigabyte; accounts at or under the fifty-gigabyte limit pay nothing. Given the gigabytes used, return the storage overage charge in dollars.",
+      "status": "synthesized",
+      "program": "fn storage_overage(x: i64) -> i64 {\n    if 50 < x {\n        return ((x + -50) * 5);\n    }\n    return 0;\n}\n",
+      "program_lang": "mog",
+      "transpiled": {
+        "python": "def storage_overage(x: int):\n    if 50 < x:\n        return ((x + -50) * 5)\n    return 0",
+        "rust": "fn storage_overage(x: i64) -> i64 {\n    if 50 < x {\n        return ((x + -50) * 5);\n    }\n    return 0;\n}",
+        "typescript": "function storage_overage(x: number): number {\n    if (50 < x) {\n        return ((x + -50) * 5);\n    }\n    return 0;\n}"
+      },
+      "method": "search_single_branch",
+      "train_count": 7,
+      "holdout_count": 3,
+      "holdout_passed": 3,
+      "reference_holdout_passed": 3,
+      "synth_vs_reference_agree": true,
+      "confidence": "high",
+      "notes": [
+        "Program verified against the train examples by the synthesizer; reproduced 3/3 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 0 counterexample(s) over 0 round(s) before this result."
+      ],
+      "ir": {
+        "entry_point": "storage_overage",
+        "description": "Five dollars per gigabyte used above a fifty-gigabyte free limit.",
+        "params": [
+          {
+            "name": "used_gb",
+            "type": "i64"
+          }
+        ],
+        "return_type": "i64",
+        "io_examples": [
+          {
+            "inputs": [
+              0
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              40
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              49
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              50
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              51
+            ],
+            "expected": 5
+          },
+          {
+            "inputs": [
+              55
+            ],
+            "expected": 25
+          },
+          {
+            "inputs": [
+              60
+            ],
+            "expected": 50
+          },
+          {
+            "inputs": [
+              70
+            ],
+            "expected": 100
+          },
+          {
+            "inputs": [
+              120
+            ],
+            "expected": 350
+          },
+          {
+            "inputs": [
+              200
+            ],
+            "expected": 750
+          }
+        ],
+        "invariants": [
+          "no charge at or below 50 GB",
+          "five dollars per GB over the limit"
+        ],
+        "edge_cases": [
+          "exactly at the limit is free",
+          "below the limit is free"
+        ],
+        "reference_impl": "def storage_overage(used_gb):\n    over = used_gb - 50\n    return 5 * over if over > 0 else 0",
+        "reference_lang": "python"
+      }
+    },
+    {
+      "english": "The first one hundred minutes of calls each month are free. Every minute after that costs two cents. Given the total minutes used, return the call cost in cents.",
+      "status": "synthesized",
+      "program": "fn call_cost(x: i64) -> i64 {\n    if 100 < x {\n        return ((x - 100) * 2);\n    }\n    return 0;\n}\n",
+      "program_lang": "mog",
+      "transpiled": {
+        "python": "def call_cost(x: int):\n    if 100 < x:\n        return ((x - 100) * 2)\n    return 0",
+        "rust": "fn call_cost(x: i64) -> i64 {\n    if 100 < x {\n        return ((x - 100) * 2);\n    }\n    return 0;\n}",
+        "typescript": "function call_cost(x: number): number {\n    if (100 < x) {\n        return ((x - 100) * 2);\n    }\n    return 0;\n}"
+      },
+      "method": "search_single_branch",
+      "train_count": 7,
+      "holdout_count": 3,
+      "holdout_passed": 3,
+      "reference_holdout_passed": 3,
+      "synth_vs_reference_agree": true,
+      "confidence": "high",
+      "notes": [
+        "Program verified against the train examples by the synthesizer; reproduced 3/3 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 0 counterexample(s) over 0 round(s) before this result."
+      ],
+      "ir": {
+        "entry_point": "call_cost",
+        "description": "Two cents per minute used above a hundred free minutes.",
+        "params": [
+          {
+            "name": "minutes",
+            "type": "i64"
+          }
+        ],
+        "return_type": "i64",
+        "io_examples": [
+          {
+            "inputs": [
+              0
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              80
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              99
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              100
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              101
+            ],
+            "expected": 2
+          },
+          {
+            "inputs": [
+              110
+            ],
+            "expected": 20
+          },
+          {
+            "inputs": [
+              150
+            ],
+            "expected": 100
+          },
+          {
+            "inputs": [
+              200
+            ],
+            "expected": 200
+          },
+          {
+            "inputs": [
+              350
+            ],
+            "expected": 500
+          },
+          {
+            "inputs": [
+              600
+            ],
+            "expected": 1000
+          }
+        ],
+        "invariants": [
+          "first 100 minutes are free",
+          "two cents per minute thereafter"
+        ],
+        "edge_cases": [
+          "at or below 100 minutes is free"
+        ],
+        "reference_impl": "def call_cost(minutes):\n    over = minutes - 100\n    return 2 * over if over > 0 else 0",
+        "reference_lang": "python"
+      }
+    },
+    {
+      "english": "Each support ticket we resolve within an hour earns the customer a five dollar credit, but the credit is capped at ten fast tickets per month \u2014 fast tickets beyond the tenth earn nothing extra. Given the number of tickets resolved within an hour, return the credit in dollars.",
+      "status": "synthesized",
+      "program": "fn support_credit(x: i64) -> i64 {\n    if 10 < x {\n        return (-5 * -10);\n    }\n    return (x * 5);\n}\n",
+      "program_lang": "mog",
+      "transpiled": {
+        "python": "def support_credit(x: int):\n    if 10 < x:\n        return (-5 * -10)\n    return (x * 5)",
+        "rust": "fn support_credit(x: i64) -> i64 {\n    if 10 < x {\n        return (-5 * -10);\n    }\n    return (x * 5);\n}",
+        "typescript": "function support_credit(x: number): number {\n    if (10 < x) {\n        return (-5 * -10);\n    }\n    return (x * 5);\n}"
+      },
+      "method": "search_single_branch",
+      "train_count": 7,
+      "holdout_count": 3,
+      "holdout_passed": 3,
+      "reference_holdout_passed": 3,
+      "synth_vs_reference_agree": true,
+      "confidence": "high",
+      "notes": [
+        "Program verified against the train examples by the synthesizer; reproduced 3/3 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 0 counterexample(s) over 0 round(s) before this result."
+      ],
+      "ir": {
+        "entry_point": "support_credit",
+        "description": "Five dollars per fast ticket, counting at most ten of them.",
+        "params": [
+          {
+            "name": "fast_tickets",
+            "type": "i64"
+          }
+        ],
+        "return_type": "i64",
+        "io_examples": [
+          {
+            "inputs": [
+              0
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              1
+            ],
+            "expected": 5
+          },
+          {
+            "inputs": [
+              3
+            ],
+            "expected": 15
+          },
+          {
+            "inputs": [
+              5
+            ],
+            "expected": 25
+          },
+          {
+            "inputs": [
+              8
+            ],
+            "expected": 40
+          },
+          {
+            "inputs": [
+              9
+            ],
+            "expected": 45
+          },
+          {
+            "inputs": [
+              10
+            ],
+            "expected": 50
+          },
+          {
+            "inputs": [
+              11
+            ],
+            "expected": 50
+          },
+          {
+            "inputs": [
+              15
+            ],
+            "expected": 50
+          },
+          {
+            "inputs": [
+              20
+            ],
+            "expected": 50
+          }
+        ],
+        "invariants": [
+          "five dollars per fast ticket",
+          "credit never exceeds fifty dollars"
+        ],
+        "edge_cases": [
+          "beyond ten fast tickets the credit is flat"
+        ],
+        "reference_impl": "def support_credit(fast_tickets):\n    return 5 * min(fast_tickets, 10)",
+        "reference_lang": "python"
+      }
+    },
+    {
+      "english": "Customers earn one loyalty point for every dollar they spend. On top of that, any portion of a purchase above one hundred dollars earns a second point per dollar. Given a purchase amount in whole dollars, return the loyalty points earned.",
+      "status": "synthesized",
+      "program": "fn loyalty_points(x: i64) -> i64 {\n    if 100 < x {\n        return (x - (100 - x));\n    }\n    return x;\n}\n",
+      "program_lang": "mog",
+      "transpiled": {
+        "python": "def loyalty_points(x: int):\n    if 100 < x:\n        return (x - (100 - x))\n    return x",
+        "rust": "fn loyalty_points(x: i64) -> i64 {\n    if 100 < x {\n        return (x - (100 - x));\n    }\n    return x;\n}",
+        "typescript": "function loyalty_points(x: number): number {\n    if (100 < x) {\n        return (x - (100 - x));\n    }\n    return x;\n}"
+      },
+      "method": "search_single_branch",
+      "train_count": 7,
+      "holdout_count": 3,
+      "holdout_passed": 3,
+      "reference_holdout_passed": 3,
+      "synth_vs_reference_agree": true,
+      "confidence": "high",
+      "notes": [
+        "Program verified against the train examples by the synthesizer; reproduced 3/3 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 0 counterexample(s) over 0 round(s) before this result."
+      ],
+      "ir": {
+        "entry_point": "loyalty_points",
+        "description": "One point per dollar, plus a second point per dollar above $100.",
+        "params": [
+          {
+            "name": "amount",
+            "type": "i64"
+          }
+        ],
+        "return_type": "i64",
+        "io_examples": [
+          {
+            "inputs": [
+              0
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              50
+            ],
+            "expected": 50
+          },
+          {
+            "inputs": [
+              80
+            ],
+            "expected": 80
+          },
+          {
+            "inputs": [
+              99
+            ],
+            "expected": 99
+          },
+          {
+            "inputs": [
+              100
+            ],
+            "expected": 100
+          },
+          {
+            "inputs": [
+              101
+            ],
+            "expected": 102
+          },
+          {
+            "inputs": [
+              120
+            ],
+            "expected": 140
+          },
+          {
+            "inputs": [
+              200
+            ],
+            "expected": 300
+          },
+          {
+            "inputs": [
+              250
+            ],
+            "expected": 400
+          },
+          {
+            "inputs": [
+              301
+            ],
+            "expected": 502
+          }
+        ],
+        "invariants": [
+          "at least one point per dollar",
+          "double points on the amount over $100"
+        ],
+        "edge_cases": [
+          "at or below $100 earns one point per dollar"
+        ],
+        "reference_impl": "def loyalty_points(amount):\n    bonus = amount - 100\n    return amount + (bonus if bonus > 0 else 0)",
+        "reference_lang": "python"
+      }
+    },
+    {
+      "english": "API calls are billed in tiers: the first one thousand calls each month are free, the next nine thousand calls cost two cents each, and every call beyond ten thousand costs one cent each. Given the number of calls, return the bill in cents.",
+      "status": "synthesized",
+      "program": "fn api_bill(x: i64) -> i64 {\n    if 1001 < x {\n        return ((8000 % x) + x);\n    }\n    return ((x % -999) % -500);\n}\n",
+      "program_lang": "mog",
+      "transpiled": {
+        "python": "def api_bill(x: int):\n    if 1001 < x:\n        return ((8000 % x) + x)\n    return ((x % -999) % -500)",
+        "rust": "fn api_bill(x: i64) -> i64 {\n    if 1001 < x {\n        return ((8000 % x) + x);\n    }\n    return ((x % -999) % -500);\n}",
+        "typescript": "function api_bill(x: number): number {\n    if (1001 < x) {\n        return ((8000 % x) + x);\n    }\n    return ((x % -999) % -500);\n}"
+      },
+      "method": "search_single_branch",
+      "train_count": 7,
+      "holdout_count": 3,
+      "holdout_passed": 2,
+      "reference_holdout_passed": 3,
+      "synth_vs_reference_agree": false,
+      "confidence": "low",
+      "notes": [
+        "Program verified against the train examples by the synthesizer; reproduced 2/3 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 6 counterexample(s) over 2 round(s) before this result."
+      ],
+      "ir": {
+        "entry_point": "api_bill",
+        "description": "Tiered per-call pricing with free / 2c / 1c bands at 1k and 10k.",
+        "params": [
+          {
+            "name": "calls",
+            "type": "i64"
+          }
+        ],
+        "return_type": "i64",
+        "io_examples": [
+          {
+            "inputs": [
+              0
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              500
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              1000
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              1001
+            ],
+            "expected": 2
+          },
+          {
+            "inputs": [
+              2000
+            ],
+            "expected": 2000
+          },
+          {
+            "inputs": [
+              5000
+            ],
+            "expected": 8000
+          },
+          {
+            "inputs": [
+              10000
+            ],
+            "expected": 18000
+          },
+          {
+            "inputs": [
+              10001
+            ],
+            "expected": 18001
+          },
+          {
+            "inputs": [
+              15000
+            ],
+            "expected": 23000
+          },
+          {
+            "inputs": [
+              20000
+            ],
+            "expected": 28000
+          },
+          {
+            "inputs": [
+              1
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              2
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              3
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              4
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              5
+            ],
+            "expected": 0
+          },
+          {
+            "inputs": [
+              6
+            ],
+            "expected": 0
+          }
+        ],
+        "invariants": [
+          "first 1000 calls free",
+          "calls 1001..10000 at 2c",
+          "calls above 10000 at 1c"
+        ],
+        "edge_cases": [
+          "two breakpoints at 1000 and 10000"
+        ],
+        "reference_impl": "def api_bill(calls):\n    if calls <= 1000:\n        return 0\n    if calls <= 10000:\n        return 2 * (calls - 1000)\n    return 18000 + (calls - 10000)",
+        "reference_lang": "python"
+      }
+    }
+  ],
+  "summary": {
+    "rules": 7,
+    "synthesized": 7,
+    "high_confidence": 6,
+    "medium_confidence": 0
+  }
+}

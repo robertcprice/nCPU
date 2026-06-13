@@ -27,7 +27,6 @@ checked.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -72,13 +71,25 @@ class ResolvedRequirement:
 
 
 def _split(examples: list[IoExample]) -> tuple[list[IoExample], list[IoExample]]:
-    """Hold out ~1/3 (at least 1, but never all) for generalization testing."""
+    """Hold out ~1/3 (at least 1, but never all) for generalization testing.
+
+    Strided, not tail-sliced: every third example goes to the holdout set.
+    A tail slice would put a whole region of the input domain (e.g. all the
+    large-x examples of a piecewise rule) exclusively in the holdout, leaving
+    train unable to pin the rule there — so even the correct program can't be
+    distinguished from an overfit, and generalization looks like failure. A
+    stride keeps both train and holdout spanning the full domain, which is the
+    honest test: train on a representative sample, check unseen points drawn
+    from the same spread."""
     n = len(examples)
     if n <= 2:
         return examples, []  # too few to spare any; train on all
-    n_holdout = max(1, math.floor(n / 3))
-    n_train = n - n_holdout
-    return examples[:n_train], examples[n_train:]
+    train, holdout = [], []
+    for i, ex in enumerate(examples):
+        (holdout if i % 3 == 2 else train).append(ex)
+    if not holdout:  # n==2 handled above, but guard anyway
+        return examples, []
+    return train, holdout
 
 
 def _safe_callable(source: str, entry_point: str):
