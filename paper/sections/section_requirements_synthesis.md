@@ -61,13 +61,33 @@ those numbers were never on the list. Three changes to the scalar branch search
 threshold and tiered rules discoverable bottom-up, continuing the mined-vocabulary
 principle of §20.2:
 
-* **Mined constants.** `mine_scalar_constants` derives each problem's candidate
-  constant set from its own data — example inputs and outputs, intercepts
-  (`t − x`), exact slopes (`t / x`), the gaps between sorted output steps, and
-  negations of all of these — anchored on {−1, 0, 1}. The breakpoint 50 in
-  "first 50 GB free" enters the vocabulary because the examples *imply* it, not
-  because a human anticipated it. This replaces a fixed `[-1, 0, 1, 2, 3, 10,
-  100]` pool that could never have expressed it.
+* **Mined constants, breakpoints preserved.** `mine_scalar_constants` derives
+  each problem's candidate constant set from its own data — example inputs and
+  outputs, intercepts (`t − x`), exact slopes (`t / x`), the gaps between sorted
+  output steps, and negations of all of these — anchored on {−1, 0, 1}. The
+  breakpoint 50 in "first 50 GB free" enters the vocabulary because the examples
+  *imply* it, not because a human anticipated it. This replaces a fixed
+  `[-1, 0, 1, 2, 3, 10, 100]` pool that could never have expressed it. Raw inputs
+  and outputs are retained even when large, so a *tier* threshold such as 10000
+  survives — a fixed-size by-magnitude cap would have dropped it and left tiered
+  rules unexpressible.
+
+* **No divide or mod by the input.** `/` and `%` are admitted only with a
+  data-independent divisor: `x % 10` (a digit/parity operation) stays, but
+  `8000 % x` and `expr / x` are forbidden. Dividing or modding *by* the input is
+  almost never a genuine scalar rule — it is precisely how branch search overfits
+  a piecewise function (faking the api_bill tiers with `x − (−8000 % x)`).
+  Removing the class makes genuinely multi-tier data fail single-branch search
+  *honestly* and fall through to two-branch search.
+
+* **Simplest representative, hash-independent.** When several expressions produce
+  identical outputs on the examples, the candidate pool keeps the structurally
+  simplest one (with a stable canonical tiebreak) rather than whichever a hash
+  map happened to visit first. This makes synthesis reproducible run to run, and
+  it is what lets a clean affine `x + 8000` be selected over an equal-output
+  bounded-range modulo `x % 10001 + 18001` deterministically — the two are
+  indistinguishable on sparse samples, so without this the wrong one could be
+  emitted depending on the hash seed.
 
 * **Agreement-ranked candidate pool.** The branch-expression pool is capped (at
   800 candidates) for tractability. A correct-but-deep expression such as
@@ -109,13 +129,30 @@ ordering of the example list.
 
 When a synthesized program agrees with the reference on the holdout but might
 still diverge elsewhere, the demo driver runs a CEGIS loop: it sweeps the input
-domain comparing the synthesized program against the reference, collects up to a
-handful of disagreements per round as new I/O examples, hands them back to the
-proposer, and re-synthesizes — keeping the best result by
-`(confidence, holdout_passed)`. For rules that already generalize this converges
-in zero rounds (the first synthesis matched the spec across the whole domain);
-for rules that do not, it is the mechanism that *surfaces* the failure rather
-than papering over it.
+domain comparing the synthesized program against the reference, collects
+disagreements as new I/O examples, hands them back to the proposer, and
+re-synthesizes. Two properties make the loop converge *honestly* rather than
+merely terminate:
+
+* **Counterexamples are spread, not first-N.** A piecewise rule disagrees in
+  contiguous runs — all of one tier near a wrong breakpoint. Taking the first few
+  disagreements would draw every counterexample from a single region and never
+  pin the *other* breakpoints; the loop would keep proposing fits that are right
+  where it has looked and wrong where it has not. Sampling the disagreements
+  evenly across the domain supplies evidence from every region, which is what
+  forces a true multi-tier program to emerge.
+
+* **A clean-sweep gate, downgrade-only.** A candidate is ranked above another only
+  if it survives a *full* domain sweep with zero disagreements, and a final gate
+  reduces any surviving best that is still wrong anywhere to `low`. Because the
+  gate can only ever lower a grade, it cannot manufacture confidence; it can only
+  refuse to certify a program a dense sweep has proven wrong. This is what stops a
+  program that fits the sparse holdout but is wrong between sampled points from
+  being shipped — the failure mode §21.5 walks through in detail.
+
+For rules that already generalize this converges in zero rounds; for the tiered
+rule it is the mechanism that both *surfaces* the overfit and *drives the search*
+to the correct program.
 
 ### 21.5 Case Study: MeterBill
 
@@ -127,9 +164,9 @@ calculator (`meterbill.html`, and a live page in the nCPU site) plus a
 `provenance.json` audit trail recording prose → IR → method → holdout →
 confidence for every rule.
 
-**Result: 7/7 synthesized; 6 certified high-confidence; 1 held back.** The four
-piecewise rules are the substance of the result — their breakpoints (50, 100,
-10) were mined, not given:
+**Result: 7/7 synthesized and certified high-confidence.** The five piecewise
+rules are the substance — their breakpoints (50, 100, 10, 1000, 10000) were
+mined, not given:
 
 | Rule | English (abridged) | Discovered program | Grade |
 |---|---|---|---|
@@ -139,18 +176,31 @@ piecewise rules are the substance of the result — their breakpoints (50, 100,
 | `call_cost` | first 100 min free, then 2¢/min | `if 100<x: (x−100)·2 else 0` | high |
 | `support_credit` | \$5/ticket, capped at 10 | `if 10<x: 50 else 5·x` | high |
 | `loyalty_points` | 1 pt/\$ + bonus above \$100 | `if 100<x: x+(x−100) else x` | high |
-| `api_bill` | tiered: free / \$0.01 / \$0.005 | *(fit found, not certified)* | **low** |
+| `api_bill` | tiered: free / 2¢ / 1¢ | `if 10000<x: x+8000; if 1000<x: 2(x−1000); else 0` | high |
 
-The headline is the last row. `api_bill` is a two-breakpoint tiered schedule —
-strictly beyond a single-threshold branch program. nsynth fits the seed
-examples, but on held-out inputs the program drops to 2/3 and disagrees with the
-reference; CEGIS adds counterexamples and it still does not certify. **The
-pipeline refuses to ship it.** It is shown uncertified and is never executed in
-the calculator. A billing system that confidently emits a *wrong* tiered price
-is worse than one that says "not sure about this one" — and the value of the
-whole construction is that it can tell the two situations apart and act
-differently. The six certified rules carry a proof (holdout-clean plus an
-agreeing independent reference); the seventh carries an honest refusal.
+The headline is the last row — not because it is refused, but because of what the
+contract had to *reject* before certifying it. `api_bill` is a two-breakpoint
+tiered schedule, strictly beyond a single-threshold program. The first fits the
+search returned **passed the sparse holdout but were overfits**: an
+integer-division flooring term `(x / 1001)·2000`, exact only at sampled points,
+and a bounded-range modulo `x % 10001`, which mimics `x − 10001` up to the
+largest training input and wraps past it. Each reproduced a three-point holdout
+exactly. A pipeline that trusted the holdout would have certified a wrong billing
+rule.
+
+It does not. The CEGIS loop sweeps the *entire* input domain against the
+reference, feeds back disagreements sampled **evenly across the domain** (so the
+evidence pins every tier, not just the one nearest a wrong breakpoint), and a
+final gate **refuses to certify any program still wrong anywhere on the sweep** —
+an operation that can only lower a grade, never raise one. Only once the search
+produced the exact tiered rule — zero disagreements across the domain and beyond
+the training range — did `api_bill` certify. Two synthesizer properties made that
+rule reachable at all: constant mining preserves large tier breakpoints (10000)
+instead of truncating them by magnitude, and the candidate pool keeps the
+*simplest* expression for each distinct behaviour, so the clean affine `x + 8000`
+is selected over an equal-output modulo overfit deterministically rather than by
+hash order. The honest-refusal path remains exactly as before for any rule the
+sweep can never satisfy; `api_bill` simply earned its way off it.
 
 ### 21.6 What This Adds to the Stack
 

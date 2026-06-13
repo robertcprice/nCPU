@@ -103,12 +103,12 @@
     {
       "english": "Customers who prepay for a year get two months free: take their monthly rate, multiply by ten, and that is the annual prepay price. Given the monthly rate in dollars, return the yearly price in dollars.",
       "status": "synthesized",
-      "program": "fn annual_prepay(x: i64) -> i64 {\n    if 0 != x {\n        return (x * 10);\n    }\n    return 0;\n}\n",
+      "program": "fn annual_prepay(x: i64) -> i64 {\n    if 0 != x {\n        return (10 * x);\n    }\n    return 0;\n}\n",
       "program_lang": "mog",
       "transpiled": {
-        "python": "def annual_prepay(x: int):\n    if 0 != x:\n        return (x * 10)\n    return 0",
-        "rust": "fn annual_prepay(x: i64) -> i64 {\n    if 0 != x {\n        return (x * 10);\n    }\n    return 0;\n}",
-        "typescript": "function annual_prepay(x: number): number {\n    if (0 != x) {\n        return (x * 10);\n    }\n    return 0;\n}"
+        "python": "def annual_prepay(x: int):\n    if 0 != x:\n        return (10 * x)\n    return 0",
+        "rust": "fn annual_prepay(x: i64) -> i64 {\n    if 0 != x {\n        return (10 * x);\n    }\n    return 0;\n}",
+        "typescript": "function annual_prepay(x: number): number {\n    if (0 != x) {\n        return (10 * x);\n    }\n    return 0;\n}"
       },
       "method": "search_single_branch",
       "train_count": 6,
@@ -201,12 +201,12 @@
     {
       "english": "Every account includes fifty gigabytes of storage at no cost. Beyond that we bill five dollars for each additional gigabyte; accounts at or under the fifty-gigabyte limit pay nothing. Given the gigabytes used, return the storage overage charge in dollars.",
       "status": "synthesized",
-      "program": "fn storage_overage(x: i64) -> i64 {\n    if 50 < x {\n        return ((50 - x) * -5);\n    }\n    return 0;\n}\n",
+      "program": "fn storage_overage(x: i64) -> i64 {\n    if 50 < x {\n        return ((-50 + x) * 5);\n    }\n    return 0;\n}\n",
       "program_lang": "mog",
       "transpiled": {
-        "python": "def storage_overage(x: int):\n    if 50 < x:\n        return ((50 - x) * -5)\n    return 0",
-        "rust": "fn storage_overage(x: i64) -> i64 {\n    if 50 < x {\n        return ((50 - x) * -5);\n    }\n    return 0;\n}",
-        "typescript": "function storage_overage(x: number): number {\n    if (50 < x) {\n        return ((50 - x) * -5);\n    }\n    return 0;\n}"
+        "python": "def storage_overage(x: int):\n    if 50 < x:\n        return ((-50 + x) * 5)\n    return 0",
+        "rust": "fn storage_overage(x: i64) -> i64 {\n    if 50 < x {\n        return ((-50 + x) * 5);\n    }\n    return 0;\n}",
+        "typescript": "function storage_overage(x: number): number {\n    if (50 < x) {\n        return ((-50 + x) * 5);\n    }\n    return 0;\n}"
       },
       "method": "search_single_branch",
       "train_count": 7,
@@ -306,12 +306,12 @@
     {
       "english": "The first one hundred minutes of calls each month are free. Every minute after that costs two cents. Given the total minutes used, return the call cost in cents.",
       "status": "synthesized",
-      "program": "fn call_cost(x: i64) -> i64 {\n    if 100 < x {\n        return ((x + x) + -200);\n    }\n    return 0;\n}\n",
+      "program": "fn call_cost(x: i64) -> i64 {\n    if 100 < x {\n        return ((-100 + x) * 2);\n    }\n    return 0;\n}\n",
       "program_lang": "mog",
       "transpiled": {
-        "python": "def call_cost(x: int):\n    if 100 < x:\n        return ((x + x) + -200)\n    return 0",
-        "rust": "fn call_cost(x: i64) -> i64 {\n    if 100 < x {\n        return ((x + x) + -200);\n    }\n    return 0;\n}",
-        "typescript": "function call_cost(x: number): number {\n    if (100 < x) {\n        return ((x + x) + -200);\n    }\n    return 0;\n}"
+        "python": "def call_cost(x: int):\n    if 100 < x:\n        return ((-100 + x) * 2)\n    return 0",
+        "rust": "fn call_cost(x: i64) -> i64 {\n    if 100 < x {\n        return ((-100 + x) * 2);\n    }\n    return 0;\n}",
+        "typescript": "function call_cost(x: number): number {\n    if (100 < x) {\n        return ((-100 + x) * 2);\n    }\n    return 0;\n}"
       },
       "method": "search_single_branch",
       "train_count": 7,
@@ -410,12 +410,12 @@
     {
       "english": "Each support ticket we resolve within an hour earns the customer a five dollar credit, but the credit is capped at ten fast tickets per month \u2014 fast tickets beyond the tenth earn nothing extra. Given the number of tickets resolved within an hour, return the credit in dollars.",
       "status": "synthesized",
-      "program": "fn support_credit(x: i64) -> i64 {\n    if 10 < x {\n        return (-5 * -10);\n    }\n    return (x * 5);\n}\n",
+      "program": "fn support_credit(x: i64) -> i64 {\n    if 10 < x {\n        return 50;\n    }\n    return (5 * x);\n}\n",
       "program_lang": "mog",
       "transpiled": {
-        "python": "def support_credit(x: int):\n    if 10 < x:\n        return (-5 * -10)\n    return (x * 5)",
-        "rust": "fn support_credit(x: i64) -> i64 {\n    if 10 < x {\n        return (-5 * -10);\n    }\n    return (x * 5);\n}",
-        "typescript": "function support_credit(x: number): number {\n    if (10 < x) {\n        return (-5 * -10);\n    }\n    return (x * 5);\n}"
+        "python": "def support_credit(x: int):\n    if 10 < x:\n        return 50\n    return (5 * x)",
+        "rust": "fn support_credit(x: i64) -> i64 {\n    if 10 < x {\n        return 50;\n    }\n    return (5 * x);\n}",
+        "typescript": "function support_credit(x: number): number {\n    if (10 < x) {\n        return 50;\n    }\n    return (5 * x);\n}"
       },
       "method": "search_single_branch",
       "train_count": 7,
@@ -514,12 +514,12 @@
     {
       "english": "Customers earn one loyalty point for every dollar they spend. On top of that, any portion of a purchase above one hundred dollars earns a second point per dollar. Given a purchase amount in whole dollars, return the loyalty points earned.",
       "status": "synthesized",
-      "program": "fn loyalty_points(x: i64) -> i64 {\n    if 100 < x {\n        return (x - (100 - x));\n    }\n    return x;\n}\n",
+      "program": "fn loyalty_points(x: i64) -> i64 {\n    if 100 < x {\n        return ((-100 + x) + x);\n    }\n    return x;\n}\n",
       "program_lang": "mog",
       "transpiled": {
-        "python": "def loyalty_points(x: int):\n    if 100 < x:\n        return (x - (100 - x))\n    return x",
-        "rust": "fn loyalty_points(x: i64) -> i64 {\n    if 100 < x {\n        return (x - (100 - x));\n    }\n    return x;\n}",
-        "typescript": "function loyalty_points(x: number): number {\n    if (100 < x) {\n        return (x - (100 - x));\n    }\n    return x;\n}"
+        "python": "def loyalty_points(x: int):\n    if 100 < x:\n        return ((-100 + x) + x)\n    return x",
+        "rust": "fn loyalty_points(x: i64) -> i64 {\n    if 100 < x {\n        return ((-100 + x) + x);\n    }\n    return x;\n}",
+        "typescript": "function loyalty_points(x: number): number {\n    if (100 < x) {\n        return ((-100 + x) + x);\n    }\n    return x;\n}"
       },
       "method": "search_single_branch",
       "train_count": 7,
@@ -618,23 +618,23 @@
     {
       "english": "API calls are billed in tiers: the first one thousand calls each month are free, the next nine thousand calls cost two cents each, and every call beyond ten thousand costs one cent each. Given the number of calls, return the bill in cents.",
       "status": "synthesized",
-      "program": "fn api_bill(x: i64) -> i64 {\n    if 1001 < x {\n        return ((8000 % x) + x);\n    }\n    return ((-1 + x) / 500);\n}\n",
+      "program": "fn api_bill(x: i64) -> i64 {\n    if 10000 < x {\n        return ((-10000 + 18000) + x);\n    }\n    if 1001 <= x {\n        return ((-2000 + x) + x);\n    }\n    return 0;\n}\n",
       "program_lang": "mog",
       "transpiled": {
-        "python": "def api_bill(x: int):\n    if 1001 < x:\n        return ((8000 % x) + x)\n    return ((-1 + x) // 500)",
-        "rust": "fn api_bill(x: i64) -> i64 {\n    if 1001 < x {\n        return ((8000 % x) + x);\n    }\n    return ((-1 + x) / 500);\n}",
-        "typescript": "function api_bill(x: number): number {\n    if (1001 < x) {\n        return ((8000 % x) + x);\n    }\n    return (Math.trunc((-1 + x) / 500));\n}"
+        "python": "def api_bill(x: int):\n    if 10000 < x:\n        return ((-10000 + 18000) + x)\n    if 1001 <= x:\n        return ((-2000 + x) + x)\n    return 0",
+        "rust": "fn api_bill(x: i64) -> i64 {\n    if 10000 < x {\n        return ((-10000 + 18000) + x);\n    }\n    if 1001 <= x {\n        return ((-2000 + x) + x);\n    }\n    return 0;\n}",
+        "typescript": "function api_bill(x: number): number {\n    if (10000 < x) {\n        return ((-10000 + 18000) + x);\n    }\n    if (1001 <= x) {\n        return ((-2000 + x) + x);\n    }\n    return 0;\n}"
       },
-      "method": "search_single_branch",
-      "train_count": 7,
-      "holdout_count": 3,
-      "holdout_passed": 2,
-      "reference_holdout_passed": 3,
-      "synth_vs_reference_agree": false,
-      "confidence": "low",
+      "method": "search_two_branch",
+      "train_count": 12,
+      "holdout_count": 6,
+      "holdout_passed": 6,
+      "reference_holdout_passed": 6,
+      "synth_vs_reference_agree": true,
+      "confidence": "high",
       "notes": [
-        "Program verified against the train examples by the synthesizer; reproduced 2/3 held-out examples. Examples originated from an untrusted proposer.",
-        "CEGIS: swept the input domain vs the reference spec and added 12 counterexample(s) over 3 round(s) before this result."
+        "Program verified against the train examples by the synthesizer; reproduced 6/6 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 8 counterexample(s) over 2 round(s) before this result."
       ],
       "ir": {
         "entry_point": "api_bill",
@@ -709,75 +709,51 @@
           },
           {
             "inputs": [
-              501
-            ],
-            "expected": 0
-          },
-          {
-            "inputs": [
-              502
-            ],
-            "expected": 0
-          },
-          {
-            "inputs": [
-              503
-            ],
-            "expected": 0
-          },
-          {
-            "inputs": [
-              504
-            ],
-            "expected": 0
-          },
-          {
-            "inputs": [
-              505
-            ],
-            "expected": 0
-          },
-          {
-            "inputs": [
-              506
-            ],
-            "expected": 0
-          },
-          {
-            "inputs": [
               1
             ],
             "expected": 0
           },
           {
             "inputs": [
-              2
+              1253
             ],
-            "expected": 0
+            "expected": 506
           },
           {
             "inputs": [
-              3
+              2503
             ],
-            "expected": 0
+            "expected": 3006
           },
           {
             "inputs": [
-              4
+              3752
             ],
-            "expected": 0
+            "expected": 5504
           },
           {
             "inputs": [
-              5
+              5003
             ],
-            "expected": 0
+            "expected": 8006
           },
           {
             "inputs": [
-              6
+              6252
             ],
-            "expected": 0
+            "expected": 10504
+          },
+          {
+            "inputs": [
+              7501
+            ],
+            "expected": 13002
+          },
+          {
+            "inputs": [
+              8750
+            ],
+            "expected": 15500
           }
         ],
         "invariants": [
@@ -796,7 +772,7 @@
   "summary": {
     "rules": 7,
     "synthesized": 7,
-    "high_confidence": 6,
+    "high_confidence": 7,
     "medium_confidence": 0
   }
 }

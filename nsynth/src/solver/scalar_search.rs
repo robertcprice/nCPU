@@ -116,6 +116,22 @@ pub(super) fn scalar_expr_complexity(expr: &ScalarExpr) -> usize {
     }
 }
 
+/// True if `expr` reads any input variable (vs. being a pure constant fold).
+/// Used to forbid dividing or modding *by* a data-dependent value: `k % x`,
+/// `expr / x`, etc. are almost never a real scalar rule — they are how branch
+/// search overfits a piecewise/tiered function (e.g. faking the api_bill tiers
+/// with `x - (-8000 % x)`). Restricting `/` and `%` to a data-independent
+/// divisor keeps the legitimate `x % 10` / `x / 2` digit-and-parity forms while
+/// removing the overfit class, so genuinely multi-tier data makes single-branch
+/// search honestly fail and fall through to two-branch search.
+fn scalar_expr_uses_var(expr: &ScalarExpr) -> bool {
+    match expr {
+        ScalarExpr::Var(_) => true,
+        ScalarExpr::Const(_) => false,
+        ScalarExpr::Bin(lhs, _, rhs) => scalar_expr_uses_var(lhs) || scalar_expr_uses_var(rhs),
+    }
+}
+
 fn scalar_expr_collect_used_vars(expr: &ScalarExpr, used: &mut [bool]) {
     match expr {
         ScalarExpr::Var(index) => {
@@ -385,6 +401,29 @@ pub(super) fn code_unary_range_loop(
     )
 }
 
+/// Order-independent canonical key for an expression, used to break complexity
+/// ties when choosing the representative of an output-signature. Without it the
+/// representative would be whichever expression a `HashMap` happened to visit
+/// first, which varies with the hash seed and makes synthesis non-deterministic
+/// (and lets a bounded-range modulo overfit like `x % 10001` stand in for the
+/// simpler, correct `x + 8000` that has the same outputs on the samples).
+fn scalar_expr_canon(expr: &ScalarExpr) -> String {
+    match expr {
+        ScalarExpr::Var(i) => format!("v{i}"),
+        ScalarExpr::Const(c) => format!("c{c}"),
+        ScalarExpr::Bin(lhs, op, rhs) => {
+            let o = match op {
+                ScalarBinOp::Add => '+',
+                ScalarBinOp::Sub => '-',
+                ScalarBinOp::Mul => '*',
+                ScalarBinOp::Div => '/',
+                ScalarBinOp::Mod => '%',
+            };
+            format!("({} {} {})", scalar_expr_canon(lhs), o, scalar_expr_canon(rhs))
+        }
+    }
+}
+
 fn insert_expr_candidate(
     seen: &mut HashMap<Vec<Option<i64>>, ScalarExpr>,
     expr: ScalarExpr,
@@ -397,7 +436,22 @@ fn insert_expr_candidate(
     if outputs.iter().all(Option::is_none) {
         return;
     }
-    seen.entry(outputs).or_insert(expr);
+    // Keep the simplest representative for each distinct behaviour (then a
+    // stable canonical tiebreak), so the candidate pool is deterministic and
+    // Occam-ordered rather than hash-order-arbitrary.
+    use std::collections::hash_map::Entry;
+    match seen.entry(outputs) {
+        Entry::Vacant(slot) => {
+            slot.insert(expr);
+        }
+        Entry::Occupied(mut slot) => {
+            let new_key = (scalar_expr_complexity(&expr), scalar_expr_canon(&expr));
+            let cur_key = (scalar_expr_complexity(slot.get()), scalar_expr_canon(slot.get()));
+            if new_key < cur_key {
+                slot.insert(expr);
+            }
+        }
+    }
 }
 
 /// Mine a constant pool from the problem's own examples rather than a fixed
@@ -443,15 +497,48 @@ pub(super) fn mine_scalar_constants(examples: &[Vec<i64>], targets: &[i64]) -> V
         examples.iter().filter_map(|e| e.first().copied()).collect(),
         &mut set,
     );
-    // include negations so `a*x - b` is reachable as `a*x + (-b)`
-    let mut out: Vec<i64> = Vec::new();
-    for &v in &set {
+    // Raw inputs and outputs are the breakpoints and tier values of a piecewise
+    // rule; they must survive truncation even when large (a 10000-call tier
+    // threshold has a big |value| and a fixed-size by-magnitude cap would drop
+    // it, leaving tiered rules unexpressible). Keep them all, then fill the
+    // remaining budget with the smaller derived constants (intercepts, slopes,
+    // step sizes) ordered by magnitude.
+    let mut guaranteed: BTreeSet<i64> = BTreeSet::new();
+    for a in [-1i64, 0, 1] {
+        guaranteed.insert(a);
+    }
+    for ex in examples {
+        for &v in ex {
+            guaranteed.insert(v);
+        }
+    }
+    for &t in targets {
+        guaranteed.insert(t);
+    }
+    let with_neg = |src: &BTreeSet<i64>| -> Vec<i64> {
+        let mut v: Vec<i64> = Vec::new();
+        for &x in src {
+            v.push(x);
+            v.push(-x);
+        }
+        v.sort_by_key(|x| (x.unsigned_abs(), *x));
+        v.dedup();
+        v
+    };
+    let guaranteed_vec = with_neg(&guaranteed);
+    let derived: BTreeSet<i64> = set.difference(&guaranteed).copied().collect();
+    let derived_vec = with_neg(&derived);
+
+    const CAP: usize = 48;
+    let mut out = guaranteed_vec;
+    for v in derived_vec {
+        if out.len() >= CAP {
+            break;
+        }
         out.push(v);
-        out.push(-v);
     }
     out.sort_by_key(|v| (v.unsigned_abs(), *v));
     out.dedup();
-    out.truncate(32);
     out
 }
 
@@ -483,6 +570,7 @@ fn build_expr_candidates(
         .collect::<Vec<_>>();
     for lhs in &atom_exprs {
         for rhs in &atom_exprs {
+            let rhs_data_dependent = scalar_expr_uses_var(rhs);
             for op in [
                 ScalarBinOp::Add,
                 ScalarBinOp::Sub,
@@ -490,6 +578,9 @@ fn build_expr_candidates(
                 ScalarBinOp::Div,
                 ScalarBinOp::Mod,
             ] {
+                if rhs_data_dependent && matches!(op, ScalarBinOp::Div | ScalarBinOp::Mod) {
+                    continue; // no dividing/modding by a data-dependent value
+                }
                 insert_expr_candidate(
                     &mut seen,
                     ScalarExpr::Bin(Box::new(lhs.clone()), op, Box::new(rhs.clone())),
@@ -525,6 +616,7 @@ pub(super) fn build_deep_expr_candidates(
 
     for lhs in &atom_exprs {
         for rhs in &atom_exprs {
+            let rhs_data_dependent = scalar_expr_uses_var(rhs);
             for op in [
                 ScalarBinOp::Add,
                 ScalarBinOp::Sub,
@@ -532,6 +624,9 @@ pub(super) fn build_deep_expr_candidates(
                 ScalarBinOp::Div,
                 ScalarBinOp::Mod,
             ] {
+                if rhs_data_dependent && matches!(op, ScalarBinOp::Div | ScalarBinOp::Mod) {
+                    continue;
+                }
                 insert_expr_candidate(
                     &mut seen,
                     ScalarExpr::Bin(Box::new(lhs.clone()), op, Box::new(rhs.clone())),
@@ -543,7 +638,9 @@ pub(super) fn build_deep_expr_candidates(
 
     let d2_exprs: Vec<ScalarExpr> = seen.values().cloned().collect();
     for expr in &d2_exprs {
+        let expr_data_dependent = scalar_expr_uses_var(expr);
         for atom in &atom_exprs {
+            let atom_data_dependent = scalar_expr_uses_var(atom);
             for op in [
                 ScalarBinOp::Add,
                 ScalarBinOp::Sub,
@@ -551,16 +648,23 @@ pub(super) fn build_deep_expr_candidates(
                 ScalarBinOp::Div,
                 ScalarBinOp::Mod,
             ] {
-                insert_expr_candidate(
-                    &mut seen,
-                    ScalarExpr::Bin(Box::new(expr.clone()), op, Box::new(atom.clone())),
-                    examples,
-                );
-                insert_expr_candidate(
-                    &mut seen,
-                    ScalarExpr::Bin(Box::new(atom.clone()), op, Box::new(expr.clone())),
-                    examples,
-                );
+                let is_div_mod = matches!(op, ScalarBinOp::Div | ScalarBinOp::Mod);
+                // expr op atom: divisor is `atom`
+                if !(is_div_mod && atom_data_dependent) {
+                    insert_expr_candidate(
+                        &mut seen,
+                        ScalarExpr::Bin(Box::new(expr.clone()), op, Box::new(atom.clone())),
+                        examples,
+                    );
+                }
+                // atom op expr: divisor is `expr`
+                if !(is_div_mod && expr_data_dependent) {
+                    insert_expr_candidate(
+                        &mut seen,
+                        ScalarExpr::Bin(Box::new(atom.clone()), op, Box::new(expr.clone())),
+                        examples,
+                    );
+                }
             }
         }
     }
@@ -886,5 +990,119 @@ mod probe_tests {
             .expect("single_branch must solve max(0,x-50)*5");
         assert!(result.success);
         assert!(result.code.contains("if"), "expected a branch program");
+    }
+
+    fn api_bill_problem() -> Problem {
+        // 3-tier: free <=1000, 2c/call 1001..10000, 1c/call beyond.
+        let rows = [
+            (0, 0), (500, 0), (1000, 0), (1001, 2), (2000, 2000),
+            (5000, 8000), (10000, 18000), (10001, 18001), (15000, 23000), (20000, 28000),
+        ];
+        Problem {
+            name: "api_bill".to_string(),
+            category: "external",
+            description: "",
+            signature: "fn api_bill(x: i64) -> i64",
+            examples: rows
+                .iter()
+                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: *o })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    fn api_bill_ref(x: i64) -> i64 {
+        if x <= 1000 {
+            0
+        } else if x <= 10000 {
+            2 * (x - 1000)
+        } else {
+            18000 + (x - 10000)
+        }
+    }
+
+    fn dense_api_bill_problem() -> Problem {
+        // Tier-spanning points chosen so the *only* program fitting all of them
+        // is the exact tiered rule. The mid-tier values are deliberately not
+        // multiples of any breakpoint, so an integer-division flooring overfit
+        // (e.g. `(x/1001)*2000`) produces a different output on the training set
+        // itself and therefore cannot fit — removing the equal-output ambiguity
+        // that, on a sparse set, lets such an overfit be selected by hash order.
+        // In the live pipeline CEGIS supplies exactly this kind of spread and
+        // the dense-sweep gate rejects any survivor that is still wrong, so
+        // MeterBill converges to the true rule reliably; this keeps the unit
+        // test fast (few examples) while pinning the same outcome.
+        let xs = [
+            0, 317, 613, 1000, // tier 0
+            1001, 1234, 1777, 2345, 3001, 4567, 5001, 6789, 7777, 8888, 9123, 9999,
+            10000, // tier 1 (non-multiples)
+            10001, 11234, 13567, 16789, 20000, // tier 2
+        ];
+        Problem {
+            name: "api_bill_tiered_probe".to_string(),
+            category: "external",
+            description: "",
+            signature: "fn api_bill_tiered_probe(x: i64) -> i64",
+            examples: xs
+                .iter()
+                .map(|&x| Example { inputs: vec![Value::Int(x)], expected: api_bill_ref(x) })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    // Regression: large tier breakpoints must survive constant mining, and a
+    // two-breakpoint tiered rule must be synthesizable *correctly* (not via a
+    // modulo/division overfit that only fits the sampled points). Before the
+    // var-as-divisor ban + breakpoint-preserving mining, the only fit found was
+    // an integer-division overfit wrong between samples.
+    #[test]
+    fn two_breakpoint_tiered_rule_is_exact() {
+        let sparse = api_bill_problem();
+        let consts = mine_scalar_constants(
+            &extract_scalar_examples(&sparse).unwrap(),
+            &sparse.examples.iter().map(|e| e.expected).collect::<Vec<_>>(),
+        );
+        for want in [1000_i64, 1001, 10000] {
+            assert!(consts.contains(&want), "breakpoint {} must survive mining", want);
+        }
+        // No `k % x` / `_ / x` overfit class: single-branch cannot fake the
+        // tiers on the sparse set, so it honestly fails (or the program it
+        // returns is *not* a divisor-by-variable hack).
+        if let Some(r) =
+            super::search_scalar_families::search_single_branch(&sparse, "api_bill")
+        {
+            assert!(
+                !r.code.contains("% x") && !r.code.contains("/ x"),
+                "single-branch must not overfit by dividing/modding by the input: {}",
+                r.code
+            );
+        }
+        // Given tier-spanning examples, two-branch search recovers the exact
+        // rule — verified correct across the whole domain, including unseen
+        // points between and beyond the samples.
+        let dense = dense_api_bill_problem();
+        let result =
+            super::search_scalar_families::search_two_branch(&dense, "api_bill_tiered_probe")
+                .expect("two_branch must solve the dense tiered rule");
+        assert!(result.success);
+        // Prove the synthesized program is correct on UNSEEN points (offset from
+        // the training samples) across and beyond the training range.
+        let check = Problem {
+            name: "api_bill_tiered_probe".to_string(),
+            category: "external",
+            description: "",
+            signature: "fn api_bill_tiered_probe(x: i64) -> i64",
+            examples: (0..=30000)
+                .step_by(137)
+                .map(|x| Example { inputs: vec![Value::Int(x)], expected: api_bill_ref(x) })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        };
+        crate::runtime::verify_problem_code_strict(&check, &result.code)
+            .expect("tiered rule must be exact on unseen points, not an overfit");
     }
 }

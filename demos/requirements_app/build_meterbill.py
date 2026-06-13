@@ -95,10 +95,9 @@ def _ir(
 
 
 # Each RULE: (english_prose, IR). The prose is what a product manager wrote;
-# the IR is what the LLM proposer turned it into. Examples are ordered so the
-# pipeline's first-2/3 train / last-1/3 holdout split makes both regions of
-# each piecewise rule appear in training AND in the held-out generalization
-# test.
+# the IR is what the LLM proposer turned it into. The pipeline's strided holdout
+# (every 3rd example) makes both regions of each piecewise rule appear in
+# training AND in the held-out generalization test.
 RULES: list[tuple[str, RequirementsIR]] = [
     (
         "We charge twelve dollars per seat per month. Given the number of "
@@ -279,12 +278,58 @@ def cegis_resolve(
     resolution, the number of counterexamples added, and rounds used."""
     _RANK = {"high": 3, "medium": 2, "low": 1, "none": 0}
 
-    def _score(r: ResolvedRequirement) -> tuple[int, int]:
-        return (_RANK.get(r.confidence, 0), r.holdout_passed)
+    def _sweep(res: ResolvedRequirement, *, cap: Optional[int]):
+        """Count domain points where the synthesized program disagrees with the
+        reference; collect up to `cap` fresh ones as counterexamples. A clean
+        sweep (0 disagreements) is the gold standard — it means the program
+        matches the spec *everywhere on the domain*, not just on the sparse
+        holdout. (None,[]) when the program can't be run."""
+        if res.status != "synthesized":
+            return None, []
+        synth_py = res.transpiled.get("python")
+        fn = _safe_callable(synth_py, ir.entry_point) if synth_py else None
+        if fn is None:
+            return None, []
+        seen = {tuple(e.inputs) for e in ir.io_examples}
+        total = 0
+        disagreements: list[IoExample] = []
+        for x in _domain(ir):
+            try:
+                want, got = ref(x), fn(x)
+            except Exception:  # noqa: BLE001
+                continue
+            if want != got:
+                total += 1
+                if (x,) not in seen:
+                    disagreements.append(IoExample(inputs=[x], expected=want))
+        if cap is None or len(disagreements) <= cap:
+            return total, disagreements
+        # Spread the counterexamples evenly across the domain instead of taking
+        # the first `cap`. A piecewise/tiered rule disagrees in contiguous runs
+        # (e.g. all of tier 1 near a wrong breakpoint); the first few would all
+        # land in one tier and never pin the *other* breakpoints. Evenly spaced
+        # counterexamples give the synthesizer evidence from every region, which
+        # is what forces the true multi-tier program to emerge.
+        step = len(disagreements) / cap
+        spread = [disagreements[min(len(disagreements) - 1, int(i * step))] for i in range(cap)]
+        # dedup while preserving order
+        out, picked = [], set()
+        for ex in spread:
+            key = tuple(ex.inputs)
+            if key not in picked:
+                picked.add(key)
+                out.append(ex)
+        return total, out
+
+    # A result that survives a *full* domain sweep ranks above any that doesn't,
+    # regardless of its sparse-holdout confidence. This is what stops a program
+    # that fits the 3 holdout points but is wrong between them (e.g. an integer-
+    # division tier-flooring overfit) from being certified.
+    def _score(res: ResolvedRequirement, clean: bool) -> tuple[int, int, int]:
+        return (1 if clean else 0, _RANK.get(res.confidence, 0), res.holdout_passed)
 
     added = 0
     last = resolve(english, proposer=proposer, synth_timeout_s=25.0)
-    best = last
     single_int_arg = (
         len(ir.params) == 1
         and ir.reference_impl
@@ -297,40 +342,40 @@ def cegis_resolve(
     if ref is None:
         return last, 0, 0
 
+    total0, counter = _sweep(last, cap=8)
+    best, best_clean = last, (total0 == 0)
+
     rnd = 0
     for rnd in range(1, rounds + 1):
-        if _score(last) > _score(best):
-            best = last
         if last.status != "synthesized":
             break
-        synth_py = last.transpiled.get("python")
-        fn = _safe_callable(synth_py, ir.entry_point) if synth_py else None
-        if fn is None:
+        if not counter:  # last either swept clean or produced no runnable program
             break
-        # already fully agrees with its own reference on the holdout AND found
-        # generalizing — nothing to tighten.
-        counter: list[IoExample] = []
-        seen = {tuple(e.inputs) for e in ir.io_examples}
-        for x in _domain(ir):
-            try:
-                want = ref(x)
-                got = fn(x)
-            except Exception:  # noqa: BLE001
-                continue
-            if want != got and (x,) not in seen:
-                counter.append(IoExample(inputs=[x], expected=want))
-                if len(counter) >= 6:  # a handful per round is plenty
-                    break
-        if not counter:
-            break  # synthesized program matches the spec across the whole domain
         ir.io_examples.extend(counter)
         added += len(counter)
         proposer._by_english[english.strip()] = ir  # proposer now serves richer IR
         print(f"    cegis round {rnd}: +{len(counter)} counterexample(s) "
               f"(e.g. {counter[0].inputs[0]}→{counter[0].expected}), re-synthesizing")
         last = resolve(english, proposer=proposer, synth_timeout_s=25.0)
-    if _score(last) > _score(best):
-        best = last
+        total_i, counter = _sweep(last, cap=8)
+        last_clean = (total_i == 0)
+        if _score(last, last_clean) > _score(best, best_clean):
+            best, best_clean = last, last_clean
+
+    # Final honesty gate: if the best program still disagrees with the reference
+    # anywhere on the domain, it is NOT certified — downgrade to low and say so.
+    # This can only ever *lower* a grade, never raise one, so it cannot
+    # manufacture confidence; it only refuses to ship a program proven wrong.
+    if best.status == "synthesized" and not best_clean:
+        total_final, _ = _sweep(best, cap=1)
+        if total_final and total_final > 0:
+            if best.confidence in ("high", "medium"):
+                best.notes.append(
+                    f"DOWNGRADED to low: synthesized program disagrees with the "
+                    f"reference on {total_final} domain point(s) — passes the sparse "
+                    f"holdout but is not correct between sampled points."
+                )
+            best.confidence = "low"
     return best, added, rnd if added else 0
 
 
