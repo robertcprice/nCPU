@@ -12,7 +12,8 @@ fn default_solver_prefers_differentiable_when_supported() {
     // simple closed-form arithmetic, but older routes remain acceptable if
     // search heuristics ever change.
     assert!(
-        result.method == "search_scalar_expr"
+        result.method == "search_affine"
+            || result.method == "search_scalar_expr"
             || result.method == "search_abs_diff_formula"
             || result.method.starts_with("diff_gradient_")
             || result.method == "synth_gradient"

@@ -58,6 +58,22 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact multi-argument linear family first: a 2-3 arg affine or
+    // single-threshold-affine rule is solved by a direct integer linear solve in
+    // microseconds and verified against every example, so it must short-circuit
+    // ahead of the search/gradient stages rather than risk being starved by an
+    // earlier candidate. No-op (instant None) for 1-arg or non-linear data.
+    if let Some(result) = super::search::solve_multi_arg_affine(problem) {
+        if result.success {
+            eprintln!(
+                "[solve] multi-arg affine OK in {:.3}s — {}",
+                t0.elapsed().as_secs_f32(),
+                result.method
+            );
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and

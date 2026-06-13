@@ -1,5 +1,6 @@
 use crate::search_family_router;
 
+use super::search_affine::*;
 use super::search_catalog::*;
 use super::search_families::*;
 use super::search_numeric_families::*;
@@ -336,6 +337,17 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_two_branch",
         func: search_two_branch,
     },
+    // Multi-argument linear family — placed last so single-input solvers keep
+    // their problems; these only catch the 2-3 arg rules the others cannot
+    // express at all.
+    SearchCandidate {
+        key: "search_affine",
+        func: search_affine,
+    },
+    SearchCandidate {
+        key: "search_affine_threshold",
+        func: search_affine_threshold,
+    },
 ];
 
 fn ranked_search_candidates(problem: &Problem) -> Vec<SearchCandidate> {
@@ -366,6 +378,17 @@ pub(super) fn ranked_search_candidate_keys(problem: &Problem) -> Vec<&'static st
         .into_iter()
         .map(|candidate| candidate.key)
         .collect()
+}
+
+/// Exact multi-argument linear solvers, run before any other stage. A 2-3 arg
+/// affine or single-threshold-affine rule is recovered in microseconds by a
+/// direct integer linear solve, so it should never fall through to the slower
+/// search/gradient stages (which environment-specific initialisation can
+/// derail). 1-arg and non-linear data return None instantly, so this is a cheap
+/// no-op for everything else.
+pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
+    let fn_name = problem.function_name();
+    search_affine(problem, fn_name).or_else(|| search_affine_threshold(problem, fn_name))
 }
 
 pub(super) fn solve_by_search(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
