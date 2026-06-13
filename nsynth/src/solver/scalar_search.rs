@@ -1105,4 +1105,63 @@ mod probe_tests {
         crate::runtime::verify_problem_code_strict(&check, &result.code)
             .expect("tiered rule must be exact on unseen points, not an overfit");
     }
+
+    fn scalar_problem(name: &'static str, rows: &[(i64, i64)]) -> Problem {
+        Problem {
+            name: name.to_string(),
+            category: "external",
+            description: "",
+            signature: "fn f(x: i64) -> i64",
+            examples: rows
+                .iter()
+                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: *o })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    // The piecewise-affine solver recovers a 3-tier rule exactly from examples
+    // and is verified correct on UNSEEN points — the capability that lifts the
+    // generalization probe from 0% to most of 3/4-tier rules.
+    #[test]
+    fn piecewise_affine_recovers_three_tiers_exactly() {
+        // 0 for x<=1000; 2(x-1000) for 1000<x<=5000; 8000+5(x-5000) beyond.
+        let f = |x: i64| -> i64 {
+            if x <= 1000 {
+                0
+            } else if x <= 5000 {
+                2 * (x - 1000)
+            } else {
+                8000 + 5 * (x - 5000)
+            }
+        };
+        let train: Vec<(i64, i64)> = [0, 500, 1000, 1001, 2000, 3000, 5000, 5001, 7000, 9000, 12000]
+            .iter()
+            .map(|&x| (x, f(x)))
+            .collect();
+        let p = scalar_problem("f", &train);
+        let r = super::search_scalar_families::search_piecewise_affine(&p, "f")
+            .expect("piecewise must solve the 3-tier rule");
+        assert!(r.code.matches("if").count() >= 2, "expected >=3 pieces: {}", r.code);
+        let check = scalar_problem(
+            "f",
+            &(0..=20000).step_by(53).map(|x| (x, f(x))).collect::<Vec<_>>(),
+        );
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("3-tier rule must be exact on unseen points");
+    }
+
+    // It must NOT fake a curve with a per-point staircase: a quadratic is not
+    // piecewise-affine, so the solver refuses (returns None) and leaves it to
+    // the other solvers, rather than emitting an overfit.
+    #[test]
+    fn piecewise_affine_refuses_quadratic() {
+        let rows: Vec<(i64, i64)> = (0..12).map(|x| (x, x * x)).collect();
+        let p = scalar_problem("sq", &rows);
+        assert!(
+            super::search_scalar_families::search_piecewise_affine(&p, "sq").is_none(),
+            "piecewise must refuse a non-affine curve, not staircase-overfit it"
+        );
+    }
 }

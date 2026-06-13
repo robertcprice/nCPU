@@ -115,7 +115,12 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // makes novel piecewise rules (thresholds + affine pieces) solve in
         // milliseconds instead of timing out.
         | "search_single_branch"
-        | "search_two_branch" => true,
+        | "search_two_branch"
+        // Exact piecewise-affine recovery (any number of tiers): the program is
+        // verified on the examples and generalizes by construction (breakpoints
+        // read from the data, placed at piece intersections), so likewise it is
+        // returned directly instead of being distilled by gradient.
+        | "search_piecewise_affine" => true,
         "search_unary_range_loop" => {
             result.code.contains("acc = acc + i;") || result.code.contains("acc = acc * i;")
         }

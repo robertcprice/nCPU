@@ -618,23 +618,23 @@
     {
       "english": "API calls are billed in tiers: the first one thousand calls each month are free, the next nine thousand calls cost two cents each, and every call beyond ten thousand costs one cent each. Given the number of calls, return the bill in cents.",
       "status": "synthesized",
-      "program": "fn api_bill(x: i64) -> i64 {\n    if 10000 < x {\n        return ((-10000 + 18000) + x);\n    }\n    if 1001 <= x {\n        return ((-2000 + x) + x);\n    }\n    return 0;\n}\n",
+      "program": "fn api_bill(x: i64) -> i64 {\n    if x <= 1000 {\n        return 0;\n    }\n    if x <= 10000 {\n        return ((2 * x) + -2000);\n    }\n    return (x + 8000);\n}\n",
       "program_lang": "mog",
       "transpiled": {
-        "python": "def api_bill(x: int):\n    if 10000 < x:\n        return ((-10000 + 18000) + x)\n    if 1001 <= x:\n        return ((-2000 + x) + x)\n    return 0",
-        "rust": "fn api_bill(x: i64) -> i64 {\n    if 10000 < x {\n        return ((-10000 + 18000) + x);\n    }\n    if 1001 <= x {\n        return ((-2000 + x) + x);\n    }\n    return 0;\n}",
-        "typescript": "function api_bill(x: number): number {\n    if (10000 < x) {\n        return ((-10000 + 18000) + x);\n    }\n    if (1001 <= x) {\n        return ((-2000 + x) + x);\n    }\n    return 0;\n}"
+        "python": "def api_bill(x: int):\n    if x <= 1000:\n        return 0\n    if x <= 10000:\n        return ((2 * x) + -2000)\n    return (x + 8000)",
+        "rust": "fn api_bill(x: i64) -> i64 {\n    if x <= 1000 {\n        return 0;\n    }\n    if x <= 10000 {\n        return ((2 * x) + -2000);\n    }\n    return (x + 8000);\n}",
+        "typescript": "function api_bill(x: number): number {\n    if (x <= 1000) {\n        return 0;\n    }\n    if (x <= 10000) {\n        return ((2 * x) + -2000);\n    }\n    return (x + 8000);\n}"
       },
-      "method": "search_two_branch",
-      "train_count": 12,
-      "holdout_count": 6,
-      "holdout_passed": 6,
-      "reference_holdout_passed": 6,
+      "method": "search_piecewise_affine",
+      "train_count": 7,
+      "holdout_count": 3,
+      "holdout_passed": 3,
+      "reference_holdout_passed": 3,
       "synth_vs_reference_agree": true,
       "confidence": "high",
       "notes": [
-        "Program verified against the train examples by the synthesizer; reproduced 6/6 held-out examples. Examples originated from an untrusted proposer.",
-        "CEGIS: swept the input domain vs the reference spec and added 8 counterexample(s) over 2 round(s) before this result."
+        "Program verified against the train examples by the synthesizer; reproduced 3/3 held-out examples. Examples originated from an untrusted proposer.",
+        "CEGIS: swept the input domain vs the reference spec and added 0 counterexample(s) over 0 round(s) before this result."
       ],
       "ir": {
         "entry_point": "api_bill",
@@ -706,54 +706,6 @@
               20000
             ],
             "expected": 28000
-          },
-          {
-            "inputs": [
-              1
-            ],
-            "expected": 0
-          },
-          {
-            "inputs": [
-              1253
-            ],
-            "expected": 506
-          },
-          {
-            "inputs": [
-              2503
-            ],
-            "expected": 3006
-          },
-          {
-            "inputs": [
-              3752
-            ],
-            "expected": 5504
-          },
-          {
-            "inputs": [
-              5003
-            ],
-            "expected": 8006
-          },
-          {
-            "inputs": [
-              6252
-            ],
-            "expected": 10504
-          },
-          {
-            "inputs": [
-              7501
-            ],
-            "expected": 13002
-          },
-          {
-            "inputs": [
-              8750
-            ],
-            "expected": 15500
           }
         ],
         "invariants": [

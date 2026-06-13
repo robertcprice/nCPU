@@ -321,6 +321,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_simulate_gravity,
     },
     SearchCandidate {
+        key: "search_piecewise_affine",
+        func: search_piecewise_affine,
+    },
+    SearchCandidate {
         key: "search_scalar_expr",
         func: search_scalar_expr,
     },
