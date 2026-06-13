@@ -105,10 +105,27 @@ principle of §20.2:
   but kinks in the wrong place. This is what makes the discovered breakpoint the
   *semantically* correct one, not merely an interpolating one.
 
-A verified single- or two-branch search result also pre-empts the native
-gradient-distillation stage (`search_result_preempts_native_gradient`), since an
-exact, human-readable piecewise program is preferable to a distilled
-approximation of one.
+* **Exact piecewise-affine recovery.** The branch searches above enumerate over a
+  candidate vocabulary; a tiered rule with *k* breakpoints needs *k+1* pieces and
+  *k* conditions, and beyond two breakpoints the enumeration cost and overfit
+  risk both climb (Section 21.6). `search_piecewise_affine` solves the whole
+  family in closed form instead. It sorts the examples by input, greedily splits
+  them into maximal *exact-affine runs* (consecutive points sharing one integer
+  slope), and places each breakpoint at the integer `x` where the two adjoining
+  pieces intersect — the true threshold of a continuous tier schedule, read
+  directly from the data rather than searched for. The recovered program is exact
+  on every example *by construction of the segments*, so it generalizes to unseen
+  inputs; it is emitted only when the data is confidently piecewise-affine (two to
+  six segments, each supported by at least two colinear points), so a curve
+  (quadratic, modulo, a loop) — which would fragment into many two-point
+  "segments" — is rejected rather than reproduced as a per-point staircase.
+
+A verified single-branch, two-branch, or piecewise-affine search result also
+pre-empts the native gradient-distillation stage
+(`search_result_preempts_native_gradient`), since an exact, human-readable
+program is preferable to a distilled approximation of one — and, for the
+piecewise solver, returning the verified program directly is what keeps a
+multi-tier rule from falling through to the slow gradient path and timing out.
 
 ### 21.3 Honest Holdout: Why the Split Is Strided
 
@@ -202,7 +219,39 @@ is selected over an equal-output modulo overfit deterministically rather than by
 hash order. The honest-refusal path remains exactly as before for any rule the
 sweep can never satisfy; `api_bill` simply earned its way off it.
 
-### 21.6 What This Adds to the Stack
+### 21.6 Measured Generalization, Not a Curated Demo
+
+A seven-rule demo that passes proves the rules were chosen to pass. The load-
+bearing claim is about the *engine*: given only examples — no reference, no
+counterexample loop, no curation — does it return programs correct on inputs it
+never saw? We measure it directly. A harness generates random continuous
+piecewise-affine functions (the shape of real tier schedules), feeds the raw
+synthesizer a modest training sample, and scores the returned program against
+*dense unseen points*. A program counts as solved only if it is exactly correct
+on every unseen point; fitting the samples but diverging between them is an
+overfit, scored as a failure of exactly the kind sparse holdouts miss.
+
+On 40 random rules, examples only, the piecewise-affine solver moves the engine's
+generalization sharply:
+
+| metric | before | after |
+|---|---:|---:|
+| solved (correct on unseen points) | 32% | **78%** |
+| overfit (fits samples, wrong between) | 20% | 8% |
+| failed (no program) | 48% | 15% |
+| two-tier rules | 3/13 | **13/13** |
+| three-tier rules | 0/9 | **5/9** |
+| four-tier rules | 0/8 | **4/8** |
+
+The result that matters is not the headline percentage but its shape: the engine
+went from solving *no* rule with three or more tiers to solving most of them, and
+its overfit rate more than halved. Crucially, the 105-problem solver benchmark
+held at 100% throughout and invokes the piecewise solver on *none* of its
+problems — it never contained a multi-tier rule, so this capability gap was
+invisible to it. Saturated coverage on a fixed benchmark measures only what the
+benchmark contains; a generated, held-out probe measures the capability itself.
+
+### 21.7 What This Adds to the Stack
 
 Section 20 showed verified synthesis from examples; this section closes the gap
 to natural-language requirements without weakening the contract. The same

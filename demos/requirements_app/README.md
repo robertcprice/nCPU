@@ -87,35 +87,37 @@ The piecewise rules (`storage_overage`, `call_cost`, `support_credit`,
 the examples and the boundary-continuity scorer locked onto the threshold where
 the branches actually meet.
 
-### The honesty showcase: `api_bill`
+### `api_bill`: solved at the engine level
 
-`api_bill` is genuinely hard — a **two-breakpoint** tiered schedule. It is the
-demo's honesty showcase not because it is refused, but because of *what the
-system had to reject before certifying it*.
+`api_bill` is genuinely hard — a **two-breakpoint** tiered schedule, three affine
+pieces. The engine now recovers it **directly**, from examples alone, with no
+reference and zero CEGIS rounds:
 
-The first programs the search found **passed the sparse holdout but were
-overfits**:
+```
+fn api_bill(x) { if x <= 1000 { 0 } if x <= 10000 { 2*x - 2000 } else { x + 8000 } }
+```
 
-- an integer-division flooring trick, `(x / 1001) * 2000`, exact at the sampled
-  points but wrong at every non-multiple between them;
-- a bounded-range modulo, `x % 10001`, that mimics `x − 10001` only as far as
-  the largest training input and wraps past it.
+This is the `search_piecewise_affine` solver (in `nsynth`): it detects the affine
+segments in the data (where the slope changes) and places each breakpoint at the
+exact integer where the adjoining pieces intersect — so the breakpoints **1000**
+and **10000** come straight out of the examples, and the program is correct
+across the whole domain (`0` mismatches over `0..40000`), not just on the
+samples. It is exact by construction, so it generalizes.
 
-Each fit a 3-point holdout perfectly. A system that trusts a sparse holdout would
-have shipped a wrong billing rule. This one does not: CEGIS sweeps the **whole
-input domain** against the reference, feeds every disagreement back as a new
-example, and a final gate **refuses to certify any program still wrong anywhere
-on that sweep** (it can only ever lower a grade, never manufacture one). Only
-once the search produced the exact tiered rule — `0` disagreements across the
-domain *and beyond the training range* — did `api_bill` certify and go live.
+This was not always so, and the history is the honesty point. Before the
+piecewise solver, branch search fit `api_bill` with programs that **passed the
+sparse holdout but were overfits** — an integer-division flooring trick
+`(x / 1001) * 2000`, and a bounded-range modulo `x % 10001` that wraps past the
+largest training input. A system that trusts a 3-point holdout would have shipped
+one. This one did not: the CEGIS sweep compared against the reference across the
+whole domain and a **downgrade-only gate refused to certify any program still
+wrong anywhere** — so the worst case was an honest *refusal*, never a wrong
+shipped rule. The piecewise solver then closed the gap by solving it *correctly*,
+turning the refusal into a clean certification.
 
-Two synthesizer changes made the true program reachable in the first place:
-mining keeps large tier breakpoints (10000) instead of truncating them, and the
-candidate pool keeps the **simplest** expression for each behavior, so the clean
-affine `x + 8000` wins over an equal-output modulo overfit deterministically.
-A rule the sweep could never satisfy would be **held back, shown uncertified,
-never executed** — the refusal path is still there; `api_bill` just earned its
-way off it.
+The refusal path is still there for anything the synthesizer cannot solve
+exactly. But the goal was never to refuse well — it was to **get it right**, and
+now the engine does (see [the measured generalization gain](#measured-does-the-engine-actually-generalize)).
 
 ---
 
@@ -212,6 +214,46 @@ Rust crate (`nsynth/src/solver/scalar_search.rs`,
   (with a stable tiebreak) instead of whichever a hash map visited first. This
   makes synthesis reproducible and lets the clean affine `x + 8000` win over an
   equal-output modulo overfit `x % 10001 + 18001` every time.
+- **Piecewise-affine recovery (any number of tiers)** — `search_piecewise_affine`
+  detects the affine segments in the data (maximal runs of constant slope) and
+  places each breakpoint at the exact integer where the adjoining pieces
+  intersect. This recovers tiered/threshold/clamp rules of *any* number of
+  segments **exactly**, so they generalize by construction rather than being fit.
+  It commits only when the data is confidently piecewise-affine (2–6 segments,
+  each backed by ≥2 colinear points), so curves and loops fall through to the
+  other solvers instead of being faked with a per-point staircase.
+
+---
+
+## Measured: does the engine actually generalize?
+
+A demo that passes seven hand-written rules proves little. The real question is
+whether the *engine* — given only examples, no reference, no curation — produces
+programs that are correct on inputs it never saw. `measure_generalization.py`
+answers it: it generates random continuous piecewise-affine functions (the shape
+of real tier schedules), feeds raw nsynth a modest training sample, and checks
+the returned program against **dense unseen points**.
+
+```bash
+PYTHONPATH=. python3 demos/requirements_app/measure_generalization.py 40 7
+```
+
+A program counts as SOLVED only if it is exactly correct on every unseen point;
+fitting the samples but diverging between them is an OVERFIT. Adding the
+piecewise-affine solver moved the numbers (40 random rules, examples only):
+
+| | before | after |
+|---|--:|--:|
+| **SOLVED** (correct on unseen) | 32% | **78%** |
+| OVERFIT (wrong between samples) | 20% | 8% |
+| FAILED (no program) | 48% | 15% |
+| 2-tier | 3/13 | **13/13** |
+| 3-tier | 0/9 | **5/9** |
+| 4-tier | 0/8 | **4/8** |
+
+The 105-problem solver benchmark stayed at 100% throughout and uses the piecewise
+solver on *zero* of its problems — it never contained a multi-tier rule, which is
+exactly why this capability gap was invisible until measured directly.
 
 ---
 
@@ -220,6 +262,7 @@ Rust crate (`nsynth/src/solver/scalar_search.rs`,
 | File | Role |
 |------|------|
 | `build_meterbill.py` | Driver: rules, `ScriptedProposer`, `cegis_resolve`, `build_html`, HTML template |
+| `measure_generalization.py` | The capability meter: random piecewise rules → raw nsynth → correctness on unseen points |
 | `meterbill.html` | Generated calculator (commit artifact; regenerate by running the script) |
 | `provenance.json` | Generated audit trail (commit artifact) |
 
