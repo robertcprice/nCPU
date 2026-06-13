@@ -121,10 +121,12 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // read from the data, placed at piece intersections), so likewise it is
         // returned directly instead of being distilled by gradient.
         | "search_piecewise_affine"
-        // Exact multi-argument linear solves (global affine and single-threshold
-        // affine): verified against every example, so returned directly.
+        // Exact multi-argument linear solves (global affine, single-threshold
+        // affine, and multi-tier piecewise affine): verified against every
+        // example, so returned directly.
         | "search_affine"
-        | "search_affine_threshold" => true,
+        | "search_affine_threshold"
+        | "search_affine_piecewise" => true,
         "search_unary_range_loop" => {
             result.code.contains("acc = acc + i;") || result.code.contains("acc = acc * i;")
         }

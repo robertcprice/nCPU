@@ -348,6 +348,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_affine_threshold",
         func: search_affine_threshold,
     },
+    SearchCandidate {
+        key: "search_affine_piecewise",
+        func: search_affine_piecewise,
+    },
 ];
 
 fn ranked_search_candidates(problem: &Problem) -> Vec<SearchCandidate> {
@@ -388,7 +392,9 @@ pub(super) fn ranked_search_candidate_keys(problem: &Problem) -> Vec<&'static st
 /// no-op for everything else.
 pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
-    search_affine(problem, fn_name).or_else(|| search_affine_threshold(problem, fn_name))
+    search_affine(problem, fn_name)
+        .or_else(|| search_affine_piecewise(problem, fn_name))
+        .or_else(|| search_affine_threshold(problem, fn_name))
 }
 
 pub(super) fn solve_by_search(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
