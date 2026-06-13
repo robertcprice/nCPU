@@ -222,6 +222,14 @@ Rust crate (`nsynth/src/solver/scalar_search.rs`,
   It commits only when the data is confidently piecewise-affine (2–6 segments,
   each backed by ≥2 colinear points), so curves and loops fall through to the
   other solvers instead of being faked with a per-point staircase.
+- **Multi-argument linear family** (`search_affine`, `search_affine_threshold`,
+  `search_affine_piecewise`) — for 2–3 argument rules: a global affine
+  `c0 + c1·a + c2·b` is recovered by an integer linear solve over the examples;
+  a single-threshold or multi-tier rule is recovered by sorting on the threshold
+  argument, affine-fitting each tier, and placing each breakpoint at the
+  intersection of the adjoining pieces. These run *first* in `solve_problem`
+  (a linear rule is solved in microseconds), so they never fall through to the
+  slow gradient stages. Always verified, so non-linear data is refused.
 
 ---
 
@@ -239,21 +247,31 @@ PYTHONPATH=. python3 demos/requirements_app/measure_generalization.py 40 7
 ```
 
 A program counts as SOLVED only if it is exactly correct on every unseen point;
-fitting the samples but diverging between them is an OVERFIT. Adding the
-piecewise-affine solver moved the numbers (40 random rules, examples only):
+fitting the samples but diverging between them is an OVERFIT. There are four
+probes (`measure_generalization.py`, `_2arg.py`, the inline 3-arg check, and
+`_multiarg_tiered.py`), one per shape. Adding the exact linear-family solvers
+moved every one of them from where the engine started:
 
-| | before | after |
+| Rule shape (random, examples only) | before | after |
 |---|--:|--:|
-| **SOLVED** (correct on unseen) | 32% | **78%** |
-| OVERFIT (wrong between samples) | 20% | 8% |
-| FAILED (no program) | 48% | 15% |
-| 2-tier | 3/13 | **13/13** |
-| 3-tier | 0/9 | **5/9** |
-| 4-tier | 0/8 | **4/8** |
+| **1-arg piecewise / tiered** | 32% | **78–80%** |
+| **2-arg affine** `c0+c1·a+c2·b` | 0% | **100%** (13/13) |
+| **3-arg affine** | 0% | **100%** (16/16) |
+| **2-arg single-threshold** | 0% | **~75%** |
+| **multi-arg tiered** (affine in 2 args, tiered by one) | 0% | **83%** |
 
-The 105-problem solver benchmark stayed at 100% throughout and uses the piecewise
-solver on *zero* of its problems — it never contained a multi-tier rule, which is
-exactly why this capability gap was invisible until measured directly.
+Each row is a capability the engine **measurably did not have** — most at a flat
+0% — recovered exactly, not fit. The multi-arg tiered row (real-world
+tiered-pricing shape) is the headline: from 0% to 83%, and the one subtlety that
+made it work — placing each breakpoint at the *intersection* of the two affine
+pieces rather than the last sampled point — dropped its overfit rate from 71% to
+4%.
+
+The 105-problem solver benchmark stayed at 100% throughout and uses these solvers
+on *almost none* of its problems (it has no multi-tier or multi-arg-tiered rule)
+— which is exactly why these gaps were invisible until measured directly. A
+saturated fixed benchmark only measures what it contains; a generated, held-out
+probe measures the capability itself.
 
 ---
 
@@ -262,7 +280,9 @@ exactly why this capability gap was invisible until measured directly.
 | File | Role |
 |------|------|
 | `build_meterbill.py` | Driver: rules, `ScriptedProposer`, `cegis_resolve`, `build_html`, HTML template |
-| `measure_generalization.py` | The capability meter: random piecewise rules → raw nsynth → correctness on unseen points |
+| `measure_generalization.py` | Capability meter — random 1-arg piecewise/tiered rules → raw nsynth → correctness on unseen points |
+| `measure_generalization_2arg.py` | Same, for 2-arg affine + single-threshold rules |
+| `measure_generalization_multiarg_tiered.py` | Same, for multi-argument tiered rules (affine in 2 args, tiered by one) |
 | `meterbill.html` | Generated calculator (commit artifact; regenerate by running the script) |
 | `provenance.json` | Generated audit trail (commit artifact) |
 

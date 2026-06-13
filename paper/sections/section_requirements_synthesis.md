@@ -120,6 +120,23 @@ principle of §20.2:
   (quadratic, modulo, a loop) — which would fragment into many two-point
   "segments" — is rejected rather than reproduced as a per-point staircase.
 
+* **Exact multi-argument linear recovery.** Everything above is single-input;
+  real requirements are mostly multi-argument (`cost(base, units)`,
+  `ship(weight, zone)`), and the engine solved *none* of them. Three solvers
+  close the linear family for two and three arguments. `search_affine` recovers a
+  global affine `c0 + Σ c_j·x_j` by solving the integer linear system the
+  examples define (Gaussian elimination, rounded, then verified — a non-affine
+  fit is rejected). `search_affine_threshold` and `search_affine_piecewise`
+  recover a rule that is affine in all arguments within each tier of *one*
+  threshold argument: sort by that argument, fit an affine to each tier, and
+  place each breakpoint where the two adjoining pieces meet on the threshold axis
+  — the multi-dimensional analogue of the 1-arg intersection, valid as a clean
+  threshold exactly when the other arguments' slopes agree across the tiers so
+  their terms cancel. These run *first* in the solver pipeline: a linear rule is
+  recovered in microseconds, so it must short-circuit ahead of the search and
+  gradient stages (which environment-specific initialisation can otherwise stall)
+  rather than be reached by chance.
+
 A verified single-branch, two-branch, or piecewise-affine search result also
 pre-empts the native gradient-distillation stage
 (`search_result_preempts_native_gradient`), since an exact, human-readable
@@ -231,25 +248,31 @@ synthesizer a modest training sample, and scores the returned program against
 on every unseen point; fitting the samples but diverging between them is an
 overfit, scored as a failure of exactly the kind sparse holdouts miss.
 
-On 40 random rules, examples only, the piecewise-affine solver moves the engine's
-generalization sharply:
+One probe exists per rule shape; each was at, or near, a flat zero before the
+exact solvers and is recovered exactly after — from examples alone, correct on
+unseen inputs:
 
-| metric | before | after |
+| Rule shape (random, examples only) | before | after |
 |---|---:|---:|
-| solved (correct on unseen points) | 32% | **78%** |
-| overfit (fits samples, wrong between) | 20% | 8% |
-| failed (no program) | 48% | 15% |
-| two-tier rules | 3/13 | **13/13** |
-| three-tier rules | 0/9 | **5/9** |
-| four-tier rules | 0/8 | **4/8** |
+| 1-arg piecewise / tiered | 32% | **78–80%** |
+| 2-arg affine `c0+c1·a+c2·b` | 0% | **100%** |
+| 3-arg affine | 0% | **100%** |
+| 2-arg single-threshold | 0% | **~75%** |
+| multi-arg tiered (affine in two args, tiered by one) | 0% | **83%** |
 
-The result that matters is not the headline percentage but its shape: the engine
-went from solving *no* rule with three or more tiers to solving most of them, and
-its overfit rate more than halved. Crucially, the 105-problem solver benchmark
-held at 100% throughout and invokes the piecewise solver on *none* of its
-problems — it never contained a multi-tier rule, so this capability gap was
-invisible to it. Saturated coverage on a fixed benchmark measures only what the
-benchmark contains; a generated, held-out probe measures the capability itself.
+The result that matters is the shape, not any single percentage: the engine went
+from solving *none* of three classes of rule (multi-tier, multi-argument affine,
+multi-argument tiered) to solving most of each. The hardest, most realistic shape
+— a tiered-pricing rule over several arguments — moved from 0% to 83%, and the
+single change that carried it was placing each breakpoint at the *intersection*
+of the adjoining affine pieces rather than at the last sampled point (overfit
+71% → 4%): the breakpoint is recovered, not guessed.
+
+Crucially, the 105-problem solver benchmark held at 100% throughout and invokes
+these solvers on at most a handful of its problems — it contains no multi-tier or
+multi-argument-tiered rule, so these gaps were invisible to it. Saturated
+coverage on a fixed benchmark measures only what the benchmark contains; a
+generated, held-out probe measures the capability itself.
 
 ### 21.7 What This Adds to the Stack
 
