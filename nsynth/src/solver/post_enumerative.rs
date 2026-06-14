@@ -62,6 +62,7 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_popcount"
         | "search_polynomial_quadratic"
         | "search_polynomial_multi"
+        | "search_clamp_affine"
         | "search_min3_branch"
         | "search_scalar_expr"
         | "search_digit_sum_loop"

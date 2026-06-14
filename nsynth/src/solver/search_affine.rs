@@ -255,6 +255,121 @@ pub(super) fn search_polynomial_multi(problem: &Problem, fn_name: &str) -> Optio
     verified_result(problem, code, "search_polynomial_multi")
 }
 
+/// Exact clamped-affine rules: the whole output is an affine function of the
+/// arguments saturated against constant bound(s):
+///
+///   * floor   `max(lo, A(x))`          — a minimum (ReLU / "never below lo")
+///   * cap     `min(hi, A(x))`          — a saturation ceiling ("never above hi")
+///   * band    `min(hi, max(lo, A(x)))` — a two-sided saturation band
+///
+/// with `A(x) = c0 + Σ c_j·x_j`. Clamping is everywhere in real rules — minimum
+/// fees, spend caps, ReLU, physical saturation, control limits — yet every
+/// affine solver refuses it the moment the data stops being one straight line.
+///
+/// INVERSION: a clamp's bound is a constant the output never crosses, so the
+/// floor `lo` is exactly `min(targets)` and the cap `hi` is exactly
+/// `max(targets)` whenever the rule is genuinely active (at least one sample
+/// rests on each bound). The points strictly *inside* the band are pure affine,
+/// so `A` is recovered by the integer linear solve on just those interior
+/// points. Each candidate is checked against EVERY example by `verified_result`,
+/// so a coincidental bound, a flat dataset, or an under-determined inner fit is
+/// rejected rather than returned. The affine body is inlined (not bound to a
+/// local) so the emitted program uses only `if`/comparison/`return` — the same
+/// constructs the threshold solver already round-trips through the transpiler.
+pub(super) fn search_clamp_affine(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let examples = super::scalar_search::extract_scalar_examples(problem)?;
+    let arity = examples.first()?.len();
+    if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
+        return None;
+    }
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    if targets.len() != examples.len() {
+        return None;
+    }
+    let m = arity + 1;
+    let lo = *targets.iter().min()?;
+    let hi = *targets.iter().max()?;
+    if lo == hi {
+        return None; // constant output — nothing for a clamp to recover
+    }
+    // A bound is only a real clamp if the output actually SATURATES there — i.e.
+    // several distinct examples rest on exactly that value (a plateau). A lone
+    // extreme is just the smallest/largest *active* sample, not a floor/ceiling;
+    // treating it as one invents a clamp the data never shows and is wrong on
+    // unseen inputs. Requiring an observed plateau is what keeps this solver
+    // honest: it recovers clamps it can see and refuses the ones it cannot.
+    let plateau = |bound: i64| targets.iter().filter(|&&t| t == bound).count();
+    let lo_observed = plateau(lo) >= 2;
+    let hi_observed = plateau(hi) >= 2;
+    let param_names = scalar_param_names(arity);
+    let params = scalar_params_decl(&param_names);
+
+    // Fit the inner affine on the band interior: the examples whose target is
+    // strictly above `gt` (when given) and strictly below `lt` (when given),
+    // requiring at least `m` such points so the system is determined. Returns
+    // the rendered affine body string. Taking explicit bounds (rather than a
+    // predicate closure) keeps the call sites monomorphic — no `dyn Fn`.
+    let fit_body = |gt: Option<i64>, lt: Option<i64>| -> Option<String> {
+        let mut xs = Vec::new();
+        let mut ys = Vec::new();
+        for (row, &t) in examples.iter().zip(targets.iter()) {
+            if gt.map_or(true, |g| t > g) && lt.map_or(true, |l| t < l) {
+                xs.push(row.clone());
+                ys.push(t);
+            }
+        }
+        if xs.len() < m {
+            return None;
+        }
+        let coeffs = solve_affine(&xs, &ys, arity)?;
+        // The Gaussian solve reads the answer off the first `m` pivot rows and
+        // never checks the remaining interior rows for consistency. For a true
+        // clamp every interior point lies exactly on the inner line, so demand
+        // that `coeffs` reproduces ALL of them. This refuses an under-determined
+        // or f64-rounded fit (the band failure mode) instead of emitting a
+        // saturation that is right on the samples but wrong between them.
+        if !xs.iter().zip(ys.iter()).all(|(row, &y)| affine_predicts(&coeffs, row, y)) {
+            return None;
+        }
+        Some(render_scalar_expr(&affine_expr(&coeffs), &param_names))
+    };
+
+    // floor: max(lo, A) — interior is the points strictly above the floor.
+    if lo_observed {
+        if let Some(body) = fit_body(Some(lo), None) {
+            let code = format!(
+                "fn {fn_name}({params}) -> i64 {{\n    if ({body}) < {lo} {{\n        return {lo};\n    }}\n    return {body};\n}}\n"
+            );
+            if let Some(result) = verified_result(problem, code, "search_clamp_affine") {
+                return Some(result);
+            }
+        }
+    }
+    // cap: min(hi, A) — interior is the points strictly below the cap.
+    if hi_observed {
+        if let Some(body) = fit_body(None, Some(hi)) {
+            let code = format!(
+                "fn {fn_name}({params}) -> i64 {{\n    if ({body}) > {hi} {{\n        return {hi};\n    }}\n    return {body};\n}}\n"
+            );
+            if let Some(result) = verified_result(problem, code, "search_clamp_affine") {
+                return Some(result);
+            }
+        }
+    }
+    // band: min(hi, max(lo, A)) — both bounds must be observed plateaus.
+    if lo_observed && hi_observed {
+        if let Some(body) = fit_body(Some(lo), Some(hi)) {
+            let code = format!(
+                "fn {fn_name}({params}) -> i64 {{\n    if ({body}) < {lo} {{\n        return {lo};\n    }}\n    if ({body}) > {hi} {{\n        return {hi};\n    }}\n    return {body};\n}}\n"
+            );
+            if let Some(result) = verified_result(problem, code, "search_clamp_affine") {
+                return Some(result);
+            }
+        }
+    }
+    None
+}
+
 pub(super) fn search_affine_threshold(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let (examples, targets, arity) = multi_arg_examples(problem)?;
     let param_names = scalar_param_names(arity);
@@ -575,6 +690,51 @@ mod tests {
         assert!(
             search_polynomial_multi(&p, "f").is_none(),
             "separable basis must refuse a cross-term product"
+        );
+    }
+
+    // A one-argument FLOOR `max(0, 5x - 40)` (a minimum charge: nothing until
+    // usage passes 8, then 5/unit) is recovered exactly and is correct on unseen
+    // points both inside and below the floor.
+    #[test]
+    fn clamp_recovers_one_arg_floor() {
+        let f = |x: i64| (5 * x - 40).max(0);
+        let rows: Vec<(i64, i64)> =
+            [0, 2, 4, 6, 8, 10, 14, 20, 30].iter().map(|&x| (x, f(x))).collect();
+        let p = p1(&rows);
+        let r = search_clamp_affine(&p, "f").expect("must recover max(0, 5x-40)");
+        let check = p1(&[(1, f(1)), (7, f(7)), (9, f(9)), (50, f(50)), (100, f(100))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("floor must be exact on unseen points");
+    }
+
+    // A two-argument CAP `min(500, 10a + 3b)` (a billing ceiling) is recovered
+    // exactly and correct on unseen points above and below the cap.
+    #[test]
+    fn clamp_recovers_two_arg_cap() {
+        let f = |a: i64, b: i64| (10 * a + 3 * b).min(500);
+        let raw = [
+            (0, 0), (1, 1), (5, 2), (10, 10), (20, 5), (3, 3), (8, 8), // below cap
+            (60, 10), (90, 40), (100, 0), (200, 100), // at/above cap (clamped to 500)
+        ];
+        let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
+        let p = p2(&rows);
+        let r = search_clamp_affine(&p, "f").expect("must recover min(500, 10a+3b)");
+        let check = p2(&[((4, 4), f(4, 4)), ((49, 3), f(49, 3)), ((300, 7), f(300, 7))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("cap must be exact on unseen points");
+    }
+
+    // It refuses data that is not a clamped line (a true product a·b): no
+    // constant floor/cap fits, so it returns None rather than a wrong saturation.
+    #[test]
+    fn clamp_refuses_nonclamp() {
+        let rows: Vec<((i64, i64), i64)> =
+            (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
+        let p = p2(&rows);
+        assert!(
+            search_clamp_affine(&p, "f").is_none(),
+            "clamp must refuse a non-saturated nonlinear rule"
         );
     }
 

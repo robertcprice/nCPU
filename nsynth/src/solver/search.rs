@@ -206,6 +206,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_palindrome,
     },
     SearchCandidate {
+        key: "search_suffix_class",
+        func: search_suffix_class,
+    },
+    SearchCandidate {
         key: "search_gcd_loop",
         func: search_gcd_loop,
     },
@@ -345,6 +349,13 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_polynomial_multi",
         func: search_polynomial_multi,
     },
+    // Clamped-affine family — a floor/cap/band saturating an affine rule. Fires
+    // only when the data is NOT one straight line (verified_result rejects any
+    // coincidental bound), so it never steals a problem the pure solvers own.
+    SearchCandidate {
+        key: "search_clamp_affine",
+        func: search_clamp_affine,
+    },
     // Multi-argument linear family — placed last so single-input solvers keep
     // their problems; these only catch the 2-3 arg rules the others cannot
     // express at all.
@@ -402,6 +413,7 @@ pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
     search_affine(problem, fn_name)
         .or_else(|| search_polynomial_multi(problem, fn_name))
+        .or_else(|| search_clamp_affine(problem, fn_name))
         .or_else(|| search_affine_piecewise(problem, fn_name))
         .or_else(|| search_affine_threshold(problem, fn_name))
 }
