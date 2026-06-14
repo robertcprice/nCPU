@@ -53,7 +53,46 @@ LINGUAGENESIS = Path("/Users/bobbyprice/projects/linguigenesis")
 MOG_SYNTH = Path("/Users/bobbyprice/projects/nCPU/nsynth/target/release/mog_synth")
 
 STEM_SIBILANT = 901  # synthetic feature: verb base ends in a sibilant (s/sh/ch/x/z)
+STEM_Y = 900         # synthetic feature: verb base ends in consonant + y
 _SIBILANT_SUFFIXES = ("s", "sh", "ch", "x", "z")
+
+
+def _cons_y(base: str) -> bool:
+    return base.endswith("y") and not base.endswith(("ay", "ey", "oy", "uy", "iy"))
+
+
+def find_verb_base(word: str, verb_bases: set[str]) -> str:
+    word = word.lower()
+    if word in verb_bases:
+        return word
+    if word.endswith("ied"):
+        cand = word[:-3] + "y"
+        if cand in verb_bases:
+            return cand
+    if word.endswith("ies"):
+        cand = word[:-3] + "y"
+        if cand in verb_bases:
+            return cand
+    if word.endswith("ed"):
+        cand = word[:-2]
+        if cand in verb_bases:
+            return cand
+    if word.endswith("es"):
+        cand = word[:-2]
+        if cand in verb_bases:
+            return cand
+    if word.endswith("s"):
+        cand = word[:-1]
+        if cand in verb_bases:
+            return cand
+    if word.endswith("ing"):
+        cand = word[:-3]
+        if cand in verb_bases:
+            return cand
+    for base in sorted(verb_bases, key=len, reverse=True):
+        if word.startswith(base):
+            return base
+    return word
 
 
 def _curriculum():
@@ -89,15 +128,17 @@ def encode_sentence(sentence: str, tok, to_base) -> list[int]:
     """Perception: sentence -> small int feature array.
 
     Keep only inflection-suffix tokens (band 100..108) and add the sibilant-stem
-    feature (901). This is exactly the array nsynth (and the Tier-C rule memory)
-    sees — never the raw token stream.
+    feature (901) and y-stem feature (900).
     """
     ids = tok.encode(sentence, add_bos=False, add_eos=False)
     feats = sorted(i for i in ids if 100 <= i <= 108)
     verb = _last_word(sentence)
-    base = to_base.get(verb, verb)
+    verb_bases = {b.lower() for b in to_base.values()}
+    base = find_verb_base(verb, verb_bases)
     if base.endswith(_SIBILANT_SUFFIXES):
         feats = feats + [STEM_SIBILANT]
+    if _cons_y(base):
+        feats = feats + [STEM_Y]
     return feats
 
 
@@ -123,15 +164,24 @@ def build_rows(count: int = 600):
         feats = encode_sentence(sentence, tok, to_base)
         label = 0 if ex.is_negative else 1
         rows.append((feats, label, sentence))
+
+    # Inject adversarial negatives: y-stem verb + <+s> suffix (e.g. *replys)
+    for v in morph.REGULAR_VERBS:
+        base = v.base
+        if _cons_y(base):
+            wrong_sentence = f"The worker {base}s."
+            feats = encode_sentence(wrong_sentence, tok, to_base)
+            rows.append((feats, 0, f"adversarial: {wrong_sentence}"))
+
     rows.sort(key=lambda r: r[2])
     return rows
 
 
 def stratified_split(rows, holdout_every: int = 4):
-    """Split by (has-sibilant-feature, label) so every combination appears in TRAIN."""
+    """Split by (has-sibilant-feature, has-y-stem-feature, label) so every combination appears in TRAIN."""
     groups = defaultdict(list)
     for feats, label, sentence in rows:
-        key = (STEM_SIBILANT in feats, label)
+        key = (STEM_SIBILANT in feats, STEM_Y in feats, label)
         groups[key].append((feats, label, sentence))
     examples, holdouts = [], []
     for _key, group in sorted(groups.items()):

@@ -59,11 +59,11 @@ def synth_rule(pairs: list[tuple[str, str]]) -> str | None:
         "examples": [{"inputs": [w], "expected": p} for w, p in pairs],
         "holdouts": [],
     })
-    out = subprocess.run([str(BIN), "--problem-json", "-"], input=payload,
-                         capture_output=True, text=True, timeout=120).stdout
     try:
+        out = subprocess.run([str(BIN), "--problem-json", "-"], input=payload,
+                             capture_output=True, text=True, timeout=8).stdout
         r = json.loads(out)
-    except json.JSONDecodeError:
+    except (subprocess.TimeoutExpired, json.JSONDecodeError):
         return None
     return r["code"] if r.get("success") else None
 

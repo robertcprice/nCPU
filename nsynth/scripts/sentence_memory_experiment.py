@@ -111,7 +111,7 @@ def synth_rule(rows: list[tuple[tuple[int, ...], int]]) -> str | None:
     })
     try:
         out = subprocess.run([str(BIN), "--problem-json", "-"], input=payload,
-                             capture_output=True, text=True, timeout=300).stdout
+                             capture_output=True, text=True, timeout=10).stdout
     except subprocess.TimeoutExpired:
         return None
     r = None
