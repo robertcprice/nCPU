@@ -164,6 +164,142 @@ fn mined_literals(examples: &[StrSynthExample]) -> Vec<String> {
     v
 }
 
+/// A transform applied to an input value when it appears in the output.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Xf {
+    Id,
+    Upper,
+    Lower,
+    Cap, // first char upper, rest unchanged
+}
+
+fn apply_xf(x: Xf, s: &str) -> String {
+    match x {
+        Xf::Id => s.to_string(),
+        Xf::Upper => s.to_uppercase(),
+        Xf::Lower => s.to_lowercase(),
+        Xf::Cap => {
+            let mut c = s.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum Seg {
+    Const(String),
+    Var(usize, Xf),
+}
+
+fn xf_to_sexpr(i: usize, x: Xf) -> SExpr {
+    let v = Box::new(SExpr::Var(i));
+    match x {
+        Xf::Id => SExpr::Var(i),
+        Xf::Upper => SExpr::Upper(v),
+        Xf::Lower => SExpr::Lower(v),
+        Xf::Cap => SExpr::Concat(
+            Box::new(SExpr::Upper(Box::new(SExpr::Slice(
+                Box::new(SExpr::Var(i)),
+                IExpr::Const(0),
+                IExpr::Const(1),
+            )))),
+            Box::new(SExpr::Slice(
+                Box::new(SExpr::Var(i)),
+                IExpr::Const(1),
+                IExpr::Len(Box::new(SExpr::Var(i)), 0),
+            )),
+        ),
+    }
+}
+
+/// Greedy left-to-right segmentation of `output` into input-derived pieces and
+/// constants. At each position prefer the longest input-transform match.
+fn segment(output: &str, inputs: &[String]) -> Option<Vec<Seg>> {
+    let chars: Vec<char> = output.chars().collect();
+    let mut segs: Vec<Seg> = Vec::new();
+    let mut cur_const = String::new();
+    let mut pos = 0;
+    while pos < chars.len() {
+        let rest: String = chars[pos..].iter().collect();
+        let mut best: Option<(usize, usize, Xf)> = None; // (len_chars, input_idx, xf)
+        for (i, v) in inputs.iter().enumerate() {
+            if v.is_empty() {
+                continue;
+            }
+            for x in [Xf::Id, Xf::Upper, Xf::Lower, Xf::Cap] {
+                let t = apply_xf(x, v);
+                if !t.is_empty() && rest.starts_with(&t) {
+                    let l = t.chars().count();
+                    if best.map(|(bl, _, _)| l > bl).unwrap_or(true) {
+                        best = Some((l, i, x));
+                    }
+                }
+            }
+        }
+        if let Some((l, i, x)) = best {
+            if !cur_const.is_empty() {
+                segs.push(Seg::Const(std::mem::take(&mut cur_const)));
+            }
+            segs.push(Seg::Var(i, x));
+            pos += l;
+        } else {
+            cur_const.push(chars[pos]);
+            pos += 1;
+        }
+    }
+    if !cur_const.is_empty() {
+        segs.push(Seg::Const(cur_const));
+    }
+    Some(segs)
+}
+
+fn skeleton_to_sexpr(sk: Vec<Seg>) -> Option<SExpr> {
+    let mut it = sk.into_iter().rev();
+    let mut acc = match it.next()? {
+        Seg::Const(s) => SExpr::Lit(s),
+        Seg::Var(i, x) => xf_to_sexpr(i, x),
+    };
+    for seg in it {
+        let left = match seg {
+            Seg::Const(s) => SExpr::Lit(s),
+            Seg::Var(i, x) => xf_to_sexpr(i, x),
+        };
+        acc = SExpr::Concat(Box::new(left), Box::new(acc));
+    }
+    Some(acc)
+}
+
+/// FlashFill-style template synthesis. Greedy segmentation can mis-fire when an
+/// input value coincidentally appears inside a constant region (e.g. "co" inside
+/// ".com"), so we treat EACH example's segmentation as a candidate template and
+/// keep the first whose program reproduces every example's output.
+fn try_template(examples: &[StrSynthExample]) -> Option<SExpr> {
+    let target: Vec<&str> = examples.iter().map(|e| e.expected.as_str()).collect();
+    for ex in examples {
+        let segs = match segment(&ex.expected, &ex.inputs) {
+            Some(s) => s,
+            None => continue,
+        };
+        if !segs.iter().any(|s| matches!(s, Seg::Var(_, _))) {
+            continue;
+        }
+        let Some(e) = skeleton_to_sexpr(segs) else {
+            continue;
+        };
+        let ok = examples
+            .iter()
+            .zip(&target)
+            .all(|(ex, want)| eval_s(&e, &ex.inputs).as_deref() == Some(*want));
+        if ok {
+            return Some(e);
+        }
+    }
+    None
+}
+
 pub fn synthesize_string_program(
     params: &[String],
     examples: &[StrSynthExample],
@@ -175,6 +311,13 @@ pub fn synthesize_string_program(
         return fail("no examples / no args");
     }
     let target: Vec<String> = examples.iter().map(|e| e.expected.clone()).collect();
+
+    // Fast structural pre-pass: concatenation templates (const + input + const ...).
+    if let Some(e) = try_template(examples) {
+        if signature(&e, examples).as_ref() == Some(&target) {
+            return emit(e, params);
+        }
+    }
     let lits = mined_literals(examples);
     let ixs: Vec<IExpr> = {
         let mut ix = vec![IExpr::Const(0), IExpr::Const(1), IExpr::Const(2), IExpr::Const(3)];
@@ -384,6 +527,21 @@ mod tests {
             ],
         );
         assert!(r.success, "{:?}", r.error);
+    }
+
+    #[test]
+    fn learns_email_template() {
+        // a + "@" + b + ".com"; "co" appears inside ".com", testing segmentation robustness.
+        let r = solve(
+            &["a", "b"],
+            &[
+                ex(&["john", "acme"], "john@acme.com"),
+                ex(&["amy", "x"], "amy@x.com"),
+                ex(&["bob", "co"], "bob@co.com"),
+            ],
+        );
+        assert!(r.success, "{:?}", r.error);
+        assert!(r.code.contains("@") && r.code.contains(".com"), "{}", r.code);
     }
 
     #[test]
