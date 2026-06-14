@@ -360,6 +360,50 @@ def task_formal_logic(count: int = 400) -> dict:
     }
 
 
+def _form_task(name: str, form_attr: str, holdout_every: int = 4) -> dict:
+    """Generic base->inflected-form transduction from the curriculum verb lexicon.
+
+    Produces (base, <form>) string pairs for an attribute of VerbLemma
+    (third_singular / past_regular / gerund). nSynth synthesizes the inflection
+    as a string->string Mog program — a morphological *realization* program used
+    by the speaker. Stratified by 2-char suffix so exception classes are in train.
+    """
+    morph = _curriculum()
+    rows = []
+    for v in morph.REGULAR_VERBS:
+        base = v.base
+        form = getattr(v, form_attr)
+        rows.append((base, form))
+
+    by_suffix = {}
+    for b, f in rows:
+        by_suffix.setdefault(b[-2:], []).append((b, f))
+    examples, holdouts = [], []
+    for _suf, group in sorted(by_suffix.items()):
+        for i, (b, f) in enumerate(group):
+            row = {"inputs": [b], "expected": f}
+            (holdouts if i % holdout_every == holdout_every - 1 else examples).append(row)
+
+    return {
+        "name": name,
+        "signature": f"fn {name}(s: string) -> string",
+        "examples": examples,
+        "holdouts": holdouts,
+    }
+
+
+def task_verb_3sg_form(holdout_every: int = 4) -> dict:
+    return _form_task("third_singular", "third_singular", holdout_every)
+
+
+def task_verb_past_form(holdout_every: int = 4) -> dict:
+    return _form_task("past", "past_regular", holdout_every)
+
+
+def task_verb_gerund_form(holdout_every: int = 4) -> dict:
+    return _form_task("gerund", "gerund", holdout_every)
+
+
 def task_semantic_roles(count: int = 300) -> dict:
     """Stage 7 semantics: selectional restriction (thematic roles).
 
@@ -489,6 +533,9 @@ TASKS = {
     "pluralize_gen": task_pluralize_gen,
     "formal_logic": task_formal_logic,
     "semantic_roles": task_semantic_roles,
+    "verb_3sg_form": task_verb_3sg_form,
+    "verb_past_form": task_verb_past_form,
+    "verb_gerund_form": task_verb_gerund_form,
 }
 
 
