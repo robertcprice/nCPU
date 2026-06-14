@@ -72,40 +72,62 @@ def main():
     rng = random.Random(SEED)
     from v2.curriculum import morphology_productivity as m
 
+    from v2.grammar.morphology import _IRREGULAR_PLURAL
+
     print("Synthesizing the morphological realization programs (verified)…")
     s3_fn, s3_code = synth("verb_3sg_form")
     pa_fn, pa_code = synth("verb_past_form")
     ge_fn, ge_code = synth("verb_gerund_form")
-    print(f"  3sg / past / gerund inflection programs ready "
-          f"({s3_fn}, {pa_fn}, {ge_fn}).\n")
+    pl_fn, pl_code = synth("pluralize_gen")
+    print(f"  3sg / past / gerund / pluralize programs ready "
+          f"({s3_fn}, {pa_fn}, {ge_fn}, {pl_fn}).\n")
 
     verbs = m.REGULAR_VERBS
     bases = [v.base for v in verbs]
     obj = {v.base: (v.objects[0] if v.objects else None) for v in verbs}
-    subjects = m.SINGULAR_SUBJECTS
 
     # Inflect the whole verb lexicon with the synthesized programs.
-    sg = inflect_all(s3_code, s3_fn, bases)
-    pa = inflect_all(pa_code, pa_fn, bases)
-    ge = inflect_all(ge_code, ge_fn, bases)
+    sg = inflect_all(s3_code, s3_fn, bases)        # 3sg present
+    pa = inflect_all(pa_code, pa_fn, bases)        # past
+    ge = inflect_all(ge_code, ge_fn, bases)        # gerund
 
-    def sentence(tense: str) -> str:
-        subj = rng.choice(subjects)
-        v = rng.choice(bases)
+    # Singular + plural subjects (plural via the synthesized pluralize program;
+    # irregular-plural nouns are skipped — those are lexical, not rule-derived).
+    heads = [(s, s.split()[-1]) for s in m.SINGULAR_SUBJECTS]
+    reg = [(s, h) for s, h in heads if h not in _IRREGULAR_PLURAL]
+    plural_heads = inflect_all(pl_code, pl_fn, [h for _s, h in reg])
+    sing_subjects = [s for s, _h in reg]
+    plur_subjects = [f"The {plural_heads[h]}" for _s, h in reg]
+
+    def clause(subj: str, v: str, number: str, tense: str) -> str:
         tail = f" {obj[v]}" if obj[v] else ""
         if tense == "present":
-            return f"{subj} {sg[v]}{tail}."
+            # NUMBER AGREEMENT: singular -> 3sg form, plural -> base form.
+            verb = sg[v] if number == "sing" else v
+            return f"{subj} {verb}{tail}."
         if tense == "past":
-            return f"{subj} {pa[v]}{tail}."
-        return f"{subj} is {ge[v]}{tail}."  # progressive
+            return f"{subj} {pa[v]}{tail}."           # past: no number agreement
+        if tense == "progressive":
+            be = "is" if number == "sing" else "are"  # be-agreement
+            return f"{subj} {be} {ge[v]}{tail}."
+        # negated present (do-support, with agreement on the auxiliary)
+        aux = "does not" if number == "sing" else "do not"
+        return f"{subj} {aux} {v}{tail}."
 
     print("nCPU speaking — every word form produced by a synthesized program:\n")
-    for tense in ("present", "past", "progressive"):
-        print(f"  [{tense}]")
+    for label, number, tense in [
+        ("present · singular", "sing", "present"),
+        ("present · plural", "plur", "present"),
+        ("past", "sing", "past"),
+        ("progressive", "plur", "progressive"),
+        ("negation", "sing", "negation"),
+    ]:
+        print(f"  [{label}]")
+        subjects = sing_subjects if number == "sing" else plur_subjects
         seen = set()
         n = 0
         while n < 4:
-            s = sentence(tense)
+            s = clause(rng.choice(subjects), rng.choice(bases), number, tense)
             if s in seen:
                 continue
             seen.add(s)
