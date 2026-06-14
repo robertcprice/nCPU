@@ -193,6 +193,37 @@ def main():
         print(f"     A: {a}")
     print()
 
+    # Multi-turn discourse — topic continuity + pronoun reference. The subject is
+    # established in turn 1, then referred to by a pronoun in turn 2 with correct
+    # agreement (animal -> "It" + 3sg; person -> singular "They" + base); the
+    # object is referred to by "it"/"them" (number-matched).
+    animals = {"dog", "cat", "bird", "fox", "mouse", "horse", "rabbit", "duck",
+               "goat", "lamb", "pony", "monkey", "parrot"}
+    transitive = [v.base for v in verbs if v.objects]
+    print("  [discourse — pronoun reference + agreement]")
+    n = 0
+    seen = set()
+    while n < 4:
+        subj = rng.choice(sing_subjects)
+        head = subj.split()[-1]
+        v1, v2 = rng.choice(transitive), rng.choice(transitive)
+        if v1 == v2:
+            continue
+        o1 = obj[v1]
+        obj_pron = "them" if o1.endswith("s") else "it"
+        if head in animals:
+            subj_pron, verb2 = "It", sg[v2]          # animal: 3sg
+        else:
+            subj_pron, verb2 = "They", v2            # person: singular they + base
+        turn1 = f"{subj} {sg[v1]} {o1}."
+        turn2 = f"{subj_pron} {verb2} {obj_pron}."
+        if turn1 in seen:
+            continue
+        seen.add(turn1)
+        n += 1
+        print(f"     {turn1} {turn2}")
+    print()
+
     # Independent verification: the recovered grammaticality rule must ACCEPT
     # the generated present-tense sibilant 3sg sentences (KVRM-style check).
     print("Independent verification (recovered 3sg rule accepts what nCPU spoke):")
