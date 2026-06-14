@@ -18,7 +18,18 @@ hypothesis class, all exact + verifying:
 | `sentence_gerund` | `search_array_conjunction` | one AND/NOT | `is` AND `<+ing>` |
 | `sentence_past` | `search_array_dnf` | DNF + stem feature | `(<+ied>∧y) ∨ (<+ed>∧¬y)` |
 | `formal_logic` | `search_array_dnf` | DNF | modus ponens/tollens validity |
+| `semantic_roles` | `search_array_conjunction` | conjunction + animacy feature | agent must be animate (selectional restriction) |
 | `sentence_full` | — (declines) | — | needs lexical features (honest ceiling) |
+
+Four domains — **morphology, syntax, reasoning, semantics** — one mechanism.
+
+## Recovered rules are deployable (KVRM applied to language)
+
+`scripts/rule_constraint_demo.py` runs the *synthesized* programs on held-out
+inputs: `pluralize` GENERATES forms (church→churches, lady→ladies, boy→boys),
+the 3sg rule ACCEPTS/REJECTS sentences as a grammaticality constraint, and the
+inference rule ACCEPTS/REJECTS arguments — each a small verified program, a
+deployable constraint rather than weights.
 
 ## What "a code synthesizer learns language" means here
 

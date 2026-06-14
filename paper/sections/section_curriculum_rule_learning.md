@@ -91,6 +91,25 @@ valid iff (asserts antecedent ∧ ¬negated)   // modus ponens
 A program synthesizer, learning a rule of *logic*, from labeled arguments, with
 the curriculum's validator as oracle.
 
+### Semantics — selectional restriction
+
+The same machinery reaches Stage 7 (compositional semantics). "The teacher writes
+the report" is well-formed; "The report writes the teacher" is not — the *agent*
+of an action must be animate. With an animacy feature (the curriculum's own
+agent/patient lexicon), nSynth learns the **selectional restriction** "valid iff
+the subject is animate" as a verified program. Four linguistic levels —
+morphology, syntax, reasoning, semantics — recovered by one mechanism.
+
+## Deployment — recovered rules as constraints
+
+Because each rule is an executable program, it deploys directly on held-out
+inputs the synthesizer never saw (`scripts/rule_constraint_demo.py`): `pluralize`
+*generates* correct forms (church→churches, lady→ladies, including the y→ies stem
+change); the 3sg and inference rules *accept or reject* fresh sentences and
+arguments. This is the program-synthesis analog of KVRM's verified-registry
+guarantee, applied to language: a generator constrained to nSynth-recovered rules
+cannot produce a form the rule forbids.
+
 ## The honest ceiling — and how features close it
 
 Not everything is a function of the token *set*. Two Stage-3 forms — "asked"

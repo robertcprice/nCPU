@@ -360,6 +360,69 @@ def task_formal_logic(count: int = 400) -> dict:
     }
 
 
+def task_semantic_roles(count: int = 300) -> dict:
+    """Stage 7 semantics: selectional restriction (thematic roles).
+
+    "The teacher writes the report" is fine; "The report writes the teacher" is
+    not — the AGENT of an action must be animate, the PATIENT inanimate. The
+    discriminating feature is animacy, which the curriculum encodes directly as
+    ROLE_AGENTS (animate) vs ROLE_PATIENTS (inanimate). A parser tags the subject
+    and object animacy into feature tokens:
+        subj_animate=1 subj_inanimate=2  obj_animate=3 obj_inanimate=4
+    and nSynth learns "valid iff subject animate AND object inanimate" — a
+    semantic conjunction. Words/labels come from the curriculum; animacy is its
+    own lexicon, never the label.
+    """
+    import re
+
+    morph = _curriculum()
+    sys.path.insert(0, str(LINGUAGENESIS))
+    from v2.curriculum import compositional_semantics as cs  # type: ignore
+
+    agents = {w.lower() for w in cs.ROLE_AGENTS}
+    patients = {w.lower() for w in cs.ROLE_PATIENTS}
+
+    def parse(sentence: str):
+        words = [w.lower() for w in re.findall(r"[A-Za-z]+", sentence)]
+        nouns = [(i, w) for i, w in enumerate(words) if w in agents or w in patients]
+        if len(nouns) < 2:
+            return None
+        (_, subj), (_, obj) = nouns[0], nouns[-1]
+        toks = []
+        toks.append(1 if subj in agents else 2)
+        toks.append(3 if obj in agents else 4)
+        return toks
+
+    gen = cs.Stage7CompositionalSemanticsGenerator() if hasattr(
+        cs, "Stage7CompositionalSemanticsGenerator"
+    ) else getattr(cs, [n for n in dir(cs) if "Generator" in n][0])()
+    generated = gen.generate(count=count, include_negative=True)
+    rows = []
+    for ex in generated:
+        if "semantics.role.agent" not in ex.rule_ids:
+            continue
+        toks = parse(ex.sentence)
+        if toks is None:
+            continue
+        rows.append((toks, 0 if ex.is_negative else 1))
+
+    by_form = {}
+    for toks, label in rows:
+        by_form.setdefault(tuple(toks), []).append((toks, label))
+    examples, holdouts = [], []
+    for _form, group in sorted(by_form.items()):
+        for i, (toks, label) in enumerate(group):
+            row = {"inputs": [toks], "expected": label}
+            (holdouts if i % 4 == 3 else examples).append(row)
+
+    return {
+        "name": "valid_roles",
+        "signature": "fn valid_roles(arr: [i64]) -> i64",
+        "examples": examples,
+        "holdouts": holdouts,
+    }
+
+
 def task_pluralize_gen(holdout_every: int = 4) -> dict:
     """Generative morphology: PRODUCE the plural form (cat -> cats, box -> boxes).
 
@@ -425,6 +488,7 @@ TASKS = {
     "sentence_full": task_sentence_full,
     "pluralize_gen": task_pluralize_gen,
     "formal_logic": task_formal_logic,
+    "semantic_roles": task_semantic_roles,
 }
 
 
