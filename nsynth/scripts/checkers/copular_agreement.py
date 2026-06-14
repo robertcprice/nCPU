@@ -110,6 +110,12 @@ def build_rows(max_adjectives: int = 4) -> list:
     information and only slow the DNF teacher. We cap the adjective variety
     (`max_adjectives`) to keep a small, balanced train set while still drawing
     every subject (singular + plural) and both copulas from the curriculum.
+
+    We also inject synthetic negative examples for the OOD feature combos that
+    the curriculum never generates but the DNF would otherwise treat as valid by
+    shortcut — no-copula sentences ("The dog happy.") and dual-copula sentences
+    ("The dog is are happy.") — so the recovered rule MUST reference both "is"
+    and "are" tokens to correctly reject these cases.
     """
     bcf, dn = _curriculum()
     subjects = _subject_pairs(dn)
@@ -128,6 +134,21 @@ def build_rows(max_adjectives: int = 4) -> list:
                     feats = _features(is_plural, copula)
                     label = _oracle_label(is_plural, copula)
                     rows.append((feats, label, sentence))
+
+    # Inject adversarial negatives: feature combos that never appear in the
+    # curriculum's well-formed generator but must be rejected to prevent the
+    # "shortcut DNF" (plural AND not-is) ∪ (singular AND is) which never
+    # references "are".  These synthetic rows force the DNF to check BOTH
+    # copula tokens or left-empty-handed.
+    adversarial_negatives = [
+        ([],                         0, "adversarial: no copula, singular subject"),
+        ([F_SUBJ_PLURAL],            0, "adversarial: no copula, plural subject"),
+        ([F_HAS_IS, F_HAS_ARE],      0, "adversarial: both copulas, singular subject"),
+        ([F_SUBJ_PLURAL, F_HAS_IS, F_HAS_ARE], 0, "adversarial: both copulas, plural subject"),
+    ]
+    for feats, label, desc in adversarial_negatives:
+        rows.append((feats, label, desc))
+
     rows.sort(key=lambda r: r[2])
     return rows
 
