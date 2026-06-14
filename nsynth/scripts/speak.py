@@ -99,6 +99,8 @@ def main():
     sing_subjects = [s for s, _h in reg]
     plur_subjects = [f"The {plural_heads[h]}" for _s, h in reg]
 
+    from v2.curriculum.compositional_semantics import MODIFIERS as adjectives
+
     def clause(subj: str, v: str, number: str, tense: str) -> str:
         tail = f" {obj[v]}" if obj[v] else ""
         if tense == "present":
@@ -110,6 +112,14 @@ def main():
         if tense == "progressive":
             be = "is" if number == "sing" else "are"  # be-agreement
             return f"{subj} {be} {ge[v]}{tail}."
+        if tense == "copular":
+            be = "is" if number == "sing" else "are"
+            return f"{subj} {be} {rng.choice(adjectives)}."
+        if tense == "question":
+            # yes/no question: do-support inversion, agreement on the auxiliary.
+            aux = "Does" if number == "sing" else "Do"
+            low = subj[0].lower() + subj[1:]
+            return f"{aux} {low} {v}{tail}?"
         # negated present (do-support, with agreement on the auxiliary)
         aux = "does not" if number == "sing" else "do not"
         return f"{subj} {aux} {v}{tail}."
@@ -121,6 +131,8 @@ def main():
         ("past", "sing", "past"),
         ("progressive", "plur", "progressive"),
         ("negation", "sing", "negation"),
+        ("copular", "plur", "copular"),
+        ("question", "sing", "question"),
     ]:
         print(f"  [{label}]")
         subjects = sing_subjects if number == "sing" else plur_subjects
