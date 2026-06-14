@@ -168,6 +168,73 @@ def task_sentence_3sg(count: int = 400) -> dict:
     return _split(_encode_rows(generated, tok, keep), "sentence_es_3sg")
 
 
+_SIB_STEM = 901  # synthetic feature: the verb stem ends in a sibilant (s/sh/ch/x/z)
+
+
+def task_sentence_3sg_general(count: int = 400) -> dict:
+    """Sentence-level 3sg grammaticality for ALL verbs (not just sibilant).
+
+    The `<+s>` token (106) is ambiguous: it marks a correct regular 3sg ("walks")
+    but ALSO appears when the tokenizer over-splits a bare sibilant stem
+    ("miss" -> mis + <+s>). So presence of a 3sg suffix alone can't separate
+    grammatical from bare. We expose one feature — the verb stem ends in a
+    sibilant (token 901) — and the DNF teacher learns the general rule
+        valid iff <+es> OR <+ies> OR (<+s> AND NOT sibilant-stem)
+    which accepts every correct 3sg (watches/tidies/walks) and rejects bare stems.
+    """
+    morph = _curriculum()
+    tok = _tokenizer()
+    # surface verb form -> base, to compute the stem feature for any sentence.
+    to_base = {}
+    for v in morph.REGULAR_VERBS:
+        for form in (v.base, v.third_singular, v.past_regular, v.gerund):
+            to_base[form] = v.base
+
+    def stem_sibilant(sentence):
+        verb = _last_word(sentence)
+        base = to_base.get(verb, verb)
+        return base.endswith(("s", "sh", "ch", "x", "z"))
+
+    gen = morph.Stage3MorphologyProductivityGenerator()
+    generated = gen.generate(count=count, include_negative=True)
+
+    def encode(ex):
+        if ex.rule_ids != ["morphology.verb.3sg"]:
+            return None
+        ids = tok.encode(ex.sentence, add_bos=False, add_eos=False)
+        # Keep only the discriminating features: inflection-suffix tokens (band
+        # 100-108) plus the sibilant-stem feature. Subject/determiner/period
+        # tokens are noise for the agreement rule.
+        feats = sorted(i for i in ids if 100 <= i <= 108)
+        if stem_sibilant(ex.sentence):
+            feats = feats + [_SIB_STEM]
+        return feats, (0 if ex.is_negative else 1)
+
+    rows = []
+    for ex in generated:
+        r = encode(ex)
+        if r:
+            rows.append(r)
+
+    # Stratify by (has-sibilant-feature, label) so all combinations are in train.
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for ids, label in rows:
+        groups[(_SIB_STEM in ids, label)].append((ids, label))
+    examples, holdouts = [], []
+    for _k, g in sorted(groups.items()):
+        for i, (ids, label) in enumerate(g):
+            row = {"inputs": [list(ids)], "expected": label}
+            (holdouts if i % 4 == 3 else examples).append(row)
+
+    return {
+        "name": "sentence_3sg_ok",
+        "signature": "fn sentence_3sg_ok(arr: [i64]) -> i64",
+        "examples": examples,
+        "holdouts": holdouts,
+    }
+
+
 def task_sentence_gerund(count: int = 300) -> dict:
     """Sentence-level gerund grammaticality — a CONJUNCTION the OR-only
     member-class teacher cannot express.
@@ -533,6 +600,7 @@ TASKS = {
     "pluralize_gen": task_pluralize_gen,
     "formal_logic": task_formal_logic,
     "semantic_roles": task_semantic_roles,
+    "sentence_3sg_general": task_sentence_3sg_general,
     "verb_3sg_form": task_verb_3sg_form,
     "verb_past_form": task_verb_past_form,
     "verb_gerund_form": task_verb_gerund_form,

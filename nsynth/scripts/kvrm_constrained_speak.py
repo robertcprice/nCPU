@@ -61,17 +61,36 @@ class RecoveredRuleValidator:
     """A validator whose decision IS a recovered, verified Mog program.
 
     Mirrors the shape of LinguaGenesis's tool.validate: `.ok(sentence)` returns
-    whether the recovered 3sg grammaticality rule accepts the sentence.
+    whether the recovered GENERAL 3sg grammaticality rule (all verbs, not just
+    sibilant) accepts the sentence. Perception matches the rule's training
+    encoding: inflection-suffix tokens + a sibilant-stem feature.
     """
+
+    SIB_STEM = 901
 
     def __init__(self):
         from v2.tokenizer.morpheme_tokenizer import MorphemeTokenizer
-        self.fn, self.code = synth("sentence_3sg")
+        from v2.curriculum import morphology_productivity as m
+        self.fn, self.code = synth("sentence_3sg_general")
         self.tok = MorphemeTokenizer()
+        self.to_base = {}
+        for v in m.REGULAR_VERBS:
+            for f in (v.base, v.third_singular, v.past_regular, v.gerund):
+                self.to_base[f] = v.base
+
+    def _encode(self, sentence: str) -> list[int]:
+        import re
+        ids = self.tok.encode(sentence, add_bos=False, add_eos=False)
+        feats = sorted(i for i in ids if 100 <= i <= 108)
+        words = re.findall(r"[A-Za-z]+", sentence)
+        verb = words[-1].lower() if words else ""
+        base = self.to_base.get(verb, verb)
+        if base.endswith(("s", "sh", "ch", "x", "z")):
+            feats = feats + [self.SIB_STEM]
+        return feats
 
     def ok(self, sentence: str) -> bool:
-        ids = self.tok.encode(sentence, add_bos=False, add_eos=False)
-        lit = "[" + ", ".join(str(x) for x in ids) + "]"
+        lit = "[" + ", ".join(str(x) for x in self._encode(sentence)) + "]"
         out = _run(f"{self.code}\nfn main() -> i64 {{\n  println_i64({self.fn}({lit}));\n  return 0;\n}}\n")
         return out.strip() == "1"
 
@@ -86,9 +105,8 @@ def main():
     s3_fn, s3_code = synth("verb_3sg_form")
     validator = RecoveredRuleValidator()
 
-    # Sibilant verbs — the slice the recovered 3sg rule covers (carry <+es>).
-    sib = [v.base for v in m.REGULAR_VERBS
-           if v.base.endswith(("ch", "sh", "ss", "x", "z"))]
+    # ALL verbs — the general recovered 3sg rule covers regular, sibilant, and y.
+    sib = [v.base for v in m.REGULAR_VERBS]
     forms = {b: inflect(s3_code, s3_fn, b) for b in sib}
     subjects = [s for s in m.SINGULAR_SUBJECTS if s.split()[-1] not in {"child", "man", "woman", "mouse"}]
 
