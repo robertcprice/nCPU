@@ -356,6 +356,14 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_clamp_affine",
         func: search_clamp_affine,
     },
+    // Compositional ("think-in-code") family — an exact affine rule over derived
+    // features (squares, cross-terms, modulo, floor-div). Sparse-first + fully
+    // verified, so it only claims genuinely nonlinear rules the pure linear and
+    // separable-polynomial solvers cannot express, and refuses otherwise.
+    SearchCandidate {
+        key: "search_composed_features",
+        func: search_composed_features,
+    },
     // Multi-argument linear family — placed last so single-input solvers keep
     // their problems; these only catch the 2-3 arg rules the others cannot
     // express at all.
@@ -414,6 +422,7 @@ pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
     search_affine(problem, fn_name)
         .or_else(|| search_polynomial_multi(problem, fn_name))
         .or_else(|| search_clamp_affine(problem, fn_name))
+        .or_else(|| search_composed_features(problem, fn_name))
         .or_else(|| search_affine_piecewise(problem, fn_name))
         .or_else(|| search_affine_threshold(problem, fn_name))
 }

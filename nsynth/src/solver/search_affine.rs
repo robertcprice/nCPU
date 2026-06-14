@@ -255,6 +255,273 @@ pub(super) fn search_polynomial_multi(problem: &Problem, fn_name: &str) -> Optio
     verified_result(problem, code, "search_polynomial_multi")
 }
 
+/// A derived feature: a small expression over the raw arguments (the `expr`,
+/// kept for rendering and final verification) together with its already-computed
+/// value on every example (`col`, used for the fast in-Rust exact-fit check).
+struct Feature {
+    expr: ScalarExpr,
+    col: Vec<i64>,
+}
+
+/// Evaluate a per-row i128 feature closure into an i64 column, or return an empty
+/// column (the caller drops the feature) if any row overflows i64 or the closure
+/// is undefined there. Generic over the closure so each call monomorphises — no
+/// `dyn Fn` and no allocation per row beyond the column itself.
+fn feature_column<F: Fn(&[i64]) -> Option<i128>>(examples: &[Vec<i64>], f: F) -> Vec<i64> {
+    let mut col = Vec::with_capacity(examples.len());
+    for row in examples {
+        match f(row) {
+            Some(v) if i64::try_from(v).is_ok() => col.push(v as i64),
+            _ => return Vec::new(),
+        }
+    }
+    col
+}
+
+/// Build the candidate-feature library for compositional synthesis: each entry
+/// is a little program over the raw inputs whose output becomes a regression
+/// column. This is the engine "thinking in code" — it proposes intermediate
+/// computations, runs them, and lets the exact linear solve recover structure
+/// over the *results* rather than the raw inputs. Features:
+///
+///   * raw          `x_j`
+///   * square       `x_j · x_j`
+///   * cross        `x_i · x_j`   (i < j) — the cross-terms the separable
+///                                  polynomial solver deliberately cannot express
+///   * modulo       `x_j % m`     (m a mined constant, 2 ≤ m, no mod-by-input)
+///   * floor-div    `x_j / m`     (m a mined constant, 2 ≤ m)
+///
+/// A feature is dropped entirely if it overflows or divides/mods by zero on any
+/// example (we never emit a program that can trap). Moduli/divisors are *mined
+/// from the problem's own data* (`mine_scalar_constants`), not hand-picked, so
+/// the vocabulary is data-driven. The set is capped so the subset search stays
+/// fast and over-determined.
+fn compose_features(examples: &[Vec<i64>], arity: usize) -> Vec<Feature> {
+    let mut feats: Vec<Feature> = Vec::new();
+    let mut add = |expr: ScalarExpr, col: Vec<i64>| {
+        if col.len() == examples.len() {
+            feats.push(Feature { expr, col });
+        }
+    };
+
+    for j in 0..arity {
+        // raw
+        add(ScalarExpr::Var(j), feature_column(examples, |r| Some(r[j] as i128)));
+        // square
+        let sq = ScalarExpr::Bin(
+            Box::new(ScalarExpr::Var(j)),
+            ScalarBinOp::Mul,
+            Box::new(ScalarExpr::Var(j)),
+        );
+        add(sq, feature_column(examples, |r| Some(r[j] as i128 * r[j] as i128)));
+    }
+    // cross terms x_i · x_j
+    for i in 0..arity {
+        for j in (i + 1)..arity {
+            let cross = ScalarExpr::Bin(
+                Box::new(ScalarExpr::Var(i)),
+                ScalarBinOp::Mul,
+                Box::new(ScalarExpr::Var(j)),
+            );
+            add(cross, feature_column(examples, |r| Some(r[i] as i128 * r[j] as i128)));
+        }
+    }
+    // modulo / floor-div bases. The UNIVERSAL arithmetic bases — parity (2),
+    // mod-3, quarters (4), mod-5/7, decimal digit (10) — are always available:
+    // these are the moduli/divisors of essentially every real periodic or banded
+    // rule, foundational like `+`/`*` rather than problem-specific magic, so they
+    // are included whether or not the literal value appears in the data (without
+    // this, `x % 4` was unexpressible whenever no input happened to equal 4).
+    // On top of them, any OTHER constant mined from the problem's own inputs is
+    // appended for genuinely problem-specific periods. Universal-first ordering
+    // also fixes the bug where a plain ascending-sort + truncate dropped a useful
+    // base behind a run of small accidental ones.
+    let universal = [2i64, 3, 4, 5, 7, 10];
+    let mined: Vec<i64> = super::scalar_search::mine_scalar_constants(examples, &[])
+        .into_iter()
+        .filter(|&m| (2..=64).contains(&m))
+        .collect();
+    let mut bases: Vec<i64> = universal.to_vec();
+    for &m in &mined {
+        if !bases.contains(&m) {
+            bases.push(m);
+        }
+    }
+    bases.truncate(8); // keep the feature set bounded and over-determined
+    for &m in &bases {
+        for j in 0..arity {
+            let md = ScalarExpr::Bin(
+                Box::new(ScalarExpr::Var(j)),
+                ScalarBinOp::Mod,
+                Box::new(ScalarExpr::Const(m)),
+            );
+            add(md, feature_column(examples, |r| Some(r[j].rem_euclid(m) as i128)));
+            let dv = ScalarExpr::Bin(
+                Box::new(ScalarExpr::Var(j)),
+                ScalarBinOp::Div,
+                Box::new(ScalarExpr::Const(m)),
+            );
+            add(dv, feature_column(examples, |r| Some(r[j].div_euclid(m) as i128)));
+        }
+    }
+    feats
+}
+
+/// `c0` plus the chosen features → the expression `c0 + Σ c_k·feature_k`,
+/// dropping zero coefficients and rendering `1·feature` as the feature itself.
+/// Reuses `affine_expr`'s constant rule.
+fn composed_expr(c0: i64, picks: &[(&Feature, i64)]) -> ScalarExpr {
+    let mut terms: Vec<ScalarExpr> = Vec::new();
+    for &(feat, c) in picks {
+        if c == 0 {
+            continue;
+        }
+        terms.push(if c == 1 {
+            feat.expr.clone()
+        } else {
+            ScalarExpr::Bin(
+                Box::new(ScalarExpr::Const(c)),
+                ScalarBinOp::Mul,
+                Box::new(feat.expr.clone()),
+            )
+        });
+    }
+    if c0 != 0 || terms.is_empty() {
+        terms.push(ScalarExpr::Const(c0));
+    }
+    let mut iter = terms.into_iter();
+    let first = iter.next().expect("at least one term");
+    iter.fold(first, |acc, term| {
+        ScalarExpr::Bin(Box::new(acc), ScalarBinOp::Add, Box::new(term))
+    })
+}
+
+/// True iff `c0 + Σ coeffs_k·feat_k[row] == targets[row]` for every example
+/// (i128 accumulation). The cheap in-Rust gate that lets the subset search try
+/// thousands of feature combinations without parsing/executing Mog — only the
+/// surviving combination is handed to `verified_result`.
+fn composed_predicts(c0: i64, picks: &[(&Feature, i64)], targets: &[i64]) -> bool {
+    for (i, &t) in targets.iter().enumerate() {
+        let mut acc = c0 as i128;
+        for &(feat, c) in picks {
+            acc += c as i128 * feat.col[i] as i128;
+        }
+        if acc != t as i128 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Compositional ("think-in-code") synthesis: recover an exact rule of the form
+///
+///     f(x) = c0 + Σ_k c_k · g_k(x)
+///
+/// where each `g_k` is a derived feature (see `compose_features`) — a square, a
+/// cross-term `x_i·x_j`, a modulo `x_j % m`, a floor-div `x_j / m`, or a raw
+/// argument. This is what lifts the engine past one straight line: it composes
+/// little intermediate programs and recovers the exact *linear combination* of
+/// their outputs that reproduces the data, generalising by construction.
+///
+/// HONESTY (the whole point — a rich feature basis can fit noise, so the guards
+/// are the contract):
+///   * SPARSE-FIRST: subsets are tried smallest-and-simplest first (1 feature,
+///     then 2, then 3) and the FIRST exact fit wins — the simplest explanation,
+///     which is the one that generalises. A 3-feature fit is only reached when
+///     nothing simpler is exact.
+///   * OVER-DETERMINED: a k-feature fit is attempted only when there are at
+///     least `k + 1 + MARGIN` examples, so the system is never square (which
+///     would fit anything).
+///   * EXACT INTEGER + FULL VERIFY: `solve_linear_features` rounds to integers
+///     and rejects non-integral solutions; `composed_predicts` then requires the
+///     fit to reproduce EVERY example before it is even rendered; finally
+///     `verified_result` re-checks through the real runtime.
+///   * NOT PURE AFFINE: a winning subset of only raw variables is left to
+///     `search_affine` (it runs first); composition only claims genuinely
+///     nonlinear/derived rules.
+pub(super) fn search_composed_features(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    const MARGIN: usize = 2;
+    let examples = super::scalar_search::extract_scalar_examples(problem)?;
+    let arity = examples.first()?.len();
+    if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
+        return None;
+    }
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    if targets.len() != examples.len() {
+        return None;
+    }
+    let n = examples.len();
+    let feats = compose_features(&examples, arity);
+    if feats.is_empty() {
+        return None;
+    }
+    let param_names = scalar_param_names(arity);
+    let params = scalar_params_decl(&param_names);
+
+    // A feature subset is "interesting" only if at least one picked feature is
+    // not a raw variable — pure-affine combinations belong to search_affine.
+    let is_raw = |f: &Feature| matches!(f.expr, ScalarExpr::Var(_));
+
+    // Solve for [c0, c_1, …, c_k] over the chosen feature columns and, if it is
+    // an exact integer fit reproducing every example, render + verify it.
+    let try_subset = |idxs: &[usize]| -> Option<SolveResult> {
+        let k = idxs.len();
+        if n < k + 1 + MARGIN {
+            return None;
+        }
+        if idxs.iter().all(|&fi| is_raw(&feats[fi])) {
+            return None; // pure affine — not ours
+        }
+        let m = k + 1;
+        let feature_rows: Vec<Vec<i64>> = (0..n)
+            .map(|i| {
+                let mut phi = Vec::with_capacity(m);
+                phi.push(1);
+                for &fi in idxs {
+                    phi.push(feats[fi].col[i]);
+                }
+                phi
+            })
+            .collect();
+        let w = solve_linear_features(&feature_rows, &targets, m)?;
+        let picks: Vec<(&Feature, i64)> =
+            idxs.iter().enumerate().map(|(slot, &fi)| (&feats[fi], w[slot + 1])).collect();
+        if !composed_predicts(w[0], &picks, &targets) {
+            return None;
+        }
+        let body = render_scalar_expr(&composed_expr(w[0], &picks), &param_names);
+        let code = format!("fn {fn_name}({params}) -> i64 {{\n    return {body};\n}}\n");
+        verified_result(problem, code, "search_composed_features")
+    };
+
+    let fc = feats.len();
+    // size 1
+    for a in 0..fc {
+        if let Some(r) = try_subset(&[a]) {
+            return Some(r);
+        }
+    }
+    // size 2
+    for a in 0..fc {
+        for b in (a + 1)..fc {
+            if let Some(r) = try_subset(&[a, b]) {
+                return Some(r);
+            }
+        }
+    }
+    // size 3
+    for a in 0..fc {
+        for b in (a + 1)..fc {
+            for c in (b + 1)..fc {
+                if let Some(r) = try_subset(&[a, b, c]) {
+                    return Some(r);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Exact clamped-affine rules: the whole output is an affine function of the
 /// arguments saturated against constant bound(s):
 ///
@@ -735,6 +1002,51 @@ mod tests {
         assert!(
             search_clamp_affine(&p, "f").is_none(),
             "clamp must refuse a non-saturated nonlinear rule"
+        );
+    }
+
+    // A true CROSS-TERM rule `a·b + 2a + 3` — which the separable polynomial
+    // solver deliberately refuses — is recovered exactly by composition (the
+    // `a·b` feature) and is correct on unseen points.
+    #[test]
+    fn composed_recovers_cross_term() {
+        let f = |a: i64, b: i64| a * b + 2 * a + 3;
+        let raw = [
+            (0, 0), (1, 1), (2, 3), (3, 2), (4, 5), (5, 1), (2, 7), (6, 0), (1, 9), (8, 4),
+        ];
+        let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
+        let p = p2(&rows);
+        let r = search_composed_features(&p, "f").expect("must recover a·b + 2a + 3");
+        let check = p2(&[((11, 4), f(11, 4)), ((20, 7), f(20, 7)), ((3, 50), f(3, 50))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("cross-term must be exact on unseen points");
+    }
+
+    // A modular rule `3·(x % 7) + 1` is recovered via the mined `x % 7` feature
+    // and is correct on unseen points (it is periodic, so plain affine cannot fit
+    // it — proving composition recovers genuine non-affine structure).
+    #[test]
+    fn composed_recovers_modular() {
+        let f = |x: i64| 3 * (x % 7) + 1;
+        let rows: Vec<(i64, i64)> = (0..14).map(|x| (x, f(x))).collect();
+        let p = p1(&rows);
+        let r = search_composed_features(&p, "f").expect("must recover 3*(x%7) + 1");
+        let check = p1(&[(20, f(20)), (35, f(35)), (48, f(48)), (100, f(100))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("modular rule must be exact on unseen points");
+    }
+
+    // It refuses noise: random targets with no exact composed-feature explanation
+    // yield None rather than a coincidental over-parameterised fit.
+    #[test]
+    fn composed_refuses_noise() {
+        let ys = [7i64, 2, 9, 1, 5, 8, 3, 6, 4, 0, 11, 13];
+        let rows: Vec<((i64, i64), i64)> =
+            ys.iter().enumerate().map(|(i, &y)| ((i as i64, (i * 2 + 1) as i64), y)).collect();
+        let p = p2(&rows);
+        assert!(
+            search_composed_features(&p, "f").is_none(),
+            "composition must refuse data with no exact feature explanation"
         );
     }
 
