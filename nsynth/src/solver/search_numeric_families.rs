@@ -214,7 +214,18 @@ pub(super) fn search_lcm_formula(problem: &Problem, fn_name: &str) -> Option<Sol
     if param_types != [ParamType::I64, ParamType::I64] {
         return None;
     }
-    if !validate_binary_int(problem, |a, b| (a * b) / gcd(a, b)) {
+    // `gcd(0, 0) == 0`, so guard the division — an example with both inputs zero
+    // would otherwise panic (divide by zero) and crash the whole binary. lcm is
+    // conventionally 0 there. Use i128 for the product so a large pair does not
+    // overflow before the divide.
+    if !validate_binary_int(problem, |a, b| {
+        let g = gcd(a, b);
+        if g == 0 {
+            0
+        } else {
+            ((a as i128 * b as i128) / g as i128) as i64
+        }
+    }) {
         return None;
     }
     verified_result(problem, code_lcm(fn_name), "search_lcm_formula")

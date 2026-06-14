@@ -79,6 +79,11 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // chain is verified, so it generalizes by construction and is returned
         // directly instead of feeding gradient.
         | "search_modular_cases"
+        // Value-based envelope (`max(A,B)` / `min(A,B)` of two affines): both
+        // pieces are exact affines and the reconstructed envelope is verified on
+        // every example, so it generalizes by construction and is returned
+        // directly instead of feeding gradient.
+        | "search_minmax_affine"
         | "search_min3_branch"
         | "search_scalar_expr"
         | "search_digit_sum_loop"

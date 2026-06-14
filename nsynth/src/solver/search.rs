@@ -426,6 +426,15 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_modular_cases",
         func: search_modular_cases,
     },
+    // Value-based branching — `max(A(x), B(x))` / `min(A(x), B(x))`, the upper/
+    // lower envelope of two non-constant affines ("take the better of two
+    // formulas"). The winning region is a half-space carved from the data, not an
+    // axis threshold, so no threshold/branch solver expresses it. Recovered by
+    // iterative partition refinement, fully verified.
+    SearchCandidate {
+        key: "search_minmax_affine",
+        func: search_minmax_affine,
+    },
 ];
 
 fn ranked_search_candidates(problem: &Problem) -> Vec<SearchCandidate> {
@@ -474,6 +483,7 @@ pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| search_affine_threshold(problem, fn_name))
         .or_else(|| search_predicate_branch(problem, fn_name))
         .or_else(|| search_modular_cases(problem, fn_name))
+        .or_else(|| search_minmax_affine(problem, fn_name))
 }
 
 pub(super) fn solve_by_search(problem: &Problem, fn_name: &str) -> Option<SolveResult> {

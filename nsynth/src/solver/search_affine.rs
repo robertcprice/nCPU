@@ -1080,6 +1080,158 @@ pub(super) fn search_modular_cases(problem: &Problem, fn_name: &str) -> Option<S
     None
 }
 
+/// `c0 + Σ c_{i+1}·row[i]` evaluated in i128 (no overflow), as the piecewise
+/// value of an affine at a point.
+fn affine_value(coeffs: &[i64], row: &[i64]) -> i128 {
+    let mut acc = coeffs[0] as i128;
+    for (i, &c) in coeffs.iter().enumerate().skip(1) {
+        acc += c as i128 * row[i - 1] as i128;
+    }
+    acc
+}
+
+/// Value-based branching: recover `f(x) = max(A(x), B(x))` or `min(A(x), B(x))`
+/// where A and B are BOTH non-constant affine — the upper/lower envelope of two
+/// planes ("take the better of two formulas": `max(2a+b, a+3b)`). Distinct from
+/// `search_clamp_affine`, which saturates one affine against a CONSTANT; here
+/// both pieces vary, and the winning region is a half-space the data carves out
+/// rather than an axis threshold, so the threshold/branch solvers cannot express
+/// it.
+///
+/// INVERSION (the partition — which point is on which piece — is unknown): seed a
+/// split from each axis threshold, fit an exact affine to each side, then
+/// REASSIGN every example to the piece that wins there (argmax/argmin) and refit,
+/// iterating to a fixpoint. Accept only when the reconstructed `max(A,B)` /
+/// `min(A,B)` reproduces EVERY example exactly. Each piece must stay over-
+/// determined (≥ arity+2 points) and be affine-exact on its own points at every
+/// step (`solve_affine` reads off the pivot rows, so the explicit predicts-check
+/// is what keeps a mixed assignment from yielding a bogus plane). The final
+/// `verified_result` re-runs the emitted program, so a non-converged or
+/// coincidental fit is rejected rather than returned.
+pub(super) fn search_minmax_affine(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let examples = super::scalar_search::extract_scalar_examples(problem)?;
+    let arity = examples.first()?.len();
+    if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
+        return None;
+    }
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    if targets.len() != examples.len() {
+        return None;
+    }
+    let n = examples.len();
+    let min_side = arity + 2;
+    let need = arity + 1; // points that determine one affine piece
+    if n < 2 * min_side {
+        return None; // too few examples to over-determine two pieces
+    }
+    let param_names = scalar_param_names(arity);
+    let params = scalar_params_decl(&param_names);
+
+    // Given an A-anchor set (arity+1 example indices) and the envelope direction,
+    // recover the whole `max(A,B)` / `min(A,B)` if one fits, else None. A is the
+    // affine through the anchors; for it to be a piece of a `max` it must lie at
+    // or BELOW every target (a lower support), and its equality set is its
+    // winning region; B is fit to the complement; the reconstructed envelope is
+    // checked on every example and finally re-verified through the runtime.
+    let try_anchor = |a_idx: &[usize], is_max: bool| -> Option<SolveResult> {
+        let ax: Vec<Vec<i64>> = a_idx.iter().map(|&i| examples[i].clone()).collect();
+        let ay: Vec<i64> = a_idx.iter().map(|&i| targets[i]).collect();
+        let a = solve_affine(&ax, &ay, arity)?;
+        if !ax.iter().zip(ay.iter()).all(|(r, &y)| affine_predicts(&a, r, y)) {
+            return None; // anchors not affinely independent / not exact
+        }
+        // A must be a valid support: ≤ every target (max) or ≥ every target (min).
+        let supports = examples.iter().zip(targets.iter()).all(|(r, &y)| {
+            let v = affine_value(&a, r);
+            if is_max {
+                v <= y as i128
+            } else {
+                v >= y as i128
+            }
+        });
+        if !supports {
+            return None;
+        }
+        // A's winning region is where it meets the target; the rest is B's.
+        let a_pts: Vec<bool> = examples
+            .iter()
+            .zip(targets.iter())
+            .map(|(r, &y)| affine_value(&a, r) == y as i128)
+            .collect();
+        let a_count = a_pts.iter().filter(|&&b| b).count();
+        if a_count < min_side || n - a_count < min_side {
+            return None;
+        }
+        let (mut bx, mut by) = (Vec::new(), Vec::new());
+        for (i, row) in examples.iter().enumerate() {
+            if !a_pts[i] {
+                bx.push(row.clone());
+                by.push(targets[i]);
+            }
+        }
+        let b = solve_affine(&bx, &by, arity)?;
+        if a == b || !bx.iter().zip(by.iter()).all(|(r, &y)| affine_predicts(&b, r, y)) {
+            return None;
+        }
+        // The reconstructed envelope must reproduce EVERY example.
+        let ok = examples.iter().zip(targets.iter()).all(|(r, &y)| {
+            let av = affine_value(&a, r);
+            let bv = affine_value(&b, r);
+            let want = if is_max { av.max(bv) } else { av.min(bv) };
+            want == y as i128
+        });
+        if !ok {
+            return None;
+        }
+        let a_body = render_scalar_expr(&affine_expr(&a), &param_names);
+        let b_body = render_scalar_expr(&affine_expr(&b), &param_names);
+        let cmp = if is_max { ">=" } else { "<=" };
+        let code = format!(
+            "fn {fn_name}({params}) -> i64 {{\n    if ({a_body}) {cmp} ({b_body}) {{\n        return {a_body};\n    }}\n    return {b_body};\n}}\n"
+        );
+        verified_result(problem, code, "search_minmax_affine")
+    };
+
+    // Enumerate A-anchor sets (arity+1 example indices), capped so the search
+    // stays bounded, for both envelope directions. One affine piece is pinned by
+    // any arity+1 of its own winning points, so a correct envelope is found as
+    // soon as the anchors all land on the same piece.
+    const MAX_ATTEMPTS: usize = 20_000;
+    let mut attempts = 0usize;
+    let mut idx = vec![0usize; need];
+    // Iterative odometer over increasing index combinations of `need` out of n.
+    for i in 0..need {
+        idx[i] = i;
+    }
+    loop {
+        for &is_max in &[true, false] {
+            attempts += 1;
+            if let Some(result) = try_anchor(&idx, is_max) {
+                return Some(result);
+            }
+        }
+        if attempts >= MAX_ATTEMPTS {
+            break;
+        }
+        // advance the combination
+        let mut p = need;
+        while p > 0 {
+            p -= 1;
+            if idx[p] != p + n - need {
+                idx[p] += 1;
+                for q in (p + 1)..need {
+                    idx[q] = idx[q - 1] + 1;
+                }
+                break;
+            }
+            if p == 0 {
+                return None; // exhausted all combinations
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1178,6 +1330,41 @@ mod tests {
             search_predicate_branch(&p, "f").is_none(),
             "must refuse data with no exact branch explanation"
         );
+    }
+
+    // A two-argument MAX of two affines `max(2a + b, a + 3b)` — neither piece a
+    // constant, the boundary not axis-aligned — recovered by partition
+    // refinement and exact on unseen points.
+    #[test]
+    fn minmax_recovers_max_of_two_affine() {
+        let f = |a: i64, b: i64| (2 * a + b).max(a + 3 * b);
+        let raw = [
+            (0, 0), (5, 1), (1, 5), (3, 3), (8, 2), (2, 8), (6, 4), (4, 6), (10, 0), (0, 10),
+            (7, 7), (9, 1), (1, 9), (12, 3),
+        ];
+        let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
+        let p = p2(&rows);
+        let r = search_minmax_affine(&p, "f").expect("must recover max(2a+b, a+3b)");
+        let check = p2(&[((20, 5), f(20, 5)), ((5, 20), f(5, 20)), ((15, 15), f(15, 15))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("max envelope must be exact on unseen points");
+    }
+
+    // A two-argument MIN of two affines `min(a + 2b, 3a - b)`, recovered and
+    // exact on unseen points.
+    #[test]
+    fn minmax_recovers_min_of_two_affine() {
+        let f = |a: i64, b: i64| (a + 2 * b).min(3 * a - b);
+        let raw = [
+            (0, 0), (5, 1), (1, 5), (3, 3), (8, 2), (2, 8), (6, 4), (4, 6), (10, 1), (1, 10),
+            (7, 7), (9, 2), (2, 9), (11, 4),
+        ];
+        let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
+        let p = p2(&rows);
+        let r = search_minmax_affine(&p, "f").expect("must recover min(a+2b, 3a-b)");
+        let check = p2(&[((20, 6), f(20, 6)), ((6, 20), f(6, 20)), ((14, 14), f(14, 14))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("min envelope must be exact on unseen points");
     }
 
     // Full mod-3 case analysis `match x%3 { 0 => 2x, 1 => x+5, 2 => 3x-1 }` —
