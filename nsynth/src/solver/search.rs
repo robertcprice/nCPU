@@ -407,6 +407,17 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_affine_piecewise",
         func: search_affine_piecewise,
     },
+    // Conditional logic — `if x % m == r { affine } else { affine }`, a modular/
+    // parity class split with an exact affine on each side. Last in the affine
+    // block so the non-branching and argument-threshold solvers keep their
+    // problems; this catches the genuine modular branches they cannot express
+    // (argument thresholds stay with the threshold/scalar-branch solvers, which
+    // own breakpoint placement). Fully verified, so a coincidental split is
+    // rejected.
+    SearchCandidate {
+        key: "search_predicate_branch",
+        func: search_predicate_branch,
+    },
 ];
 
 fn ranked_search_candidates(problem: &Problem) -> Vec<SearchCandidate> {
@@ -453,6 +464,7 @@ pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| search_composed_features(problem, fn_name))
         .or_else(|| search_affine_piecewise(problem, fn_name))
         .or_else(|| search_affine_threshold(problem, fn_name))
+        .or_else(|| search_predicate_branch(problem, fn_name))
 }
 
 pub(super) fn solve_by_search(problem: &Problem, fn_name: &str) -> Option<SolveResult> {

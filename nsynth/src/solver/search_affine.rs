@@ -803,6 +803,113 @@ pub(super) fn search_affine_piecewise(problem: &Problem, fn_name: &str) -> Optio
     None
 }
 
+/// Conditional logic: recover `if P(x) { A(x) } else { B(x) }` where `P` is a
+/// predicate over ONE argument — a modular test `x_j % m == r` (parity, mod-3,
+/// quarters, …) or a threshold `x_j <= k` — and each branch body is an exact
+/// affine rule over all arguments. Real programs branch; this is the first
+/// solver that recovers a genuine `if/else` whose condition is a DERIVED
+/// predicate (the existing threshold solvers split only on a raw argument
+/// inequality, never on a modular/parity class).
+///
+/// INVERSION: enumerate candidate predicates simplest-first (modular before
+/// threshold, smallest base/most-natural first); for each, partition the
+/// examples into the two branches, recover an exact integer affine on EACH side
+/// (`solve_affine`), and keep the first split whose reconstructed `if/else`
+/// reproduces every example (`verified_result`). The modulus partition is
+/// computed with `rem_euclid` to match the emitted `x % m`; any residual
+/// mismatch on negative inputs is caught by the full verify, never returned.
+///
+/// HONESTY GUARDS:
+///   * each branch must be OVER-DETERMINED — at least `arity + 2` examples, one
+///     more than the affine's `arity + 1` unknowns — so neither side is a square
+///     system that fits anything;
+///   * the two branch affines must DIFFER (else it is not a branch and
+///     `search_affine` owns it);
+///   * a coincidental partition that does not reproduce all examples is rejected
+///     by `verified_result`.
+pub(super) fn search_predicate_branch(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let examples = super::scalar_search::extract_scalar_examples(problem)?;
+    let arity = examples.first()?.len();
+    if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
+        return None;
+    }
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    if targets.len() != examples.len() {
+        return None;
+    }
+    let min_side = arity + 2; // over-determined: one row more than the unknowns
+    let param_names = scalar_param_names(arity);
+    let params = scalar_params_decl(&param_names);
+
+    // Fit affine on each side of a boolean partition, render `if cond { A } B`,
+    // and verify against every example. Returns the verified result or None.
+    let try_partition = |cond: &str, side_true: &[bool]| -> Option<SolveResult> {
+        let mut tx = Vec::new();
+        let mut ty = Vec::new();
+        let mut fx = Vec::new();
+        let mut fy = Vec::new();
+        for (i, row) in examples.iter().enumerate() {
+            if side_true[i] {
+                tx.push(row.clone());
+                ty.push(targets[i]);
+            } else {
+                fx.push(row.clone());
+                fy.push(targets[i]);
+            }
+        }
+        if tx.len() < min_side || fx.len() < min_side {
+            return None;
+        }
+        let a = solve_affine(&tx, &ty, arity)?;
+        let b = solve_affine(&fx, &fy, arity)?;
+        if a == b {
+            return None; // not actually a branch
+        }
+        let a_body = render_scalar_expr(&affine_expr(&a), &param_names);
+        let b_body = render_scalar_expr(&affine_expr(&b), &param_names);
+        let code = format!(
+            "fn {fn_name}({params}) -> i64 {{\n    if {cond} {{\n        return {a_body};\n    }}\n    return {b_body};\n}}\n"
+        );
+        verified_result(problem, code, "search_predicate_branch")
+    };
+
+    // Modular predicates first (the genuinely new capability): for each argument
+    // and each natural-or-mined base, split on each residue class. Bases are the
+    // universal arithmetic moduli plus any constant the data exhibits.
+    let mut bases: Vec<i64> = vec![2, 3, 4, 5, 7, 10];
+    for &m in &super::scalar_search::mine_scalar_constants(&examples, &targets) {
+        if (2..=32).contains(&m) && !bases.contains(&m) {
+            bases.push(m);
+        }
+    }
+    for ti in 0..arity {
+        for &m in &bases {
+            for r in 0..m {
+                let cond = format!("({} % {m}) == {r}", param_names[ti]);
+                let side_true: Vec<bool> =
+                    examples.iter().map(|row| row[ti].rem_euclid(m) == r).collect();
+                // Skip a partition that puts everything on one side.
+                let t = side_true.iter().filter(|&&b| b).count();
+                if t == 0 || t == examples.len() {
+                    continue;
+                }
+                if let Some(result) = try_partition(&cond, &side_true) {
+                    return Some(result);
+                }
+            }
+        }
+    }
+    // Threshold predicates (`x_j <= k`) are deliberately NOT emitted here: an
+    // argument inequality is already owned by `search_affine_threshold` (multi-
+    // arg) and the scalar single/two-branch solvers (1-arg), and a discontinuous
+    // threshold whose exact boundary value is not sampled is off-by-one
+    // ambiguous — exactly the breakpoint problem the piecewise solver handles
+    // with intersection placement. This solver's unique, exact contribution is
+    // the MODULAR/parity class split, which has no boundary ambiguity, so it
+    // stays modular-only and refuses the rest.
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -836,6 +943,51 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
         }
+    }
+
+    // A parity branch `if x even { 2x } else { 3x + 1 }` — the collatz-style
+    // rule no affine or threshold solver can express — is recovered via the
+    // `x % 2 == 0` predicate and is correct on unseen points.
+    #[test]
+    fn predicate_branch_recovers_parity_split() {
+        let f = |x: i64| if x % 2 == 0 { 2 * x } else { 3 * x + 1 };
+        let rows: Vec<(i64, i64)> = (0..16).map(|x| (x, f(x))).collect();
+        let p = p1(&rows);
+        let r = search_predicate_branch(&p, "f").expect("must recover the parity branch");
+        assert!(r.code.contains('%'), "expected a modular condition: {}", r.code);
+        let check = p1(&[(20, f(20)), (21, f(21)), (50, f(50)), (99, f(99))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("parity branch must be exact on unseen points");
+    }
+
+    // A mod-3 residue branch over two arguments: `if a % 3 == 1 { a + 2b }
+    // else { 2a - b }`. Recovered and exact on unseen points.
+    #[test]
+    fn predicate_branch_recovers_mod3_two_arg() {
+        let f = |a: i64, b: i64| if a.rem_euclid(3) == 1 { a + 2 * b } else { 2 * a - b };
+        let raw = [
+            (0, 1), (1, 2), (2, 0), (3, 4), (4, 1), (5, 5), (6, 2), (7, 3), (9, 0), (10, 6),
+            (12, 1), (13, 2),
+        ];
+        let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
+        let p = p2(&rows);
+        let r = search_predicate_branch(&p, "f").expect("must recover the mod-3 branch");
+        let check = p2(&[((22, 5), f(22, 5)), ((31, 9), f(31, 9)), ((40, 0), f(40, 0))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("mod-3 branch must be exact on unseen points");
+    }
+
+    // It refuses noise: targets with no exact two-affine branch over any modular
+    // or threshold predicate yield None rather than a coincidental split.
+    #[test]
+    fn predicate_branch_refuses_noise() {
+        let ys = [3i64, 7, 1, 9, 2, 8, 4, 6, 0, 5, 11, 13, 1, 7];
+        let rows: Vec<(i64, i64)> = ys.iter().enumerate().map(|(i, &y)| (i as i64, y)).collect();
+        let p = p1(&rows);
+        assert!(
+            search_predicate_branch(&p, "f").is_none(),
+            "must refuse data with no exact branch explanation"
+        );
     }
 
     // A two-argument affine rule `5 + 3a + 2b` is recovered exactly by the

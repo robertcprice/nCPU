@@ -69,6 +69,11 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // fully verified, so it generalizes by construction and preempts the slow
         // native-gradient distillation rather than feeding it.
         | "array_affine_features"
+        // Conditional logic (`if x%m==r { affine } else { affine }`): both
+        // branches are exact integer affines on over-determined partitions and
+        // the whole if/else is verified on every example, so it generalizes by
+        // construction and is returned directly instead of feeding gradient.
+        | "search_predicate_branch"
         | "search_min3_branch"
         | "search_scalar_expr"
         | "search_digit_sum_loop"
