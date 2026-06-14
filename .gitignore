@@ -95,3 +95,13 @@ paper/generated/
 # prior-net training data (regenerate via: cargo run --release --bin gen_prior_data)
 nsynth/data/prior_net_train*.jsonl
 training/prior_net/prior_net_v1_rejected*.pt
+
+# nsynth learned runtime caches (per-machine state, regenerated on every run —
+# never commit: they only affect solver SPEED, never correctness)
+.nsynth_method_router.json
+.nsynth_search_family_router.json
+.nsynth_solved_programs.json
+.nsynth_learned_biases.jsonl
+
+# egdc mog transpiler test binaries (compiled fixtures, ~1.5 MB each)
+egdc/mog/tests_data/
