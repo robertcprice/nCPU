@@ -172,6 +172,9 @@ fn transpile(mog: &str, target: Target) -> String {
         // integer-returning functions we rewrite the operator so
         // `5 / 2 == 2`, not `2.5`. Only applies at the top-level body of
         // `-> i64` functions — doesn't touch other targets.
+        if target == Target::Python {
+            body = rewrite_logical_python(&body);
+        }
         if target == Target::Python && returns_int {
             body = rewrite_int_div_python(&body);
         }
@@ -229,6 +232,46 @@ fn transpile(mog: &str, target: Target) -> String {
 /// slash is already part of `//` (unchanged), or embedded in a string
 /// literal (best-effort: we avoid rewriting inside quotes). Strings in
 /// the synthesizer's output are rare; a conservative scan is enough.
+/// Rewrite Mog's C-style logical operators to Python keywords on a body line:
+/// `&&` -> `and`, `||` -> `or`, a standalone `!` -> `not ` (but never `!=`).
+/// `~` (bit-not) needs no change — Python spells it the same. Replacements skip
+/// the interior of string literals so a `"&&"` inside a string is left alone.
+fn rewrite_logical_python(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len() + 4);
+    let mut i = 0;
+    let mut in_str = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' {
+            in_str = !in_str;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if in_str {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let next = chars.get(i + 1).copied();
+        if c == '&' && next == Some('&') {
+            out.push_str(" and ");
+            i += 2;
+        } else if c == '|' && next == Some('|') {
+            out.push_str(" or ");
+            i += 2;
+        } else if c == '!' && next != Some('=') {
+            out.push_str("not ");
+            i += 1;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
+}
+
 fn rewrite_int_div_python(line: &str) -> String {
     let bytes = line.as_bytes();
     let mut out = String::with_capacity(line.len() + 4);
@@ -651,6 +694,26 @@ mod tests {
         }\n\
         return acc;\n\
         }\n";
+
+    #[test]
+    fn python_logical_operators_rewrite() {
+        // C-style `&&`/`||`/`!` become Python `and`/`or`/`not`; `~` is unchanged.
+        let mog = "fn f(x: i64) -> i64 {\n\
+            if x > 0 && x < 10 {\n\
+            return 1;\n\
+            }\n\
+            if x < 0 || !(x == 5) {\n\
+            return ~x;\n\
+            }\n\
+            return 0;\n\
+            }\n";
+        let out = to_python(mog);
+        assert!(out.contains("x > 0  and  x < 10"), "&& -> and: {out}");
+        assert!(out.contains(" or "), "|| -> or: {out}");
+        assert!(out.contains("not (x == 5)"), "! -> not: {out}");
+        assert!(out.contains("~x"), "~ unchanged: {out}");
+        assert!(!out.contains("&&") && !out.contains("||"), "no C ops left: {out}");
+    }
 
     #[test]
     fn python_transpile_shape() {

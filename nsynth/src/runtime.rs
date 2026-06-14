@@ -200,6 +200,7 @@ pub enum Pattern {
 pub enum UnaryOp {
     Neg,
     Not,
+    BitNot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +215,8 @@ pub enum BinaryOp {
     BitXor,
     Shl,
     Shr,
+    And,
+    Or,
     Eq,
     Ne,
     Lt,
@@ -255,6 +258,10 @@ enum Token {
     Caret,
     Shl,
     Shr,
+    AmpAmp,
+    PipePipe,
+    Bang,
+    Tilde,
     EqEq,
     BangEq,
     Lt,
@@ -611,8 +618,12 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                     chars.next();
                     out.push(Token::BangEq);
                 } else {
-                    return Err("unexpected !".to_string());
+                    out.push(Token::Bang);
                 }
+            }
+            '~' => {
+                chars.next();
+                out.push(Token::Tilde);
             }
             '<' => {
                 chars.next();
@@ -640,11 +651,21 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
             }
             '&' => {
                 chars.next();
-                out.push(Token::Amp);
+                if matches!(chars.peek(), Some('&')) {
+                    chars.next();
+                    out.push(Token::AmpAmp);
+                } else {
+                    out.push(Token::Amp);
+                }
             }
             '|' => {
                 chars.next();
-                out.push(Token::Pipe);
+                if matches!(chars.peek(), Some('|')) {
+                    chars.next();
+                    out.push(Token::PipePipe);
+                } else {
+                    out.push(Token::Pipe);
+                }
             }
             '^' => {
                 chars.next();
@@ -920,7 +941,29 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_bitor()
+        self.parse_logical_or()
+    }
+
+    // Logical `||` then `&&`, the lowest-binding operators (below the bitwise
+    // family), matching C. Both short-circuit at evaluation time.
+    fn parse_logical_or(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_logical_and()?;
+        while self.at(&Token::PipePipe) {
+            self.bump();
+            let rhs = self.parse_logical_and()?;
+            expr = Expr::Binary(Box::new(expr), BinaryOp::Or, Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn parse_logical_and(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_bitor()?;
+        while self.at(&Token::AmpAmp) {
+            self.bump();
+            let rhs = self.parse_bitor()?;
+            expr = Expr::Binary(Box::new(expr), BinaryOp::And, Box::new(rhs));
+        }
+        Ok(expr)
     }
 
     // Bitwise precedence, lowest-binding first (C order): `|` then `^` then `&`,
@@ -1056,6 +1099,14 @@ impl Parser {
         if self.at(&Token::Minus) {
             self.bump();
             return Ok(Expr::Unary(UnaryOp::Neg, Box::new(self.parse_unary()?)));
+        }
+        if self.at(&Token::Bang) {
+            self.bump();
+            return Ok(Expr::Unary(UnaryOp::Not, Box::new(self.parse_unary()?)));
+        }
+        if self.at(&Token::Tilde) {
+            self.bump();
+            return Ok(Expr::Unary(UnaryOp::BitNot, Box::new(self.parse_unary()?)));
         }
         self.parse_postfix()
     }
@@ -1601,9 +1652,24 @@ impl Runtime {
                 match op {
                     UnaryOp::Neg => Ok(Value::Int(-expect_int(&value)?)),
                     UnaryOp::Not => Ok(Value::Bool(!truthy(&value))),
+                    UnaryOp::BitNot => Ok(Value::Int(!expect_int(&value)?)),
                 }
             }
             Expr::Binary(lhs, op, rhs) => {
+                // Logical `&&` / `||` short-circuit: the right side is only
+                // evaluated when the left does not already decide the result, so
+                // `false && (x / 0)` does not trap.
+                if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                    let l = truthy(&self.eval_expr(lhs, env.clone())?);
+                    let decided = match op {
+                        BinaryOp::And => !l, // false && _ == false
+                        _ => l,              // true  || _ == true
+                    };
+                    if decided {
+                        return Ok(Value::Bool(l));
+                    }
+                    return Ok(Value::Bool(truthy(&self.eval_expr(rhs, env)?)));
+                }
                 let lhs = self.eval_expr(lhs, env.clone())?;
                 let rhs = self.eval_expr(rhs, env)?;
                 self.eval_binary(lhs, *op, rhs)
@@ -1748,6 +1814,10 @@ impl Runtime {
                 }
                 Ok(Value::Int(l >> r))
             }
+            // `&&` / `||` are normally short-circuited in `eval_expr`; this eager
+            // path keeps the match exhaustive if they are ever evaluated directly.
+            BinaryOp::And => Ok(Value::Bool(truthy(&lhs) && truthy(&rhs))),
+            BinaryOp::Or => Ok(Value::Bool(truthy(&lhs) || truthy(&rhs))),
             BinaryOp::Eq => Ok(Value::Bool(value_eq(&lhs, &rhs))),
             BinaryOp::Ne => Ok(Value::Bool(!value_eq(&lhs, &rhs))),
             BinaryOp::Lt => Ok(Value::Bool(expect_int(&lhs)? < expect_int(&rhs)?)),
@@ -2228,6 +2298,37 @@ fn main() -> i64 {
 }
 "#;
         assert_program_output(code, "4\n5\n6\n24\n12\n6");
+    }
+
+    #[test]
+    fn executes_logical_and_unary_operators() {
+        // `&&`, `||`, `!`, `~` parse with C precedence and short-circuit.
+        // x=5: (x>0 && x<10) true -> 1; (x<0 || x==5) true -> 1;
+        // !(x==4) -> true -> 1; ~x = -(x)-1 = -6; (~x) + 7 = 1.
+        // Short-circuit: (x != 0 && (100 / x) > 10) -> 100/5=20>10 -> 1.
+        let code = r#"
+fn main() -> i64 {
+    x := 5;
+    a := 0;
+    if x > 0 && x < 10 {
+        a = a + 1;
+    }
+    if x < 0 || x == 5 {
+        a = a + 1;
+    }
+    if !(x == 4) {
+        a = a + 1;
+    }
+    b := (~x) + 7;
+    if x != 0 && (100 / x) > 10 {
+        a = a + 1;
+    }
+    println_i64(a);
+    println_i64(b);
+    return 0;
+}
+"#;
+        assert_program_output(code, "4\n1");
     }
 
     #[test]
