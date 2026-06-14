@@ -147,6 +147,52 @@ def main():
             print(f"     {s}")
         print()
 
+    # Conversation — coherent question→answer exchanges. The question uses
+    # do-support (base verb); the answer restores agreement (sing -> 3sg,
+    # plural -> base), so the pair is grammatical end to end.
+    print("  [conversation — Q&A with agreement]")
+    n = 0
+    seen = set()
+    while n < 4:
+        number = rng.choice(["sing", "plur"])
+        subjects = sing_subjects if number == "sing" else plur_subjects
+        subj = rng.choice(subjects)
+        v = rng.choice(bases)
+        tail = f" {obj[v]}" if obj[v] else ""
+        low = subj[0].lower() + subj[1:]
+        if number == "sing":
+            q = f"Does {low} {v}{tail}?"
+            a = f"Yes, {low} {sg[v]}{tail}."
+        else:
+            q = f"Do {low} {v}{tail}?"
+            a = f"Yes, {low} {v}{tail}."
+        if q in seen:
+            continue
+        seen.add(q)
+        n += 1
+        print(f"     Q: {q}")
+        print(f"     A: {a}")
+    print()
+
+    # Wh-question → answer about the action.
+    print("  [conversation — wh-question]")
+    n = 0
+    seen = set()
+    while n < 3:
+        subj = rng.choice(sing_subjects)
+        v = rng.choice([b for b in bases if obj[b]])
+        low = subj[0].lower() + subj[1:]
+        q = f"What does {low} do?"
+        a = f"{subj} {sg[v]} {obj[v]}."
+        key = (subj, v)
+        if key in seen:
+            continue
+        seen.add(key)
+        n += 1
+        print(f"     Q: {q}")
+        print(f"     A: {a}")
+    print()
+
     # Independent verification: the recovered grammaticality rule must ACCEPT
     # the generated present-tense sibilant 3sg sentences (KVRM-style check).
     print("Independent verification (recovered 3sg rule accepts what nCPU spoke):")
