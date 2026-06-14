@@ -83,6 +83,11 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // recovered by deterministic 3-run segmentation, both bodies exact, the
         // whole program verified — generalizes by construction, preempts gradient.
         | "search_interval_branch"
+        // Rational floor-division (`(a*x + b) / d`, affine inside the divide):
+        // recovered by a bounded divisor/slope search, b forced by the floor
+        // inequalities, gated to a,b,x >= 0 so trunc == floor, and verified — so
+        // it generalizes by construction and preempts gradient.
+        | "search_rational_floor"
         // Full modular case analysis (`match x%m { r => affine }`): every residue
         // class is an exact affine on an over-determined bucket and the whole
         // chain is verified, so it generalizes by construction and is returned

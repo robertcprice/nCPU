@@ -1135,6 +1135,96 @@ pub(super) fn search_interval_branch(problem: &Problem, fn_name: &str) -> Option
     verified_result(problem, code, "search_interval_branch")
 }
 
+/// Single-argument rational floor-division: `f(x) = (a·x + b) / d` (integer,
+/// truncating) for a constant divisor `d ≥ 2` and non-negative `a, b`. The affine
+/// lives INSIDE the division, which is exactly what no other solver can express:
+/// `search_affine` is a plain line, and `search_composed_features`' `x / m`
+/// feature divides the raw argument (`c·(x / m)`), never an affine of it. Real
+/// rules of this shape are averages and bucketed rates — `(3x + 1) / 2`,
+/// `(x + 5) / 3`, "every d units costs one more".
+///
+/// INVERSION: for each divisor `d`, the numerator's slope `a` is within a small
+/// window of `d · (Δy / Δx)` (the observed step), so only a handful of `(d, a)`
+/// pairs are tried. For a fixed `(d, a)`, `b` is forced: every example needs
+/// `d·y ≤ a·x + b < d·y + d`, i.e. `b ≥ max_x(d·y − a·x)` and `b < min_x(…) + d`;
+/// that interval is non-empty exactly when the spread of `d·y − a·x` is `< d`, and
+/// then `b = max_x(d·y − a·x)`. HONESTY GUARDS: `a, b ≥ 0` and `x ≥ 0` (so Mog's
+/// truncating `/` equals floor and the program is correct on unseen inputs, not
+/// just where the samples happened to be non-negative); the division must be
+/// genuinely lossy on some example (otherwise it is exact and belongs to
+/// `search_affine`); and the whole program is re-checked by `verified_result`.
+pub(super) fn search_rational_floor(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let examples = super::scalar_search::extract_scalar_examples(problem)?;
+    let arity = examples.first()?.len();
+    if arity != 1 || examples.iter().any(|row| row.len() != 1) {
+        return None;
+    }
+    let targets: Vec<i64> = problem.examples.iter().map(|e| e.expected_int()).collect();
+    let n = examples.len();
+    if targets.len() != n || n < 6 {
+        return None;
+    }
+    if examples.iter().any(|row| row[0] < 0) {
+        return None; // keep truncating `/` == floor: only defined for x >= 0 here
+    }
+    // If a plain affine already reproduces every example, this rule is
+    // `search_affine`'s (the minimal form) — refuse, even though a lossy floor
+    // like `(3x + 7) / 3 == x + 2` could also represent it. This family only
+    // claims genuinely non-affine floors (`(3x + 1) / 2`, whose first differences
+    // are not constant).
+    if let Some(c) = solve_affine(&examples, &targets, 1) {
+        if examples.iter().zip(targets.iter()).all(|(r, &y)| affine_predicts(&c, r, y)) {
+            return None;
+        }
+    }
+    let mut idx: Vec<usize> = (0..n).collect();
+    idx.sort_by_key(|&i| examples[i][0]);
+    let (xmin, ymin) = (examples[idx[0]][0], targets[idx[0]]);
+    let (xmax, ymax) = (examples[idx[n - 1]][0], targets[idx[n - 1]]);
+    if xmax == xmin {
+        return None;
+    }
+    let param_names = scalar_param_names(1);
+    let params = scalar_params_decl(&param_names);
+
+    for d in 2..=32i64 {
+        let approx = (d as i128 * (ymax - ymin) as i128 / (xmax - xmin) as i128) as i64;
+        for a in (approx - 2).max(0)..=(approx + 2).max(0) {
+            // b is forced by the floor inequalities: b = max_x(d*y - a*x), valid
+            // only when the spread of (d*y - a*x) is strictly less than d.
+            let mut hmin = i128::MAX;
+            let mut hmax = i128::MIN;
+            for (row, &y) in examples.iter().zip(targets.iter()) {
+                let h = d as i128 * y as i128 - a as i128 * row[0] as i128;
+                hmin = hmin.min(h);
+                hmax = hmax.max(h);
+            }
+            if hmax - hmin >= d as i128 || hmax < 0 {
+                continue; // interval empty, or b would be negative
+            }
+            let Ok(b) = i64::try_from(hmax) else {
+                continue;
+            };
+            // Reject exact division on every example — that is a plain affine,
+            // owned by search_affine; this family is for the genuinely lossy floor.
+            let lossy = examples
+                .iter()
+                .zip(targets.iter())
+                .any(|(row, _)| (a as i128 * row[0] as i128 + b as i128).rem_euclid(d as i128) != 0);
+            if !lossy {
+                continue;
+            }
+            let num = render_scalar_expr(&affine_expr(&[b, a]), &param_names);
+            let code =
+                format!("fn {fn_name}({params}) -> i64 {{\n    return ({num}) / {d};\n}}\n");
+            if let Some(result) = verified_result(problem, code, "search_rational_floor") {
+                return Some(result);
+            }
+        }
+    }
+    None
+}
+
 pub(super) fn search_modular_cases(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let examples = super::scalar_search::extract_scalar_examples(problem)?;
     let arity = examples.first()?.len();
@@ -1409,6 +1499,34 @@ mod tests {
         let check = p1(&[(2, f(2)), (6, f(6)), (12, f(12)), (13, f(13)), (40, f(40))]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("interval branch must be exact on unseen points");
+    }
+
+    // A rational floor rule `(3x + 1) / 2` — the affine is INSIDE the division,
+    // which no affine/composition solver can express — recovered and exact on
+    // unseen points.
+    #[test]
+    fn rational_floor_recovers_affine_over_d() {
+        let f = |x: i64| (3 * x + 1) / 2;
+        let rows: Vec<(i64, i64)> = (0..14).map(|x| (x, f(x))).collect();
+        let p = p1(&rows);
+        let r = search_rational_floor(&p, "f").expect("must recover (3x+1)/2");
+        assert!(r.code.contains('/'), "expected a division: {}", r.code);
+        let check = p1(&[(20, f(20)), (33, f(33)), (50, f(50)), (101, f(101))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("rational floor must be exact on unseen points");
+    }
+
+    // It refuses an EXACT-division rule `(2x + 4) / 2 == x + 2` — that is a plain
+    // affine, owned by search_affine, so the floor family must not claim it.
+    #[test]
+    fn rational_floor_refuses_exact_division() {
+        let f = |x: i64| (2 * x + 4) / 2; // == x + 2 exactly, never lossy
+        let rows: Vec<(i64, i64)> = (0..14).map(|x| (x, f(x))).collect();
+        let p = p1(&rows);
+        assert!(
+            search_rational_floor(&p, "f").is_none(),
+            "exact division is plain affine, not a lossy floor"
+        );
     }
 
     // It refuses a single one-sided threshold (only two runs, not three) — that

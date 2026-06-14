@@ -494,6 +494,7 @@ pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| search_affine_threshold(problem, fn_name))
         .or_else(|| search_predicate_branch(problem, fn_name))
         .or_else(|| search_interval_branch(problem, fn_name))
+        .or_else(|| search_rational_floor(problem, fn_name))
         .or_else(|| search_modular_cases(problem, fn_name))
         .or_else(|| search_minmax_affine(problem, fn_name))
 }
