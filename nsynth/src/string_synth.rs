@@ -46,6 +46,7 @@ enum SExpr {
     Concat(Box<SExpr>, Box<SExpr>),
     Slice(Box<SExpr>, IExpr, IExpr),
     Replace(Box<SExpr>, String, String),
+    Split(Box<SExpr>, String, usize), // E.split(sep)[k]
 }
 
 fn clamp(i: i64, n: usize) -> usize {
@@ -94,6 +95,13 @@ fn eval_s(e: &SExpr, inputs: &[String]) -> Option<String> {
             }
             eval_s(a, inputs)?.replace(old, new)
         }
+        SExpr::Split(a, sep, k) => {
+            if sep.is_empty() {
+                return None;
+            }
+            let s = eval_s(a, inputs)?;
+            s.split(sep.as_str()).nth(*k)?.to_string()
+        }
     })
 }
 
@@ -129,6 +137,9 @@ fn code_s(e: &SExpr, params: &[String]) -> String {
         SExpr::Replace(a, old, new) => {
             format!("{}.replace(\"{}\", \"{}\")", code_s(a, params), esc(old), esc(new))
         }
+        SExpr::Split(a, sep, k) => {
+            format!("{}.split(\"{}\")[{k}]", code_s(a, params), esc(sep))
+        }
     }
 }
 
@@ -156,6 +167,27 @@ fn mined_literals(examples: &[StrSynthExample]) -> Vec<String> {
         for start in 0..chars.len() {
             for len in 1..=3usize.min(chars.len() - start) {
                 set.insert(chars[start..start + len].iter().collect());
+            }
+        }
+    }
+    let mut v: Vec<String> = set.into_iter().collect();
+    v.sort();
+    v
+}
+
+/// Delimiter characters for split: common separators plus any non-alphanumeric
+/// character that occurs in the inputs.
+fn mined_delimiters(examples: &[StrSynthExample]) -> Vec<String> {
+    let mut set: HashSet<String> = HashSet::new();
+    for d in [" ", "@", ".", ",", "-", "_", "/", ":", "|"] {
+        set.insert(d.to_string());
+    }
+    for ex in examples {
+        for inp in &ex.inputs {
+            for c in inp.chars() {
+                if !c.is_alphanumeric() {
+                    set.insert(c.to_string());
+                }
             }
         }
     }
@@ -319,6 +351,7 @@ pub fn synthesize_string_program(
         }
     }
     let lits = mined_literals(examples);
+    let dels = mined_delimiters(examples);
     let ixs: Vec<IExpr> = {
         let mut ix = vec![IExpr::Const(0), IExpr::Const(1), IExpr::Const(2), IExpr::Const(3)];
         for i in 0..n_args {
@@ -379,11 +412,16 @@ pub fn synthesize_string_program(
             try_push!(SExpr::Trim(Box::new(e.clone())), size);
             try_push!(SExpr::Reverse(Box::new(e.clone())), size);
         }
-        // 3. Slices over size-1 children — bounded to prefix/suffix/char windows.
+        // 3. Slices + split-take over size-1 children.
         for e in &children {
             for lo in &ixs {
                 for hi in &ixs {
                     try_push!(SExpr::Slice(Box::new(e.clone()), lo.clone(), hi.clone()), size);
+                }
+            }
+            for sep in &dels {
+                for k in 0..3 {
+                    try_push!(SExpr::Split(Box::new(e.clone()), sep.clone(), k), size);
                 }
             }
             if by_size[size].len() > MAX_BANK {
@@ -542,6 +580,34 @@ mod tests {
         );
         assert!(r.success, "{:?}", r.error);
         assert!(r.code.contains("@") && r.code.contains(".com"), "{}", r.code);
+    }
+
+    #[test]
+    fn learns_split_take_domain() {
+        // domain after @, with VARYING local-part lengths (slice can't do it).
+        let r = solve(
+            &["s"],
+            &[
+                ex(&["john@acme.com"], "acme.com"),
+                ex(&["a@x.org"], "x.org"),
+                ex(&["robert@longname.net"], "longname.net"),
+            ],
+        );
+        assert!(r.success, "{:?}", r.error);
+        assert!(r.code.contains("split"), "{}", r.code);
+    }
+
+    #[test]
+    fn learns_first_word() {
+        let r = solve(
+            &["s"],
+            &[
+                ex(&["hello world"], "hello"),
+                ex(&["a b c"], "a"),
+                ex(&["one two"], "one"),
+            ],
+        );
+        assert!(r.success, "{:?}", r.error);
     }
 
     #[test]

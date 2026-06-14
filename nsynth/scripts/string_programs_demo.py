@@ -27,6 +27,9 @@ TASKS = [
     ("last_first",   "fn f(a: string, b: string) -> string", [(("john", "smith"), "smith, john"), (("jane", "doe"), "doe, jane"), (("amy", "lee"), "lee, amy")]),
     ("initials",     "fn f(a: string, b: string) -> string", [(("john", "smith"), "JS"), (("jane", "doe"), "JD"), (("amy", "lee"), "AL")]),
     ("email",        "fn f(a: string, b: string) -> string", [(("john", "acme"), "john@acme.com"), (("amy", "x"), "amy@x.com")]),
+    ("domain",       "fn f(s: string) -> string",            [("john@acme.com", "acme.com"), ("a@x.org", "x.org"), ("bob@longco.net", "longco.net")]),
+    ("username",     "fn f(s: string) -> string",            [("john@acme.com", "john"), ("amy@x.org", "amy")]),
+    ("first_word",   "fn f(s: string) -> string",            [("hello world", "hello"), ("a b c", "a"), ("one two", "one")]),
 ]
 
 
