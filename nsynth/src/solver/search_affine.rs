@@ -32,24 +32,25 @@ fn multi_arg_examples(problem: &Problem) -> Option<(Vec<Vec<i64>>, Vec<i64>, usi
     Some((examples, targets, arity))
 }
 
-/// Solve `c0 + Σ c_j·x_j = y` for integer coefficients `[c0, c1, …, cn]` from the
-/// examples. Gaussian elimination in f64 with partial pivoting recovers the
-/// coefficients; they are rounded to the nearest integer and rejected if they
-/// are not (near-)integral. The final exactness check is the caller's
-/// `verified_result`, so a wrong fit (non-affine data, ill-conditioning) is
-/// caught there and discarded — this routine only proposes.
-fn solve_affine(examples: &[Vec<i64>], targets: &[i64], arity: usize) -> Option<Vec<i64>> {
-    let m = arity + 1; // unknowns: const + one per argument
-    if examples.len() < m {
+/// Solve the integer linear system `PHI · w = targets` for `w` (length `m`) from
+/// pre-built feature rows (each `feature_rows[i]` is the length-`m` feature
+/// vector `phi` for example `i`). Gaussian elimination in f64 with partial
+/// pivoting recovers `w`; the entries are rounded to the nearest integer and
+/// rejected if they are not (near-)integral. This is byte-for-byte the body of
+/// the original `solve_affine` lifted to an arbitrary feature basis, so the
+/// affine path that delegates to it (`feature = [1, x_1, …, x_n]`) is unchanged.
+/// The final exactness check is the caller's `verified_result`, so a wrong fit
+/// (wrong basis, ill-conditioning) is caught there — this routine only proposes.
+fn solve_linear_features(feature_rows: &[Vec<i64>], targets: &[i64], m: usize) -> Option<Vec<i64>> {
+    if feature_rows.len() < m {
         return None;
     }
-    // Augmented rows: [1, x_1, …, x_n | y].
-    let mut a: Vec<Vec<f64>> = examples
+    // Augmented rows: [phi_1, …, phi_m | y].
+    let mut a: Vec<Vec<f64>> = feature_rows
         .iter()
         .zip(targets.iter())
         .map(|(row, &t)| {
             let mut r = Vec::with_capacity(m + 1);
-            r.push(1.0);
             r.extend(row.iter().map(|&v| v as f64));
             r.push(t as f64);
             r
@@ -97,6 +98,25 @@ fn solve_affine(examples: &[Vec<i64>], targets: &[i64], arity: usize) -> Option<
     Some(coeffs)
 }
 
+/// Solve `c0 + Σ c_j·x_j = y` for integer coefficients `[c0, c1, …, cn]` from the
+/// examples by building the affine feature rows `[1, x_1, …, x_n]` and delegating
+/// to `solve_linear_features` (`m = arity + 1`). The body is identical to the
+/// original direct implementation — only the elimination machinery has been
+/// factored out so the quadratic solver can reuse it.
+fn solve_affine(examples: &[Vec<i64>], targets: &[i64], arity: usize) -> Option<Vec<i64>> {
+    let m = arity + 1; // unknowns: const + one per argument
+    let feature_rows: Vec<Vec<i64>> = examples
+        .iter()
+        .map(|row| {
+            let mut r = Vec::with_capacity(m);
+            r.push(1);
+            r.extend(row.iter().copied());
+            r
+        })
+        .collect();
+    solve_linear_features(&feature_rows, targets, m)
+}
+
 /// `coeffs = [c0, c1, …, cn]` → the expression `c0 + c1·v0 + c2·v1 + …`,
 /// dropping zero terms and rendering `1·v` as just `v`.
 fn affine_expr(coeffs: &[i64]) -> ScalarExpr {
@@ -130,6 +150,109 @@ pub(super) fn search_affine(problem: &Problem, fn_name: &str) -> Option<SolveRes
     let body = render_scalar_expr(&affine_expr(&coeffs), &param_names);
     let code = format!("fn {fn_name}({params}) -> i64 {{\n    return {body};\n}}\n");
     verified_result(problem, code, "search_affine")
+}
+
+/// `w = [c0, c1, d1, c2, d2, …, cn, dn]` (the layout produced by
+/// `search_polynomial_multi`: a const, then a linear+quadratic coefficient per
+/// axis) → the expression `c0 + Σ_j (c_j·x_j + d_j·x_j²)`, dropping zero terms,
+/// rendering `1·x` as `x` and `1·x²` as `(x·x)`. Reuses `affine_expr`'s constant
+/// rule (append `c0` iff it is non-zero, or there are no other terms).
+fn polynomial_expr(w: &[i64], arity: usize) -> ScalarExpr {
+    let mut terms: Vec<ScalarExpr> = Vec::new();
+    for j in 0..arity {
+        let lin = w[1 + 2 * j];
+        let quad = w[2 + 2 * j];
+        if lin != 0 {
+            let var = ScalarExpr::Var(j);
+            terms.push(if lin == 1 {
+                var
+            } else {
+                ScalarExpr::Bin(Box::new(ScalarExpr::Const(lin)), ScalarBinOp::Mul, Box::new(var))
+            });
+        }
+        if quad != 0 {
+            // x_j² rendered as (x_j · x_j).
+            let sq = ScalarExpr::Bin(
+                Box::new(ScalarExpr::Var(j)),
+                ScalarBinOp::Mul,
+                Box::new(ScalarExpr::Var(j)),
+            );
+            terms.push(if quad == 1 {
+                sq
+            } else {
+                ScalarExpr::Bin(Box::new(ScalarExpr::Const(quad)), ScalarBinOp::Mul, Box::new(sq))
+            });
+        }
+    }
+    if w[0] != 0 || terms.is_empty() {
+        terms.push(ScalarExpr::Const(w[0]));
+    }
+    let mut iter = terms.into_iter();
+    let first = iter.next().expect("at least one term");
+    iter.fold(first, |acc, term| {
+        ScalarExpr::Bin(Box::new(acc), ScalarBinOp::Add, Box::new(term))
+    })
+}
+
+/// Exact separable degree-2 (per-variable quadratic) integer rule over 1–3
+/// integer arguments: `y = c0 + Σ_j (c_j·x_j + d_j·x_j²)`. Covers curved
+/// single-argument rules `a·x² + b·x + c` that the affine solvers refuse, plus
+/// mixed quadratic-per-axis multi-argument rules (e.g. `x² + 2y + 3`). The
+/// cross-term `x_i·x_j` is deliberately excluded to keep the feature matrix
+/// small and the solve deterministic — a documented gap, not a bug.
+///
+/// INVERSION: build the monomial feature row `phi = [1, x_1, x_1², …, x_n, x_n²]`
+/// (length `m = 1 + 2·arity`), solving the integer linear system via the shared
+/// `solve_linear_features`. The `x²` feature is formed in `i128` before the f64
+/// cast so large inputs do not overflow during matrix construction; the
+/// round-to-int gate plus `verified_result` reject any case where f64 precision
+/// on `x²` lost integrality. Returns None when there are fewer than `m` examples.
+///
+/// EARLY-OUT: if every quadratic coefficient rounds to zero the program is pure
+/// affine — for arity ≥ 2 return None and let `search_affine` own those (it runs
+/// first). For arity == 1 the all-quad-zero (pure-linear `b·x + c`) result is
+/// kept, because `search_affine` is gated to 2–3 args and cannot fire here.
+pub(super) fn search_polynomial_multi(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let examples = super::scalar_search::extract_scalar_examples(problem)?;
+    let arity = examples.first()?.len();
+    if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
+        return None;
+    }
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    if targets.len() != examples.len() {
+        return None;
+    }
+    let m = 1 + 2 * arity;
+    if examples.len() < m {
+        return None;
+    }
+    // Feature rows phi = [1, x_1, x_1², …, x_n, x_n²]. x² is computed in i128 so
+    // the construction does not overflow; values that lose integrality in the f64
+    // solve are caught by the round-to-int gate and by verified_result.
+    let feature_rows: Vec<Vec<i64>> = examples
+        .iter()
+        .map(|row| {
+            let mut phi = Vec::with_capacity(m);
+            phi.push(1);
+            for &x in row {
+                phi.push(x);
+                let sq = (x as i128) * (x as i128);
+                phi.push(sq as i64);
+            }
+            phi
+        })
+        .collect();
+    let w = solve_linear_features(&feature_rows, &targets, m)?;
+    // Early-out for degenerate (pure-affine) fits when search_affine owns the case.
+    let all_quad_zero = (0..arity).all(|j| w[2 + 2 * j] == 0);
+    if all_quad_zero && arity >= 2 {
+        return None;
+    }
+    let param_names = scalar_param_names(arity);
+    let params = scalar_params_decl(&param_names);
+    let body = render_scalar_expr(&polynomial_expr(&w, arity), &param_names);
+    let code = format!("fn {fn_name}({params}) -> i64 {{\n    return {body};\n}}\n");
+    verified_result(problem, code, "search_polynomial_multi")
 }
 
 pub(super) fn search_affine_threshold(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
@@ -314,6 +437,21 @@ mod tests {
         }
     }
 
+    fn p1(rows: &[(i64, i64)]) -> Problem {
+        Problem {
+            name: "f".to_string(),
+            category: "external",
+            description: "",
+            signature: "fn f(x: i64) -> i64",
+            examples: rows
+                .iter()
+                .map(|&(x, y)| Example { inputs: vec![Value::Int(x)], expected: y })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
     // A two-argument affine rule `5 + 3a + 2b` is recovered exactly by the
     // integer linear solve and verified correct on unseen points.
     #[test]
@@ -393,5 +531,65 @@ mod tests {
             (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
         let p = p2(&rows);
         assert!(search_affine(&p, "f").is_none(), "affine must refuse a product");
+    }
+
+    // A curved single-argument rule `2x² − 3x + 5` is recovered exactly by the
+    // monomial-feature solve and verified correct on UNSEEN points — proving
+    // generalization, not fit. (The affine solvers refuse this curvature.)
+    #[test]
+    fn polynomial_recovers_one_arg_quadratic() {
+        let f = |x: i64| 2 * x * x - 3 * x + 5;
+        let rows: Vec<(i64, i64)> =
+            [0, 1, 2, 3, 4, 5, 7, 10].iter().map(|&x| (x, f(x))).collect();
+        let p = p1(&rows);
+        let r = search_polynomial_multi(&p, "f").expect("must solve 2x^2 - 3x + 5");
+        let check = p1(&[(13, f(13)), (50, f(50)), (99, f(99))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("quadratic must be exact on unseen points");
+    }
+
+    // A two-argument SEPARABLE quadratic `a² + 2b + 3` is recovered exactly and
+    // verified on unseen points.
+    #[test]
+    fn polynomial_recovers_two_arg_separable() {
+        let f = |a: i64, b: i64| a * a + 2 * b + 3;
+        let rows: Vec<((i64, i64), i64)> =
+            [(0, 0), (1, 1), (2, 3), (3, 5), (4, 2), (5, 7), (7, 1)]
+                .iter()
+                .map(|&(a, b)| ((a, b), f(a, b)))
+                .collect();
+        let p = p2(&rows);
+        let r = search_polynomial_multi(&p, "f").expect("must solve a^2 + 2b + 3");
+        let check = p2(&[((13, 4), f(13, 4)), ((99, 50), f(99, 50))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("separable quadratic must be exact on unseen points");
+    }
+
+    // It refuses a true cross-term `a·b` — the separable feature basis cannot
+    // express it, so the round-to-int / rank check rejects rather than overfit.
+    #[test]
+    fn polynomial_refuses_cross_term() {
+        let rows: Vec<((i64, i64), i64)> =
+            (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
+        let p = p2(&rows);
+        assert!(
+            search_polynomial_multi(&p, "f").is_none(),
+            "separable basis must refuse a cross-term product"
+        );
+    }
+
+    // A pure-linear single-argument rule `3x + 1` (all quadratic coeffs zero) is
+    // still solved at arity 1, because search_affine is gated to 2–3 args and so
+    // this legitimately lands in the polynomial solver's arity==1 branch.
+    #[test]
+    fn polynomial_one_arg_affine_still_lands() {
+        let f = |x: i64| 3 * x + 1;
+        let rows: Vec<(i64, i64)> =
+            [0, 1, 2, 3, 4, 5, 7].iter().map(|&x| (x, f(x))).collect();
+        let p = p1(&rows);
+        let r = search_polynomial_multi(&p, "f").expect("must solve 3x + 1 at arity 1");
+        let check = p1(&[(13, f(13)), (88, f(88))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("linear arity-1 must be exact on unseen points");
     }
 }

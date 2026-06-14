@@ -337,6 +337,14 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_two_branch",
         func: search_two_branch,
     },
+    // Separable degree-2 family — tried ahead of the linear solvers so curved
+    // (non-zero curvature) data is recovered exactly, but after the single-purpose
+    // scalar/array solvers. Returns None on pure-linear multi-arg data (early-out),
+    // so it never steals a problem search_affine owns.
+    SearchCandidate {
+        key: "search_polynomial_multi",
+        func: search_polynomial_multi,
+    },
     // Multi-argument linear family — placed last so single-input solvers keep
     // their problems; these only catch the 2-3 arg rules the others cannot
     // express at all.
@@ -393,6 +401,7 @@ pub(super) fn ranked_search_candidate_keys(problem: &Problem) -> Vec<&'static st
 pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
     search_affine(problem, fn_name)
+        .or_else(|| search_polynomial_multi(problem, fn_name))
         .or_else(|| search_affine_piecewise(problem, fn_name))
         .or_else(|| search_affine_threshold(problem, fn_name))
 }
