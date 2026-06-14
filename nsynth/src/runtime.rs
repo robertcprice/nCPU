@@ -209,6 +209,11 @@ pub enum BinaryOp {
     Mul,
     Div,
     Mod,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Eq,
     Ne,
     Lt,
@@ -245,6 +250,11 @@ enum Token {
     Star,
     Slash,
     Percent,
+    Amp,
+    Pipe,
+    Caret,
+    Shl,
+    Shr,
     EqEq,
     BangEq,
     Lt,
@@ -609,6 +619,9 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                 if matches!(chars.peek(), Some('=')) {
                     chars.next();
                     out.push(Token::LtEq);
+                } else if matches!(chars.peek(), Some('<')) {
+                    chars.next();
+                    out.push(Token::Shl);
                 } else {
                     out.push(Token::Lt);
                 }
@@ -618,9 +631,24 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                 if matches!(chars.peek(), Some('=')) {
                     chars.next();
                     out.push(Token::GtEq);
+                } else if matches!(chars.peek(), Some('>')) {
+                    chars.next();
+                    out.push(Token::Shr);
                 } else {
                     out.push(Token::Gt);
                 }
+            }
+            '&' => {
+                chars.next();
+                out.push(Token::Amp);
+            }
+            '|' => {
+                chars.next();
+                out.push(Token::Pipe);
+            }
+            '^' => {
+                chars.next();
+                out.push(Token::Caret);
             }
             ':' => {
                 chars.next();
@@ -892,7 +920,40 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_equality()
+        self.parse_bitor()
+    }
+
+    // Bitwise precedence, lowest-binding first (C order): `|` then `^` then `&`,
+    // all below equality. Shifts (`<<`/`>>`) bind tighter than comparison and
+    // looser than `+`/`-`, also matching C.
+    fn parse_bitor(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_bitxor()?;
+        while self.at(&Token::Pipe) {
+            self.bump();
+            let rhs = self.parse_bitxor()?;
+            expr = Expr::Binary(Box::new(expr), BinaryOp::BitOr, Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn parse_bitxor(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_bitand()?;
+        while self.at(&Token::Caret) {
+            self.bump();
+            let rhs = self.parse_bitand()?;
+            expr = Expr::Binary(Box::new(expr), BinaryOp::BitXor, Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn parse_bitand(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_equality()?;
+        while self.at(&Token::Amp) {
+            self.bump();
+            let rhs = self.parse_equality()?;
+            expr = Expr::Binary(Box::new(expr), BinaryOp::BitAnd, Box::new(rhs));
+        }
+        Ok(expr)
     }
 
     fn parse_equality(&mut self) -> Result<Expr, String> {
@@ -914,7 +975,7 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, String> {
-        let mut expr = self.parse_additive()?;
+        let mut expr = self.parse_shift()?;
         loop {
             let op = if self.at(&Token::Lt) {
                 Some(BinaryOp::Lt)
@@ -924,6 +985,24 @@ impl Parser {
                 Some(BinaryOp::Le)
             } else if self.at(&Token::GtEq) {
                 Some(BinaryOp::Ge)
+            } else {
+                None
+            };
+            let Some(op) = op else { break };
+            self.bump();
+            let rhs = self.parse_shift()?;
+            expr = Expr::Binary(Box::new(expr), op, Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn parse_shift(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_additive()?;
+        loop {
+            let op = if self.at(&Token::Shl) {
+                Some(BinaryOp::Shl)
+            } else if self.at(&Token::Shr) {
+                Some(BinaryOp::Shr)
             } else {
                 None
             };
@@ -1648,6 +1727,27 @@ impl Runtime {
                 }
                 Ok(Value::Int(lhs % rhs))
             }
+            BinaryOp::BitAnd => Ok(Value::Int(expect_int(&lhs)? & expect_int(&rhs)?)),
+            BinaryOp::BitOr => Ok(Value::Int(expect_int(&lhs)? | expect_int(&rhs)?)),
+            BinaryOp::BitXor => Ok(Value::Int(expect_int(&lhs)? ^ expect_int(&rhs)?)),
+            BinaryOp::Shl => {
+                let l = expect_int(&lhs)?;
+                let r = expect_int(&rhs)?;
+                if !(0..64).contains(&r) {
+                    return Err("shift amount out of range in <<".to_string());
+                }
+                l.checked_shl(r as u32)
+                    .map(Value::Int)
+                    .ok_or_else(|| "integer overflow in <<".to_string())
+            }
+            BinaryOp::Shr => {
+                let l = expect_int(&lhs)?;
+                let r = expect_int(&rhs)?;
+                if !(0..64).contains(&r) {
+                    return Err("shift amount out of range in >>".to_string());
+                }
+                Ok(Value::Int(l >> r))
+            }
             BinaryOp::Eq => Ok(Value::Bool(value_eq(&lhs, &rhs))),
             BinaryOp::Ne => Ok(Value::Bool(!value_eq(&lhs, &rhs))),
             BinaryOp::Lt => Ok(Value::Bool(expect_int(&lhs)? < expect_int(&rhs)?)),
@@ -2101,6 +2201,33 @@ mod tests {
         let result = execute_program(code)
             .unwrap_or_else(|err| panic!("program execution failed: {err}\n\n{code}"));
         assert_eq!(result.output, expected);
+    }
+
+    #[test]
+    fn executes_bitwise_and_shift_operators() {
+        // `&`, `|`, `^`, `<<`, `>>` parse with C precedence and evaluate on ints.
+        // `(13 & 6)` = 4, `(4 | 1)` = 5, `(5 ^ 3)` = 6, `(6 << 2)` = 24,
+        // `(24 >> 1)` = 12.  Precedence: `1 + 2 << 1` = `(1+2) << 1` = 6 (shift
+        // binds looser than +), and `6 & 3 == 2` parses as `6 & (3 == 2)` is NOT
+        // wanted; we test the arithmetic precedence that matters for codegen.
+        let code = r#"
+fn main() -> i64 {
+    a := 13 & 6;
+    b := a | 1;
+    c := b ^ 3;
+    d := c << 2;
+    e := d >> 1;
+    f := 1 + 2 << 1;
+    println_i64(a);
+    println_i64(b);
+    println_i64(c);
+    println_i64(d);
+    println_i64(e);
+    println_i64(f);
+    return 0;
+}
+"#;
+        assert_program_output(code, "4\n5\n6\n24\n12\n6");
     }
 
     #[test]

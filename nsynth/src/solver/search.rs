@@ -2,6 +2,7 @@ use crate::search_family_router;
 
 use super::search_affine::*;
 use super::search_array_compose::*;
+use super::search_bitwise::*;
 use super::search_catalog::*;
 use super::search_families::*;
 use super::search_numeric_families::*;
@@ -435,6 +436,15 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_minmax_affine",
         func: search_minmax_affine,
     },
+    // Bitwise-structured family — masks/sets/toggles (`a & m`, `a | m`, `a ^ m`)
+    // and pairwise bit-combines (`a & b`, `a | b`, `a ^ b`), optionally wrapped
+    // in an affine. Enabled by the bitwise operators now in the Mog language.
+    // Runs after composition (which already covers shifts and low-bit masks as
+    // arithmetic), and is fully verified.
+    SearchCandidate {
+        key: "search_bitwise",
+        func: search_bitwise,
+    },
 ];
 
 fn ranked_search_candidates(problem: &Problem) -> Vec<SearchCandidate> {
@@ -479,6 +489,7 @@ pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| search_polynomial_multi(problem, fn_name))
         .or_else(|| search_clamp_affine(problem, fn_name))
         .or_else(|| search_composed_features(problem, fn_name))
+        .or_else(|| search_bitwise(problem, fn_name))
         .or_else(|| search_affine_piecewise(problem, fn_name))
         .or_else(|| search_affine_threshold(problem, fn_name))
         .or_else(|| search_predicate_branch(problem, fn_name))

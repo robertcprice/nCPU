@@ -64,6 +64,11 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_polynomial_multi"
         | "search_clamp_affine"
         | "search_composed_features"
+        // Exact bitwise-structured rule (mask/set/toggle/pairwise-combine, plus
+        // optional affine): recovered by an over-determined integer solve and
+        // verified on every example, so it generalizes by construction and
+        // preempts the slow native-gradient distillation.
+        | "search_bitwise"
         // Exact array-feature composition: an affine mix of array reductions
         // (and scalar args), recovered by an over-determined integer solve and
         // fully verified, so it generalizes by construction and preempts the slow

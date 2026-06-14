@@ -19,6 +19,7 @@ mod search_catalog_codegen;
 mod search_catalog_runtime;
 mod search_affine;
 mod search_array_compose;
+mod search_bitwise;
 mod search_catalog_simple;
 mod search_codegen;
 mod search_families;
