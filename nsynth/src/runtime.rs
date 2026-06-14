@@ -1847,6 +1847,12 @@ impl Runtime {
                     };
                     Ok(Value::Str(value.replace(&old, &new)))
                 }
+                "reverse" => {
+                    if !args.is_empty() {
+                        return Err("reverse takes no arguments".to_string());
+                    }
+                    Ok(Value::Str(value.chars().rev().collect()))
+                }
                 "slice" => {
                     if args.len() != 2 {
                         return Err("slice requires start and end".to_string());

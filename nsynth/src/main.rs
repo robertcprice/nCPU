@@ -7,6 +7,7 @@ use mog_synth::interactive::{
     solve_interactive_problem, solve_interactive_problem_differentiable_only,
 };
 use mog_synth::morph_transduce::{solve_morph_transduction, StrExample};
+use mog_synth::string_synth::{synthesize_string_program, StrSynthExample};
 use mog_synth::orchestrator::Orchestrator;
 use mog_synth::runtime::{execute_program, execute_program_with_input};
 use mog_synth::solver::{
@@ -104,9 +105,10 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
 }
 
 /// If the problem-json describes a string-output problem (`-> string`), route it
-/// to the generative-morphology solver and return the result JSON. Returns None
-/// when the problem is not string-output, so the normal i64 pipeline runs.
-fn try_morph_transduction(json_str: &str) -> Option<String> {
+/// to the string-program path: the fast morphology specialist for single-arg
+/// suffix transduction, then the general enumerative string synthesizer. Returns
+/// None when the problem is not string-output, so the normal i64 pipeline runs.
+fn try_string_program(json_str: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
     let signature = v["signature"].as_str().unwrap_or("");
     if !signature.replace(' ', "").contains("->string") {
@@ -116,40 +118,89 @@ fn try_morph_transduction(json_str: &str) -> Option<String> {
         .split_once("fn ")
         .and_then(|(_, rest)| rest.split_once('('))
         .map(|(name, _)| name.trim())
-        .unwrap_or("transduce")
+        .unwrap_or("transform")
         .to_string();
+    // Parameter names from the signature (all string args).
+    let params: Vec<String> = signature
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(p, _)| p)
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|p| p.split(':').next().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+        .collect();
 
-    fn parse_str_examples(node: &serde_json::Value) -> Vec<StrExample> {
+    fn rows_of(node: &serde_json::Value) -> Vec<(Vec<String>, String)> {
         node.as_array()
             .map(|rows| {
                 rows.iter()
                     .filter_map(|row| {
-                        let input = row["inputs"].as_array()?.first()?.as_str()?.to_string();
+                        let inputs: Vec<String> = row["inputs"]
+                            .as_array()?
+                            .iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect();
                         let expected = row["expected"].as_str()?.to_string();
-                        Some(StrExample { input, expected })
+                        if inputs.is_empty() {
+                            return None;
+                        }
+                        Some((inputs, expected))
                     })
                     .collect()
             })
             .unwrap_or_default()
     }
 
-    let train = parse_str_examples(&v["examples"]);
-    let holdouts = parse_str_examples(&v["holdouts"]);
+    let train = rows_of(&v["examples"]);
+    let holdouts = rows_of(&v["holdouts"]);
+    let single_arg = train.iter().all(|(i, _)| i.len() == 1);
     eprintln!(
-        "[morph-transduce] {} train, {} holdout (string -> string)",
+        "[string-program] {} train, {} holdout ({} args -> string)",
         train.len(),
-        holdouts.len()
+        holdouts.len(),
+        params.len().max(1)
     );
-    let result = solve_morph_transduction(&fn_name, &train, &holdouts);
-    Some(
-        serde_json::json!({
-            "success": result.success,
-            "code": result.code,
-            "method": result.method,
-            "error": result.error,
-        })
-        .to_string(),
-    )
+
+    // 1. Fast morphology specialist (single-arg suffix transduction).
+    if single_arg {
+        let to_morph = |rs: &[(Vec<String>, String)]| {
+            rs.iter()
+                .map(|(i, e)| StrExample { input: i[0].clone(), expected: e.clone() })
+                .collect::<Vec<_>>()
+        };
+        let m = solve_morph_transduction(&fn_name, &to_morph(&train), &to_morph(&holdouts));
+        if m.success {
+            return Some(result_json(m.success, m.code, m.method, m.error));
+        }
+    }
+
+    // 2. General enumerative string synthesizer; verify on train + holdouts.
+    let to_synth = |rs: &[(Vec<String>, String)]| {
+        rs.iter()
+            .map(|(i, e)| StrSynthExample { inputs: i.clone(), expected: e.clone() })
+            .collect::<Vec<_>>()
+    };
+    let all: Vec<StrSynthExample> = to_synth(&train).into_iter().chain(to_synth(&holdouts)).collect();
+    let pnames = if params.is_empty() {
+        vec!["s".to_string()]
+    } else {
+        params
+    };
+    let r = synthesize_string_program(&pnames, &all);
+    // Rename the emitted `transform` to the requested function name.
+    let code = r.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+    Some(result_json(r.success, code, r.method, r.error))
+}
+
+fn result_json(success: bool, code: String, method: String, error: Option<String>) -> String {
+    serde_json::json!({
+        "success": success,
+        "code": if success { serde_json::Value::String(code) } else { serde_json::Value::Null },
+        "method": method,
+        "error": error,
+    })
+    .to_string()
 }
 
 fn main() {
@@ -254,7 +305,7 @@ fn main() {
 
         // String-output problems (generative morphology) take an additive path:
         // signature returns a string and `expected` fields are strings.
-        if let Some(output) = try_morph_transduction(&json_str) {
+        if let Some(output) = try_string_program(&json_str) {
             println!("{output}");
             return;
         }
