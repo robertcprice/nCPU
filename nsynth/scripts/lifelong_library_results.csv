@@ -1,0 +1,7 @@
+after_learning,domain,holdout_accuracy
+pluralize,pluralize,1.0
+reverse,pluralize,1.0
+reverse,reverse,1.0
+verb_3sg,pluralize,1.0
+verb_3sg,reverse,1.0
+verb_3sg,verb_3sg,1.0

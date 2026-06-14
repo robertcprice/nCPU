@@ -1,0 +1,14 @@
+{
+  "pluralize": {
+    "fn": "pluralize",
+    "code": "fn pluralize(s: string) -> string {\n    if s.ends_with(\"h\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"s\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"x\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"y\") {\n        return s.slice(0, s.len - 1) + \"ies\";\n    }\n    return s + \"s\";\n}\n"
+  },
+  "reverse": {
+    "fn": "reverse",
+    "code": "fn reverse(s: string) -> string {\n    return s.reverse();\n}\n"
+  },
+  "verb_3sg": {
+    "fn": "verb_3sg",
+    "code": "fn verb_3sg(s: string) -> string {\n    if s.ends_with(\"ay\") {\n        return s + \"s\";\n    }\n    if s.ends_with(\"ch\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"oy\") {\n        return s + \"s\";\n    }\n    if s.ends_with(\"sh\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"s\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"x\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"y\") {\n        return s.slice(0, s.len - 1) + \"ies\";\n    }\n    if s.ends_with(\"z\") {\n        return s + \"es\";\n    }\n    return s + \"s\";\n}\n"
+  }
+}
