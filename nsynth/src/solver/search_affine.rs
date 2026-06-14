@@ -1006,6 +1006,135 @@ pub(super) fn search_predicate_branch(problem: &Problem, fn_name: &str) -> Optio
 /// `search_affine`), and the whole chain is checked by `verified_result`. The
 /// strong per-class data requirement (≥ m·(arity+2) examples) is itself a guard:
 /// a coarser/finer modulus that coincidentally aligns will fail it or the verify.
+/// Greedily split single-argument points (already sorted ascending by `x`) into
+/// maximal runs on which one affine `c0 + c1·x` fits every point. Each run opens
+/// by solving the affine on its first two points and extends while subsequent
+/// points satisfy it; the next run begins at the first point that does not.
+/// Returns `(coeffs, first_index, last_index)` per run, or None if a run is too
+/// short to fit (it never can be for n ≥ 2 since two points always determine a
+/// line, but the signature keeps the call site uniform).
+fn segment_1arg(xs: &[i64], ys: &[i64]) -> Option<Vec<(Vec<i64>, usize, usize)>> {
+    let n = xs.len();
+    let mut segs: Vec<(Vec<i64>, usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if i + 2 > n {
+            // One trailing point: it must lie on the current run, else the data
+            // is not a clean piecewise-affine of this shape.
+            let (coeffs, _, end) = segs.last_mut()?;
+            if affine_predicts(coeffs, &[xs[n - 1]], ys[n - 1]) {
+                *end = n - 1;
+                return Some(segs);
+            }
+            return None;
+        }
+        let win_x = vec![vec![xs[i]], vec![xs[i + 1]]];
+        let win_y = vec![ys[i], ys[i + 1]];
+        let coeffs = solve_affine(&win_x, &win_y, 1)?;
+        let mut j = i + 2;
+        while j < n && affine_predicts(&coeffs, &[xs[j]], ys[j]) {
+            j += 1;
+        }
+        segs.push((coeffs, i, j - 1));
+        i = j;
+    }
+    Some(segs)
+}
+
+/// Single-argument closed-interval branch: `if lo <= x && x <= hi { A(x) } else
+/// { B(x) }` — a value INSIDE a band picks one affine, outside picks another.
+/// This is the first solver to emit the logical `&&` the language just gained,
+/// and it owns 1-argument interval membership (the scalar single/two-branch
+/// solvers do one-sided cuts; the multi-arg piecewise solver is gated to ≥ 2
+/// args), so nothing else recovers this shape.
+///
+/// INVERSION (deterministic — no first-verified-wins ambiguity, which is what
+/// made an earlier draft overfit): sort the points by `x` and segment them into
+/// maximal affine runs. The interval shape is exactly THREE runs whose two outer
+/// runs are the SAME affine and whose middle run differs — `B | A | B`. The
+/// bounds are then the middle run's own `x`-range, refined to the integer
+/// boundary where the two pieces meet when they are continuous (so an unsampled
+/// gap between runs is placed correctly rather than at the last sample). The
+/// reconstructed program is checked against EVERY example by `verified_result`.
+///
+/// HONESTY GUARDS: exactly three runs, each over-determined (≥ 3 points), outer
+/// runs identical, middle run distinct; otherwise refuse.
+pub(super) fn search_interval_branch(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let examples = super::scalar_search::extract_scalar_examples(problem)?;
+    let arity = examples.first()?.len();
+    if arity != 1 || examples.iter().any(|row| row.len() != 1) {
+        return None;
+    }
+    let targets: Vec<i64> = problem.examples.iter().map(|e| e.expected).collect();
+    let n = examples.len();
+    if targets.len() != n || n < 9 {
+        return None; // need three runs of at least three points each
+    }
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| examples[i][0]);
+    let xs: Vec<i64> = order.iter().map(|&i| examples[i][0]).collect();
+    let ys: Vec<i64> = order.iter().map(|&i| targets[i]).collect();
+
+    let segs = segment_1arg(&xs, &ys)?;
+    if segs.len() != 3 {
+        return None;
+    }
+    let (outer_l, mid, outer_r) = (&segs[0], &segs[1], &segs[2]);
+    let run_len = |s: &(Vec<i64>, usize, usize)| s.2 - s.1 + 1;
+    if run_len(outer_l) < 3 || run_len(mid) < 3 || run_len(outer_r) < 3 {
+        return None;
+    }
+    if outer_l.0 != outer_r.0 || mid.0 == outer_l.0 {
+        return None; // not the B|A|B interval shape
+    }
+    let (a_coeffs, b_coeffs) = (&mid.0, &outer_l.0); // A = inside, B = outside
+
+    // Integer boundary where the two lines meet: A(x) == B(x) at
+    // x = (b0 - a0) / (a1 - b1). Use it when it divides evenly and lands in the
+    // gap before the middle run (continuous interval); otherwise fall back to the
+    // tightest in-data bound (the middle run's own endpoints).
+    let intersect = |left: bool| -> i64 {
+        let (a0, a1, b0, b1) = (a_coeffs[0], a_coeffs[1], b_coeffs[0], b_coeffs[1]);
+        if a1 != b1 {
+            let num = b0 - a0;
+            let den = a1 - b1;
+            if num % den == 0 {
+                return num / den;
+            }
+        }
+        if left {
+            xs[mid.1]
+        } else {
+            xs[mid.2]
+        }
+    };
+    // Left boundary: the smaller of (intersection, first middle x); right
+    // boundary: the larger of (intersection-ish, last middle x). Keep it simple
+    // and exact-on-data: lo = first middle x, hi = last middle x, but if the
+    // continuous intersection sits just left of lo (in the gap), use it.
+    let mut lo = xs[mid.1];
+    let mut hi = xs[mid.2];
+    let xi = intersect(true);
+    if xi < lo && xi > xs[outer_l.2] {
+        lo = xi;
+    }
+    let xj = intersect(false);
+    if xj > hi && xj < xs[outer_r.1] {
+        hi = xj;
+    }
+
+    let param_names = scalar_param_names(1);
+    let params = scalar_params_decl(&param_names);
+    let v = &param_names[0];
+    let a_body = render_scalar_expr(&affine_expr(a_coeffs), &param_names);
+    let b_body = render_scalar_expr(&affine_expr(b_coeffs), &param_names);
+    let cond = format!("{v} >= {lo} && {v} <= {hi}");
+    let code = format!(
+        "fn {fn_name}({params}) -> i64 {{\n    if {cond} {{\n        return {a_body};\n    }}\n    return {b_body};\n}}\n"
+    );
+    verified_result(problem, code, "search_interval_branch")
+}
+
 pub(super) fn search_modular_cases(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let examples = super::scalar_search::extract_scalar_examples(problem)?;
     let arity = examples.first()?.len();
@@ -1265,6 +1394,34 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
         }
+    }
+
+    // A closed-interval branch `if 5 <= x <= 12 { 2x } else { x + 100 }` — emits
+    // the `&&` operator, recovered by 3-run segmentation, exact on unseen points
+    // inside and on both sides of the band.
+    #[test]
+    fn interval_branch_recovers_membership() {
+        let f = |x: i64| if (5..=12).contains(&x) { 2 * x } else { x + 100 };
+        let rows: Vec<(i64, i64)> = (0..22).map(|x| (x, f(x))).collect();
+        let p = p1(&rows);
+        let r = search_interval_branch(&p, "f").expect("must recover the interval branch");
+        assert!(r.code.contains("&&"), "expected a range condition: {}", r.code);
+        let check = p1(&[(2, f(2)), (6, f(6)), (12, f(12)), (13, f(13)), (40, f(40))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("interval branch must be exact on unseen points");
+    }
+
+    // It refuses a single one-sided threshold (only two runs, not three) — that
+    // belongs to the scalar branch solvers, not the interval solver.
+    #[test]
+    fn interval_branch_refuses_single_threshold() {
+        let f = |x: i64| if x <= 10 { 2 * x } else { x + 5 };
+        let rows: Vec<(i64, i64)> = (0..20).map(|x| (x, f(x))).collect();
+        let p = p1(&rows);
+        assert!(
+            search_interval_branch(&p, "f").is_none(),
+            "two-run threshold is not an interval"
+        );
     }
 
     // A parity branch `if x even { 2x } else { 3x + 1 }` — the collatz-style

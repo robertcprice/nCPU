@@ -79,6 +79,10 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // the whole if/else is verified on every example, so it generalizes by
         // construction and is returned directly instead of feeding gradient.
         | "search_predicate_branch"
+        // Single-argument closed-interval branch (`if lo <= x && x <= hi`):
+        // recovered by deterministic 3-run segmentation, both bodies exact, the
+        // whole program verified — generalizes by construction, preempts gradient.
+        | "search_interval_branch"
         // Full modular case analysis (`match x%m { r => affine }`): every residue
         // class is an exact affine on an over-determined bucket and the whole
         // chain is verified, so it generalizes by construction and is returned
