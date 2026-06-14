@@ -41,7 +41,11 @@ fn multi_arg_examples(problem: &Problem) -> Option<(Vec<Vec<i64>>, Vec<i64>, usi
 /// affine path that delegates to it (`feature = [1, x_1, …, x_n]`) is unchanged.
 /// The final exactness check is the caller's `verified_result`, so a wrong fit
 /// (wrong basis, ill-conditioning) is caught there — this routine only proposes.
-fn solve_linear_features(feature_rows: &[Vec<i64>], targets: &[i64], m: usize) -> Option<Vec<i64>> {
+pub(super) fn solve_linear_features(
+    feature_rows: &[Vec<i64>],
+    targets: &[i64],
+    m: usize,
+) -> Option<Vec<i64>> {
     if feature_rows.len() < m {
         return None;
     }

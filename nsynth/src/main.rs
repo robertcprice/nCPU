@@ -6,6 +6,7 @@ use mog_synth::enumerative;
 use mog_synth::interactive::{
     solve_interactive_problem, solve_interactive_problem_differentiable_only,
 };
+use mog_synth::morph_transduce::{solve_morph_transduction, StrExample};
 use mog_synth::orchestrator::Orchestrator;
 use mog_synth::runtime::{execute_program, execute_program_with_input};
 use mog_synth::solver::{
@@ -100,6 +101,55 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         holdouts,
         reference_code: "",
     })
+}
+
+/// If the problem-json describes a string-output problem (`-> string`), route it
+/// to the generative-morphology solver and return the result JSON. Returns None
+/// when the problem is not string-output, so the normal i64 pipeline runs.
+fn try_morph_transduction(json_str: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let signature = v["signature"].as_str().unwrap_or("");
+    if !signature.replace(' ', "").contains("->string") {
+        return None;
+    }
+    let fn_name = signature
+        .split_once("fn ")
+        .and_then(|(_, rest)| rest.split_once('('))
+        .map(|(name, _)| name.trim())
+        .unwrap_or("transduce")
+        .to_string();
+
+    fn parse_str_examples(node: &serde_json::Value) -> Vec<StrExample> {
+        node.as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|row| {
+                        let input = row["inputs"].as_array()?.first()?.as_str()?.to_string();
+                        let expected = row["expected"].as_str()?.to_string();
+                        Some(StrExample { input, expected })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    let train = parse_str_examples(&v["examples"]);
+    let holdouts = parse_str_examples(&v["holdouts"]);
+    eprintln!(
+        "[morph-transduce] {} train, {} holdout (string -> string)",
+        train.len(),
+        holdouts.len()
+    );
+    let result = solve_morph_transduction(&fn_name, &train, &holdouts);
+    Some(
+        serde_json::json!({
+            "success": result.success,
+            "code": result.code,
+            "method": result.method,
+            "error": result.error,
+        })
+        .to_string(),
+    )
 }
 
 fn main() {
@@ -201,6 +251,13 @@ fn main() {
                 .unwrap_or_default();
             buf
         };
+
+        // String-output problems (generative morphology) take an additive path:
+        // signature returns a string and `expected` fields are strings.
+        if let Some(output) = try_morph_transduction(&json_str) {
+            println!("{output}");
+            return;
+        }
 
         // Parse JSON into a Problem
         eprintln!(

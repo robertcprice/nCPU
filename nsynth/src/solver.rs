@@ -18,6 +18,7 @@ mod search_catalog_advanced;
 mod search_catalog_codegen;
 mod search_catalog_runtime;
 mod search_affine;
+mod search_array_compose;
 mod search_catalog_simple;
 mod search_codegen;
 mod search_families;
@@ -33,8 +34,8 @@ use self::helpers::{
     validate_unary_int, validate_unary_pair, validate_unary_str,
 };
 use self::signature::{
-    parse_param_types, scalar_param_names, scalar_params_decl, unary_pair_examples,
-    unary_string_examples, ParamType,
+    parse_param_types, scalar_param_names, scalar_params_decl, unary_array_examples,
+    unary_pair_examples, unary_string_examples, ParamType,
 };
 
 #[cfg(test)]

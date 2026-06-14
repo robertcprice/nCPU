@@ -56,6 +56,92 @@ pub(super) fn code_starts_with_literal_search(fn_name: &str, literal: &str) -> S
     )
 }
 
+pub(super) fn code_suffix_class_search(fn_name: &str, suffixes: &[String]) -> String {
+    let mut body = String::new();
+    for suffix in suffixes {
+        let suffix = suffix.replace('\\', "\\\\").replace('"', "\\\"");
+        body.push_str(&format!(
+            "    if s.ends_with(\"{suffix}\") {{\n        return 1;\n    }}\n"
+        ));
+    }
+    format!("fn {fn_name}(s: string) -> i64 {{\n{body}    return 0;\n}}\n")
+}
+
+pub(super) fn code_array_member_class_search(fn_name: &str, consts: &[i64]) -> String {
+    let mut checks = String::new();
+    for c in consts {
+        checks.push_str(&format!(
+            "        if x == {c} {{\n            return 1;\n        }}\n"
+        ));
+    }
+    format!(
+        "fn {fn_name}(arr: [i64]) -> i64 {{\n    for x in arr {{\n{checks}    }}\n    return 0;\n}}\n"
+    )
+}
+
+pub(super) fn code_array_conjunction_search(
+    fn_name: &str,
+    required: &[i64],
+    forbidden: &[i64],
+) -> String {
+    // One flag per required/forbidden token, set during a single pass.
+    let mut decls = String::new();
+    let mut sets = String::new();
+    for (i, t) in required.iter().enumerate() {
+        decls.push_str(&format!("    r{i}: i64 = 0;\n"));
+        sets.push_str(&format!("        if x == {t} {{\n            r{i} = 1;\n        }}\n"));
+    }
+    for (i, t) in forbidden.iter().enumerate() {
+        decls.push_str(&format!("    f{i}: i64 = 0;\n"));
+        sets.push_str(&format!("        if x == {t} {{\n            f{i} = 1;\n        }}\n"));
+    }
+    // Guard: all required flags 1, all forbidden flags 0. Mog has no `&&`, so the
+    // conjunction is a nest of single-condition `if`s; the innermost returns 1.
+    let mut conds: Vec<String> = Vec::new();
+    for i in 0..required.len() {
+        conds.push(format!("r{i} == 1"));
+    }
+    for i in 0..forbidden.len() {
+        conds.push(format!("f{i} == 0"));
+    }
+    let mut guard = String::from("return 1;");
+    for cond in conds.iter().rev() {
+        guard = format!("if {cond} {{ {guard} }}");
+    }
+    format!(
+        "fn {fn_name}(arr: [i64]) -> i64 {{\n{decls}    for x in arr {{\n{sets}    }}\n    {guard}\n    return 0;\n}}\n"
+    )
+}
+
+pub(super) fn code_array_dnf_search(fn_name: &str, rules: &[Vec<(i64, bool)>]) -> String {
+    // One flag per distinct token referenced, set in a single pass; then one
+    // nested-if block per conjunctive rule (OR across rules).
+    let mut toks: Vec<i64> = rules.iter().flatten().map(|&(t, _)| t).collect();
+    toks.sort_unstable();
+    toks.dedup();
+    let idx = |t: i64| toks.iter().position(|&x| x == t).unwrap();
+
+    let mut decls = String::new();
+    let mut sets = String::new();
+    for (i, t) in toks.iter().enumerate() {
+        decls.push_str(&format!("    t{i}: i64 = 0;\n"));
+        sets.push_str(&format!("        if x == {t} {{\n            t{i} = 1;\n        }}\n"));
+    }
+
+    let mut blocks = String::new();
+    for rule in rules {
+        let mut guard = String::from("return 1;");
+        for &(tok, want) in rule.iter().rev() {
+            let val = if want { 1 } else { 0 };
+            guard = format!("if t{} == {val} {{ {guard} }}", idx(tok));
+        }
+        blocks.push_str(&format!("    {guard}\n"));
+    }
+    format!(
+        "fn {fn_name}(arr: [i64]) -> i64 {{\n{decls}    for x in arr {{\n{sets}    }}\n{blocks}    return 0;\n}}\n"
+    )
+}
+
 pub(super) fn verified_result(
     problem: &Problem,
     code: String,

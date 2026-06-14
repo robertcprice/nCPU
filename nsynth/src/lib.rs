@@ -6,6 +6,7 @@ pub mod learned_biases;
 pub mod meta_learner;
 pub mod method_router;
 pub mod mog_transpile;
+pub mod morph_transduce;
 pub mod orchestrator;
 pub mod program_trace;
 pub mod rejected_cache;

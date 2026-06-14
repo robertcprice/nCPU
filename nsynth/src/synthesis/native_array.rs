@@ -30,7 +30,10 @@ fn extract_arr_examples(problem: &Problem) -> Option<(Vec<ArrExample>, usize)> {
             Value::Array(a) => a.clone(),
             _ => return None,
         };
-        let arr_len = arr.len() as f32;
+        // arr_len must not exceed the padded buffer width, or the soft-array
+        // gradient loops index past MAX_ARR (panic). Arrays longer than MAX_ARR
+        // are truncated to their first MAX_ARR elements for the gradient path.
+        let arr_len = arr.len().min(MAX_ARR) as f32;
         let mut padded = vec![0f32; MAX_ARR];
         for (i, v) in arr.iter().enumerate() {
             if i < MAX_ARR {

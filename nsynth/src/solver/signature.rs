@@ -1,6 +1,6 @@
 use crate::benchmark::Problem;
 
-use super::helpers::{pair_value, str_value};
+use super::helpers::{array_value, pair_value, str_value};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ParamType {
@@ -62,6 +62,23 @@ pub(super) fn unary_string_examples(problem: &Problem) -> Option<Vec<String>> {
                 return None;
             }
             str_value(&example.inputs[0]).map(|value| value.to_string())
+        })
+        .collect()
+}
+
+pub(super) fn unary_array_examples(problem: &Problem) -> Option<Vec<Vec<i64>>> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    problem
+        .examples
+        .iter()
+        .map(|example| {
+            if example.inputs.len() != 1 {
+                return None;
+            }
+            array_value(&example.inputs[0]).map(|value| value.to_vec())
         })
         .collect()
 }

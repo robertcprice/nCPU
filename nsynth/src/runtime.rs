@@ -305,6 +305,18 @@ pub fn execute_function_for_problem(
     runtime.call_function(function_name, args)
 }
 
+/// Execute a single-string-argument function and return its raw `Value`.
+/// Used by the generative-morphology path, where the function returns a string
+/// (`fn pluralize(s: string) -> string`) rather than an i64.
+pub fn execute_str_function(code: &str, function_name: &str, input: &str) -> Result<String, String> {
+    let program = parse_program(code)?;
+    let runtime = Runtime::new(program);
+    match runtime.call_function(function_name, vec![Value::Str(input.to_string())])? {
+        Value::Str(s) => Ok(s),
+        other => Err(format!("expected string return, got {other:?}")),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionResult {
     pub output: String,
@@ -1834,6 +1846,29 @@ impl Runtime {
                         }
                     };
                     Ok(Value::Str(value.replace(&old, &new)))
+                }
+                "slice" => {
+                    if args.len() != 2 {
+                        return Err("slice requires start and end".to_string());
+                    }
+                    let chars: Vec<char> = value.chars().collect();
+                    let n = chars.len() as i64;
+                    let clamp = |i: i64| -> usize {
+                        if i < 0 {
+                            0
+                        } else if i > n {
+                            chars.len()
+                        } else {
+                            i as usize
+                        }
+                    };
+                    let start = clamp(expect_int(&args[0])?);
+                    let end = clamp(expect_int(&args[1])?);
+                    if start >= end {
+                        Ok(Value::Str(String::new()))
+                    } else {
+                        Ok(Value::Str(chars[start..end].iter().collect()))
+                    }
                 }
                 _ => Err(format!("unknown string method {method}")),
             },

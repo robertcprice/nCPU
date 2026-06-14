@@ -1,6 +1,7 @@
 use crate::search_family_router;
 
 use super::search_affine::*;
+use super::search_array_compose::*;
 use super::search_catalog::*;
 use super::search_families::*;
 use super::search_numeric_families::*;
@@ -36,6 +37,22 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_array_range",
         func: search_array_range,
+    },
+    // General membership/DNF array classifiers. Each is guarded to require >= 12
+    // examples (every structural benchmark problem has <= 10), so they own the
+    // large curriculum language-classification tasks without shadowing the exact
+    // structural solvers (palindrome, sorted, ...) on small problems.
+    SearchCandidate {
+        key: "search_array_member_class",
+        func: search_array_member_class,
+    },
+    SearchCandidate {
+        key: "search_array_conjunction",
+        func: search_array_conjunction,
+    },
+    SearchCandidate {
+        key: "search_array_dnf",
+        func: search_array_dnf,
     },
     SearchCandidate {
         key: "search_min_element",
@@ -340,6 +357,17 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_two_branch",
         func: search_two_branch,
+    },
+    // Array-feature composition — an exact affine mix of array reductions (sum,
+    // max, len, count_positive, sum_of_squares, …) plus the scalar args, e.g.
+    // `5 + 2*len + sum`, `sum_sq - 3*sum`. Placed at the tail of the array block,
+    // AFTER every dedicated single-reduction solver (which own and run first on
+    // their bare-reduction problems) and BEFORE the scalar/affine block. Refuses
+    // the single-reduction restatement and constant outputs, so it only claims
+    // the genuinely compositional array rules the dedicated solvers cannot express.
+    SearchCandidate {
+        key: "array_affine_features",
+        func: search_array_affine_features,
     },
     // Separable degree-2 family — tried ahead of the linear solvers so curved
     // (non-zero curvature) data is recovered exactly, but after the single-purpose

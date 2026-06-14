@@ -64,6 +64,11 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_polynomial_multi"
         | "search_clamp_affine"
         | "search_composed_features"
+        // Exact array-feature composition: an affine mix of array reductions
+        // (and scalar args), recovered by an over-determined integer solve and
+        // fully verified, so it generalizes by construction and preempts the slow
+        // native-gradient distillation rather than feeding it.
+        | "array_affine_features"
         | "search_min3_branch"
         | "search_scalar_expr"
         | "search_digit_sum_loop"
@@ -129,7 +134,17 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // example, so returned directly.
         | "search_affine"
         | "search_affine_threshold"
-        | "search_affine_piecewise" => true,
+        | "search_affine_piecewise"
+        // Disjunctive class learners (string suffix / array membership): the
+        // emitted program is verified on examples + holdouts and generalizes by
+        // construction (admissible features never fire on a negative), so it is
+        // returned directly instead of feeding the slow native-gradient path.
+        // This is what makes morpheme-tokenized grammaticality solve in
+        // milliseconds instead of timing out in the array-gradient distillation.
+        | "search_suffix_class"
+        | "search_array_member_class"
+        | "search_array_conjunction"
+        | "search_array_dnf" => true,
         "search_unary_range_loop" => {
             result.code.contains("acc = acc + i;") || result.code.contains("acc = acc * i;")
         }
