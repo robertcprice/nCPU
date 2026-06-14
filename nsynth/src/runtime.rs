@@ -7,6 +7,7 @@ use crate::benchmark::{generated_holdouts, Problem, Value as BenchmarkValue};
 #[derive(Clone, Debug)]
 pub enum Value {
     Int(i64),
+    Float(f64),
     Bool(bool),
     Str(String),
     Array(Vec<Value>),
@@ -31,6 +32,7 @@ pub enum Value {
 #[derive(Clone, Copy, Debug)]
 pub enum Builtin {
     PrintlnI64,
+    PrintlnF64,
     Println,
     PrintF64,
     PrintString,
@@ -163,6 +165,10 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     Int(i64),
+    /// A float literal stored as its IEEE-754 bits, so `Expr` keeps `Eq`/`Hash`
+    /// (the rest of the AST — `Stmt`, `Target` — derives `Eq` and contains
+    /// `Expr`). Recover the value with `f64::from_bits` at evaluation time.
+    Float(u64),
     Str(String),
     Bool(bool),
     ArrayLit(Vec<Expr>),
@@ -247,6 +253,9 @@ enum Token {
     False,
     Ident(String),
     Int(i64),
+    /// A float literal kept as its source text (so the `Token` enum stays `Eq`);
+    /// the parser converts it to the bit pattern in `Expr::Float`.
+    Float(String),
     Str(String),
     Plus,
     Minus,
@@ -419,6 +428,7 @@ pub fn verify_problem_code_via_main(problem: &Problem, code: &str) -> Result<(),
 fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Result<Value, String> {
     match value {
         BenchmarkValue::Int(v) => Ok(Value::Int(*v)),
+        BenchmarkValue::Float(b) => Ok(Value::Float(f64::from_bits(*b))),
         BenchmarkValue::Str(v) => Ok(Value::Str(v.clone())),
         BenchmarkValue::Array(values) => Ok(Value::Array(
             values.iter().copied().map(Value::Int).collect::<Vec<_>>(),
@@ -479,9 +489,20 @@ fn expect_int(value: &Value) -> Result<i64, String> {
     }
 }
 
+/// Coerce an int or float value to `f64` for float arithmetic (an `Int` operand
+/// in a float expression is widened, matching how `1 + 2.5` reads).
+fn as_f64(value: &Value) -> Result<f64, String> {
+    match value {
+        Value::Float(v) => Ok(*v),
+        Value::Int(v) => Ok(*v as f64),
+        _ => Err(format!("expected a number, got {:?}", value)),
+    }
+}
+
 fn display_value(value: &Value) -> Result<String, String> {
     match value {
         Value::Int(v) => Ok(v.to_string()),
+        Value::Float(v) => Ok(format!("{:.7}", v)),
         Value::Bool(v) => Ok(if *v {
             "true".to_string()
         } else {
@@ -527,11 +548,34 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                     break;
                 }
             }
-            out.push(Token::Int(
-                value
-                    .parse::<i64>()
-                    .map_err(|err| format!("invalid int literal {value}: {err}"))?,
-            ));
+            // A `.` followed by a digit makes this a float literal (`2.5`); a
+            // `.` followed by anything else is the field/range operator and is
+            // left for the next token (so `arr.len`, `0..n` still lex correctly).
+            let is_float = matches!(chars.peek(), Some('.'))
+                && {
+                    let mut lookahead = chars.clone();
+                    lookahead.next();
+                    matches!(lookahead.peek(), Some(d) if d.is_ascii_digit())
+                };
+            if is_float {
+                value.push('.');
+                chars.next(); // consume '.'
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_digit() {
+                        value.push(next);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                out.push(Token::Float(value));
+            } else {
+                out.push(Token::Int(
+                    value
+                        .parse::<i64>()
+                        .map_err(|err| format!("invalid int literal {value}: {err}"))?,
+                ));
+            }
             continue;
         }
 
@@ -1162,6 +1206,13 @@ impl Parser {
                 self.bump();
                 Ok(Expr::Int(value))
             }
+            Token::Float(s) => {
+                let f = s
+                    .parse::<f64>()
+                    .map_err(|err| format!("invalid float literal {s}: {err}"))?;
+                self.bump();
+                Ok(Expr::Float(f.to_bits()))
+            }
             Token::Str(v) => {
                 let value = v.clone();
                 self.bump();
@@ -1427,6 +1478,7 @@ impl Runtime {
             global.define(name, Value::Function(name.clone()));
         }
         global.define("println_i64", Value::Builtin(Builtin::PrintlnI64));
+        global.define("println_f64", Value::Builtin(Builtin::PrintlnF64));
         global.define("println", Value::Builtin(Builtin::Println));
         global.define("print_f64", Value::Builtin(Builtin::PrintF64));
         global.define("print_string", Value::Builtin(Builtin::PrintString));
@@ -1647,6 +1699,7 @@ impl Runtime {
     fn eval_expr(&self, expr: &Expr, env: Env) -> Result<Value, String> {
         match expr {
             Expr::Int(v) => Ok(Value::Int(*v)),
+            Expr::Float(bits) => Ok(Value::Float(f64::from_bits(*bits))),
             Expr::Str(v) => Ok(Value::Str(v.clone())),
             Expr::Bool(v) => Ok(Value::Bool(*v)),
             Expr::ArrayLit(values) => Ok(Value::Array(
@@ -1668,7 +1721,10 @@ impl Runtime {
             Expr::Unary(op, expr) => {
                 let value = self.eval_expr(expr, env)?;
                 match op {
-                    UnaryOp::Neg => Ok(Value::Int(-expect_int(&value)?)),
+                    UnaryOp::Neg => match value {
+                        Value::Float(v) => Ok(Value::Float(-v)),
+                        _ => Ok(Value::Int(-expect_int(&value)?)),
+                    },
                     UnaryOp::Not => Ok(Value::Bool(!truthy(&value))),
                     UnaryOp::BitNot => Ok(Value::Int(!expect_int(&value)?)),
                 }
@@ -1772,6 +1828,33 @@ impl Runtime {
     }
 
     fn eval_binary(&self, lhs: Value, op: BinaryOp, rhs: Value) -> Result<Value, String> {
+        // Float arithmetic: if either operand is a float, both are widened to
+        // `f64` and the op is computed in floating point. This intercepts before
+        // the integer paths below, so all-integer programs are unaffected.
+        if matches!(lhs, Value::Float(_)) || matches!(rhs, Value::Float(_)) {
+            let a = as_f64(&lhs)?;
+            let b = as_f64(&rhs)?;
+            return match op {
+                BinaryOp::Add => Ok(Value::Float(a + b)),
+                BinaryOp::Sub => Ok(Value::Float(a - b)),
+                BinaryOp::Mul => Ok(Value::Float(a * b)),
+                BinaryOp::Div => Ok(Value::Float(a / b)),
+                BinaryOp::Mod => Ok(Value::Float(a % b)),
+                BinaryOp::Lt => Ok(Value::Bool(a < b)),
+                BinaryOp::Gt => Ok(Value::Bool(a > b)),
+                BinaryOp::Le => Ok(Value::Bool(a <= b)),
+                BinaryOp::Ge => Ok(Value::Bool(a >= b)),
+                BinaryOp::Eq => Ok(Value::Bool(a == b)),
+                BinaryOp::Ne => Ok(Value::Bool(a != b)),
+                BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+                | BinaryOp::And
+                | BinaryOp::Or => Err("bitwise/logical operator on a float".to_string()),
+            };
+        }
         match op {
             BinaryOp::Add => match (lhs, rhs) {
                 (Value::Int(a), Value::Int(b)) => a
@@ -2107,11 +2190,12 @@ impl Runtime {
                 self.output.borrow_mut().push(line);
                 Ok(Value::Unit)
             }
-            Builtin::PrintF64 => {
+            Builtin::PrintF64 | Builtin::PrintlnF64 => {
                 let value = args
                     .first()
                     .ok_or_else(|| "print_f64 requires one argument".to_string())?;
                 let line = match value {
+                    Value::Float(v) => format!("{:.7}", v),
                     Value::Int(v) => format!("{:.7}", *v as f64),
                     _ => return Err(format!("print_f64 expected numeric value, got {:?}", value)),
                 };
@@ -2316,6 +2400,29 @@ fn main() -> i64 {
 }
 "#;
         assert_program_output(code, "4\n5\n6\n24\n12\n6");
+    }
+
+    #[test]
+    fn executes_float_arithmetic() {
+        // Float literals parse, mixed int/float coerces, `/` is true division.
+        // f(x=2.0) = 2.5*2.0 + 1.5 = 6.5 ; 1/2 in float context = 0.5 ; print
+        // formats floats. Verifies the f64 path end to end.
+        let code = r#"
+fn main() -> f64 {
+    x := 2.0;
+    y := 2.5 * x + 1.5;
+    z := 1.0 / 2.0;
+    w := 3 + 0.5;
+    println_f64(y);
+    println_f64(z);
+    println_f64(w);
+    return y;
+}
+"#;
+        let result = execute_program(code).expect("float program runs");
+        assert!(result.output.starts_with("6.5"), "got {}", result.output);
+        assert!(result.output.contains("0.5"), "got {}", result.output);
+        assert!(result.output.contains("3.5"), "got {}", result.output);
     }
 
     #[test]

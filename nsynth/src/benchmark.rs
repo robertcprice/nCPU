@@ -1,6 +1,10 @@
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Int(i64),
+    /// A float value kept as IEEE-754 bits so `Value` (and `Example`/`Problem`,
+    /// which derive `Eq`/`Ord`/`Serialize`) stay derivable — `f64` is neither
+    /// `Eq` nor `Ord`. Recover with `f64::from_bits`.
+    Float(u64),
     Str(String),
     Array(Vec<i64>),
     Pair(i64, i64),
@@ -10,6 +14,7 @@ impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Int(v) => write!(f, "{v}"),
+            Value::Float(b) => write!(f, "{}", f64::from_bits(*b)),
             Value::Str(s) => write!(f, "{s}"),
             Value::Array(a) => write!(
                 f,
@@ -40,6 +45,26 @@ impl Example {
             Value::Pair(a, _) => *a,
             _ => 0,
         }
+    }
+
+    /// The expected output as an f64 (the float-regression lane). An `Int`
+    /// expected output is widened; a `Float` is recovered from its bits.
+    pub fn expected_f64(&self) -> Option<f64> {
+        match &self.expected {
+            Value::Float(b) => Some(f64::from_bits(*b)),
+            Value::Int(i) => Some(*i as f64),
+            _ => None,
+        }
+    }
+}
+
+/// A single scalar input coerced to f64 (`Int` or `Float`), or None for
+/// non-scalar inputs. Used by the float-regression solver.
+pub fn value_as_f64(v: &Value) -> Option<f64> {
+    match v {
+        Value::Float(b) => Some(f64::from_bits(*b)),
+        Value::Int(i) => Some(*i as f64),
+        _ => None,
     }
 }
 
@@ -130,6 +155,7 @@ fn example_str(inputs: Vec<Value>, expected: &str) -> Example {
 fn render_expected(value: &Value) -> String {
     match value {
         Value::Int(v) => v.to_string(),
+        Value::Float(b) => format!("{:.7}", f64::from_bits(*b)),
         Value::Str(s) => s.clone(),
         Value::Array(a) => format!(
             "[{}]",
@@ -165,6 +191,7 @@ fn render_string(value: &str) -> String {
 fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
     match value {
         Value::Int(v) => Ok(v.to_string()),
+        Value::Float(b) => Ok(format!("{:.7}", f64::from_bits(*b))),
         Value::Str(v) => Ok(render_string(v)),
         Value::Array(values) => Ok(format!(
             "[{}]",

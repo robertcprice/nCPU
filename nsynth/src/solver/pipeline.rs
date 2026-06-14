@@ -121,6 +121,18 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
 
 fn solve_problem_inner(problem: &Problem) -> SolveResult {
     let t0 = std::time::Instant::now();
+
+    // Float (continuous) lane first: a `-> f64` problem is least-squares affine
+    // regression, a different regime from the exact-integer machinery below
+    // (which would choke on f64 inputs). Self-gates to f64 signatures and returns
+    // None for everything else, so integer problems are untouched.
+    if let Some(result) = super::search_float::search_float_affine(problem, &problem.function_name())
+    {
+        if result.success {
+            return result;
+        }
+    }
+
     let router_ctx = post_enumerative_context(problem);
 
     // Stage 0: persistent cross-run memoization. A previous solve with the

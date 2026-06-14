@@ -5,6 +5,7 @@ use super::helpers::{array_value, pair_value, str_value};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ParamType {
     I64,
+    F64,
     ArrayI64,
     String,
     Other(String),
@@ -31,6 +32,7 @@ pub(super) fn parse_param_types(signature: &str) -> Vec<ParamType> {
                 .unwrap_or_default();
             match ty {
                 "i64" => ParamType::I64,
+                "f64" => ParamType::F64,
                 "[i64]" => ParamType::ArrayI64,
                 "string" => ParamType::String,
                 other => ParamType::Other(other.to_string()),

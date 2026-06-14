@@ -62,6 +62,11 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         for inp in inputs_arr {
             if let Some(n) = inp.as_i64() {
                 inputs.push(Value::Int(n));
+            } else if inp.is_f64() {
+                // JSON numbers written with a decimal point are f64 (`as_i64`
+                // returns None for them); integers keep their `Int` lane. Stored
+                // as IEEE bits (Value keeps Eq/Ord).
+                inputs.push(Value::Float(inp.as_f64().unwrap().to_bits()));
             } else if let Some(arr) = inp.as_array() {
                 let vals: Vec<i64> = arr.iter().filter_map(|x| x.as_i64()).collect();
                 inputs.push(Value::Array(vals));
@@ -75,6 +80,8 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         let exp = &v["expected"];
         let expected = if let Some(n) = exp.as_i64() {
             Value::Int(n)
+        } else if exp.is_f64() {
+            Value::Float(exp.as_f64().unwrap().to_bits())
         } else if let Some(s) = exp.as_str() {
             Value::Str(s.to_string())
         } else if let Some(arr) = exp.as_array() {
