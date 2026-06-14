@@ -74,6 +74,11 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // the whole if/else is verified on every example, so it generalizes by
         // construction and is returned directly instead of feeding gradient.
         | "search_predicate_branch"
+        // Full modular case analysis (`match x%m { r => affine }`): every residue
+        // class is an exact affine on an over-determined bucket and the whole
+        // chain is verified, so it generalizes by construction and is returned
+        // directly instead of feeding gradient.
+        | "search_modular_cases"
         | "search_min3_branch"
         | "search_scalar_expr"
         | "search_digit_sum_loop"

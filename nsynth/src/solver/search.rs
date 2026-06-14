@@ -418,6 +418,14 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_predicate_branch",
         func: search_predicate_branch,
     },
+    // Full modular case analysis — `match x % m { 0 => affine, 1 => affine, … }`,
+    // a distinct affine per residue class. Generalises the 2-way predicate
+    // branch to the full cyclic split (day % 7, phase % 3); runs after it so the
+    // simpler 2-way form is preferred. Fully verified.
+    SearchCandidate {
+        key: "search_modular_cases",
+        func: search_modular_cases,
+    },
 ];
 
 fn ranked_search_candidates(problem: &Problem) -> Vec<SearchCandidate> {
@@ -465,6 +473,7 @@ pub(super) fn solve_multi_arg_affine(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| search_affine_piecewise(problem, fn_name))
         .or_else(|| search_affine_threshold(problem, fn_name))
         .or_else(|| search_predicate_branch(problem, fn_name))
+        .or_else(|| search_modular_cases(problem, fn_name))
 }
 
 pub(super) fn solve_by_search(problem: &Problem, fn_name: &str) -> Option<SolveResult> {

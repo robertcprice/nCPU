@@ -910,6 +910,96 @@ pub(super) fn search_predicate_branch(problem: &Problem, fn_name: &str) -> Optio
     None
 }
 
+/// Full modular CASE ANALYSIS: recover `match x_j % m { 0 => A_0(x), 1 => A_1(x),
+/// …, m-1 => A_{m-1}(x) }` — a distinct exact affine for EVERY residue class of
+/// one argument. Generalises `search_predicate_branch` (which special-cases a
+/// single residue against the rest) to the full cyclic case split that round-
+/// robin, scheduling, and calendar rules use (`day % 7`, `phase % 3`, …).
+/// Emitted as an `if x%m == r { … }` chain, so it stays inside the if/else
+/// fragment the runtime and transpiler already round-trip.
+///
+/// INVERSION: for each argument and modulus, bucket the examples by
+/// `x_j % m`, recover an exact integer affine on EACH bucket (`solve_affine`),
+/// and keep the smallest modulus whose reconstructed chain reproduces every
+/// example. HONESTY GUARDS: every one of the `m` residue classes must be present
+/// AND over-determined (≥ arity+2 points — so no class is a square system), the
+/// `m` affines must not be all identical (else it is plain affine, owned by
+/// `search_affine`), and the whole chain is checked by `verified_result`. The
+/// strong per-class data requirement (≥ m·(arity+2) examples) is itself a guard:
+/// a coarser/finer modulus that coincidentally aligns will fail it or the verify.
+pub(super) fn search_modular_cases(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let examples = super::scalar_search::extract_scalar_examples(problem)?;
+    let arity = examples.first()?.len();
+    if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
+        return None;
+    }
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    if targets.len() != examples.len() {
+        return None;
+    }
+    let min_class = arity + 2; // over-determined per residue class
+    let param_names = scalar_param_names(arity);
+    let params = scalar_params_decl(&param_names);
+
+    // Moduli to try, smallest-first (simplest case split wins): the natural
+    // small bases plus any the data exhibits. Start at 3 — a 2-way split is
+    // `search_predicate_branch`'s job and runs before this.
+    let mut bases: Vec<i64> = vec![3, 4, 5, 6, 7, 8, 9, 10, 12];
+    for &m in &super::scalar_search::mine_scalar_constants(&examples, &targets) {
+        if (3..=16).contains(&m) && !bases.contains(&m) {
+            bases.push(m);
+        }
+    }
+    bases.sort_unstable();
+    bases.dedup();
+
+    for ti in 0..arity {
+        'next_base: for &m in &bases {
+            // Bucket the examples by residue class.
+            let mut classes: Vec<(Vec<Vec<i64>>, Vec<i64>)> =
+                (0..m).map(|_| (Vec::new(), Vec::new())).collect();
+            for (row, &t) in examples.iter().zip(targets.iter()) {
+                let r = row[ti].rem_euclid(m) as usize;
+                classes[r].0.push(row.clone());
+                classes[r].1.push(t);
+            }
+            // Every class must be present and over-determined.
+            if classes.iter().any(|(xs, _)| xs.len() < min_class) {
+                continue;
+            }
+            // Recover an exact affine on each class.
+            let mut coeffs: Vec<Vec<i64>> = Vec::with_capacity(m as usize);
+            for (xs, ys) in &classes {
+                match solve_affine(xs, ys, arity) {
+                    Some(c) => coeffs.push(c),
+                    None => continue 'next_base,
+                }
+            }
+            // Reject the degenerate case where every class is the same affine
+            // (that is a plain affine rule, owned by search_affine).
+            if coeffs.iter().all(|c| c == &coeffs[0]) {
+                continue;
+            }
+            // Render the `if x%m == r { … }` chain (last class as the fallthrough).
+            let mut body = String::new();
+            for (r, c) in coeffs.iter().enumerate().take(m as usize - 1) {
+                let piece = render_scalar_expr(&affine_expr(c), &param_names);
+                body.push_str(&format!(
+                    "    if ({} % {m}) == {r} {{\n        return {piece};\n    }}\n",
+                    param_names[ti]
+                ));
+            }
+            let last = render_scalar_expr(&affine_expr(coeffs.last().unwrap()), &param_names);
+            body.push_str(&format!("    return {last};\n"));
+            let code = format!("fn {fn_name}({params}) -> i64 {{\n{body}}}\n");
+            if let Some(result) = verified_result(problem, code, "search_modular_cases") {
+                return Some(result);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,6 +1077,38 @@ mod tests {
         assert!(
             search_predicate_branch(&p, "f").is_none(),
             "must refuse data with no exact branch explanation"
+        );
+    }
+
+    // Full mod-3 case analysis `match x%3 { 0 => 2x, 1 => x+5, 2 => 3x-1 }` —
+    // three distinct affines, one per residue class — recovered and exact on
+    // unseen points.
+    #[test]
+    fn modular_cases_recovers_three_way() {
+        let f = |x: i64| match x.rem_euclid(3) {
+            0 => 2 * x,
+            1 => x + 5,
+            _ => 3 * x - 1,
+        };
+        let rows: Vec<(i64, i64)> = (0..24).map(|x| (x, f(x))).collect();
+        let p = p1(&rows);
+        let r = search_modular_cases(&p, "f").expect("must recover the mod-3 case split");
+        assert!(r.code.matches("if").count() >= 2, "expected a 3-way chain: {}", r.code);
+        let check = p1(&[(30, f(30)), (31, f(31)), (32, f(32)), (100, f(100))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("mod-3 case split must be exact on unseen points");
+    }
+
+    // It refuses a plain affine (all residue classes identical): that belongs to
+    // search_affine, so modular_cases must NOT claim it.
+    #[test]
+    fn modular_cases_refuses_plain_affine() {
+        let f = |x: i64| 3 * x + 2;
+        let rows: Vec<(i64, i64)> = (0..24).map(|x| (x, f(x))).collect();
+        let p = p1(&rows);
+        assert!(
+            search_modular_cases(&p, "f").is_none(),
+            "modular_cases must refuse a rule with no per-residue difference"
         );
     }
 
