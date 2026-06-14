@@ -417,6 +417,84 @@ fn composed_predicts(c0: i64, picks: &[(&Feature, i64)], targets: &[i64]) -> boo
     true
 }
 
+/// Recover the rendered BODY of the simplest exact rule over a set of example
+/// rows — an affine first, and if no affine fits, a sparse composed-feature rule
+/// (one or two derived features: square, cross-term, modulo, floor-div). This is
+/// the recursion that makes the branch solvers "think in code": a branch is no
+/// longer limited to a straight line — its body can itself be a composed program
+/// the engine recovers. Affine-first means every rule that was already affine
+/// renders identically, so existing behaviour is unchanged; the composed path
+/// only adds genuinely non-linear branch bodies.
+///
+/// Over-determination is STRICTER here than for a whole-program composed fit
+/// (≥ k + 1 + 3 rows per composed body) because a branch's row set is small, and
+/// the caller still verifies the entire reconstructed program against every
+/// example — so a per-branch fit that does not generalise is rejected upstream.
+fn recover_body(
+    xs: &[Vec<i64>],
+    ys: &[i64],
+    arity: usize,
+    param_names: &[String],
+) -> Option<String> {
+    // Affine first — preserves the exact output of the pre-existing affine-body
+    // branch solvers. `solve_affine` reads its answer off the pivot rows and does
+    // not check the rest, so demand that the recovered affine reproduces EVERY
+    // row before accepting it; otherwise fall through to the composed search
+    // (this is what lets a genuinely non-linear branch reach the composed path
+    // instead of being masked by a bogus affine fit).
+    if let Some(c) = solve_affine(xs, ys, arity) {
+        if xs.iter().zip(ys.iter()).all(|(row, &y)| affine_predicts(&c, row, y)) {
+            return Some(render_scalar_expr(&affine_expr(&c), param_names));
+        }
+    }
+    // Composed fallback: the affine base (ALL raw variables) plus exactly ONE
+    // derived feature — `affine + e·g(x)` for a single square, cross-term,
+    // modulo, or floor-div `g`. This is the common non-linear branch body (one
+    // curved/periodic/coupled term on top of a line); always including the raw
+    // base means `a·b + 2a - 3` is one derived feature on top of the affine
+    // rather than a 3-feature subset, which keeps the search cheap (linear in the
+    // derived-feature count) — important because this runs once per candidate
+    // branch partition. Higher-order branch bodies are deliberately out of scope.
+    const BODY_MARGIN: usize = 3;
+    let feats = compose_features(xs, arity);
+    if feats.is_empty() {
+        return None;
+    }
+    let n = xs.len();
+    let raws: Vec<usize> =
+        (0..feats.len()).filter(|&i| matches!(feats[i].expr, ScalarExpr::Var(_))).collect();
+    let derived: Vec<usize> =
+        (0..feats.len()).filter(|&i| !matches!(feats[i].expr, ScalarExpr::Var(_))).collect();
+    for &d in &derived {
+        let mut idxs = raws.clone();
+        idxs.push(d);
+        let k = idxs.len();
+        if n < k + 1 + BODY_MARGIN {
+            continue;
+        }
+        let m = k + 1;
+        let rows: Vec<Vec<i64>> = (0..n)
+            .map(|i| {
+                let mut phi = Vec::with_capacity(m);
+                phi.push(1);
+                for &fi in &idxs {
+                    phi.push(feats[fi].col[i]);
+                }
+                phi
+            })
+            .collect();
+        let Some(w) = solve_linear_features(&rows, ys, m) else {
+            continue;
+        };
+        let picks: Vec<(&Feature, i64)> =
+            idxs.iter().enumerate().map(|(s, &fi)| (&feats[fi], w[s + 1])).collect();
+        if composed_predicts(w[0], &picks, ys) {
+            return Some(render_scalar_expr(&composed_expr(w[0], &picks), param_names));
+        }
+    }
+    None
+}
+
 /// Compositional ("think-in-code") synthesis: recover an exact rule of the form
 ///
 ///     f(x) = c0 + Σ_k c_k · g_k(x)
@@ -860,13 +938,14 @@ pub(super) fn search_predicate_branch(problem: &Problem, fn_name: &str) -> Optio
         if tx.len() < min_side || fx.len() < min_side {
             return None;
         }
-        let a = solve_affine(&tx, &ty, arity)?;
-        let b = solve_affine(&fx, &fy, arity)?;
-        if a == b {
+        // Each branch body is recovered by the engine itself (affine first, then
+        // a composed-feature program) — so a branch can be non-linear, not just a
+        // straight line.
+        let a_body = recover_body(&tx, &ty, arity, &param_names)?;
+        let b_body = recover_body(&fx, &fy, arity, &param_names)?;
+        if a_body == b_body {
             return None; // not actually a branch
         }
-        let a_body = render_scalar_expr(&affine_expr(&a), &param_names);
-        let b_body = render_scalar_expr(&affine_expr(&b), &param_names);
         let code = format!(
             "fn {fn_name}({params}) -> i64 {{\n    if {cond} {{\n        return {a_body};\n    }}\n    return {b_body};\n}}\n"
         );
@@ -967,29 +1046,30 @@ pub(super) fn search_modular_cases(problem: &Problem, fn_name: &str) -> Option<S
             if classes.iter().any(|(xs, _)| xs.len() < min_class) {
                 continue;
             }
-            // Recover an exact affine on each class.
-            let mut coeffs: Vec<Vec<i64>> = Vec::with_capacity(m as usize);
+            // Recover the body of each class via the engine itself (affine
+            // first, composed program as fallback) — so a residue class can be
+            // non-linear, not only a straight line.
+            let mut bodies: Vec<String> = Vec::with_capacity(m as usize);
             for (xs, ys) in &classes {
-                match solve_affine(xs, ys, arity) {
-                    Some(c) => coeffs.push(c),
+                match recover_body(xs, ys, arity, &param_names) {
+                    Some(b) => bodies.push(b),
                     None => continue 'next_base,
                 }
             }
-            // Reject the degenerate case where every class is the same affine
-            // (that is a plain affine rule, owned by search_affine).
-            if coeffs.iter().all(|c| c == &coeffs[0]) {
+            // Reject the degenerate case where every class renders the same body
+            // (that is a plain rule, owned by the non-branching solvers).
+            if bodies.iter().all(|b| b == &bodies[0]) {
                 continue;
             }
             // Render the `if x%m == r { … }` chain (last class as the fallthrough).
             let mut body = String::new();
-            for (r, c) in coeffs.iter().enumerate().take(m as usize - 1) {
-                let piece = render_scalar_expr(&affine_expr(c), &param_names);
+            for (r, piece) in bodies.iter().enumerate().take(m as usize - 1) {
                 body.push_str(&format!(
                     "    if ({} % {m}) == {r} {{\n        return {piece};\n    }}\n",
                     param_names[ti]
                 ));
             }
-            let last = render_scalar_expr(&affine_expr(coeffs.last().unwrap()), &param_names);
+            let last = bodies.last().unwrap();
             body.push_str(&format!("    return {last};\n"));
             let code = format!("fn {fn_name}({params}) -> i64 {{\n{body}}}\n");
             if let Some(result) = verified_result(problem, code, "search_modular_cases") {
@@ -1065,6 +1145,26 @@ mod tests {
         let check = p2(&[((22, 5), f(22, 5)), ((31, 9), f(31, 9)), ((40, 0), f(40, 0))]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("mod-3 branch must be exact on unseen points");
+    }
+
+    // Recursive branch bodies: `if a even { a·b + 1 } else { 2a - b }` — one
+    // branch carries a CROSS-TERM, which a plain affine branch could never
+    // express. Recovered (the body is itself a composed program) and exact on
+    // unseen points. This is the "think-in-code" recursion: a branch body is a
+    // program the engine recovers, not just a straight line.
+    #[test]
+    fn predicate_branch_recovers_composed_body() {
+        let f = |a: i64, b: i64| if a % 2 == 0 { a * b + 1 } else { 2 * a - b };
+        let raw = [
+            (0, 1), (2, 3), (4, 0), (6, 5), (8, 2), (10, 4), (12, 1), (1, 2), (3, 4), (5, 0),
+            (7, 6), (9, 1), (11, 3), (13, 5),
+        ];
+        let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
+        let p = p2(&rows);
+        let r = search_predicate_branch(&p, "f").expect("must recover the composed-body branch");
+        let check = p2(&[((20, 7), f(20, 7)), ((21, 9), f(21, 9)), ((14, 0), f(14, 0))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("composed-body branch must be exact on unseen points");
     }
 
     // It refuses noise: targets with no exact two-affine branch over any modular

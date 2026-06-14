@@ -29,28 +29,38 @@ def make_branch(rng: random.Random):
     # scalar single/two-branch solvers, with its own breakpoint handling.)
     kind = "mod"
 
-    def affine():
+    def body():
+        """A branch body: an affine, OR (testing the recursive 'think-in-code'
+        bodies) an affine plus one non-linear term — a square or, for 2 args, a
+        cross-term a*b — which a plain affine branch could never express."""
         c0 = rng.choice([0, 1, 3, 5, -2])
         cs = [rng.choice([1, 2, 3, -1, -2]) for _ in range(k)]
-        return c0, cs
+        kind = rng.choice(["affine", "affine", "square", "cross"] if k >= 2 else ["affine", "affine", "square"])
+        extra = rng.choice([1, 2, -1])
+        if kind == "square":
+            j = rng.randrange(k)
+            g = (lambda c0, cs, j, e: lambda xs: c0 + sum(cs[t] * xs[t] for t in range(k)) + e * xs[j] * xs[j])(c0, cs, j, extra)
+            d = f"aff+{extra}*x{j}^2"
+        elif kind == "cross":
+            g = (lambda c0, cs, e: lambda xs: c0 + sum(cs[t] * xs[t] for t in range(k)) + e * xs[0] * xs[1])(c0, cs, extra)
+            d = f"aff+{extra}*x0*x1"
+        else:
+            g = (lambda c0, cs: lambda xs: c0 + sum(cs[t] * xs[t] for t in range(k)))(c0, cs)
+            d = "aff"
+        return g, d
 
-    a0, acs = affine()
-    b0, bcs = affine()
-    while (a0, acs) == (b0, bcs):
-        b0, bcs = affine()
-
-    def lin(c0, cs, xs):
-        return c0 + sum(cs[j] * xs[j] for j in range(k))
+    a_fn, a_d = body()
+    b_fn, b_d = body()
 
     m = rng.choice([2, 3, 4, 5])
     r = rng.randrange(m)
-    desc = f"{k}arg if x{split}%{m}=={r} A else B"
+    desc = f"{k}arg if x{split}%{m}=={r} ({a_d}) else ({b_d})"
 
     def pred(xs):
         return xs[split] % m == r
 
     def fn(*xs):
-        return lin(a0, acs, xs) if pred(xs) else lin(b0, bcs, xs)
+        return a_fn(xs) if pred(xs) else b_fn(xs)
 
     return fn, desc, k, pred, split, m
 
