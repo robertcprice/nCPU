@@ -226,6 +226,17 @@ pub fn factory_count() -> usize {
     FACTORIES.len()
 }
 
+/// String-output benchmark problems (solved by the main pipeline's string path).
+pub fn get_string_benchmark(variants_per_factory: usize) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    for variant in 0..variants_per_factory {
+        for factory in STRING_FACTORIES {
+            problems.push(factory(variant));
+        }
+    }
+    problems
+}
+
 pub fn generated_holdouts(problem: &Problem) -> Vec<Example> {
     problem.holdouts.clone()
 }
@@ -1403,6 +1414,127 @@ fn make_interactive_sum(variant: usize) -> Problem {
         "fn interactive_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n",
     )
 }
+
+// ── String-output programs (first-class via the widened Value output) ────────
+
+fn make_reverse_str(variant: usize) -> Problem {
+    problem(
+        "reverse_str",
+        variant,
+        "strings",
+        "Reverse the input string.",
+        "fn reverse_str(s: string) -> string",
+        vec![
+            example_str(vec![string("abc")], "cba"),
+            example_str(vec![string("hello")], "olleh"),
+            example_str(vec![string("x")], "x"),
+            example_str(vec![string("ab")], "ba"),
+        ],
+        vec![
+            example_str(vec![string("world")], "dlrow"),
+            example_str(vec![string("rust")], "tsur"),
+        ],
+        "fn reverse_str(s: string) -> string {\n    return s.reverse();\n}\n",
+    )
+}
+
+fn make_uppercase(variant: usize) -> Problem {
+    problem(
+        "uppercase",
+        variant,
+        "strings",
+        "Return the string in uppercase.",
+        "fn uppercase(s: string) -> string",
+        vec![
+            example_str(vec![string("abc")], "ABC"),
+            example_str(vec![string("Hello")], "HELLO"),
+            example_str(vec![string("mix")], "MIX"),
+        ],
+        vec![example_str(vec![string("done")], "DONE")],
+        "fn uppercase(s: string) -> string {\n    return s.upper();\n}\n",
+    )
+}
+
+fn make_capitalize(variant: usize) -> Problem {
+    problem(
+        "capitalize",
+        variant,
+        "strings",
+        "Uppercase the first character, leave the rest unchanged.",
+        "fn capitalize(s: string) -> string",
+        vec![
+            example_str(vec![string("cat")], "Cat"),
+            example_str(vec![string("dog")], "Dog"),
+            example_str(vec![string("bird")], "Bird"),
+            example_str(vec![string("fish")], "Fish"),
+        ],
+        vec![
+            example_str(vec![string("fox")], "Fox"),
+            example_str(vec![string("hen")], "Hen"),
+        ],
+        "fn capitalize(s: string) -> string {\n    return s.slice(0, 1).upper() + s.slice(1, s.len);\n}\n",
+    )
+}
+
+fn make_drop_last(variant: usize) -> Problem {
+    problem(
+        "drop_last",
+        variant,
+        "strings",
+        "Drop the last character of the string.",
+        "fn drop_last(s: string) -> string",
+        vec![
+            example_str(vec![string("cats")], "cat"),
+            example_str(vec![string("dogs")], "dog"),
+            example_str(vec![string("birds")], "bird"),
+        ],
+        vec![example_str(vec![string("foxes")], "foxe")],
+        "fn drop_last(s: string) -> string {\n    return s.slice(0, s.len - 1);\n}\n",
+    )
+}
+
+fn make_full_name(variant: usize) -> Problem {
+    problem(
+        "full_name",
+        variant,
+        "strings",
+        "Join first and last name with a space.",
+        "fn full_name(a: string, b: string) -> string",
+        vec![
+            example_str(vec![string("john"), string("smith")], "john smith"),
+            example_str(vec![string("jane"), string("doe")], "jane doe"),
+            example_str(vec![string("amy"), string("lee")], "amy lee"),
+        ],
+        vec![example_str(vec![string("max"), string("ray")], "max ray")],
+        "fn full_name(a: string, b: string) -> string {\n    return (a + \" \") + b;\n}\n",
+    )
+}
+
+fn make_last_first(variant: usize) -> Problem {
+    problem(
+        "last_first",
+        variant,
+        "strings",
+        "Render as \"last, first\".",
+        "fn last_first(a: string, b: string) -> string",
+        vec![
+            example_str(vec![string("john"), string("smith")], "smith, john"),
+            example_str(vec![string("jane"), string("doe")], "doe, jane"),
+            example_str(vec![string("amy"), string("lee")], "lee, amy"),
+        ],
+        vec![example_str(vec![string("max"), string("ray")], "ray, max")],
+        "fn last_first(a: string, b: string) -> string {\n    return (b + \", \") + a;\n}\n",
+    )
+}
+
+pub const STRING_FACTORIES: &[Factory] = &[
+    make_reverse_str,
+    make_uppercase,
+    make_capitalize,
+    make_drop_last,
+    make_full_name,
+    make_last_first,
+];
 
 pub const FACTORIES: &[Factory] = &[
     make_add_two,

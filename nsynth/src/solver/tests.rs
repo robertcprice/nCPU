@@ -421,6 +421,20 @@ fn search_array_dnf_learns_inference_validity() {
     );
 }
 
+/// Every string-output benchmark problem is solved by the main pipeline and the
+/// emitted program verifies on its held-out examples.
+#[test]
+fn string_benchmark_full_coverage() {
+    let problems = crate::benchmark::get_string_benchmark(1);
+    assert!(!problems.is_empty());
+    for p in &problems {
+        let result = solve_problem(p);
+        assert!(result.success, "string benchmark {} not solved", p.name);
+        crate::runtime::verify_problem_code_strict(p, &result.code)
+            .unwrap_or_else(|e| panic!("{} failed strict verify: {e}", p.name));
+    }
+}
+
 /// String OUTPUT through the main pipeline — exercises the widened
 /// `Example.expected: Value` and the Value-aware verify path. A string->string
 /// problem is solved by `solve_problem` and run on a fresh input.
