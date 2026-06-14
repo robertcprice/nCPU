@@ -96,7 +96,7 @@ fn to_problem(input: InputProblem) -> Option<Problem> {
         }
         examples.push(Example {
             inputs: ins,
-            expected: ex.expected,
+            expected: Value::Int(ex.expected),
         });
     }
     let signature: &'static str = Box::leak(input.signature.into_boxed_str());

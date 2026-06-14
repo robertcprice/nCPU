@@ -10,19 +10,19 @@ fn solve_problem_prefers_native_gradient_before_scalar_templates() {
         examples: vec![
             Example {
                 inputs: vec![Value::Int(10), Value::Int(4)],
-                expected: 6,
+                expected: Value::Int(6),
             },
             Example {
                 inputs: vec![Value::Int(4), Value::Int(10)],
-                expected: 6,
+                expected: Value::Int(6),
             },
             Example {
                 inputs: vec![Value::Int(3), Value::Int(3)],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Int(-2), Value::Int(5)],
-                expected: 7,
+                expected: Value::Int(7),
             },
         ],
         holdouts: vec![],
@@ -47,19 +47,19 @@ fn solve_problem_prefers_array_gradient_before_array_templates() {
         examples: vec![
             Example {
                 inputs: vec![Value::Array(vec![1, 2, 3, 4])],
-                expected: 4,
+                expected: Value::Int(4),
             },
             Example {
                 inputs: vec![Value::Array(vec![4, -3, 2, -1])],
-                expected: 2,
+                expected: Value::Int(2),
             },
             Example {
                 inputs: vec![Value::Array(vec![-5])],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Array(vec![0, 0, 0])],
-                expected: 0,
+                expected: Value::Int(0),
             },
         ],
         holdouts: vec![],
@@ -92,11 +92,11 @@ fn method_router_promotes_learned_search_teacher_to_front() {
             examples: vec![
                 Example {
                     inputs: vec![Value::Int(10), Value::Int(4)],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Int(4), Value::Int(10)],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
             ],
             holdouts: vec![],
@@ -124,11 +124,11 @@ fn method_router_normalizes_legacy_array_method_names() {
             examples: vec![
                 Example {
                     inputs: vec![Value::Array(vec![1, 2, 3])],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Array(vec![-5, 5])],
-                    expected: 0,
+                    expected: Value::Int(0),
                 },
             ],
             holdouts: vec![],
@@ -188,11 +188,11 @@ fn method_router_can_skip_enumerative_after_repeated_late_stage_wins() {
             examples: vec![
                 Example {
                     inputs: vec![Value::Int(10), Value::Int(4)],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Int(4), Value::Int(10)],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
             ],
             holdouts: vec![],
@@ -227,11 +227,11 @@ fn method_router_keeps_enumerative_when_top_route_is_slow_array_gradient() {
             examples: vec![
                 Example {
                     inputs: vec![Value::Array(vec![1, 2, 3])],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Array(vec![-5, 5])],
-                    expected: 0,
+                    expected: Value::Int(0),
                 },
             ],
             holdouts: vec![],
@@ -264,11 +264,11 @@ fn method_router_keeps_enumerative_when_enum_has_the_bucket() {
             examples: vec![
                 Example {
                     inputs: vec![Value::Array(vec![1, 2, 3])],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Array(vec![-5, 5])],
-                    expected: 0,
+                    expected: Value::Int(0),
                 },
             ],
             holdouts: vec![],
@@ -297,11 +297,11 @@ fn cache_bypass_requires_a_stronger_general_route_than_cached_method() {
             examples: vec![
                 Example {
                     inputs: vec![Value::Int(10), Value::Int(4)],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Int(4), Value::Int(10)],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
             ],
             holdouts: vec![],
@@ -349,15 +349,15 @@ fn solve_problem_can_bypass_cache_and_upgrade_to_router_preferred_route() {
             examples: vec![
                 Example {
                     inputs: vec![Value::Array(vec![1, 2, 3])],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Array(vec![4, -1, 2])],
-                    expected: 5,
+                    expected: Value::Int(5),
                 },
                 Example {
                     inputs: vec![Value::Array(vec![-5, 5])],
-                    expected: 0,
+                    expected: Value::Int(0),
                 },
             ],
             holdouts: vec![],
@@ -405,19 +405,19 @@ fn solve_problem_uses_array_gradient_for_simple_sum_fold() {
         examples: vec![
             Example {
                 inputs: vec![Value::Array(vec![1, 2, 3])],
-                expected: 6,
+                expected: Value::Int(6),
             },
             Example {
                 inputs: vec![Value::Array(vec![4, -1, 2])],
-                expected: 5,
+                expected: Value::Int(5),
             },
             Example {
                 inputs: vec![Value::Array(vec![-5, 5])],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Array(vec![])],
-                expected: 0,
+                expected: Value::Int(0),
             },
         ],
         holdouts: vec![],

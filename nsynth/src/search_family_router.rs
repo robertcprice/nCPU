@@ -255,7 +255,7 @@ mod tests {
             signature: "fn test()",
             examples: vec![Example {
                 inputs,
-                expected: 0,
+                expected: Value::Int(0),
             }],
             holdouts: vec![],
             reference_code: "",

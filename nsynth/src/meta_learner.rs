@@ -174,11 +174,11 @@ pub fn extract_problem_features(problem: &Problem) -> [f64; FEATURE_DIM] {
     let mut out_abs_sum: i128 = 0;
     let mut nonneg = 0usize;
     for ex in examples {
-        out_min = out_min.min(ex.expected);
-        out_max = out_max.max(ex.expected);
-        out_sum += ex.expected as i128;
-        out_abs_sum += (ex.expected.unsigned_abs() as i128).min(i128::MAX / 2);
-        if ex.expected >= 0 {
+        out_min = out_min.min(ex.expected_int());
+        out_max = out_max.max(ex.expected_int());
+        out_sum += ex.expected_int() as i128;
+        out_abs_sum += (ex.expected_int().unsigned_abs() as i128).min(i128::MAX / 2);
+        if ex.expected_int() >= 0 {
             nonneg += 1;
         }
     }
@@ -207,7 +207,7 @@ pub fn extract_problem_features(problem: &Problem) -> [f64; FEATURE_DIM] {
         // Monotone-in-arg0 score: sort (arg0, out), count strictly increasing.
         let mut paired: Vec<(i64, i64)> = arg0_values
             .iter()
-            .zip(examples.iter().map(|e| e.expected))
+            .zip(examples.iter().map(|e| e.expected_int()))
             .map(|(a, o)| (*a, o))
             .collect();
         paired.sort_by_key(|(a, _)| *a);
@@ -774,15 +774,15 @@ mod tests {
         let p = make_problem(vec![
             Example {
                 inputs: vec![Value::Int(1)],
-                expected: 2,
+                expected: Value::Int(2),
             },
             Example {
                 inputs: vec![Value::Int(2)],
-                expected: 4,
+                expected: Value::Int(4),
             },
             Example {
                 inputs: vec![Value::Int(3)],
-                expected: 6,
+                expected: Value::Int(6),
             },
         ]);
         let f = extract_problem_features(&p);
@@ -817,15 +817,15 @@ mod tests {
             let p = make_problem(vec![
                 Example {
                     inputs: vec![Value::Int(1)],
-                    expected: 2,
+                    expected: Value::Int(2),
                 },
                 Example {
                     inputs: vec![Value::Int(5)],
-                    expected: 10,
+                    expected: Value::Int(10),
                 },
                 Example {
                     inputs: vec![Value::Int(10)],
-                    expected: 20,
+                    expected: Value::Int(20),
                 },
             ]);
             let candidates = vec![
@@ -869,15 +869,15 @@ mod tests {
             examples: vec![
                 Example {
                     inputs: vec![Value::Int(1), Value::Int(0)],
-                    expected: 1,
+                    expected: Value::Int(1),
                 },
                 Example {
                     inputs: vec![Value::Int(2), Value::Int(0)],
-                    expected: 4,
+                    expected: Value::Int(4),
                 },
                 Example {
                     inputs: vec![Value::Int(3), Value::Int(0)],
-                    expected: 9,
+                    expected: Value::Int(9),
                 },
             ],
             holdouts: vec![],
@@ -924,11 +924,11 @@ mod tests {
             let p = make_problem(vec![
                 Example {
                     inputs: vec![Value::Int(1)],
-                    expected: 2,
+                    expected: Value::Int(2),
                 },
                 Example {
                     inputs: vec![Value::Int(2)],
-                    expected: 4,
+                    expected: Value::Int(4),
                 },
             ]);
             let code = "fn t(a: i64) -> i64 { return a * 2; }".to_string();
@@ -960,11 +960,11 @@ mod tests {
             let p = make_problem(vec![
                 Example {
                     inputs: vec![Value::Int(1)],
-                    expected: 1,
+                    expected: Value::Int(1),
                 },
                 Example {
                     inputs: vec![Value::Int(2)],
-                    expected: 2,
+                    expected: Value::Int(2),
                 },
             ]);
             // Many transfer events should pull the low weight up toward 1.0
@@ -1000,11 +1000,11 @@ mod tests {
             let p = make_problem(vec![
                 Example {
                     inputs: vec![Value::Int(1)],
-                    expected: 1,
+                    expected: Value::Int(1),
                 },
                 Example {
                     inputs: vec![Value::Int(2)],
-                    expected: 2,
+                    expected: Value::Int(2),
                 },
             ]);
             unsafe { std::env::set_var("NSYNTH_META_L2", "0") };
@@ -1034,11 +1034,11 @@ mod tests {
         let pf = extract_problem_features(&make_problem(vec![
             Example {
                 inputs: vec![Value::Int(0)],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Int(5)],
-                expected: 5,
+                expected: Value::Int(5),
             },
         ]));
 
@@ -1069,7 +1069,7 @@ mod tests {
                     signature: "fn t(n: i64) -> i64",
                     examples: vec![Example {
                         inputs: vec![Value::Int(3)],
-                        expected: 3,
+                        expected: Value::Int(3),
                     }],
                     holdouts: vec![],
                     reference_code: "",
@@ -1101,11 +1101,11 @@ mod tests {
             let p = make_problem(vec![
                 Example {
                     inputs: vec![Value::Int(1)],
-                    expected: 2,
+                    expected: Value::Int(2),
                 },
                 Example {
                     inputs: vec![Value::Int(2)],
-                    expected: 4,
+                    expected: Value::Int(4),
                 },
             ]);
             let before = with_weights(|w| w.clone());

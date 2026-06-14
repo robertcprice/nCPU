@@ -47,7 +47,7 @@ where
     problem.examples.iter().all(|ex| {
         ex.inputs.len() == 1
             && int_value(&ex.inputs[0])
-                .map(|x| func(x) == ex.expected)
+                .map(|x| func(x) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -60,7 +60,7 @@ where
         ex.inputs.len() == 2
             && int_value(&ex.inputs[0])
                 .zip(int_value(&ex.inputs[1]))
-                .map(|(a, b)| func(a, b) == ex.expected)
+                .map(|(a, b)| func(a, b) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -74,7 +74,7 @@ where
             && int_value(&ex.inputs[0])
                 .zip(int_value(&ex.inputs[1]))
                 .zip(int_value(&ex.inputs[2]))
-                .map(|((a, b), c)| func(a, b, c) == ex.expected)
+                .map(|((a, b), c)| func(a, b, c) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -89,7 +89,7 @@ where
                 .zip(int_value(&ex.inputs[1]))
                 .zip(int_value(&ex.inputs[2]))
                 .zip(int_value(&ex.inputs[3]))
-                .map(|(((a, b), c), d)| func(a, b, c, d) == ex.expected)
+                .map(|(((a, b), c), d)| func(a, b, c, d) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -101,7 +101,7 @@ where
     problem.examples.iter().all(|ex| {
         ex.inputs.len() == 1
             && array_value(&ex.inputs[0])
-                .map(|arr| func(arr) == ex.expected)
+                .map(|arr| func(arr) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -114,7 +114,7 @@ where
         ex.inputs.len() == 2
             && array_value(&ex.inputs[0])
                 .zip(int_value(&ex.inputs[1]))
-                .map(|(arr, target)| func(arr, target) == ex.expected)
+                .map(|(arr, target)| func(arr, target) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -126,7 +126,7 @@ where
     problem.examples.iter().all(|ex| {
         ex.inputs.len() == 1
             && str_value(&ex.inputs[0])
-                .map(|s| func(s) == ex.expected)
+                .map(|s| func(s) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -138,7 +138,7 @@ where
     problem.examples.iter().all(|ex| {
         ex.inputs.len() == 1
             && pair_value(&ex.inputs[0])
-                .map(|(a, b)| func(a, b) == ex.expected)
+                .map(|(a, b)| func(a, b) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -151,7 +151,7 @@ where
         ex.inputs.len() == 2
             && array_value(&ex.inputs[0])
                 .zip(array_value(&ex.inputs[1]))
-                .map(|(a, b)| func(a, b) == ex.expected)
+                .map(|(a, b)| func(a, b) == ex.expected_int())
                 .unwrap_or(false)
     })
 }

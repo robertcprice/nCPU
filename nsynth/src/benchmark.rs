@@ -1,4 +1,4 @@
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Int(i64),
     Str(String),
@@ -6,10 +6,41 @@ pub enum Value {
     Pair(i64, i64),
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Int(v) => write!(f, "{v}"),
+            Value::Str(s) => write!(f, "{s}"),
+            Value::Array(a) => write!(
+                f,
+                "[{}]",
+                a.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Value::Pair(a, b) => write!(f, "({a}, {b})"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Example {
     pub inputs: Vec<Value>,
-    pub expected: i64,
+    pub expected: Value,
+}
+
+impl Example {
+    /// The expected output as an i64. Numeric solvers operate only on integer
+    /// problems, so this returns the int payload (0 for non-int outputs, which
+    /// those solvers never see).
+    pub fn expected_int(&self) -> i64 {
+        match &self.expected {
+            Value::Int(i) => *i,
+            Value::Pair(a, _) => *a,
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,16 +63,29 @@ impl Problem {
             .unwrap_or("")
     }
 
+    /// True when the function returns a string (used to pick the right print
+    /// builtin and expected-output rendering).
+    fn returns_string(&self) -> bool {
+        self.signature.replace(' ', "").contains("->string")
+    }
+
     pub fn expected_stdout(&self) -> String {
         self.examples
             .iter()
-            .map(|example| example.expected.to_string())
+            .map(|example| render_expected(&example.expected))
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     pub fn build_wrapper(&self) -> Result<String, String> {
         let fn_name = self.function_name();
+        // String-returning functions print with the generic `println` (raw
+        // string); integer functions print with `println_i64`.
+        let print = if self.returns_string() {
+            "println"
+        } else {
+            "println_i64"
+        };
         let mut lines = vec!["fn main() -> i64 {".to_string()];
         for example in &self.examples {
             let args = example
@@ -50,7 +94,7 @@ impl Problem {
                 .map(|value| render_value(self, value))
                 .collect::<Result<Vec<_>, _>>()?
                 .join(", ");
-            lines.push(format!("    println_i64({fn_name}({args}));"));
+            lines.push(format!("    {print}({fn_name}({args}));"));
         }
         lines.push("    return 0;".to_string());
         lines.push("}".to_string());
@@ -67,7 +111,35 @@ impl Problem {
 }
 
 fn example(inputs: Vec<Value>, expected: i64) -> Example {
-    Example { inputs, expected }
+    Example {
+        inputs,
+        expected: Value::Int(expected),
+    }
+}
+
+/// An example with a string expected output (for string-returning problems).
+#[allow(dead_code)]
+fn example_str(inputs: Vec<Value>, expected: &str) -> Example {
+    Example {
+        inputs,
+        expected: Value::Str(expected.to_string()),
+    }
+}
+
+/// Render an expected output to match what the wrapper's print builtin emits.
+fn render_expected(value: &Value) -> String {
+    match value {
+        Value::Int(v) => v.to_string(),
+        Value::Str(s) => s.clone(),
+        Value::Array(a) => format!(
+            "[{}]",
+            a.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Pair(a, b) => format!("({a}, {b})"),
+    }
 }
 
 fn int(v: i64) -> Value {

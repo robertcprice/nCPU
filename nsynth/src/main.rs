@@ -71,7 +71,17 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
                 return Err(format!("unsupported input type: {inp}"));
             }
         }
-        let expected = v["expected"].as_i64().ok_or("missing expected")?;
+        // Expected output may be int, string, or array — all first-class now.
+        let exp = &v["expected"];
+        let expected = if let Some(n) = exp.as_i64() {
+            Value::Int(n)
+        } else if let Some(s) = exp.as_str() {
+            Value::Str(s.to_string())
+        } else if let Some(arr) = exp.as_array() {
+            Value::Array(arr.iter().filter_map(|x| x.as_i64()).collect())
+        } else {
+            return Err("missing/unsupported expected".to_string());
+        };
         Ok(Example { inputs, expected })
     }
 

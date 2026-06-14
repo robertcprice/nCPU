@@ -2200,7 +2200,7 @@ fn main() {
                                     }
                                 })
                                 .collect();
-                            (inputs, ex.expected)
+                            (inputs, ex.expected_int())
                         })
                         .collect();
                     let record = MetaRecord {
@@ -2386,7 +2386,7 @@ fn main() {
                         })
                         .collect();
                     match prog.discrete_eval(&inputs) {
-                        Some(out) => out == ex.expected,
+                        Some(out) => out == ex.expected_int(),
                         None => false,
                     }
                 });
@@ -2424,7 +2424,7 @@ fn main() {
                                     }
                                 })
                                 .collect();
-                            (inputs, ex.expected)
+                            (inputs, ex.expected_int())
                         })
                         .collect();
 
@@ -2484,7 +2484,7 @@ fn main() {
                             })
                             .collect();
                         match prog.discrete_eval(&inputs) {
-                            Some(out) => out == ex.expected,
+                            Some(out) => out == ex.expected_int(),
                             None => false,
                         }
                     });

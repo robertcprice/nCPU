@@ -51,7 +51,7 @@ fn extract_arr_examples(problem: &Problem) -> Option<(Vec<ArrExample>, usize)> {
             arr: padded,
             arr_len,
             scalar_args,
-            expected: ex.expected as f32,
+            expected: ex.expected_int() as f32,
         });
     }
     Some((examples, n_scalar))

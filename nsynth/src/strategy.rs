@@ -490,19 +490,19 @@ mod tests {
             examples: vec![
                 Example {
                     inputs: vec![Value::Int(1), Value::Int(2)],
-                    expected: 3,
+                    expected: Value::Int(3),
                 },
                 Example {
                     inputs: vec![Value::Int(10), Value::Int(-4)],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Int(-3), Value::Int(-2)],
-                    expected: -5,
+                    expected: Value::Int(-5),
                 },
                 Example {
                     inputs: vec![Value::Int(0), Value::Int(0)],
-                    expected: 0,
+                    expected: Value::Int(0),
                 },
             ],
             holdouts: vec![],
@@ -528,7 +528,7 @@ mod tests {
             signature: "fn array_sum(xs: Vec<i64>) -> i64",
             examples: vec![Example {
                 inputs: vec![Value::Array(vec![1, 2, 3])],
-                expected: 6,
+                expected: Value::Int(6),
             }],
             holdouts: vec![],
             reference_code: "",
@@ -553,7 +553,7 @@ mod tests {
             signature: "fn f(a: i64) -> i64",
             examples: vec![Example {
                 inputs: vec![Value::Int(1)],
-                expected: 1,
+                expected: Value::Int(1),
             }],
             holdouts: vec![],
             reference_code: "",
@@ -581,7 +581,7 @@ mod tests {
             signature: "fn f(a: i64) -> i64",
             examples: vec![Example {
                 inputs: vec![Value::Int(1)],
-                expected: 1,
+                expected: Value::Int(1),
             }],
             holdouts: vec![],
             reference_code: "",
@@ -596,7 +596,7 @@ mod tests {
             signature: "fn f(xs: Vec<i64>) -> i64",
             examples: vec![Example {
                 inputs: vec![Value::Array(vec![1, 2])],
-                expected: 3,
+                expected: Value::Int(3),
             }],
             holdouts: vec![],
             reference_code: "",
@@ -649,7 +649,7 @@ mod tests {
             signature: "fn big_scalar(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64",
             examples: vec![Example {
                 inputs,
-                expected: 0,
+                expected: Value::Int(0),
             }],
             holdouts: vec![],
             reference_code: "",

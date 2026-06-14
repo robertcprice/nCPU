@@ -43,7 +43,7 @@ fn int_inputs(problem: &Problem) -> Option<Vec<(Vec<i64>, i64)>> {
             };
             inputs.push(*v);
         }
-        cases.push((inputs, example.expected));
+        cases.push((inputs, example.expected_int()));
     }
     Some(cases)
 }
@@ -132,7 +132,7 @@ fn grouped_examples_from_traces(traces: &[InteractiveTrace], arity: usize) -> Op
                 .collect();
             examples.push(Example {
                 inputs,
-                expected: *expected,
+                expected: Value::Int(*expected),
             });
         }
     }

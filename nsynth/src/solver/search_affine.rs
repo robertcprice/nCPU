@@ -25,7 +25,7 @@ fn multi_arg_examples(problem: &Problem) -> Option<(Vec<Vec<i64>>, Vec<i64>, usi
     if !(2..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -222,7 +222,7 @@ pub(super) fn search_polynomial_multi(problem: &Problem, fn_name: &str) -> Optio
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -528,7 +528,7 @@ pub(super) fn search_composed_features(problem: &Problem, fn_name: &str) -> Opti
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -631,7 +631,7 @@ pub(super) fn search_clamp_affine(problem: &Problem, fn_name: &str) -> Option<So
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -911,7 +911,7 @@ pub(super) fn search_predicate_branch(problem: &Problem, fn_name: &str) -> Optio
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -1065,7 +1065,7 @@ pub(super) fn search_interval_branch(problem: &Problem, fn_name: &str) -> Option
     if arity != 1 || examples.iter().any(|row| row.len() != 1) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|e| e.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|e| e.expected_int()).collect();
     let n = examples.len();
     if targets.len() != n || n < 9 {
         return None; // need three runs of at least three points each
@@ -1141,7 +1141,7 @@ pub(super) fn search_modular_cases(problem: &Problem, fn_name: &str) -> Option<S
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -1243,7 +1243,7 @@ pub(super) fn search_minmax_affine(problem: &Problem, fn_name: &str) -> Option<S
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -1374,7 +1374,7 @@ mod tests {
             signature: "fn f(a: i64, b: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|((a, b), y)| Example { inputs: vec![Value::Int(*a), Value::Int(*b)], expected: *y })
+                .map(|((a, b), y)| Example { inputs: vec![Value::Int(*a), Value::Int(*b)], expected: Value::Int(*y) })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1389,7 +1389,7 @@ mod tests {
             signature: "fn f(x: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|&(x, y)| Example { inputs: vec![Value::Int(x)], expected: y })
+                .map(|&(x, y)| Example { inputs: vec![Value::Int(x)], expected: Value::Int(y) })
                 .collect(),
             holdouts: vec![],
             reference_code: "",

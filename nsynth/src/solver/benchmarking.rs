@@ -66,7 +66,7 @@ fn try_python_warmstart(problem: &Problem) -> Option<SolveResult> {
                     }
                 })
                 .collect();
-            serde_json::json!([inputs, ex.expected])
+            serde_json::json!([inputs, ex.expected_int()])
         })
         .collect();
 

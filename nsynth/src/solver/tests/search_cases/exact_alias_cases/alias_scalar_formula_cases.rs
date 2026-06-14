@@ -90,11 +90,11 @@ fn search_solves_aliased_safe_div_without_family_name() {
     );
     problem.examples.push(Example {
         inputs: vec![Value::Int(20), Value::Int(4)],
-        expected: 5,
+        expected: Value::Int(5),
     });
     problem.examples.push(Example {
         inputs: vec![Value::Int(8), Value::Int(2)],
-        expected: 4,
+        expected: Value::Int(4),
     });
     let result = solve_problem_search_only(&problem);
     assert!(result.success);

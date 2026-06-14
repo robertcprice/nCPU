@@ -93,7 +93,7 @@ fn to_problem(input: InputProblem) -> Result<Problem, String> {
         }
         examples.push(Example {
             inputs: ins,
-            expected: ex.expected,
+            expected: Value::Int(ex.expected),
         });
     }
     if examples.is_empty() {

@@ -13,7 +13,102 @@ fn has_non_scalar_input(problem: &Problem) -> bool {
     })
 }
 
+/// Route string-output problems (signature `-> string`) to the string-program
+/// path: the fast morphology specialist, then the general enumerative string
+/// synthesizer. Returns None for non-string problems so the numeric pipeline runs.
+fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
+    if !problem.signature.replace(' ', "").contains("->string") {
+        return None;
+    }
+    // Examples must be all-string-input, string-output.
+    let to_rows = |exs: &[crate::benchmark::Example]| -> Option<Vec<(Vec<String>, String)>> {
+        exs.iter()
+            .map(|e| {
+                let ins: Option<Vec<String>> = e
+                    .inputs
+                    .iter()
+                    .map(|v| match v {
+                        Value::Str(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                match (&ins, &e.expected) {
+                    (Some(i), Value::Str(o)) => Some((i.clone(), o.clone())),
+                    _ => None,
+                }
+            })
+            .collect()
+    };
+    let train = to_rows(&problem.examples)?;
+    let holds = to_rows(&problem.holdouts).unwrap_or_default();
+    let fn_name = problem.function_name();
+    let single = train.iter().all(|(i, _)| i.len() == 1);
+
+    // Fast morphology specialist (single-arg suffix transduction).
+    if single {
+        use crate::morph_transduce::{solve_morph_transduction, StrExample};
+        let mk = |rs: &[(Vec<String>, String)]| {
+            rs.iter()
+                .map(|(i, o)| StrExample { input: i[0].clone(), expected: o.clone() })
+                .collect::<Vec<_>>()
+        };
+        let m = solve_morph_transduction(fn_name, &mk(&train), &mk(&holds));
+        if m.success {
+            return Some(SolveResult {
+                success: true,
+                code: m.code,
+                method: m.method,
+                error: None,
+                metadata: Default::default(),
+            });
+        }
+    }
+
+    // General enumerative string synthesizer.
+    use crate::string_synth::{synthesize_string_program, StrSynthExample};
+    let params: Vec<String> = problem
+        .signature
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(')'))
+        .map(|(p, _)| p)
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|p| p.split(':').next().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+        .collect();
+    let params = if params.is_empty() {
+        vec!["s".to_string()]
+    } else {
+        params
+    };
+    let all: Vec<StrSynthExample> = train
+        .iter()
+        .chain(holds.iter())
+        .map(|(i, o)| StrSynthExample { inputs: i.clone(), expected: o.clone() })
+        .collect();
+    let r = synthesize_string_program(&params, &all);
+    if r.success {
+        let code = r.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: r.method,
+            error: None,
+            metadata: Default::default(),
+        });
+    }
+    None
+}
+
 pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
+    // String-output problems take the additive string-program path (the i64
+    // gradient/search pipeline cannot express string outputs).
+    if let Some(result) = solve_string_output(problem) {
+        if result.success {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+        }
+        return result;
+    }
     let result = solve_problem_inner(problem);
     if result.success {
         // Record every successful solve. De-duped inside the cache so reruns

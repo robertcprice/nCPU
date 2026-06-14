@@ -10,29 +10,29 @@ fn array_teacher_distillation_solves_count_positive() {
         examples: vec![
             Example {
                 inputs: vec![Value::Array(vec![1, 2, 3, 4])],
-                expected: 4,
+                expected: Value::Int(4),
             },
             Example {
                 inputs: vec![Value::Array(vec![4, -3, 2, -1])],
-                expected: 2,
+                expected: Value::Int(2),
             },
             Example {
                 inputs: vec![Value::Array(vec![-5])],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Array(vec![0, 0, 0])],
-                expected: 0,
+                expected: Value::Int(0),
             },
         ],
         holdouts: vec![
             Example {
                 inputs: vec![Value::Array(vec![3, 0, -2, 1])],
-                expected: 2,
+                expected: Value::Int(2),
             },
             Example {
                 inputs: vec![Value::Array(vec![-1, -2, -3])],
-                expected: 0,
+                expected: Value::Int(0),
             },
         ],
         reference_code: "",

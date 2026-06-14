@@ -2879,7 +2879,7 @@ fn scalar_teacher_examples_from_code(
         };
         out.push(Example {
             inputs: values,
-            expected,
+            expected: Value::Int(expected),
         });
     }
 
@@ -2924,7 +2924,7 @@ fn mismatched_scalar_teacher_inputs(problem: &Problem, code: &str) -> Option<Vec
         let RuntimeValue::Int(actual) = actual else {
             return None;
         };
-        if actual != example.expected {
+        if actual != example.expected_int() {
             failing.push(inputs);
         }
     }
@@ -3879,7 +3879,7 @@ fn synthesize_scalar_expr_inner(
                     }
                 })
                 .collect();
-            (inputs, ex.expected as f32)
+            (inputs, ex.expected_int() as f32)
         })
         .collect();
     let default_names = ["a", "b", "c", "d", "e", "f"];
@@ -4742,7 +4742,7 @@ fn synthesize_scalar_inner(problem: &Problem, use_templates: bool) -> Option<Sol
                     }
                 })
                 .collect();
-            (inputs, ex.expected as f32)
+            (inputs, ex.expected_int() as f32)
         })
         .collect();
 

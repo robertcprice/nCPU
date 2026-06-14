@@ -285,7 +285,7 @@ fn build_io_rows(problem: &mog_synth::benchmark::Problem, n_args: usize) -> Opti
         if row.len() != n_args {
             return None;
         }
-        row.push(ex.expected);
+        row.push(ex.expected_int());
         rows.push(row);
     }
     Some(rows)

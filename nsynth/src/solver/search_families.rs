@@ -208,7 +208,7 @@ pub(super) fn search_array_member_class(
     if !problem
         .examples
         .iter()
-        .all(|e| e.expected == 0 || e.expected == 1)
+        .all(|e| e.expected_int() == 0 || e.expected_int() == 1)
     {
         return None;
     }
@@ -217,14 +217,14 @@ pub(super) fn search_array_member_class(
         .examples
         .iter()
         .zip(arrays.iter())
-        .filter(|(e, _)| e.expected == 1)
+        .filter(|(e, _)| e.expected_int() == 1)
         .map(|(_, a)| a)
         .collect();
     let negatives: Vec<&Vec<i64>> = problem
         .examples
         .iter()
         .zip(arrays.iter())
-        .filter(|(e, _)| e.expected == 0)
+        .filter(|(e, _)| e.expected_int() == 0)
         .map(|(_, a)| a)
         .collect();
     if positives.is_empty() || negatives.is_empty() {
@@ -305,7 +305,7 @@ pub(super) fn search_array_conjunction(problem: &Problem, fn_name: &str) -> Opti
     if !problem
         .examples
         .iter()
-        .all(|e| e.expected == 0 || e.expected == 1)
+        .all(|e| e.expected_int() == 0 || e.expected_int() == 1)
     {
         return None;
     }
@@ -314,13 +314,13 @@ pub(super) fn search_array_conjunction(problem: &Problem, fn_name: &str) -> Opti
     let pos: Vec<&HashSet<i64>> = sets
         .iter()
         .zip(problem.examples.iter())
-        .filter(|(_, e)| e.expected == 1)
+        .filter(|(_, e)| e.expected_int() == 1)
         .map(|(s, _)| s)
         .collect();
     let neg: Vec<&HashSet<i64>> = sets
         .iter()
         .zip(problem.examples.iter())
-        .filter(|(_, e)| e.expected == 0)
+        .filter(|(_, e)| e.expected_int() == 0)
         .map(|(s, _)| s)
         .collect();
     if pos.is_empty() || neg.is_empty() {
@@ -348,7 +348,7 @@ pub(super) fn search_array_conjunction(problem: &Problem, fn_name: &str) -> Opti
     };
     let separates = |req: &[i64], forb: &[i64]| -> bool {
         sets.iter().zip(problem.examples.iter()).all(|(s, e)| {
-            (predicate(s, req, forb) as i64) == e.expected
+            (predicate(s, req, forb) as i64) == e.expected_int()
         })
     };
 
@@ -410,12 +410,12 @@ pub(super) fn search_array_dnf(problem: &Problem, fn_name: &str) -> Option<Solve
     if !problem
         .examples
         .iter()
-        .all(|e| e.expected == 0 || e.expected == 1)
+        .all(|e| e.expected_int() == 0 || e.expected_int() == 1)
     {
         return None;
     }
     let sets: Vec<HashSet<i64>> = arrays.iter().map(|a| a.iter().copied().collect()).collect();
-    let labels: Vec<i64> = problem.examples.iter().map(|e| e.expected).collect();
+    let labels: Vec<i64> = problem.examples.iter().map(|e| e.expected_int()).collect();
     let pos_idx: Vec<usize> = (0..sets.len()).filter(|&i| labels[i] == 1).collect();
     let neg_idx: Vec<usize> = (0..sets.len()).filter(|&i| labels[i] == 0).collect();
     if pos_idx.is_empty() || neg_idx.is_empty() {

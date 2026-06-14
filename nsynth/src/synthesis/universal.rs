@@ -909,7 +909,7 @@ pub fn synthesize_universal_and_collect(
                     }
                 })
                 .collect();
-            (inputs, ex.expected as f32)
+            (inputs, ex.expected_int() as f32)
         })
         .collect();
 
@@ -1078,7 +1078,7 @@ pub fn synthesize_universal_warm_start(
                     }
                 })
                 .collect();
-            (inputs, ex.expected as f32)
+            (inputs, ex.expected_int() as f32)
         })
         .collect();
 
@@ -1580,7 +1580,7 @@ mod tests {
         let examples: Vec<Example> = (1i64..=8)
             .map(|n| Example {
                 inputs: vec![Value::Int(n)],
-                expected: n + 1,
+                expected: Value::Int(n + 1),
             })
             .collect();
         let problem = Problem {

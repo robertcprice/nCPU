@@ -38,7 +38,7 @@ fn extract_two_array_examples(problem: &Problem) -> Option<Vec<TwoArrayExample>>
             a: a_pad,
             b: b_pad,
             len,
-            expected: ex.expected as f32,
+            expected: ex.expected_int() as f32,
         });
     }
     Some(examples)

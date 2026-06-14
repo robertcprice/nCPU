@@ -353,15 +353,34 @@ pub fn execute_program(code: &str) -> Result<ExecutionResult, String> {
     execute_program_with_input(code, Vec::new())
 }
 
+/// Compare a runtime result value (`runtime::Value`) against an expected
+/// benchmark value (`benchmark::Value`). Handles int, bool, string, array, and
+/// pair outputs uniformly — this is what lets string/array-output problems
+/// verify through the main pipeline.
+fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
+    use crate::benchmark::Value as BV;
+    match (actual, expected) {
+        (Value::Int(a), BV::Int(b)) => a == b,
+        (Value::Bool(a), BV::Int(b)) => i64::from(*a) == *b,
+        (Value::Str(a), BV::Str(b)) => a == b,
+        (Value::Array(a), BV::Array(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|(x, y)| matches!(x, Value::Int(xi) if xi == y))
+        }
+        _ => false,
+    }
+}
+
 pub fn verify_problem_code(problem: &Problem, code: &str) -> Result<(), String> {
     let fn_name = problem.function_name();
     for example in &problem.examples {
         let value = execute_function_for_problem(code, fn_name, &example.inputs, problem)?;
-        let actual = expect_int(&value)?;
-        if actual != example.expected {
+        if !output_matches(&value, &example.expected) {
             return Err(format!(
-                "example failed for {}: expected {}, got {}",
-                problem.name, example.expected, actual
+                "example failed for {}: expected {}, got {:?}",
+                problem.name, example.expected, value
             ));
         }
     }
@@ -373,11 +392,10 @@ pub fn verify_problem_code_strict(problem: &Problem, code: &str) -> Result<(), S
     let fn_name = problem.function_name();
     for example in generated_holdouts(problem) {
         let value = execute_function_for_problem(code, fn_name, &example.inputs, problem)?;
-        let actual = expect_int(&value)?;
-        if actual != example.expected {
+        if !output_matches(&value, &example.expected) {
             return Err(format!(
-                "holdout failed for {}: inputs {:?}, expected {}, got {}",
-                problem.name, example.inputs, example.expected, actual
+                "holdout failed for {}: inputs {:?}, expected {}, got {:?}",
+                problem.name, example.inputs, example.expected, value
             ));
         }
     }

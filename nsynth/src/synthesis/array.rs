@@ -172,7 +172,7 @@ fn array_teacher_examples_from_code(problem: &Problem, teacher_code: &str) -> Op
         let RuntimeValue::Int(expected) = actual else {
             return None;
         };
-        distilled.push(Example { inputs, expected });
+        distilled.push(Example { inputs, expected: Value::Int(expected) });
         if distilled.len() >= 12 {
             break;
         }

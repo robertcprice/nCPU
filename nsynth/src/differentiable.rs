@@ -102,7 +102,7 @@ fn scalar_bridge_examples(examples: &[Example]) -> Option<Vec<BridgeExample>> {
         }
         out.push(BridgeExample {
             inputs,
-            expected: example.expected,
+            expected: example.expected_int(),
         });
     }
     Some(out)
@@ -122,7 +122,7 @@ fn is_small_output_scalar_problem(problem: &Problem) -> bool {
     };
     let mut outputs = BTreeSet::new();
     for example in &problem.examples {
-        outputs.insert(example.expected);
+        outputs.insert(example.expected_int());
     }
     outputs.len() <= 3 && problem.examples.len() >= 4
 }
@@ -211,7 +211,7 @@ fn mismatched_scalar_inputs(problem: &Problem, code: &str) -> Option<Vec<Vec<i64
         let RuntimeValue::Int(actual) = actual else {
             return None;
         };
-        if actual != example.expected {
+        if actual != example.expected_int() {
             failing.push(inputs);
         }
     }
@@ -806,19 +806,19 @@ mod tests {
             examples: vec![
                 Example {
                     inputs: vec![Value::Int(5), Value::Int(3)],
-                    expected: 2,
+                    expected: Value::Int(2),
                 },
                 Example {
                     inputs: vec![Value::Int(3), Value::Int(5)],
-                    expected: 2,
+                    expected: Value::Int(2),
                 },
                 Example {
                     inputs: vec![Value::Int(7), Value::Int(7)],
-                    expected: 0,
+                    expected: Value::Int(0),
                 },
                 Example {
                     inputs: vec![Value::Int(-2), Value::Int(5)],
-                    expected: 7,
+                    expected: Value::Int(7),
                 },
             ],
             holdouts: vec![],

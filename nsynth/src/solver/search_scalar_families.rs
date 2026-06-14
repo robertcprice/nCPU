@@ -151,7 +151,7 @@ pub(super) fn search_piecewise_affine(problem: &Problem, fn_name: &str) -> Optio
     if examples.first().map(Vec::len) != Some(1) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
     let mut pts: Vec<(i64, i64)> = examples
         .iter()
         .zip(targets.iter())
@@ -181,7 +181,7 @@ pub(super) fn search_scalar_expr(problem: &Problem, fn_name: &str) -> Option<Sol
     let examples = extract_scalar_examples(problem)?;
     let arity = examples.first()?.len();
     let param_names = scalar_param_names(arity);
-    let target: Vec<i64> = problem.examples.iter().map(|ex| ex.expected).collect();
+    let target: Vec<i64> = problem.examples.iter().map(|ex| ex.expected_int()).collect();
 
     let constants = mine_scalar_constants(&examples, &target);
     let mut candidates = build_deep_expr_candidates(arity, &examples, &constants);
@@ -271,7 +271,7 @@ pub(super) fn search_unary_range_loop(problem: &Problem, fn_name: &str) -> Optio
             .zip(examples.iter())
             .all(|(example, args)| {
                 simulate_unary_range_loop(args[0], init, start, cmp, op, term)
-                    == Some(example.expected)
+                    == Some(example.expected_int())
             });
         if !matches {
             continue;
@@ -301,7 +301,7 @@ pub(super) fn search_polynomial_quadratic(problem: &Problem, fn_name: &str) -> O
                         .zip(examples.iter())
                         .all(|(example, args)| {
                             let x = args[0];
-                            a * x * x + b * x + c == example.expected
+                            a * x * x + b * x + c == example.expected_int()
                         });
                 if !matches {
                     continue;

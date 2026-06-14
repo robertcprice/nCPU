@@ -93,7 +93,7 @@ fn to_problem(input: InputProblem) -> Option<Problem> {
         }
         examples.push(Example {
             inputs: ins,
-            expected: ex.expected,
+            expected: Value::Int(ex.expected),
         });
     }
 
@@ -129,7 +129,7 @@ fn io_examples_from(problem: &Problem) -> Vec<(Vec<i64>, i64)> {
                     }
                 })
                 .collect();
-            (inputs, ex.expected)
+            (inputs, ex.expected_int())
         })
         .collect()
 }

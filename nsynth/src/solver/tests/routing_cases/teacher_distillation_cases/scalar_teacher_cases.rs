@@ -10,29 +10,29 @@ fn native_scalar_teacher_distillation_solves_add_two() {
         examples: vec![
             Example {
                 inputs: vec![Value::Int(1), Value::Int(2)],
-                expected: 3,
+                expected: Value::Int(3),
             },
             Example {
                 inputs: vec![Value::Int(-5), Value::Int(8)],
-                expected: 3,
+                expected: Value::Int(3),
             },
             Example {
                 inputs: vec![Value::Int(0), Value::Int(0)],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Int(10), Value::Int(-4)],
-                expected: 6,
+                expected: Value::Int(6),
             },
         ],
         holdouts: vec![
             Example {
                 inputs: vec![Value::Int(7), Value::Int(9)],
-                expected: 16,
+                expected: Value::Int(16),
             },
             Example {
                 inputs: vec![Value::Int(-3), Value::Int(-4)],
-                expected: -7,
+                expected: Value::Int(-7),
             },
         ],
         reference_code: "",
@@ -54,29 +54,29 @@ fn native_scalar_teacher_distillation_solves_digit_sum_loop() {
         examples: vec![
             Example {
                 inputs: vec![Value::Int(0)],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Int(405)],
-                expected: 9,
+                expected: Value::Int(9),
             },
             Example {
                 inputs: vec![Value::Int(7001)],
-                expected: 8,
+                expected: Value::Int(8),
             },
             Example {
                 inputs: vec![Value::Int(999)],
-                expected: 27,
+                expected: Value::Int(27),
             },
         ],
         holdouts: vec![
             Example {
                 inputs: vec![Value::Int(12345)],
-                expected: 15,
+                expected: Value::Int(15),
             },
             Example {
                 inputs: vec![Value::Int(90)],
-                expected: 9,
+                expected: Value::Int(9),
             },
         ],
         reference_code: "",
@@ -99,29 +99,29 @@ fn native_scalar_teacher_distillation_solves_is_prime_loop() {
         examples: vec![
             Example {
                 inputs: vec![Value::Int(1)],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Int(2)],
-                expected: 1,
+                expected: Value::Int(1),
             },
             Example {
                 inputs: vec![Value::Int(4)],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Int(17)],
-                expected: 1,
+                expected: Value::Int(1),
             },
         ],
         holdouts: vec![
             Example {
                 inputs: vec![Value::Int(21)],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Int(29)],
-                expected: 1,
+                expected: Value::Int(1),
             },
         ],
         reference_code: "",
@@ -144,29 +144,29 @@ fn native_scalar_teacher_distillation_solves_gcd_loop() {
         examples: vec![
             Example {
                 inputs: vec![Value::Int(18), Value::Int(24)],
-                expected: 6,
+                expected: Value::Int(6),
             },
             Example {
                 inputs: vec![Value::Int(7), Value::Int(5)],
-                expected: 1,
+                expected: Value::Int(1),
             },
             Example {
                 inputs: vec![Value::Int(42), Value::Int(56)],
-                expected: 14,
+                expected: Value::Int(14),
             },
             Example {
                 inputs: vec![Value::Int(81), Value::Int(27)],
-                expected: 27,
+                expected: Value::Int(27),
             },
         ],
         holdouts: vec![
             Example {
                 inputs: vec![Value::Int(270), Value::Int(192)],
-                expected: 6,
+                expected: Value::Int(6),
             },
             Example {
                 inputs: vec![Value::Int(54), Value::Int(24)],
-                expected: 6,
+                expected: Value::Int(6),
             },
         ],
         reference_code: "",

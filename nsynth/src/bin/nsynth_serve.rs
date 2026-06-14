@@ -196,7 +196,7 @@ fn handle_synthesize(body: &str) -> String {
         }
         examples.push(Example {
             inputs: ins,
-            expected: ex.expected,
+            expected: Value::Int(ex.expected),
         });
     }
     if examples.is_empty() {

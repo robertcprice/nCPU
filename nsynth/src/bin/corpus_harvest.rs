@@ -90,7 +90,7 @@ fn io_examples_from(problem: &Problem) -> Vec<(Vec<i64>, i64)> {
                     }
                 })
                 .collect();
-            (inputs, ex.expected)
+            (inputs, ex.expected_int())
         })
         .collect()
 }

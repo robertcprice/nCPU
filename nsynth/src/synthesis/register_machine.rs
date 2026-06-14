@@ -579,7 +579,7 @@ pub fn synthesize_register_machine(problem: &Problem) -> Option<SolveResult> {
                     _ => 0.0,
                 })
                 .collect();
-            (inputs, ex.expected as f32)
+            (inputs, ex.expected_int() as f32)
         })
         .collect();
 
@@ -720,23 +720,23 @@ mod tests {
             examples: vec![
                 Example {
                     inputs: vec![Value::Int(1)],
-                    expected: 2,
+                    expected: Value::Int(2),
                 },
                 Example {
                     inputs: vec![Value::Int(3)],
-                    expected: 6,
+                    expected: Value::Int(6),
                 },
                 Example {
                     inputs: vec![Value::Int(0)],
-                    expected: 0,
+                    expected: Value::Int(0),
                 },
                 Example {
                     inputs: vec![Value::Int(-2)],
-                    expected: -4,
+                    expected: Value::Int(-4),
                 },
                 Example {
                     inputs: vec![Value::Int(5)],
-                    expected: 10,
+                    expected: Value::Int(10),
                 },
             ],
             holdouts: vec![],

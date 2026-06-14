@@ -113,7 +113,7 @@ pub(super) fn search_bitwise(problem: &Problem, fn_name: &str) -> Option<SolveRe
     if !(1..=2).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|e| e.expected).collect();
+    let targets: Vec<i64> = problem.examples.iter().map(|e| e.expected_int()).collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -222,7 +222,7 @@ mod tests {
             signature: "fn f(x: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|&(x, y)| Example { inputs: vec![Value::Int(x)], expected: y })
+                .map(|&(x, y)| Example { inputs: vec![Value::Int(x)], expected: Value::Int(y) })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -239,7 +239,7 @@ mod tests {
                 .iter()
                 .map(|((a, b), y)| Example {
                     inputs: vec![Value::Int(*a), Value::Int(*b)],
-                    expected: *y,
+                    expected: Value::Int(*y),
                 })
                 .collect(),
             holdouts: vec![],

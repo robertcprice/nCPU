@@ -16,7 +16,7 @@ pub(super) fn search_contains_literal(problem: &Problem, fn_name: &str) -> Optio
     let strings = unary_string_examples(problem)?;
     let mut candidates = Vec::new();
     for (example, value) in problem.examples.iter().zip(strings.iter()) {
-        if example.expected != 1 {
+        if example.expected_int() != 1 {
             continue;
         }
         let chars = value.chars().collect::<Vec<_>>();
@@ -35,7 +35,7 @@ pub(super) fn search_contains_literal(problem: &Problem, fn_name: &str) -> Optio
             .iter()
             .zip(strings.iter())
             .all(|(example, value)| {
-                (if value.contains(&candidate) { 1 } else { 0 }) == example.expected
+                (if value.contains(&candidate) { 1 } else { 0 }) == example.expected_int()
             });
         if !matches {
             continue;
@@ -52,7 +52,7 @@ pub(super) fn search_starts_with_literal(problem: &Problem, fn_name: &str) -> Op
     let strings = unary_string_examples(problem)?;
     let mut candidates = Vec::new();
     for (example, value) in problem.examples.iter().zip(strings.iter()) {
-        if example.expected != 1 {
+        if example.expected_int() != 1 {
             continue;
         }
         let chars = value.chars().collect::<Vec<_>>();
@@ -69,7 +69,7 @@ pub(super) fn search_starts_with_literal(problem: &Problem, fn_name: &str) -> Op
             .iter()
             .zip(strings.iter())
             .all(|(example, value)| {
-                (if value.starts_with(&candidate) { 1 } else { 0 }) == example.expected
+                (if value.starts_with(&candidate) { 1 } else { 0 }) == example.expected_int()
             });
         if !matches {
             continue;
@@ -150,7 +150,7 @@ pub(super) fn search_suffix_class(problem: &Problem, fn_name: &str) -> Option<So
     if !problem
         .examples
         .iter()
-        .all(|e| e.expected == 0 || e.expected == 1)
+        .all(|e| e.expected_int() == 0 || e.expected_int() == 1)
     {
         return None;
     }
@@ -159,14 +159,14 @@ pub(super) fn search_suffix_class(problem: &Problem, fn_name: &str) -> Option<So
         .examples
         .iter()
         .zip(strings.iter())
-        .filter(|(e, _)| e.expected == 1)
+        .filter(|(e, _)| e.expected_int() == 1)
         .map(|(_, s)| s)
         .collect();
     let negatives: Vec<&String> = problem
         .examples
         .iter()
         .zip(strings.iter())
-        .filter(|(e, _)| e.expected == 0)
+        .filter(|(e, _)| e.expected_int() == 0)
         .map(|(_, s)| s)
         .collect();
     // Need both classes present to learn a discriminative rule.

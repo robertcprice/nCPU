@@ -815,7 +815,7 @@ pub fn eval_fallback_direct(names: &[String]) -> Vec<serde_json::Value> {
                 arr: padded,
                 arr_len: arr.len() as f32,
                 scalar_args,
-                expected: ex.expected as f32,
+                expected: ex.expected_int() as f32,
             });
         }
         if !ok {
@@ -946,7 +946,7 @@ mod tests {
 
         let mk = |arr: &[i64], expected: i64| crate::benchmark::Example {
             inputs: vec![crate::benchmark::Value::Array(arr.to_vec())],
-            expected,
+            expected: crate::benchmark::Value::Int(expected),
         };
         let problem = Problem {
             name: "prior_net_stub_sum".to_string(),
@@ -978,7 +978,7 @@ mod tests {
                     arr: padded,
                     arr_len: arr.len() as f32,
                     scalar_args: vec![],
-                    expected: ex.expected as f32,
+                    expected: ex.expected_int() as f32,
                 }
             })
             .collect();

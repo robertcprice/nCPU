@@ -187,7 +187,7 @@ fn extract(problem: &Problem) -> Option<(Vec<ArrExample>, usize)> {
         for input in &ex.inputs[1..] {
             scalars.push(int_value(input)?);
         }
-        examples.push(ArrExample { arr, scalars, target: ex.expected });
+        examples.push(ArrExample { arr, scalars, target: ex.expected_int() });
     }
     if examples.is_empty() {
         return None;
@@ -524,7 +524,7 @@ mod tests {
                 .iter()
                 .map(|(arr, y)| Example {
                     inputs: vec![Value::Array(arr.to_vec())],
-                    expected: *y,
+                    expected: Value::Int(*y),
                 })
                 .collect(),
             holdouts: vec![],
@@ -543,7 +543,7 @@ mod tests {
                 .iter()
                 .map(|(arr, k, y)| Example {
                     inputs: vec![Value::Array(arr.to_vec()), Value::Int(*k)],
-                    expected: *y,
+                    expected: Value::Int(*y),
                 })
                 .collect(),
             holdouts: vec![],

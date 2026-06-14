@@ -58,7 +58,7 @@ pub fn examples_fingerprint(examples: &[Example]) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(examples.len());
     for ex in examples {
         let ins: Vec<String> = ex.inputs.iter().map(fingerprint_value).collect();
-        parts.push(format!("{}~{}", ins.join("|"), ex.expected));
+        parts.push(format!("{}~{}", ins.join("|"), ex.expected_int()));
     }
     parts.join(";;")
 }
@@ -710,11 +710,11 @@ mod tests {
         with_clean_cache(|| {
             let ex1 = Example {
                 inputs: vec![Value::Int(3)],
-                expected: 3,
+                expected: Value::Int(3),
             };
             let ex2 = Example {
                 inputs: vec![Value::Int(5)],
-                expected: 5,
+                expected: Value::Int(5),
             };
             assert_eq!(
                 examples_fingerprint(&[ex1.clone(), ex2.clone()]),
@@ -939,11 +939,11 @@ mod tests {
             let problem = problem_with(vec![
                 Example {
                     inputs: vec![Value::Int(1)],
-                    expected: 2, // expected 2, but cached code returns arg
+                    expected: Value::Int(2), // expected 2, but cached code returns arg
                 },
                 Example {
                     inputs: vec![Value::Int(5)],
-                    expected: 10,
+                    expected: Value::Int(10),
                 },
             ]);
             // Insert deliberately wrong cached code.

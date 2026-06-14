@@ -1288,7 +1288,7 @@ fn synthesize_scalar_enumerative(problem: &Problem) -> Option<SolveResult> {
                     }
                 })
                 .collect();
-            (args, ex.expected)
+            (args, ex.expected_int())
         })
         .collect();
 
@@ -1447,7 +1447,7 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
                 })
                 .next()
                 .unwrap_or_default();
-            (scalar_args, array, ex.expected)
+            (scalar_args, array, ex.expected_int())
         })
         .collect();
 
@@ -1786,7 +1786,7 @@ fn synthesize_nested_while(problem: &Problem) -> Option<SolveResult> {
                     }
                 })
                 .collect();
-            (args, ex.expected)
+            (args, ex.expected_int())
         })
         .collect();
 
@@ -1897,7 +1897,7 @@ fn synthesize_while_cond(problem: &Problem) -> Option<SolveResult> {
                     }
                 })
                 .collect();
-            (args, ex.expected)
+            (args, ex.expected_int())
         })
         .collect();
 

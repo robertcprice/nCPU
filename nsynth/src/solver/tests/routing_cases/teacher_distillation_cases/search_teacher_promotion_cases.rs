@@ -10,29 +10,29 @@ fn search_teacher_promotes_scalar_gradient_before_raw_search() {
         examples: vec![
             Example {
                 inputs: vec![Value::Int(10), Value::Int(4)],
-                expected: 14,
+                expected: Value::Int(14),
             },
             Example {
                 inputs: vec![Value::Int(4), Value::Int(10)],
-                expected: 14,
+                expected: Value::Int(14),
             },
             Example {
                 inputs: vec![Value::Int(3), Value::Int(3)],
-                expected: 6,
+                expected: Value::Int(6),
             },
             Example {
                 inputs: vec![Value::Int(-2), Value::Int(5)],
-                expected: 3,
+                expected: Value::Int(3),
             },
         ],
         holdouts: vec![
             Example {
                 inputs: vec![Value::Int(-10), Value::Int(7)],
-                expected: -3,
+                expected: Value::Int(-3),
             },
             Example {
                 inputs: vec![Value::Int(9), Value::Int(-4)],
-                expected: 5,
+                expected: Value::Int(5),
             },
         ],
         reference_code: "",
@@ -56,29 +56,29 @@ fn search_teacher_promotes_array_gradient_before_raw_search() {
         examples: vec![
             Example {
                 inputs: vec![Value::Array(vec![1, 2, 3, 4])],
-                expected: 4,
+                expected: Value::Int(4),
             },
             Example {
                 inputs: vec![Value::Array(vec![4, -3, 2, -1])],
-                expected: 2,
+                expected: Value::Int(2),
             },
             Example {
                 inputs: vec![Value::Array(vec![-5])],
-                expected: 0,
+                expected: Value::Int(0),
             },
             Example {
                 inputs: vec![Value::Array(vec![0, 0, 0])],
-                expected: 0,
+                expected: Value::Int(0),
             },
         ],
         holdouts: vec![
             Example {
                 inputs: vec![Value::Array(vec![3, 0, -2, 1])],
-                expected: 2,
+                expected: Value::Int(2),
             },
             Example {
                 inputs: vec![Value::Array(vec![-1, -2, -3])],
-                expected: 0,
+                expected: Value::Int(0),
             },
         ],
         reference_code: "",

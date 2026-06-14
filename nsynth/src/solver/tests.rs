@@ -186,7 +186,7 @@ fn str_class_problem(
             .iter()
             .map(|(w, label)| Example {
                 inputs: vec![Value::Str((*w).to_string())],
-                expected: *label,
+                expected: Value::Int(*label),
             })
             .collect(),
         holdouts: vec![],
@@ -264,7 +264,7 @@ fn arr_class_problem(
             .iter()
             .map(|(arr, label)| Example {
                 inputs: vec![Value::Array(arr.to_vec())],
-                expected: *label,
+                expected: Value::Int(*label),
             })
             .collect(),
         holdouts: vec![],
@@ -395,7 +395,7 @@ fn search_array_dnf_learns_inference_validity() {
             .take(16)
             .map(|(a, l)| Example {
                 inputs: vec![Value::Array(a.clone())],
-                expected: *l,
+                expected: Value::Int(*l),
             })
             .collect(),
         holdouts: vec![],
@@ -419,6 +419,40 @@ fn search_array_dnf_learns_inference_validity() {
             (vec![Value::Array(vec![77, 1, 3, 5, 6])], 0), // DA
         ],
     );
+}
+
+/// String OUTPUT through the main pipeline — exercises the widened
+/// `Example.expected: Value` and the Value-aware verify path. A string->string
+/// problem is solved by `solve_problem` and run on a fresh input.
+#[test]
+fn solve_problem_handles_string_output() {
+    let str_ex = |inp: &str, out: &str| Example {
+        inputs: vec![Value::Str(inp.to_string())],
+        expected: Value::Str(out.to_string()),
+    };
+    let problem = Problem {
+        name: "reverse_str".to_string(),
+        category: "string",
+        description: "",
+        signature: "fn reverse_str(s: string) -> string",
+        examples: vec![
+            str_ex("abc", "cba"),
+            str_ex("hello", "olleh"),
+            str_ex("x", "x"),
+            str_ex("ab", "ba"),
+        ],
+        holdouts: vec![str_ex("world", "dlrow"), str_ex("nsynth", "htnysn")],
+        reference_code: "",
+    };
+    let result = solve_problem(&problem);
+    assert!(
+        result.success,
+        "string-output problem not solved: {:?}",
+        result.error
+    );
+    let out =
+        crate::runtime::execute_str_function(&result.code, "reverse_str", "verify").unwrap();
+    assert_eq!(out, "yfirev");
 }
 
 #[path = "tests/benchmark_diff_cases.rs"]

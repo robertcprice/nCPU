@@ -115,7 +115,7 @@ fn structured_kernel_loss(problem: &Problem, kernel: StructuredArrayKernel) -> O
     let mut count = 0usize;
     for example in &problem.examples {
         let predicted = kernel.predict(example)? as f32;
-        let diff = predicted - example.expected as f32;
+        let diff = predicted - example.expected_int() as f32;
         total += diff * diff;
         count += 1;
     }
@@ -139,7 +139,7 @@ fn structured_selector_loss(
         for (weight, kernel) in weights.iter().zip(kernels) {
             predicted += *weight * kernel.predict(example)? as f32;
         }
-        let diff = predicted - example.expected as f32;
+        let diff = predicted - example.expected_int() as f32;
         total += diff * diff;
     }
     Some(total / problem.examples.len().max(1) as f32)

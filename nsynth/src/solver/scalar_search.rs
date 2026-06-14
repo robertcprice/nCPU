@@ -749,7 +749,7 @@ pub(super) fn scalar_search_context(problem: &Problem) -> Option<ScalarSearchCon
     let target: Vec<i64> = problem
         .examples
         .iter()
-        .map(|example| example.expected)
+        .map(|example| example.expected_int())
         .collect();
     let constants = mine_scalar_constants(&examples, &target);
     let (mut atom_candidates, mut expr_candidates) =
@@ -964,7 +964,7 @@ mod probe_tests {
             signature: "fn storage_overage(used_gb: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: *o })
+                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: Value::Int(*o) })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -980,7 +980,7 @@ mod probe_tests {
         let p = storage_problem();
         let consts = mine_scalar_constants(
             &extract_scalar_examples(&p).unwrap(),
-            &p.examples.iter().map(|e| e.expected).collect::<Vec<_>>(),
+            &p.examples.iter().map(|e| e.expected_int()).collect::<Vec<_>>(),
         );
         assert!(consts.contains(&50), "threshold 50 must be mined from examples");
         // search_single_branch only returns Some after verified_result has
@@ -1005,7 +1005,7 @@ mod probe_tests {
             signature: "fn api_bill(x: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: *o })
+                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: Value::Int(*o) })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1046,7 +1046,7 @@ mod probe_tests {
             signature: "fn api_bill_tiered_probe(x: i64) -> i64",
             examples: xs
                 .iter()
-                .map(|&x| Example { inputs: vec![Value::Int(x)], expected: api_bill_ref(x) })
+                .map(|&x| Example { inputs: vec![Value::Int(x)], expected: Value::Int(api_bill_ref(x)) })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1063,7 +1063,7 @@ mod probe_tests {
         let sparse = api_bill_problem();
         let consts = mine_scalar_constants(
             &extract_scalar_examples(&sparse).unwrap(),
-            &sparse.examples.iter().map(|e| e.expected).collect::<Vec<_>>(),
+            &sparse.examples.iter().map(|e| e.expected_int()).collect::<Vec<_>>(),
         );
         for want in [1000_i64, 1001, 10000] {
             assert!(consts.contains(&want), "breakpoint {} must survive mining", want);
@@ -1097,7 +1097,7 @@ mod probe_tests {
             signature: "fn api_bill_tiered_probe(x: i64) -> i64",
             examples: (0..=30000)
                 .step_by(137)
-                .map(|x| Example { inputs: vec![Value::Int(x)], expected: api_bill_ref(x) })
+                .map(|x| Example { inputs: vec![Value::Int(x)], expected: Value::Int(api_bill_ref(x)) })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1114,7 +1114,7 @@ mod probe_tests {
             signature: "fn f(x: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: *o })
+                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: Value::Int(*o) })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
