@@ -751,7 +751,8 @@ pub(super) fn code_stateful_reducer(
         other => format!("    return r; // unknown op: {}\n", other),
     };
     format!(
-        "fn __FN__({state_arg}: i64, {arr_arg}: [i64]) -> i64 {{\n{reduction}{combine}}}\n",
+        "fn {fn_name}({state_arg}: i64, {arr_arg}: [i64]) -> i64 {{\n{reduction}{combine}}}\n",
+        fn_name = fn_name,
         state_arg = state_arg,
         arr_arg = arr_arg
     )
