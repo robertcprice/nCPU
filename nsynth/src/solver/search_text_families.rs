@@ -1,8 +1,80 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::search_codegen::*;
 use super::search_runtime::count_words;
 use super::*;
+
+/// Learned lexical lookup: synthesize `fn f(s: string) -> i64` as a verified
+/// string-equality table — the comprehension parser's *lexicon*. Arbitrary facts
+/// (animacy, irregular class membership) carry no orthographic signal and cannot
+/// be derived by a rule, so they must be stored. The teacher recovers the table
+/// directly from I/O, compresses it around the majority label (only off-default
+/// words get a branch), and verifies it end to end.
+pub(super) fn search_string_equality_map(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let strings = unary_string_examples(problem)?;
+    // Need enough evidence that this is a real lexicon, not a 1-2 point fluke.
+    if problem.examples.len() < 3 {
+        return None;
+    }
+
+    // Build a consistent string -> label map. Conflicting labels for the same
+    // surface form mean the answer is not a function of the word alone — refuse.
+    let mut map: HashMap<String, i64> = HashMap::new();
+    for (example, word) in problem.examples.iter().zip(strings.iter()) {
+        let label = example.expected_int();
+        match map.get(word) {
+            Some(prev) if *prev != label => return None,
+            _ => {
+                map.insert(word.clone(), label);
+            }
+        }
+    }
+
+    // A single-label map is a constant function — leave that to other teachers.
+    let distinct_labels: HashSet<i64> = map.values().copied().collect();
+    if distinct_labels.len() < 2 {
+        return None;
+    }
+
+    // Last-resort guarantee, independent of portfolio/router ordering: if any
+    // general orthographic-rule teacher already explains these examples, defer to
+    // it. A rule (suffix / prefix / substring) generalizes to unseen words; a
+    // lookup table does not. This teacher must only claim a problem when the
+    // string->label map really is an arbitrary lexicon that no rule can capture.
+    for rule_teacher in [
+        search_suffix_class as fn(&Problem, &str) -> Option<SolveResult>,
+        search_contains_literal,
+        search_starts_with_literal,
+    ] {
+        if rule_teacher(problem, fn_name).is_some() {
+            return None;
+        }
+    }
+
+    // Default = the most frequent label across examples, so the common class
+    // needs no branches and the table stays as small as the data allows.
+    let mut counts: HashMap<i64, usize> = HashMap::new();
+    for example in &problem.examples {
+        *counts.entry(example.expected_int()).or_insert(0) += 1;
+    }
+    let default = counts
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(label, _)| *label)?;
+
+    // Emit a branch only for words whose label differs from the default.
+    let mut branches: Vec<(String, i64)> = map
+        .into_iter()
+        .filter(|(_, label)| *label != default)
+        .collect();
+    branches.sort();
+
+    let code = code_string_equality_map(fn_name, default, &branches);
+    verified_result(problem, code, "search_string_equality_map")
+}
 
 pub(super) fn search_trimmed_len(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if unary_string_examples(problem).is_none() {

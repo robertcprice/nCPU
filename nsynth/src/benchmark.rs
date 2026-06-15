@@ -104,7 +104,7 @@ pub fn value_as_f64(v: &Value) -> Option<f64> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Problem {
     pub name: String,
     pub category: &'static str,

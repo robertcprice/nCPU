@@ -91,6 +91,61 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_recursive_fibonacci",
         func: search_recursive_fibonacci,
     },
+    // Mutual recursion teachers (Stage 5)
+    SearchCandidate {
+        key: "search_mutual_recursion_even_odd",
+        func: search_mutual_recursion_even_odd,
+    },
+    SearchCandidate {
+        key: "search_mutual_recursion_fib_pair",
+        func: search_mutual_recursion_fib_pair,
+    },
+    SearchCandidate {
+        key: "search_tribonacci",
+        func: search_tribonacci,
+    },
+    // Tree traversal teachers (Stage 5)
+    SearchCandidate {
+        key: "search_tree_preorder_sum",
+        func: search_tree_preorder_sum,
+    },
+    SearchCandidate {
+        key: "search_tree_inorder_sum",
+        func: search_tree_inorder_sum,
+    },
+    SearchCandidate {
+        key: "search_tree_postorder_sum",
+        func: search_tree_postorder_sum,
+    },
+    SearchCandidate {
+        key: "search_tree_level_order_sum",
+        func: search_tree_level_order_sum,
+    },
+    // Advanced algorithms (Stage 5)
+    SearchCandidate {
+        key: "search_ackermann",
+        func: search_ackermann,
+    },
+    SearchCandidate {
+        key: "search_quickselect",
+        func: search_quickselect,
+    },
+    SearchCandidate {
+        key: "search_merge_sort",
+        func: search_merge_sort,
+    },
+    SearchCandidate {
+        key: "search_bst_search",
+        func: search_bst_search,
+    },
+    SearchCandidate {
+        key: "search_bst_insert",
+        func: search_bst_insert,
+    },
+    SearchCandidate {
+        key: "search_bst_delete",
+        func: search_bst_delete,
+    },
     // Polynomial sequence teachers (Stage 5)
     SearchCandidate {
         key: "search_sequence_quadratic_polynomial",
@@ -365,6 +420,13 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_string_subsequence_class",
         func: search_string_subsequence_class,
     },
+    // Last-resort string teacher: a learned lexical lookup table. It internally
+    // defers to the orthographic-rule teachers above, so it claims a problem only
+    // when the string->label map really is an arbitrary lexicon (e.g. animacy).
+    SearchCandidate {
+        key: "search_string_equality_map",
+        func: search_string_equality_map,
+    },
     SearchCandidate {
         key: "search_gcd_loop",
         func: search_gcd_loop,
@@ -619,6 +681,48 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_matmul_template",
         func: search_matmul_template,
+    },
+    // Stage 9: Dynamic Programming Teachers
+    // Pattern recognition for classic DP problems: knapsack, LIS, coin change, etc.
+    SearchCandidate {
+        key: "search_knapsack_01",
+        func: search_knapsack_01,
+    },
+    SearchCandidate {
+        key: "search_knapsack_unbounded",
+        func: search_knapsack_unbounded,
+    },
+    SearchCandidate {
+        key: "search_lis",
+        func: search_lis,
+    },
+    SearchCandidate {
+        key: "search_lds",
+        func: search_lds,
+    },
+    SearchCandidate {
+        key: "search_coin_change_min",
+        func: search_coin_change_min,
+    },
+    SearchCandidate {
+        key: "search_coin_change_count",
+        func: search_coin_change_count,
+    },
+    SearchCandidate {
+        key: "search_subset_sum",
+        func: search_subset_sum,
+    },
+    SearchCandidate {
+        key: "search_partition_equal_sum",
+        func: search_partition_equal_sum,
+    },
+    SearchCandidate {
+        key: "search_fibonacci_dp",
+        func: search_fibonacci_dp,
+    },
+    SearchCandidate {
+        key: "search_climb_stairs",
+        func: search_climb_stairs,
     },
 ];
 

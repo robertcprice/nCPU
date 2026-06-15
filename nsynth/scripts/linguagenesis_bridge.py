@@ -591,8 +591,180 @@ def task_pluralize_gen(holdout_every: int = 4) -> dict:
     }
 
 
+def task_animacy_lexicon() -> dict:
+    """Stage 7 LEXICON: learn the animacy of a noun as a verified Mog program.
+
+    Animacy ("teacher" is animate, "report" is not) is an *arbitrary lexical
+    fact* — it carries no orthographic signal, so no rule can derive it (the
+    agents and patients even share endings: farmer/painter vs chapter/letter,
+    both -er). It must therefore be STORED, and the right object to learn is the
+    closed lexicon itself. nSynth recovers it from (word -> animate) I/O via the
+    string-equality-map teacher, emitting `is_animate(s) -> i64` as a verified
+    lookup table. This is exactly the semantic knowledge that used to live in a
+    hand-written Python `if word in ROLE_AGENTS` — now a synthesized program, so
+    the *comprehension parser has the semantics built in*, not bolted on in
+    Python. The whole closed lexicon is the training set (a dictionary is meant
+    to be fully known); novel words fall to the default (inanimate) class.
+    """
+    sys.path.insert(0, str(LINGUAGENESIS))
+    from v2.curriculum import compositional_semantics as cs  # type: ignore
+
+    rows = [(w.lower(), 1) for w in cs.ROLE_AGENTS]
+    rows += [(w.lower(), 0) for w in cs.ROLE_PATIENTS]
+    rows = sorted(set(rows))
+    examples = [{"inputs": [w], "expected": label} for w, label in rows]
+
+    return {
+        "name": "is_animate",
+        "signature": "fn is_animate(s: string) -> i64",
+        "examples": examples,
+        "holdouts": [],
+    }
+
+
+def task_noun_animacy() -> dict:
+    """The comprehension parser's LEXICON, learned as one verified program:
+    `noun_animacy(word) -> {1=animate noun, 2=inanimate noun, 0=not a noun}`.
+
+    This single synthesized lookup does BOTH jobs the hand-written Python parser
+    used to do — finding the nouns and classifying their animacy. Non-nouns
+    (verbs, modifiers, determiners) are trained to 0 and form the majority, so an
+    unseen word safely defaults to "not a noun". Agents -> 1, patients -> 2. The
+    string-equality-map teacher recovers it; the meaning path now contains no
+    Python noun/animacy logic at all.
+    """
+    sys.path.insert(0, str(LINGUAGENESIS))
+    from v2.curriculum import compositional_semantics as cs  # type: ignore
+
+    def forms(word: str) -> list[str]:
+        # singular + regular plural, so plural subjects/objects are recognized too
+        w = word.lower()
+        return [w, w + "s"]
+
+    rows = [(f, 1) for w in cs.ROLE_AGENTS for f in forms(w)]
+    rows += [(f, 2) for w in cs.ROLE_PATIENTS for f in forms(w)]
+    # Non-noun negatives -> 0 (the safe default for unseen words). Make them the
+    # majority so the default really is "not a noun".
+    nonnouns = set()
+    for attr in ("ROLE_VERBS", "AGENTIVE_VERBS", "MODIFIERS"):
+        for w in getattr(cs, attr, []):
+            forms = w if isinstance(w, (tuple, list)) else (w,)  # verbs are (base, 3sg)
+            for form in forms:
+                nonnouns.add(str(form).lower())
+    nonnouns.update({"the", "a", "is", "are", "not", "does", "do", "always", "to"})
+    rows += [(w, 0) for w in nonnouns]
+    rows = sorted(set(rows))
+    examples = [{"inputs": [w], "expected": label} for w, label in rows]
+
+    return {
+        "name": "noun_animacy",
+        "signature": "fn noun_animacy(s: string) -> i64",
+        "examples": examples,
+        "holdouts": [],
+    }
+
+
+def task_roles_rule() -> dict:
+    """The selectional-restriction RULE in the token space the comprehender emits.
+
+    The composed parser tags the subject's animacy as {1,2} and the object's as
+    {11,12} (offset so position is recoverable by the bag-of-tokens classifier).
+    nSynth learns: valid iff the sentence has an animate subject (token 1) AND an
+    inanimate object (token 12) — the real two-part rule, not the "subject
+    animate" shortcut that the correlated dataset let it overfit before.
+    """
+    combos = [
+        ([1, 12], 1),   # animate subject, inanimate object  -> licensed
+        ([1, 11], 0),   # animate subject, ANIMATE object    -> blocked
+        ([2, 12], 0),   # inanimate subject                  -> blocked
+        ([2, 11], 0),   # inanimate subject, animate object  -> blocked
+    ]
+    rows = []
+    for _ in range(4):  # >= 12 examples so the array classifier engages
+        rows.extend(combos)
+    examples = [{"inputs": [toks], "expected": label} for toks, label in rows]
+    return {
+        "name": "valid_roles",
+        "signature": "fn valid_roles(arr: [i64]) -> i64",
+        "examples": examples,
+        "holdouts": [],
+    }
+
+
+def task_agreement_rule() -> dict:
+    """Subject-number AGREEMENT, the rule the old 3sg checker never had.
+
+    The bug it fixes: the recovered 3sg rule only checked that the verb carried a
+    valid 3sg suffix, so it ACCEPTED "The captains watches." (plural subject, 3sg
+    verb). English agreement is really a parity constraint: regular plural nouns
+    and 3sg verbs are both marked with -s, and exactly ONE of {subject, verb} may
+    carry it. The composer tags the subject's -s as {1 none, 2 has} and the verb's
+    as {11 none, 12 has}; nSynth learns the DNF:
+        valid iff (singular subject + 3sg verb)  -> tokens 1 and 12
+               or (plural subject + base verb)    -> tokens 2 and 11
+    so "The captains watches." is finally rejected and "The captains watch."
+    accepted.
+    """
+    combos = [
+        ([1, 12], 1),   # singular subject, 3sg verb   (the captain watches)  OK
+        ([2, 11], 1),   # plural subject, base verb     (the captains watch)   OK
+        ([1, 11], 0),   # singular subject, base verb   (the captain watch)    bad
+        ([2, 12], 0),   # plural subject, 3sg verb      (the captains watches) bad
+    ]
+    rows = []
+    for _ in range(4):  # >= 12 examples so the array classifier engages
+        rows.extend(combos)
+    examples = [{"inputs": [toks], "expected": label} for toks, label in rows]
+    return {
+        "name": "valid_agreement",
+        "signature": "fn valid_agreement(arr: [i64]) -> i64",
+        "examples": examples,
+        "holdouts": [],
+    }
+
+
+def task_ends_s() -> dict:
+    """A tiny morphological detector: does a word carry the regular -s inflection?
+
+    The atom both agreement features are built from. Learned (not hard-coded) as a
+    suffix predicate from labeled curriculum word forms, so even this lives as a
+    verified Mog program rather than a Python `w.endswith('s')`. We keep only
+    REGULAR stems (base does not already end in a sibilant), so the contrast is
+    cleanly suffix-separable and nSynth recovers the general rule `ends_with("s")`
+    — which generalizes to unseen words — rather than memorizing a table. (Stems
+    like "press" / "pass" whose base already ends in -s are the genuinely
+    ambiguous cases English marks irregularly; they are out of scope here.)
+    """
+    morph = _curriculum()
+    sibilant = ("s", "x", "z", "ch", "sh")
+    rows = []
+    for v in morph.REGULAR_VERBS:
+        if v.base.endswith(sibilant):
+            continue  # base already ends in -s-like: not cleanly separable
+        rows.append((v.base, 0))               # base: no -s
+        rows.append((v.third_singular, 1))     # 3sg: carries -s
+    # a few singular/plural nouns for the same -s contrast
+    for sing, plur in [("captain", "captains"), ("editor", "editors"),
+                       ("report", "reports"), ("book", "books")]:
+        rows.append((sing, 0))
+        rows.append((plur, 1))
+    rows = sorted(set(rows))
+    examples = [{"inputs": [w], "expected": label} for w, label in rows]
+    return {
+        "name": "ends_s",
+        "signature": "fn ends_s(s: string) -> i64",
+        "examples": examples,
+        "holdouts": [],
+    }
+
+
 TASKS = {
     "verb_3sg_es": task_verb_3sg_es,
+    "animacy_lexicon": task_animacy_lexicon,
+    "noun_animacy": task_noun_animacy,
+    "roles_rule": task_roles_rule,
+    "agreement_rule": task_agreement_rule,
+    "ends_s": task_ends_s,
     "sentence_3sg": task_sentence_3sg,
     "sentence_gerund": task_sentence_gerund,
     "sentence_past": task_sentence_past,

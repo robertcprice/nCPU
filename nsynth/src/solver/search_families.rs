@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::benchmark::TreeNode;
 use super::search_codegen::*;
 use super::search_runtime::*;
 use super::*;
@@ -2015,6 +2016,565 @@ pub(super) fn search_recursive_fibonacci(
     verified_result(problem, code, "search_recursive_fibonacci")
 }
 
+/// Stage 5: Mutual Recursion Teacher (Even/Odd Check)
+/// Detects: even(n) = (n == 0 || odd(n-1)), odd(n) = (n != 0 && even(n-1))
+pub(super) fn search_mutual_recursion_even_odd(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let n = match &ex.inputs[0] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+        let expected = ex.expected_int();
+        let is_even = n % 2 == 0;
+        (is_even && expected == 1) || (!is_even && expected == 0)
+    });
+
+    if passes {
+        let code = code_mutual_recursion_even_odd(fn_name);
+        return verified_result(
+            problem,
+            code,
+            "search_mutual_recursion_even_odd",
+        );
+    }
+    None
+}
+
+/// Stage 5: Mutual Recursion Teacher (Fibonacci Pair)
+/// Detects: fib_pair(n) returns (fib(n), fib(n-1)) via mutual recursion.
+pub(super) fn search_mutual_recursion_fib_pair(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let n = match &ex.inputs[0] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+        let expected = ex.expected_int();
+
+        // Compute fib(n)
+        let fib_n = if n == 0 {
+            0
+        } else if n == 1 {
+            1
+        } else {
+            let (mut a, mut b) = (0i64, 1i64);
+            for _ in 2..=n {
+                let tmp = a + b;
+                a = b;
+                b = tmp;
+            }
+            b
+        };
+
+        expected == fib_n
+    });
+
+    if passes {
+        let code = code_mutual_recursion_fib_pair(fn_name);
+        return verified_result(
+            problem,
+            code,
+            "search_mutual_recursion_fib_pair",
+        );
+    }
+    None
+}
+
+/// Stage 5: Tribonacci Teacher
+/// Detects: tribonacci(n) = trib(n-1) + trib(n-2) + trib(n-3), base: 0,0,1
+pub(super) fn search_tribonacci(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let n = match &ex.inputs[0] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+        let expected = ex.expected_int();
+
+        let trib = if n == 0 {
+            0
+        } else if n == 1 {
+            0
+        } else if n == 2 {
+            1
+        } else {
+            let (mut a, mut b, mut c) = (0i64, 0i64, 1i64);
+            for _ in 3..=n {
+                let tmp = a + b + c;
+                a = b;
+                b = c;
+                c = tmp;
+            }
+            c
+        };
+
+        expected == trib
+    });
+
+    if passes {
+        let code = code_tribonacci(fn_name);
+        return verified_result(problem, code, "search_tribonacci");
+    }
+    None
+}
+
+/// Stage 5: Tree Traversal - Preorder (Root, Left, Right)
+pub(super) fn search_tree_preorder_sum(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    if problem.examples.is_empty() {
+        return None;
+    }
+
+    let tree = extract_tree_for_search(problem)?;
+    let expected = problem.examples[0].expected_int();
+    let actual_sum = sum_tree_preorder(0, tree);
+
+    if expected != actual_sum {
+        return None;
+    }
+
+    for ex in &problem.examples {
+        let tree = ex
+            .inputs
+            .iter()
+            .find_map(|v| match v {
+                Value::Tree(nodes) => Some(nodes.as_slice()),
+                _ => None,
+            })?;
+
+        if ex.expected_int() != sum_tree_preorder(0, tree) {
+            return None;
+        }
+    }
+
+    let code = code_tree_preorder_traversal(fn_name);
+    verified_result(problem, code, "search_tree_preorder_sum")
+}
+
+/// Stage 5: Tree Traversal - Inorder (Left, Root, Right)
+pub(super) fn search_tree_inorder_sum(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    if problem.examples.is_empty() {
+        return None;
+    }
+
+    let tree = extract_tree_for_search(problem)?;
+    let expected = problem.examples[0].expected_int();
+    let actual_sum = sum_tree_inorder(0, tree);
+
+    if expected != actual_sum {
+        return None;
+    }
+
+    for ex in &problem.examples {
+        let tree = ex
+            .inputs
+            .iter()
+            .find_map(|v| match v {
+                Value::Tree(nodes) => Some(nodes.as_slice()),
+                _ => None,
+            })?;
+
+        if ex.expected_int() != sum_tree_inorder(0, tree) {
+            return None;
+        }
+    }
+
+    let code = code_tree_inorder_traversal(fn_name);
+    verified_result(problem, code, "search_tree_inorder_sum")
+}
+
+/// Stage 5: Tree Traversal - Postorder (Left, Right, Root)
+pub(super) fn search_tree_postorder_sum(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    if problem.examples.is_empty() {
+        return None;
+    }
+
+    let tree = extract_tree_for_search(problem)?;
+    let expected = problem.examples[0].expected_int();
+    let actual_sum = sum_tree_postorder(0, tree);
+
+    if expected != actual_sum {
+        return None;
+    }
+
+    for ex in &problem.examples {
+        let tree = ex
+            .inputs
+            .iter()
+            .find_map(|v| match v {
+                Value::Tree(nodes) => Some(nodes.as_slice()),
+                _ => None,
+            })?;
+
+        if ex.expected_int() != sum_tree_postorder(0, tree) {
+            return None;
+        }
+    }
+
+    let code = code_tree_postorder_traversal(fn_name);
+    verified_result(problem, code, "search_tree_postorder_sum")
+}
+
+/// Stage 5: Tree Traversal - Level Order (BFS)
+pub(super) fn search_tree_level_order_sum(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    if problem.examples.is_empty() {
+        return None;
+    }
+
+    let tree = extract_tree_for_search(problem)?;
+    let expected = problem.examples[0].expected_int();
+    let actual_sum = sum_tree_level_order(tree);
+
+    if expected != actual_sum {
+        return None;
+    }
+
+    for ex in &problem.examples {
+        let tree = ex
+            .inputs
+            .iter()
+            .find_map(|v| match v {
+                Value::Tree(nodes) => Some(nodes.as_slice()),
+                _ => None,
+            })?;
+
+        if ex.expected_int() != sum_tree_level_order(tree) {
+            return None;
+        }
+    }
+
+    let code = code_tree_level_order_traversal(fn_name);
+    verified_result(problem, code, "search_tree_level_order_sum")
+}
+
+/// Stage 5: Ackermann Function (mu-recursive hierarchy)
+/// Computes: A(m, n) with limited support (m <= 3, n <= 10)
+pub(super) fn search_ackermann(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64, ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 2 {
+            return false;
+        }
+        let m = match &ex.inputs[0] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+        let n = match &ex.inputs[1] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+        let expected = ex.expected_int();
+
+        // Only compute for small m (avoid stack overflow)
+        if m < 0 || m > 3 || n < 0 || n > 10 {
+            return false;
+        }
+
+        let ack = compute_ackermann(m, n);
+        expected == ack
+    });
+
+    if passes {
+        let code = code_ackermann(fn_name);
+        return verified_result(problem, code, "search_ackermann");
+    }
+    None
+}
+
+/// Stage 5: Quick-Select (find k-th smallest)
+/// Detects: find k-th smallest element in array via partition
+pub(super) fn search_quickselect(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64, ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 2 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        let k = match &ex.inputs[1] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+        let expected = ex.expected_int();
+
+        if k < 0 || k >= arr.len() as i64 {
+            return false;
+        }
+
+        let mut sorted = arr.clone();
+        sorted.sort_unstable();
+        expected == sorted[k as usize]
+    });
+
+    if passes {
+        let code = code_quickselect(fn_name);
+        return verified_result(problem, code, "search_quickselect");
+    }
+    None
+}
+
+/// Stage 5: Merge Sort (stable sort via divide-and-conquer)
+pub(super) fn search_merge_sort(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        let expected_arr = match &ex.expected {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+
+        let mut sorted = arr.clone();
+        sorted.sort_unstable();
+        expected_arr == sorted
+    });
+
+    if passes {
+        let code = code_merge_sort(fn_name);
+        return verified_result(problem, code, "search_merge_sort");
+    }
+    None
+}
+
+/// Stage 5: Binary Search Tree - Search for Key
+/// Detects: searches BST for a target value
+pub(super) fn search_bst_search(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    if problem.examples.is_empty() {
+        return None;
+    }
+
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::Other("Tree".to_string()), ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 2 {
+            return false;
+        }
+        let tree = match &ex.inputs[0] {
+            Value::Tree(nodes) => nodes.as_slice(),
+            _ => return false,
+        };
+        let target = match &ex.inputs[1] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+        let expected = ex.expected_int();
+
+        let found = bst_contains(0, tree, target);
+        (found && expected == 1) || (!found && expected == 0)
+    });
+
+    if passes {
+        let code = code_bst_search(fn_name);
+        return verified_result(problem, code, "search_bst_search");
+    }
+    None
+}
+
+/// Stage 5: Binary Search Tree - Insert into BST
+/// Detects: inserts a value into BST maintaining order
+pub(super) fn search_bst_insert(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    if problem.examples.is_empty() {
+        return None;
+    }
+
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::Other("Tree".to_string()), ParamType::I64] {
+        return None;
+    }
+
+    let code = code_bst_insert(fn_name);
+    verified_result(problem, code, "search_bst_insert")
+}
+
+/// Stage 5: Binary Search Tree - Delete from BST
+/// Detects: removes a value from BST maintaining order
+pub(super) fn search_bst_delete(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    if problem.examples.is_empty() {
+        return None;
+    }
+
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::Other("Tree".to_string()), ParamType::I64] {
+        return None;
+    }
+
+    let code = code_bst_delete(fn_name);
+    verified_result(problem, code, "search_bst_delete")
+}
+
+// ============================================================================
+// Helper functions for tree traversal
+// ============================================================================
+
+fn extract_tree_for_search(problem: &Problem) -> Option<&[TreeNode]> {
+    problem.examples[0]
+        .inputs
+        .iter()
+        .find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes.as_slice()),
+            _ => None,
+        })
+}
+
+fn sum_tree_preorder(idx: i32, tree: &[TreeNode]) -> i64 {
+    if idx < 0 {
+        return 0;
+    }
+    let node = &tree[idx as usize];
+    node.value
+        + sum_tree_preorder(node.left, tree)
+        + sum_tree_preorder(node.right, tree)
+}
+
+fn sum_tree_inorder(idx: i32, tree: &[TreeNode]) -> i64 {
+    if idx < 0 {
+        return 0;
+    }
+    let node = &tree[idx as usize];
+    sum_tree_inorder(node.left, tree)
+        + node.value
+        + sum_tree_inorder(node.right, tree)
+}
+
+fn sum_tree_postorder(idx: i32, tree: &[TreeNode]) -> i64 {
+    if idx < 0 {
+        return 0;
+    }
+    let node = &tree[idx as usize];
+    sum_tree_postorder(node.left, tree)
+        + sum_tree_postorder(node.right, tree)
+        + node.value
+}
+
+fn sum_tree_level_order(tree: &[TreeNode]) -> i64 {
+    if tree.is_empty() {
+        return 0;
+    }
+    let mut sum = 0i64;
+    let mut queue: Vec<i32> = vec![0];
+    while !queue.is_empty() {
+        let idx = queue.remove(0);
+        if idx < 0 {
+            continue;
+        }
+        let node = &tree[idx as usize];
+        sum += node.value;
+        if node.left >= 0 {
+            queue.push(node.left);
+        }
+        if node.right >= 0 {
+            queue.push(node.right);
+        }
+    }
+    sum
+}
+
+fn compute_ackermann(m: i64, n: i64) -> i64 {
+    if m == 0 {
+        n + 1
+    } else if n == 0 {
+        compute_ackermann(m - 1, 1)
+    } else {
+        compute_ackermann(m - 1, compute_ackermann(m, n - 1))
+    }
+}
+
+fn bst_contains(idx: i32, tree: &[TreeNode], target: i64) -> bool {
+    if idx < 0 {
+        return false;
+    }
+    let node = &tree[idx as usize];
+    if node.value == target {
+        true
+    } else if target < node.value {
+        bst_contains(node.left, tree, target)
+    } else {
+        bst_contains(node.right, tree, target)
+    }
+}
+
 /// Polynomial sequences: detect quadratic, cubic patterns.
 /// Pattern: a*n^2 + b*n + c or a*n^3 + b*n^2 + c*n + d.
 /// Validates with 3-5 examples from the sequence.
@@ -2405,6 +2965,1049 @@ pub(super) fn search_harmonic_progression(
             let code = code_harmonic_progression(fn_name);
             return verified_result(problem, code, "search_harmonic_progression");
         }
+    }
+
+    None
+}
+
+/// **Stage 8: Statistical Teachers**
+/// Detects and synthesizes statistical computation patterns
+/// including mean, median, mode, variance, stddev, percentiles,
+/// coefficient of variation, z-scores, outlier detection, and skewness.
+
+/// Stage 8: Mean (Average) Teacher
+/// Recognizes: sum(arr) / len(arr)
+pub(super) fn search_array_mean(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+        let mean = arr.iter().sum::<i64>() / arr.len() as i64;
+        mean == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_array_mean(fn_name);
+        return verified_result(problem, code, "search_array_mean");
+    }
+    None
+}
+
+/// Stage 8: Median Teacher
+/// Recognizes: middle value when sorted
+pub(super) fn search_array_median(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+        let mut sorted = arr.clone();
+        sorted.sort_unstable();
+        let median = sorted[sorted.len() / 2];
+        median == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_array_median(fn_name);
+        return verified_result(problem, code, "search_array_median");
+    }
+    None
+}
+
+/// Stage 8: Mode (Most Frequent Value) Teacher
+/// Recognizes: most frequently occurring value
+pub(super) fn search_array_mode(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+
+        // Find mode (most frequent value)
+        let mut max_count = 0i64;
+        let mut mode = arr[0];
+        for &val in &arr {
+            let count = arr.iter().filter(|&&x| x == val).count() as i64;
+            if count > max_count {
+                max_count = count;
+                mode = val;
+            }
+        }
+        mode == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_array_mode(fn_name);
+        return verified_result(problem, code, "search_array_mode");
+    }
+    None
+}
+
+/// Stage 8: Variance Teacher
+/// Recognizes: sum((x - mean)^2) / n
+pub(super) fn search_array_variance(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+
+        let mean = arr.iter().sum::<i64>() / arr.len() as i64;
+        let variance = arr.iter()
+            .map(|&x| {
+                let diff = x - mean;
+                diff * diff
+            })
+            .sum::<i64>() / arr.len() as i64;
+        variance == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_array_variance(fn_name);
+        return verified_result(problem, code, "search_array_variance");
+    }
+    None
+}
+
+/// Stage 8: Standard Deviation Teacher
+/// Recognizes: sqrt(variance)
+pub(super) fn search_array_stddev(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+
+        let mean = arr.iter().sum::<i64>() / arr.len() as i64;
+        let variance = arr.iter()
+            .map(|&x| {
+                let diff = x - mean;
+                diff * diff
+            })
+            .sum::<i64>() / arr.len() as i64;
+
+        // Integer square root
+        let mut stddev = 0i64;
+        let mut sq = 0i64;
+        while sq * sq <= variance {
+            if sq * sq == variance {
+                stddev = sq;
+            }
+            sq += 1;
+        }
+        stddev == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_array_stddev(fn_name);
+        return verified_result(problem, code, "search_array_stddev");
+    }
+    None
+}
+
+/// Stage 8: Percentile Teacher
+/// Recognizes: value at specified percentile rank (25th, 50th, 75th)
+pub(super) fn search_array_percentile(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    // Try common percentiles: 25 (Q1), 50 (median), 75 (Q3)
+    for percentile in &[25, 50, 75] {
+        let passes = problem.examples.iter().all(|ex| {
+            if ex.inputs.len() != 1 {
+                return false;
+            }
+            let arr = match &ex.inputs[0] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+            if arr.is_empty() {
+                return ex.expected_int() == 0;
+            }
+
+            let mut sorted = arr.clone();
+            sorted.sort_unstable();
+            let idx = (sorted.len() as i64 * percentile) / 100;
+            let idx = if idx >= sorted.len() as i64 { sorted.len() - 1 } else { idx as usize };
+            sorted[idx] == ex.expected_int()
+        });
+
+        if passes {
+            let code = code_array_percentile(fn_name, *percentile as i64);
+            return verified_result(problem, code, "search_array_percentile");
+        }
+    }
+    None
+}
+
+/// Stage 8: Coefficient of Variation Teacher
+/// Recognizes: (stddev / mean) * 100
+pub(super) fn search_array_coefficient_variation(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+
+        let mean = arr.iter().sum::<i64>() / arr.len() as i64;
+        if mean == 0 {
+            return ex.expected_int() == 0;
+        }
+
+        let variance = arr.iter()
+            .map(|&x| {
+                let diff = x - mean;
+                diff * diff
+            })
+            .sum::<i64>() / arr.len() as i64;
+
+        // Integer square root
+        let mut stddev = 0i64;
+        let mut sq = 0i64;
+        while sq * sq <= variance {
+            if sq * sq == variance {
+                stddev = sq;
+            }
+            sq += 1;
+        }
+
+        let cv = (stddev * 100) / mean;
+        cv == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_array_coefficient_variation(fn_name);
+        return verified_result(problem, code, "search_array_coefficient_variation");
+    }
+    None
+}
+
+/// Stage 8: Z-Score Outlier Detection Teacher
+/// Recognizes: is value within N standard deviations of mean?
+pub(super) fn search_array_zscore_outlier(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64, ParamType::I64] {
+        return None;
+    }
+
+    // Try common thresholds: 1, 2, 3 standard deviations
+    for threshold in &[1, 2, 3] {
+        let passes = problem.examples.iter().all(|ex| {
+            if ex.inputs.len() != 2 {
+                return false;
+            }
+            let arr = match &ex.inputs[0] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+            let value = match &ex.inputs[1] {
+                Value::Int(v) => *v,
+                _ => return false,
+            };
+
+            if arr.is_empty() {
+                return ex.expected_int() == 1;
+            }
+
+            let mean = arr.iter().sum::<i64>() / arr.len() as i64;
+            let variance = arr.iter()
+                .map(|&x| {
+                    let diff = x - mean;
+                    diff * diff
+                })
+                .sum::<i64>() / arr.len() as i64;
+
+            let mut stddev = 0i64;
+            let mut sq = 0i64;
+            while sq * sq <= variance {
+                if sq * sq == variance {
+                    stddev = sq;
+                }
+                sq += 1;
+            }
+
+            if stddev == 0 {
+                return ex.expected_int() == 1;
+            }
+
+            let diff = (value - mean).abs();
+            let is_inlier = diff <= stddev * threshold;
+            (is_inlier as i64) == ex.expected_int()
+        });
+
+        if passes {
+            let code = code_array_zscore_outlier(fn_name, *threshold);
+            return verified_result(problem, code, "search_array_zscore_outlier");
+        }
+    }
+    None
+}
+
+/// Stage 8: IQR Outlier Detection Teacher
+/// Recognizes: is value within 1.5*IQR of quartiles?
+pub(super) fn search_array_iqr_outlier(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64, ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 2 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        let value = match &ex.inputs[1] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+
+        if arr.is_empty() {
+            return ex.expected_int() == 1;
+        }
+
+        let mut sorted = arr.clone();
+        sorted.sort_unstable();
+
+        let q1_idx = sorted.len() / 4;
+        let q3_idx = (sorted.len() * 3) / 4;
+        let q1 = sorted[q1_idx];
+        let q3 = sorted[q3_idx];
+        let iqr = q3 - q1;
+
+        let lower_bound = q1 - (iqr * 3) / 2;
+        let upper_bound = q3 + (iqr * 3) / 2;
+
+        let is_inlier = value >= lower_bound && value <= upper_bound;
+        (is_inlier as i64) == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_array_iqr_outlier(fn_name);
+        return verified_result(problem, code, "search_array_iqr_outlier");
+    }
+    None
+}
+
+/// Stage 8: Skewness Teacher
+/// Recognizes: Fisher-Pearson skewness coefficient
+pub(super) fn search_array_skewness(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+
+        let mean = arr.iter().sum::<i64>() / arr.len() as i64;
+
+        let mut sum_sq_diff = 0i64;
+        let mut sum_cube_diff = 0i64;
+        for &x in &arr {
+            let diff = x - mean;
+            sum_sq_diff += diff * diff;
+            sum_cube_diff += diff * diff * diff;
+        }
+
+        let variance = sum_sq_diff / arr.len() as i64;
+        let mut stddev = 0i64;
+        let mut sq = 0i64;
+        while sq * sq <= variance {
+            if sq * sq == variance {
+                stddev = sq;
+            }
+            sq += 1;
+        }
+
+        if stddev == 0 {
+            return ex.expected_int() == 0;
+        }
+
+        let skew_numerator = sum_cube_diff / arr.len() as i64;
+        let skew_denom = stddev * stddev * stddev;
+        if skew_denom == 0 {
+            return ex.expected_int() == 0;
+        }
+
+        let skewness = skew_numerator / skew_denom;
+        skewness == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_array_skewness(fn_name);
+        return verified_result(problem, code, "search_array_skewness");
+    }
+    None
+}
+
+// ============================================================================
+// DP TEACHERS: Dynamic Programming Pattern Recognition
+// ============================================================================
+
+/// Stage 9: 0/1 Knapsack Teacher
+/// Detects: (weights: [i64], values: [i64], capacity: i64) -> max_value (inferred capacity)
+pub(super) fn search_knapsack_01(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+
+    // Expect (weights: [i64], values: [i64]) or 2-array input with scalar constraint
+    if param_types.len() < 2 || param_types.len() > 3 {
+        return None;
+    }
+
+    // Must have at least one array
+    let has_array = param_types.iter().any(|p| p == &ParamType::ArrayI64);
+    if !has_array {
+        return None;
+    }
+
+    // Try common capacities (infer from max values seen in examples)
+    let mut capacities = HashSet::new();
+    for ex in &problem.examples {
+        if ex.inputs.len() >= 1 {
+            if let Value::Array(arr) = &ex.inputs[0] {
+                for &val in arr {
+                    if val > 0 && val <= 100 {
+                        capacities.insert(val);
+                    }
+                }
+            }
+        }
+    }
+
+    for capacity in capacities {
+        let passes = problem.examples.iter().all(|ex| {
+            if ex.inputs.len() < 2 {
+                return false;
+            }
+            let weights = match &ex.inputs[0] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+            let values = match &ex.inputs[1] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+
+            if weights.len() != values.len() || weights.is_empty() {
+                return false;
+            }
+
+            // Simulate 0/1 knapsack
+            let mut dp = vec![0i64; (capacity + 1) as usize];
+            for i in 0..weights.len() {
+                for j in (weights[i]..=capacity).rev() {
+                    if dp[(j - weights[i]) as usize] + values[i] > dp[j as usize] {
+                        dp[j as usize] = dp[(j - weights[i]) as usize] + values[i];
+                    }
+                }
+            }
+
+            dp[capacity as usize] == ex.expected_int()
+        });
+
+        if passes {
+            let code = code_knapsack_01_dp(fn_name, capacity);
+            return verified_result(problem, code, "search_knapsack_01");
+        }
+    }
+
+    None
+}
+
+/// Stage 9: Unbounded Knapsack Teacher
+/// Detects: (weights: [i64], values: [i64], capacity: i64) -> max_value (items unlimited)
+pub(super) fn search_knapsack_unbounded(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+
+    if param_types.len() < 2 || param_types.len() > 3 {
+        return None;
+    }
+
+    let has_array = param_types.iter().any(|p| p == &ParamType::ArrayI64);
+    if !has_array {
+        return None;
+    }
+
+    let mut capacities = HashSet::new();
+    for ex in &problem.examples {
+        if ex.inputs.len() >= 1 {
+            if let Value::Array(arr) = &ex.inputs[0] {
+                for &val in arr {
+                    if val > 0 && val <= 100 {
+                        capacities.insert(val);
+                    }
+                }
+            }
+        }
+    }
+
+    for capacity in capacities {
+        let passes = problem.examples.iter().all(|ex| {
+            if ex.inputs.len() < 2 {
+                return false;
+            }
+            let weights = match &ex.inputs[0] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+            let values = match &ex.inputs[1] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+
+            if weights.len() != values.len() || weights.is_empty() {
+                return false;
+            }
+
+            // Simulate unbounded knapsack
+            let mut dp = vec![0i64; (capacity + 1) as usize];
+            for j in 1..=capacity {
+                for i in 0..weights.len() {
+                    if weights[i] <= j {
+                        if dp[(j - weights[i]) as usize] + values[i] > dp[j as usize] {
+                            dp[j as usize] = dp[(j - weights[i]) as usize] + values[i];
+                        }
+                    }
+                }
+            }
+
+            dp[capacity as usize] == ex.expected_int()
+        });
+
+        if passes {
+            let code = code_knapsack_unbounded_dp(fn_name, capacity);
+            return verified_result(problem, code, "search_knapsack_unbounded");
+        }
+    }
+
+    None
+}
+
+/// Stage 9: Longest Increasing Subsequence (LIS) Teacher
+/// Detects: [i64] -> length of longest strictly increasing subsequence
+pub(super) fn search_lis(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+
+        // Compute LIS length
+        let mut dp = vec![1i64; arr.len()];
+        for i in 1..arr.len() {
+            for j in 0..i {
+                if arr[j] < arr[i] && dp[j] + 1 > dp[i] {
+                    dp[i] = dp[j] + 1;
+                }
+            }
+        }
+
+        let max_lis = *dp.iter().max().unwrap_or(&0);
+        max_lis == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_longest_increasing_subsequence(fn_name);
+        return verified_result(problem, code, "search_lis");
+    }
+
+    None
+}
+
+/// Stage 9: Longest Decreasing Subsequence (LDS) Teacher
+/// Detects: [i64] -> length of longest strictly decreasing subsequence
+pub(super) fn search_lds(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+
+        // Compute LDS length
+        let mut dp = vec![1i64; arr.len()];
+        for i in 1..arr.len() {
+            for j in 0..i {
+                if arr[j] > arr[i] && dp[j] + 1 > dp[i] {
+                    dp[i] = dp[j] + 1;
+                }
+            }
+        }
+
+        let max_lds = *dp.iter().max().unwrap_or(&0);
+        max_lds == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_longest_decreasing_subsequence(fn_name);
+        return verified_result(problem, code, "search_lds");
+    }
+
+    None
+}
+
+/// Stage 9: Coin Change (Minimum Coins) Teacher
+/// Detects: [i64] (coins) -> i64 (minimum coins to make target, inferred)
+pub(super) fn search_coin_change_min(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    // Infer target from expected outputs (should be reasonable)
+    let mut targets = HashSet::new();
+    for ex in &problem.examples {
+        let expected = ex.expected_int();
+        if expected > 0 && expected <= 50 {
+            targets.insert(expected * 5); // heuristic: assume target ~= min_coins * 5
+        }
+    }
+
+    if targets.is_empty() {
+        targets.insert(10);
+        targets.insert(20);
+        targets.insert(50);
+    }
+
+    for target in targets {
+        let passes = problem.examples.iter().all(|ex| {
+            if ex.inputs.len() != 1 {
+                return false;
+            }
+            let coins = match &ex.inputs[0] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+
+            if coins.is_empty() || coins.iter().any(|&c| c <= 0) {
+                return false;
+            }
+
+            // Simulate coin change (min coins)
+            let mut dp = vec![-1i64; (target + 1) as usize];
+            dp[0] = 0;
+
+            for i in 1..=target {
+                for &coin in &coins {
+                    if coin <= i && dp[(i - coin) as usize] != -1 {
+                        if dp[i as usize] == -1 || dp[(i - coin) as usize] + 1 < dp[i as usize] {
+                            dp[i as usize] = dp[(i - coin) as usize] + 1;
+                        }
+                    }
+                }
+            }
+
+            dp[target as usize] == ex.expected_int()
+        });
+
+        if passes {
+            let code = code_coin_change_min_dp(fn_name, target);
+            return verified_result(problem, code, "search_coin_change_min");
+        }
+    }
+
+    None
+}
+
+/// Stage 9: Coin Change (Count Ways) Teacher
+/// Detects: [i64] (coins) -> i64 (number of ways to make target)
+pub(super) fn search_coin_change_count(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    // Infer target similarly
+    let mut targets = HashSet::new();
+    for ex in &problem.examples {
+        let expected = ex.expected_int();
+        if expected > 0 && expected <= 100 {
+            targets.insert(expected);
+        }
+    }
+
+    if targets.is_empty() {
+        targets.insert(5);
+        targets.insert(10);
+        targets.insert(20);
+    }
+
+    for target in targets {
+        let passes = problem.examples.iter().all(|ex| {
+            if ex.inputs.len() != 1 {
+                return false;
+            }
+            let coins = match &ex.inputs[0] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+
+            if coins.is_empty() || coins.iter().any(|&c| c <= 0) {
+                return false;
+            }
+
+            // Simulate coin change (count ways)
+            let mut dp = vec![0i64; (target + 1) as usize];
+            dp[0] = 1;
+
+            for coin in coins {
+                for j in coin..=target {
+                    dp[j as usize] += dp[(j - coin) as usize];
+                }
+            }
+
+            dp[target as usize] == ex.expected_int()
+        });
+
+        if passes {
+            let code = code_coin_change_count_dp(fn_name, target);
+            return verified_result(problem, code, "search_coin_change_count");
+        }
+    }
+
+    None
+}
+
+/// Stage 9: Subset Sum Teacher
+/// Detects: [i64] -> i64 (1 if target sum achievable, 0 otherwise, target inferred)
+pub(super) fn search_subset_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    // Infer target from array sums in examples
+    let mut targets = HashSet::new();
+    for ex in &problem.examples {
+        if ex.inputs.len() >= 1 {
+            if let Value::Array(arr) = &ex.inputs[0] {
+                let total: i64 = arr.iter().sum();
+                if total > 0 && total <= 200 {
+                    targets.insert(total / 2);
+                    targets.insert(total);
+                }
+            }
+        }
+    }
+
+    for target in targets {
+        let passes = problem.examples.iter().all(|ex| {
+            if ex.inputs.len() != 1 {
+                return false;
+            }
+            let arr = match &ex.inputs[0] {
+                Value::Array(v) => v.clone(),
+                _ => return false,
+            };
+
+            if arr.is_empty() {
+                return ex.expected_int() == 0;
+            }
+
+            // Simulate subset sum
+            let mut dp = vec![0i64; (target + 1) as usize];
+            dp[0] = 1;
+
+            for &num in &arr {
+                if num > 0 {
+                    for j in (num..=target).rev() {
+                        if dp[(j - num) as usize] == 1 {
+                            dp[j as usize] = 1;
+                        }
+                    }
+                }
+            }
+
+            dp[target as usize] == ex.expected_int()
+        });
+
+        if passes {
+            let code = code_subset_sum_dp(fn_name, target);
+            return verified_result(problem, code, "search_subset_sum");
+        }
+    }
+
+    None
+}
+
+/// Stage 9: Partition Equal Sum Subset Teacher
+/// Detects: [i64] -> i64 (1 if can partition into equal-sum subsets, 0 otherwise)
+pub(super) fn search_partition_equal_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let arr = match &ex.inputs[0] {
+            Value::Array(v) => v.clone(),
+            _ => return false,
+        };
+
+        if arr.is_empty() {
+            return ex.expected_int() == 0;
+        }
+
+        let total: i64 = arr.iter().sum();
+
+        // Odd sum cannot be partitioned
+        if total % 2 != 0 {
+            return ex.expected_int() == 0;
+        }
+
+        let target = total / 2;
+
+        // Simulate partition equal sum
+        let mut dp = vec![0i64; (target + 1) as usize];
+        dp[0] = 1;
+
+        for &num in &arr {
+            if num > 0 {
+                for j in (num..=target).rev() {
+                    if dp[(j - num) as usize] == 1 {
+                        dp[j as usize] = 1;
+                    }
+                }
+            }
+        }
+
+        dp[target as usize] == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_partition_equal_sum_dp(fn_name);
+        return verified_result(problem, code, "search_partition_equal_sum");
+    }
+
+    None
+}
+
+/// Stage 9: Fibonacci DP Teacher
+/// Detects: i64 (n) -> i64 (nth Fibonacci number)
+pub(super) fn search_fibonacci_dp(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let n = match &ex.inputs[0] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+
+        if n < 0 {
+            return false;
+        }
+
+        // Compute Fibonacci
+        let fib = if n == 0 {
+            0
+        } else if n == 1 {
+            1
+        } else {
+            let mut dp = vec![0i64; (n + 1) as usize];
+            dp[0] = 0;
+            dp[1] = 1;
+            for i in 2..=n {
+                dp[i as usize] = dp[(i - 1) as usize] + dp[(i - 2) as usize];
+            }
+            dp[n as usize]
+        };
+
+        fib == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_fibonacci_dp(fn_name);
+        return verified_result(problem, code, "search_fibonacci_dp");
+    }
+
+    None
+}
+
+/// Stage 9: Climb Stairs Teacher
+/// Detects: i64 (n) -> i64 (ways to climb n stairs, 1 or 2 steps at a time)
+pub(super) fn search_climb_stairs(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    let passes = problem.examples.iter().all(|ex| {
+        if ex.inputs.len() != 1 {
+            return false;
+        }
+        let n = match &ex.inputs[0] {
+            Value::Int(v) => *v,
+            _ => return false,
+        };
+
+        if n <= 0 {
+            return false;
+        }
+
+        // Compute climb stairs
+        let ways = if n == 1 {
+            1
+        } else if n == 2 {
+            2
+        } else {
+            let mut dp = vec![0i64; n as usize];
+            dp[0] = 1;
+            dp[1] = 2;
+            for i in 2..n {
+                dp[i as usize] = dp[(i - 1) as usize] + dp[(i - 2) as usize];
+            }
+            dp[(n - 1) as usize]
+        };
+
+        ways == ex.expected_int()
+    });
+
+    if passes {
+        let code = code_climb_stairs_dp(fn_name);
+        return verified_result(problem, code, "search_climb_stairs");
     }
 
     None

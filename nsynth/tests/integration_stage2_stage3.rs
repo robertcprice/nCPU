@@ -36,6 +36,7 @@ fn stage2_broadcast_vector() -> Problem {
             expected: Value::Array(vec![7, 7, 7, 7]),
         }],
         reference_code: "fn broadcast_vec(x: i64) -> [i64] { [x, x, x, x] }",
+        ..Default::default()
     }
 }
 
@@ -60,6 +61,7 @@ fn stage2_dot_product() -> Problem {
             expected: Value::Int(6),
         }],
         reference_code: "fn dot(a: [i64], b: [i64]) -> i64 { sum(zip(a, b, |x, y| x * y)) }",
+        ..Default::default()
     }
 }
 
@@ -85,6 +87,7 @@ fn stage2_matrix_row_sum() -> Problem {
             expected: Value::Int(15),
         }],
         reference_code: "fn row_sum_first(matrix: [i64]) -> i64 { matrix[0] + matrix[1] + matrix[2] }",
+        ..Default::default()
     }
 }
 
@@ -109,6 +112,7 @@ fn stage2_vector_add() -> Problem {
             expected: Value::Array(vec![4, 4, 4]),
         }],
         reference_code: "fn vec_add(a: [i64], b: [i64]) -> [i64] { [a[0]+b[0], a[1]+b[1], a[2]+b[2]] }",
+        ..Default::default()
     }
 }
 
@@ -133,6 +137,7 @@ fn stage2_scalar_times_vector() -> Problem {
             expected: Value::Array(vec![4, 4, 4]),
         }],
         reference_code: "fn scalar_mul(x: i64, v: [i64]) -> [i64] { [x*v[0], x*v[1], x*v[2]] }",
+        ..Default::default()
     }
 }
 
@@ -157,6 +162,7 @@ fn stage2_vector_max() -> Problem {
             expected: Value::Int(9),
         }],
         reference_code: "fn vec_max(v: [i64]) -> i64 { max(max(max(v[0], v[1]), v[2]), max(v[3], v[4])) }",
+        ..Default::default()
     }
 }
 
@@ -181,6 +187,7 @@ fn stage2_vector_norm_squared() -> Problem {
             expected: Value::Int(9),
         }],
         reference_code: "fn norm_sq(v: [i64]) -> i64 { v[0]*v[0] + v[1]*v[1] + v[2]*v[2] }",
+        ..Default::default()
     }
 }
 
@@ -205,6 +212,7 @@ fn stage2_pairwise_distances() -> Problem {
             expected: Value::Int(4),
         }],
         reference_code: "fn vec_dist(a: [i64], b: [i64]) -> i64 { abs(a[0]-b[0]) + abs(a[1]-b[1]) }",
+        ..Default::default()
     }
 }
 
@@ -233,6 +241,7 @@ fn stage3_struct_sum_count() -> Problem {
             expected: Value::Pair(6, 3),
         }],
         reference_code: "fn aggregate(state: (i64, i64), arr: [i64]) -> (i64, i64) { (state.0 + sum(arr), state.1 + len(arr)) }",
+        ..Default::default()
     }
 }
 
@@ -257,6 +266,7 @@ fn stage3_struct_max_min() -> Problem {
             expected: Value::Pair(3, 1),
         }],
         reference_code: "fn track_bounds(state: (i64, i64), arr: [i64]) -> (i64, i64) { (max(state.0, max(arr)), min(state.1, min(arr))) }",
+        ..Default::default()
     }
 }
 
@@ -281,6 +291,7 @@ fn stage3_struct_weighted_sum() -> Problem {
             expected: Value::Pair(3, 3),
         }],
         reference_code: "fn weighted(state: (i64, i64), arr: [i64]) -> (i64, i64) { (state.0 + sum(arr), state.1 + len(arr)) }",
+        ..Default::default()
     }
 }
 
@@ -305,6 +316,7 @@ fn stage3_struct_quad_state() -> Problem {
             expected: Value::Quad(6, 3, 2, 2),
         }],
         reference_code: "fn quad_agg(state: (i64, i64, i64, i64), arr: [i64]) -> (i64, i64, i64, i64) { (state.0 + sum(arr), state.1 + len(arr), max(state.2, max(arr)), min(state.3, min(arr))) }",
+        ..Default::default()
     }
 }
 
@@ -329,6 +341,7 @@ fn stage3_struct_conditional() -> Problem {
             expected: Value::Pair(3, 3),
         }],
         reference_code: "fn cond_count(state: (i64, i64), arr: [i64]) -> (i64, i64) { (state.0 + count_positive(arr), state.1 + len(arr)) }",
+        ..Default::default()
     }
 }
 
@@ -353,6 +366,7 @@ fn stage3_struct_cross_field() -> Problem {
             expected: Value::Pair(10, 2),
         }],
         reference_code: "fn delta_agg(state: (i64, i64), arr: [i64]) -> (i64, i64) { (state.0 + sum(arr), state.1 + len(arr)) }",
+        ..Default::default()
     }
 }
 

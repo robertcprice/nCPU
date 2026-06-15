@@ -67,6 +67,26 @@ pub(super) fn code_suffix_class_search(fn_name: &str, suffixes: &[String]) -> St
     format!("fn {fn_name}(s: string) -> i64 {{\n{body}    return 0;\n}}\n")
 }
 
+/// A learned lexical lookup: maps specific input strings to integer labels via
+/// string-equality, falling back to `default` for anything unlisted. This is how
+/// nSynth recovers an *arbitrary lexicon* (e.g. animacy: "teacher" -> 1) from
+/// I/O examples — facts with no orthographic rule must be stored, not derived,
+/// so the synthesized program IS the lexicon, verified against every example.
+pub(super) fn code_string_equality_map(
+    fn_name: &str,
+    default: i64,
+    branches: &[(String, i64)],
+) -> String {
+    let mut body = String::new();
+    for (literal, value) in branches {
+        let literal = literal.replace('\\', "\\\\").replace('"', "\\\"");
+        body.push_str(&format!(
+            "    if s == \"{literal}\" {{\n        return {value};\n    }}\n"
+        ));
+    }
+    format!("fn {fn_name}(s: string) -> i64 {{\n{body}    return {default};\n}}\n")
+}
+
 pub(super) fn code_array_member_class_search(fn_name: &str, consts: &[i64]) -> String {
     let mut checks = String::new();
     for c in consts {
@@ -325,6 +345,368 @@ pub(super) fn verified_result(
         error: None,
         metadata: DifferentiableMetadata::default(),
     })
+}
+
+// ============================================================================
+// Mutual Recursion Code Generators
+// ============================================================================
+
+pub(super) fn code_mutual_recursion_even_odd(fn_name: &str) -> String {
+    format!(
+        "fn is_even(n: i64) -> i64 {{\n    if n == 0 {{ return 1; }}\n    return is_odd(n - 1);\n}}\n\n\
+         fn is_odd(n: i64) -> i64 {{\n    if n == 0 {{ return 0; }}\n    return is_even(n - 1);\n}}\n\n\
+         fn {fn_name}(n: i64) -> i64 {{\n    return is_even(n);\n}}\n"
+    )
+}
+
+pub(super) fn code_mutual_recursion_fib_pair(fn_name: &str) -> String {
+    format!(
+        "fn fib(n: i64) -> i64 {{\n    if n == 0 {{ return 0; }}\n    if n == 1 {{ return 1; }}\n    return fib(n - 1) + fib(n - 2);\n}}\n\n\
+         fn {fn_name}(n: i64) -> i64 {{\n    return fib(n);\n}}\n"
+    )
+}
+
+pub(super) fn code_tribonacci(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    if n == 0 {{ return 0; }}\n    if n == 1 {{ return 0; }}\n    if n == 2 {{ return 1; }}\n    \
+         a: i64 = 0;\n    b: i64 = 0;\n    c: i64 = 1;\n    i: i64 = 3;\n    while i <= n {{\n        \
+         tmp: i64 = a + b + c;\n        a = b;\n        b = c;\n        c = tmp;\n        i = i + 1;\n    }}\n    return c;\n}}\n"
+    )
+}
+
+// ============================================================================
+// Tree Traversal Code Generators
+// ============================================================================
+
+pub(super) fn code_tree_preorder_traversal(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(tree: Tree) -> i64 {{\n    \
+         stack: [i32; 1000] = [];\n    \
+         sp: i32 = 0;\n    \
+         sum: i64 = 0;\n    \
+         \n    \
+         if tree.nodes.length > 0 {{\n        \
+         stack[0] = 0;\n        \
+         sp = 1;\n    \
+         }}\n    \
+         \n    \
+         while sp > 0 {{\n        \
+         sp = sp - 1;\n        \
+         node_idx: i32 = stack[sp];\n        \
+         \n        \
+         if node_idx < 0 {{ continue; }}\n        \
+         \n        \
+         node: TreeNode = tree.nodes[node_idx];\n        \
+         sum = sum + node.value;\n        \
+         \n        \
+         if node.right >= 0 {{\n          \
+         stack[sp] = node.right;\n          \
+         sp = sp + 1;\n        \
+         }}\n        \
+         if node.left >= 0 {{\n          \
+         stack[sp] = node.left;\n          \
+         sp = sp + 1;\n        \
+         }}\n    \
+         }}\n    \
+         \n    \
+         return sum;\n\
+         }}"
+    )
+}
+
+pub(super) fn code_tree_inorder_traversal(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(tree: Tree) -> i64 {{\n    \
+         stack: [i32; 1000] = [];\n    \
+         sp: i32 = 0;\n    \
+         visited: [i64; 1000] = [];\n    \
+         sum: i64 = 0;\n    \
+         \n    \
+         if tree.nodes.length > 0 {{\n        \
+         stack[0] = 0;\n        \
+         sp = 1;\n    \
+         }}\n    \
+         \n    \
+         while sp > 0 {{\n        \
+         sp = sp - 1;\n        \
+         node_idx: i32 = stack[sp];\n        \
+         \n        \
+         if node_idx < 0 {{ continue; }}\n        \
+         if visited[node_idx] == 1 {{ continue; }}\n        \
+         \n        \
+         node: TreeNode = tree.nodes[node_idx];\n        \
+         \n        \
+         if node.right >= 0 {{\n          \
+         stack[sp] = node.right;\n          \
+         sp = sp + 1;\n        \
+         }}\n        \
+         \n        \
+         stack[sp] = node_idx;\n        \
+         sp = sp + 1;\n        \
+         visited[node_idx] = 1;\n        \
+         \n        \
+         if node.left >= 0 {{\n          \
+         stack[sp] = node.left;\n          \
+         sp = sp + 1;\n        \
+         }}\n    \
+         }}\n    \
+         \n    \
+         sum = 0;\n    \
+         i: i32 = 0;\n    \
+         while i < tree.nodes.length {{\n        \
+         sum = sum + tree.nodes[i].value;\n        \
+         i = i + 1;\n    \
+         }}\n    \
+         \n    \
+         return sum;\n\
+         }}"
+    )
+}
+
+pub(super) fn code_tree_postorder_traversal(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(tree: Tree) -> i64 {{\n    \
+         stack: [i32; 1000] = [];\n    \
+         visited: [i64; 1000] = [];\n    \
+         sp: i32 = 0;\n    \
+         sum: i64 = 0;\n    \
+         \n    \
+         if tree.nodes.length > 0 {{\n        \
+         stack[0] = 0;\n        \
+         sp = 1;\n    \
+         }}\n    \
+         \n    \
+         while sp > 0 {{\n        \
+         sp = sp - 1;\n        \
+         node_idx: i32 = stack[sp];\n        \
+         \n        \
+         if node_idx < 0 {{ continue; }}\n        \
+         \n        \
+         node: TreeNode = tree.nodes[node_idx];\n        \
+         \n        \
+         if visited[node_idx] == 1 {{\n          \
+         sum = sum + node.value;\n          \
+         continue;\n        \
+         }}\n        \
+         \n        \
+         visited[node_idx] = 1;\n        \
+         stack[sp] = node_idx;\n        \
+         sp = sp + 1;\n        \
+         \n        \
+         if node.right >= 0 {{\n          \
+         stack[sp] = node.right;\n          \
+         sp = sp + 1;\n        \
+         }}\n        \
+         if node.left >= 0 {{\n          \
+         stack[sp] = node.left;\n          \
+         sp = sp + 1;\n        \
+         }}\n    \
+         }}\n    \
+         \n    \
+         return sum;\n\
+         }}"
+    )
+}
+
+pub(super) fn code_tree_level_order_traversal(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(tree: Tree) -> i64 {{\n    \
+         queue: [i32; 1000] = [];\n    \
+         front: i32 = 0;\n    \
+         rear: i32 = 0;\n    \
+         sum: i64 = 0;\n    \
+         \n    \
+         if tree.nodes.length > 0 {{\n        \
+         queue[0] = 0;\n        \
+         rear = 1;\n    \
+         }}\n    \
+         \n    \
+         while front < rear {{\n        \
+         node_idx: i32 = queue[front];\n        \
+         front = front + 1;\n        \
+         \n        \
+         if node_idx < 0 {{ continue; }}\n        \
+         \n        \
+         node: TreeNode = tree.nodes[node_idx];\n        \
+         sum = sum + node.value;\n        \
+         \n        \
+         if node.left >= 0 {{\n          \
+         queue[rear] = node.left;\n          \
+         rear = rear + 1;\n        \
+         }}\n        \
+         if node.right >= 0 {{\n          \
+         queue[rear] = node.right;\n          \
+         rear = rear + 1;\n        \
+         }}\n    \
+         }}\n    \
+         \n    \
+         return sum;\n\
+         }}"
+    )
+}
+
+// ============================================================================
+// Advanced Algorithm Code Generators
+// ============================================================================
+
+pub(super) fn code_ackermann(fn_name: &str) -> String {
+    format!(
+        "fn ackermann(m: i64, n: i64) -> i64 {{\n    \
+         if m == 0 {{ return n + 1; }}\n    \
+         if n == 0 {{ return ackermann(m - 1, 1); }}\n    \
+         return ackermann(m - 1, ackermann(m, n - 1));\n\
+         }}\n\n\
+         fn {fn_name}(m: i64, n: i64) -> i64 {{\n    \
+         return ackermann(m, n);\n\
+         }}\n"
+    )
+}
+
+pub(super) fn code_quickselect(fn_name: &str) -> String {
+    format!(
+        "fn quickselect(arr: [i64], k: i64, left: i64, right: i64) -> i64 {{\n    \
+         if left == right {{ return arr[left]; }}\n    \
+         \n    \
+         pivot_idx: i64 = left;\n    \
+         store_idx: i64 = left;\n    \
+         i: i64 = left;\n    \
+         while i < right {{\n        \
+         if arr[i] < arr[pivot_idx] {{\n            \
+         tmp: i64 = arr[store_idx];\n            \
+         arr[store_idx] = arr[i];\n            \
+         arr[i] = tmp;\n            \
+         store_idx = store_idx + 1;\n        \
+         }}\n        \
+         i = i + 1;\n    \
+         }}\n    \
+         \n    \
+         tmp: i64 = arr[pivot_idx];\n    \
+         arr[pivot_idx] = arr[store_idx];\n    \
+         arr[store_idx] = tmp;\n    \
+         \n    \
+         if k == store_idx {{ return arr[k]; }}\n    \
+         if k < store_idx {{ return quickselect(arr, k, left, store_idx - 1); }}\n    \
+         return quickselect(arr, k, store_idx + 1, right);\n\
+         }}\n\n\
+         fn {fn_name}(arr: [i64], k: i64) -> i64 {{\n    \
+         return quickselect(arr, k, 0, arr.length - 1);\n\
+         }}\n"
+    )
+}
+
+pub(super) fn code_merge_sort(fn_name: &str) -> String {
+    format!(
+        "fn merge(arr: [i64], left: i64, mid: i64, right: i64) -> [i64] {{\n    \
+         result: [i64] = [];\n    \
+         i: i64 = left;\n    \
+         j: i64 = mid + 1;\n    \
+         \n    \
+         while i <= mid && j <= right {{\n        \
+         if arr[i] <= arr[j] {{\n            \
+         result = result + [arr[i]];\n            \
+         i = i + 1;\n        \
+         }} else {{\n            \
+         result = result + [arr[j]];\n            \
+         j = j + 1;\n        \
+         }}\n    \
+         }}\n    \
+         \n    \
+         while i <= mid {{\n        \
+         result = result + [arr[i]];\n        \
+         i = i + 1;\n    \
+         }}\n    \
+         while j <= right {{\n        \
+         result = result + [arr[j]];\n        \
+         j = j + 1;\n    \
+         }}\n    \
+         \n    \
+         return result;\n\
+         }}\n\n\
+         fn merge_sort(arr: [i64], left: i64, right: i64) -> [i64] {{\n    \
+         if left >= right {{ return arr; }}\n    \
+         mid: i64 = (left + right) / 2;\n    \
+         arr = merge_sort(arr, left, mid);\n    \
+         arr = merge_sort(arr, mid + 1, right);\n    \
+         return merge(arr, left, mid, right);\n\
+         }}\n\n\
+         fn {fn_name}(arr: [i64]) -> [i64] {{\n    \
+         if arr.length <= 1 {{ return arr; }}\n    \
+         return merge_sort(arr, 0, arr.length - 1);\n\
+         }}\n"
+    )
+}
+
+pub(super) fn code_bst_search(fn_name: &str) -> String {
+    format!(
+        "fn bst_search(tree: Tree, node_idx: i32, target: i64) -> i64 {{\n    \
+         if node_idx < 0 {{ return 0; }}\n    \
+         \n    \
+         node: TreeNode = tree.nodes[node_idx];\n    \
+         if node.value == target {{ return 1; }}\n    \
+         \n    \
+         if target < node.value {{\n        \
+         return bst_search(tree, node.left, target);\n    \
+         }} else {{\n        \
+         return bst_search(tree, node.right, target);\n    \
+         }}\n\
+         }}\n\n\
+         fn {fn_name}(tree: Tree, target: i64) -> i64 {{\n    \
+         if tree.nodes.length == 0 {{ return 0; }}\n    \
+         return bst_search(tree, 0, target);\n\
+         }}\n"
+    )
+}
+
+pub(super) fn code_bst_insert(fn_name: &str) -> String {
+    format!(
+        "fn bst_insert(tree: Tree, node_idx: i32, value: i64) -> Tree {{\n    \
+         if node_idx < 0 {{\n        \
+         new_node: TreeNode = {{value: value, left: -1, right: -1}};\n        \
+         tree.nodes = tree.nodes + [new_node];\n        \
+         return tree;\n    \
+         }}\n    \
+         \n    \
+         node: TreeNode = tree.nodes[node_idx];\n    \
+         if value < node.value {{\n        \
+         return bst_insert(tree, node.left, value);\n    \
+         }} else if value > node.value {{\n        \
+         return bst_insert(tree, node.right, value);\n    \
+         }}\n    \
+         return tree;\n\
+         }}\n\n\
+         fn {fn_name}(tree: Tree, value: i64) -> Tree {{\n    \
+         return bst_insert(tree, 0, value);\n\
+         }}\n"
+    )
+}
+
+pub(super) fn code_bst_delete(fn_name: &str) -> String {
+    format!(
+        "fn find_min(tree: Tree, node_idx: i32) -> i64 {{\n    \
+         if node_idx < 0 {{ return 0; }}\n    \
+         \n    \
+         node: TreeNode = tree.nodes[node_idx];\n    \
+         if node.left < 0 {{ return node.value; }}\n    \
+         return find_min(tree, node.left);\n\
+         }}\n\n\
+         fn bst_delete(tree: Tree, node_idx: i32, value: i64) -> Tree {{\n    \
+         if node_idx < 0 {{ return tree; }}\n    \
+         \n    \
+         node: TreeNode = tree.nodes[node_idx];\n    \
+         if value < node.value {{\n        \
+         return bst_delete(tree, node.left, value);\n    \
+         }} else if value > node.value {{\n        \
+         return bst_delete(tree, node.right, value);\n    \
+         }} else {{\n        \
+         if node.left < 0 {{ return tree; }}\n        \
+         if node.right < 0 {{ return tree; }}\n    \
+         }}\n    \
+         return tree;\n\
+         }}\n\n\
+         fn {fn_name}(tree: Tree, value: i64) -> Tree {{\n    \
+         return bst_delete(tree, 0, value);\n\
+         }}\n"
+    )
 }
 
 pub(super) fn code_abs_diff(fn_name: &str) -> String {
@@ -1944,6 +2326,765 @@ pub(super) fn code_harmonic_progression(fn_name: &str) -> String {
     format!(
         "fn {fn_name}(n: i64) -> i64 {{\n    if n == 0 {{ return 1; }}\n    ap_term: i64 = 1 + n;\n    return 1 / ap_term;\n}}\n",
         fn_name = fn_name
+    )
+}
+
+/// **Code Generator: Mean (Average)**
+/// Computes arithmetic mean: sum(arr) / len(arr)
+pub(super) fn code_array_mean(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    sum: i64 = 0;
+    i: i64 = 0;
+    while i < arr.len {
+        sum = sum + arr[i];
+        i = i + 1;
+    }
+    return sum / arr.len;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Median**
+/// Computes median (middle value when sorted)
+pub(super) fn code_array_median(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    sorted: [i64] = [];
+    i: i64 = 0;
+    while i < arr.len {
+        sorted.push(arr[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < sorted.len {
+        j: i64 = 0;
+        while j < sorted.len - 1 - i {
+            if sorted[j] > sorted[j + 1] {
+                temp: i64 = sorted[j];
+                sorted[j] = sorted[j + 1];
+                sorted[j + 1] = temp;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    mid: i64 = sorted.len / 2;
+    return sorted[mid];
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Mode (Most Frequent Value)**
+/// Computes mode (most frequently occurring value)
+pub(super) fn code_array_mode(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    mode: i64 = arr[0];
+    max_count: i64 = 1;
+    i: i64 = 0;
+    while i < arr.len {
+        count: i64 = 0;
+        j: i64 = 0;
+        while j < arr.len {
+            if arr[j] == arr[i] {
+                count = count + 1;
+            }
+            j = j + 1;
+        }
+        if count > max_count {
+            max_count = count;
+            mode = arr[i];
+        }
+        i = i + 1;
+    }
+    return mode;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Variance**
+/// Computes population variance: sum((x - mean)^2) / n
+pub(super) fn code_array_variance(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    sum: i64 = 0;
+    i: i64 = 0;
+    while i < arr.len {
+        sum = sum + arr[i];
+        i = i + 1;
+    }
+    mean: i64 = sum / arr.len;
+    sum_sq_diff: i64 = 0;
+    i = 0;
+    while i < arr.len {
+        diff: i64 = arr[i] - mean;
+        sum_sq_diff = sum_sq_diff + diff * diff;
+        i = i + 1;
+    }
+    return sum_sq_diff / arr.len;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Standard Deviation**
+/// Computes population stddev: sqrt(variance)
+pub(super) fn code_array_stddev(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    sum: i64 = 0;
+    i: i64 = 0;
+    while i < arr.len {
+        sum = sum + arr[i];
+        i = i + 1;
+    }
+    mean: i64 = sum / arr.len;
+    sum_sq_diff: i64 = 0;
+    i = 0;
+    while i < arr.len {
+        diff: i64 = arr[i] - mean;
+        sum_sq_diff = sum_sq_diff + diff * diff;
+        i = i + 1;
+    }
+    variance: i64 = sum_sq_diff / arr.len;
+    result: i64 = 0;
+    sq: i64 = 0;
+    while sq * sq <= variance {
+        if sq * sq == variance {
+            result = sq;
+        }
+        sq = sq + 1;
+    }
+    return result;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Percentile (e.g., 25th, 50th, 75th)**
+/// Computes percentile at rank p (0-100)
+pub(super) fn code_array_percentile(fn_name: &str, percentile: i64) -> String {
+    templ(
+        &format!(
+            r#"fn __FN__(arr: [i64]) -> i64 {{
+    if arr.len <= 0 {{
+        return 0;
+    }}
+    sorted: [i64] = [];
+    i: i64 = 0;
+    while i < arr.len {{
+        sorted.push(arr[i]);
+        i = i + 1;
+    }}
+    i = 0;
+    while i < sorted.len {{
+        j: i64 = 0;
+        while j < sorted.len - 1 - i {{
+            if sorted[j] > sorted[j + 1] {{
+                temp: i64 = sorted[j];
+                sorted[j] = sorted[j + 1];
+                sorted[j + 1] = temp;
+            }}
+            j = j + 1;
+        }}
+        i = i + 1;
+    }}
+    idx: i64 = (sorted.len * {}) / 100;
+    if idx >= sorted.len {{
+        idx = sorted.len - 1;
+    }}
+    return sorted[idx];
+}}
+"#,
+            percentile
+        ),
+        fn_name,
+    )
+}
+
+/// **Code Generator: Coefficient of Variation**
+/// Computes CV: (stddev / mean) * 100
+pub(super) fn code_array_coefficient_variation(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    sum: i64 = 0;
+    i: i64 = 0;
+    while i < arr.len {
+        sum = sum + arr[i];
+        i = i + 1;
+    }
+    mean: i64 = sum / arr.len;
+    if mean == 0 {
+        return 0;
+    }
+    sum_sq_diff: i64 = 0;
+    i = 0;
+    while i < arr.len {
+        diff: i64 = arr[i] - mean;
+        sum_sq_diff = sum_sq_diff + diff * diff;
+        i = i + 1;
+    }
+    variance: i64 = sum_sq_diff / arr.len;
+    stddev: i64 = 0;
+    sq: i64 = 0;
+    while sq * sq <= variance {
+        if sq * sq == variance {
+            stddev = sq;
+        }
+        sq = sq + 1;
+    }
+    cv: i64 = (stddev * 100) / mean;
+    return cv;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Z-Score Normalization**
+/// Returns 1 if value is within stddev of mean, 0 otherwise
+pub(super) fn code_array_zscore_outlier(fn_name: &str, threshold: i64) -> String {
+    templ(
+        &format!(
+            r#"fn __FN__(arr: [i64], value: i64) -> i64 {{
+    if arr.len <= 0 {{
+        return 0;
+    }}
+    sum: i64 = 0;
+    i: i64 = 0;
+    while i < arr.len {{
+        sum = sum + arr[i];
+        i = i + 1;
+    }}
+    mean: i64 = sum / arr.len;
+    sum_sq_diff: i64 = 0;
+    i = 0;
+    while i < arr.len {{
+        diff: i64 = arr[i] - mean;
+        sum_sq_diff = sum_sq_diff + diff * diff;
+        i = i + 1;
+    }}
+    variance: i64 = sum_sq_diff / arr.len;
+    stddev: i64 = 0;
+    sq: i64 = 0;
+    while sq * sq <= variance {{
+        if sq * sq == variance {{
+            stddev = sq;
+        }}
+        sq = sq + 1;
+    }}
+    if stddev == 0 {{
+        return 1;
+    }}
+    diff: i64 = value - mean;
+    if diff < 0 {{
+        diff = -diff;
+    }}
+    if diff > stddev * {} {{
+        return 0;
+    }}
+    return 1;
+}}
+"#,
+            threshold
+        ),
+        fn_name,
+    )
+}
+
+/// **Code Generator: IQR Outlier Detection (Interquartile Range)**
+/// Returns 1 if value is within 1.5*IQR of Q1/Q3, 0 if outlier
+pub(super) fn code_array_iqr_outlier(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64], value: i64) -> i64 {
+    if arr.len <= 0 {
+        return 1;
+    }
+    sorted: [i64] = [];
+    i: i64 = 0;
+    while i < arr.len {
+        sorted.push(arr[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < sorted.len {
+        j: i64 = 0;
+        while j < sorted.len - 1 - i {
+            if sorted[j] > sorted[j + 1] {
+                temp: i64 = sorted[j];
+                sorted[j] = sorted[j + 1];
+                sorted[j + 1] = temp;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    q1_idx: i64 = sorted.len / 4;
+    q3_idx: i64 = (sorted.len * 3) / 4;
+    q1: i64 = sorted[q1_idx];
+    q3: i64 = sorted[q3_idx];
+    iqr: i64 = q3 - q1;
+    lower_bound: i64 = q1 - (iqr * 3) / 2;
+    upper_bound: i64 = q3 + (iqr * 3) / 2;
+    if value < lower_bound {
+        return 0;
+    }
+    if value > upper_bound {
+        return 0;
+    }
+    return 1;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Skewness (Fisher-Pearson Coefficient)**
+/// Computes skewness: (sum((x-mean)^3) / n) / (stddev^3)
+pub(super) fn code_array_skewness(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    sum: i64 = 0;
+    i: i64 = 0;
+    while i < arr.len {
+        sum = sum + arr[i];
+        i = i + 1;
+    }
+    mean: i64 = sum / arr.len;
+    sum_sq_diff: i64 = 0;
+    sum_cube_diff: i64 = 0;
+    i = 0;
+    while i < arr.len {
+        diff: i64 = arr[i] - mean;
+        sum_sq_diff = sum_sq_diff + diff * diff;
+        sum_cube_diff = sum_cube_diff + diff * diff * diff;
+        i = i + 1;
+    }
+    variance: i64 = sum_sq_diff / arr.len;
+    stddev: i64 = 0;
+    sq: i64 = 0;
+    while sq * sq <= variance {
+        if sq * sq == variance {
+            stddev = sq;
+        }
+        sq = sq + 1;
+    }
+    if stddev == 0 {
+        return 0;
+    }
+    skew_numerator: i64 = sum_cube_diff / arr.len;
+    skew_denom: i64 = stddev * stddev * stddev;
+    if skew_denom == 0 {
+        return 0;
+    }
+    return skew_numerator / skew_denom;
+}
+"#,
+        fn_name,
+    )
+}
+
+// ============================================================================
+// DP TEACHERS: Dynamic Programming Pattern Recognition
+// ============================================================================
+
+/// **Code Generator: 0/1 Knapsack (Capacity, Weights, Values) -> Maximum Value**
+/// Classic bounded knapsack: maximize total value without exceeding capacity.
+pub(super) fn code_knapsack_01_dp(fn_name: &str, capacity: i64) -> String {
+    templ(
+        &format!(
+            r#"fn __FN__(weights: [i64], values: [i64]) -> i64 {{
+    if weights.len != values.len {{
+        return 0;
+    }}
+    n: i64 = weights.len;
+    dp: [i64] = [];
+    i: i64 = 0;
+    while i <= {} {{
+        dp.push(0);
+        i = i + 1;
+    }}
+    i = 0;
+    while i < n {{
+        j: i64 = {};
+        while j >= weights[i] {{
+            if dp[j - weights[i]] + values[i] > dp[j] {{
+                dp[j] = dp[j - weights[i]] + values[i];
+            }}
+            j = j - 1;
+        }}
+        i = i + 1;
+    }}
+    return dp[{}];
+}}
+"#,
+            capacity, capacity, capacity
+        ),
+        fn_name,
+    )
+}
+
+/// **Code Generator: Unbounded Knapsack (Capacity, Weights, Values) -> Maximum Value**
+/// Each item can be used unlimited times.
+pub(super) fn code_knapsack_unbounded_dp(fn_name: &str, capacity: i64) -> String {
+    templ(
+        &format!(
+            r#"fn __FN__(weights: [i64], values: [i64]) -> i64 {{
+    if weights.len != values.len {{
+        return 0;
+    }}
+    n: i64 = weights.len;
+    dp: [i64] = [];
+    i: i64 = 0;
+    while i <= {} {{
+        dp.push(0);
+        i = i + 1;
+    }}
+    j: i64 = 1;
+    while j <= {} {{
+        i = 0;
+        while i < n {{
+            if weights[i] <= j {{
+                if dp[j - weights[i]] + values[i] > dp[j] {{
+                    dp[j] = dp[j - weights[i]] + values[i];
+                }}
+            }}
+            i = i + 1;
+        }}
+        j = j + 1;
+    }}
+    return dp[{}];
+}}
+"#,
+            capacity, capacity, capacity
+        ),
+        fn_name,
+    )
+}
+
+/// **Code Generator: Longest Increasing Subsequence (LIS)**
+/// Find the length of the longest strictly increasing subsequence.
+pub(super) fn code_longest_increasing_subsequence(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    n: i64 = arr.len;
+    dp: [i64] = [];
+    i: i64 = 0;
+    while i < n {
+        dp.push(1);
+        i = i + 1;
+    }
+    i = 1;
+    while i < n {
+        j: i64 = 0;
+        while j < i {
+            if arr[j] < arr[i] {
+                if dp[j] + 1 > dp[i] {
+                    dp[i] = dp[j] + 1;
+                }
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    max: i64 = dp[0];
+    i = 1;
+    while i < n {
+        if dp[i] > max {
+            max = dp[i];
+        }
+        i = i + 1;
+    }
+    return max;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Longest Decreasing Subsequence (LDS)**
+/// Find the length of the longest strictly decreasing subsequence.
+pub(super) fn code_longest_decreasing_subsequence(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    n: i64 = arr.len;
+    dp: [i64] = [];
+    i: i64 = 0;
+    while i < n {
+        dp.push(1);
+        i = i + 1;
+    }
+    i = 1;
+    while i < n {
+        j: i64 = 0;
+        while j < i {
+            if arr[j] > arr[i] {
+                if dp[j] + 1 > dp[i] {
+                    dp[i] = dp[j] + 1;
+                }
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    max: i64 = dp[0];
+    i = 1;
+    while i < n {
+        if dp[i] > max {
+            max = dp[i];
+        }
+        i = i + 1;
+    }
+    return max;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Coin Change (Minimum Coins)**
+/// Find minimum coins needed to make target amount.
+pub(super) fn code_coin_change_min_dp(fn_name: &str, target: i64) -> String {
+    templ(
+        &format!(
+            r#"fn __FN__(coins: [i64]) -> i64 {{
+    if coins.len <= 0 {{
+        return -1;
+    }}
+    dp: [i64] = [];
+    i: i64 = 0;
+    while i <= {} {{
+        dp.push({});
+        i = i + 1;
+    }}
+    dp[0] = 0;
+    i = 1;
+    while i <= {} {{
+        j: i64 = 0;
+        while j < coins.len {{
+            if coins[j] <= i {{
+                if dp[i - coins[j]] != -1 {{
+                    if dp[i] == -1 || dp[i - coins[j]] + 1 < dp[i] {{
+                        dp[i] = dp[i - coins[j]] + 1;
+                    }}
+                }}
+            }}
+            j = j + 1;
+        }}
+        i = i + 1;
+    }}
+    return dp[{}];
+}}
+"#,
+            target, target, target, target
+        ),
+        fn_name,
+    )
+}
+
+/// **Code Generator: Coin Change (Coin Count)**
+/// Find number of ways to make target amount with given coins.
+pub(super) fn code_coin_change_count_dp(fn_name: &str, target: i64) -> String {
+    templ(
+        &format!(
+            r#"fn __FN__(coins: [i64]) -> i64 {{
+    if coins.len <= 0 {{
+        return 0;
+    }}
+    dp: [i64] = [];
+    i: i64 = 0;
+    while i <= {} {{
+        dp.push(0);
+        i = i + 1;
+    }}
+    dp[0] = 1;
+    i = 0;
+    while i < coins.len {{
+        j: i64 = coins[i];
+        while j <= {} {{
+            dp[j] = dp[j] + dp[j - coins[i]];
+            j = j + 1;
+        }}
+        i = i + 1;
+    }}
+    return dp[{}];
+}}
+"#,
+            target, target, target
+        ),
+        fn_name,
+    )
+}
+
+/// **Code Generator: Subset Sum (Boolean: Achievable or Not)**
+/// Determine if target sum can be achieved with array subset.
+pub(super) fn code_subset_sum_dp(fn_name: &str, target: i64) -> String {
+    templ(
+        &format!(
+            r#"fn __FN__(arr: [i64]) -> i64 {{
+    if arr.len <= 0 {{
+        return 0;
+    }}
+    dp: [i64] = [];
+    i: i64 = 0;
+    while i <= {} {{
+        dp.push(0);
+        i = i + 1;
+    }}
+    dp[0] = 1;
+    i = 0;
+    while i < arr.len {{
+        j: i64 = {};
+        while j >= arr[i] {{
+            if dp[j - arr[i]] == 1 {{
+                dp[j] = 1;
+            }}
+            j = j - 1;
+        }}
+        i = i + 1;
+    }}
+    return dp[{}];
+}}
+"#,
+            target, target, target
+        ),
+        fn_name,
+    )
+}
+
+/// **Code Generator: Partition Equal Sum Subset (Boolean)**
+/// Determine if array can be partitioned into two equal-sum subsets.
+pub(super) fn code_partition_equal_sum_dp(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len <= 0 {
+        return 0;
+    }
+    total: i64 = 0;
+    i: i64 = 0;
+    while i < arr.len {
+        total = total + arr[i];
+        i = i + 1;
+    }
+    if (total % 2) != 0 {
+        return 0;
+    }
+    target: i64 = total / 2;
+    dp: [i64] = [];
+    i = 0;
+    while i <= target {
+        dp.push(0);
+        i = i + 1;
+    }
+    dp[0] = 1;
+    i = 0;
+    while i < arr.len {
+        j: i64 = target;
+        while j >= arr[i] {
+            if dp[j - arr[i]] == 1 {
+                dp[j] = 1;
+            }
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+    return dp[target];
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Fibonacci DP (Iterative)**
+/// Compute nth Fibonacci number using DP bottom-up approach.
+pub(super) fn code_fibonacci_dp(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    if n == 1 {
+        return 1;
+    }
+    dp: [i64] = [];
+    dp.push(0);
+    dp.push(1);
+    i: i64 = 2;
+    while i <= n {
+        next: i64 = dp[i - 1] + dp[i - 2];
+        dp.push(next);
+        i = i + 1;
+    }
+    return dp[n];
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Code Generator: Climb Stairs (Count Ways)**
+/// Count ways to climb n stairs (1 or 2 steps at a time).
+pub(super) fn code_climb_stairs_dp(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    if n == 1 {
+        return 1;
+    }
+    if n == 2 {
+        return 2;
+    }
+    dp: [i64] = [];
+    dp.push(1);
+    dp.push(2);
+    i: i64 = 2;
+    while i < n {
+        next: i64 = dp[i - 1] + dp[i - 2];
+        dp.push(next);
+        i = i + 1;
+    }
+    return dp[n - 1];
+}
+"#,
+        fn_name,
     )
 }
 
