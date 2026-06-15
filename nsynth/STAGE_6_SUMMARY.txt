@@ -1,0 +1,361 @@
+================================================================================
+                   STAGE 6: MODULE COMPOSITION DESIGN
+                    Function Pipeline Synthesis in nsynth
+================================================================================
+
+PROJECT OVERVIEW
+================================================================================
+
+Current State: nsynth synthesizes MONOLITHIC functions
+Goal:          Synthesize COMPOSED functions (filter → map → reduce chains)
+
+Example Problem: filter_sum_positive([1, -2, 3, -4, 5]) → 9
+
+Current Approach (Monolithic):
+  fn filter_sum_positive(arr: [i64]) -> i64 {
+    result: i64 = 0
+    i: i64 = 0
+    while i < len(arr) {
+      if arr[i] > 0 { result = result + arr[i] }
+      i = i + 1
+    }
+    return result
+  }
+
+Stage 6 Approach (Composed):
+  fn filter_helper(arr: [i64]) -> [i64] { /* filter arr > 0 */ }
+  fn sum_helper(arr: [i64]) -> i64 { /* sum array */ }
+  fn filter_sum_positive(arr: [i64]) -> i64 {
+    filtered: [i64] = filter_helper(arr)
+    return sum_helper(filtered)
+  }
+
+Benefits:
+  ✓ Reusable library functions (filter, map, reduce, scan, sort)
+  ✓ 2-3x faster synthesis (pattern matching vs. gradient descent)
+  ✓ Clearer intent (code shows data flow)
+  ✓ Potential for learned biases (good compositions cached)
+
+================================================================================
+ARCHITECTURE
+================================================================================
+
+5 New Components:
+
+1. COMPOSITION LIBRARY (composition_lib.rs)
+   - 9 hard-coded Mog templates: filter, map, reduce, scan, sort, etc.
+   - Each fully verified, self-contained
+   - Reused across many problems
+
+2. PATTERN DETECTION (composition.rs)
+   - Analyze problem I/O examples
+   - Recognize filter/map/reduce/scan/sort patterns
+   - Return confidence-sorted list of candidates
+
+3. CODEGEN (composition.rs)
+   - emit_inline_*: inlined loops (no function calls)
+   - emit_composed_*_with_calls: multi-function code with calls
+   - Both verified before returning
+
+4. PROBLEM METADATA (benchmark.rs)
+   - composition_allowed: bool
+   - composition_hints: Vec<Pattern>
+   - All 105+ factories updated
+
+5. SEARCH TEACHER (solver/search.rs)
+   - search_composition() added between enumerative and gradient
+   - Gated on problem.composition_allowed
+   - Returns SolveResult on success, None on failure (graceful)
+
+================================================================================
+IMPLEMENTATION TIMELINE
+================================================================================
+
+SPRINT 1: Foundation (5 days, 50 hours)
+  Day 1-2: Composition library + Problem metadata
+  Day 3: Pattern detection
+  Day 4: Inline codegen
+  Day 5: Teacher integration + 8 benchmarks
+
+  Milestone: 8/8 Phase 1 benchmarks passing (inline only)
+
+SPRINT 2: Function Calls (3 days, 26 hours)
+  Day 6: Multi-function call codegen
+  Day 7: Runtime verification + 4 Phase 2 benchmarks
+  Day 8: Integration + regression testing
+
+  Milestone: 12/12 Phase 1+2 benchmarks passing (calls working)
+
+SPRINT 3: Advanced (7 days, 37 hours) [OPTIONAL]
+  Day 9-10: Nested composition (3+ function chains)
+  Day 11: Learned bias acceleration
+  Day 12: Paper section + final polish
+
+  Milestone: 16+ benchmarks, complete paper section
+
+TOTAL: 1.9-2.5 weeks, 76-113 hours
+
+================================================================================
+PATTERN TYPES (6 Core Patterns)
+================================================================================
+
+FILTER: Array → Smaller Array
+  Input:  [1, -2, 3, -4, 5]
+  Output: [1, 3, 5]
+  Logic:  Keep only elements where x > 0
+  Detection: Output size < Input size, all outputs in input
+
+MAP: Array → Array (Same Size)
+  Input:  [1, 2, 3]
+  Output: [2, 4, 6]
+  Logic:  Apply function to each element (×2)
+  Detection: |Input| == |Output|, outputs transform inputs
+
+REDUCE: Array → Scalar
+  Input:  [1, 2, 3, 4]
+  Output: 10
+  Logic:  Fold array with operator (sum, product, min, max)
+  Detection: Input is array, output is scalar
+
+SCAN: Array → Array (Cumulative)
+  Input:  [1, 2, 3]
+  Output: [1, 3, 6]
+  Logic:  Cumulative fold (prefix sums)
+  Detection: |Input| == |Output|, outputs are cumulative
+
+SORT: Array → Array (Sorted)
+  Input:  [3, 1, 2]
+  Output: [1, 2, 3]
+  Logic:  Reorder elements (ascending)
+  Detection: Output is sorted(Input)
+
+FINDALL: Predicate Search → Count/Indices
+  Input:  [1, -2, 3]
+  Output: 2 (count of x > 0)
+  Logic:  Count or find indices of matches
+  Detection: Input array, scalar/array output, filtering logic
+
+================================================================================
+BENCHMARKS (12-16 Problems)
+================================================================================
+
+PHASE 1 (Inline Composition): 8 Problems
+  ✓ filter_sum_positive: [1,-2,3,-4,5] → 9
+  ✓ filter_count_even: [1,2,3,4,5,6] → 3
+  ✓ map_double_sum: [1,2,3] → 12
+  ✓ map_square_max: [1,-3,2] → 9
+  ✓ reduce_product: [2,3,4] → 24
+  ✓ reduce_min: [5,2,8,1] → 1
+  ✓ scan_cumsum: [1,2,3] → [1,3,6]
+  ✓ count_abs_greater_five: [-10,3,6] → 2
+
+PHASE 2 (Function Calls): 4 Problems
+  ✓ double_and_max: [1,2,3] → 6 (map+reduce)
+  ✓ filter_sum_positive: [1,-2,3] → 4 (filter+reduce)
+  ✓ count_unique: [1,2,1,3,2] → 3 (sort+scan)
+  ✓ deduplicate_then_count: [1,2,1,3] → 3 (unique+count)
+
+PHASE 3 (Advanced, Optional): 4+ Problems
+  ✓ Nested 3-function chains
+  ✓ Cross-problem learned composition
+  ✓ Advanced patterns (group_by, zip, transpose)
+
+================================================================================
+DELIVERABLES
+================================================================================
+
+Four Design Documents (2,300+ lines total):
+
+1. STAGE_6_COMPOSITION.md (600 lines)
+   - Vision & goals
+   - Architecture overview
+   - 4 implementation phases
+   - Challenge analysis (3 challenges, 3 solutions each)
+   - Benchmark specs
+   - Integration checklist
+   - Open questions
+   READ THIS FIRST for understanding "why" and "what"
+
+2. STAGE_6_ROADMAP.md (700 lines)
+   - Sprint-by-sprint breakdown
+   - Day-by-day deliverables
+   - File-by-file modification checklist
+   - 6 milestone gates
+   - Risk mitigation
+   - Success criteria
+   USE THIS for day-to-day implementation guidance
+
+3. STAGE_6_TECHNICAL_SPEC.md (800 lines)
+   - Data structures (Rust code)
+   - Pattern detection pseudocode
+   - Codegen functions (all 6 patterns)
+   - Verification strategy
+   - Integration points
+   - Walk-through example
+   REFERENCE THIS while coding
+
+4. STAGE_6_INDEX.md (200 lines)
+   - Quick reference guide
+   - How to use the three documents
+   - Key concepts at a glance
+   - Document relationships
+   START HERE for orientation
+
+All documents committed to git:
+  commit: 16afd94 "docs(nsynth): Stage 6 design — function composition synthesis"
+
+================================================================================
+KEY TECHNICAL DECISIONS
+================================================================================
+
+✓ Phase 1: Inline composition (no function calls)
+  Why: Simpler to verify, more likely to succeed
+  Cost: ~1 week
+
+✓ Phase 2: Multi-function calls (composition chains)
+  Why: Full generality, matches high-level intent
+  Cost: ~1.5 days on top of Phase 1
+
+✓ Hand-coded library templates (not synthesized)
+  Why: Safe, reusable, verified once
+  When: Deferred to Phase 3+
+
+✓ Predicate inlining (not parameterized closures)
+  Why: Simpler, avoids higher-order synthesis
+  When: Upgrade to templates in Phase 2
+
+✓ Pattern detection with confidence scoring
+  Why: Ordered search (best-first)
+  Cost: ~50-100ms per problem
+
+✓ Graceful fallback (composition returns None, next teacher tries)
+  Why: No regression risk
+  Cost: Zero (if no pattern found)
+
+================================================================================
+SUCCESS CRITERIA
+================================================================================
+
+MUST HAVE (Hard Criteria):
+  ✓ All 105 existing benchmarks still pass (zero regression)
+  ✓ All 12 Phase 1+2 composition benchmarks pass
+  ✓ Composition cost <5s per problem average
+  ✓ Code compiles with zero warnings
+  ✓ All unit tests pass
+
+NICE TO HAVE (Soft Criteria):
+  ✓ Composition solves 3-5% of problems faster
+  ✓ Learned bias acceleration working
+  ✓ Paper section written
+  ✓ Nested chains (3+ functions) working
+  ✓ Type checking comprehensive
+
+================================================================================
+RISKS & MITIGATION
+================================================================================
+
+Risk 1: Runtime doesn't support function calls
+  Probability: Medium | Impact: High
+  Mitigation: Test early (Day 7), fallback to inlining
+
+Risk 2: Pattern detection overfits
+  Probability: Low | Impact: Medium
+  Mitigation: Validate on holdouts, require >0.7 confidence
+
+Risk 3: Composition search explodes
+  Probability: Medium | Impact: Medium
+  Mitigation: Top 2-3 patterns only, early termination
+
+Risk 4: Regression on existing benchmarks
+  Probability: Low | Impact: High
+  Mitigation: Run full suite after each change
+
+Risk 5: Verify timeout on multi-function code
+  Probability: Low | Impact: High
+  Mitigation: 10s timeout per verify call
+
+================================================================================
+FILES TO CREATE / MODIFY
+================================================================================
+
+CREATE:
+  - nsynth/src/synthesis/composition_lib.rs (300 LOC)
+  - nsynth/src/synthesis/composition.rs (600 LOC)
+  - tests/composition_integration.rs (200 LOC, optional)
+
+MODIFY:
+  - nsynth/src/benchmark.rs (add 12 factories + metadata)
+  - nsynth/src/synthesis/mod.rs (add module declarations)
+  - nsynth/src/solver/search.rs (add search_composition teacher)
+  - nsynth/src/runtime.rs (audit function call support)
+  - docs/ARCHITECTURE.md (document composition teacher)
+
+================================================================================
+QUICK START CHECKLIST
+================================================================================
+
+BEFORE STARTING:
+  [ ] Read STAGE_6_COMPOSITION.md (sections 1-3)
+  [ ] Skim STAGE_6_ROADMAP.md (sprint structure)
+  [ ] Understand 5 architecture components
+
+SPRINT 1 (Days 1-5):
+  [ ] Day 1-2: composition_lib.rs + Problem metadata
+  [ ] Day 3: Pattern detection working
+  [ ] Day 4: Inline codegen for all 6 patterns
+  [ ] Day 5: search_composition teacher + 8 benchmarks
+  [ ] Verify: 8/8 benchmarks pass, 95/95 existing pass
+
+SPRINT 2 (Days 6-8):
+  [ ] Day 6: Multi-function call codegen
+  [ ] Day 7: Runtime verification + 4 Phase 2 benchmarks
+  [ ] Day 8: Regression testing
+  [ ] Verify: 12/12 benchmarks pass, 105/105 existing pass
+
+OPTIONAL - SPRINT 3 (Days 9-12):
+  [ ] Nested compositions (3+ chains)
+  [ ] Learned bias acceleration
+  [ ] Paper section
+  [ ] Polish & optimization
+
+================================================================================
+REFERENCES
+================================================================================
+
+Papers & Concepts:
+  - FlashFill (Gulwani 2011) — synthesis from examples
+  - DreamCoder (Ellis et al. 2015) — library-based program synthesis
+  - Higher-order synthesis — lambda calculus approach (deferred)
+
+Related nsynth Components:
+  - solve_problem_differentiable() — current gradient synthesis
+  - verify_problem_code_strict() — runtime verification
+  - SolveResult, SearchTeacher — solver infrastructure
+  - ExampleBenchmark, Problem — problem definitions
+
+nsynth Stages:
+  - Stage 1: Bottom-up piecewise synthesis (scalar)
+  - Stage 2: Tensor synthesis (multi-dimensional arrays)
+  - Stage 3: Struct-of-state synthesis (records)
+  - Stage 4: Time-parameterized teachers
+  - Stage 5: Recursive state synthesis
+  - Stage 6: Module composition [THIS DOCUMENT]
+  - Stage 7+: TBD (user-defined functions, polymorphism, etc.)
+
+================================================================================
+CONTACT & QUESTIONS
+================================================================================
+
+Author: Bobby Price (bobbycprice90@gmail.com)
+Date: June 15, 2026
+Status: Design complete, ready for implementation
+Branch: feat/bottom-up-piecewise-synthesis
+Commit: 16afd94
+
+Questions? See STAGE_6_COMPOSITION.md section 7 (Open Questions)
+- Should composition be enabled by default? (Recommend: yes)
+- Should library functions be synthesized? (Recommend: hand-coded for now)
+- How to handle edge cases? (Recommend: library handles all cases)
+- Can composition fix template slowdown? (Measure in Phase 4)
+
+================================================================================
