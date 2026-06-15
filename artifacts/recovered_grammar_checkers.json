@@ -1,0 +1,49 @@
+{
+  "source": "ROADMAP.md Rung 10 Tier C checker recovery",
+  "date": "2026-06-14",
+  "checkers": {
+    "number_agreement": {
+      "method": "search_array_dnf",
+      "train_n": 248,
+      "train_positive": 124,
+      "train_negative": 124,
+      "holdout_n": 80,
+      "holdout_correct": 80,
+      "holdout_accuracy": 1.0,
+      "feature_encoding": {
+        "902": "subject-is-plural",
+        "905": "verb-carries-3sg-suffix"
+      }
+    },
+    "copular_agreement": {
+      "method": "search_array_dnf",
+      "train_n": 988,
+      "train_positive": 492,
+      "train_negative": 496,
+      "holdout_n": 328,
+      "holdout_correct": 328,
+      "holdout_accuracy": 1.0,
+      "feature_encoding": {
+        "902": "subject-is-plural",
+        "903": "contains-copula-is",
+        "904": "contains-copula-are"
+      }
+    },
+    "past_sentence": {
+      "method": "search_array_dnf",
+      "train_n": 355,
+      "train_positive": 118,
+      "train_negative": 237,
+      "holdout_n": 116,
+      "holdout_correct": 116,
+      "holdout_accuracy": 1.0,
+      "distinct_feature_combos": 6,
+      "conflicts": 0,
+      "feature_encoding": {
+        "102": "past-suffix-ied",
+        "105": "past-suffix-ed",
+        "900": "verb-stem-consonant-y"
+      }
+    }
+  }
+}

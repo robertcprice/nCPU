@@ -1,6 +1,6 @@
 {
   "v1": {
-    "generated_at": "2026-06-12T01:31:42",
+    "generated_at": "2026-06-14T21:41:34",
     "prior_config": {
       "tau_env": null,
       "signal_env": null,
@@ -38,13 +38,13 @@
       "warm_solves": 0,
       "warm_names": [],
       "wall_seconds": {
-        "off": 36.3,
-        "on": 31.6,
-        "delta": -4.7
+        "off": 83.9,
+        "on": 62.7,
+        "delta": -21.2
       },
       "per_problem_delta": {
-        "mean": -0.278,
-        "median": 0.032
+        "mean": -1.307,
+        "median": -0.404
       },
       "rows": [
         {
@@ -52,18 +52,18 @@
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 3.115,
-          "seconds_on": 3.019,
-          "delta_seconds": -0.096
+          "seconds_off": 8.088,
+          "seconds_on": 6.7,
+          "delta_seconds": -1.388
         },
         {
           "name": "second_max_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 2.789,
-          "seconds_on": 2.361,
-          "delta_seconds": -0.428
+          "seconds_off": 7.77,
+          "seconds_on": 5.329,
+          "delta_seconds": -2.441
         },
         {
           "name": "array_range_v0",
@@ -71,125 +71,125 @@
           "solved_on": true,
           "method_on": "univ_arr_gradient",
           "seconds_off": 0.001,
-          "seconds_on": 0.009,
-          "delta_seconds": 0.008
+          "seconds_on": 0.007,
+          "delta_seconds": 0.006
         },
         {
           "name": "max_consecutive_sum_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 2.501,
-          "seconds_on": 2.028,
-          "delta_seconds": -0.473
+          "seconds_off": 5.474,
+          "seconds_on": 4.156,
+          "delta_seconds": -1.318
         },
         {
           "name": "min_consecutive_sum_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 2.98,
-          "seconds_on": 2.426,
-          "delta_seconds": -0.554
+          "seconds_off": 6.685,
+          "seconds_on": 5.274,
+          "delta_seconds": -1.411
         },
         {
           "name": "max_stock_profit_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 2.911,
-          "seconds_on": 2.806,
-          "delta_seconds": -0.105
+          "seconds_off": 6.986,
+          "seconds_on": 6.11,
+          "delta_seconds": -0.876
         },
         {
           "name": "is_sorted_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 1.563,
-          "seconds_on": 2.042,
-          "delta_seconds": 0.479
+          "seconds_off": 3.541,
+          "seconds_on": 3.833,
+          "delta_seconds": 0.292
         },
         {
           "name": "longest_increasing_run_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "prior_net",
-          "seconds_off": 3.152,
-          "seconds_on": 0.008,
-          "delta_seconds": -3.144
+          "seconds_off": 6.384,
+          "seconds_on": 0.026,
+          "delta_seconds": -6.358
         },
         {
           "name": "longest_plateau_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 3.424,
-          "seconds_on": 4.555,
-          "delta_seconds": 1.131
+          "seconds_off": 7.35,
+          "seconds_on": 7.61,
+          "delta_seconds": 0.26
         },
         {
           "name": "prefix_max_sum_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 1.224,
-          "seconds_on": 1.678,
-          "delta_seconds": 0.454
+          "seconds_off": 2.869,
+          "seconds_on": 2.441,
+          "delta_seconds": -0.428
         },
         {
           "name": "max_abs_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 1.193,
-          "seconds_on": 1.436,
-          "delta_seconds": 0.243
+          "seconds_off": 2.82,
+          "seconds_on": 2.988,
+          "delta_seconds": 0.168
         },
         {
           "name": "min_positive_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 2.212,
-          "seconds_on": 2.615,
-          "delta_seconds": 0.403
+          "seconds_off": 5.368,
+          "seconds_on": 4.987,
+          "delta_seconds": -0.381
         },
         {
           "name": "count_peaks_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "prior_net",
-          "seconds_off": 3.018,
-          "seconds_on": 0.023,
-          "delta_seconds": -2.995
+          "seconds_off": 7.301,
+          "seconds_on": 0.015,
+          "delta_seconds": -7.286
         },
         {
           "name": "alternating_sum_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 1.082,
-          "seconds_on": 1.137,
-          "delta_seconds": 0.055
+          "seconds_off": 2.446,
+          "seconds_on": 2.686,
+          "delta_seconds": 0.24
         },
         {
           "name": "prefix_sum_k_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 2.085,
-          "seconds_on": 2.391,
-          "delta_seconds": 0.306
+          "seconds_off": 4.995,
+          "seconds_on": 4.859,
+          "delta_seconds": -0.136
         },
         {
           "name": "is_palindrome_arr_v0",
           "solved_off": true,
           "solved_on": true,
           "method_on": "univ_arr_gradient",
-          "seconds_off": 2.781,
-          "seconds_on": 3.05,
-          "delta_seconds": 0.269
+          "seconds_off": 5.516,
+          "seconds_on": 5.656,
+          "delta_seconds": 0.14
         }
       ]
     },
@@ -203,13 +203,13 @@
     "prior_warm_solves": 0,
     "prior_warm_names": [],
     "wall_seconds": {
-      "off": 20.9,
-      "on": 18.4,
-      "delta": -2.6
+      "off": 60.0,
+      "on": 46.0,
+      "delta": -14.0
     },
     "bench_wall_seconds": {
-      "off": 20.716,
-      "on": 18.359
+      "off": 59.669,
+      "on": 45.954
     },
     "focus_problems": [],
     "focus_wall_delta": {
@@ -224,15 +224,17 @@
         "arr_gradient_count_distinct": 1,
         "arr_gradient_kth_smallest": 1,
         "arr_gradient_two_sum_exists": 1,
-        "enumerative": 1,
         "enumerative-array": 3,
         "search_abs_diff_formula": 1,
+        "search_affine": 2,
         "search_alternating_sum": 1,
         "search_arr_sum_squares": 1,
         "search_celsius_to_fahrenheit": 1,
+        "search_clamp_affine": 1,
         "search_clamp_formula": 1,
         "search_collatz_loop": 1,
         "search_combat_resolve_branch": 1,
+        "search_composed_features": 2,
         "search_contains_literal": 2,
         "search_count_adjacent_diff": 1,
         "search_count_divisors_loop": 1,
@@ -249,7 +251,6 @@
         "search_gcd_loop": 2,
         "search_grid_bounds_check_branch": 1,
         "search_harmonic_sum_loop": 1,
-        "search_is_even_formula": 1,
         "search_is_palindrome_arr": 1,
         "search_is_perfect_square": 1,
         "search_is_prime_loop": 1,
@@ -271,16 +272,15 @@
         "search_min_positive": 1,
         "search_next_power_of_2": 1,
         "search_palindrome": 1,
-        "search_polynomial_quadratic": 1,
+        "search_polynomial_multi": 2,
         "search_popcount": 1,
-        "search_positive_or_default_branch": 1,
         "search_power_loop": 1,
         "search_prefix_max_sum": 1,
         "search_prefix_sum_k": 1,
         "search_reverse_digits_loop": 1,
         "search_run_length_decode_sum": 1,
         "search_safe_div_or_neg1_branch": 1,
-        "search_scalar_expr": 6,
+        "search_scalar_expr": 3,
         "search_score_tracker_branch": 1,
         "search_second_max": 1,
         "search_sign_branch": 1,
@@ -306,15 +306,17 @@
         "arr_gradient_count_distinct": 1,
         "arr_gradient_kth_smallest": 1,
         "arr_gradient_two_sum_exists": 1,
-        "enumerative": 1,
         "enumerative-array": 3,
         "search_abs_diff_formula": 1,
+        "search_affine": 2,
         "search_alternating_sum": 1,
         "search_arr_sum_squares": 1,
         "search_celsius_to_fahrenheit": 1,
+        "search_clamp_affine": 1,
         "search_clamp_formula": 1,
         "search_collatz_loop": 1,
         "search_combat_resolve_branch": 1,
+        "search_composed_features": 2,
         "search_contains_literal": 2,
         "search_count_adjacent_diff": 1,
         "search_count_divisors_loop": 1,
@@ -331,7 +333,6 @@
         "search_gcd_loop": 2,
         "search_grid_bounds_check_branch": 1,
         "search_harmonic_sum_loop": 1,
-        "search_is_even_formula": 1,
         "search_is_palindrome_arr": 1,
         "search_is_perfect_square": 1,
         "search_is_prime_loop": 1,
@@ -353,16 +354,15 @@
         "search_min_positive": 1,
         "search_next_power_of_2": 1,
         "search_palindrome": 1,
-        "search_polynomial_quadratic": 1,
+        "search_polynomial_multi": 2,
         "search_popcount": 1,
-        "search_positive_or_default_branch": 1,
         "search_power_loop": 1,
         "search_prefix_max_sum": 1,
         "search_prefix_sum_k": 1,
         "search_reverse_digits_loop": 1,
         "search_run_length_decode_sum": 1,
         "search_safe_div_or_neg1_branch": 1,
-        "search_scalar_expr": 6,
+        "search_scalar_expr": 3,
         "search_score_tracker_branch": 1,
         "search_second_max": 1,
         "search_sign_branch": 1,
@@ -392,841 +392,841 @@
         "name": "abs_diff_v0",
         "method_off": "search_abs_diff_formula",
         "method_on": "search_abs_diff_formula",
-        "seconds_off": 0.0151,
-        "seconds_on": 0.0112,
-        "delta_seconds": -0.0039
+        "seconds_off": 0.1138,
+        "seconds_on": 0.1052,
+        "delta_seconds": -0.0086
       },
       {
         "name": "add_two_v0",
-        "method_off": "search_scalar_expr",
-        "method_on": "search_scalar_expr",
-        "seconds_off": 0.0196,
-        "seconds_on": 0.0117,
-        "delta_seconds": -0.0079
+        "method_off": "search_affine",
+        "method_on": "search_affine",
+        "seconds_off": 0.0024,
+        "seconds_on": 0.0003,
+        "delta_seconds": -0.0021
       },
       {
         "name": "alternating_sum_v0",
         "method_off": "search_alternating_sum",
         "method_on": "search_alternating_sum",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.001,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.0005
       },
       {
         "name": "arr_sum_squares_v0",
         "method_off": "search_arr_sum_squares",
         "method_on": "search_arr_sum_squares",
-        "seconds_off": 0.0004,
-        "seconds_on": 0.0005,
-        "delta_seconds": 0.0001
+        "seconds_off": 0.0013,
+        "seconds_on": 0.001,
+        "delta_seconds": -0.0003
       },
       {
         "name": "array_max_elem_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 0.007,
-        "seconds_on": 0.0063,
-        "delta_seconds": -0.0007
+        "seconds_off": 0.0154,
+        "seconds_on": 0.034,
+        "delta_seconds": 0.0186
       },
       {
         "name": "array_max_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 0.01,
-        "seconds_on": 0.0065,
-        "delta_seconds": -0.0035
+        "seconds_off": 0.0238,
+        "seconds_on": 0.0138,
+        "delta_seconds": -0.01
       },
       {
         "name": "array_range_v0",
         "method_off": "search_max_pair_diff",
         "method_on": "search_max_pair_diff",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0003,
-        "delta_seconds": 0.0001
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0005,
+        "delta_seconds": 0.0
       },
       {
         "name": "array_sum_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 7.9317,
-        "seconds_on": 5.8585,
-        "delta_seconds": -2.0732
+        "seconds_off": 20.8723,
+        "seconds_on": 14.4081,
+        "delta_seconds": -6.4642
       },
       {
         "name": "bilinear3_v0",
         "method_off": "search_scalar_expr",
         "method_on": "search_scalar_expr",
-        "seconds_off": 0.018,
-        "seconds_on": 0.018,
-        "delta_seconds": 0.0
+        "seconds_off": 0.1752,
+        "seconds_on": 0.2246,
+        "delta_seconds": 0.0494
       },
       {
         "name": "binary_search_v0",
         "method_off": "arr_gradient_binary_search",
         "method_on": "arr_gradient_binary_search",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0003,
+        "seconds_off": 0.0013,
+        "seconds_on": 0.0013,
         "delta_seconds": 0.0
       },
       {
         "name": "celsius_to_fahrenheit_v0",
         "method_off": "search_celsius_to_fahrenheit",
         "method_on": "search_celsius_to_fahrenheit",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0006,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.0001
       },
       {
         "name": "clamp_0_100_v0",
         "method_off": "search_clamp_formula",
         "method_on": "search_clamp_formula",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0002
       },
       {
         "name": "closure_map_sum_v0",
         "method_off": "enumerative-array",
         "method_on": "enumerative-array",
-        "seconds_off": 0.0014,
-        "seconds_on": 0.0003,
-        "delta_seconds": -0.0011
+        "seconds_off": 0.0012,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.0007
       },
       {
         "name": "collatz_steps_v0",
         "method_off": "search_collatz_loop",
         "method_on": "search_collatz_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0003,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0002
       },
       {
         "name": "combat_resolve_v0",
         "method_off": "search_combat_resolve_branch",
         "method_on": "search_combat_resolve_branch",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.001,
+        "seconds_on": 0.0014,
+        "delta_seconds": 0.0004
       },
       {
         "name": "contains_cat_v0",
         "method_off": "search_contains_literal",
         "method_on": "search_contains_literal",
-        "seconds_off": 0.0006,
-        "seconds_on": 0.0004,
-        "delta_seconds": -0.0002
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0008,
+        "delta_seconds": 0.0001
       },
       {
         "name": "count_adjacent_diff_v0",
         "method_off": "search_count_adjacent_diff",
         "method_on": "search_count_adjacent_diff",
-        "seconds_off": 0.0007,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0005
+        "seconds_off": 0.0005,
+        "seconds_on": 0.001,
+        "delta_seconds": 0.0005
       },
       {
         "name": "count_distinct_v0",
         "method_off": "arr_gradient_count_distinct",
         "method_on": "arr_gradient_count_distinct",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0003,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0011,
+        "seconds_on": 0.001,
+        "delta_seconds": -0.0001
       },
       {
         "name": "count_divisors_v0",
         "method_off": "search_count_divisors_loop",
         "method_on": "search_count_divisors_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0005,
+        "seconds_on": 0.001,
+        "delta_seconds": 0.0005
       },
       {
         "name": "count_even_digits_v0",
         "method_off": "search_count_even_digits_loop",
         "method_on": "search_count_even_digits_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0005,
+        "delta_seconds": 0.0
       },
       {
         "name": "count_evens_v0",
         "method_off": "search_count_evens",
         "method_on": "search_count_evens",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0003,
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0008,
         "delta_seconds": 0.0001
       },
       {
         "name": "count_greater_than_v0",
         "method_off": "enumerative-array",
         "method_on": "enumerative-array",
-        "seconds_off": 0.0005,
-        "seconds_on": 0.0005,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0015,
+        "seconds_on": 0.0014,
+        "delta_seconds": -0.0001
       },
       {
         "name": "count_occurrences_v0",
         "method_off": "enumerative-array",
         "method_on": "enumerative-array",
-        "seconds_off": 0.0008,
-        "seconds_on": 0.0006,
-        "delta_seconds": -0.0002
+        "seconds_off": 0.0012,
+        "seconds_on": 0.0011,
+        "delta_seconds": -0.0001
       },
       {
         "name": "count_peaks_v0",
         "method_off": "search_count_peaks",
         "method_on": "search_count_peaks",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0005,
+        "delta_seconds": 0.0
       },
       {
         "name": "count_positive_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 0.012,
-        "seconds_on": 0.0065,
-        "delta_seconds": -0.0055
+        "seconds_off": 0.0283,
+        "seconds_on": 0.0281,
+        "delta_seconds": -0.0002
       },
       {
         "name": "count_words_v0",
         "method_off": "search_count_words",
         "method_on": "search_count_words",
-        "seconds_off": 0.0005,
-        "seconds_on": 0.0004,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0009,
+        "seconds_on": 0.0048,
+        "delta_seconds": 0.0039
       },
       {
         "name": "count_zeros_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 0.0065,
-        "seconds_on": 0.0066,
-        "delta_seconds": 0.0001
+        "seconds_off": 0.0173,
+        "seconds_on": 0.0187,
+        "delta_seconds": 0.0014
       },
       {
         "name": "cube_v0",
         "method_off": "search_scalar_expr",
         "method_on": "search_scalar_expr",
-        "seconds_off": 0.0057,
-        "seconds_on": 0.006,
-        "delta_seconds": 0.0003
+        "seconds_off": 0.3499,
+        "seconds_on": 0.3196,
+        "delta_seconds": -0.0303
       },
       {
         "name": "digit_count_v0",
         "method_off": "search_digit_count_loop",
         "method_on": "search_digit_count_loop",
-        "seconds_off": 0.0004,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0002
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0006,
+        "delta_seconds": 0.0001
       },
       {
         "name": "digit_product_v0",
         "method_off": "search_digit_product_loop",
         "method_on": "search_digit_product_loop",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0009,
+        "seconds_on": 0.0007,
+        "delta_seconds": -0.0002
       },
       {
         "name": "digit_sum_v0",
         "method_off": "search_digit_sum_loop",
         "method_on": "search_digit_sum_loop",
-        "seconds_off": 0.0076,
-        "seconds_on": 0.007,
-        "delta_seconds": -0.0006
+        "seconds_off": 0.7843,
+        "seconds_on": 0.7104,
+        "delta_seconds": -0.0739
       },
       {
         "name": "digital_root_v0",
         "method_off": "search_digital_root",
         "method_on": "search_digital_root",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
+        "seconds_off": 0.0006,
+        "seconds_on": 0.0006,
         "delta_seconds": 0.0
       },
       {
         "name": "dot_product_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 0.0004,
-        "seconds_on": 0.0007,
-        "delta_seconds": 0.0003
+        "seconds_off": 0.0015,
+        "seconds_on": 0.0014,
+        "delta_seconds": -0.0001
       },
       {
         "name": "euler_totient_v0",
         "method_off": "search_euler_totient_loop",
         "method_on": "search_euler_totient_loop",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0006,
+        "delta_seconds": 0.0001
       },
       {
         "name": "factorial_v0",
         "method_off": "search_unary_range_loop",
         "method_on": "search_unary_range_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0035,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.003
       },
       {
         "name": "fib_iter_v0",
         "method_off": "search_fib_iter_loop",
         "method_on": "search_fib_iter_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0007,
+        "delta_seconds": 0.0002
       },
       {
         "name": "fibonacci_v0",
         "method_off": "search_fib_iter_loop",
         "method_on": "search_fib_iter_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.0003
       },
       {
         "name": "gcd_extended_v0",
         "method_off": "search_gcd_loop",
         "method_on": "search_gcd_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0115,
+        "seconds_on": 0.0093,
+        "delta_seconds": -0.0022
       },
       {
         "name": "gcd_v0",
         "method_off": "search_gcd_loop",
         "method_on": "search_gcd_loop",
-        "seconds_off": 0.0142,
-        "seconds_on": 0.01,
-        "delta_seconds": -0.0042
+        "seconds_off": 1.2788,
+        "seconds_on": 0.5573,
+        "delta_seconds": -0.7215
       },
       {
         "name": "grid_bounds_check_v0",
         "method_off": "search_grid_bounds_check_branch",
         "method_on": "search_grid_bounds_check_branch",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0005,
         "delta_seconds": 0.0
       },
       {
         "name": "harmonic_sum_v0",
         "method_off": "search_harmonic_sum_loop",
         "method_on": "search_harmonic_sum_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0006,
+        "seconds_on": 0.0015,
+        "delta_seconds": 0.0009
       },
       {
         "name": "interactive_sum_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 6.1299,
-        "seconds_on": 6.0977,
-        "delta_seconds": -0.0322
+        "seconds_off": 15.7531,
+        "seconds_on": 13.7707,
+        "delta_seconds": -1.9824
       },
       {
         "name": "is_even_v0",
-        "method_off": "search_is_even_formula",
-        "method_on": "search_is_even_formula",
-        "seconds_off": 0.0015,
-        "seconds_on": 0.0007,
-        "delta_seconds": -0.0008
+        "method_off": "search_composed_features",
+        "method_on": "search_composed_features",
+        "seconds_off": 0.0001,
+        "seconds_on": 0.0001,
+        "delta_seconds": 0.0
       },
       {
         "name": "is_palindrome_arr_v0",
         "method_off": "search_is_palindrome_arr",
         "method_on": "search_is_palindrome_arr",
-        "seconds_off": 0.0015,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0013
+        "seconds_off": 0.0004,
+        "seconds_on": 0.0008,
+        "delta_seconds": 0.0004
       },
       {
         "name": "is_perfect_square_v0",
         "method_off": "search_is_perfect_square",
         "method_on": "search_is_perfect_square",
-        "seconds_off": 0.0027,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0025
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.0002
       },
       {
         "name": "is_prime_v0",
         "method_off": "search_is_prime_loop",
         "method_on": "search_is_prime_loop",
-        "seconds_off": 0.0004,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0002
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0014,
+        "delta_seconds": 0.0007
       },
       {
         "name": "is_sorted_v0",
         "method_off": "search_is_sorted",
         "method_on": "search_is_sorted",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0004,
+        "delta_seconds": -0.0004
       },
       {
         "name": "kth_from_end_v0",
         "method_off": "search_kth_from_end",
         "method_on": "search_kth_from_end",
-        "seconds_off": 0.0021,
-        "seconds_on": 0.0003,
-        "delta_seconds": -0.0018
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0025,
+        "delta_seconds": 0.0017
       },
       {
         "name": "kth_smallest_v0",
         "method_off": "arr_gradient_kth_smallest",
         "method_on": "arr_gradient_kth_smallest",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0012,
+        "seconds_on": 0.0013,
+        "delta_seconds": 0.0001
       },
       {
         "name": "lcm_v0",
         "method_off": "search_lcm_formula",
         "method_on": "search_lcm_formula",
-        "seconds_off": 0.0139,
-        "seconds_on": 0.01,
-        "delta_seconds": -0.0039
+        "seconds_off": 0.864,
+        "seconds_on": 0.4476,
+        "delta_seconds": -0.4164
       },
       {
         "name": "leading_digit_v0",
         "method_off": "search_leading_digit",
         "method_on": "search_leading_digit",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0003,
+        "seconds_off": 0.0006,
+        "seconds_on": 0.0007,
         "delta_seconds": 0.0001
       },
       {
         "name": "longest_increasing_run_v0",
         "method_off": "search_longest_increasing_run",
         "method_on": "search_longest_increasing_run",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.0002
       },
       {
         "name": "longest_plateau_v0",
         "method_off": "search_longest_plateau",
         "method_on": "search_longest_plateau",
-        "seconds_off": 0.0016,
-        "seconds_on": 0.0003,
-        "delta_seconds": -0.0013
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0005,
+        "delta_seconds": 0.0
       },
       {
         "name": "lucas_number_v0",
         "method_off": "search_lucas_loop",
         "method_on": "search_lucas_loop",
-        "seconds_off": 0.0004,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0002
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0001
       },
       {
         "name": "max2_v0",
         "method_off": "search_max2_formula",
         "method_on": "search_max2_formula",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0047,
-        "delta_seconds": 0.0044
+        "seconds_off": 0.0012,
+        "seconds_on": 0.0008,
+        "delta_seconds": -0.0004
       },
       {
         "name": "max_abs_v0",
         "method_off": "search_max_abs",
         "method_on": "search_max_abs",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0006,
+        "seconds_on": 0.0009,
+        "delta_seconds": 0.0003
       },
       {
         "name": "max_consecutive_sum_v0",
         "method_off": "search_max_consecutive_sum",
         "method_on": "search_max_consecutive_sum",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0003,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0009,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0003
       },
       {
         "name": "max_digit_v0",
         "method_off": "search_max_digit_loop",
         "method_on": "search_max_digit_loop",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0002
       },
       {
         "name": "max_pair_diff_v0",
         "method_off": "search_max_pair_diff",
         "method_on": "search_max_pair_diff",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0011,
+        "delta_seconds": 0.0006
       },
       {
         "name": "max_stock_profit_v0",
         "method_off": "search_max_stock_profit",
         "method_on": "search_max_stock_profit",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.0002
       },
       {
         "name": "min3_v0",
         "method_off": "search_min3_branch",
         "method_on": "search_min3_branch",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0003,
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0007,
         "delta_seconds": 0.0
       },
       {
         "name": "min_consecutive_sum_v0",
         "method_off": "search_min_consecutive_sum",
         "method_on": "search_min_consecutive_sum",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0008,
+        "delta_seconds": 0.0001
       },
       {
         "name": "min_element_v0",
         "method_off": "search_min_consecutive_sum",
         "method_on": "search_min_consecutive_sum",
-        "seconds_off": 0.0025,
-        "seconds_on": 0.0003,
-        "delta_seconds": -0.0022
+        "seconds_off": 0.0006,
+        "seconds_on": 0.0005,
+        "delta_seconds": -0.0001
       },
       {
         "name": "min_positive_v0",
         "method_off": "search_min_positive",
         "method_on": "search_min_positive",
-        "seconds_off": 0.0006,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0004
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0001
       },
       {
         "name": "next_power_of_2_v0",
         "method_off": "search_next_power_of_2",
         "method_on": "search_next_power_of_2",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
-      },
-      {
-        "name": "nth_triangle_v0",
-        "method_off": "search_unary_range_loop",
-        "method_on": "search_unary_range_loop",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
-      },
-      {
-        "name": "palindrome_check_v0",
-        "method_off": "search_palindrome",
-        "method_on": "search_palindrome",
         "seconds_off": 0.0005,
         "seconds_on": 0.0005,
         "delta_seconds": 0.0
       },
       {
+        "name": "nth_triangle_v0",
+        "method_off": "search_unary_range_loop",
+        "method_on": "search_unary_range_loop",
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0024,
+        "delta_seconds": 0.0019
+      },
+      {
+        "name": "palindrome_check_v0",
+        "method_off": "search_palindrome",
+        "method_on": "search_palindrome",
+        "seconds_off": 0.001,
+        "seconds_on": 0.003,
+        "delta_seconds": 0.002
+      },
+      {
         "name": "point_sum_v0",
         "method_off": "search_struct_pair",
         "method_on": "search_struct_pair",
-        "seconds_off": 0.0035,
-        "seconds_on": 0.0004,
-        "delta_seconds": -0.0031
+        "seconds_off": 0.0061,
+        "seconds_on": 0.0008,
+        "delta_seconds": -0.0053
       },
       {
         "name": "polynomial_v0",
-        "method_off": "search_polynomial_quadratic",
-        "method_on": "search_polynomial_quadratic",
-        "seconds_off": 0.0073,
-        "seconds_on": 0.0059,
-        "delta_seconds": -0.0014
+        "method_off": "search_polynomial_multi",
+        "method_on": "search_polynomial_multi",
+        "seconds_off": 0.0001,
+        "seconds_on": 0.0001,
+        "delta_seconds": 0.0
       },
       {
         "name": "popcount_v0",
         "method_off": "search_popcount",
         "method_on": "search_popcount",
-        "seconds_off": 0.0015,
-        "seconds_on": 0.0003,
-        "delta_seconds": -0.0012
+        "seconds_off": 0.0005,
+        "seconds_on": 0.001,
+        "delta_seconds": 0.0005
       },
       {
         "name": "positive_or_default_v0",
-        "method_off": "search_positive_or_default_branch",
-        "method_on": "search_positive_or_default_branch",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "method_off": "search_clamp_affine",
+        "method_on": "search_clamp_affine",
+        "seconds_off": 0.0001,
+        "seconds_on": 0.0001,
+        "delta_seconds": 0.0
       },
       {
         "name": "power_v0",
         "method_off": "search_power_loop",
         "method_on": "search_power_loop",
-        "seconds_off": 0.0134,
-        "seconds_on": 0.0116,
-        "delta_seconds": -0.0018
+        "seconds_off": 0.6821,
+        "seconds_on": 0.6618,
+        "delta_seconds": -0.0203
       },
       {
         "name": "prefix_max_sum_v0",
         "method_off": "search_prefix_max_sum",
         "method_on": "search_prefix_max_sum",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0003,
-        "delta_seconds": 0.0001
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0004,
+        "delta_seconds": -0.0001
       },
       {
         "name": "prefix_sum_k_v0",
         "method_off": "search_prefix_sum_k",
         "method_on": "search_prefix_sum_k",
-        "seconds_off": 0.0027,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0025
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0006,
+        "delta_seconds": 0.0001
       },
       {
         "name": "priority_pop_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 0.0085,
-        "seconds_on": 0.0085,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0201,
+        "seconds_on": 0.0238,
+        "delta_seconds": 0.0037
       },
       {
         "name": "product_1_to_n_v0",
         "method_off": "search_unary_range_loop",
         "method_on": "search_unary_range_loop",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0007,
+        "delta_seconds": 0.0002
       },
       {
         "name": "product_offset_v0",
         "method_off": "search_scalar_expr",
         "method_on": "search_scalar_expr",
-        "seconds_off": 0.0102,
-        "seconds_on": 0.0106,
-        "delta_seconds": 0.0004
+        "seconds_off": 0.1056,
+        "seconds_on": 0.1134,
+        "delta_seconds": 0.0078
       },
       {
         "name": "rectangle_area_v0",
         "method_off": "search_struct_pair",
         "method_on": "search_struct_pair",
-        "seconds_off": 0.0007,
-        "seconds_on": 0.0004,
-        "delta_seconds": -0.0003
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0041,
+        "delta_seconds": 0.0033
       },
       {
         "name": "reverse_digits_v0",
         "method_off": "search_reverse_digits_loop",
         "method_on": "search_reverse_digits_loop",
-        "seconds_off": 0.0004,
-        "seconds_on": 0.0003,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0006,
+        "seconds_on": 0.0006,
+        "delta_seconds": 0.0
       },
       {
         "name": "reverse_sum_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 6.3911,
-        "seconds_on": 6.2023,
-        "delta_seconds": -0.1888
+        "seconds_off": 18.1321,
+        "seconds_on": 14.2291,
+        "delta_seconds": -3.903
       },
       {
         "name": "run_length_decode_sum_v0",
         "method_off": "search_run_length_decode_sum",
         "method_on": "search_run_length_decode_sum",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0003,
-        "delta_seconds": 0.0001
+        "seconds_off": 0.0012,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0006
       },
       {
         "name": "safe_div_or_neg1_v0",
         "method_off": "search_safe_div_or_neg1_branch",
         "method_on": "search_safe_div_or_neg1_branch",
-        "seconds_off": 0.0003,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0011,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0005
       },
       {
         "name": "scaled_sum_v0",
-        "method_off": "search_scalar_expr",
-        "method_on": "search_scalar_expr",
-        "seconds_off": 0.0129,
-        "seconds_on": 0.011,
-        "delta_seconds": -0.0019
+        "method_off": "search_affine",
+        "method_on": "search_affine",
+        "seconds_off": 0.0001,
+        "seconds_on": 0.0001,
+        "delta_seconds": 0.0
       },
       {
         "name": "score_tracker_v0",
         "method_off": "search_score_tracker_branch",
         "method_on": "search_score_tracker_branch",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0014,
+        "delta_seconds": 0.0006
       },
       {
         "name": "second_max_v0",
         "method_off": "search_second_max",
         "method_on": "search_second_max",
-        "seconds_off": 0.0004,
-        "seconds_on": 0.0004,
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0007,
         "delta_seconds": 0.0
       },
       {
         "name": "sign_v0",
         "method_off": "search_sign_branch",
         "method_on": "search_sign_branch",
-        "seconds_off": 0.0021,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0019
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0034,
+        "delta_seconds": 0.0029
       },
       {
         "name": "simulate_gravity_v0",
         "method_off": "search_simulate_gravity_clamp",
         "method_on": "search_simulate_gravity_clamp",
-        "seconds_off": 0.0004,
-        "seconds_on": 0.0002,
-        "delta_seconds": -0.0002
+        "seconds_off": 0.0021,
+        "seconds_on": 0.0017,
+        "delta_seconds": -0.0004
       },
       {
         "name": "square_plus_n_v0",
-        "method_off": "search_scalar_expr",
-        "method_on": "search_scalar_expr",
-        "seconds_off": 0.0053,
-        "seconds_on": 0.0053,
+        "method_off": "search_polynomial_multi",
+        "method_on": "search_polynomial_multi",
+        "seconds_off": 0.0001,
+        "seconds_on": 0.0001,
         "delta_seconds": 0.0
       },
       {
         "name": "starts_with_m_v0",
         "method_off": "search_contains_literal",
         "method_on": "search_contains_literal",
-        "seconds_off": 0.0019,
-        "seconds_on": 0.0004,
-        "delta_seconds": -0.0015
+        "seconds_off": 0.0008,
+        "seconds_on": 0.0008,
+        "delta_seconds": 0.0
       },
       {
         "name": "sum_absolute_v0",
         "method_off": "search_sum_absolute",
         "method_on": "search_sum_absolute",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0003,
-        "delta_seconds": 0.0001
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0005,
+        "delta_seconds": 0.0
       },
       {
         "name": "sum_at_even_indices_v0",
         "method_off": "search_sum_at_even_indices",
         "method_on": "search_sum_at_even_indices",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0004,
+        "seconds_off": 0.0007,
+        "seconds_on": 0.0009,
         "delta_seconds": 0.0002
       },
       {
         "name": "sum_negatives_v0",
         "method_off": "arr_gradient",
         "method_on": "arr_gradient",
-        "seconds_off": 0.0074,
-        "seconds_on": 0.0066,
-        "delta_seconds": -0.0008
+        "seconds_off": 0.0175,
+        "seconds_on": 0.0321,
+        "delta_seconds": 0.0146
       },
       {
         "name": "sum_odd_digits_v0",
         "method_off": "search_sum_odd_digits_loop",
         "method_on": "search_sum_odd_digits_loop",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.001,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0004
       },
       {
         "name": "sum_odd_indexed_v0",
         "method_off": "search_sum_odd_indexed",
         "method_on": "search_sum_odd_indexed",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0004,
+        "seconds_on": 0.0007,
+        "delta_seconds": 0.0003
       },
       {
         "name": "sum_of_divisors_v0",
         "method_off": "search_sum_of_divisors_loop",
         "method_on": "search_sum_of_divisors_loop",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0072,
+        "seconds_on": 0.0006,
+        "delta_seconds": -0.0066
       },
       {
         "name": "sum_positives_v0",
         "method_off": "search_sum_positives",
         "method_on": "search_sum_positives",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0009,
+        "seconds_on": 0.0013,
+        "delta_seconds": 0.0004
       },
       {
         "name": "sum_squares_v0",
         "method_off": "synth_gradient",
         "method_on": "synth_gradient",
-        "seconds_off": 0.0007,
-        "seconds_on": 0.0006,
-        "delta_seconds": -0.0001
+        "seconds_off": 0.0013,
+        "seconds_on": 0.0018,
+        "delta_seconds": 0.0005
       },
       {
         "name": "sum_to_n_v0",
         "method_off": "search_unary_range_loop",
         "method_on": "search_unary_range_loop",
-        "seconds_off": 0.0076,
-        "seconds_on": 0.0057,
-        "delta_seconds": -0.0019
+        "seconds_off": 0.3421,
+        "seconds_on": 0.1651,
+        "delta_seconds": -0.177
       },
       {
         "name": "traffic_light_phase_v0",
-        "method_off": "enumerative",
-        "method_on": "enumerative",
-        "seconds_off": 0.0093,
-        "seconds_on": 0.0069,
-        "delta_seconds": -0.0024
-      },
-      {
-        "name": "triangular_check_v0",
-        "method_off": "search_triangular_check_loop",
-        "method_on": "search_triangular_check_loop",
+        "method_off": "search_composed_features",
+        "method_on": "search_composed_features",
         "seconds_off": 0.0002,
         "seconds_on": 0.0002,
         "delta_seconds": 0.0
       },
       {
+        "name": "triangular_check_v0",
+        "method_off": "search_triangular_check_loop",
+        "method_on": "search_triangular_check_loop",
+        "seconds_off": 0.0005,
+        "seconds_on": 0.0007,
+        "delta_seconds": 0.0002
+      },
+      {
         "name": "trimmed_len_v0",
         "method_off": "search_trimmed_len",
         "method_on": "search_trimmed_len",
-        "seconds_off": 0.0006,
-        "seconds_on": 0.0004,
-        "delta_seconds": -0.0002
+        "seconds_off": 0.0009,
+        "seconds_on": 0.0008,
+        "delta_seconds": -0.0001
       },
       {
         "name": "turn_order_rotate_v0",
         "method_off": "search_turn_order_rotate",
         "method_on": "search_turn_order_rotate",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0003,
+        "seconds_off": 0.0009,
+        "seconds_on": 0.001,
         "delta_seconds": 0.0001
       },
       {
         "name": "two_sum_exists_v0",
         "method_off": "arr_gradient_two_sum_exists",
         "method_on": "arr_gradient_two_sum_exists",
-        "seconds_off": 0.0006,
-        "seconds_on": 0.0006,
-        "delta_seconds": 0.0
+        "seconds_off": 0.0018,
+        "seconds_on": 0.0012,
+        "delta_seconds": -0.0006
       },
       {
         "name": "vending_change_v0",
         "method_off": "search_vending_change_branch",
         "method_on": "search_vending_change_branch",
-        "seconds_off": 0.0002,
-        "seconds_on": 0.0002,
-        "delta_seconds": 0.0
+        "seconds_off": 0.001,
+        "seconds_on": 0.0011,
+        "delta_seconds": 0.0001
       },
       {
         "name": "vowel_count_v0",
         "method_off": "search_vowel_count",
         "method_on": "search_vowel_count",
-        "seconds_off": 0.004,
-        "seconds_on": 0.0007,
-        "delta_seconds": -0.0033
+        "seconds_off": 0.001,
+        "seconds_on": 0.001,
+        "delta_seconds": 0.0
       }
     ],
     "isolation": {

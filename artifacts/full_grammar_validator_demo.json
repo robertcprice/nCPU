@@ -1,0 +1,38 @@
+{
+  "source": "ROADMAP.md Rung 10 Tier D validator-in-the-loop",
+  "date": "2026-06-14",
+  "demo": "nsynth/scripts/full_grammar_validator_demo.py",
+  "checkers_loaded": {
+    "ThreeSgValidator": {
+      "rule_id": "morphology.verb.3sg",
+      "program_bytes": 558
+    },
+    "NumberAgreementValidator": {
+      "rule_id": "morphology.verb.number_agreement",
+      "program_bytes": 311
+    },
+    "CopularAgreementValidator": {
+      "rule_id": "morphology.copular.agreement",
+      "program_bytes": 411
+    },
+    "PastSentenceValidator": {
+      "rule_id": "morphology.verb.past",
+      "program_bytes": 365
+    }
+  },
+  "draft_validate_revise": {
+    "passed": 8,
+    "total": 8,
+    "accuracy": 1.0,
+    "cases": [
+      "3sg present tense rejects bare stem and accepts watches",
+      "3sg y→ies rejects replys and accepts replies",
+      "number agreement rejects plural subject with 3sg verb and accepts plural base verb",
+      "number agreement rejects singular subject with bare verb and accepts singular 3sg verb",
+      "copular agreement rejects plural subject with is and accepts are",
+      "copular agreement rejects singular subject with are and accepts is",
+      "past sentence rejects bare stem and accepts walked",
+      "past sentence rejects carryed and accepts carried"
+    ]
+  }
+}
