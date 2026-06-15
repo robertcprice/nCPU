@@ -18,7 +18,7 @@ Usage::
     python3 -m tools.registry.server --db registry.sqlite --verify-all
 
 Endpoints:
-    POST /skills        submit {name, author, examples, program|program_v2}
+    POST /skills        submit {name, author, examples, program|program_v2|program_v3}
     GET  /skills        list (author attribution + created_at)
     GET  /skills/<id>   full record
     GET  /library.json  whole registry as a loadable NPCoT library
@@ -31,6 +31,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -78,16 +79,18 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 
 def canonicalize_examples(examples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Normalize examples to {data: [float...], n_points: int, target: float}."""
+    """Normalize examples to {data, n_points, target} or {data, n_points, targets}."""
     out = []
     for ex in examples:
-        out.append(
-            {
-                "data": [float(v) for v in ex["data"]],
-                "n_points": int(ex["n_points"]),
-                "target": float(ex["target"]),
-            }
-        )
+        record = {
+            "data": [float(v) for v in ex["data"]],
+            "n_points": int(ex["n_points"]),
+        }
+        if "targets" in ex:
+            record["targets"] = [float(v) for v in ex["targets"]]
+        else:
+            record["target"] = float(ex["target"])
+        out.append(record)
     return out
 
 
@@ -136,9 +139,11 @@ def _validate_examples(raw: Any) -> List[Dict[str, Any]]:
     for i, ex in enumerate(raw):
         if not isinstance(ex, dict):
             raise ValueError(f"examples[{i}] must be an object")
-        for key in ("data", "n_points", "target"):
+        for key in ("data", "n_points"):
             if key not in ex:
                 raise ValueError(f"examples[{i}] missing field: {key}")
+        if ("target" in ex) == ("targets" in ex):
+            raise ValueError(f"examples[{i}] must contain exactly one of 'target' or 'targets'")
         if not isinstance(ex["data"], list):
             raise ValueError(f"examples[{i}].data must be a list")
         for v in ex["data"]:
@@ -146,9 +151,19 @@ def _validate_examples(raw: Any) -> List[Dict[str, Any]]:
                 raise ValueError(f"examples[{i}].data must contain finite numbers")
         if isinstance(ex["n_points"], bool) or not isinstance(ex["n_points"], int) or ex["n_points"] < 0:
             raise ValueError(f"examples[{i}].n_points must be a non-negative integer")
-        t = ex["target"]
-        if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t):
-            raise ValueError(f"examples[{i}].target must be a finite number")
+        if "targets" in ex:
+            targets = ex["targets"]
+            if not isinstance(targets, list) or not targets:
+                raise ValueError(f"examples[{i}].targets must be a non-empty list")
+            for step, t in enumerate(targets):
+                if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t):
+                    raise ValueError(f"examples[{i}].targets[{step}] must be finite numbers")
+            if len(targets) != ex["n_points"]:
+                raise ValueError(f"examples[{i}].targets length must match n_points")
+        else:
+            t = ex["target"]
+            if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t):
+                raise ValueError(f"examples[{i}].target must be a finite number")
     return canonicalize_examples(raw)
 
 
@@ -163,10 +178,15 @@ def _parse_submission(body: Dict[str, Any]) -> Tuple[str, str, List[Dict[str, An
     examples = _validate_examples(body["examples"])
     has_v1 = "program" in body
     has_v2 = "program_v2" in body
-    if has_v1 == has_v2:
-        raise ValueError("exactly one of 'program' or 'program_v2' is required")
-    version = 1 if has_v1 else 2
-    payload = body["program"] if has_v1 else body["program_v2"]
+    has_v3 = "program_v3" in body
+    if has_v1 + has_v2 + has_v3 != 1:
+        raise ValueError("exactly one of 'program', 'program_v2', or 'program_v3' is required")
+    if has_v1:
+        version, payload = 1, body["program"]
+    elif has_v2:
+        version, payload = 2, body["program_v2"]
+    else:
+        version, payload = 3, body["program_v3"]
     if not isinstance(payload, dict):
         raise ValueError("program must be an object")
     program = executor.program_from_dict(payload, version)
@@ -189,12 +209,35 @@ def handle_submission(body: Dict[str, Any], db_path: str) -> Tuple[int, Dict[str
     result = executor.verify_program(program, examples)
     if not result.ok:
         max_err = result.max_err if math.isfinite(result.max_err) else None
-        return 422, {
+        response = {
             "accepted": False,
             "max_err": max_err,
             "first_failure": result.first_failure,
             "error": "verification failed: program does not reproduce its examples",
         }
+        # Capture point for the cascade loop: every rejected submission
+        # becomes a WorkItem via ``ncpu.autoresearch.sources.registry``
+        # when NCPU_REGISTRY_MISSES_PATH is set. The autoresearch driver
+        # can then run the cascade on the rejected problem and POST
+        # the recovered program back to the registry, closing the loop
+        # without ever letting unverified code into the store.
+        misses_path = os.environ.get("NCPU_REGISTRY_MISSES_PATH")
+        if misses_path:
+            try:
+                with open(misses_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "name": name,
+                        "author": author,
+                        "examples": examples,
+                        "error": response["error"],
+                        "first_failure": response["first_failure"],
+                        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    }, sort_keys=True) + "\n")
+            except OSError:
+                # Capture is best-effort: a missing misses file must not
+                # change the registry's HTTP response.
+                pass
+        return 422, response
 
     fingerprint = examples_fingerprint(examples)
     program_json = canonical_program_json(executor.program_to_dict(program))
@@ -255,7 +298,13 @@ def get_skill(db_path: str, skill_id: int) -> Optional[Dict[str, Any]]:
             return None
         record = dict(row)
         program = json.loads(record.pop("program_json"))
-        record["program_v2" if record["format"] == 2 else "program"] = program
+        if record["format"] == 3:
+            program_key = "program_v3"
+        elif record["format"] == 2:
+            program_key = "program_v2"
+        else:
+            program_key = "program"
+        record[program_key] = program
         record["examples"] = json.loads(record.pop("examples_json"))
         return record
     finally:
@@ -280,7 +329,8 @@ def build_library(db_path: str) -> Dict[str, Any]:
     finally:
         conn.close()
 
-    needs_v2 = any(r["format"] == 2 for r in rows)
+    needs_v3 = any(r["format"] == 3 for r in rows)
+    needs_v2 = (not needs_v3) and any(r["format"] >= 2 for r in rows)
     entries = []
     for r in rows:
         program = json.loads(r["program_json"])
@@ -292,17 +342,33 @@ def build_library(db_path: str) -> Dict[str, Any]:
             "cached_at_step": None,
             "convergence_gap": None,
         }
-        if needs_v2:
+        if needs_v3:
             if r["format"] == 1:
-                v1 = executor.program_from_dict(program, 1)
-                program = executor.program_to_dict(executor.ProgramV2.from_v1(v1))
-            entry["program_v2"] = program
+                p = executor.ProgramV3.from_v1(executor.program_from_dict(program, 1))
+            elif r["format"] == 2:
+                p = executor.ProgramV3.from_v2(executor.program_from_dict(program, 2))
+            else:
+                p = executor.program_from_dict(program, 3)
+            entry["program_v3"] = executor.program_to_dict(p)
+        elif needs_v2:
+            if r["format"] == 1:
+                p = executor.ProgramV2.from_v1(executor.program_from_dict(program, 1))
+            elif r["format"] == 2:
+                p = executor.program_from_dict(program, 2)
+            else:
+                p3 = executor.program_from_dict(program, 3)
+                p = p3.to_v2()
+                if p is None:
+                    raise ValueError(f"skill {r['id']} requires format 3 export")
+            entry["program_v2"] = executor.program_to_dict(p)
         else:
             entry["program"] = program
         entries.append(entry)
 
     library: Dict[str, Any] = {}
-    if needs_v2:
+    if needs_v3:
+        library["format"] = 3
+    elif needs_v2:
         library["format"] = 2
     library["config"] = {
         "similarity_threshold": SIMILARITY_THRESHOLD,

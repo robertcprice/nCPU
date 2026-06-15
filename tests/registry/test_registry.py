@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from tools.registry import executor
-from tools.registry.executor import DiscreteProgram, ProgramV2
+from tools.registry.executor import DiscreteProgram, ProgramV2, ProgramV3
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -96,6 +96,44 @@ def test_v2_from_v1_is_exact():
     assert lifted.is_v1()
     data = [1.0, -2.0, 3.0]
     assert executor.execute_program_v2(lifted, data, 3) == executor.execute_program(v1, data, 3)
+
+
+def test_v3_running_counter_replay():
+    p = ProgramV3(
+        arity=1, combine_idx=0, guard_idx=0, guard_threshold=0.0,
+        reset_guard_idx=0, reset_threshold=0.0, state_init_idx=0,
+        update_transform_idx=3, update_reduce_idx=0, post_scale_idx=0,
+        output_idx=0, offset=0.0,
+    )
+    assert executor.execute_program_v3(p, [5.0, -2.0, 0.0, 9.0], 4) == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_v3_running_max_with_reset():
+    p = ProgramV3(
+        arity=1, combine_idx=0, guard_idx=0, guard_threshold=0.0,
+        reset_guard_idx=2, reset_threshold=-8.0, state_init_idx=2,
+        update_transform_idx=0, update_reduce_idx=2, post_scale_idx=0,
+        output_idx=0, offset=0.0,
+    )
+    assert executor.execute_program_v3(p, [5.0, 2.0, -10.0, 1.0, 0.0], 5) == [5.0, 5.0, -10.0, 1.0, 1.0]
+
+
+def test_v3_lift_matches_v2_final_output():
+    v2 = ProgramV2(arity=2, combine_idx=3, guard_idx=0, guard_threshold=0.0,
+                   init_idx=0, transform_idx=0, reduce_idx=0, post_scale_idx=0, offset=0.25)
+    data = [2.0, 3.0, 4.0, 0.5]
+    assert executor.execute_program_v3_final(ProgramV3.from_v2(v2), data, 2) == executor.execute_program_v2(v2, data, 2)
+
+
+def test_verify_accepts_v3_trace_examples():
+    p = ProgramV3(
+        arity=1, combine_idx=0, guard_idx=0, guard_threshold=0.0,
+        reset_guard_idx=0, reset_threshold=0.0, state_init_idx=0,
+        update_transform_idx=3, update_reduce_idx=0, post_scale_idx=0,
+        output_idx=0, offset=0.0,
+    )
+    examples = [{"data": [1.0, 2.0, 3.0], "n_points": 3, "targets": [1.0, 2.0, 3.0]}]
+    assert executor.verify_program(p, examples).ok
 
 
 def test_verify_accepts_within_relative_tolerance():
@@ -187,6 +225,20 @@ DOT_SKILL = {
     "program_v2": {"arity": 2, "combine_idx": 3, "guard_idx": 0, "guard_threshold": 0.0,
                    "init_idx": 0, "transform_idx": 0, "reduce_idx": 0,
                    "post_scale_idx": 0, "offset": 0.0},
+}
+
+COUNTER_SKILL = {
+    "name": "running_counter",
+    "author": "dana",
+    "examples": [
+        {"data": [5.0, -2.0, 0.0, 9.0], "n_points": 4, "targets": [1.0, 2.0, 3.0, 4.0]},
+        {"data": [0.5, 0.5, -3.0, 100.0, 0.0, 7.0], "n_points": 6,
+         "targets": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
+    ],
+    "program_v3": {"arity": 1, "combine_idx": 0, "guard_idx": 0, "guard_threshold": 0.0,
+                   "reset_guard_idx": 0, "reset_threshold": 0.0, "state_init_idx": 0,
+                   "update_transform_idx": 3, "update_reduce_idx": 0,
+                   "post_scale_idx": 0, "output_idx": 0, "offset": 0.0},
 }
 
 
@@ -285,6 +337,40 @@ def test_submit_v2_skill_lifts_library_to_format_2(registry):
     assert executor.execute_program_v2(p, [1.0, 2.0, 3.0], 3) == 6.0
 
 
+def test_submit_v3_skill_lifts_library_to_format_3(registry):
+    port, _db = registry
+    status, body = _request(port, "POST", "/skills", SUM_SKILL)
+    assert status == 200 and body["accepted"]
+    status, body = _request(port, "POST", "/skills", COUNTER_SKILL)
+    assert status == 200, body
+    assert body["accepted"] is True
+
+    status, lib = _request(port, "GET", "/library.json")
+    assert status == 200
+    assert lib["format"] == 3
+    assert len(lib["entries"]) == 2
+    for e in lib["entries"]:
+        assert "program" not in e
+        assert "program_v2" not in e
+        assert set(e["program_v3"]) == set(executor.V3_FIELDS)
+    lifted = next(e for e in lib["entries"] if e["task_name"] == "sum")["program_v3"]
+    assert (lifted["arity"], lifted["combine_idx"], lifted["guard_idx"]) == (1, 0, 0)
+    p = executor.program_from_dict(lifted, 3)
+    assert executor.execute_program_v3_final(p, [1.0, 2.0, 3.0], 3) == 6.0
+
+
+def test_submit_wrong_v3_program_rejected(registry):
+    port, _db = registry
+    wrong = json.loads(json.dumps(COUNTER_SKILL))
+    wrong["program_v3"]["update_transform_idx"] = 0  # identity update instead of const-1 counter
+    status, body = _request(port, "POST", "/skills", wrong)
+    assert status == 422, body
+    assert body["accepted"] is False
+    assert body["first_failure"]["example_index"] == 0
+    _, listing = _request(port, "GET", "/skills")
+    assert listing["count"] == 0
+
+
 def test_submit_wrong_v2_program_rejected(registry):
     port, _db = registry
     wrong = json.loads(json.dumps(DOT_SKILL))
@@ -359,13 +445,13 @@ def _run_verify_all(db) -> subprocess.CompletedProcess:
 
 def test_verify_all_clean_then_corrupted(registry):
     port, db = registry
-    for skill in (SUM_SKILL, DOT_SKILL):
+    for skill in (SUM_SKILL, DOT_SKILL, COUNTER_SKILL):
         status, body = _request(port, "POST", "/skills", skill)
         assert status == 200 and body["accepted"]
 
     result = _run_verify_all(db)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "2/2 skills verified OK" in result.stdout
+    assert "3/3 skills verified OK" in result.stdout
 
     # Corrupt the stored program directly in sqlite — simulating db
     # tampering that bypassed the POST verification gate.
@@ -395,6 +481,7 @@ def test_malformed_submissions_rejected_400(registry):
         {**SUM_SKILL, "examples": []},  # empty examples
         {k: v for k, v in SUM_SKILL.items() if k != "program"},  # no program
         {**SUM_SKILL, "program_v2": DOT_SKILL["program_v2"]},  # both programs
+        {**SUM_SKILL, "program_v3": COUNTER_SKILL["program_v3"]},  # v1 + v3
     ]
     for case in cases:
         status, body = _request(port, "POST", "/skills", case)
