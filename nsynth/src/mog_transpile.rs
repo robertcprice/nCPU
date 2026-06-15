@@ -1,4 +1,4 @@
-//! Mog → {Python, Rust, TypeScript} transpiler.
+//! Mog → {Python, Rust, TypeScript, Go, Java} transpiler.
 //!
 //! The Mog programs emitted by the synthesizer are already C-like. Each
 //! target language needs only a small set of rewrites:
@@ -24,6 +24,7 @@ pub enum Target {
     Rust,
     TypeScript,
     Go,
+    Java,
 }
 
 /// Transpile a Mog source string to Python. Returns idiomatic,
@@ -50,6 +51,15 @@ pub fn to_typescript(mog: &str) -> String {
 /// is Go's `int64` (matches Mog's `i64`) and arrays are `[]int64`.
 pub fn to_go(mog: &str) -> String {
     transpile(mog, Target::Go)
+}
+
+/// Transpile a Mog source string to Java. Output is a complete
+/// `public static RET NAME(args) { ... }` block, ready to drop into a
+/// class. Integer type is `long` (matches Mog's `i64`); arrays are
+/// `long[]`; `bool` round-trips; structs (`Point`, `Rectangle`) keep
+/// their original type spelling for the user to declare alongside.
+pub fn to_java(mog: &str) -> String {
+    transpile(mog, Target::Java)
 }
 
 /// Single parametric transpiler; the three public entries are thin
@@ -101,7 +111,7 @@ fn transpile(mog: &str, target: Target) -> String {
             }
             match target {
                 Target::Python => { /* no-op; dedent is implicit */ }
-                Target::Rust | Target::TypeScript | Target::Go => {
+                Target::Rust | Target::TypeScript | Target::Go | Target::Java => {
                     for _ in 0..depth {
                         out.push_str(indent_unit(target));
                     }
@@ -144,22 +154,23 @@ fn transpile(mog: &str, target: Target) -> String {
                     }
                     // Other `} ...` shapes fall through to body handling.
                 }
-                Target::Rust | Target::TypeScript | Target::Go => {
+                Target::Rust | Target::TypeScript | Target::Go | Target::Java => {
                     for _ in 0..depth {
                         out.push_str(indent_unit(target));
                     }
-                    // For TS, `} else if (X) {` needs parens around the
+                    // For TS/Java, `} else if (X) {` needs parens around the
                     // condition just like bare `if`. Handle with a small
                     // rewrite; Rust/Go keep the line as-is.
-                    let rewritten = if target == Target::TypeScript {
-                        if let Some(cond_plus) = rest.strip_prefix("else if ") {
-                            let cond = cond_plus.trim_end_matches('{').trim();
-                            format!("}} else if ({}) {{", cond)
-                        } else {
-                            format!("}} {}", rest)
+                    let rewritten = match target {
+                        Target::TypeScript | Target::Java => {
+                            if let Some(cond_plus) = rest.strip_prefix("else if ") {
+                                let cond = cond_plus.trim_end_matches('{').trim();
+                                format!("}} else if ({}) {{", cond)
+                            } else {
+                                format!("}} {}", rest)
+                            }
                         }
-                    } else {
-                        format!("}} {}", rest)
+                        _ => format!("}} {}", rest),
                     };
                     out.push_str(rewritten.trim_end());
                     out.push('\n');
@@ -210,7 +221,7 @@ fn transpile(mog: &str, target: Target) -> String {
                     body = body.trim_end().trim_end_matches('{').trim_end().to_string();
                     body.push(':');
                 }
-                Target::Rust | Target::TypeScript | Target::Go => {
+                Target::Rust | Target::TypeScript | Target::Go | Target::Java => {
                     // Keep the brace; no rewrite.
                 }
             }
@@ -463,6 +474,7 @@ fn indent_unit(target: Target) -> &'static str {
     match target {
         Target::Python | Target::TypeScript | Target::Rust => "    ",
         Target::Go => "\t",
+        Target::Java => "    ",
     }
 }
 
@@ -504,6 +516,12 @@ fn rewrite_fn_header(line: &str, target: Target) -> Option<String> {
             name,
             rewrite_args_go(args),
             rewrite_type_go(ret_type)
+        ),
+        Target::Java => format!(
+            "public static {} {}({}) {{",
+            rewrite_type_java(ret_type),
+            name,
+            rewrite_args_java(args),
         ),
     })
 }
@@ -608,6 +626,33 @@ fn rewrite_type_go(t: &str) -> String {
     }
 }
 
+fn rewrite_args_java(args: &str) -> String {
+    // Java: `a: i64, b: i64` → `long a, long b`. Same as Go with `long`
+    // instead of `int64`. Point/Rectangle structs keep their original
+    // Mog spelling for the user to declare alongside.
+    args.split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|arg| {
+            if let Some((n, t)) = arg.split_once(':') {
+                format!("{} {}", rewrite_type_java(t.trim()), n.trim())
+            } else {
+                arg.trim().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn rewrite_type_java(t: &str) -> String {
+    match t {
+        "i64" => "long".into(),
+        "[i64]" => "long[]".into(),
+        "string" => "String".into(),
+        "bool" => "boolean".into(),
+        other => other.to_string(),
+    }
+}
+
 /// Body-line rewrites shared across all three targets:
 ///   - `VAR: TYPE = EXPR;` → declaration in the target's syntax
 ///   - `return EXPR;` → target-specific return
@@ -631,6 +676,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
                     format!("let {}: {} = {};", var, rewrite_type_ts(ty), rhs)
                 }
                 Target::Go => format!("var {} {} = {}", var, rewrite_type_go(ty), rhs),
+                Target::Java => format!("{} {} = {};", rewrite_type_java(ty), var, rhs),
             };
         }
         // Plain assignment (no type): same var on both sides means
@@ -638,7 +684,9 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
         if !lhs.contains(' ') && !lhs.contains('(') {
             return match target {
                 Target::Python => format!("{} = {}", lhs, rhs),
-                Target::Rust | Target::TypeScript | Target::Go => format!("{} = {};", lhs, rhs),
+                Target::Rust | Target::TypeScript | Target::Go | Target::Java => {
+                    format!("{} = {};", lhs, rhs)
+                }
             };
         }
     }
@@ -647,7 +695,9 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
     if let Some(expr) = line.strip_prefix("return ") {
         return match target {
             Target::Python => format!("return {}", expr.trim()),
-            Target::Rust | Target::TypeScript | Target::Go => format!("return {};", expr.trim()),
+            Target::Rust | Target::TypeScript | Target::Go | Target::Java => {
+                format!("return {};", expr.trim())
+            }
         };
     }
 
@@ -677,13 +727,14 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
                     Target::Rust => format!("if {} {{ {} }}", cond, stmts.join(" ")),
                     Target::TypeScript => format!("if ({}) {{ {} }}", cond, stmts.join(" ")),
                     Target::Go => format!("if {} {{ {} }}", cond, stmts.join(" ")),
+                    Target::Java => format!("if ({}) {{ {} }}", cond, stmts.join(" ")),
                 };
             }
         }
         let cond = cond_plus_brace.trim_end_matches('{').trim();
         return match target {
             Target::Python | Target::Rust | Target::Go => line.to_string(),
-            Target::TypeScript => format!("if ({}) {{", cond),
+            Target::TypeScript | Target::Java => format!("if ({}) {{", cond),
         };
     }
     if line.starts_with("while ") {
@@ -691,7 +742,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
         let cond = cond_plus_brace.trim_end_matches('{').trim();
         return match target {
             Target::Python | Target::Rust | Target::Go => line.to_string(),
-            Target::TypeScript => format!("while ({}) {{", cond),
+            Target::TypeScript | Target::Java => format!("while ({}) {{", cond),
         };
     }
     if line == "else" || line.starts_with("else ") {
@@ -714,6 +765,12 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
                 Target::Python | Target::Rust => format!("for {} in {} {{", var, iter_expr),
                 Target::TypeScript => format!("for (const {} of {}) {{", var, iter_expr),
                 Target::Go => format!("for _, {} := range {} {{", var, iter_expr),
+                // Java: enhanced-for uses `for (TYPE var : iterable) { ... }`.
+                // The Mog element type defaults to `long` for `i64` arrays;
+                // for struct iterables the user declares a wrapper class.
+                // We emit `long` here; if the user iterates a `long[]` this
+                // is correct, and a `Point[]` case is out of scope.
+                Target::Java => format!("for (long {} : (long[]) {}) {{", var, iter_expr),
             };
         }
         // Fallback: pass through.
@@ -723,7 +780,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
     // Fallback: emit the line with a target-appropriate terminator.
     match target {
         Target::Python => line.to_string(),
-        Target::Rust | Target::TypeScript | Target::Go => format!("{};", line),
+        Target::Rust | Target::TypeScript | Target::Go | Target::Java => format!("{};", line),
     }
 }
 
@@ -951,5 +1008,27 @@ mod inline_if_tests {
         assert!(go.contains("var s int64 = 0"), "got: {go}");
         assert!(go.contains("for _, x := range arr {"), "got: {go}");
         assert!(go.contains("return s;"), "got: {go}");
+    }
+
+    #[test]
+    fn inline_if_java() {
+        let ja = to_java(MOG);
+        assert!(ja.contains("if (b >= a) { v0 = a; }"), "got: {ja}");
+    }
+
+    #[test]
+    fn java_emits_static_long_array_enhanced_for() {
+        let mog = "fn sum_array(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for x in arr {\n        s = s + x;\n    }\n    return s;\n}\n";
+        let ja = to_java(mog);
+        assert!(
+            ja.contains("public static long sum_array(long[] arr)"),
+            "got: {ja}"
+        );
+        assert!(ja.contains("long s = 0;"), "got: {ja}");
+        assert!(
+            ja.contains("for (long x : (long[]) arr) {"),
+            "got: {ja}"
+        );
+        assert!(ja.contains("return s;"), "got: {ja}");
     }
 }

@@ -44,7 +44,7 @@ from ncpu.synthesis_api.server import (
     read_bank_stats,
 )
 
-_LANGUAGES = ("python", "rust", "typescript", "go")
+_LANGUAGES = ("python", "rust", "typescript", "go", "java")
 
 _GUIDANCE = (
     "Provide concrete input/output examples like: f(2,3) -> 5. "

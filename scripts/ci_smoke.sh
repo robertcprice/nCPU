@@ -26,11 +26,13 @@ ${PYTEST[@]} -q \
     tests/synthesis_api/test_prompt_endpoint.py \
     tests/mcp_server/test_mcp_server.py
 
-# nsynth new-language surface (bool, struct, Go transpile) — Rust unit
-# tests. One positional filter per invocation; the script runs the
-# three relevant test groups separately.
+# nsynth new-language surface (bool, struct, float, Go/Java transpile,
+# stateful benchmarks) — Rust unit tests. One positional filter per
+# invocation; the script runs the relevant test groups separately.
 (cd nsynth && cargo test --release --lib --quiet \
     runtime::tests::verifies_bool 2>&1 | tail -5)
+(cd nsynth && cargo test --release --lib --quiet \
+    runtime::tests::verifies_float 2>&1 | tail -5)
 (cd nsynth && cargo test --release --lib --quiet \
     mog_transpile:: 2>&1 | tail -5)
 (cd nsynth && cargo test --release --lib --quiet \

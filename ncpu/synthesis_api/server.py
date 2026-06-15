@@ -81,7 +81,7 @@ MAX_BODY_BYTES = 64 * 1024
 _I64_MIN = -(2**63)
 _I64_MAX = 2**63 - 1
 
-_TRANSPILE_TARGETS = ("python", "rust", "typescript", "go")
+_TRANSPILE_TARGETS = ("python", "rust", "typescript", "go", "java")
 
 
 def default_backend_path() -> Path:
@@ -225,9 +225,19 @@ def _validate_examples(examples: Any, where: str, allow_empty: bool) -> None:
             # already solve against.
             ex["expected"] = int(expected)
             expected = ex["expected"]
-        if not isinstance(expected, int) or isinstance(expected, bool):
-            raise ValueError(f"{where}[{i}].expected must be an integer or bool")
-        if not (_I64_MIN <= expected <= _I64_MAX):
+        elif isinstance(expected, float) and expected.is_integer():
+            # JSON numbers written with a trailing `.0` round-trip as
+            # `float` in Python; collapse the int-typed `1.0` /
+            # `42.0` case to the int lane so the existing int teachers
+            # still own them. Real float values (1.5, -3.14) keep
+            # their float shape and reach the float-regression lane.
+            ex["expected"] = int(expected)
+            expected = ex["expected"]
+        if not isinstance(expected, (int, float, str)) or isinstance(expected, bool):
+            raise ValueError(
+                f"{where}[{i}].expected must be an integer, bool, float, or string"
+            )
+        if isinstance(expected, int) and not (_I64_MIN <= expected <= _I64_MAX):
             raise ValueError(f"{where}[{i}].expected out of i64 range")
 
 
@@ -250,11 +260,36 @@ def validate_synthesize_request(request: Any) -> tuple[dict[str, Any], Optional[
         "name": name.strip(),
         "examples": request["examples"],
     }
+    # String-typed expected is its own lane. The backend routes
+    # `-> string` signatures to the morph_transduce / string_synth
+    # pipeline (separate from the i64 search teachers), so when any
+    # example asks for a string we synthesize a `-> string` signature
+    # if the user didn't supply one.
+    has_string_expected = any(
+        isinstance(ex.get("expected"), str)
+        for ex in request["examples"]
+    )
     signature = request.get("signature")
     if signature is not None:
         if not isinstance(signature, str):
             raise ValueError("signature must be a string when provided")
         problem["signature"] = signature
+    elif has_string_expected:
+        # Build `fn NAME(s: string) -> string` from the first example's
+        # input shape. Multi-arg string problems are accepted; the
+        # signature mirrors the input arity.
+        first_inputs = request["examples"][0]["inputs"]
+        n_str = sum(1 for v in first_inputs if isinstance(v, str))
+        if n_str != len(first_inputs):
+            # Mixed: at least one input isn't a string. The string lane
+            # only handles string args; refuse here instead of
+            # silently mis-routing.
+            raise ValueError(
+                "string-typed expected requires all inputs to be strings; "
+                f"got {[type(v).__name__ for v in first_inputs]}"
+            )
+        params = ", ".join(f"s{i+1}: string" for i in range(len(first_inputs)))
+        problem["signature"] = f"fn {name.strip()}({params}) -> string"
     else:
         # Default backend signature is `fn unknown(...)` — build one from
         # the request name + first example so generated code is named.

@@ -121,6 +121,25 @@ STRICTLY_INCREASING_REQUEST = {
     ],
 }
 
+FLOAT_ABS_REQUEST = {
+    "name": "abs_diff_float",
+    "examples": [
+        {"inputs": [3, 5], "expected": 2.0},
+        {"inputs": [7, 2], "expected": 5.0},
+        {"inputs": [-3, 8], "expected": 11.0},
+        {"inputs": [0, 0], "expected": 0.0},
+    ],
+}
+
+STRING_REVERSE_REQUEST = {
+    "name": "reverse_str",
+    "examples": [
+        {"inputs": ["hello"], "expected": "olleh"},
+        {"inputs": ["abc"], "expected": "cba"},
+        {"inputs": ["x"], "expected": "x"},
+    ],
+}
+
 # Struct input — the user supplies a `Point` signature so the request
 # looks like a real domain problem (geometry, graphics, etc.). The
 # solver already knows how to round-trip a Point literal and the
@@ -287,10 +306,10 @@ def test_solve_easy_problem(server):
     assert "def" in transpiled["python"]
     assert "fn" in transpiled["rust"]
     assert "function" in transpiled["typescript"]
-    # Go transpile was added in the same expansion as bool/struct inputs;
-    # the API now emits a `func NAME(...) ...` block alongside the
-    # other three targets.
+    # Go and Java transpile were added in the same expansion as
+    # bool/struct inputs; the API now emits all five targets.
     assert "func" in transpiled["go"]
+    assert "public static" in transpiled["java"]
     assert body["elapsed_ms"] >= 0
 
 
@@ -319,6 +338,29 @@ def test_struct_input_point_solves_through_api(server):
     # The struct signature is preserved; the Mog function it returns
     # operates over the Point input the user asked for.
     assert "point_sum_ok" in body["code"]
+    assert body["error"] is None
+
+
+def test_float_expected_solves_through_api(server):
+    # `expected: 2.0` (or any float) reaches the existing int search
+    # teachers via the new int↔float verification bridge. The
+    # float-regression lane also picks these up if a value is
+    # non-integer (the API normalizes 1.0 → 1, leaves 1.5 alone).
+    status, body = _request(server, "/synthesize", FLOAT_ABS_REQUEST)
+    assert status == 200
+    assert body["success"] is True, body
+    assert "abs_diff_float" in body["code"]
+    assert body["error"] is None
+
+
+def test_string_expected_solves_through_api(server):
+    # A string-typed `expected` is routed to the morph_transduce /
+    # string_synth lane (the i64 search teachers never see it). The
+    # API synthesizes a `-> string` signature automatically.
+    status, body = _request(server, "/synthesize", STRING_REVERSE_REQUEST)
+    assert status == 200
+    assert body["success"] is True, body
+    assert "reverse_str" in body["code"]
     assert body["error"] is None
 
 
