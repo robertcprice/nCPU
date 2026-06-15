@@ -1644,6 +1644,10 @@ pub const FACTORIES: &[Factory] = &[
     make_two_sum_exists,
     make_count_distinct,
     make_binary_search,
+    make_strictly_increasing,
+    make_has_strictly_increasing_run,
+    make_first_index_of,
+    make_last_index_of,
     make_longest_plateau,
     make_prefix_max_sum,
     make_cube,
@@ -1861,6 +1865,176 @@ fn make_count_distinct(variant: usize) -> Problem {
             example(vec![array(&[0, 0, 0, 1, 1])], 2),
         ],
         "fn count_distinct(arr: [i64]) -> i64 {\n    arr.sort();\n    count: i64 = 1;\n    i: i64 = 1;\n    while i < arr.len {\n        if arr[i] != arr[i - 1] {\n            count = count + 1;\n        }\n        i = i + 1;\n    }\n    return count;\n}\n",
+    )
+}
+
+fn make_strictly_increasing(variant: usize) -> Problem {
+    // variant picks the strict-inequality vs ≤ test's bias: variant 0
+    // uses the "negatives include equal neighbours" path that
+    // search_is_sorted can't solve; variant 1 includes a descent in
+    // the negatives (also unmatched by is_sorted).
+    let _ = variant;
+    problem(
+        "strictly_increasing",
+        variant,
+        "arrays",
+        "Return 1 iff the array is strictly increasing (no equal neighbours).",
+        "fn strictly_increasing(arr: [i64]) -> i64",
+        vec![
+            example(vec![array(&[1, 2, 3, 4])], 1),
+            example(vec![array(&[0, 5])], 1),
+            example(vec![array(&[-3, -1, 0, 7, 100])], 1),
+            example(vec![array(&[10, 20, 30, 40, 50])], 1),
+            // equal neighbours
+            example(vec![array(&[1, 1, 2])], 0),
+            example(vec![array(&[2, 2])], 0),
+            example(vec![array(&[5, 5, 5, 6])], 0),
+            // descent
+            example(vec![array(&[3, 2, 1])], 0),
+            example(vec![array(&[10, 0])], 0),
+            example(vec![array(&[1, 5, 4, 9])], 0),
+        ],
+        vec![
+            example(vec![array(&[100, 200])], 1),
+            example(vec![array(&[1, 1])], 0),
+            example(vec![array(&[1, 2, 1])], 0),
+            example(vec![array(&[0, 0, 1])], 0),
+        ],
+        "fn strictly_increasing(arr: [i64]) -> i64 {\n    i: i64 = 1;\n    while i < arr.len {\n        if arr[i] <= arr[i - 1] { return 0; }\n        i = i + 1;\n    }\n    return 1;\n}\n",
+    )
+}
+
+fn make_has_strictly_increasing_run(variant: usize) -> Problem {
+    // Each variant picks a different run length (2..=5). The teacher
+    // tries k in {2,3,4,5} and emits the first that verifies.
+    let run_length = match variant % 4 {
+        0 => 2,
+        1 => 3,
+        2 => 4,
+        _ => 5,
+    };
+    let name = format!("has_strictly_increasing_run_{run_length}");
+    let reference: &'static str = Box::leak(
+        format!(
+            "fn {name}(arr: [i64]) -> i64 {{\n    run: i64 = 1;\n    i: i64 = 1;\n    while i < arr.len {{\n        if arr[i] > arr[i - 1] {{\n            run = run + 1;\n            if run >= {run_length} {{ return 1; }}\n        }} else {{\n            run = 1;\n        }}\n        i = i + 1;\n    }}\n    return 0;\n}}\n"
+        )
+        .into_boxed_str(),
+    );
+    let signature: &'static str =
+        Box::leak(format!("fn {name}(arr: [i64]) -> i64").into_boxed_str());
+    let description: &'static str = Box::leak(
+        format!(
+            "Return 1 iff arr contains a strictly increasing run of length >= {run_length}."
+        )
+        .into_boxed_str(),
+    );
+    problem(
+        &name,
+        variant,
+        "arrays",
+        description,
+        signature,
+        vec![
+            example(vec![array(&[1, 2, 3])], 1),
+            example(vec![array(&[0, 1, 5, 6, 7])], 1),
+            example(vec![array(&[10, 20, 30])], 1),
+            example(vec![array(&[5, 4, 3, 7, 8, 9])], 1),
+            example(vec![array(&[1, 2])], 0),
+            example(vec![array(&[1, 5, 3])], 0),
+            example(vec![array(&[5, 4, 3, 2, 1])], 0),
+        ],
+        vec![
+            example(vec![array(&[3, 3, 4])], 0),
+            example(vec![array(&[-1, 0, 1, 2, 0, 1])], 1),
+        ],
+        reference,
+    )
+}
+
+fn make_first_index_of(variant: usize) -> Problem {
+    // Each variant uses a different target so the teacher actually has
+    // to mine the candidate set. Targets cycle through small constants.
+    let target: i64 = match variant % 6 {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3 => 5,
+        4 => 7,
+        _ => -1,
+    };
+    let name = format!("first_index_of_{target}");
+    let reference: &'static str = Box::leak(
+        format!(
+            "fn {name}(arr: [i64]) -> i64 {{\n    i: i64 = 0;\n    while i < arr.len {{\n        if arr[i] == {target} {{ return i; }}\n        i = i + 1;\n    }}\n    return 0 - 1;\n}}\n"
+        )
+        .into_boxed_str(),
+    );
+    let signature: &'static str =
+        Box::leak(format!("fn {name}(arr: [i64]) -> i64").into_boxed_str());
+    let description: &'static str = Box::leak(
+        format!("Return the first index where arr[i] == {target}, or -1.").into_boxed_str(),
+    );
+    problem(
+        &name,
+        variant,
+        "arrays",
+        description,
+        signature,
+        vec![
+            example(vec![array(&[1, 2, 3, 4, 5])], 4),
+            example(vec![array(&[5, 5, 5])], 0),
+            example(vec![array(&[0, 0, 0, 5])], 3),
+            example(vec![array(&[10, 20, 30])], -1),
+            example(vec![array(&[5])], 0),
+        ],
+        vec![
+            example(vec![array(&[1, 2, 3, 4, 6, 7, 5, 8, 9, 5])], 6),
+            example(vec![array(&[1, 2, 3, 4])], -1),
+        ],
+        reference,
+    )
+}
+
+fn make_last_index_of(variant: usize) -> Problem {
+    // Mirror of first_index_of but with a target that appears multiple
+    // times so last != first in at least one example.
+    let target: i64 = match variant % 4 {
+        0 => 5,
+        1 => 0,
+        2 => 7,
+        _ => -2,
+    };
+    let name = format!("last_index_of_{target}");
+    let reference: &'static str = Box::leak(
+        format!(
+            "fn {name}(arr: [i64]) -> i64 {{\n    i: i64 = arr.len - 1;\n    while i >= 0 {{\n        if arr[i] == {target} {{ return i; }}\n        i = i - 1;\n    }}\n    return 0 - 1;\n}}\n"
+        )
+        .into_boxed_str(),
+    );
+    let signature: &'static str =
+        Box::leak(format!("fn {name}(arr: [i64]) -> i64").into_boxed_str());
+    let description: &'static str = Box::leak(
+        format!("Return the last index where arr[i] == {target}, or -1.").into_boxed_str(),
+    );
+    problem(
+        &name,
+        variant,
+        "arrays",
+        description,
+        signature,
+        vec![
+            // multiple targets so last != first
+            example(vec![array(&[1, 5, 2, 5, 3])], 3),
+            example(vec![array(&[5, 5])], 1),
+            example(vec![array(&[5])], 0),
+            example(vec![array(&[1, 2, 3])], -1),
+            example(vec![array(&[5, 4, 3, 2, 1])], 0),
+        ],
+        vec![
+            example(vec![array(&[1, 5, 1, 5, 1, 5])], 5),
+            example(vec![array(&[1, 2, 3, 4])], -1),
+        ],
+        reference,
     )
 }
 

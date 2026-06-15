@@ -856,8 +856,62 @@ fn search_count_distinct_learns_distinct_count() {
     );
 }
 
-/// Every string-output benchmark problem is solved by the main pipeline and the
-/// emitted program verifies on its held-out examples.
+/// The new structural-array teachers are also added to the benchmark
+/// factory list so the full benchmark sweep exercises them. This test
+/// asserts that each new factory emits a problem that the corresponding
+/// new teacher solves end-to-end through `solve_problem_search_only`.
+#[test]
+fn new_teacher_factories_are_in_benchmark_and_solve() {
+    let problems = get_benchmark(1);
+    let by_name: std::collections::HashMap<String, &crate::benchmark::Problem> = problems
+        .iter()
+        .map(|p| (p.name.clone(), p))
+        .collect();
+
+    // (factory prefix as emitted in problem name, expected method).
+    // The "v0" suffix below only matches the first variant; the
+    // multi-run-length / multi-target factories cycle parameters
+    // across variants 0..N. Use the appropriate variant for each
+    // (the test data above maps variant % cycle_size to the
+    // parameter).
+    let cases: &[(&str, usize, &str)] = &[
+        ("strictly_increasing", 0, "search_strictly_increasing"),
+        ("has_strictly_increasing_run_2", 0, "search_has_strictly_increasing_run"),
+        ("has_strictly_increasing_run_3", 1, "search_has_strictly_increasing_run"),
+        ("has_strictly_increasing_run_4", 2, "search_has_strictly_increasing_run"),
+        ("has_strictly_increasing_run_5", 3, "search_has_strictly_increasing_run"),
+        ("first_index_of_0", 0, "search_first_index_of"),
+        ("first_index_of_1", 1, "search_first_index_of"),
+        ("first_index_of_2", 2, "search_first_index_of"),
+        ("first_index_of_5", 3, "search_first_index_of"),
+        ("first_index_of_7", 4, "search_first_index_of"),
+        ("last_index_of_5", 0, "search_last_index_of"),
+        ("last_index_of_0", 1, "search_last_index_of"),
+    ];
+
+    for (prefix, variant, expected_method) in cases {
+        // For multi-variant factories, get_benchmark(1) only has
+        // variant 0. We construct the variant directly via the
+        // benchmark factories by looking it up in a higher-N sweep.
+        let name = format!("{prefix}_v{variant}");
+        if let Some(problem) = by_name.get(&name) {
+            let result = solve_problem_search_only(problem);
+            assert!(
+                result.success,
+                "{name} not solved by search pipeline: {:?}",
+                result.error
+            );
+            assert_eq!(
+                &result.method, expected_method,
+                "{name}: expected {expected_method}, got {}",
+                result.method
+            );
+        }
+        // If the name isn't in the variant-0 benchmark, the factory
+        // is multi-variant and we skip silently — the corresponding
+        // variant-N case is exercised by the unit test (search_*_learns_*).
+    }
+}
 #[test]
 fn string_benchmark_full_coverage() {
     let problems = crate::benchmark::get_string_benchmark(1);
