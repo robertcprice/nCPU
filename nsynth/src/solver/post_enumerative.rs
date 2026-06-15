@@ -180,6 +180,7 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_stateful_reducer"
         | "search_stateful_reducer_dual"
         | "search_stateful_reducer_event"
+        | "search_stateful_reducer_temporal"
         | "search_stateful_replace"
         | "search_strictly_increasing"
         | "search_has_strictly_increasing_run"

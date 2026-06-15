@@ -50,6 +50,13 @@ fn fingerprint_value(v: &Value) -> String {
         }
         Value::Pair(a, b) => format!("p:({a},{b})"),
         Value::Quad(a, b, c, d) => format!("q:({a},{b},{c},{d})"),
+        Value::Tree(nodes) => {
+            let node_strs: Vec<String> = nodes
+                .iter()
+                .map(|n| format!("({},{},{})", n.value, n.left, n.right))
+                .collect();
+            format!("t:[{}]", node_strs.join(";"))
+        }
     }
 }
 

@@ -289,8 +289,9 @@ fn every_preempting_method_has_a_registered_search_candidate() {
         "search_intersects",
         "search_stateful_reducer",
         "search_stateful_reducer_dual",
-        "search_stateful_reducer_event",
         "search_stateful_replace",
+        "search_stateful_reducer_event",
+        "search_stateful_reducer_temporal",
         "search_kth_smallest",
         "search_count_distinct",
     ] {
@@ -600,6 +601,175 @@ fn search_stateful_reducer_event_solves_gated_contribution() {
         result.error
     );
     assert_eq!(result.method, "search_stateful_reducer_event");
+    verify_problem_code_strict(&problem, &result.code)
+        .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
+}
+
+#[test]
+fn search_stateful_reducer_temporal_is_registered_and_preempts_gradient() {
+    // Stage 4 completion: the time-lane stateful reducer
+    // `(state, t, arr) -> state`. Wired into both the search
+    // candidate list and the preemption whitelist so a verified
+    // time-driven update is returned directly.
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_stateful_reducer_temporal"),
+        "search_stateful_reducer_temporal missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_stateful_reducer_temporal", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_stateful_reducer_temporal not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_stateful_reducer_temporal_solves_aging_state() {
+    // End-to-end: `f(state, t, arr) = state + t` (pure time aging).
+    let problem = Problem {
+        name: "aging_state_v0".to_string(),
+        category: "test",
+        description: "test",
+        signature: "fn aging_state_v0(state: i64, t: i64, arr: [i64]) -> i64",
+        examples: vec![
+            Example {
+                inputs: vec![BmValue::Int(0), BmValue::Int(5), BmValue::Array(vec![1, 2, 3])],
+                expected: BmValue::Int(5),
+            },
+            Example {
+                inputs: vec![BmValue::Int(10), BmValue::Int(3), BmValue::Array(vec![1, 1, 1])],
+                expected: BmValue::Int(13),
+            },
+            Example {
+                inputs: vec![BmValue::Int(-5), BmValue::Int(7), BmValue::Array(vec![4, 4])],
+                expected: BmValue::Int(2),
+            },
+        ],
+        holdouts: vec![],
+        reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
+    };
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "temporal stateful reducer failed: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_stateful_reducer_temporal");
+    verify_problem_code_strict(&problem, &result.code)
+        .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
+}
+
+#[test]
+fn search_stateful_reducer_temporal_solves_rate_accumulator() {
+    // End-to-end: `f(state, t, arr) = state + sum(arr) * t`.
+    // Note: this may be solved by `search_stateful_reducer_event` first
+    // since the event teacher enumerates `state + event * sum(arr)`.
+    // The temporal teacher is the canonical time-lane teacher.
+    let problem = Problem {
+        name: "rate_accumulator_v0".to_string(),
+        category: "test",
+        description: "test",
+        signature: "fn rate_accumulator_v0(state: i64, t: i64, arr: [i64]) -> i64",
+        examples: vec![
+            Example {
+                inputs: vec![BmValue::Int(0), BmValue::Int(2), BmValue::Array(vec![1, 2, 3])],
+                expected: BmValue::Int(12),
+            },
+            Example {
+                inputs: vec![BmValue::Int(10), BmValue::Int(3), BmValue::Array(vec![1, 1, 1])],
+                expected: BmValue::Int(19),
+            },
+            Example {
+                inputs: vec![BmValue::Int(-5), BmValue::Int(4), BmValue::Array(vec![4, 4])],
+                expected: BmValue::Int(27),
+            },
+        ],
+        holdouts: vec![],
+        reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
+    };
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "rate accumulator failed: {:?}",
+        result.error
+    );
+    // Accept either temporal or event (they both match this shape).
+    assert!(
+        result.method == "search_stateful_reducer_temporal"
+            || result.method == "search_stateful_reducer_event",
+        "expected temporal or event, got {}",
+        result.method
+    );
+    verify_problem_code_strict(&problem, &result.code)
+        .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
+}
+
+#[test]
+fn search_stateful_reducer_temporal_solves_tick_every_2() {
+    // End-to-end: `f(state, t, arr) = state + sum(arr) * (t % 2 == 0 ? 1 : 0)`.
+    // Periodic tick — fires only on even t.
+    let problem = Problem {
+        name: "tick_every_2_v0".to_string(),
+        category: "test",
+        description: "test",
+        signature: "fn tick_every_2_v0(state: i64, t: i64, arr: [i64]) -> i64",
+        examples: vec![
+            Example {
+                inputs: vec![BmValue::Int(0), BmValue::Int(2), BmValue::Array(vec![1, 2, 3])],
+                expected: BmValue::Int(6),
+            },
+            Example {
+                inputs: vec![BmValue::Int(10), BmValue::Int(4), BmValue::Array(vec![1, 1, 1])],
+                expected: BmValue::Int(13),
+            },
+            Example {
+                inputs: vec![BmValue::Int(-5), BmValue::Int(3), BmValue::Array(vec![4, 4])],
+                expected: BmValue::Int(-5),
+            },
+        ],
+        holdouts: vec![],
+        reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
+    };
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "tick every 2 failed: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_stateful_reducer_temporal");
     verify_problem_code_strict(&problem, &result.code)
         .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
 }

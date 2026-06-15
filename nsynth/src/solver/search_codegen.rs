@@ -1633,8 +1633,9 @@ pub(super) fn code_struct_conditional_fields(
     )
 }
 
-/// Emit Mog for temporal stateful reducer: state combined with reduction of array,
-/// parameterized by time variable t.
+/// Stage 4 completion: emit Mog for `state OP r(arr) [combine] f(t)` where
+/// `combine` is one of `add_add`/`add_mul`/`sub_add`/`sub_mul` and
+/// `f(t)` is one of `t`/`-t`/`(t % N == 0 ? 1 : 0)` etc.
 pub(super) fn code_stateful_reducer_temporal(
     fn_name: &str,
     state_arg: &str,
@@ -1642,8 +1643,8 @@ pub(super) fn code_stateful_reducer_temporal(
     arr_arg: &str,
     reducer_kind: &str,
     op_state: &str,
+    combine: &str,
     time_kind: &str,
-    time_op: &str,
 ) -> String {
     // Reduction step
     let reduction = match reducer_kind {
@@ -1663,47 +1664,77 @@ pub(super) fn code_stateful_reducer_temporal(
             "    s: i64 = 0;\n    for v in {arr_arg} {{\n        if v > 0 {{ s = s + 1; }}\n    }}\n    r := s;\n",
             arr_arg = arr_arg
         ),
+        "count_negative" => format!(
+            "    s: i64 = 0;\n    for v in {arr_arg} {{\n        if v < 0 {{ s = s + 1; }}\n    }}\n    r := s;\n",
+            arr_arg = arr_arg
+        ),
         _ => format!("    r: i64 = 0; // reducer: {}\n", reducer_kind),
     };
-
-    // Time adjustment
-    let time_adjust = match time_kind {
-        "exponential_decay" => match time_op {
-            "multiply" => format!("    r = r * {time_arg} / ({time_arg} + 1);\n", time_arg = time_arg),
-            "divide" => format!("    r = r / ({time_arg} + 1);\n", time_arg = time_arg),
-            _ => format!("    r = r * {time_arg};\n", time_arg = time_arg),
-        },
-        "polynomial" => match time_op {
-            "power2" => format!("    r = r * {time_arg} * {time_arg};\n", time_arg = time_arg),
-            "power3" => format!("    r = r * {time_arg} * {time_arg} * {time_arg};\n", time_arg = time_arg),
-            _ => format!("    r = r * {time_arg};\n", time_arg = time_arg),
-        },
-        _ => format!("    // time_kind: {}\n", time_kind),
+    // f(t) expression. For tick_n/odd_n we need an if-statement to set
+    // a local variable (Mog `if` is a statement, not an expression in
+    // arithmetic position). identity/neg can be used inline.
+    let (time_setup_stmt, time_expr_str) = match time_kind {
+        "identity" => (String::new(), time_arg.to_string()),
+        "neg" => (String::new(), format!("-{}", time_arg)),
+        "tick_n2" => (
+            format!("    tval: i64 = 0;\n    if {t} % 2 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "tick_n3" => (
+            format!("    tval: i64 = 0;\n    if {t} % 3 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "tick_n4" => (
+            format!("    tval: i64 = 0;\n    if {t} % 4 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "tick_n5" => (
+            format!("    tval: i64 = 0;\n    if {t} % 5 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "tick_n6" => (
+            format!("    tval: i64 = 0;\n    if {t} % 6 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "odd_n2" => (
+            format!("    tval: i64 = 0;\n    if {t} % 2 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "odd_n3" => (
+            format!("    tval: i64 = 0;\n    if {t} % 3 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        _ => (String::new(), time_arg.to_string()),
     };
-
-    // Combine with state
-    let combine = match op_state {
-        "+" => format!("    return {state} + r;\n", state = state_arg),
-        "-" => format!("    return {state} - r;\n", state = state_arg),
-        "*" => format!("    return {state} * r;\n", state = state_arg),
-        _ => format!("    return r;\n"),
+    // Combine expression
+    let return_expr: String = match (op_state, combine) {
+        ("+", "add_add") => format!("{s} + r + {te}", s = state_arg, te = time_expr_str),
+        ("+", "add_mul") => format!("{s} + r * {te}", s = state_arg, te = time_expr_str),
+        ("+", "sub_add") => format!("{s} + r - {te}", s = state_arg, te = time_expr_str),
+        ("-", "add_add") => format!("{s} - r + {te}", s = state_arg, te = time_expr_str),
+        ("-", "add_mul") => format!("{s} - r * {te}", s = state_arg, te = time_expr_str),
+        ("-", "sub_add") => format!("{s} - r - {te}", s = state_arg, te = time_expr_str),
+        // sub_mul same as add_mul for op_state="+"
+        ("+", "sub_mul") => format!("{s} + r * {te}", s = state_arg, te = time_expr_str),
+        ("-", "sub_mul") => format!("{s} - r * {te}", s = state_arg, te = time_expr_str),
+        _ => format!("{s} + r", s = state_arg),
     };
-
     format!(
-        "fn {fn_name}({state_arg}: i64, {time_arg}: i64, {arr_arg}: [i64]) -> i64 {{\n{reduction}{time_adjust}{combine}}}\n",
+        "fn {fn_name}({state_arg}: i64, {time_arg}: i64, {arr_arg}: [i64]) -> i64 {{\n{reduction}{t_setup}    return {expr};\n}}\n",
         fn_name = fn_name,
         state_arg = state_arg,
         time_arg = time_arg,
         arr_arg = arr_arg,
+        reduction = reduction,
+        t_setup = time_setup_stmt,
+        expr = return_expr,
     )
 }
 
-/// Stage 4 completion: no-reducer variant that ALSO accepts the
-/// `(state, t, arr) -> state` signature (the existing variant above
-/// omits `arr` and only handles `(state, t) -> state`, which causes
-/// verification to fail on 3-arg signatures). Emits Mog for
-/// `state OP f(t)` where f(t) is one of `t`, `-t`, or
-/// `(t % N == 0 ? 1 : 0)`.
+/// Stage 4 completion: no-reducer variant for `(state, t, arr) -> state`.
+/// Emits Mog for `state OP f(t)` where f(t) is one of `t`, `-t`, or
+/// `(t % N == 0 ? 1 : 0)`. Mog `if` is a statement, so tick patterns
+/// require a `tval` local variable.
 pub(super) fn code_stateful_reducer_temporal_no_reducer(
     fn_name: &str,
     state_arg: &str,
@@ -1711,17 +1742,38 @@ pub(super) fn code_stateful_reducer_temporal_no_reducer(
     op_state: &str,
     time_kind: &str,
 ) -> String {
-    let time_expr_str = match time_kind {
-        "identity" => time_arg.to_string(),
-        "neg" => format!("-{}", time_arg),
-        "tick_n2" => format!("(if {t} % 2 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
-        "tick_n3" => format!("(if {t} % 3 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
-        "tick_n4" => format!("(if {t} % 4 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
-        "tick_n5" => format!("(if {t} % 5 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
-        "tick_n6" => format!("(if {t} % 6 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
-        "odd_n2" => format!("(if {t} % 2 == 1 {{ 1 }} else {{ 0 }})", t = time_arg),
-        "odd_n3" => format!("(if {t} % 3 == 1 {{ 1 }} else {{ 0 }})", t = time_arg),
-        _ => time_arg.to_string(),
+    let (time_setup_stmt, time_expr_str) = match time_kind {
+        "identity" => (String::new(), time_arg.to_string()),
+        "neg" => (String::new(), format!("-{}", time_arg)),
+        "tick_n2" => (
+            format!("    tval: i64 = 0;\n    if {t} % 2 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "tick_n3" => (
+            format!("    tval: i64 = 0;\n    if {t} % 3 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "tick_n4" => (
+            format!("    tval: i64 = 0;\n    if {t} % 4 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "tick_n5" => (
+            format!("    tval: i64 = 0;\n    if {t} % 5 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "tick_n6" => (
+            format!("    tval: i64 = 0;\n    if {t} % 6 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "odd_n2" => (
+            format!("    tval: i64 = 0;\n    if {t} % 2 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        "odd_n3" => (
+            format!("    tval: i64 = 0;\n    if {t} % 3 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            "tval".to_string(),
+        ),
+        _ => (String::new(), time_arg.to_string()),
     };
     let return_expr = match op_state {
         "+" => format!("{state} + {te}", state = state_arg, te = time_expr_str),
@@ -1729,10 +1781,11 @@ pub(super) fn code_stateful_reducer_temporal_no_reducer(
         _ => format!("{state} + {te}", state = state_arg, te = time_expr_str),
     };
     format!(
-        "fn {fn_name}({state_arg}: i64, {time_arg}: i64, arr: [i64]) -> i64 {{\n    return {expr};\n}}\n",
+        "fn {fn_name}({state_arg}: i64, {time_arg}: i64, arr: [i64]) -> i64 {{\n{t_setup}    return {expr};\n}}\n",
         fn_name = fn_name,
         state_arg = state_arg,
         time_arg = time_arg,
+        t_setup = time_setup_stmt,
         expr = return_expr,
     )
 }
@@ -1754,6 +1807,143 @@ pub(super) fn code_explicit_stack_fibonacci(fn_name: &str, arg: &str) -> String 
         "fn {fn_name}({arg}: i64) -> i64 {{\n    if {arg} == 0 {{ return 0; }}\n    if {arg} == 1 {{ return 1; }}\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 2;\n    while i <= {arg} {{\n        tmp: i64 = a + b;\n        a = b;\n        b = tmp;\n        i = i + 1;\n    }}\n    return b;\n}}\n",
         fn_name = fn_name,
         arg = arg
+    )
+}
+
+/// Modular arithmetic: remainder/modulo patterns.
+pub(super) fn code_modular_remainder(fn_name: &str, divisor: i64) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    return n % {divisor};\n}}\n",
+        fn_name = fn_name,
+        divisor = divisor
+    )
+}
+
+pub(super) fn code_modular_quotient(fn_name: &str, divisor: i64) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    return n / {divisor};\n}}\n",
+        fn_name = fn_name,
+        divisor = divisor
+    )
+}
+
+pub(super) fn code_gcd_euclidean(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(a: i64, b: i64) -> i64 {{\n    while b != 0 {{\n        tmp: i64 = b;\n        b = a % b;\n        a = tmp;\n    }}\n    return a;\n}}\n",
+        fn_name = fn_name
+    )
+}
+
+pub(super) fn code_lcm_formula(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(a: i64, b: i64) -> i64 {{\n    gcd: i64 = a;\n    temp_b: i64 = b;\n    while temp_b != 0 {{\n        tmp: i64 = temp_b;\n        temp_b = gcd % temp_b;\n        gcd = tmp;\n    }}\n    return (a / gcd) * b;\n}}\n",
+        fn_name = fn_name
+    )
+}
+
+/// Tree traversal patterns (DFS iterative with explicit stack).
+pub(super) fn code_tree_dfs_count(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(t: [i64]) -> i64 {{\n    return t.len as i64;\n}}\n",
+        fn_name = fn_name
+    )
+}
+
+pub(super) fn code_tree_dfs_sum(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(t: [i64]) -> i64 {{\n    acc: i64 = 0;\n    i: i64 = 0;\n    while i < t.len {{\n        acc = acc + t[i];\n        i = i + 1;\n    }}\n    return acc;\n}}\n",
+        fn_name = fn_name
+    )
+}
+
+/// Bit manipulation patterns.
+pub(super) fn code_bit_popcount(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    x: i64 = n;\n    count: i64 = 0;\n    while x != 0 {{\n        if (x % 2) == 1 {{ count = count + 1; }}\n        x = x / 2;\n    }}\n    return count;\n}}\n",
+        fn_name = fn_name
+    )
+}
+
+pub(super) fn code_bit_power_of_two_check(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    if n <= 0 {{ return 0; }}\n    if (n & (n - 1)) == 0 {{ return 1; }}\n    return 0;\n}}\n",
+        fn_name = fn_name
+    )
+}
+
+/// Polynomial sequence: quadratic a*n^2 + b*n + c
+pub(super) fn code_sequence_quadratic_polynomial(fn_name: &str, a: i64, b: i64, c: i64) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    return ({a} * n * n) + ({b} * n) + {c};\n}}\n",
+        fn_name = fn_name,
+        a = a,
+        b = b,
+        c = c
+    )
+}
+
+/// Polynomial sequence: cubic a*n^3 + b*n^2 + c*n + d
+pub(super) fn code_sequence_cubic_polynomial(fn_name: &str, a: i64, b: i64, c: i64, d: i64) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    return ({a} * n * n * n) + ({b} * n * n) + ({c} * n) + {d};\n}}\n",
+        fn_name = fn_name,
+        a = a,
+        b = b,
+        c = c,
+        d = d
+    )
+}
+
+/// Chebyshev polynomial sequence with recurrence T_{n+1}(x) = 2*x*T_n(x) - T_{n-1}(x)
+pub(super) fn code_chebyshev_sequence(fn_name: &str, x: i64) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    if n == 0 {{ return 1; }}\n    if n == 1 {{ return {x}; }}\n    prev2: i64 = 1;\n    prev1: i64 = {x};\n    i: i64 = 2;\n    while i <= n {{\n        curr: i64 = (2 * {x} * prev1) - prev2;\n        prev2 = prev1;\n        prev1 = curr;\n        i = i + 1;\n    }}\n    return prev1;\n}}\n",
+        fn_name = fn_name,
+        x = x
+    )
+}
+
+/// Hermite polynomial sequence with recurrence H_{n+1}(0) = -2*n*H_{n-1}(0)
+pub(super) fn code_hermite_sequence(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    if n == 0 {{ return 1; }}\n    if n == 1 {{ return 0; }}\n    if (n % 2) == 1 {{ return 0; }}\n    prev2: i64 = 1;\n    prev1: i64 = 0;\n    i: i64 = 2;\n    while i <= n {{\n        curr: i64 = -2 * (i - 1) * prev2;\n        prev2 = prev1;\n        prev1 = curr;\n        i = i + 1;\n    }}\n    return prev1;\n}}\n",
+        fn_name = fn_name
+    )
+}
+
+/// Legendre polynomial sequence P_n(1) = 1 for all n
+pub(super) fn code_legendre_sequence(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    return 1;\n}}\n",
+        fn_name = fn_name
+    )
+}
+
+/// Arithmetic progression: a + d*n where a is first term and d is common difference
+pub(super) fn code_arithmetic_progression(fn_name: &str, a: i64, d: i64) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    return {a} + ({d} * n);\n}}\n",
+        fn_name = fn_name,
+        a = a,
+        d = d
+    )
+}
+
+/// Geometric progression: a * r^n where a is first term and r is common ratio
+pub(super) fn code_geometric_progression(fn_name: &str, a: i64, r: i64) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    result: i64 = {a};\n    i: i64 = 0;\n    while i < n {{\n        result = result * {r};\n        i = i + 1;\n    }}\n    return result;\n}}\n",
+        fn_name = fn_name,
+        a = a,
+        r = r
+    )
+}
+
+/// Harmonic progression: reciprocals form an arithmetic sequence
+pub(super) fn code_harmonic_progression(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(n: i64) -> i64 {{\n    if n == 0 {{ return 1; }}\n    ap_term: i64 = 1 + n;\n    return 1 / ap_term;\n}}\n",
+        fn_name = fn_name
     )
 }
 

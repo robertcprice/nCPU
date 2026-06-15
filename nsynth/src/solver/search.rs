@@ -91,6 +91,40 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_recursive_fibonacci",
         func: search_recursive_fibonacci,
     },
+    // Polynomial sequence teachers (Stage 5)
+    SearchCandidate {
+        key: "search_sequence_quadratic_polynomial",
+        func: search_sequence_quadratic_polynomial,
+    },
+    SearchCandidate {
+        key: "search_sequence_cubic_polynomial",
+        func: search_sequence_cubic_polynomial,
+    },
+    SearchCandidate {
+        key: "search_chebyshev_sequence",
+        func: search_chebyshev_sequence,
+    },
+    SearchCandidate {
+        key: "search_hermite_sequence",
+        func: search_hermite_sequence,
+    },
+    SearchCandidate {
+        key: "search_legendre_sequence",
+        func: search_legendre_sequence,
+    },
+    // Arithmetic/Geometric/Harmonic progression teachers (Stage 5)
+    SearchCandidate {
+        key: "search_arithmetic_progression",
+        func: search_arithmetic_progression,
+    },
+    SearchCandidate {
+        key: "search_geometric_progression",
+        func: search_geometric_progression,
+    },
+    SearchCandidate {
+        key: "search_harmonic_progression",
+        func: search_harmonic_progression,
+    },
     // General membership/DNF array classifiers. Each is guarded to require >= 12
     // examples (every structural benchmark problem has <= 10), so they own the
     // large curriculum language-classification tasks without shadowing the exact

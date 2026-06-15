@@ -474,6 +474,11 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
                 fields,
             })
         }
+        BenchmarkValue::Tree(_) => {
+            Err(format!(
+                "tree argument conversion not yet implemented for problem {problem_name}"
+            ))
+        }
     }
 }
 

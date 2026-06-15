@@ -21,11 +21,11 @@ struct VerificationResult {
 fn verify_stage4_benchmarks() {
     // Representative Stage 4 time-parameterized benchmarks
     let test_cases = vec![
-        "fibonacci",
-        "factorial",
-        "triangular_check",
-        "polynomial",
-        "collatz_steps",
+        "fibonacci_v0",
+        "factorial_v0",
+        "triangular_check_v0",
+        "polynomial_v0",
+        "collatz_steps_v0",
     ];
 
     let mut results = Vec::new();
@@ -37,6 +37,20 @@ fn verify_stage4_benchmarks() {
 
     // Get all problems from the benchmark factory
     let all_problems = get_benchmark(1);
+
+    // Debug: Find and print matching problems
+    eprintln!("Looking for target problems...");
+    for target in &["fibonacci", "factorial", "triangular", "polynomial", "collatz"] {
+        let matches: Vec<&str> = all_problems
+            .iter()
+            .filter(|p| p.name.contains(target))
+            .map(|p| p.name.as_str())
+            .collect();
+        if !matches.is_empty() {
+            eprintln!("  Matching '{}': {:?}", target, matches);
+        }
+    }
+    eprintln!("Total problems: {}\n", all_problems.len());
 
     for problem_name in &test_cases {
         println!("Synthesizing {}...", problem_name);

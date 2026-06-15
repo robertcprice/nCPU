@@ -2014,3 +2014,398 @@ pub(super) fn search_recursive_fibonacci(
     let code = code_explicit_stack_fibonacci(fn_name, "n");
     verified_result(problem, code, "search_recursive_fibonacci")
 }
+
+/// Polynomial sequences: detect quadratic, cubic patterns.
+/// Pattern: a*n^2 + b*n + c or a*n^3 + b*n^2 + c*n + d.
+/// Validates with 3-5 examples from the sequence.
+pub(super) fn search_sequence_quadratic_polynomial(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    if problem.examples.len() < 3 {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for ex in &problem.examples {
+        if let Some(Value::Int(n)) = ex.inputs.first() {
+            let v = ex.expected_int();
+            values.push((*n, v));
+        } else {
+            return None;
+        }
+    }
+
+    if values.len() < 3 {
+        return None;
+    }
+
+    let (n0, v0) = values[0];
+    let (n1, v1) = values[1];
+    let (n2, v2) = values[2];
+
+    let d0 = (v1 - v0) / (n1 - n0 + 1);
+    let d1 = (v2 - v1) / (n2 - n1 + 1);
+    let a = (d1 - d0) / ((n2 - n0) / 2 + 1);
+
+    if a == 0 {
+        return None;
+    }
+
+    let b = (v1 - v0) / (n1 - n0 + 1) - a * (n0 + n1) / 2;
+    let c = v0 - a * n0 * n0 - b * n0;
+
+    let passes = values.iter().all(|(n, v)| {
+        let computed = a * n * n + b * n + c;
+        computed == *v
+    });
+
+    if passes {
+        let code = code_sequence_quadratic_polynomial(fn_name, a, b, c);
+        return verified_result(problem, code, "search_sequence_quadratic_polynomial");
+    }
+
+    None
+}
+
+/// Polynomial sequences: detect cubic patterns.
+/// Pattern: a*n^3 + b*n^2 + c*n + d.
+pub(super) fn search_sequence_cubic_polynomial(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    if problem.examples.len() < 4 {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for ex in &problem.examples {
+        if let Some(Value::Int(n)) = ex.inputs.first() {
+            let v = ex.expected_int();
+            values.push((*n, v));
+        } else {
+            return None;
+        }
+    }
+
+    if values.len() < 4 {
+        return None;
+    }
+
+    let (n0, v0) = values[0];
+    let (n1, v1) = values[1];
+    let (n2, v2) = values[2];
+    let (n3, v3) = values[3];
+
+    let d1_0 = v1 - v0;
+    let d1_1 = v2 - v1;
+    let d1_2 = v3 - v2;
+
+    let d2_0 = d1_1 - d1_0;
+    let d2_1 = d1_2 - d1_1;
+
+    let d3_0 = d2_1 - d2_0;
+
+    let a = d3_0 / 6;
+
+    if a == 0 {
+        return None;
+    }
+
+    let b = (d2_0 - 3 * a * n0) / 2;
+    let c = d1_0 - 3 * a * n0 * n0 - 2 * b * n0;
+    let d = v0 - a * n0 * n0 * n0 - b * n0 * n0 - c * n0;
+
+    let passes = values.iter().all(|(n, v)| {
+        let computed = a * n * n * n + b * n * n + c * n + d;
+        computed == *v
+    });
+
+    if passes {
+        let code = code_sequence_cubic_polynomial(fn_name, a, b, c, d);
+        return verified_result(problem, code, "search_sequence_cubic_polynomial");
+    }
+
+    None
+}
+
+/// Chebyshev polynomial sequence: T_n(x) = cos(n * arccos(x))
+/// For integer sequences, detect patterns like T_n(2), T_n(3), etc.
+pub(super) fn search_chebyshev_sequence(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    if problem.examples.len() < 3 {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for ex in &problem.examples {
+        if let Some(Value::Int(n)) = ex.inputs.first() {
+            let v = ex.expected_int();
+            values.push((*n, v));
+        } else {
+            return None;
+        }
+    }
+
+    if values.len() < 3 {
+        return None;
+    }
+
+    let passes = values.len() >= 3
+        && values.iter().enumerate().all(|(i, (n, v))| {
+            if i == 0 {
+                *n == 0 && *v == 1
+            } else if i == 1 {
+                *n == 1 && *v == 2
+            } else {
+                let prev2 = values[i - 2].1;
+                let prev1 = values[i - 1].1;
+                let expected = 2 * 2 * prev1 - prev2;
+                expected == *v
+            }
+        });
+
+    if passes {
+        let code = code_chebyshev_sequence(fn_name, 2);
+        return verified_result(problem, code, "search_chebyshev_sequence");
+    }
+
+    None
+}
+
+/// Hermite polynomial sequence: H_n(x)
+/// For integer sequences, detect patterns like H_n(0), H_n(1), etc.
+pub(super) fn search_hermite_sequence(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    if problem.examples.len() < 3 {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for ex in &problem.examples {
+        if let Some(Value::Int(n)) = ex.inputs.first() {
+            let v = ex.expected_int();
+            values.push((*n, v));
+        } else {
+            return None;
+        }
+    }
+
+    if values.len() < 3 {
+        return None;
+    }
+
+    let passes = values.len() >= 3
+        && values.iter().enumerate().all(|(i, (n, v))| {
+            if i == 0 {
+                *n == 0 && *v == 1
+            } else if i == 1 {
+                *n == 1 && *v == 0
+            } else {
+                let prev2 = values[i - 2].1;
+                let expected = -2 * (i as i64 - 1) * prev2;
+                expected == *v
+            }
+        });
+
+    if passes {
+        let code = code_hermite_sequence(fn_name);
+        return verified_result(problem, code, "search_hermite_sequence");
+    }
+
+    None
+}
+
+/// Legendre polynomial sequence: P_n(x)
+/// For integer sequences, detect patterns like P_n(1), P_n(2), etc.
+pub(super) fn search_legendre_sequence(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    if problem.examples.len() < 3 {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for ex in &problem.examples {
+        if let Some(Value::Int(n)) = ex.inputs.first() {
+            let v = ex.expected_int();
+            values.push((*n, v));
+        } else {
+            return None;
+        }
+    }
+
+    if values.len() < 3 {
+        return None;
+    }
+
+    let all_ones = values.iter().all(|(_, v)| *v == 1);
+    if all_ones && values.len() >= 3 {
+        let code = code_legendre_sequence(fn_name);
+        return verified_result(problem, code, "search_legendre_sequence");
+    }
+
+    None
+}
+
+/// Arithmetic progression (AP): a, a+d, a+2d, a+3d, ...
+/// Validates constant difference across examples.
+pub(super) fn search_arithmetic_progression(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    if problem.examples.len() < 3 {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for ex in &problem.examples {
+        if let Some(Value::Int(n)) = ex.inputs.first() {
+            let v = ex.expected_int();
+            values.push((*n, v));
+        } else {
+            return None;
+        }
+    }
+
+    if values.len() < 3 {
+        return None;
+    }
+
+    let diff = values[1].1 - values[0].1;
+    let is_ap = values.windows(2).all(|w| w[1].1 - w[0].1 == diff);
+
+    if is_ap {
+        let a = values[0].1;
+        let d = diff;
+        let code = code_arithmetic_progression(fn_name, a, d);
+        return verified_result(problem, code, "search_arithmetic_progression");
+    }
+
+    None
+}
+
+/// Geometric progression (GP): a, a*r, a*r^2, a*r^3, ...
+/// Validates constant ratio across examples.
+pub(super) fn search_geometric_progression(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    if problem.examples.len() < 3 {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for ex in &problem.examples {
+        if let Some(Value::Int(n)) = ex.inputs.first() {
+            let v = ex.expected_int();
+            values.push((*n, v));
+        } else {
+            return None;
+        }
+    }
+
+    if values.len() < 3 || values[0].1 == 0 {
+        return None;
+    }
+
+    let r = values[1].1 / values[0].1;
+    let is_gp = values.windows(2).all(|w| {
+        if w[0].1 == 0 {
+            false
+        } else {
+            w[1].1 == w[0].1 * r
+        }
+    });
+
+    if is_gp && r != 0 {
+        let a = values[0].1;
+        let code = code_geometric_progression(fn_name, a, r);
+        return verified_result(problem, code, "search_geometric_progression");
+    }
+
+    None
+}
+
+/// Harmonic progression (HP): 1/a, 1/(a+d), 1/(a+2d), ...
+/// For integer sequences, validates the reciprocal AP pattern.
+pub(super) fn search_harmonic_progression(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    if problem.examples.len() < 3 {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for ex in &problem.examples {
+        if let Some(Value::Int(n)) = ex.inputs.first() {
+            let v = ex.expected_int();
+            if v == 0 {
+                return None;
+            }
+            values.push((*n, v));
+        } else {
+            return None;
+        }
+    }
+
+    if values.len() < 3 {
+        return None;
+    }
+
+    if values.len() >= 3 {
+        let is_hp = values[0].1 * values[2].1 == values[1].1 * values[1].1;
+        if is_hp {
+            let code = code_harmonic_progression(fn_name);
+            return verified_result(problem, code, "search_harmonic_progression");
+        }
+    }
+
+    None
+}
