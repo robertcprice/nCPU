@@ -210,6 +210,35 @@ fn transpile(mog: &str, target: Target) -> String {
             body = rewrite_int_div_typescript(&body);
         }
 
+        // Go length-call rewrite: Mog's `arr.len` is a property access,
+        // but Go uses `len(arr)` as a built-in. Rewrite every `X.len`
+        // (where X is an identifier) to `len(X)`. The Python-style
+        // indentation pass already ran; this is the only Go-specific
+        // syntactic transformation on top of the brace handler.
+        if target == Target::Go {
+            body = rewrite_dot_len_go(&body);
+            // Go `var` declaration drops the Mog-style colon:
+            // `var X: T = V;` -> `var X T = V;`.
+            body = body
+                .lines()
+                .map(rewrite_var_decl_go)
+                .collect::<Vec<_>>()
+                .join("\n");
+            // Mog's implicit-typed declaration `X: T = V;` -> Go's
+            // `var X T = V;` (where T is Go's type, e.g. `int64`).
+            body = body
+                .lines()
+                .map(rewrite_implicit_typed_decl_go)
+                .collect::<Vec<_>>()
+                .join("\n");
+            // Mog's `while` -> Go's `for`.
+            body = body
+                .lines()
+                .map(rewrite_while_to_for_go)
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+
         // Opening-brace blocks (`if ... {`, `for ... {`, `while ... {`).
         // Python rewrites the trailing `{` to `:`; Rust/TS keep the brace.
         // In all targets, depth increases by one.
@@ -329,6 +358,142 @@ fn rewrite_int_div_python(line: &str) -> String {
 /// the synthesizer's atoms: identifiers, integer literals (optionally
 /// negative), or balanced parenthesized expressions. Scans left to
 /// right; chained divisions fold left-associatively.
+/// Rewrite `X.len` (Mog property access) to `len(X)` for Go.
+/// Operates on the full body string; the caller applies this to
+/// the post-brace body.
+fn rewrite_dot_len_go(body: &str) -> String {
+    // Match an identifier (letters/digits/underscore) followed by `.len`
+    // and rewrite to `len(<id>)`. We don't try to handle chained
+    // accesses (e.g. `a.b.len`) because Mog's array types don't have
+    // struct nesting in the surfaced syntax.
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len() + 8);
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 4 <= bytes.len()
+            && bytes[i] == b'.'
+            && bytes[i + 1] == b'l'
+            && bytes[i + 2] == b'e'
+            && bytes[i + 3] == b'n'
+        {
+            // Walk backwards from `i` to find the identifier start.
+            let mut start = i;
+            while start > 0 {
+                let prev = bytes[start - 1];
+                if prev.is_ascii_alphanumeric() || prev == b'_' {
+                    start -= 1;
+                } else {
+                    break;
+                }
+            }
+            if start < i {
+                // Truncate the output by the identifier length we
+                // already pushed, then push the rewrite.
+                let ident_len = i - start;
+                let new_len = out.len() - ident_len;
+                out.truncate(new_len);
+                let ident = std::str::from_utf8(&bytes[start..i]).unwrap_or("");
+                out.push_str(&format!("len({})", ident));
+                i += 4; // skip past `.len`
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Rewrite `var X: T = V;` (Mog `var` declaration) to `var X T = V`
+/// (Go `var` declaration). Drops the colon and the trailing
+/// semicolon. Operates per-line.
+fn rewrite_var_decl_go(line: &str) -> String {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("var ") {
+        return line.to_string();
+    }
+    // Find the `:` separator. The shape is `var NAME: TYPE = VALUE;`.
+    let bytes = line.as_bytes();
+    // Skip "var " prefix and the identifier.
+    let mut i = 4;
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b':' {
+        return line.to_string();
+    }
+    // Construct the rewrite: "var NAME TYPE = VALUE;" (drop the colon).
+    let prefix = &line[..4]; // "var "
+    let ident = &line[4..i];
+    let rest = &line[i + 1..];
+    format!("{prefix}{ident} {rest}")
+}
+
+/// Rewrite Mog's implicit-typed declaration `X: T = V;` to Go's
+/// `var X T = V;`. The Mog codegen emits `i: i64 = 1;` (no `var`
+/// keyword) when the type is inferred from a later use; for Go we
+/// need the explicit type. Operates per-line.
+fn rewrite_implicit_typed_decl_go(line: &str) -> String {
+    // Skip leading whitespace.
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return line.to_string();
+    }
+    // Must start with an identifier.
+    if !bytes[i].is_ascii_alphabetic() && bytes[i] != b'_' {
+        return line.to_string();
+    }
+    let ident_start = i;
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b':' {
+        return line.to_string();
+    }
+    // Skip the `:` and any whitespace, then expect a type.
+    i += 1;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b'i' {
+        return line.to_string();
+    }
+    // The Mog codegen uses `i64` for int. We convert it to Go's `int64`.
+    if i + 3 > bytes.len() || &bytes[i..i + 3] != b"i64" {
+        return line.to_string();
+    }
+    // Rewrite: insert "var " before the identifier, drop the `:` and
+    // the `i64` literal, and add a Go type name in its place.
+    let prefix_ws = &line[..ident_start];
+    let ident = &line[ident_start..line.find(':').unwrap()];
+    let rest = &line[line.find(':').unwrap() + 1..];
+    // Skip the type and the `=` and the value; just emit the Go
+    // declaration.
+    format!("{prefix_ws}var {ident} int64{rest}")
+}
+
+/// Rewrite Mog's `while COND { BODY }` to Go's `for COND { BODY }`.
+/// Operates per-line: matches a `while`-prefixed line and rewrites
+/// the keyword.
+fn rewrite_while_to_for_go(line: &str) -> String {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("while ") && trimmed != "while" {
+        return line.to_string();
+    }
+    // Replace the first 5 characters ("while") with "for ".
+    let leading_ws: String = line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let rest_start = leading_ws.len() + "while".len();
+    let rest = &line[rest_start..];
+    format!("{leading_ws}for {rest}")
+}
+
 fn rewrite_int_div_typescript(line: &str) -> String {
     let mut s = line.to_string();
     // Cursor past which we look for the next unwrapped `/`. After each
