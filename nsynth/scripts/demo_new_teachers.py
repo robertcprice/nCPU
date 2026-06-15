@@ -198,8 +198,15 @@ DEMOS: list[Demo] = [
 
 
 def _solve(demo: Demo) -> dict | None:
+    # Run each demo with --run so the JSON response also includes the
+    # `run_output` field showing the runtime result on a fresh input.
+    # The first test input in `inputs_to_run` is the one we execute.
+    run_json = json.dumps(demo.inputs_to_run[:1]) if demo.inputs_to_run else None
+    args = [str(BACKEND), "--problem-json", json.dumps(demo.request)]
+    if run_json is not None:
+        args += ["--run", run_json]
     proc = subprocess.run(
-        [str(BACKEND), "--problem-json", json.dumps(demo.request)],
+        args,
         capture_output=True,
         text=True,
         timeout=120,
@@ -260,6 +267,13 @@ def main() -> int:
         print("  emitted code:")
         for line in result["code"].splitlines():
             print(f"    {line}")
+        print()
+        run_output = result.get("run_output")
+        if run_output is not None:
+            print(f"  runtime result: {run_output}")
+        else:
+            expected_first = demo.expected_outputs[0] if demo.expected_outputs else "?"
+            print(f"  (no --run output; expected first input -> {expected_first})")
         print()
 
         n_total += 1

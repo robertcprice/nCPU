@@ -28,6 +28,53 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
+/// Run an emitted Mog program on a fresh input parsed from JSON.
+/// The JSON shape mirrors the `examples[i].inputs` shape — a list of
+/// JSON values (int, array of ints, or string). The function is
+/// inferred from the problem's `function_name()`.
+fn run_emitted_on_input(
+    code: &str,
+    problem: &mog_synth::benchmark::Problem,
+    input_json: &str,
+) -> Result<String, String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(input_json).map_err(|e| format!("invalid --run JSON: {e}"))?;
+    let arr = parsed
+        .as_array()
+        .ok_or_else(|| "--run JSON must be a list of input values".to_string())?;
+    let inputs: Vec<mog_synth::benchmark::Value> = arr
+        .iter()
+        .map(|v| match v {
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(mog_synth::benchmark::Value::Int(i))
+                } else {
+                    Err(format!("--run: number {n} is not i64"))
+                }
+            }
+            serde_json::Value::Array(items) => {
+                let ints: Result<Vec<i64>, String> = items
+                    .iter()
+                    .map(|x| {
+                        x.as_i64()
+                            .ok_or_else(|| "--run: array element not i64".to_string())
+                    })
+                    .collect();
+                Ok(mog_synth::benchmark::Value::Array(ints?))
+            }
+            serde_json::Value::String(s) => Ok(mog_synth::benchmark::Value::Str(s.clone())),
+            other => Err(format!("--run: unsupported input type {other:?}")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let value = mog_synth::runtime::execute_function_for_problem(
+        code,
+        problem.function_name(),
+        &inputs,
+        problem,
+    )?;
+    Ok(format!("{value:?}"))
+}
+
 fn default_memory_root() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
@@ -357,6 +404,10 @@ fn main() {
             "[problem-json] parsed {} bytes, calling solve_problem...",
             json_str.len()
         );
+        // Optional --run <input-json> to execute the emitted code on a
+        // fresh input after the problem is solved. Add a `run_output` field
+        // to the JSON response.
+        let run_input_json = arg_value(&args, "--run");
         match parse_problem_json(&json_str) {
             Ok(problem) => {
                 eprintln!(
@@ -370,13 +421,25 @@ fn main() {
                         .unwrap_or(0)
                 );
                 let result = solve_problem(&problem);
-                // Output as JSON
-                let output = serde_json::json!({
+                let mut output = serde_json::json!({
                     "success": result.success,
                     "code": result.code,
                     "method": result.method,
                     "error": result.error,
                 });
+                if result.success {
+                    if let Some(run_json) = run_input_json {
+                        match run_emitted_on_input(&result.code, &problem, &run_json) {
+                            Ok(value) => {
+                                output["run_output"] = serde_json::Value::String(value);
+                            }
+                            Err(e) => {
+                                output["run_error"] =
+                                    serde_json::Value::String(format!("run failed: {e}"));
+                            }
+                        }
+                    }
+                }
                 println!("{output}");
             }
             Err(e) => {
