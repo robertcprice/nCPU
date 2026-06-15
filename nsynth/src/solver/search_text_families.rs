@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::search_codegen::*;
 use super::search_runtime::count_words;
 use super::*;
@@ -239,4 +241,153 @@ pub(super) fn search_suffix_class(problem: &Problem, fn_name: &str) -> Option<So
     chosen.sort();
     let code = code_suffix_class_search(fn_name, &chosen);
     verified_result(problem, code, "search_suffix_class")
+}
+
+/// Order-sensitive string classifier: label 1 iff the input contains one of a
+/// learned set of character subsequences.
+pub(super) fn search_string_subsequence_class(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    const MIN_EXAMPLES: usize = 12;
+    const MAX_SUBSEQ_LEN: usize = 4;
+    const MAX_DISJUNCTS: usize = 8;
+
+    let strings = unary_string_examples(problem)?;
+    if problem.examples.len() < MIN_EXAMPLES {
+        return None;
+    }
+    if !problem
+        .examples
+        .iter()
+        .all(|e| e.expected_int() == 0 || e.expected_int() == 1)
+    {
+        return None;
+    }
+
+    let positives: Vec<&String> = problem
+        .examples
+        .iter()
+        .zip(strings.iter())
+        .filter(|(e, _)| e.expected_int() == 1)
+        .map(|(_, s)| s)
+        .collect();
+    let negatives: Vec<&String> = problem
+        .examples
+        .iter()
+        .zip(strings.iter())
+        .filter(|(e, _)| e.expected_int() == 0)
+        .map(|(_, s)| s)
+        .collect();
+    if positives.is_empty() || negatives.is_empty() {
+        return None;
+    }
+
+    let mut candidates = HashSet::<Vec<String>>::new();
+    for p in &positives {
+        let chars: Vec<char> = p.chars().collect();
+        let mut current: Vec<String> = Vec::new();
+        collect_subsequence_candidates(&chars, MAX_SUBSEQ_LEN, 2, 0, &mut current, &mut candidates);
+    }
+
+    let mut candidates: Vec<Vec<String>> = candidates.into_iter().collect();
+    candidates.sort_by(|a, b| {
+        a.len()
+            .cmp(&b.len())
+            .then_with(|| a.join("").cmp(&b.join("")))
+    });
+    if candidates.len() > 512 {
+        candidates.truncate(512);
+    }
+
+    let admissible: Vec<Vec<String>> = candidates
+        .into_iter()
+        .filter(|subseq| !negatives.iter().any(|n| has_string_subsequence(n, subseq)))
+        .collect();
+    if admissible.is_empty() {
+        return None;
+    }
+
+    let mut uncovered: Vec<bool> = vec![true; positives.len()];
+    let mut chosen: Vec<Vec<String>> = Vec::new();
+    while uncovered.iter().any(|&u| u) && chosen.len() < MAX_DISJUNCTS {
+        let mut best: Option<(usize, &Vec<String>)> = None;
+        for subseq in &admissible {
+            if chosen.iter().any(|c| c == subseq) {
+                continue;
+            }
+            let cover = positives
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| uncovered[*i] && has_string_subsequence(p, subseq))
+                .count();
+            if cover == 0 {
+                continue;
+            }
+            match best {
+                Some((best_cover, _)) if cover <= best_cover => {}
+                _ => best = Some((cover, subseq)),
+            }
+        }
+        let (_, subseq) = best?;
+        for (i, p) in positives.iter().enumerate() {
+            if has_string_subsequence(p, subseq) {
+                uncovered[i] = false;
+            }
+        }
+        chosen.push(subseq.clone());
+    }
+    if uncovered.iter().any(|&u| u) {
+        return None;
+    }
+
+    chosen.sort_by(|a, b| {
+        a.len()
+            .cmp(&b.len())
+            .then_with(|| a.join("").cmp(&b.join("")))
+    });
+    let code = code_string_subsequence_class_search(fn_name, &chosen);
+    verified_result(problem, code, "search_string_subsequence_class")
+}
+
+fn collect_subsequence_candidates(
+    chars: &[char],
+    max_len: usize,
+    min_len: usize,
+    start: usize,
+    current: &mut Vec<String>,
+    out: &mut HashSet<Vec<String>>,
+) {
+    if current.len() >= min_len {
+        out.insert(current.clone());
+    }
+    if current.len() == max_len || start >= chars.len() {
+        return;
+    }
+    for i in start..chars.len() {
+        current.push(chars[i].to_string());
+        collect_subsequence_candidates(chars, max_len, min_len, i + 1, current, out);
+        current.pop();
+    }
+}
+
+fn has_string_subsequence(value: &str, subseq: &[String]) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    let mut pos = 0usize;
+    for token in subseq {
+        let expected = token.chars().next().unwrap_or_default();
+        let mut found = false;
+        while pos < chars.len() {
+            if chars[pos] == expected {
+                found = true;
+                pos += 1;
+                break;
+            }
+            pos += 1;
+        }
+        if !found {
+            return false;
+        }
+    }
+    true
 }

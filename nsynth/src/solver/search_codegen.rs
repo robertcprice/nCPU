@@ -89,11 +89,15 @@ pub(super) fn code_array_conjunction_search(
     let mut sets = String::new();
     for (i, t) in required.iter().enumerate() {
         decls.push_str(&format!("    r{i}: i64 = 0;\n"));
-        sets.push_str(&format!("        if x == {t} {{\n            r{i} = 1;\n        }}\n"));
+        sets.push_str(&format!(
+            "        if x == {t} {{\n            r{i} = 1;\n        }}\n"
+        ));
     }
     for (i, t) in forbidden.iter().enumerate() {
         decls.push_str(&format!("    f{i}: i64 = 0;\n"));
-        sets.push_str(&format!("        if x == {t} {{\n            f{i} = 1;\n        }}\n"));
+        sets.push_str(&format!(
+            "        if x == {t} {{\n            f{i} = 1;\n        }}\n"
+        ));
     }
     // Guard: all required flags 1, all forbidden flags 0. Mog has no `&&`, so the
     // conjunction is a nest of single-condition `if`s; the innermost returns 1.
@@ -125,7 +129,9 @@ pub(super) fn code_array_dnf_search(fn_name: &str, rules: &[Vec<(i64, bool)>]) -
     let mut sets = String::new();
     for (i, t) in toks.iter().enumerate() {
         decls.push_str(&format!("    t{i}: i64 = 0;\n"));
-        sets.push_str(&format!("        if x == {t} {{\n            t{i} = 1;\n        }}\n"));
+        sets.push_str(&format!(
+            "        if x == {t} {{\n            t{i} = 1;\n        }}\n"
+        ));
     }
 
     let mut blocks = String::new();
@@ -140,6 +146,170 @@ pub(super) fn code_array_dnf_search(fn_name: &str, rules: &[Vec<(i64, bool)>]) -
     format!(
         "fn {fn_name}(arr: [i64]) -> i64 {{\n{decls}    for x in arr {{\n{sets}    }}\n{blocks}    return 0;\n}}\n"
     )
+}
+
+pub(super) fn code_array_sequence_search(fn_name: &str, rules: &[(i64, i64)]) -> String {
+    let mut decls = String::new();
+    let mut loop_body = String::new();
+    for (i, &(a, b)) in rules.iter().enumerate() {
+        decls.push_str(&format!("    seen_{i}: i64 = 0;\n"));
+        loop_body.push_str(&format!(
+            "        if x == {b} {{\n            if seen_{i} == 1 {{\n                return 1;\n            }}\n        }}\n"
+        ));
+        loop_body.push_str(&format!(
+            "        if x == {a} {{\n            seen_{i} = 1;\n        }}\n"
+        ));
+    }
+    format!(
+        "fn {fn_name}(arr: [i64]) -> i64 {{\n{decls}    for x in arr {{\n{loop_body}    }}\n    return 0;\n}}\n"
+    )
+}
+
+pub(super) fn code_array_feature_dnf_search(
+    fn_name: &str,
+    features: &[super::search_families::ArrayFeature],
+    rules: &[Vec<usize>],
+) -> String {
+    let mut decls = String::new();
+    let mut init = String::new();
+    let mut loop_body = String::new();
+    let mut post_loop = String::new();
+    let mut needs_prev_value = false;
+
+    for (idx, feature) in features.iter().enumerate() {
+        decls.push_str(&format!("    f{idx}: i64 = 0;\n"));
+        match feature {
+            super::search_families::ArrayFeature::Contains(tok) => {
+                loop_body.push_str(&format!(
+                    "        if x == {tok} {{\n            f{idx} = 1;\n        }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::Adjacent(a, b) => {
+                if !needs_prev_value {
+                    init.push_str("    prev_value: i64 = 0;\n    has_prev_value: i64 = 0;\n");
+                    needs_prev_value = true;
+                }
+                loop_body.push_str(&format!(
+                    "        if has_prev_value == 1 && prev_value == {a} && x == {b} {{\n            f{idx} = 1;\n        }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::Sequence(a, b) => {
+                init.push_str(&format!("    seen_f{idx}_a: i64 = 0;\n"));
+                loop_body.push_str(&format!(
+                    "        if seen_f{idx}_a == 1 && x == {b} {{\n            f{idx} = 1;\n        }}\n"
+                ));
+                loop_body.push_str(&format!(
+                    "        if x == {a} {{\n            seen_f{idx}_a = 1;\n        }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::CountAtLeast(tok, threshold) => {
+                init.push_str(&format!("    count_f{idx}: i64 = 0;\n"));
+                loop_body.push_str(&format!(
+                    "        if x == {tok} {{\n            count_f{idx} = count_f{idx} + 1;\n        }}\n"
+                ));
+                post_loop.push_str(&format!(
+                    "    if count_f{idx} >= {threshold} {{\n        f{idx} = 1;\n    }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::CountExactly(tok, threshold) => {
+                init.push_str(&format!("    count_f{idx}: i64 = 0;\n"));
+                loop_body.push_str(&format!(
+                    "        if x == {tok} {{\n            count_f{idx} = count_f{idx} + 1;\n        }}\n"
+                ));
+                post_loop.push_str(&format!(
+                    "    if count_f{idx} == {threshold} {{\n        f{idx} = 1;\n    }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::RunAtLeast(tok, length) => {
+                init.push_str(&format!(
+                    "    run_value_f{idx}: i64 = 0;\n    run_len_f{idx}: i64 = 0;\n"
+                ));
+                loop_body.push_str(&format!(
+                    "        if x == {tok} {{\n            if run_value_f{idx} == {tok} {{\n                run_len_f{idx} = run_len_f{idx} + 1;\n            }} else {{\n                run_value_f{idx} = {tok};\n                run_len_f{idx} = 1;\n            }}\n            if run_len_f{idx} >= {length} {{\n                f{idx} = 1;\n            }}\n        }} else {{\n            run_len_f{idx} = 0;\n        }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::AnyGreater(threshold) => {
+                loop_body.push_str(&format!(
+                    "        if x > {threshold} {{\n            f{idx} = 1;\n        }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::AnyLess(threshold) => {
+                loop_body.push_str(&format!(
+                    "        if x < {threshold} {{\n            f{idx} = 1;\n        }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::AllGreater(threshold) => {
+                init.push_str(&format!(
+                    "    bad_f{idx}: i64 = 0;\n    count_f{idx}: i64 = 0;\n"
+                ));
+                loop_body.push_str(&format!(
+                    "        count_f{idx} = count_f{idx} + 1;\n        if x <= {threshold} {{\n            bad_f{idx} = 1;\n        }}\n"
+                ));
+                post_loop.push_str(&format!(
+                    "    if bad_f{idx} == 0 && count_f{idx} > 0 {{\n        f{idx} = 1;\n    }}\n"
+                ));
+            }
+            super::search_families::ArrayFeature::AllLess(threshold) => {
+                init.push_str(&format!(
+                    "    bad_f{idx}: i64 = 0;\n    count_f{idx}: i64 = 0;\n"
+                ));
+                loop_body.push_str(&format!(
+                    "        count_f{idx} = count_f{idx} + 1;\n        if x >= {threshold} {{\n            bad_f{idx} = 1;\n        }}\n"
+                ));
+                post_loop.push_str(&format!(
+                    "    if bad_f{idx} == 0 && count_f{idx} > 0 {{\n        f{idx} = 1;\n    }}\n"
+                ));
+            }
+        }
+    }
+    if needs_prev_value {
+        loop_body.push_str("        prev_value = x;\n        has_prev_value = 1;\n");
+    }
+
+    let mut guards = String::new();
+    for rule in rules {
+        let mut guard = String::from("return 1;");
+        for &feature_idx in rule.iter().rev() {
+            guard = format!("if f{feature_idx} == 1 {{ {guard} }}");
+        }
+        guards.push_str(&format!("    {guard}\n"));
+    }
+
+    format!(
+        "fn {fn_name}(arr: [i64]) -> i64 {{\n{decls}{init}    for x in arr {{\n{loop_body}    }}\n{post_loop}{guards}    return 0;\n}}\n"
+    )
+}
+
+pub(super) fn code_string_subsequence_class_search(
+    fn_name: &str,
+    subsequences: &[Vec<String>],
+) -> String {
+    let mut flags = String::new();
+    let mut checks = String::new();
+
+    for (idx, subseq) in subsequences.iter().enumerate() {
+        flags.push_str(&format!(
+            "    done_{idx}: i64 = 0;\n    cursor_{idx}: i64 = 0;\n"
+        ));
+        let mut body = String::new();
+        for (pos, token) in subseq.iter().enumerate() {
+            let escaped = escape_string(token);
+            body.push_str(&format!(
+                "        found_{idx}_{pos}: i64 = 0;\n        search_{idx}_{pos}: i64 = cursor_{idx};\n        while search_{idx}_{pos} < s.len {{\n            if s[search_{idx}_{pos}] == \"{escaped}\" {{\n                found_{idx}_{pos} = 1;\n                cursor_{idx} = search_{idx}_{pos} + 1;\n                break;\n            }}\n            search_{idx}_{pos} = search_{idx}_{pos} + 1;\n        }}\n        if found_{idx}_{pos} == 1 {{\n            done_{idx} = done_{idx} + 1;\n        }}\n"
+            ));
+        }
+        checks.push_str(&body);
+        checks.push_str(&format!(
+            "    if done_{idx} == {} {{\n        return 1;\n    }}\n",
+            subseq.len()
+        ));
+    }
+
+    format!("fn {fn_name}(s: string) -> i64 {{\n{flags}{checks}    return 0;\n}}\n")
+}
+
+fn escape_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 pub(super) fn verified_result(

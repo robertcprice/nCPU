@@ -334,7 +334,11 @@ pub fn execute_function_for_problem(
 /// Execute a single-string-argument function and return its raw `Value`.
 /// Used by the generative-morphology path, where the function returns a string
 /// (`fn pluralize(s: string) -> string`) rather than an i64.
-pub fn execute_str_function(code: &str, function_name: &str, input: &str) -> Result<String, String> {
+pub fn execute_str_function(
+    code: &str,
+    function_name: &str,
+    input: &str,
+) -> Result<String, String> {
     let program = parse_program(code)?;
     let runtime = Runtime::new(program);
     match runtime.call_function(function_name, vec![Value::Str(input.to_string())])? {
@@ -551,12 +555,11 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
             // A `.` followed by a digit makes this a float literal (`2.5`); a
             // `.` followed by anything else is the field/range operator and is
             // left for the next token (so `arr.len`, `0..n` still lex correctly).
-            let is_float = matches!(chars.peek(), Some('.'))
-                && {
-                    let mut lookahead = chars.clone();
-                    lookahead.next();
-                    matches!(lookahead.peek(), Some(d) if d.is_ascii_digit())
-                };
+            let is_float = matches!(chars.peek(), Some('.')) && {
+                let mut lookahead = chars.clone();
+                lookahead.next();
+                matches!(lookahead.peek(), Some(d) if d.is_ascii_digit())
+            };
             if is_float {
                 value.push('.');
                 chars.next(); // consume '.'

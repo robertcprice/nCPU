@@ -22,9 +22,8 @@ use std::io::Write as IoWrite;
 /// is always `[0, 1, -1, c3, c4, c5]` with `c3..c5` drawn (distinct) from
 /// this list — a closed vocabulary so the prior net can predict constant
 /// values with a classification head instead of unbounded regression.
-pub const CONST_CANDIDATES: [i64; 17] = [
-    2, -2, 3, -3, 4, -4, 5, -5, 6, 7, 8, 9, 10, 12, 15, 16, 20,
-];
+pub const CONST_CANDIDATES: [i64; 17] =
+    [2, -2, 3, -3, 4, -4, 5, -5, 6, 7, 8, 9, 10, 12, 15, 16, 20];
 
 /// Cap on rows per distinct discrete program. Without it the dataset is
 /// dominated by a handful of attractor shapes (sum, max, identity).
@@ -194,7 +193,10 @@ fn run_examples(
         for s in scalars {
             args.push(s.to_string());
         }
-        src.push_str(&format!("    println_i64({fn_name}({}));\n", args.join(", ")));
+        src.push_str(&format!(
+            "    println_i64({fn_name}({}));\n",
+            args.join(", ")
+        ));
     }
     src.push_str("    return 0;\n}\n");
 
@@ -217,7 +219,12 @@ fn run_examples(
     Ok(outs)
 }
 
-fn desc_to_json(desc: &UArrDescription, origin: &str, examples_json: Vec<serde_json::Value>, mog: &str) -> serde_json::Value {
+fn desc_to_json(
+    desc: &UArrDescription,
+    origin: &str,
+    examples_json: Vec<serde_json::Value>,
+    mog: &str,
+) -> serde_json::Value {
     serde_json::json!({
         "n_scalar": desc.n_scalar,
         "origin": origin,
@@ -248,8 +255,8 @@ pub fn generate_prior_data(
     let mut rng = SplitMix64::new(seed);
     let mut stats = GenStats::default();
     let mut code_counts: HashMap<String, usize> = HashMap::new();
-    let file = std::fs::File::create(out_path)
-        .map_err(|e| format!("cannot create {out_path}: {e}"))?;
+    let file =
+        std::fs::File::create(out_path).map_err(|e| format!("cannot create {out_path}: {e}"))?;
     let mut w = std::io::BufWriter::new(file);
 
     let max_attempts = target_rows.saturating_mul(60).max(10_000);
@@ -296,7 +303,9 @@ pub fn generate_prior_data(
         let mut inputs: Vec<(Vec<i64>, Vec<i64>)> = Vec::with_capacity(n_ex);
         for _ in 0..n_ex {
             let len = 1 + rng.below(MAX_ARR_LEN);
-            let arr: Vec<i64> = (0..len).map(|_| rng.range_i64(-MAX_ELEM, MAX_ELEM)).collect();
+            let arr: Vec<i64> = (0..len)
+                .map(|_| rng.range_i64(-MAX_ELEM, MAX_ELEM))
+                .collect();
             let scalars: Vec<i64> = (0..n_scalar)
                 .map(|_| rng.range_i64(-MAX_SCALAR, MAX_SCALAR))
                 .collect();
@@ -349,10 +358,7 @@ pub fn generate_prior_data(
 /// Parse a prior-net proposal (the JSON shape emitted by
 /// `nsynth/scripts/prior_net/propose.py`) into a [`UArrDescription`].
 /// Returns `None` on any malformed field — callers fail soft.
-fn description_from_proposal(
-    v: &serde_json::Value,
-    n_scalar: usize,
-) -> Option<UArrDescription> {
+fn description_from_proposal(v: &serde_json::Value, n_scalar: usize) -> Option<UArrDescription> {
     let consts_v = v.get("consts")?.as_array()?;
     let mut consts = [0i64; N_CONSTS];
     for (i, c) in consts_v.iter().take(N_CONSTS).enumerate() {
@@ -406,10 +412,18 @@ fn program_from_description(desc: &UArrDescription) -> SoftUniversalArrayProgram
 
 // ── Tier-0 proposer wiring (stage A3; v1 persistent server + gate) ───────────
 
-/// Master switch for the prior-net tier-0 proposer. Anything other than
-/// `NSYNTH_PRIOR_NET=1` leaves the solver byte-identical to before.
+/// Master switch for the prior-net tier-0 proposer. The proposer is now
+/// opportunistic: if the script/model assets are present it can warm-start the
+/// universal-array solver by default; set `NSYNTH_PRIOR_NET=0` to force the old
+/// byte-identical no-prior path.
 pub(in crate::synthesis) fn prior_net_enabled() -> bool {
-    std::env::var("NSYNTH_PRIOR_NET").map(|v| v == "1").unwrap_or(false)
+    if std::env::var("NSYNTH_PRIOR_NET")
+        .map(|v| v == "0")
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    find_prior_net_assets().is_some()
 }
 
 /// Default confidence gate (Phase A v1). Calibrated on the 10k held-out
@@ -467,8 +481,7 @@ enum ServerState {
 }
 
 fn prior_server() -> &'static std::sync::Mutex<ServerState> {
-    static SERVER: std::sync::OnceLock<std::sync::Mutex<ServerState>> =
-        std::sync::OnceLock::new();
+    static SERVER: std::sync::OnceLock<std::sync::Mutex<ServerState>> = std::sync::OnceLock::new();
     SERVER.get_or_init(|| std::sync::Mutex::new(ServerState::Untried))
 }
 
@@ -568,10 +581,7 @@ fn spawn_prior_server() -> Option<PriorServer> {
 
 /// One request/response round-trip on the live server. `None` on any
 /// protocol failure — the caller demotes the server to `Failed`.
-fn server_request(
-    server: &mut PriorServer,
-    req: &serde_json::Value,
-) -> Option<serde_json::Value> {
+fn server_request(server: &mut PriorServer, req: &serde_json::Value) -> Option<serde_json::Value> {
     use std::io::{BufRead as _, Write as _};
     let mut line = req.to_string();
     line.push('\n');
@@ -704,7 +714,10 @@ pub(in crate::synthesis) fn try_prior_net_proposals(
     let req = serde_json::json!({"n_scalar": n_scalar, "examples": exs});
 
     let resp = prior_server_propose(&req)?;
-    let confidence = resp.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.0);
+    let confidence = resp
+        .get("confidence")
+        .and_then(|c| c.as_f64())
+        .unwrap_or(0.0);
     if resp.get("gated").and_then(|g| g.as_bool()) == Some(true) {
         eprintln!(
             "[prior_net] {fn_name}: GATED (conf {confidence:.3} < tau {:.3}) in {:.0}ms",
@@ -781,7 +794,10 @@ pub fn eval_fallback_direct(names: &[String]) -> Vec<serde_json::Value> {
             Some(f) => f,
             None => continue,
         };
-        if !matches!(first.inputs.first(), Some(crate::benchmark::Value::Array(_))) {
+        if !matches!(
+            first.inputs.first(),
+            Some(crate::benchmark::Value::Array(_))
+        ) {
             continue;
         }
         let n_scalar = first.inputs.len().saturating_sub(1);
@@ -824,7 +840,11 @@ pub fn eval_fallback_direct(names: &[String]) -> Vec<serde_json::Value> {
         let scalar_names: Vec<&str> = match n_scalar {
             0 => vec![],
             1 => vec!["k"],
-            n => ["a", "b", "c", "d", "e", "f"].iter().take(n).copied().collect(),
+            n => ["a", "b", "c", "d", "e", "f"]
+                .iter()
+                .take(n)
+                .copied()
+                .collect(),
         };
         let fn_name = problem.function_name();
         let t0 = std::time::Instant::now();
@@ -862,7 +882,11 @@ mod tests {
                 let prog = random_bias_init(n_scalar, seed.wrapping_mul(977), &consts);
                 let desc = prog.describe();
                 let rebuilt = SoftUniversalArrayProgram::from_description(&desc);
-                assert_eq!(rebuilt.describe(), desc, "desc roundtrip n={n_scalar} s={seed}");
+                assert_eq!(
+                    rebuilt.describe(),
+                    desc,
+                    "desc roundtrip n={n_scalar} s={seed}"
+                );
                 let names = scalar_names_for(n_scalar);
                 assert_eq!(
                     rebuilt.discretize_and_emit("f", &names),
@@ -991,7 +1015,10 @@ mod tests {
         // behavior that makes server startup cost ~0 wall time).
         let first =
             try_prior_net_proposals(&problem, &examples, 0, "f", &[], &mut rejected, &mut neg);
-        assert!(first.is_none(), "first call must return None while spawning");
+        assert!(
+            first.is_none(),
+            "first call must return None while spawning"
+        );
         assert!(
             wait_for_prior_server(std::time::Duration::from_secs(20)),
             "stub server failed to become ready"
@@ -1026,7 +1053,10 @@ mod tests {
                 Some(f) => f,
                 None => continue,
             };
-            if !matches!(first.inputs.first(), Some(crate::benchmark::Value::Array(_))) {
+            if !matches!(
+                first.inputs.first(),
+                Some(crate::benchmark::Value::Array(_))
+            ) {
                 continue;
             }
             let n_scalar = first.inputs.len().saturating_sub(1);
@@ -1070,7 +1100,8 @@ mod tests {
 
     #[test]
     fn generator_smoke_produces_clean_rows() {
-        let tmp = std::env::temp_dir().join(format!("prior_gen_smoke_{}.jsonl", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("prior_gen_smoke_{}.jsonl", std::process::id()));
         let stats = generate_prior_data(40, 42, tmp.to_str().unwrap()).unwrap();
         assert_eq!(stats.written, 40);
         let text = std::fs::read_to_string(&tmp).unwrap();
@@ -1091,8 +1122,7 @@ mod tests {
                 .collect();
             assert!(outs.windows(2).any(|w| w[0] != w[1]), "constant row leaked");
             // Proposal parse + rebuild emits the row's own Mog code.
-            let desc =
-                description_from_proposal(&row["desc"], n_scalar).expect("desc parse");
+            let desc = description_from_proposal(&row["desc"], n_scalar).expect("desc parse");
             let prog = program_from_description(&desc);
             let names = scalar_names_for(n_scalar);
             assert_eq!(

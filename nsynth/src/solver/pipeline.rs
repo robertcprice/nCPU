@@ -49,7 +49,10 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
         use crate::morph_transduce::{solve_morph_transduction, StrExample};
         let mk = |rs: &[(Vec<String>, String)]| {
             rs.iter()
-                .map(|(i, o)| StrExample { input: i[0].clone(), expected: o.clone() })
+                .map(|(i, o)| StrExample {
+                    input: i[0].clone(),
+                    expected: o.clone(),
+                })
                 .collect::<Vec<_>>()
         };
         let m = solve_morph_transduction(fn_name, &mk(&train), &mk(&holds));
@@ -84,11 +87,16 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
     let all: Vec<StrSynthExample> = train
         .iter()
         .chain(holds.iter())
-        .map(|(i, o)| StrSynthExample { inputs: i.clone(), expected: o.clone() })
+        .map(|(i, o)| StrSynthExample {
+            inputs: i.clone(),
+            expected: o.clone(),
+        })
         .collect();
     let r = synthesize_string_program(&params, &all);
     if r.success {
-        let code = r.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+        let code = r
+            .code
+            .replacen("fn transform(", &format!("fn {fn_name}("), 1);
         return Some(SolveResult {
             success: true,
             code,
@@ -126,7 +134,8 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
     // regression, a different regime from the exact-integer machinery below
     // (which would choke on f64 inputs). Self-gates to f64 signatures and returns
     // None for everything else, so integer problems are untouched.
-    if let Some(result) = super::search_float::search_float_affine(problem, &problem.function_name())
+    if let Some(result) =
+        super::search_float::search_float_affine(problem, &problem.function_name())
     {
         if result.success {
             return result;

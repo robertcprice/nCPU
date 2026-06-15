@@ -889,9 +889,9 @@ pub struct UArrSlotDesc {
 pub struct UArrDescription {
     pub n_scalar: usize,
     pub consts: [i64; N_CONSTS],
-    pub slots: Vec<UArrSlotDesc>,      // N_ARR_SLOTS entries
-    pub body_init: Vec<usize>,         // N_ARR_BODY entries, each < lip
-    pub ret: usize,                    // pool index
+    pub slots: Vec<UArrSlotDesc>, // N_ARR_SLOTS entries
+    pub body_init: Vec<usize>,    // N_ARR_BODY entries, each < lip
+    pub ret: usize,               // pool index
 }
 
 impl SoftUniversalArrayProgram {
@@ -1619,7 +1619,6 @@ pub(super) fn synthesize_universal_array_fallback(
             // same parameter patterns (restart 0 is a no-op plain init).
             apply_handcoded_restart_bias(&mut prog, restart);
         }
-
 
         if restart > 0 {
             let code = SoftUniversalArrayProgram {

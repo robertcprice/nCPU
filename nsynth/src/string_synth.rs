@@ -135,7 +135,12 @@ fn code_s(e: &SExpr, params: &[String]) -> String {
             code_i(hi, params)
         ),
         SExpr::Replace(a, old, new) => {
-            format!("{}.replace(\"{}\", \"{}\")", code_s(a, params), esc(old), esc(new))
+            format!(
+                "{}.replace(\"{}\", \"{}\")",
+                code_s(a, params),
+                esc(old),
+                esc(new)
+            )
         }
         SExpr::Split(a, sep, k) => {
             format!("{}.split(\"{}\")[{k}]", code_s(a, params), esc(sep))
@@ -353,7 +358,12 @@ pub fn synthesize_string_program(
     let lits = mined_literals(examples);
     let dels = mined_delimiters(examples);
     let ixs: Vec<IExpr> = {
-        let mut ix = vec![IExpr::Const(0), IExpr::Const(1), IExpr::Const(2), IExpr::Const(3)];
+        let mut ix = vec![
+            IExpr::Const(0),
+            IExpr::Const(1),
+            IExpr::Const(2),
+            IExpr::Const(3),
+        ];
         for i in 0..n_args {
             for k in 0..=2 {
                 ix.push(IExpr::Len(Box::new(SExpr::Var(i)), k));
@@ -400,7 +410,10 @@ pub fn synthesize_string_program(
             let ras: Vec<SExpr> = by_size[right].iter().map(|(e, _)| e.clone()).collect();
             for a in &las {
                 for b in &ras {
-                    try_push!(SExpr::Concat(Box::new(a.clone()), Box::new(b.clone())), size);
+                    try_push!(
+                        SExpr::Concat(Box::new(a.clone()), Box::new(b.clone())),
+                        size
+                    );
                 }
             }
         }
@@ -416,7 +429,10 @@ pub fn synthesize_string_program(
         for e in &children {
             for lo in &ixs {
                 for hi in &ixs {
-                    try_push!(SExpr::Slice(Box::new(e.clone()), lo.clone(), hi.clone()), size);
+                    try_push!(
+                        SExpr::Slice(Box::new(e.clone()), lo.clone(), hi.clone()),
+                        size
+                    );
                 }
             }
             for sep in &dels {
@@ -449,7 +465,10 @@ pub fn synthesize_string_program(
 
     if std::env::var("STRSYNTH_DEBUG").is_ok() {
         let sizes: Vec<usize> = by_size.iter().map(|v| v.len()).collect();
-        eprintln!("[strsynth] by_size lens = {sizes:?}; lits={}; target={target:?}", lits.len());
+        eprintln!(
+            "[strsynth] by_size lens = {sizes:?}; lits={}; target={target:?}",
+            lits.len()
+        );
     }
     fail("no string program found within the enumeration bound")
 }
@@ -502,7 +521,11 @@ mod tests {
     fn learns_reverse() {
         let r = solve(
             &["s"],
-            &[ex(&["abc"], "cba"), ex(&["hello"], "olleh"), ex(&["xy"], "yx")],
+            &[
+                ex(&["abc"], "cba"),
+                ex(&["hello"], "olleh"),
+                ex(&["xy"], "yx"),
+            ],
         );
         assert!(r.success, "{:?}", r.error);
         assert!(r.code.contains("reverse"), "{}", r.code);
@@ -513,7 +536,11 @@ mod tests {
         // first char upper, rest unchanged: cat -> Cat
         let r = solve(
             &["s"],
-            &[ex(&["cat"], "Cat"), ex(&["dog"], "Dog"), ex(&["fox"], "Fox")],
+            &[
+                ex(&["cat"], "Cat"),
+                ex(&["dog"], "Dog"),
+                ex(&["fox"], "Fox"),
+            ],
         );
         assert!(r.success, "{:?}", r.error);
     }
@@ -579,7 +606,11 @@ mod tests {
             ],
         );
         assert!(r.success, "{:?}", r.error);
-        assert!(r.code.contains("@") && r.code.contains(".com"), "{}", r.code);
+        assert!(
+            r.code.contains("@") && r.code.contains(".com"),
+            "{}",
+            r.code
+        );
     }
 
     #[test]

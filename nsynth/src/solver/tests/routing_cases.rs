@@ -8,3 +8,5 @@ mod router_policy_cases;
 mod stage_order_cases;
 #[path = "routing_cases/teacher_distillation_cases.rs"]
 mod teacher_distillation_cases;
+#[path = "routing_cases/new_teacher_preemption_cases.rs"]
+mod new_teacher_preemption_cases;

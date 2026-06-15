@@ -66,18 +66,36 @@ fn build_bit_features(examples: &[Vec<i64>], arity: usize, masks: &[i64]) -> Vec
     for j in 0..arity {
         let v = &names[j];
         for &m in masks {
-            add(format!("({v} & {m})"), examples.iter().map(|r| r[j] & m).collect());
-            add(format!("({v} | {m})"), examples.iter().map(|r| r[j] | m).collect());
-            add(format!("({v} ^ {m})"), examples.iter().map(|r| r[j] ^ m).collect());
+            add(
+                format!("({v} & {m})"),
+                examples.iter().map(|r| r[j] & m).collect(),
+            );
+            add(
+                format!("({v} | {m})"),
+                examples.iter().map(|r| r[j] | m).collect(),
+            );
+            add(
+                format!("({v} ^ {m})"),
+                examples.iter().map(|r| r[j] ^ m).collect(),
+            );
         }
     }
     // pairwise bit-combines (the genuinely two-argument bit ops)
     for i in 0..arity {
         for j in (i + 1)..arity {
             let (a, b) = (&names[i], &names[j]);
-            add(format!("({a} & {b})"), examples.iter().map(|r| r[i] & r[j]).collect());
-            add(format!("({a} | {b})"), examples.iter().map(|r| r[i] | r[j]).collect());
-            add(format!("({a} ^ {b})"), examples.iter().map(|r| r[i] ^ r[j]).collect());
+            add(
+                format!("({a} & {b})"),
+                examples.iter().map(|r| r[i] & r[j]).collect(),
+            );
+            add(
+                format!("({a} | {b})"),
+                examples.iter().map(|r| r[i] | r[j]).collect(),
+            );
+            add(
+                format!("({a} ^ {b})"),
+                examples.iter().map(|r| r[i] ^ r[j]).collect(),
+            );
         }
     }
     feats
@@ -129,8 +147,9 @@ pub(super) fn search_bitwise(problem: &Problem, fn_name: &str) -> Option<SolveRe
     // Raw-argument columns form the affine base, always available so a rule like
     // `(a & m) + b` is one bitwise feature on top of the line rather than needing
     // the raw var as a separate "bitwise" feature.
-    let raw_terms: Vec<(String, Vec<i64>)> =
-        (0..arity).map(|j| (names[j].clone(), examples.iter().map(|r| r[j]).collect())).collect();
+    let raw_terms: Vec<(String, Vec<i64>)> = (0..arity)
+        .map(|j| (names[j].clone(), examples.iter().map(|r| r[j]).collect()))
+        .collect();
 
     // Try `c0 + (raw affine) + Σ chosen bitwise features`, for 1 then 2 features.
     let try_combo = |bit_idx: &[usize]| -> Option<SolveResult> {
@@ -222,7 +241,10 @@ mod tests {
             signature: "fn f(x: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|&(x, y)| Example { inputs: vec![Value::Int(x)], expected: Value::Int(y) })
+                .map(|&(x, y)| Example {
+                    inputs: vec![Value::Int(x)],
+                    expected: Value::Int(y),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -265,12 +287,25 @@ mod tests {
     fn bitwise_recovers_pairwise_xor() {
         let f = |a: i64, b: i64| a ^ b;
         let raw = [
-            (0, 0), (1, 2), (3, 5), (6, 1), (7, 7), (8, 4), (10, 3), (12, 9), (5, 14), (15, 0),
+            (0, 0),
+            (1, 2),
+            (3, 5),
+            (6, 1),
+            (7, 7),
+            (8, 4),
+            (10, 3),
+            (12, 9),
+            (5, 14),
+            (15, 0),
         ];
         let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
         let p = p2(&rows);
         let r = search_bitwise(&p, "f").expect("must recover a ^ b");
-        let check = p2(&[((20, 13), f(20, 13)), ((31, 8), f(31, 8)), ((9, 22), f(9, 22))]);
+        let check = p2(&[
+            ((20, 13), f(20, 13)),
+            ((31, 8), f(31, 8)),
+            ((9, 22), f(9, 22)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("xor must be exact on unseen points");
     }
@@ -293,6 +328,9 @@ mod tests {
         let ys = [3i64, 7, 1, 9, 2, 8, 4, 6, 0, 5, 11, 13];
         let rows: Vec<(i64, i64)> = ys.iter().enumerate().map(|(i, &y)| (i as i64, y)).collect();
         let p = p1(&rows);
-        assert!(search_bitwise(&p, "f").is_none(), "must refuse data with no exact bit rule");
+        assert!(
+            search_bitwise(&p, "f").is_none(),
+            "must refuse data with no exact bit rule"
+        );
     }
 }

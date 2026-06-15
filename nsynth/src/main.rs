@@ -7,7 +7,6 @@ use mog_synth::interactive::{
     solve_interactive_problem, solve_interactive_problem_differentiable_only,
 };
 use mog_synth::morph_transduce::{solve_morph_transduction, StrExample};
-use mog_synth::string_synth::{synthesize_string_program, StrSynthExample};
 use mog_synth::orchestrator::Orchestrator;
 use mog_synth::runtime::{execute_program, execute_program_with_input};
 use mog_synth::solver::{
@@ -16,6 +15,7 @@ use mog_synth::solver::{
     solve_problem_differentiable_only, solve_problem_legacy_only,
     solve_problem_prefer_differentiable, solve_problem_with_legacy_fallback,
 };
+use mog_synth::string_synth::{synthesize_string_program, StrSynthExample};
 
 fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|arg| arg == flag)
@@ -183,7 +183,10 @@ fn try_string_program(json_str: &str) -> Option<String> {
     if single_arg {
         let to_morph = |rs: &[(Vec<String>, String)]| {
             rs.iter()
-                .map(|(i, e)| StrExample { input: i[0].clone(), expected: e.clone() })
+                .map(|(i, e)| StrExample {
+                    input: i[0].clone(),
+                    expected: e.clone(),
+                })
                 .collect::<Vec<_>>()
         };
         let m = solve_morph_transduction(&fn_name, &to_morph(&train), &to_morph(&holdouts));
@@ -195,10 +198,16 @@ fn try_string_program(json_str: &str) -> Option<String> {
     // 2. General enumerative string synthesizer; verify on train + holdouts.
     let to_synth = |rs: &[(Vec<String>, String)]| {
         rs.iter()
-            .map(|(i, e)| StrSynthExample { inputs: i.clone(), expected: e.clone() })
+            .map(|(i, e)| StrSynthExample {
+                inputs: i.clone(),
+                expected: e.clone(),
+            })
             .collect::<Vec<_>>()
     };
-    let all: Vec<StrSynthExample> = to_synth(&train).into_iter().chain(to_synth(&holdouts)).collect();
+    let all: Vec<StrSynthExample> = to_synth(&train)
+        .into_iter()
+        .chain(to_synth(&holdouts))
+        .collect();
     let pnames = if params.is_empty() {
         vec!["s".to_string()]
     } else {
@@ -206,7 +215,9 @@ fn try_string_program(json_str: &str) -> Option<String> {
     };
     let r = synthesize_string_program(&pnames, &all);
     // Rename the emitted `transform` to the requested function name.
-    let code = r.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+    let code = r
+        .code
+        .replacen("fn transform(", &format!("fn {fn_name}("), 1);
     Some(result_json(r.success, code, r.method, r.error))
 }
 
@@ -281,7 +292,9 @@ fn main() {
     if let Some(target) = arg_value(&args, "--transpile") {
         use std::io::Read;
         let mut mog = String::new();
-        std::io::stdin().read_to_string(&mut mog).unwrap_or_default();
+        std::io::stdin()
+            .read_to_string(&mut mog)
+            .unwrap_or_default();
         let out = match target.as_str() {
             "python" => mog_synth::mog_transpile::to_python(&mog),
             "rust" => mog_synth::mog_transpile::to_rust(&mog),

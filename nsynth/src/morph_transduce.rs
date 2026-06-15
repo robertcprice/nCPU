@@ -6,13 +6,13 @@
 //! `StrExample`, and verification runs the emitted Mog program and compares the
 //! returned `Value::Str` directly.
 //!
-//! Scope: suffix-conditioned APPEND rules — `output = input + append(input)`,
-//! where the appended string depends only on the input's trailing characters.
-//! This is exactly the productive English plural for regular + sibilant nouns
-//! (the curriculum's `pluralize` for the non-stem-changing cases): default `+s`,
-//! sibilant `+es`. Stem-changing rules (city -> cities, knife -> knives) are not
-//! pure appends and are reported unsupported — they need substring ops, a
-//! natural next extension.
+//! Scope: suffix-conditioned drop-and-append rules — `output =
+//! input.slice(0, input.len - strip(input)) + append(input)`, where the edit
+//! action is selected by the input's trailing characters. This covers productive
+//! append cases (cat -> cats, box -> boxes) and bounded spelling changes such
+//! as consonant-y -> -ies and consonant doubling (hop -> hopped). Truly
+//! non-suffix-separable or suppletive changes are still reported unsupported and
+//! can fall through to the slower general string synthesizer.
 
 use crate::runtime::execute_str_function;
 
@@ -109,7 +109,10 @@ pub fn solve_morph_transduction(
         };
         // A stem-change rule whose conditioning suffix is shorter than its strip
         // would slice off chars the suffix never matched — reject as unsafe.
-        if rules.iter().any(|(suf, act)| act.strip > suf.chars().count()) {
+        if rules
+            .iter()
+            .any(|(suf, act)| act.strip > suf.chars().count())
+        {
             last_err = "stem-change action needs a suffix >= strip length".to_string();
             continue;
         }
@@ -376,5 +379,34 @@ mod tests {
         let result = solve_morph_transduction("xduce", &train, &[]);
         assert!(!result.success);
         assert_eq!(result.method, "morph_transduce_unsupported");
+    }
+
+    #[test]
+    fn learns_consonant_doubling() {
+        let train = vec![
+            ex("stop", "stopped"),
+            ex("drop", "dropped"),
+            ex("plan", "planned"),
+            ex("grab", "grabbed"),
+            ex("nod", "nodded"),
+            ex("hug", "hugged"),
+            ex("walk", "walked"),
+            ex("jump", "jumped"),
+        ];
+        let holdouts = vec![
+            ex("hop", "hopped"),
+            ex("tan", "tanned"),
+            ex("pack", "packed"),
+        ];
+        let result = solve_morph_transduction("past", &train, &holdouts);
+        assert!(result.success, "failed: {:?}", result.error);
+        assert_eq!(
+            execute_str_function(&result.code, "past", "hop").unwrap(),
+            "hopped"
+        );
+        assert_eq!(
+            execute_str_function(&result.code, "past", "pack").unwrap(),
+            "packed"
+        );
     }
 }

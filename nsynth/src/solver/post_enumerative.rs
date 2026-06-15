@@ -173,7 +173,10 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_suffix_class"
         | "search_array_member_class"
         | "search_array_conjunction"
-        | "search_array_dnf" => true,
+        | "search_array_dnf"
+        | "search_array_sequence"
+        | "search_array_feature_dnf"
+        | "search_string_subsequence_class" => true,
         "search_unary_range_loop" => {
             result.code.contains("acc = acc + i;") || result.code.contains("acc = acc * i;")
         }
@@ -181,21 +184,10 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
     }
 }
 
-fn solve_problem_from_search_result(problem: &Problem, search_result: SolveResult) -> SolveResult {
-    if search_result_supports_differentiable_probe(&search_result) {
-        let result = solve_problem_differentiable_probe(problem);
-        let result = SolveResult {
-            success: result.success,
-            code: result.code,
-            method: result.method,
-            error: result.error,
-            metadata: result.metadata,
-        };
-        if result.success {
-            return result;
-        }
-    }
-
+fn solve_problem_from_search_result_after_probe(
+    problem: &Problem,
+    search_result: SolveResult,
+) -> SolveResult {
     if let Some(result) = synthesis::synthesize_scalar_from_teacher(problem, &search_result.code) {
         if result.success {
             return result;
@@ -225,10 +217,26 @@ fn solve_problem_from_search_result(problem: &Problem, search_result: SolveResul
 fn solve_problem_from_search_teacher(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
     let search_result = solve_by_search(problem, fn_name)?;
+    if search_result_supports_differentiable_probe(&search_result) {
+        let probe = solve_problem_differentiable_probe(problem);
+        let probe = SolveResult {
+            success: probe.success,
+            code: probe.code,
+            method: probe.method,
+            error: probe.error,
+            metadata: probe.metadata,
+        };
+        if probe.success {
+            return Some(probe);
+        }
+    }
     if search_result_preempts_native_gradient(&search_result) {
         Some(search_result)
     } else {
-        Some(solve_problem_from_search_result(problem, search_result))
+        Some(solve_problem_from_search_result_after_probe(
+            problem,
+            search_result,
+        ))
     }
 }
 

@@ -712,7 +712,10 @@ mod tests {
         assert!(out.contains(" or "), "|| -> or: {out}");
         assert!(out.contains("not (x == 5)"), "! -> not: {out}");
         assert!(out.contains("~x"), "~ unchanged: {out}");
-        assert!(!out.contains("&&") && !out.contains("||"), "no C ops left: {out}");
+        assert!(
+            !out.contains("&&") && !out.contains("||"),
+            "no C ops left: {out}"
+        );
     }
 
     #[test]
@@ -813,11 +816,11 @@ mod tests {
             }\n\
             }\n";
         let py = to_python(mog);
+        assert!(py.contains("else:"), "Python must emit `else:`, got: {py}");
         assert!(
-            py.contains("else:"),
-            "Python must emit `else:`, got: {py}"
+            !py.contains("} else:"),
+            "Python must not keep the close-brace: {py}"
         );
-        assert!(!py.contains("} else:"), "Python must not keep the close-brace: {py}");
         assert!(!py.contains('{'), "Python must have no braces: {py}");
 
         let rs = to_rust(mog);
@@ -840,7 +843,10 @@ mod tests {
         );
         // Verify the generated Python actually computes integer division.
         // `(4 + 6) // 2 == 5`; with float division it would be `5.0`.
-        assert!(!py.contains(" / "), "no bare `/` should survive in Python int output: {py}");
+        assert!(
+            !py.contains(" / "),
+            "no bare `/` should survive in Python int output: {py}"
+        );
     }
 
     #[test]
@@ -864,7 +870,10 @@ mod inline_if_tests {
     fn inline_if_typescript() {
         let ts = to_typescript(MOG);
         assert!(ts.contains("if (b >= a) { v0 = a; }"), "got: {ts}");
-        assert!(!ts.contains("if (b >= a {"), "broken paren wrap survived: {ts}");
+        assert!(
+            !ts.contains("if (b >= a {"),
+            "broken paren wrap survived: {ts}"
+        );
     }
 
     #[test]

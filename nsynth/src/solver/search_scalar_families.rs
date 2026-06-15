@@ -65,7 +65,12 @@ fn segment_affine(pts: &[(i64, i64)]) -> Option<Vec<AffineSeg>> {
                 break;
             }
         }
-        segs.push(AffineSeg { a, b, points: j - i + 1, x_last: pts[j].0 });
+        segs.push(AffineSeg {
+            a,
+            b,
+            points: j - i + 1,
+            x_last: pts[j].0,
+        });
         i = j + 1;
     }
     Some(segs)
@@ -113,7 +118,11 @@ fn affine_expr(a: i64, b: i64) -> ScalarExpr {
     if b == 0 {
         term
     } else {
-        ScalarExpr::Bin(Box::new(term), ScalarBinOp::Add, Box::new(ScalarExpr::Const(b)))
+        ScalarExpr::Bin(
+            Box::new(term),
+            ScalarBinOp::Add,
+            Box::new(ScalarExpr::Const(b)),
+        )
     }
 }
 
@@ -130,7 +139,9 @@ fn code_piecewise(
     let mut body = String::new();
     for (k, bp) in bps.iter().enumerate() {
         let piece = render_scalar_expr(&affine_expr(segs[k].a, segs[k].b), param_names);
-        body.push_str(&format!("    if {x} {op} {bp} {{\n        return {piece};\n    }}\n"));
+        body.push_str(&format!(
+            "    if {x} {op} {bp} {{\n        return {piece};\n    }}\n"
+        ));
     }
     let last = segs.last().unwrap();
     let last_piece = render_scalar_expr(&affine_expr(last.a, last.b), param_names);
@@ -151,7 +162,11 @@ pub(super) fn search_piecewise_affine(problem: &Problem, fn_name: &str) -> Optio
     if examples.first().map(Vec::len) != Some(1) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
+    let targets: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|example| example.expected_int())
+        .collect();
     let mut pts: Vec<(i64, i64)> = examples
         .iter()
         .zip(targets.iter())
@@ -181,7 +196,11 @@ pub(super) fn search_scalar_expr(problem: &Problem, fn_name: &str) -> Option<Sol
     let examples = extract_scalar_examples(problem)?;
     let arity = examples.first()?.len();
     let param_names = scalar_param_names(arity);
-    let target: Vec<i64> = problem.examples.iter().map(|ex| ex.expected_int()).collect();
+    let target: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|ex| ex.expected_int())
+        .collect();
 
     let constants = mine_scalar_constants(&examples, &target);
     let mut candidates = build_deep_expr_candidates(arity, &examples, &constants);
@@ -332,14 +351,14 @@ pub(super) fn search_single_branch(problem: &Problem, fn_name: &str) -> Option<S
             continue;
         };
         let Some(then_expr) = ctx
-        .branch_expr_candidates
+            .branch_expr_candidates
             .iter()
             .find(|candidate| expr_matches_subset(&candidate.outputs, &ctx.target, &true_mask))
         else {
             continue;
         };
         let Some(else_expr) = ctx
-        .branch_expr_candidates
+            .branch_expr_candidates
             .iter()
             .find(|candidate| expr_matches_subset(&candidate.outputs, &ctx.target, &false_mask))
         else {

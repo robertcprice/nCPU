@@ -172,11 +172,7 @@ fn with_scratch_search_family_router<R>(f: impl FnOnce() -> R) -> R {
 }
 
 /// Build a unary-string classification Problem from (word, label) pairs.
-fn str_class_problem(
-    name: &'static str,
-    signature: &'static str,
-    rows: &[(&str, i64)],
-) -> Problem {
+fn str_class_problem(name: &'static str, signature: &'static str, rows: &[(&str, i64)]) -> Problem {
     Problem {
         name: name.to_string(),
         category: "morphology",
@@ -206,19 +202,49 @@ fn search_suffix_class_learns_sibilant_plural_rule() {
         "fn takes_es_plural(s: string) -> i64",
         &[
             // sibilant positives
-            ("bus", 1), ("glass", 1), ("kiss", 1), ("class", 1),
-            ("dish", 1), ("brush", 1), ("wish", 1), ("crash", 1),
-            ("bench", 1), ("watch", 1), ("branch", 1), ("church", 1),
-            ("box", 1), ("fox", 1), ("tax", 1), ("index", 1),
-            ("buzz", 1), ("quiz", 1), ("fizz", 1),
+            ("bus", 1),
+            ("glass", 1),
+            ("kiss", 1),
+            ("class", 1),
+            ("dish", 1),
+            ("brush", 1),
+            ("wish", 1),
+            ("crash", 1),
+            ("bench", 1),
+            ("watch", 1),
+            ("branch", 1),
+            ("church", 1),
+            ("box", 1),
+            ("fox", 1),
+            ("tax", 1),
+            ("index", 1),
+            ("buzz", 1),
+            ("quiz", 1),
+            ("fizz", 1),
             // hard negatives: non-sibilant -h, take +s
-            ("month", 0), ("path", 0), ("bath", 0), ("cloth", 0),
-            ("truth", 0), ("depth", 0), ("length", 0), ("cough", 0),
-            ("laugh", 0), ("graph", 0),
+            ("month", 0),
+            ("path", 0),
+            ("bath", 0),
+            ("cloth", 0),
+            ("truth", 0),
+            ("depth", 0),
+            ("length", 0),
+            ("cough", 0),
+            ("laugh", 0),
+            ("graph", 0),
             // easy negatives
-            ("cat", 0), ("dog", 0), ("book", 0), ("tree", 0),
-            ("car", 0), ("pen", 0), ("hand", 0), ("map", 0),
-            ("table", 0), ("star", 0), ("road", 0), ("cup", 0),
+            ("cat", 0),
+            ("dog", 0),
+            ("book", 0),
+            ("tree", 0),
+            ("car", 0),
+            ("pen", 0),
+            ("hand", 0),
+            ("map", 0),
+            ("table", 0),
+            ("star", 0),
+            ("road", 0),
+            ("cup", 0),
         ],
     );
 
@@ -302,7 +328,10 @@ fn search_array_member_class_learns_inflection_membership() {
     );
 
     let result = solve_problem_search_only(&problem);
-    assert!(result.success, "search failed to learn inflection membership");
+    assert!(
+        result.success,
+        "search failed to learn inflection membership"
+    );
     assert_eq!(
         result.method, "search_array_member_class",
         "expected the array member-class teacher, got {}",
@@ -365,6 +394,141 @@ fn search_array_conjunction_learns_auxiliary_agreement() {
             (vec![Value::Array(vec![111, 4, 109, 999, 103])], 1), // is + ing
             (vec![Value::Array(vec![111, 4, 999, 103])], 0),      // missing is
             (vec![Value::Array(vec![111, 4, 109, 999])], 0),      // missing ing
+        ],
+    );
+}
+
+#[test]
+fn search_array_sequence_learns_order_constraint() {
+    let problem = arr_class_problem(
+        "sequence_ok",
+        "fn sequence_ok(arr: [i64]) -> i64",
+        &[
+            // positives: 109 occurs before 103
+            (&[109, 103], 1),
+            (&[111, 4, 109, 659, 103], 1),
+            (&[111, 109, 4, 103], 1),
+            (&[109, 111, 103], 1),
+            (&[109, 4, 103, 5], 1),
+            (&[109, 109, 103], 1),
+            // negatives: missing or wrong order
+            (&[103, 109], 0),
+            (&[111, 103, 4, 109], 0),
+            (&[109], 0),
+            (&[103], 0),
+            (&[111, 103], 0),
+            (&[109, 111], 0),
+            (&[111, 103, 109], 0),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(result.success, "sequence not learned");
+    assert_eq!(
+        result.method, "search_array_sequence",
+        "expected the sequence teacher, got {}",
+        result.method
+    );
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![111, 109, 999, 103])], 1), // 109 before 103
+            (vec![Value::Array(vec![111, 103, 999, 109])], 0), // 103 before 109
+            (vec![Value::Array(vec![111, 109, 999])], 0),      // missing 103
+        ],
+    );
+}
+
+#[test]
+fn search_array_feature_dnf_learns_count_and_run_features() {
+    let problem = arr_class_problem(
+        "array_feature_ok",
+        "fn array_feature_ok(arr: [i64]) -> i64",
+        &[
+            (&[7, 7, 1, 2, 3], 1),
+            (&[0, 7, 5, 7], 1),
+            (&[7, 3, 7], 1),
+            (&[2, 7, 7, 8], 1),
+            (&[4, 4, 4, 9], 1),
+            (&[1, 4, 4, 4], 1),
+            (&[4, 4, 4], 1),
+            (&[6, 4, 4, 4, 5], 1),
+            (&[7, 1, 2], 0),
+            (&[7, 7, 7, 1], 0),
+            (&[4, 4, 9, 4], 0),
+            (&[4, 9, 4, 4], 0),
+            (&[7, 4, 4, 4], 0),
+            (&[4, 4, 7, 7], 0),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(result.success, "feature DNF not learned");
+    assert_eq!(
+        result.method, "search_array_feature_dnf",
+        "expected the feature DNF teacher, got {}",
+        result.method
+    );
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![7, 3, 7, 6])], 1),
+            (vec![Value::Array(vec![7, 7, 7, 9])], 0),
+            (vec![Value::Array(vec![5, 4, 4, 4])], 1),
+            (vec![Value::Array(vec![10, 4, 4])], 0),
+        ],
+    );
+}
+
+#[test]
+fn search_string_subsequence_class_learns_order_constraint() {
+    let problem = str_class_problem(
+        "a_before_b",
+        "fn a_before_b(s: string) -> i64",
+        &[
+            ("aXbZ", 1),
+            ("aaXbY", 1),
+            ("aXXbX", 1),
+            ("zaXbqW", 1),
+            ("a bV", 1),
+            ("a12bU", 1),
+            ("aaabbbT", 1),
+            ("xaYbS", 1),
+            ("bXbZ", 0),
+            ("bXbY", 0),
+            ("bXbX", 0),
+            ("bqbW", 0),
+            ("b bV", 0),
+            ("b2bU", 0),
+            ("bbbT", 0),
+            ("bYbS", 0),
+            ("bXa", 0),
+            ("b a", 0),
+            ("a only", 0),
+            ("b only", 0),
+            ("xxa", 0),
+            ("xxb", 0),
+            ("ba", 0),
+            ("bbb aaa", 0),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(result.success, "string subsequence class not learned");
+    assert_eq!(
+        result.method, "search_string_subsequence_class",
+        "expected the string subsequence-class teacher, got {}",
+        result.method
+    );
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Str("q a z b".into())], 1),
+            (vec![Value::Str("q b z a".into())], 0),
+            (vec![Value::Str("a b a".into())], 1),
+            (vec![Value::Str("b b a".into())], 0),
         ],
     );
 }
@@ -464,8 +628,7 @@ fn solve_problem_handles_string_output() {
         "string-output problem not solved: {:?}",
         result.error
     );
-    let out =
-        crate::runtime::execute_str_function(&result.code, "reverse_str", "verify").unwrap();
+    let out = crate::runtime::execute_str_function(&result.code, "reverse_str", "verify").unwrap();
     assert_eq!(out, "yfirev");
 }
 

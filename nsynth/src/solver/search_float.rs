@@ -157,9 +157,8 @@ pub(super) fn search_float_affine(problem: &Problem, fn_name: &str) -> Option<So
     }
 
     let param_names = scalar_param_names(arity);
-    let params = scalar_params_decl(&param_names)
-        .replace(": i64", ": f64"); // float signature
-    // Build `c0 + c1*x0 + c2*x1 + …`, dropping ~zero terms.
+    let params = scalar_params_decl(&param_names).replace(": i64", ": f64"); // float signature
+                                                                             // Build `c0 + c1*x0 + c2*x1 + …`, dropping ~zero terms.
     let mut terms: Vec<String> = Vec::new();
     for (j, name) in param_names.iter().enumerate() {
         let c = rounded[j + 1];
@@ -226,11 +225,17 @@ mod tests {
     fn float_affine_recovers_line() {
         // y = 2.5*x + 1.3
         let f = |x: f64| 2.5 * x + 1.3;
-        let rows: Vec<(Vec<f64>, f64)> =
-            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0].iter().map(|&x| (vec![x], f(x))).collect();
+        let rows: Vec<(Vec<f64>, f64)> = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]
+            .iter()
+            .map(|&x| (vec![x], f(x)))
+            .collect();
         let p = pf("fn f(x: f64) -> f64", &rows);
         let r = search_float_affine(&p, "f").expect("must recover 2.5x + 1.3");
-        assert!(r.code.contains("2.5") && r.code.contains("1.3"), "code: {}", r.code);
+        assert!(
+            r.code.contains("2.5") && r.code.contains("1.3"),
+            "code: {}",
+            r.code
+        );
         assert!(r.code.contains("-> f64"), "must be a float fn: {}", r.code);
     }
 
@@ -239,10 +244,15 @@ mod tests {
         // celsius-like: z = 1.8*a + 0.5*b - 2.0
         let f = |a: f64, b: f64| 1.8 * a + 0.5 * b - 2.0;
         let raw = [
-            (1.0, 1.0), (2.0, 3.0), (0.0, 0.0), (5.0, 2.0), (3.0, 7.0), (10.0, 1.0), (4.0, 4.0),
+            (1.0, 1.0),
+            (2.0, 3.0),
+            (0.0, 0.0),
+            (5.0, 2.0),
+            (3.0, 7.0),
+            (10.0, 1.0),
+            (4.0, 4.0),
         ];
-        let rows: Vec<(Vec<f64>, f64)> =
-            raw.iter().map(|&(a, b)| (vec![a, b], f(a, b))).collect();
+        let rows: Vec<(Vec<f64>, f64)> = raw.iter().map(|&(a, b)| (vec![a, b], f(a, b))).collect();
         let p = pf("fn f(a: f64, b: f64) -> f64", &rows);
         let r = search_float_affine(&p, "f").expect("must recover the 2-arg float affine");
         assert!(r.code.contains("-> f64"), "code: {}", r.code);
@@ -252,9 +262,11 @@ mod tests {
     fn float_affine_refuses_nonlinear() {
         // y = x^2 is not affine — least squares fits a line that misses, refuse.
         let f = |x: f64| x * x;
-        let rows: Vec<(Vec<f64>, f64)> =
-            (0..12).map(|i| (vec![i as f64], f(i as f64))).collect();
+        let rows: Vec<(Vec<f64>, f64)> = (0..12).map(|i| (vec![i as f64], f(i as f64))).collect();
         let p = pf("fn f(x: f64) -> f64", &rows);
-        assert!(search_float_affine(&p, "f").is_none(), "must refuse a parabola");
+        assert!(
+            search_float_affine(&p, "f").is_none(),
+            "must refuse a parabola"
+        );
     }
 }

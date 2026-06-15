@@ -25,7 +25,11 @@ fn multi_arg_examples(problem: &Problem) -> Option<(Vec<Vec<i64>>, Vec<i64>, usi
     if !(2..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
+    let targets: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|example| example.expected_int())
+        .collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -133,7 +137,11 @@ fn affine_expr(coeffs: &[i64]) -> ScalarExpr {
         terms.push(if c == 1 {
             var
         } else {
-            ScalarExpr::Bin(Box::new(ScalarExpr::Const(c)), ScalarBinOp::Mul, Box::new(var))
+            ScalarExpr::Bin(
+                Box::new(ScalarExpr::Const(c)),
+                ScalarBinOp::Mul,
+                Box::new(var),
+            )
         });
     }
     if coeffs[0] != 0 || terms.is_empty() {
@@ -171,7 +179,11 @@ fn polynomial_expr(w: &[i64], arity: usize) -> ScalarExpr {
             terms.push(if lin == 1 {
                 var
             } else {
-                ScalarExpr::Bin(Box::new(ScalarExpr::Const(lin)), ScalarBinOp::Mul, Box::new(var))
+                ScalarExpr::Bin(
+                    Box::new(ScalarExpr::Const(lin)),
+                    ScalarBinOp::Mul,
+                    Box::new(var),
+                )
             });
         }
         if quad != 0 {
@@ -184,7 +196,11 @@ fn polynomial_expr(w: &[i64], arity: usize) -> ScalarExpr {
             terms.push(if quad == 1 {
                 sq
             } else {
-                ScalarExpr::Bin(Box::new(ScalarExpr::Const(quad)), ScalarBinOp::Mul, Box::new(sq))
+                ScalarExpr::Bin(
+                    Box::new(ScalarExpr::Const(quad)),
+                    ScalarBinOp::Mul,
+                    Box::new(sq),
+                )
             });
         }
     }
@@ -222,7 +238,11 @@ pub(super) fn search_polynomial_multi(problem: &Problem, fn_name: &str) -> Optio
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
+    let targets: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|example| example.expected_int())
+        .collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -310,14 +330,20 @@ fn compose_features(examples: &[Vec<i64>], arity: usize) -> Vec<Feature> {
 
     for j in 0..arity {
         // raw
-        add(ScalarExpr::Var(j), feature_column(examples, |r| Some(r[j] as i128)));
+        add(
+            ScalarExpr::Var(j),
+            feature_column(examples, |r| Some(r[j] as i128)),
+        );
         // square
         let sq = ScalarExpr::Bin(
             Box::new(ScalarExpr::Var(j)),
             ScalarBinOp::Mul,
             Box::new(ScalarExpr::Var(j)),
         );
-        add(sq, feature_column(examples, |r| Some(r[j] as i128 * r[j] as i128)));
+        add(
+            sq,
+            feature_column(examples, |r| Some(r[j] as i128 * r[j] as i128)),
+        );
     }
     // cross terms x_i · x_j
     for i in 0..arity {
@@ -327,7 +353,10 @@ fn compose_features(examples: &[Vec<i64>], arity: usize) -> Vec<Feature> {
                 ScalarBinOp::Mul,
                 Box::new(ScalarExpr::Var(j)),
             );
-            add(cross, feature_column(examples, |r| Some(r[i] as i128 * r[j] as i128)));
+            add(
+                cross,
+                feature_column(examples, |r| Some(r[i] as i128 * r[j] as i128)),
+            );
         }
     }
     // modulo / floor-div bases. The UNIVERSAL arithmetic bases — parity (2),
@@ -359,13 +388,19 @@ fn compose_features(examples: &[Vec<i64>], arity: usize) -> Vec<Feature> {
                 ScalarBinOp::Mod,
                 Box::new(ScalarExpr::Const(m)),
             );
-            add(md, feature_column(examples, |r| Some(r[j].rem_euclid(m) as i128)));
+            add(
+                md,
+                feature_column(examples, |r| Some(r[j].rem_euclid(m) as i128)),
+            );
             let dv = ScalarExpr::Bin(
                 Box::new(ScalarExpr::Var(j)),
                 ScalarBinOp::Div,
                 Box::new(ScalarExpr::Const(m)),
             );
-            add(dv, feature_column(examples, |r| Some(r[j].div_euclid(m) as i128)));
+            add(
+                dv,
+                feature_column(examples, |r| Some(r[j].div_euclid(m) as i128)),
+            );
         }
     }
     feats
@@ -443,7 +478,11 @@ fn recover_body(
     // (this is what lets a genuinely non-linear branch reach the composed path
     // instead of being masked by a bogus affine fit).
     if let Some(c) = solve_affine(xs, ys, arity) {
-        if xs.iter().zip(ys.iter()).all(|(row, &y)| affine_predicts(&c, row, y)) {
+        if xs
+            .iter()
+            .zip(ys.iter())
+            .all(|(row, &y)| affine_predicts(&c, row, y))
+        {
             return Some(render_scalar_expr(&affine_expr(&c), param_names));
         }
     }
@@ -461,10 +500,12 @@ fn recover_body(
         return None;
     }
     let n = xs.len();
-    let raws: Vec<usize> =
-        (0..feats.len()).filter(|&i| matches!(feats[i].expr, ScalarExpr::Var(_))).collect();
-    let derived: Vec<usize> =
-        (0..feats.len()).filter(|&i| !matches!(feats[i].expr, ScalarExpr::Var(_))).collect();
+    let raws: Vec<usize> = (0..feats.len())
+        .filter(|&i| matches!(feats[i].expr, ScalarExpr::Var(_)))
+        .collect();
+    let derived: Vec<usize> = (0..feats.len())
+        .filter(|&i| !matches!(feats[i].expr, ScalarExpr::Var(_)))
+        .collect();
     for &d in &derived {
         let mut idxs = raws.clone();
         idxs.push(d);
@@ -486,10 +527,16 @@ fn recover_body(
         let Some(w) = solve_linear_features(&rows, ys, m) else {
             continue;
         };
-        let picks: Vec<(&Feature, i64)> =
-            idxs.iter().enumerate().map(|(s, &fi)| (&feats[fi], w[s + 1])).collect();
+        let picks: Vec<(&Feature, i64)> = idxs
+            .iter()
+            .enumerate()
+            .map(|(s, &fi)| (&feats[fi], w[s + 1]))
+            .collect();
         if composed_predicts(w[0], &picks, ys) {
-            return Some(render_scalar_expr(&composed_expr(w[0], &picks), param_names));
+            return Some(render_scalar_expr(
+                &composed_expr(w[0], &picks),
+                param_names,
+            ));
         }
     }
     None
@@ -528,7 +575,11 @@ pub(super) fn search_composed_features(problem: &Problem, fn_name: &str) -> Opti
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
+    let targets: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|example| example.expected_int())
+        .collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -566,8 +617,11 @@ pub(super) fn search_composed_features(problem: &Problem, fn_name: &str) -> Opti
             })
             .collect();
         let w = solve_linear_features(&feature_rows, &targets, m)?;
-        let picks: Vec<(&Feature, i64)> =
-            idxs.iter().enumerate().map(|(slot, &fi)| (&feats[fi], w[slot + 1])).collect();
+        let picks: Vec<(&Feature, i64)> = idxs
+            .iter()
+            .enumerate()
+            .map(|(slot, &fi)| (&feats[fi], w[slot + 1]))
+            .collect();
         if !composed_predicts(w[0], &picks, &targets) {
             return None;
         }
@@ -631,7 +685,11 @@ pub(super) fn search_clamp_affine(problem: &Problem, fn_name: &str) -> Option<So
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
+    let targets: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|example| example.expected_int())
+        .collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -677,7 +735,11 @@ pub(super) fn search_clamp_affine(problem: &Problem, fn_name: &str) -> Option<So
         // that `coeffs` reproduces ALL of them. This refuses an under-determined
         // or f64-rounded fit (the band failure mode) instead of emitting a
         // saturation that is right on the samples but wrong between them.
-        if !xs.iter().zip(ys.iter()).all(|(row, &y)| affine_predicts(&coeffs, row, y)) {
+        if !xs
+            .iter()
+            .zip(ys.iter())
+            .all(|(row, &y)| affine_predicts(&coeffs, row, y))
+        {
             return None;
         }
         Some(render_scalar_expr(&affine_expr(&coeffs), &param_names))
@@ -817,7 +879,11 @@ fn segment_multiarg(sorted: &[(&Vec<i64>, i64)], arity: usize, ti: usize) -> Opt
         while j < n && affine_predicts(&coeffs, sorted[j].0, sorted[j].1) {
             j += 1;
         }
-        segs.push(MultiSeg { coeffs, x_last: sorted[j - 1].0[ti], points: j - i });
+        segs.push(MultiSeg {
+            coeffs,
+            x_last: sorted[j - 1].0[ti],
+            points: j - i,
+        });
         i = j;
     }
     Some(segs)
@@ -853,7 +919,9 @@ pub(super) fn search_affine_piecewise(problem: &Problem, fn_name: &str) -> Optio
         for k in 0..segs.len() - 1 {
             let s0 = &segs[k].coeffs;
             let s1 = &segs[k + 1].coeffs;
-            let others_match = (0..arity).filter(|&j| j != ti).all(|j| s0[j + 1] == s1[j + 1]);
+            let others_match = (0..arity)
+                .filter(|&j| j != ti)
+                .all(|j| s0[j + 1] == s1[j + 1]);
             let bp = if others_match && s0[ti + 1] != s1[ti + 1] {
                 let num = s1[0] - s0[0];
                 let den = s0[ti + 1] - s1[ti + 1];
@@ -911,7 +979,11 @@ pub(super) fn search_predicate_branch(problem: &Problem, fn_name: &str) -> Optio
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
+    let targets: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|example| example.expected_int())
+        .collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -965,8 +1037,10 @@ pub(super) fn search_predicate_branch(problem: &Problem, fn_name: &str) -> Optio
         for &m in &bases {
             for r in 0..m {
                 let cond = format!("({} % {m}) == {r}", param_names[ti]);
-                let side_true: Vec<bool> =
-                    examples.iter().map(|row| row[ti].rem_euclid(m) == r).collect();
+                let side_true: Vec<bool> = examples
+                    .iter()
+                    .map(|row| row[ti].rem_euclid(m) == r)
+                    .collect();
                 // Skip a partition that puts everything on one side.
                 let t = side_true.iter().filter(|&&b| b).count();
                 if t == 0 || t == examples.len() {
@@ -1173,7 +1247,11 @@ pub(super) fn search_rational_floor(problem: &Problem, fn_name: &str) -> Option<
     // claims genuinely non-affine floors (`(3x + 1) / 2`, whose first differences
     // are not constant).
     if let Some(c) = solve_affine(&examples, &targets, 1) {
-        if examples.iter().zip(targets.iter()).all(|(r, &y)| affine_predicts(&c, r, y)) {
+        if examples
+            .iter()
+            .zip(targets.iter())
+            .all(|(r, &y)| affine_predicts(&c, r, y))
+        {
             return None;
         }
     }
@@ -1207,16 +1285,14 @@ pub(super) fn search_rational_floor(problem: &Problem, fn_name: &str) -> Option<
             };
             // Reject exact division on every example — that is a plain affine,
             // owned by search_affine; this family is for the genuinely lossy floor.
-            let lossy = examples
-                .iter()
-                .zip(targets.iter())
-                .any(|(row, _)| (a as i128 * row[0] as i128 + b as i128).rem_euclid(d as i128) != 0);
+            let lossy = examples.iter().zip(targets.iter()).any(|(row, _)| {
+                (a as i128 * row[0] as i128 + b as i128).rem_euclid(d as i128) != 0
+            });
             if !lossy {
                 continue;
             }
             let num = render_scalar_expr(&affine_expr(&[b, a]), &param_names);
-            let code =
-                format!("fn {fn_name}({params}) -> i64 {{\n    return ({num}) / {d};\n}}\n");
+            let code = format!("fn {fn_name}({params}) -> i64 {{\n    return ({num}) / {d};\n}}\n");
             if let Some(result) = verified_result(problem, code, "search_rational_floor") {
                 return Some(result);
             }
@@ -1231,7 +1307,11 @@ pub(super) fn search_modular_cases(problem: &Problem, fn_name: &str) -> Option<S
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
+    let targets: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|example| example.expected_int())
+        .collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -1333,7 +1413,11 @@ pub(super) fn search_minmax_affine(problem: &Problem, fn_name: &str) -> Option<S
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
         return None;
     }
-    let targets: Vec<i64> = problem.examples.iter().map(|example| example.expected_int()).collect();
+    let targets: Vec<i64> = problem
+        .examples
+        .iter()
+        .map(|example| example.expected_int())
+        .collect();
     if targets.len() != examples.len() {
         return None;
     }
@@ -1356,7 +1440,11 @@ pub(super) fn search_minmax_affine(problem: &Problem, fn_name: &str) -> Option<S
         let ax: Vec<Vec<i64>> = a_idx.iter().map(|&i| examples[i].clone()).collect();
         let ay: Vec<i64> = a_idx.iter().map(|&i| targets[i]).collect();
         let a = solve_affine(&ax, &ay, arity)?;
-        if !ax.iter().zip(ay.iter()).all(|(r, &y)| affine_predicts(&a, r, y)) {
+        if !ax
+            .iter()
+            .zip(ay.iter())
+            .all(|(r, &y)| affine_predicts(&a, r, y))
+        {
             return None; // anchors not affinely independent / not exact
         }
         // A must be a valid support: ≤ every target (max) or ≥ every target (min).
@@ -1389,7 +1477,12 @@ pub(super) fn search_minmax_affine(problem: &Problem, fn_name: &str) -> Option<S
             }
         }
         let b = solve_affine(&bx, &by, arity)?;
-        if a == b || !bx.iter().zip(by.iter()).all(|(r, &y)| affine_predicts(&b, r, y)) {
+        if a == b
+            || !bx
+                .iter()
+                .zip(by.iter())
+                .all(|(r, &y)| affine_predicts(&b, r, y))
+        {
             return None;
         }
         // The reconstructed envelope must reproduce EVERY example.
@@ -1464,7 +1557,10 @@ mod tests {
             signature: "fn f(a: i64, b: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|((a, b), y)| Example { inputs: vec![Value::Int(*a), Value::Int(*b)], expected: Value::Int(*y) })
+                .map(|((a, b), y)| Example {
+                    inputs: vec![Value::Int(*a), Value::Int(*b)],
+                    expected: Value::Int(*y),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1479,7 +1575,10 @@ mod tests {
             signature: "fn f(x: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|&(x, y)| Example { inputs: vec![Value::Int(x)], expected: Value::Int(y) })
+                .map(|&(x, y)| Example {
+                    inputs: vec![Value::Int(x)],
+                    expected: Value::Int(y),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1491,11 +1590,21 @@ mod tests {
     // inside and on both sides of the band.
     #[test]
     fn interval_branch_recovers_membership() {
-        let f = |x: i64| if (5..=12).contains(&x) { 2 * x } else { x + 100 };
+        let f = |x: i64| {
+            if (5..=12).contains(&x) {
+                2 * x
+            } else {
+                x + 100
+            }
+        };
         let rows: Vec<(i64, i64)> = (0..22).map(|x| (x, f(x))).collect();
         let p = p1(&rows);
         let r = search_interval_branch(&p, "f").expect("must recover the interval branch");
-        assert!(r.code.contains("&&"), "expected a range condition: {}", r.code);
+        assert!(
+            r.code.contains("&&"),
+            "expected a range condition: {}",
+            r.code
+        );
         let check = p1(&[(2, f(2)), (6, f(6)), (12, f(12)), (13, f(13)), (40, f(40))]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("interval branch must be exact on unseen points");
@@ -1551,7 +1660,11 @@ mod tests {
         let rows: Vec<(i64, i64)> = (0..16).map(|x| (x, f(x))).collect();
         let p = p1(&rows);
         let r = search_predicate_branch(&p, "f").expect("must recover the parity branch");
-        assert!(r.code.contains('%'), "expected a modular condition: {}", r.code);
+        assert!(
+            r.code.contains('%'),
+            "expected a modular condition: {}",
+            r.code
+        );
         let check = p1(&[(20, f(20)), (21, f(21)), (50, f(50)), (99, f(99))]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("parity branch must be exact on unseen points");
@@ -1561,15 +1674,35 @@ mod tests {
     // else { 2a - b }`. Recovered and exact on unseen points.
     #[test]
     fn predicate_branch_recovers_mod3_two_arg() {
-        let f = |a: i64, b: i64| if a.rem_euclid(3) == 1 { a + 2 * b } else { 2 * a - b };
+        let f = |a: i64, b: i64| {
+            if a.rem_euclid(3) == 1 {
+                a + 2 * b
+            } else {
+                2 * a - b
+            }
+        };
         let raw = [
-            (0, 1), (1, 2), (2, 0), (3, 4), (4, 1), (5, 5), (6, 2), (7, 3), (9, 0), (10, 6),
-            (12, 1), (13, 2),
+            (0, 1),
+            (1, 2),
+            (2, 0),
+            (3, 4),
+            (4, 1),
+            (5, 5),
+            (6, 2),
+            (7, 3),
+            (9, 0),
+            (10, 6),
+            (12, 1),
+            (13, 2),
         ];
         let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
         let p = p2(&rows);
         let r = search_predicate_branch(&p, "f").expect("must recover the mod-3 branch");
-        let check = p2(&[((22, 5), f(22, 5)), ((31, 9), f(31, 9)), ((40, 0), f(40, 0))]);
+        let check = p2(&[
+            ((22, 5), f(22, 5)),
+            ((31, 9), f(31, 9)),
+            ((40, 0), f(40, 0)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("mod-3 branch must be exact on unseen points");
     }
@@ -1583,13 +1716,29 @@ mod tests {
     fn predicate_branch_recovers_composed_body() {
         let f = |a: i64, b: i64| if a % 2 == 0 { a * b + 1 } else { 2 * a - b };
         let raw = [
-            (0, 1), (2, 3), (4, 0), (6, 5), (8, 2), (10, 4), (12, 1), (1, 2), (3, 4), (5, 0),
-            (7, 6), (9, 1), (11, 3), (13, 5),
+            (0, 1),
+            (2, 3),
+            (4, 0),
+            (6, 5),
+            (8, 2),
+            (10, 4),
+            (12, 1),
+            (1, 2),
+            (3, 4),
+            (5, 0),
+            (7, 6),
+            (9, 1),
+            (11, 3),
+            (13, 5),
         ];
         let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
         let p = p2(&rows);
         let r = search_predicate_branch(&p, "f").expect("must recover the composed-body branch");
-        let check = p2(&[((20, 7), f(20, 7)), ((21, 9), f(21, 9)), ((14, 0), f(14, 0))]);
+        let check = p2(&[
+            ((20, 7), f(20, 7)),
+            ((21, 9), f(21, 9)),
+            ((14, 0), f(14, 0)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("composed-body branch must be exact on unseen points");
     }
@@ -1614,13 +1763,29 @@ mod tests {
     fn minmax_recovers_max_of_two_affine() {
         let f = |a: i64, b: i64| (2 * a + b).max(a + 3 * b);
         let raw = [
-            (0, 0), (5, 1), (1, 5), (3, 3), (8, 2), (2, 8), (6, 4), (4, 6), (10, 0), (0, 10),
-            (7, 7), (9, 1), (1, 9), (12, 3),
+            (0, 0),
+            (5, 1),
+            (1, 5),
+            (3, 3),
+            (8, 2),
+            (2, 8),
+            (6, 4),
+            (4, 6),
+            (10, 0),
+            (0, 10),
+            (7, 7),
+            (9, 1),
+            (1, 9),
+            (12, 3),
         ];
         let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
         let p = p2(&rows);
         let r = search_minmax_affine(&p, "f").expect("must recover max(2a+b, a+3b)");
-        let check = p2(&[((20, 5), f(20, 5)), ((5, 20), f(5, 20)), ((15, 15), f(15, 15))]);
+        let check = p2(&[
+            ((20, 5), f(20, 5)),
+            ((5, 20), f(5, 20)),
+            ((15, 15), f(15, 15)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("max envelope must be exact on unseen points");
     }
@@ -1631,13 +1796,29 @@ mod tests {
     fn minmax_recovers_min_of_two_affine() {
         let f = |a: i64, b: i64| (a + 2 * b).min(3 * a - b);
         let raw = [
-            (0, 0), (5, 1), (1, 5), (3, 3), (8, 2), (2, 8), (6, 4), (4, 6), (10, 1), (1, 10),
-            (7, 7), (9, 2), (2, 9), (11, 4),
+            (0, 0),
+            (5, 1),
+            (1, 5),
+            (3, 3),
+            (8, 2),
+            (2, 8),
+            (6, 4),
+            (4, 6),
+            (10, 1),
+            (1, 10),
+            (7, 7),
+            (9, 2),
+            (2, 9),
+            (11, 4),
         ];
         let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
         let p = p2(&rows);
         let r = search_minmax_affine(&p, "f").expect("must recover min(a+2b, 3a-b)");
-        let check = p2(&[((20, 6), f(20, 6)), ((6, 20), f(6, 20)), ((14, 14), f(14, 14))]);
+        let check = p2(&[
+            ((20, 6), f(20, 6)),
+            ((6, 20), f(6, 20)),
+            ((14, 14), f(14, 14)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("min envelope must be exact on unseen points");
     }
@@ -1655,7 +1836,11 @@ mod tests {
         let rows: Vec<(i64, i64)> = (0..24).map(|x| (x, f(x))).collect();
         let p = p1(&rows);
         let r = search_modular_cases(&p, "f").expect("must recover the mod-3 case split");
-        assert!(r.code.matches("if").count() >= 2, "expected a 3-way chain: {}", r.code);
+        assert!(
+            r.code.matches("if").count() >= 2,
+            "expected a 3-way chain: {}",
+            r.code
+        );
         let check = p1(&[(30, f(30)), (31, f(31)), (32, f(32)), (100, f(100))]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("mod-3 case split must be exact on unseen points");
@@ -1679,14 +1864,26 @@ mod tests {
     #[test]
     fn affine_recovers_two_arg_linear() {
         let f = |a: i64, b: i64| 3 * a + 2 * b + 5;
-        let rows: Vec<((i64, i64), i64)> =
-            [(1, 1), (2, 1), (1, 2), (5, 2), (0, 0), (10, 10), (4, 7), (8, 3)]
-                .iter()
-                .map(|&(a, b)| ((a, b), f(a, b)))
-                .collect();
+        let rows: Vec<((i64, i64), i64)> = [
+            (1, 1),
+            (2, 1),
+            (1, 2),
+            (5, 2),
+            (0, 0),
+            (10, 10),
+            (4, 7),
+            (8, 3),
+        ]
+        .iter()
+        .map(|&(a, b)| ((a, b), f(a, b)))
+        .collect();
         let p = p2(&rows);
         let r = search_affine(&p, "f").expect("affine must solve 3a+2b+5");
-        let check = p2(&[((13, 4), f(13, 4)), ((99, 50), f(99, 50)), ((7, 200), f(7, 200))]);
+        let check = p2(&[
+            ((13, 4), f(13, 4)),
+            ((99, 50), f(99, 50)),
+            ((7, 200), f(7, 200)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("affine must be exact on unseen points");
     }
@@ -1697,8 +1894,18 @@ mod tests {
     fn affine_threshold_recovers_single_breakpoint() {
         let f = |a: i64, b: i64| (if a > 100 { 2 * (a - 100) } else { 0 }) + 3 * b;
         let rows: Vec<((i64, i64), i64)> = [
-            (0, 1), (50, 2), (90, 5), (100, 3), (101, 4), (150, 6), (300, 1), (500, 9), (40, 7),
-            (700, 2), (95, 8), (250, 0),
+            (0, 1),
+            (50, 2),
+            (90, 5),
+            (100, 3),
+            (101, 4),
+            (150, 6),
+            (300, 1),
+            (500, 9),
+            (40, 7),
+            (700, 2),
+            (95, 8),
+            (250, 0),
         ]
         .iter()
         .map(|&(a, b)| ((a, b), f(a, b)))
@@ -1706,7 +1913,11 @@ mod tests {
         let p = p2(&rows);
         let r = search_affine_threshold(&p, "f").expect("threshold-affine must solve the rule");
         assert!(r.code.contains("if"), "expected a branch: {}", r.code);
-        let check = p2(&[((110, 3), f(110, 3)), ((1000, 4), f(1000, 4)), ((10, 10), f(10, 10))]);
+        let check = p2(&[
+            ((110, 3), f(110, 3)),
+            ((1000, 4), f(1000, 4)),
+            ((10, 10), f(10, 10)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("threshold-affine must be exact on unseen points");
     }
@@ -1727,14 +1938,28 @@ mod tests {
             base + 3 * b
         };
         let raw = [
-            (10, 1), (40, 5), (90, 2), (100, 7), // tier0 (4)
-            (150, 3), (200, 9), (300, 1), (450, 6), (500, 4), // tier1 (5)
-            (600, 2), (800, 8), (1200, 5), (1500, 0), // tier2 (4)
+            (10, 1),
+            (40, 5),
+            (90, 2),
+            (100, 7), // tier0 (4)
+            (150, 3),
+            (200, 9),
+            (300, 1),
+            (450, 6),
+            (500, 4), // tier1 (5)
+            (600, 2),
+            (800, 8),
+            (1200, 5),
+            (1500, 0), // tier2 (4)
         ];
         let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
         let p = p2(&rows);
         let r = search_affine_piecewise(&p, "f").expect("must solve the 3-tier multi-arg rule");
-        assert!(r.code.matches("if").count() >= 2, "expected 3 pieces: {}", r.code);
+        assert!(
+            r.code.matches("if").count() >= 2,
+            "expected 3 pieces: {}",
+            r.code
+        );
         let check = p2(&[
             ((75, 3), f(75, 3)),
             ((250, 11), f(250, 11)),
@@ -1749,10 +1974,12 @@ mod tests {
     // It refuses a product (a·b) — not affine — rather than emitting a wrong fit.
     #[test]
     fn affine_refuses_nonlinear() {
-        let rows: Vec<((i64, i64), i64)> =
-            (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
+        let rows: Vec<((i64, i64), i64)> = (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
         let p = p2(&rows);
-        assert!(search_affine(&p, "f").is_none(), "affine must refuse a product");
+        assert!(
+            search_affine(&p, "f").is_none(),
+            "affine must refuse a product"
+        );
     }
 
     // A curved single-argument rule `2x² − 3x + 5` is recovered exactly by the
@@ -1761,8 +1988,10 @@ mod tests {
     #[test]
     fn polynomial_recovers_one_arg_quadratic() {
         let f = |x: i64| 2 * x * x - 3 * x + 5;
-        let rows: Vec<(i64, i64)> =
-            [0, 1, 2, 3, 4, 5, 7, 10].iter().map(|&x| (x, f(x))).collect();
+        let rows: Vec<(i64, i64)> = [0, 1, 2, 3, 4, 5, 7, 10]
+            .iter()
+            .map(|&x| (x, f(x)))
+            .collect();
         let p = p1(&rows);
         let r = search_polynomial_multi(&p, "f").expect("must solve 2x^2 - 3x + 5");
         let check = p1(&[(13, f(13)), (50, f(50)), (99, f(99))]);
@@ -1775,11 +2004,10 @@ mod tests {
     #[test]
     fn polynomial_recovers_two_arg_separable() {
         let f = |a: i64, b: i64| a * a + 2 * b + 3;
-        let rows: Vec<((i64, i64), i64)> =
-            [(0, 0), (1, 1), (2, 3), (3, 5), (4, 2), (5, 7), (7, 1)]
-                .iter()
-                .map(|&(a, b)| ((a, b), f(a, b)))
-                .collect();
+        let rows: Vec<((i64, i64), i64)> = [(0, 0), (1, 1), (2, 3), (3, 5), (4, 2), (5, 7), (7, 1)]
+            .iter()
+            .map(|&(a, b)| ((a, b), f(a, b)))
+            .collect();
         let p = p2(&rows);
         let r = search_polynomial_multi(&p, "f").expect("must solve a^2 + 2b + 3");
         let check = p2(&[((13, 4), f(13, 4)), ((99, 50), f(99, 50))]);
@@ -1791,8 +2019,7 @@ mod tests {
     // express it, so the round-to-int / rank check rejects rather than overfit.
     #[test]
     fn polynomial_refuses_cross_term() {
-        let rows: Vec<((i64, i64), i64)> =
-            (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
+        let rows: Vec<((i64, i64), i64)> = (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
         let p = p2(&rows);
         assert!(
             search_polynomial_multi(&p, "f").is_none(),
@@ -1806,8 +2033,10 @@ mod tests {
     #[test]
     fn clamp_recovers_one_arg_floor() {
         let f = |x: i64| (5 * x - 40).max(0);
-        let rows: Vec<(i64, i64)> =
-            [0, 2, 4, 6, 8, 10, 14, 20, 30].iter().map(|&x| (x, f(x))).collect();
+        let rows: Vec<(i64, i64)> = [0, 2, 4, 6, 8, 10, 14, 20, 30]
+            .iter()
+            .map(|&x| (x, f(x)))
+            .collect();
         let p = p1(&rows);
         let r = search_clamp_affine(&p, "f").expect("must recover max(0, 5x-40)");
         let check = p1(&[(1, f(1)), (7, f(7)), (9, f(9)), (50, f(50)), (100, f(100))]);
@@ -1821,13 +2050,26 @@ mod tests {
     fn clamp_recovers_two_arg_cap() {
         let f = |a: i64, b: i64| (10 * a + 3 * b).min(500);
         let raw = [
-            (0, 0), (1, 1), (5, 2), (10, 10), (20, 5), (3, 3), (8, 8), // below cap
-            (60, 10), (90, 40), (100, 0), (200, 100), // at/above cap (clamped to 500)
+            (0, 0),
+            (1, 1),
+            (5, 2),
+            (10, 10),
+            (20, 5),
+            (3, 3),
+            (8, 8), // below cap
+            (60, 10),
+            (90, 40),
+            (100, 0),
+            (200, 100), // at/above cap (clamped to 500)
         ];
         let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
         let p = p2(&rows);
         let r = search_clamp_affine(&p, "f").expect("must recover min(500, 10a+3b)");
-        let check = p2(&[((4, 4), f(4, 4)), ((49, 3), f(49, 3)), ((300, 7), f(300, 7))]);
+        let check = p2(&[
+            ((4, 4), f(4, 4)),
+            ((49, 3), f(49, 3)),
+            ((300, 7), f(300, 7)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("cap must be exact on unseen points");
     }
@@ -1836,8 +2078,7 @@ mod tests {
     // constant floor/cap fits, so it returns None rather than a wrong saturation.
     #[test]
     fn clamp_refuses_nonclamp() {
-        let rows: Vec<((i64, i64), i64)> =
-            (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
+        let rows: Vec<((i64, i64), i64)> = (1..14).map(|i| ((i, i + 1), i * (i + 1))).collect();
         let p = p2(&rows);
         assert!(
             search_clamp_affine(&p, "f").is_none(),
@@ -1852,12 +2093,25 @@ mod tests {
     fn composed_recovers_cross_term() {
         let f = |a: i64, b: i64| a * b + 2 * a + 3;
         let raw = [
-            (0, 0), (1, 1), (2, 3), (3, 2), (4, 5), (5, 1), (2, 7), (6, 0), (1, 9), (8, 4),
+            (0, 0),
+            (1, 1),
+            (2, 3),
+            (3, 2),
+            (4, 5),
+            (5, 1),
+            (2, 7),
+            (6, 0),
+            (1, 9),
+            (8, 4),
         ];
         let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
         let p = p2(&rows);
         let r = search_composed_features(&p, "f").expect("must recover a·b + 2a + 3");
-        let check = p2(&[((11, 4), f(11, 4)), ((20, 7), f(20, 7)), ((3, 50), f(3, 50))]);
+        let check = p2(&[
+            ((11, 4), f(11, 4)),
+            ((20, 7), f(20, 7)),
+            ((3, 50), f(3, 50)),
+        ]);
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("cross-term must be exact on unseen points");
     }
@@ -1881,8 +2135,11 @@ mod tests {
     #[test]
     fn composed_refuses_noise() {
         let ys = [7i64, 2, 9, 1, 5, 8, 3, 6, 4, 0, 11, 13];
-        let rows: Vec<((i64, i64), i64)> =
-            ys.iter().enumerate().map(|(i, &y)| ((i as i64, (i * 2 + 1) as i64), y)).collect();
+        let rows: Vec<((i64, i64), i64)> = ys
+            .iter()
+            .enumerate()
+            .map(|(i, &y)| ((i as i64, (i * 2 + 1) as i64), y))
+            .collect();
         let p = p2(&rows);
         assert!(
             search_composed_features(&p, "f").is_none(),
@@ -1896,8 +2153,7 @@ mod tests {
     #[test]
     fn polynomial_one_arg_affine_still_lands() {
         let f = |x: i64| 3 * x + 1;
-        let rows: Vec<(i64, i64)> =
-            [0, 1, 2, 3, 4, 5, 7].iter().map(|&x| (x, f(x))).collect();
+        let rows: Vec<(i64, i64)> = [0, 1, 2, 3, 4, 5, 7].iter().map(|&x| (x, f(x))).collect();
         let p = p1(&rows);
         let r = search_polynomial_multi(&p, "f").expect("must solve 3x + 1 at arity 1");
         let check = p1(&[(13, f(13)), (88, f(88))]);

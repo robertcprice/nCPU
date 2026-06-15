@@ -187,7 +187,11 @@ fn extract(problem: &Problem) -> Option<(Vec<ArrExample>, usize)> {
         for input in &ex.inputs[1..] {
             scalars.push(int_value(input)?);
         }
-        examples.push(ArrExample { arr, scalars, target: ex.expected_int() });
+        examples.push(ArrExample {
+            arr,
+            scalars,
+            target: ex.expected_int(),
+        });
     }
     if examples.is_empty() {
         return None;
@@ -215,14 +219,22 @@ fn build_features(examples: &[ArrExample], n_scalars: usize) -> Vec<ArrFeature> 
                 _ => continue 'red,
             }
         }
-        feats.push(ArrFeature { kind, col, rank: kind.rank() });
+        feats.push(ArrFeature {
+            kind,
+            col,
+            rank: kind.rank(),
+        });
     }
 
     // Scalar args: each is its own raw feature column.
     for j in 0..n_scalars {
         let kind = FeatureKind::Scalar(j);
         let col: Vec<i64> = examples.iter().map(|ex| ex.scalars[j]).collect();
-        feats.push(ArrFeature { kind, col, rank: kind.rank() });
+        feats.push(ArrFeature {
+            kind,
+            col,
+            rank: kind.rank(),
+        });
     }
 
     // Drop CONSTANT columns: a feature that takes one value across all examples
@@ -385,8 +397,9 @@ pub(super) fn search_array_affine_features(
     // Scalar parameter names. The array is always `arr`; trailing scalars take
     // single-letter names matching the existing mixed-signature codegen idiom.
     let scalar_param_letters = ["k", "t"];
-    let scalar_params: Vec<String> =
-        (0..n_scalars).map(|j| scalar_param_letters[j].to_string()).collect();
+    let scalar_params: Vec<String> = (0..n_scalars)
+        .map(|j| scalar_param_letters[j].to_string())
+        .collect();
     let mut signature = String::from("arr: [i64]");
     for name in &scalar_params {
         signature.push_str(&format!(", {name}: i64"));
@@ -413,8 +426,11 @@ pub(super) fn search_array_affine_features(
             .collect();
         let w = solve_linear_features(&feature_rows, &targets, m)?;
         let c0 = w[0];
-        let picks: Vec<(&ArrFeature, i64)> =
-            idxs.iter().enumerate().map(|(slot, &fi)| (&feats[fi], w[slot + 1])).collect();
+        let picks: Vec<(&ArrFeature, i64)> = idxs
+            .iter()
+            .enumerate()
+            .map(|(slot, &fi)| (&feats[fi], w[slot + 1]))
+            .collect();
         // OWNERSHIP / trivial-restatement guard, applied to the EFFECTIVE program
         // (the features that survive with a non-zero coefficient) — a larger
         // subset can still collapse to a single bare reduction when the other
@@ -454,8 +470,7 @@ pub(super) fn search_array_affine_features(
             terms.push((feature_ref(feat.kind, slot, &scalar_params), w_k));
         }
         let ret = affine_over_terms(c0, &terms);
-        let code =
-            format!("fn {fn_name}({signature}) -> i64 {{\n{body}    return {ret};\n}}\n");
+        let code = format!("fn {fn_name}({signature}) -> i64 {{\n{body}    return {ret};\n}}\n");
         verified_result(problem, code, "array_affine_features")
     };
 
@@ -556,12 +571,19 @@ mod tests {
     #[test]
     fn recovers_len_plus_sum_affine() {
         let f = |a: &[i64]| 5 + 2 * (a.len() as i64) + a.iter().sum::<i64>();
-        let train: [&[i64]; 8] =
-            [&[], &[1], &[1, 2], &[3, 3, 3], &[-1, 4], &[10], &[2, 2, 2, 2], &[7, -3, 1]];
+        let train: [&[i64]; 8] = [
+            &[],
+            &[1],
+            &[1, 2],
+            &[3, 3, 3],
+            &[-1, 4],
+            &[10],
+            &[2, 2, 2, 2],
+            &[7, -3, 1],
+        ];
         let rows: Vec<(&[i64], i64)> = train.iter().map(|&a| (a, f(a))).collect();
         let p = pa(&rows);
-        let r = search_array_affine_features(&p, "f")
-            .expect("must recover 5 + 2*len + sum");
+        let r = search_array_affine_features(&p, "f").expect("must recover 5 + 2*len + sum");
         let unseen: [&[i64]; 4] = [&[100], &[5, 5, 5, 5, 5], &[-9, -9], &[0, 1, 2, 3, 4, 5]];
         let check: Vec<(&[i64], i64)> = unseen.iter().map(|&a| (a, f(a))).collect();
         crate::runtime::verify_problem_code_strict(&pa(&check), &r.code)
@@ -586,8 +608,7 @@ mod tests {
         ];
         let rows: Vec<(&[i64], i64)> = train.iter().map(|&a| (a, f(a))).collect();
         let p = pa(&rows);
-        let r = search_array_affine_features(&p, "f")
-            .expect("must recover sum_of_squares - 3*sum");
+        let r = search_array_affine_features(&p, "f").expect("must recover sum_of_squares - 3*sum");
         let unseen: [&[i64]; 4] = [&[6, 6], &[-4, 2, 2], &[11], &[1, 1, 1, 1, 1, 1]];
         let check: Vec<(&[i64], i64)> = unseen.iter().map(|&a| (a, f(a))).collect();
         crate::runtime::verify_problem_code_strict(&pa(&check), &r.code)
@@ -611,15 +632,16 @@ mod tests {
             (&[2, 8, 2, 2], 2),
             (&[-5, -1, -3], 6),
         ];
-        let rows: Vec<(&[i64], i64, i64)> =
-            train.iter().map(|&(a, b)| (a, b, f(a, b))).collect();
+        let rows: Vec<(&[i64], i64, i64)> = train.iter().map(|&(a, b)| (a, b, f(a, b))).collect();
         let p = pas(&rows);
-        let r = search_array_affine_features(&p, "f")
-            .expect("must recover base + 2*len + min");
-        let unseen: [(&[i64], i64); 4] =
-            [(&[9, 9], 7), (&[-4, 0, 8], 3), (&[6], 11), (&[1, 2, 3, 4], 1)];
-        let check: Vec<(&[i64], i64, i64)> =
-            unseen.iter().map(|&(a, b)| (a, b, f(a, b))).collect();
+        let r = search_array_affine_features(&p, "f").expect("must recover base + 2*len + min");
+        let unseen: [(&[i64], i64); 4] = [
+            (&[9, 9], 7),
+            (&[-4, 0, 8], 3),
+            (&[6], 11),
+            (&[1, 2, 3, 4], 1),
+        ];
+        let check: Vec<(&[i64], i64, i64)> = unseen.iter().map(|&(a, b)| (a, b, f(a, b))).collect();
         crate::runtime::verify_problem_code_strict(&pas(&check), &r.code)
             .expect("must be exact on unseen (arr, base)");
     }
@@ -629,7 +651,12 @@ mod tests {
     // than overfit.
     #[test]
     fn refuses_index_weighted_sum() {
-        let f = |a: &[i64]| a.iter().enumerate().map(|(i, &v)| i as i64 * v).sum::<i64>();
+        let f = |a: &[i64]| {
+            a.iter()
+                .enumerate()
+                .map(|(i, &v)| i as i64 * v)
+                .sum::<i64>()
+        };
         let train: [&[i64]; 9] = [
             &[1, 2],
             &[3, 1, 4],
@@ -654,8 +681,16 @@ mod tests {
     #[test]
     fn refuses_bare_sum() {
         let f = |a: &[i64]| a.iter().sum::<i64>();
-        let train: [&[i64]; 8] =
-            [&[1], &[1, 2], &[3, 3], &[-1, 4], &[10], &[2, 2, 2, 2], &[7, -3, 1], &[0, 0, 5]];
+        let train: [&[i64]; 8] = [
+            &[1],
+            &[1, 2],
+            &[3, 3],
+            &[-1, 4],
+            &[10],
+            &[2, 2, 2, 2],
+            &[7, -3, 1],
+            &[0, 0, 5],
+        ];
         let rows: Vec<(&[i64], i64)> = train.iter().map(|&a| (a, f(a))).collect();
         let p = pa(&rows);
         assert!(

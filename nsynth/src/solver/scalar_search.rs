@@ -419,7 +419,12 @@ fn scalar_expr_canon(expr: &ScalarExpr) -> String {
                 ScalarBinOp::Div => '/',
                 ScalarBinOp::Mod => '%',
             };
-            format!("({} {} {})", scalar_expr_canon(lhs), o, scalar_expr_canon(rhs))
+            format!(
+                "({} {} {})",
+                scalar_expr_canon(lhs),
+                o,
+                scalar_expr_canon(rhs)
+            )
         }
     }
 }
@@ -446,7 +451,10 @@ fn insert_expr_candidate(
         }
         Entry::Occupied(mut slot) => {
             let new_key = (scalar_expr_complexity(&expr), scalar_expr_canon(&expr));
-            let cur_key = (scalar_expr_complexity(slot.get()), scalar_expr_canon(slot.get()));
+            let cur_key = (
+                scalar_expr_complexity(slot.get()),
+                scalar_expr_canon(slot.get()),
+            );
             if new_key < cur_key {
                 slot.insert(expr);
             }
@@ -956,7 +964,15 @@ mod probe_tests {
     use crate::benchmark::{Example, Problem, Value};
 
     fn storage_problem() -> Problem {
-        let rows = [(0, 0), (50, 0), (51, 5), (60, 50), (40, 0), (70, 100), (200, 750)];
+        let rows = [
+            (0, 0),
+            (50, 0),
+            (51, 5),
+            (60, 50),
+            (40, 0),
+            (70, 100),
+            (200, 750),
+        ];
         Problem {
             name: "storage_overage".to_string(),
             category: "external",
@@ -964,7 +980,10 @@ mod probe_tests {
             signature: "fn storage_overage(used_gb: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: Value::Int(*o) })
+                .map(|(i, o)| Example {
+                    inputs: vec![Value::Int(*i)],
+                    expected: Value::Int(*o),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -980,9 +999,15 @@ mod probe_tests {
         let p = storage_problem();
         let consts = mine_scalar_constants(
             &extract_scalar_examples(&p).unwrap(),
-            &p.examples.iter().map(|e| e.expected_int()).collect::<Vec<_>>(),
+            &p.examples
+                .iter()
+                .map(|e| e.expected_int())
+                .collect::<Vec<_>>(),
         );
-        assert!(consts.contains(&50), "threshold 50 must be mined from examples");
+        assert!(
+            consts.contains(&50),
+            "threshold 50 must be mined from examples"
+        );
         // search_single_branch only returns Some after verified_result has
         // confirmed the program reproduces every example, so a Some here means
         // an exact, verified solution.
@@ -995,8 +1020,16 @@ mod probe_tests {
     fn api_bill_problem() -> Problem {
         // 3-tier: free <=1000, 2c/call 1001..10000, 1c/call beyond.
         let rows = [
-            (0, 0), (500, 0), (1000, 0), (1001, 2), (2000, 2000),
-            (5000, 8000), (10000, 18000), (10001, 18001), (15000, 23000), (20000, 28000),
+            (0, 0),
+            (500, 0),
+            (1000, 0),
+            (1001, 2),
+            (2000, 2000),
+            (5000, 8000),
+            (10000, 18000),
+            (10001, 18001),
+            (15000, 23000),
+            (20000, 28000),
         ];
         Problem {
             name: "api_bill".to_string(),
@@ -1005,7 +1038,10 @@ mod probe_tests {
             signature: "fn api_bill(x: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: Value::Int(*o) })
+                .map(|(i, o)| Example {
+                    inputs: vec![Value::Int(*i)],
+                    expected: Value::Int(*o),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1046,7 +1082,10 @@ mod probe_tests {
             signature: "fn api_bill_tiered_probe(x: i64) -> i64",
             examples: xs
                 .iter()
-                .map(|&x| Example { inputs: vec![Value::Int(x)], expected: Value::Int(api_bill_ref(x)) })
+                .map(|&x| Example {
+                    inputs: vec![Value::Int(x)],
+                    expected: Value::Int(api_bill_ref(x)),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1063,17 +1102,23 @@ mod probe_tests {
         let sparse = api_bill_problem();
         let consts = mine_scalar_constants(
             &extract_scalar_examples(&sparse).unwrap(),
-            &sparse.examples.iter().map(|e| e.expected_int()).collect::<Vec<_>>(),
+            &sparse
+                .examples
+                .iter()
+                .map(|e| e.expected_int())
+                .collect::<Vec<_>>(),
         );
         for want in [1000_i64, 1001, 10000] {
-            assert!(consts.contains(&want), "breakpoint {} must survive mining", want);
+            assert!(
+                consts.contains(&want),
+                "breakpoint {} must survive mining",
+                want
+            );
         }
         // No `k % x` / `_ / x` overfit class: single-branch cannot fake the
         // tiers on the sparse set, so it honestly fails (or the program it
         // returns is *not* a divisor-by-variable hack).
-        if let Some(r) =
-            super::search_scalar_families::search_single_branch(&sparse, "api_bill")
-        {
+        if let Some(r) = super::search_scalar_families::search_single_branch(&sparse, "api_bill") {
             assert!(
                 !r.code.contains("% x") && !r.code.contains("/ x"),
                 "single-branch must not overfit by dividing/modding by the input: {}",
@@ -1097,7 +1142,10 @@ mod probe_tests {
             signature: "fn api_bill_tiered_probe(x: i64) -> i64",
             examples: (0..=30000)
                 .step_by(137)
-                .map(|x| Example { inputs: vec![Value::Int(x)], expected: Value::Int(api_bill_ref(x)) })
+                .map(|x| Example {
+                    inputs: vec![Value::Int(x)],
+                    expected: Value::Int(api_bill_ref(x)),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1114,7 +1162,10 @@ mod probe_tests {
             signature: "fn f(x: i64) -> i64",
             examples: rows
                 .iter()
-                .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: Value::Int(*o) })
+                .map(|(i, o)| Example {
+                    inputs: vec![Value::Int(*i)],
+                    expected: Value::Int(*o),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -1136,17 +1187,26 @@ mod probe_tests {
                 8000 + 5 * (x - 5000)
             }
         };
-        let train: Vec<(i64, i64)> = [0, 500, 1000, 1001, 2000, 3000, 5000, 5001, 7000, 9000, 12000]
-            .iter()
-            .map(|&x| (x, f(x)))
-            .collect();
+        let train: Vec<(i64, i64)> = [
+            0, 500, 1000, 1001, 2000, 3000, 5000, 5001, 7000, 9000, 12000,
+        ]
+        .iter()
+        .map(|&x| (x, f(x)))
+        .collect();
         let p = scalar_problem("f", &train);
         let r = super::search_scalar_families::search_piecewise_affine(&p, "f")
             .expect("piecewise must solve the 3-tier rule");
-        assert!(r.code.matches("if").count() >= 2, "expected >=3 pieces: {}", r.code);
+        assert!(
+            r.code.matches("if").count() >= 2,
+            "expected >=3 pieces: {}",
+            r.code
+        );
         let check = scalar_problem(
             "f",
-            &(0..=20000).step_by(53).map(|x| (x, f(x))).collect::<Vec<_>>(),
+            &(0..=20000)
+                .step_by(53)
+                .map(|x| (x, f(x)))
+                .collect::<Vec<_>>(),
         );
         crate::runtime::verify_problem_code_strict(&check, &r.code)
             .expect("3-tier rule must be exact on unseen points");

@@ -153,7 +153,13 @@ fn decode_store(text: &str) -> Store {
         if set.is_empty() {
             continue;
         }
-        store.rows.insert(unescape_fp(fp_enc), Row { last_used, hashes: set });
+        store.rows.insert(
+            unescape_fp(fp_enc),
+            Row {
+                last_used,
+                hashes: set,
+            },
+        );
     }
     store
 }
@@ -211,7 +217,13 @@ fn with_store<R>(f: impl FnOnce(&mut Store, Option<&Path>) -> R) -> R {
 
 /// Snapshot of every known-bad code hash for this fingerprint.
 pub fn rejected_for(fp: &str) -> BTreeSet<u128> {
-    with_store(|store, _| store.rows.get(fp).map(|r| r.hashes.clone()).unwrap_or_default())
+    with_store(|store, _| {
+        store
+            .rows
+            .get(fp)
+            .map(|r| r.hashes.clone())
+            .unwrap_or_default()
+    })
 }
 
 /// Record rejections discovered this run and persist the bank.
@@ -239,7 +251,11 @@ pub struct RejectionRecorder {
 impl RejectionRecorder {
     pub fn new(fp: String) -> Self {
         let known = rejected_for(&fp);
-        Self { fp, known, pending: Vec::new() }
+        Self {
+            fp,
+            known,
+            pending: Vec::new(),
+        }
     }
 
     /// True when this exact code already failed verification for this
@@ -285,10 +301,18 @@ mod tests {
         let text = encode_store(&store);
         let back = decode_store(&text);
         assert_eq!(back.rows.len(), 2);
-        let row = back.rows.get("fp|with~tokens\tand\ttabs").expect("escaped fp survives");
+        let row = back
+            .rows
+            .get("fp|with~tokens\tand\ttabs")
+            .expect("escaped fp survives");
         assert_eq!(row.hashes.len(), 3);
         assert_eq!(row.last_used, 100);
-        assert!(back.rows.get("other").unwrap().hashes.contains(&code_hash("bad prog")));
+        assert!(back
+            .rows
+            .get("other")
+            .unwrap()
+            .hashes
+            .contains(&code_hash("bad prog")));
     }
 
     #[test]

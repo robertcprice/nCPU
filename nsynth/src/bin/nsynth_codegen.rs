@@ -186,9 +186,7 @@ fn main() {
         "typescript" | "ts" => to_typescript(&result.code),
         "mog" => result.code.clone(),
         other => {
-            eprintln!(
-                "[nsynth_codegen] unknown --lang {other:?}; use python|rust|typescript|mog"
-            );
+            eprintln!("[nsynth_codegen] unknown --lang {other:?}; use python|rust|typescript|mog");
             std::process::exit(2);
         }
     };

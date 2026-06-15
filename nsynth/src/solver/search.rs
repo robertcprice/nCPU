@@ -56,6 +56,14 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_array_dnf,
     },
     SearchCandidate {
+        key: "search_array_sequence",
+        func: search_array_sequence,
+    },
+    SearchCandidate {
+        key: "search_array_feature_dnf",
+        func: search_array_feature_dnf,
+    },
+    SearchCandidate {
         key: "search_min_element",
         func: search_min_element,
     },
@@ -226,6 +234,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_suffix_class",
         func: search_suffix_class,
+    },
+    SearchCandidate {
+        key: "search_string_subsequence_class",
+        func: search_string_subsequence_class,
     },
     SearchCandidate {
         key: "search_gcd_loop",
@@ -446,6 +458,12 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_bitwise,
     },
 ];
+
+/// Just the registered candidate keys. Useful for tests that only need
+/// to assert membership without the function pointer.
+pub(super) fn enumerate_search_candidate_keys() -> Vec<&'static str> {
+    SEARCH_CANDIDATES.iter().map(|c| c.key).collect()
+}
 
 fn ranked_search_candidates(problem: &Problem) -> Vec<SearchCandidate> {
     let mut ranked: Vec<(usize, SearchCandidate)> =
