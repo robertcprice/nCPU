@@ -277,6 +277,9 @@ fn every_preempting_method_has_a_registered_search_candidate() {
         "search_longest_run",
         "search_intersects",
         "search_stateful_reducer",
+        "search_stateful_reducer_dual",
+        "search_stateful_reducer_event",
+        "search_stateful_replace",
         "search_kth_smallest",
         "search_count_distinct",
     ] {
@@ -286,4 +289,262 @@ fn every_preempting_method_has_a_registered_search_candidate() {
              registered in SEARCH_CANDIDATES — a phantom entry.",
         );
     }
+}
+
+#[test]
+fn search_stateful_reducer_dual_is_registered_and_preempts_gradient() {
+    // Stage-1.5 3-arg stateful reducer: (state, a, b) -> state with
+    // `state = state OP1 r1(a) OP2 r2(b)`. Wired into both the search
+    // candidate list and the preemption whitelist.
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_stateful_reducer_dual"),
+        "search_stateful_reducer_dual missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_stateful_reducer_dual", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_stateful_reducer_dual not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_stateful_reducer_dual_solves_delta_accumulator() {
+    // End-to-end: `f(state, a, b) = state + sum(a) - sum(b)`.
+    let problem = Problem {
+        name: "delta_accumulator_v0".to_string(),
+        category: "test",
+        description: "test",
+        signature: "fn delta_accumulator_v0(state: i64, a: [i64], b: [i64]) -> i64",
+        examples: vec![
+            Example {
+                inputs: vec![
+                    BmValue::Int(0),
+                    BmValue::Array(vec![1, 2, 3]),
+                    BmValue::Array(vec![1, 0, 0]),
+                ],
+                expected: BmValue::Int(5),
+            },
+            Example {
+                inputs: vec![
+                    BmValue::Int(10),
+                    BmValue::Array(vec![5, 5]),
+                    BmValue::Array(vec![2, 3]),
+                ],
+                expected: BmValue::Int(15),
+            },
+            Example {
+                inputs: vec![
+                    BmValue::Int(-5),
+                    BmValue::Array(vec![3, 3, 3]),
+                    BmValue::Array(vec![1, 1, 1]),
+                ],
+                expected: BmValue::Int(1),
+            },
+        ],
+        holdouts: vec![],
+        reference_code: "",
+    };
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "dual stateful reducer failed: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_stateful_reducer_dual");
+    verify_problem_code_strict(&problem, &result.code)
+        .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
+}
+
+#[test]
+fn search_stateful_replace_is_registered_and_preempts_gradient() {
+    // Stage-1.5 2-arg stateful replace: (state, arr) -> state with
+    // conditional update `if pred(arr) then state = g(arr) else state`.
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_stateful_replace"),
+        "search_stateful_replace missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_stateful_replace", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_stateful_replace not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_stateful_replace_solves_flip_on_positive() {
+    // End-to-end: `f(state, arr) = if any(arr > 0) then -state else state`.
+    let problem = Problem {
+        name: "flip_on_positive_v0".to_string(),
+        category: "test",
+        description: "test",
+        signature: "fn flip_on_positive_v0(state: i64, arr: [i64]) -> i64",
+        examples: vec![
+            Example {
+                inputs: vec![BmValue::Int(1), BmValue::Array(vec![3, 7, 1])],
+                expected: BmValue::Int(-1),
+            },
+            Example {
+                inputs: vec![BmValue::Int(5), BmValue::Array(vec![-1, -2])],
+                expected: BmValue::Int(5),
+            },
+            Example {
+                inputs: vec![BmValue::Int(0), BmValue::Array(vec![-3])],
+                expected: BmValue::Int(0),
+            },
+            Example {
+                inputs: vec![BmValue::Int(-7), BmValue::Array(vec![0, 0, 1])],
+                expected: BmValue::Int(7),
+            },
+        ],
+        holdouts: vec![],
+        reference_code: "",
+    };
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "stateful replace failed: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_stateful_replace");
+    verify_problem_code_strict(&problem, &result.code)
+        .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
+}
+
+#[test]
+fn search_stateful_reducer_event_is_registered_and_preempts_gradient() {
+    // Stage-1.5 3-arg event-modulated stateful reducer:
+    // (state, event, arr) -> state. Wired into both the search
+    // candidate list and the preemption whitelist.
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_stateful_reducer_event"),
+        "search_stateful_reducer_event missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_stateful_reducer_event", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_stateful_reducer_event not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_stateful_reducer_event_solves_event_modulated_sum() {
+    // End-to-end: `f(state, event, arr) = state + event * sum(arr)`.
+    let problem = Problem {
+        name: "event_modulated_sum_v0".to_string(),
+        category: "test",
+        description: "test",
+        signature: "fn event_modulated_sum_v0(state: i64, event: i64, arr: [i64]) -> i64",
+        examples: vec![
+            // state=0, event=3, sum=6  -> 0 + 3*6 = 18
+            Example {
+                inputs: vec![
+                    BmValue::Int(0),
+                    BmValue::Int(3),
+                    BmValue::Array(vec![1, 2, 3]),
+                ],
+                expected: BmValue::Int(18),
+            },
+            // state=10, event=2, sum=5 -> 10 + 2*5 = 20
+            Example {
+                inputs: vec![
+                    BmValue::Int(10),
+                    BmValue::Int(2),
+                    BmValue::Array(vec![1, 4]),
+                ],
+                expected: BmValue::Int(20),
+            },
+            // state=5, event=0, sum=4 -> 5 + 0*4 = 5  (event gates off)
+            Example {
+                inputs: vec![
+                    BmValue::Int(5),
+                    BmValue::Int(0),
+                    BmValue::Array(vec![1, 3]),
+                ],
+                expected: BmValue::Int(5),
+            },
+            // state=-3, event=-2, sum=4 -> -3 + -2*4 = -11
+            Example {
+                inputs: vec![
+                    BmValue::Int(-3),
+                    BmValue::Int(-2),
+                    BmValue::Array(vec![1, 3]),
+                ],
+                expected: BmValue::Int(-11),
+            },
+        ],
+        holdouts: vec![],
+        reference_code: "",
+    };
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "event-modulated reducer failed: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_stateful_reducer_event");
+    verify_problem_code_strict(&problem, &result.code)
+        .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
+}
+
+#[test]
+fn search_stateful_reducer_event_solves_gated_contribution() {
+    // End-to-end: `f(state, event, arr) = if event > 0 then state + sum(arr) else state`.
+    let problem = Problem {
+        name: "gated_contribution_v0".to_string(),
+        category: "test",
+        description: "test",
+        signature: "fn gated_contribution_v0(state: i64, event: i64, arr: [i64]) -> i64",
+        examples: vec![
+            // event=1, sum=6  -> 0 + 6 = 6
+            Example {
+                inputs: vec![
+                    BmValue::Int(0),
+                    BmValue::Int(1),
+                    BmValue::Array(vec![1, 2, 3]),
+                ],
+                expected: BmValue::Int(6),
+            },
+            // event=0 -> state unchanged
+            Example {
+                inputs: vec![
+                    BmValue::Int(7),
+                    BmValue::Int(0),
+                    BmValue::Array(vec![1, 2, 3]),
+                ],
+                expected: BmValue::Int(7),
+            },
+            // event=-1 -> state unchanged
+            Example {
+                inputs: vec![
+                    BmValue::Int(-2),
+                    BmValue::Int(-1),
+                    BmValue::Array(vec![10, 20]),
+                ],
+                expected: BmValue::Int(-2),
+            },
+            // event=5, sum=9 -> 4 + 9 = 13
+            Example {
+                inputs: vec![
+                    BmValue::Int(4),
+                    BmValue::Int(5),
+                    BmValue::Array(vec![4, 5]),
+                ],
+                expected: BmValue::Int(13),
+            },
+        ],
+        holdouts: vec![],
+        reference_code: "",
+    };
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "gated contribution failed: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_stateful_reducer_event");
+    verify_problem_code_strict(&problem, &result.code)
+        .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
 }

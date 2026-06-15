@@ -178,6 +178,9 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_array_feature_dnf"
         | "search_string_subsequence_class"
         | "search_stateful_reducer"
+        | "search_stateful_reducer_dual"
+        | "search_stateful_reducer_event"
+        | "search_stateful_replace"
         | "search_strictly_increasing"
         | "search_has_strictly_increasing_run"
         | "search_first_index_of"
@@ -186,7 +189,21 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_longest_run"
         | "search_intersects"
         | "search_count_distinct"
-        | "search_kth_smallest" => true,
+        | "search_kth_smallest"
+        // Stage 2: broadcast/dot-product/matmul templates
+        // These are structured numeric computation patterns that are recovered via
+        // over-determined linear algebra and fully verified on every example, so
+        // they generalize by construction and preempt gradient distillation.
+        | "search_broadcast_pattern"
+        | "search_dot_product_search"
+        | "search_matmul_template"
+        // Stage 3: struct-based field manipulation and conditional logic
+        // Field reduction, coupled field transformations, and conditional struct
+        // assembly are all verified exact solutions, so they generalize by
+        // construction and preempt the slow gradient path.
+        | "search_struct_field_reduction"
+        | "search_struct_coupled_fields"
+        | "search_struct_conditional_fields" => true,
         "search_unary_range_loop" => {
             result.code.contains("acc = acc + i;") || result.code.contains("acc = acc * i;")
         }

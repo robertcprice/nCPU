@@ -28,6 +28,18 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_stateful_reducer,
     },
     SearchCandidate {
+        key: "search_stateful_reducer_dual",
+        func: search_stateful_reducer_dual,
+    },
+    SearchCandidate {
+        key: "search_stateful_reducer_event",
+        func: search_stateful_reducer_event,
+    },
+    SearchCandidate {
+        key: "search_stateful_replace",
+        func: search_stateful_replace,
+    },
+    SearchCandidate {
         key: "search_run_length_decode_sum",
         func: search_run_length_decode_sum,
     },
@@ -238,6 +250,18 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_struct_pair_patterns",
         func: search_struct_pair_patterns,
+    },
+    SearchCandidate {
+        key: "search_struct_field_reduction",
+        func: search_struct_field_reduction,
+    },
+    SearchCandidate {
+        key: "search_struct_coupled_fields",
+        func: search_struct_coupled_fields,
+    },
+    SearchCandidate {
+        key: "search_struct_conditional_fields",
+        func: search_struct_conditional_fields,
     },
     SearchCandidate {
         key: "search_trimmed_len",
@@ -488,6 +512,27 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_bitwise",
         func: search_bitwise,
+    },
+    // Stage 2: Tensor broadcast pattern — recognizes scalar-to-tensor replication.
+    // Pattern: (scalar: i64) -> [i64] where all output elements == scalar.
+    // Returns verified Mog code using broadcast semantics.
+    SearchCandidate {
+        key: "search_broadcast_pattern",
+        func: search_broadcast_pattern,
+    },
+    // Stage 2: Tensor dot product — recognizes element-wise multiply-sum pattern.
+    // Pattern: (a: [i64], b: [i64]) -> i64 where result = sum(a[i] * b[i]).
+    // Returns verified Mog code with nested loop structure.
+    SearchCandidate {
+        key: "search_dot_product_search",
+        func: search_dot_product_search,
+    },
+    // Stage 2: Tensor matrix multiplication — recognizes N×M @ M×K -> N×K pattern.
+    // Infers dimensions from example shapes and validates matmul semantics.
+    // Returns verified Mog code with triple-nested loops for full matmul.
+    SearchCandidate {
+        key: "search_matmul_template",
+        func: search_matmul_template,
     },
 ];
 

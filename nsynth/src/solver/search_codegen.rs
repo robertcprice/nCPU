@@ -758,6 +758,266 @@ pub(super) fn code_stateful_reducer(
     )
 }
 
+/// Emit Mog for `state = state OP1 r(a) OP2 r(b)` with two named
+/// reducers (sum/max/min/count_*). Pattern is `state +/- ra +/- rb`
+/// chained left-to-right.
+pub(super) fn code_stateful_reducer_dual(
+    fn_name: &str,
+    state_arg: &str,
+    arr_a: &str,
+    arr_b: &str,
+    op1: &str,
+    reducer_a: &str,
+    op2: &str,
+    reducer_b: &str,
+) -> String {
+    let ra = reducer_body(arr_a, reducer_a, "ra");
+    let rb = reducer_body(arr_b, reducer_b, "rb");
+    let op1_tok = match op1 {
+        "+" => "+",
+        "-" => "-",
+        _ => "+",
+    };
+    let op2_tok = match op2 {
+        "+" => "+",
+        "-" => "-",
+        _ => "+",
+    };
+    format!(
+        "fn {fn_name}({state_arg}: i64, {arr_a}: [i64], {arr_b}: [i64]) -> i64 {{\n{ra}{rb}    return {state_arg} {op1} ra {op2} rb;\n}}\n",
+        fn_name = fn_name,
+        state_arg = state_arg,
+        arr_a = arr_a,
+        arr_b = arr_b,
+        ra = ra,
+        rb = rb,
+        op1 = op1_tok,
+        op2 = op2_tok,
+    )
+}
+
+/// Emit Mog for the event-modulated 3-arg reducer
+/// `(state, event, arr) -> state`.
+///
+/// Combine kinds (as encoded in the search teacher):
+///   * `add_arr`   — `state OP r`
+///   * `mul_event` — `state OP event * r`
+///   * `add_event` — `state OP r OP event`
+///
+/// Gate kinds (optional; empty = no gate):
+///   * `event_gt_0` — `if event > 0 then combined else state`
+///   * `event_eq_0` — `if event == 0 then state else combined`
+pub(super) fn code_stateful_reducer_event(
+    fn_name: &str,
+    state_arg: &str,
+    event_arg: &str,
+    arr_arg: &str,
+    combine: &str,
+    op_token: &str,
+    reducer_kind: &str,
+    gate_kind: &str,
+) -> String {
+    let r_body = reducer_body(arr_arg, reducer_kind, "r");
+    // Build the combined expression. The grammar we emit is one of:
+    //   state + r
+    //   state - r
+    //   state + event * r
+    //   state - event * r
+    //   state + r + event
+    //   state - r - event
+    let combined_expr: String = match (combine, op_token) {
+        ("add_arr", "+") => format!("{state} + r", state = state_arg),
+        ("add_arr", "-") => format!("{state} - r", state = state_arg),
+        ("mul_event", "+") => {
+            format!("{state} + {event} * r", state = state_arg, event = event_arg)
+        }
+        ("mul_event", "-") => {
+            format!("{state} - {event} * r", state = state_arg, event = event_arg)
+        }
+        ("add_event", "+") => {
+            format!("{state} + r + {event}", state = state_arg, event = event_arg)
+        }
+        ("add_event", "-") => {
+            format!("{state} - r - {event}", state = state_arg, event = event_arg)
+        }
+        _ => format!("{state} + r", state = state_arg),
+    };
+    // Apply the gate, if any. The gate branches on the event scalar.
+    let return_body = match gate_kind {
+        "" => format!("    return {expr};\n", expr = combined_expr),
+        "event_gt_0" => format!(
+            "    if {event} > 0 {{\n        return {expr};\n    }}\n    return {state};\n",
+            event = event_arg,
+            expr = combined_expr,
+            state = state_arg,
+        ),
+        "event_eq_0" => format!(
+            "    if {event} == 0 {{\n        return {state};\n    }}\n    return {expr};\n",
+            event = event_arg,
+            state = state_arg,
+            expr = combined_expr,
+        ),
+        _ => format!("    return {expr};\n", expr = combined_expr),
+    };
+    format!(
+        "fn {fn_name}({state_arg}: i64, {event_arg}: i64, {arr_arg}: [i64]) -> i64 {{\n{r_body}{return_body}}}\n",
+        fn_name = fn_name,
+        state_arg = state_arg,
+        event_arg = event_arg,
+        arr_arg = arr_arg,
+        r_body = r_body,
+        return_body = return_body,
+    )
+}
+
+/// Emit Mog for the composite two-reducer event-modulated form
+/// `f(state, event, arr) = state OP_OUTER (r_a(arr) OP_INNER r_b(arr))`.
+/// The event scalar is accepted but ignored by design — the array
+/// signal dominates.
+pub(super) fn code_stateful_reducer_event_composite(
+    fn_name: &str,
+    state_arg: &str,
+    event_arg: &str,
+    arr_arg: &str,
+    reducer_a: &str,
+    reducer_b: &str,
+    op_inner: &str,
+    op_outer: &str,
+) -> String {
+    let ra = reducer_body(arr_arg, reducer_a, "ra");
+    let rb = reducer_body(arr_arg, reducer_b, "rb");
+    let op_inner_tok = match op_inner {
+        "+" => "+",
+        "-" => "-",
+        _ => "+",
+    };
+    let op_outer_tok = match op_outer {
+        "+" => "+",
+        "-" => "-",
+        _ => "+",
+    };
+    format!(
+        "fn {fn_name}({state_arg}: i64, {event_arg}: i64, {arr_arg}: [i64]) -> i64 {{\n{ra}{rb}    return {state_arg} {op_outer} ra {op_inner_tok} rb;\n}}\n",
+        fn_name = fn_name,
+        state_arg = state_arg,
+        event_arg = event_arg,
+        arr_arg = arr_arg,
+        ra = ra,
+        rb = rb,
+        op_outer = op_outer_tok,
+        op_inner_tok = op_inner_tok,
+    )
+}
+
+/// Emit Mog for `if pred(arr) then state = new_value else state`.
+///
+/// Predicates are encoded as a single pass over `arr` checking the
+/// relevant property; new_value is one of the supported constant or
+/// state-derived expressions.
+pub(super) fn code_stateful_replace(
+    fn_name: &str,
+    pred: &str,
+    new_value: &str,
+) -> String {
+    // Each predicate maps to a guard like `p = 0/1`. The condition
+    // selects when the *new value* should be returned — i.e. when
+    // the predicate holds. For "any_pos", p=1 means "found a
+    // positive", so the condition is p == 1.
+    let (guard_init, guard_cond) = match pred {
+        "any_pos" => ("    p: i64 = 0;\n", "p == 1"),
+        "any_neg" => ("    p: i64 = 0;\n", "p == 1"),
+        "all_pos" => ("    p: i64 = 1;\n", "p == 1"),
+        "all_neg" => ("    p: i64 = 1;\n", "p == 1"),
+        "max_gt_zero" => ("    p: i64 = 0;\n", "p == 1"),
+        "min_lt_zero" => ("    p: i64 = 0;\n", "p == 1"),
+        "any_eq_zero" => ("    p: i64 = 0;\n", "p == 1"),
+        "any_eq_neg1" => ("    p: i64 = 0;\n", "p == 1"),
+        "any_eq_pos1" => ("    p: i64 = 0;\n", "p == 1"),
+        _ => ("    p: i64 = 0;\n", "0 == 1"),
+    };
+    let guard_body = match pred {
+        "any_pos" => "    for v in arr { if v > 0 { p = 1; } }\n",
+        "any_neg" => "    for v in arr { if v < 0 { p = 1; } }\n",
+        "all_pos" => {
+            "    for v in arr { if v <= 0 { p = 0; } }\n"
+        }
+        "all_neg" => {
+            "    for v in arr { if v >= 0 { p = 0; } }\n"
+        }
+        "max_gt_zero" => {
+            "    p: i64 = 0;\n    for v in arr { if v > p { p = v; } }\n    if p > 0 { p = 1; } else { p = 0; }\n"
+        }
+        "min_lt_zero" => {
+            "    p: i64 = 0;\n    for v in arr { if v < p { p = v; } }\n    if p < 0 { p = 1; } else { p = 0; }\n"
+        }
+        "any_eq_zero" => "    for v in arr { if v == 0 { p = 1; } }\n",
+        "any_eq_neg1" => "    for v in arr { if v == -1 { p = 1; } }\n",
+        "any_eq_pos1" => "    for v in arr { if v == 1 { p = 1; } }\n",
+        _ => "",
+    };
+    let new_expr = match new_value {
+        "max" => "    r: i64 = arr[0];\n    for v in arr { if v > r { r = v; } }\n",
+        "min" => "    r: i64 = arr[0];\n    for v in arr { if v < r { r = v; } }\n",
+        "first" => "    r: i64 = arr[0];\n",
+        "last" => {
+            "    r: i64 = 0;\n    for v in arr { r = v; }\n"
+        }
+        "zero" => "    r: i64 = 0;\n",
+        "one" => "    r: i64 = 1;\n",
+        "neg_one" => "    r: i64 = -1;\n",
+        "state_plus_one" => "    r: i64 = state + 1;\n",
+        "state_minus_one" => "    r: i64 = state - 1;\n",
+        "neg_state" => "    r: i64 = -state;\n",
+        _ => "    r: i64 = 0;\n",
+    };
+    // Note: guard_init may be unused for max_gt_zero/min_lt_zero
+    // because their guard_body is self-contained. We always emit it
+    // for symmetry; redundant init is harmless.
+    let _ = guard_init;
+    format!(
+        "fn {fn_name}(state: i64, arr: [i64]) -> i64 {{\n{new_expr}{guard_init}{guard_body}    if {cond} {{\n        return r;\n    }}\n    return state;\n}}\n",
+        fn_name = fn_name,
+        new_expr = new_expr,
+        guard_init = guard_init,
+        guard_body = guard_body,
+        cond = guard_cond,
+    )
+}
+
+/// Helper: emit the body of a single reducer into a result variable.
+fn reducer_body(arr: &str, reducer: &str, result_var: &str) -> String {
+    match reducer {
+        "sum" => format!(
+            "    {result_var}: i64 = 0;\n    for v in {arr} {{\n        {result_var} = {result_var} + v;\n    }}\n",
+            result_var = result_var, arr = arr
+        ),
+        "max" => format!(
+            "    {result_var}: i64 = {arr}[0];\n    for v in {arr} {{\n        if v > {result_var} {{ {result_var} = v; }}\n    }}\n",
+            result_var = result_var, arr = arr
+        ),
+        "min" => format!(
+            "    {result_var}: i64 = {arr}[0];\n    for v in {arr} {{\n        if v < {result_var} {{ {result_var} = v; }}\n    }}\n",
+            result_var = result_var, arr = arr
+        ),
+        "count_positive" => format!(
+            "    {result_var}: i64 = 0;\n    for v in {arr} {{\n        if v > 0 {{ {result_var} = {result_var} + 1; }}\n    }}\n",
+            result_var = result_var, arr = arr
+        ),
+        "count_zero" => format!(
+            "    {result_var}: i64 = 0;\n    for v in {arr} {{\n        if v == 0 {{ {result_var} = {result_var} + 1; }}\n    }}\n",
+            result_var = result_var, arr = arr
+        ),
+        "count_negative" => format!(
+            "    {result_var}: i64 = 0;\n    for v in {arr} {{\n        if v < 0 {{ {result_var} = {result_var} + 1; }}\n    }}\n",
+            result_var = result_var, arr = arr
+        ),
+        other => format!(
+            "    {result_var}: i64 = 0; // unknown reducer: {}\n",
+            other
+        ),
+    }
+}
+
 pub(super) fn code_is_even(fn_name: &str) -> String {
     templ(
         r#"fn __FN__(x: i64) -> i64 {
@@ -1159,5 +1419,204 @@ pub(super) fn code_max_digit(fn_name: &str) -> String {
 }
 "#,
         fn_name,
+    )
+}
+
+/// **Stage 2: Tensor Broadcast Teacher Code Generator**
+///
+/// Generates code that replicates a scalar input across a fixed-size array.
+/// Template: broadcast a scalar by reading it and returning it as array elements.
+/// This is a placeholder; real tensor operations will be defined in tensor_codegen.rs.
+pub(super) fn code_broadcast_pattern(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(scalar: i64) -> [i64] {
+    result: [i64] = [scalar, scalar, scalar, scalar];
+    return result;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Stage 2: Tensor Dot Product Teacher Code Generator**
+///
+/// Generates code for element-wise multiplication and summation.
+/// Computes: result = sum(a[i] * b[i] for all i).
+pub(super) fn code_dot_product_search(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(a: [i64], b: [i64]) -> i64 {
+    acc: i64 = 0;
+    i: i64 = 0;
+    while i < a.len() {
+        acc = acc + (a[i] * b[i]);
+        i = i + 1;
+    }
+    return acc;
+}
+"#,
+        fn_name,
+    )
+}
+
+/// **Stage 2: Tensor Matrix Multiplication Teacher Code Generator**
+///
+/// Generates code for N×M @ M×K -> N×K matrix multiplication.
+/// Assumes flattened row-major layout: a is N*M elements, b is M*K, result is N*K.
+/// Computes: result[i][j] = sum(a[i][k] * b[k][j] for k in 0..M).
+pub(super) fn code_matmul_template(fn_name: &str, n: usize, m: usize, k: usize) -> String {
+    format!(
+        r#"fn {fn_name}(a: [i64], b: [i64]) -> [i64] {{
+    result: [i64] = [];
+    i: i64 = 0;
+    while i < {n} {{
+        j: i64 = 0;
+        while j < {k} {{
+            acc: i64 = 0;
+            l: i64 = 0;
+            while l < {m} {{
+                acc = acc + (a[(i * {m}) + l] * b[(l * {k}) + j]);
+                l = l + 1;
+            }}
+            result.push(acc);
+            j = j + 1;
+        }}
+        i = i + 1;
+    }}
+    return result;
+}}
+"#,
+        fn_name = fn_name,
+        n = n,
+        k = k,
+        m = m
+    )
+}
+
+/// Stage 3: struct-of-state with independent field reductions.
+/// Each field evolves as: field_new = field_old OP reducer(arr)
+/// where each field may use a different reducer (sum, max, min, count_*).
+pub(super) fn code_struct_field_reduction(
+    fn_name: &str,
+    state_arg: &str,
+    arr_arg: &str,
+    fields: &[(&str, &str, &str)],
+) -> String {
+    let mut field_updates = String::new();
+    for (field_name, op, reducer) in fields {
+        let reduce_fn = match *reducer {
+            "sum" => "arr.iter().sum::<i64>()",
+            "max" => "arr.iter().copied().max().unwrap_or(0)",
+            "min" => "arr.iter().copied().min().unwrap_or(0)",
+            "count_positive" => "arr.iter().filter(|&&x| x > 0).count() as i64",
+            "count_negative" => "arr.iter().filter(|&&x| x < 0).count() as i64",
+            "count_zero" => "arr.iter().filter(|&&x| x == 0).count() as i64",
+            _ => "0",
+        };
+        let update = format!(
+            "    s.{field_name} = s.{field_name} {op} ({reduce_fn});\n"
+        );
+        field_updates.push_str(&update);
+    }
+
+    format!(
+        "fn {fn_name}({state_arg}: State, {arr_arg}: [i64]) -> State {{\n\
+        mut s: State = {state_arg};\n\
+        {field_updates}\
+        return s;\n\
+        }}\n"
+    )
+}
+
+/// Stage 3: struct-of-state with coupled field dependencies.
+/// Two fields evolve with mutual dependence: both read from each other
+/// and from reductions. Pattern: f1_new = f1_old OP1 r1(arr), f2_new = f2_old OP2 r2(arr)
+/// where cross-field coupling can appear (e.g., f1 and f2 both gated by the same condition).
+pub(super) fn code_struct_coupled_fields(
+    fn_name: &str,
+    state_arg: &str,
+    arr_arg: &str,
+    field1: &str,
+    op1: &str,
+    reducer1: &str,
+    field2: &str,
+    op2: &str,
+    reducer2: &str,
+) -> String {
+    let reduce1_fn = match reducer1 {
+        "sum" => "arr.iter().sum::<i64>()",
+        "max" => "arr.iter().copied().max().unwrap_or(0)",
+        "min" => "arr.iter().copied().min().unwrap_or(0)",
+        "count_positive" => "arr.iter().filter(|&&x| x > 0).count() as i64",
+        "count_negative" => "arr.iter().filter(|&&x| x < 0).count() as i64",
+        "count_zero" => "arr.iter().filter(|&&x| x == 0).count() as i64",
+        _ => "0",
+    };
+
+    let reduce2_fn = match reducer2 {
+        "sum" => "arr.iter().sum::<i64>()",
+        "max" => "arr.iter().copied().max().unwrap_or(0)",
+        "min" => "arr.iter().copied().min().unwrap_or(0)",
+        "count_positive" => "arr.iter().filter(|&&x| x > 0).count() as i64",
+        "count_negative" => "arr.iter().filter(|&&x| x < 0).count() as i64",
+        "count_zero" => "arr.iter().filter(|&&x| x == 0).count() as i64",
+        _ => "0",
+    };
+
+    let apply_op = |op: &str, lhs: &str, rhs: &str| -> String {
+        match op {
+            "+" => format!("{lhs} + {rhs}"),
+            "-" => format!("{lhs} - {rhs}"),
+            "*" => format!("{lhs} * {rhs}"),
+            "min" => format!("{lhs}.min({rhs})"),
+            "max" => format!("{lhs}.max({rhs})"),
+            _ => lhs.to_string(),
+        }
+    };
+
+    let update1 = apply_op(op1, &format!("s.{field1}"), reduce1_fn);
+    let update2 = apply_op(op2, &format!("s.{field2}"), reduce2_fn);
+
+    format!(
+        "fn {fn_name}({state_arg}: State, {arr_arg}: [i64]) -> State {{\n\
+        mut s: State = {state_arg};\n\
+        s.{field1} = {update1};\n\
+        s.{field2} = {update2};\n\
+        return s;\n\
+        }}\n"
+    )
+}
+
+/// Stage 3: struct-of-state with conditional field logic.
+/// field_new = if cond(arr) then field_true(field_old, arr) else field_false(field_old, arr)
+/// Captures gated updates and selective state mutations based on array properties.
+pub(super) fn code_struct_conditional_fields(
+    fn_name: &str,
+    state_arg: &str,
+    arr_arg: &str,
+    field_name: &str,
+    condition: &str,
+    update_true: &str,
+    update_false: &str,
+) -> String {
+    let cond_code = match condition {
+        "any_positive" => format!("{arr_arg}.iter().any(|&x| x > 0)"),
+        "all_positive" => format!("!{arr_arg}.is_empty() && {arr_arg}.iter().all(|&x| x > 0)"),
+        "any_negative" => format!("{arr_arg}.iter().any(|&x| x < 0)"),
+        "any_zero" => format!("{arr_arg}.iter().any(|&x| x == 0)"),
+        "is_empty" => format!("{arr_arg}.is_empty()"),
+        "sum_positive" => format!("{arr_arg}.iter().sum::<i64>() > 0"),
+        _ => "true".to_string(),
+    };
+
+    format!(
+        "fn {fn_name}({state_arg}: State, {arr_arg}: [i64]) -> State {{\n\
+        mut s: State = {state_arg};\n\
+        if {cond_code} {{\n\
+            s.{field_name} = {update_true};\n\
+        }} else {{\n\
+            s.{field_name} = {update_false};\n\
+        }}\n\
+        return s;\n\
+        }}\n"
     )
 }
