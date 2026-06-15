@@ -1,6 +1,8 @@
 pub mod benchmark;
+pub mod comprehension;
 pub mod differentiable;
 pub mod enumerative;
+pub mod ffi;
 pub mod interactive;
 pub mod learned_biases;
 pub mod meta_learner;

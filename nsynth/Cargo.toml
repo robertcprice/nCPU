@@ -6,6 +6,8 @@ edition = "2021"
 [lib]
 name = "mog_synth"
 path = "src/lib.rs"
+# rlib for Rust consumers; cdylib + staticlib expose the C ABI in src/ffi.rs.
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
