@@ -48,7 +48,9 @@ pub fn to_typescript(mog: &str) -> String {
 /// Transpile a Mog source string to Go. Output is a complete
 /// `func NAME(args) RET { ... }` block; drop into a `_test.go` file
 /// or a `package main` and call it from `main()`. The integer type
-/// is Go's `int64` (matches Mog's `i64`) and arrays are `[]int64`.
+/// is Go's `int` (matches Mog's `i64` on 64-bit targets; using `int`
+/// rather than `int64` lets the emitted Go interoperate with
+/// `len()` and indexing without explicit casts).
 pub fn to_go(mog: &str) -> String {
     transpile(mog, Target::Go)
 }
@@ -217,6 +219,7 @@ fn transpile(mog: &str, target: Target) -> String {
         // syntactic transformation on top of the brace handler.
         if target == Target::Go {
             body = rewrite_dot_len_go(&body);
+            body = rewrite_dot_sort_go(&body);
             // Go `var` declaration drops the Mog-style colon:
             // `var X: T = V;` -> `var X T = V;`.
             body = body
@@ -473,7 +476,7 @@ fn rewrite_implicit_typed_decl_go(line: &str) -> String {
     let rest = &line[line.find(':').unwrap() + 1..];
     // Skip the type and the `=` and the value; just emit the Go
     // declaration.
-    format!("{prefix_ws}var {ident} int64{rest}")
+    format!("{prefix_ws}var {ident} int{rest}")
 }
 
 /// Rewrite Mog's `while COND { BODY }` to Go's `for COND { BODY }`.
@@ -492,6 +495,56 @@ fn rewrite_while_to_for_go(line: &str) -> String {
     let rest_start = leading_ws.len() + "while".len();
     let rest = &line[rest_start..];
     format!("{leading_ws}for {rest}")
+}
+
+/// Rewrite Mog's `X.sort()` (array method call) to Go's
+/// `sort.Ints(X)`. The wrapper adds the `import "sort"` line if it
+/// sees `sort.Ints` in the body. We assume the array is `[]int`
+/// (the nsynth transpile's chosen Go type for `i64`).
+fn rewrite_dot_sort_go(body: &str) -> String {
+    // Find every `IDENT.sort()` (where IDENT is an identifier) and
+    // replace it with `sort.Ints(IDENT)`. The two-pass approach
+    // (find the call, then emit the rewrite) is needed because we
+    // have to truncate the output to drop the `.sort()` suffix
+    // without losing the identifier.
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len() + 16);
+    let mut i = 0;
+    while i < bytes.len() {
+        // Look for `.sort()`.
+        if i + 7 <= bytes.len()
+            && bytes[i] == b'.'
+            && bytes[i + 1] == b's'
+            && bytes[i + 2] == b'o'
+            && bytes[i + 3] == b'r'
+            && bytes[i + 4] == b't'
+            && bytes[i + 5] == b'('
+            && bytes[i + 6] == b')'
+        {
+            // Walk backwards to find the identifier start.
+            let mut start = i;
+            while start > 0 {
+                let prev = bytes[start - 1];
+                if prev.is_ascii_alphanumeric() || prev == b'_' {
+                    start -= 1;
+                } else {
+                    break;
+                }
+            }
+            if start < i {
+                let ident_len = i - start;
+                let new_len = out.len() - ident_len;
+                out.truncate(new_len);
+                let ident = std::str::from_utf8(&bytes[start..i]).unwrap_or("");
+                out.push_str(&format!("sort.Ints({})", ident));
+                i += 7; // skip past `.sort()`
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 fn rewrite_int_div_typescript(line: &str) -> String {
@@ -783,8 +836,8 @@ fn rewrite_args_go(args: &str) -> String {
 
 fn rewrite_type_go(t: &str) -> String {
     match t {
-        "i64" => "int64".into(),
-        "[i64]" => "[]int64".into(),
+        "i64" => "int".into(),
+        "[i64]" => "[]int".into(),
         "string" => "string".into(),
         "bool" => "bool".into(),
         other => other.to_string(),
@@ -1169,8 +1222,8 @@ mod inline_if_tests {
     fn go_emits_func_int64_array() {
         let mog = "fn sum_array(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for x in arr {\n        s = s + x;\n    }\n    return s;\n}\n";
         let go = to_go(mog);
-        assert!(go.contains("func sum_array(arr []int64) int64"), "got: {go}");
-        assert!(go.contains("var s int64 = 0"), "got: {go}");
+        assert!(go.contains("func sum_array(arr []int) int"), "got: {go}");
+        assert!(go.contains("var s int = 0"), "got: {go}");
         assert!(go.contains("for _, x := range arr {"), "got: {go}");
         assert!(go.contains("return s;"), "got: {go}");
     }

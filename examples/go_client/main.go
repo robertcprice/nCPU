@@ -265,41 +265,66 @@ func wrapGoMain(fnCode string, inputs []any) string {
 		fnName = strings.TrimSpace(rest[:paren])
 		break
 	}
-	// Build a Go file: package main + the recovered function +
-	// a main that calls it.
+	// Build the import block. Always need "fmt" for the println.
+	// Conditionally need "sort" if the function body uses sort.Ints
+	// (which the Go transpile emits for Mog's `arr.sort()`).
+	imports := `"fmt"`
+	if strings.Contains(fnCode, "sort.Ints") {
+		imports = imports + "\n\t\"sort\""
+	}
+	// Build a Go file: package main + imports + the recovered
+	// function + a main that calls it. Multi-arg inputs need
+	// declarations on their own lines so the call is just
+	// `f(a, b, c)` with no `:=` in the argument list (Go forbids
+	// declarations inside argument lists).
+	decls, call := callAndDecls(inputs)
 	return fmt.Sprintf(`package main
 
-import "fmt"
+import (
+	%s
+)
 
 %s
 
 func main() {
+%s
 	fmt.Println(%s(%s))
 }
 `,
+		imports,
 		fnCode,
+		decls,
 		fnName,
-		multiArraySetup(inputs),
+		call,
 	)
 }
 
-// multiArraySetup returns a Go expression that builds the function
-// call from `inputs`. For one input, the call is `f(arr)`. For
-// multiple, `f(a, b, c, ...)` with each variable declared inline.
-func multiArraySetup(inputs []any) string {
+// callAndDecls returns (declarations, call_args) for a multi-arg
+// function call. For one input, the call is just the slice literal
+// (no separate declaration needed because Go allows slice
+// literals as function arguments). For multiple, we emit one
+// `name := []int{...}` line per input and a comma-separated
+// argument list. Go forbids `:=` declarations inside argument
+// lists, so the declarations must be separate statements.
+func callAndDecls(inputs []any) (string, string) {
 	if len(inputs) == 1 {
-		return fmt.Sprintf("[]int64%v", inputs[0])
+		// Single-arg case: pass the slice literal directly.
+		s := strings.Trim(fmt.Sprint(inputs[0]), "[]")
+		parts := strings.Fields(s)
+		return "", "[]int{" + strings.Join(parts, ", ") + "}"
 	}
 	names := []string{"a", "b", "c", "d", "e"}
 	var decls strings.Builder
 	var refs strings.Builder
 	for i, in := range inputs {
 		if i > 0 {
-			decls.WriteString("; ")
+			decls.WriteString("\n\t")
 			refs.WriteString(", ")
 		}
-		fmt.Fprintf(&decls, "%s := []int64%v", names[i], in)
+		s := strings.Trim(fmt.Sprint(in), "[]")
+		parts := strings.Fields(s)
+		fmt.Fprintf(&decls, "\t%s := []int{%s};", names[i], strings.Join(parts, ", "))
 		refs.WriteString(names[i])
 	}
-	return decls.String() + " ; " + refs.String()
+	return decls.String() + "\n", refs.String()
 }
