@@ -1698,7 +1698,12 @@ pub(super) fn code_stateful_reducer_temporal(
     )
 }
 
-/// Emit Mog for temporal stateful update without reducer: pure state + time transformation.
+/// Stage 4 completion: no-reducer variant that ALSO accepts the
+/// `(state, t, arr) -> state` signature (the existing variant above
+/// omits `arr` and only handles `(state, t) -> state`, which causes
+/// verification to fail on 3-arg signatures). Emits Mog for
+/// `state OP f(t)` where f(t) is one of `t`, `-t`, or
+/// `(t % N == 0 ? 1 : 0)`.
 pub(super) fn code_stateful_reducer_temporal_no_reducer(
     fn_name: &str,
     state_arg: &str,
@@ -1706,29 +1711,29 @@ pub(super) fn code_stateful_reducer_temporal_no_reducer(
     op_state: &str,
     time_kind: &str,
 ) -> String {
-    // Time transformation
-    let time_expr = match time_kind {
-        "exponential_decay" => format!("{time_arg} / ({time_arg} + 1)", time_arg = time_arg),
-        "polynomial_linear" => format!("{time_arg}", time_arg = time_arg),
-        "polynomial_square" => format!("{time_arg} * {time_arg}", time_arg = time_arg),
-        "polynomial_cube" => format!("{time_arg} * {time_arg} * {time_arg}", time_arg = time_arg),
-        _ => format!("{time_arg}", time_arg = time_arg),
+    let time_expr_str = match time_kind {
+        "identity" => time_arg.to_string(),
+        "neg" => format!("-{}", time_arg),
+        "tick_n2" => format!("(if {t} % 2 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
+        "tick_n3" => format!("(if {t} % 3 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
+        "tick_n4" => format!("(if {t} % 4 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
+        "tick_n5" => format!("(if {t} % 5 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
+        "tick_n6" => format!("(if {t} % 6 == 0 {{ 1 }} else {{ 0 }})", t = time_arg),
+        "odd_n2" => format!("(if {t} % 2 == 1 {{ 1 }} else {{ 0 }})", t = time_arg),
+        "odd_n3" => format!("(if {t} % 3 == 1 {{ 1 }} else {{ 0 }})", t = time_arg),
+        _ => time_arg.to_string(),
     };
-
-    // Combine state with time
-    let result = match op_state {
-        "+" => format!("    return {state} + {time_expr};\n", state = state_arg, time_expr = time_expr),
-        "-" => format!("    return {state} - {time_expr};\n", state = state_arg, time_expr = time_expr),
-        "*" => format!("    return {state} * {time_expr};\n", state = state_arg, time_expr = time_expr),
-        "divide" => format!("    return {state} / ({time_expr} + 1);\n", state = state_arg, time_expr = time_expr),
-        _ => format!("    return {state};\n", state = state_arg),
+    let return_expr = match op_state {
+        "+" => format!("{state} + {te}", state = state_arg, te = time_expr_str),
+        "-" => format!("{state} - {te}", state = state_arg, te = time_expr_str),
+        _ => format!("{state} + {te}", state = state_arg, te = time_expr_str),
     };
-
     format!(
-        "fn {fn_name}({state_arg}: i64, {time_arg}: i64) -> i64 {{\n{result}}}\n",
+        "fn {fn_name}({state_arg}: i64, {time_arg}: i64, arr: [i64]) -> i64 {{\n    return {expr};\n}}\n",
         fn_name = fn_name,
         state_arg = state_arg,
         time_arg = time_arg,
+        expr = return_expr,
     )
 }
 
