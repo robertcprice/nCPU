@@ -23,6 +23,7 @@ pub enum Target {
     Python,
     Rust,
     TypeScript,
+    Go,
 }
 
 /// Transpile a Mog source string to Python. Returns idiomatic,
@@ -41,6 +42,14 @@ pub fn to_rust(mog: &str) -> String {
 /// `function NAME(...): RET { ... }` block, drop into a `.ts` file.
 pub fn to_typescript(mog: &str) -> String {
     transpile(mog, Target::TypeScript)
+}
+
+/// Transpile a Mog source string to Go. Output is a complete
+/// `func NAME(args) RET { ... }` block; drop into a `_test.go` file
+/// or a `package main` and call it from `main()`. The integer type
+/// is Go's `int64` (matches Mog's `i64`) and arrays are `[]int64`.
+pub fn to_go(mog: &str) -> String {
+    transpile(mog, Target::Go)
 }
 
 /// Single parametric transpiler; the three public entries are thin
@@ -92,7 +101,7 @@ fn transpile(mog: &str, target: Target) -> String {
             }
             match target {
                 Target::Python => { /* no-op; dedent is implicit */ }
-                Target::Rust | Target::TypeScript => {
+                Target::Rust | Target::TypeScript | Target::Go => {
                     for _ in 0..depth {
                         out.push_str(indent_unit(target));
                     }
@@ -135,13 +144,13 @@ fn transpile(mog: &str, target: Target) -> String {
                     }
                     // Other `} ...` shapes fall through to body handling.
                 }
-                Target::Rust | Target::TypeScript => {
+                Target::Rust | Target::TypeScript | Target::Go => {
                     for _ in 0..depth {
                         out.push_str(indent_unit(target));
                     }
                     // For TS, `} else if (X) {` needs parens around the
                     // condition just like bare `if`. Handle with a small
-                    // rewrite; Rust keeps the line as-is.
+                    // rewrite; Rust/Go keep the line as-is.
                     let rewritten = if target == Target::TypeScript {
                         if let Some(cond_plus) = rest.strip_prefix("else if ") {
                             let cond = cond_plus.trim_end_matches('{').trim();
@@ -201,7 +210,7 @@ fn transpile(mog: &str, target: Target) -> String {
                     body = body.trim_end().trim_end_matches('{').trim_end().to_string();
                     body.push(':');
                 }
-                Target::Rust | Target::TypeScript => {
+                Target::Rust | Target::TypeScript | Target::Go => {
                     // Keep the brace; no rewrite.
                 }
             }
@@ -452,8 +461,8 @@ fn rewrite_int_div_typescript(line: &str) -> String {
 
 fn indent_unit(target: Target) -> &'static str {
     match target {
-        Target::Python | Target::TypeScript => "    ",
-        Target::Rust => "    ",
+        Target::Python | Target::TypeScript | Target::Rust => "    ",
+        Target::Go => "\t",
     }
 }
 
@@ -489,6 +498,12 @@ fn rewrite_fn_header(line: &str, target: Target) -> Option<String> {
             name,
             rewrite_args_ts(args),
             rewrite_type_ts(ret_type)
+        ),
+        Target::Go => format!(
+            "func {}({}) {} {{",
+            name,
+            rewrite_args_go(args),
+            rewrite_type_go(ret_type)
         ),
     })
 }
@@ -564,6 +579,35 @@ fn rewrite_type_ts(t: &str) -> String {
     }
 }
 
+fn rewrite_args_go(args: &str) -> String {
+    // Go: `a: i64, b: i64` → `a int64, b int64`. Type names live in
+    // `rewrite_type_go`. Point/range arguments keep their original Mog
+    // type spelling so a `(p: Point)` signature round-trips intact
+    // for users that need it; the user can then define a `Point` struct
+    // alongside the generated function.
+    args.split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|arg| {
+            if let Some((n, t)) = arg.split_once(':') {
+                format!("{} {}", n.trim(), rewrite_type_go(t.trim()))
+            } else {
+                arg.trim().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn rewrite_type_go(t: &str) -> String {
+    match t {
+        "i64" => "int64".into(),
+        "[i64]" => "[]int64".into(),
+        "string" => "string".into(),
+        "bool" => "bool".into(),
+        other => other.to_string(),
+    }
+}
+
 /// Body-line rewrites shared across all three targets:
 ///   - `VAR: TYPE = EXPR;` → declaration in the target's syntax
 ///   - `return EXPR;` → target-specific return
@@ -586,6 +630,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
                 Target::TypeScript => {
                     format!("let {}: {} = {};", var, rewrite_type_ts(ty), rhs)
                 }
+                Target::Go => format!("var {} {} = {}", var, rewrite_type_go(ty), rhs),
             };
         }
         // Plain assignment (no type): same var on both sides means
@@ -593,7 +638,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
         if !lhs.contains(' ') && !lhs.contains('(') {
             return match target {
                 Target::Python => format!("{} = {}", lhs, rhs),
-                Target::Rust | Target::TypeScript => format!("{} = {};", lhs, rhs),
+                Target::Rust | Target::TypeScript | Target::Go => format!("{} = {};", lhs, rhs),
             };
         }
     }
@@ -602,7 +647,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
     if let Some(expr) = line.strip_prefix("return ") {
         return match target {
             Target::Python => format!("return {}", expr.trim()),
-            Target::Rust | Target::TypeScript => format!("return {};", expr.trim()),
+            Target::Rust | Target::TypeScript | Target::Go => format!("return {};", expr.trim()),
         };
     }
 
@@ -631,12 +676,13 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
                     Target::Python => format!("if {}: {}", cond, stmts.join("; ")),
                     Target::Rust => format!("if {} {{ {} }}", cond, stmts.join(" ")),
                     Target::TypeScript => format!("if ({}) {{ {} }}", cond, stmts.join(" ")),
+                    Target::Go => format!("if {} {{ {} }}", cond, stmts.join(" ")),
                 };
             }
         }
         let cond = cond_plus_brace.trim_end_matches('{').trim();
         return match target {
-            Target::Python | Target::Rust => line.to_string(),
+            Target::Python | Target::Rust | Target::Go => line.to_string(),
             Target::TypeScript => format!("if ({}) {{", cond),
         };
     }
@@ -644,7 +690,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
         let cond_plus_brace = line.strip_prefix("while ").unwrap_or(line);
         let cond = cond_plus_brace.trim_end_matches('{').trim();
         return match target {
-            Target::Python | Target::Rust => line.to_string(),
+            Target::Python | Target::Rust | Target::Go => line.to_string(),
             Target::TypeScript => format!("while ({}) {{", cond),
         };
     }
@@ -655,6 +701,8 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
     // `for VAR in EXPR { ... }` requires a per-target rewrite because
     // TypeScript needs `for (const VAR of EXPR) {` instead of the Mog-
     // native shape. Python + Rust already accept `for VAR in EXPR`.
+    // Go's analog is `for _, VAR := range EXPR {` — we translate the
+    // Mog form into that here so the output compiles.
     if let Some(rest) = line.strip_prefix("for ") {
         // `VAR in EXPR [{]` — the trailing `{` is stripped by the caller
         // when it detects opens_block. Split off the `in` keyword.
@@ -665,6 +713,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
             return match target {
                 Target::Python | Target::Rust => format!("for {} in {} {{", var, iter_expr),
                 Target::TypeScript => format!("for (const {} of {}) {{", var, iter_expr),
+                Target::Go => format!("for _, {} := range {} {{", var, iter_expr),
             };
         }
         // Fallback: pass through.
@@ -674,7 +723,7 @@ fn rewrite_body_line(line: &str, target: Target) -> String {
     // Fallback: emit the line with a target-appropriate terminator.
     match target {
         Target::Python => line.to_string(),
-        Target::Rust | Target::TypeScript => format!("{};", line),
+        Target::Rust | Target::TypeScript | Target::Go => format!("{};", line),
     }
 }
 
@@ -886,5 +935,21 @@ mod inline_if_tests {
     fn inline_if_rust() {
         let rs = to_rust(MOG);
         assert!(rs.contains("if b >= a { v0 = a; }"), "got: {rs}");
+    }
+
+    #[test]
+    fn inline_if_go() {
+        let go = to_go(MOG);
+        assert!(go.contains("if b >= a { v0 = a; }"), "got: {go}");
+    }
+
+    #[test]
+    fn go_emits_func_int64_array() {
+        let mog = "fn sum_array(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for x in arr {\n        s = s + x;\n    }\n    return s;\n}\n";
+        let go = to_go(mog);
+        assert!(go.contains("func sum_array(arr []int64) int64"), "got: {go}");
+        assert!(go.contains("var s int64 = 0"), "got: {go}");
+        assert!(go.contains("for _, x := range arr {"), "got: {go}");
+        assert!(go.contains("return s;"), "got: {go}");
     }
 }

@@ -81,7 +81,7 @@ MAX_BODY_BYTES = 64 * 1024
 _I64_MIN = -(2**63)
 _I64_MAX = 2**63 - 1
 
-_TRANSPILE_TARGETS = ("python", "rust", "typescript")
+_TRANSPILE_TARGETS = ("python", "rust", "typescript", "go")
 
 
 def default_backend_path() -> Path:

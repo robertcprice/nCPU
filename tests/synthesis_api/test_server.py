@@ -287,6 +287,10 @@ def test_solve_easy_problem(server):
     assert "def" in transpiled["python"]
     assert "fn" in transpiled["rust"]
     assert "function" in transpiled["typescript"]
+    # Go transpile was added in the same expansion as bool/struct inputs;
+    # the API now emits a `func NAME(...) ...` block alongside the
+    # other three targets.
+    assert "func" in transpiled["go"]
     assert body["elapsed_ms"] >= 0
 
 
