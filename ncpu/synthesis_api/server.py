@@ -382,6 +382,7 @@ def handle_synthesize_request(
         "code": code,
         "error": result.get("error"),
         "transpiled": transpiled,
+        "holdouts": result.get("holdouts"),
         "elapsed_ms": _elapsed_ms(),
     }
 

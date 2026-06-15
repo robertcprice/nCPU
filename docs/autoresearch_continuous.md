@@ -309,16 +309,23 @@ pure-Python mirror of the canonical executor).
   `registry_misses.jsonl` next to the SQLite DB. Optionally also log
   `do_GET` 404s on `/skills/{fp}` (demand for a skill nobody has
   contributed yet) — name-only, no examples, so lower value.
-- **Adapter**: new `ncpu/autoresearch/sources/registry.py` with
+- **Adapter**: `ncpu/autoresearch/sources/registry.py` with
   `mine_registry_misses(misses_path, out_path) -> counters`, mapping
   each miss to a `WorkItem`: `entry_point` from the sanitized skill
   name, `io_pairs` from the registry `examples`
   (`{data, n_points, target}` → `IoPair(args=[data], expected=target)`),
   `source_benchmark="registry"`, and a synthesized `def check(candidate)`
   harness (reuse `prompt_parser.build_work_item`'s harness emitter).
+  v3 trace examples (`targets: [...]`) are skipped — the per-shot
+  cascade runs one call, not a sequence. A missed run that emits
+  nothing leaves no empty queue file behind.
 - **Close the loop**: when the cascade solves one and the solution is
   expressible as an NPCoT program, POST it back to `/skills` — the
   registry re-verifies, so the loop stays trustless.
+- **CLI**: `python -m ncpu.autoresearch.cli mine-registry
+  --misses <path>` writes `registry_queue.jsonl`; `run-once
+  --benchmark registry` then consumes it. Covered by
+  `tests/autoresearch/test_cli_registry.py`.
 
 ### Synthesis-API refusals → queue
 [`ncpu/synthesis_api/server.py`](../ncpu/synthesis_api/server.py) returns

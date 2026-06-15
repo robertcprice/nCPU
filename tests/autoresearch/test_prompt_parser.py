@@ -126,6 +126,31 @@ class TestDedupe(unittest.TestCase):
         r = extract_from_prompt(src)
         self.assertEqual(len(r.io_pairs), 1)
 
+    def test_list_valued_args_dedupe_without_crash(self):
+        src = """
+        def sum_list(xs):
+            pass
+
+        sum_list([1, 2, 3]) -> 6
+        sum_list([1, 2, 3]) -> 6
+        sum_list([4, 5]) -> 9
+        """
+        r = extract_from_prompt(src)
+        self.assertEqual(len(r.io_pairs), 2)
+        self.assertEqual(r.io_pairs[0].args, [[1, 2, 3]])
+
+    def test_nested_literal_kwargs_dedupe_without_crash(self):
+        src = """
+        def score(rows, weights=None):
+            pass
+
+        score([{"x": 1}, {"x": 2}], weights={"x": 0.5}) -> 1.5
+        score([{"x": 1}, {"x": 2}], weights={"x": 0.5}) -> 1.5
+        """
+        r = extract_from_prompt(src)
+        self.assertEqual(len(r.io_pairs), 1)
+        self.assertEqual(r.io_pairs[0].kwargs["weights"], {"x": 0.5})
+
 
 class TestBuildWorkItem(unittest.TestCase):
     def test_full_work_item(self):

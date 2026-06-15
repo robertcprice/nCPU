@@ -71,6 +71,22 @@ def cmd_mine(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mine_registry(args: argparse.Namespace) -> int:
+    """Mine rejected verified-skill registry submissions into the driver
+    queue. Implements the registry source described in
+    ``docs/autoresearch_continuous.md`` §4. Round-trips through
+    :class:`WorkItem` so the cascade can run on it like any other
+    benchmark.
+    """
+    from ncpu.autoresearch.sources.registry import mine_registry_misses
+
+    art = Path(args.artifact_dir)
+    queue = _queue_path(art, "registry")
+    counters = mine_registry_misses(args.misses, queue)
+    print(json.dumps(counters, indent=2))
+    return 0
+
+
 def cmd_run_once(args: argparse.Namespace) -> int:
     art = Path(args.artifact_dir)
     queue = _queue_path(art, args.benchmark)
@@ -221,8 +237,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     m.add_argument("--task", action="append", default=None)
     m.set_defaults(func=cmd_mine)
 
+    mr = sub.add_parser(
+        "mine-registry",
+        help="mine rejected registry submissions into the driver queue",
+    )
+    mr.add_argument("--misses", type=Path, required=True,
+                    help="JSONL file of registry misses (one per line)")
+    mr.set_defaults(func=cmd_mine_registry)
+
     r = sub.add_parser("run-once", help="consume the queue once under a budget")
-    r.add_argument("--benchmark", choices=["humaneval", "mbpp"], default="humaneval")
+    r.add_argument("--benchmark", choices=["humaneval", "mbpp", "registry"],
+                   default="humaneval")
     r.add_argument("--wall-seconds", type=float, default=1800.0)
     r.add_argument("--max-cost-usd", type=float, default=1.0)
     r.add_argument("--max-problems", type=int, default=50)

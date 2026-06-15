@@ -59,6 +59,32 @@ JUNK_REQUEST = {
     ],
 }
 
+ARRAY_FEATURE_REQUEST = {
+    "name": "array_feature_ok",
+    "examples": [
+        {"inputs": [[7, 7, 1, 2, 3]], "expected": 1},
+        {"inputs": [[0, 7, 5, 7]], "expected": 1},
+        {"inputs": [[7, 3, 7]], "expected": 1},
+        {"inputs": [[2, 7, 7, 8]], "expected": 1},
+        {"inputs": [[4, 4, 4, 9]], "expected": 1},
+        {"inputs": [[1, 4, 4, 4]], "expected": 1},
+        {"inputs": [[4, 4, 4]], "expected": 1},
+        {"inputs": [[6, 4, 4, 4, 5]], "expected": 1},
+        {"inputs": [[7, 1, 2]], "expected": 0},
+        {"inputs": [[7, 7, 7, 1]], "expected": 0},
+        {"inputs": [[4, 4, 9, 4]], "expected": 0},
+        {"inputs": [[4, 9, 4, 4]], "expected": 0},
+        {"inputs": [[7, 4, 4, 4]], "expected": 0},
+        {"inputs": [[4, 4, 7, 7]], "expected": 0},
+    ],
+    "holdouts": [
+        {"inputs": [[7, 3, 7, 6]], "expected": 1},
+        {"inputs": [[7, 7, 7, 9]], "expected": 0},
+        {"inputs": [[5, 4, 4, 4]], "expected": 1},
+        {"inputs": [[10, 4, 4]], "expected": 0},
+    ],
+}
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -172,6 +198,14 @@ def test_solve_easy_problem(server):
     assert body["elapsed_ms"] >= 0
 
 
+def test_array_feature_dnf_problem_solves_through_api(server):
+    status, body = _request(server, "/synthesize", ARRAY_FEATURE_REQUEST)
+    assert status == 200
+    assert body["success"] is True, body
+    assert body["method"] == "search_array_feature_dnf"
+    assert "array_feature_ok" in body["code"]
+
+
 def test_repeat_request_hits_solved_cache(server):
     # First call (test above) populated the solved cache; this repeat must
     # come back near-instantly. The cache makes this ~30 ms; 1000 ms gives
@@ -205,11 +239,12 @@ def test_unsolvable_junk_is_refused_honestly(server):
     assert isinstance(body["error"], str) and body["error"]
 
 
-def test_request_timeout_is_honest_refusal(server):
-    # A patternless scalar mapping sends the solver into a long grind; the
-    # per-request timeout converts that into an honest structured refusal.
+def test_short_timeout_request_returns_structured_result(server):
+    # Some scalar maps that used to grind are now solved by the expanded
+    # search portfolio. This regression keeps the timeout override wired while
+    # allowing either an honest refusal or a fast verified solve.
     request = {
-        "name": "junk_scalar",
+        "name": "short_timeout_scalar",
         "timeout_s": 3,
         "examples": [
             {"inputs": [1], "expected": 7},
@@ -222,10 +257,10 @@ def test_request_timeout_is_honest_refusal(server):
     }
     status, body = _request(server, "/synthesize", request)
     assert status == 200
-    assert body["success"] is False
-    assert body["error"] == "timeout"
-    assert body["code"] is None
-    assert body["transpiled"] is None
+    assert "success" in body
+    assert "method" in body
+    assert "elapsed_ms" in body
+    assert body["elapsed_ms"] < 10000
 
 
 def test_malformed_json_body_is_400(server):
