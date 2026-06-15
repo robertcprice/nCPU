@@ -88,6 +88,14 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_is_sorted,
     },
     SearchCandidate {
+        key: "search_strictly_increasing",
+        func: search_strictly_increasing,
+    },
+    SearchCandidate {
+        key: "search_has_strictly_increasing_run",
+        func: search_has_strictly_increasing_run,
+    },
+    SearchCandidate {
         key: "search_longest_increasing_run",
         func: search_longest_increasing_run,
     },

@@ -157,6 +157,93 @@ pub(super) fn search_is_sorted(problem: &Problem, fn_name: &str) -> Option<Solve
     verified_result(problem, code_is_sorted(fn_name), "search_is_sorted")
 }
 
+fn code_strictly_increasing(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    i: i64 = 1;
+    while i < arr.len {
+        if arr[i] <= arr[i - 1] { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+"#,
+        fn_name,
+    )
+}
+
+pub(super) fn search_strictly_increasing(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if !validate_unary_array(problem, strictly_increasing_rust) {
+        return None;
+    }
+    verified_result(
+        problem,
+        code_strictly_increasing(fn_name),
+        "search_strictly_increasing",
+    )
+}
+
+fn code_has_strictly_increasing_run(fn_name: &str, length: i64) -> String {
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    run: i64 = 1;
+    i: i64 = 1;
+    while i < arr.len {
+        if arr[i] > arr[i - 1] {
+            run = run + 1;
+            if run >= __L__ { return 1; }
+        } else {
+            run = 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+"#,
+        fn_name,
+    )
+    .replace("__L__", &length.to_string())
+}
+
+pub(super) fn search_has_strictly_increasing_run(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    const CANDIDATE_LENGTHS: &[i64] = &[2, 3, 4, 5];
+
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if !problem
+        .examples
+        .iter()
+        .all(|e| e.expected_int() == 0 || e.expected_int() == 1)
+    {
+        return None;
+    }
+
+    let _arrays = unary_array_examples(problem)?;
+    for &length in CANDIDATE_LENGTHS {
+        let candidate = |arr: &[i64]| has_strictly_increasing_run_rust(arr, length);
+        if validate_unary_array(problem, candidate) {
+            return verified_result(
+                problem,
+                code_has_strictly_increasing_run(fn_name, length),
+                "search_has_strictly_increasing_run",
+            );
+        }
+    }
+    None
+}
+
 fn code_longest_increasing_run(fn_name: &str) -> String {
     templ(
         r#"fn __FN__(arr: [i64]) -> i64 {

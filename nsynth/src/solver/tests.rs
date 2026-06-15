@@ -585,6 +585,85 @@ fn search_array_dnf_learns_inference_validity() {
     );
 }
 
+/// Strict monotonicity: array[i] < array[i+1] for every adjacent pair.
+/// Unlike `search_is_sorted` (which permits equal neighbours), the new
+/// teacher must reject `[1, 1, 2]` and `[2, 1, 3]`.
+#[test]
+fn search_strictly_increasing_learns_strict_inequality() {
+    let problem = arr_class_problem(
+        "strictly_increasing",
+        "fn strictly_increasing(arr: [i64]) -> i64",
+        &[
+            // positives
+            (&[1, 2, 3], 1),
+            (&[0, 5], 1),
+            (&[-3, -1, 0, 7, 100], 1),
+            (&[10, 20, 30, 40, 50], 1),
+            // negatives: equal neighbours
+            (&[1, 1, 2], 0),
+            (&[2, 2], 0),
+            (&[5, 5, 5, 6], 0),
+            // negatives: descent
+            (&[3, 2, 1], 0),
+            (&[10, 0], 0),
+            // negatives: midpoint descent
+            (&[1, 5, 4, 9], 0),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(result.success, "strictly_increasing not learned: {:?}", result.error);
+    assert_eq!(result.method, "search_strictly_increasing");
+    assert!(result.code.contains("fn strictly_increasing"));
+    assert!(
+        result.code.contains("arr[i] <= arr[i - 1]"),
+        "expected strict-inequality check (not is_sorted's <); got: {}",
+        result.code
+    );
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![100, 200])], 1),
+            (vec![Value::Array(vec![1, 1])], 0),
+            (vec![Value::Array(vec![1, 2, 1])], 0),
+            (vec![Value::Array(vec![0, 0, 1])], 0),
+        ],
+    );
+}
+
+/// `has_strictly_increasing_run(arr, k) -> 1` iff arr contains a strictly
+/// increasing run of length >= k. The teacher tries k=2,3,4,5 in order
+/// and emits the first k that matches every example.
+#[test]
+fn search_has_strictly_increasing_run_learns_run_length() {
+    let problem = arr_class_problem(
+        "has_strict_inc_run_3",
+        "fn has_strict_inc_run_3(arr: [i64]) -> i64",
+        &[
+            // positives: contain a strict run of length 3
+            (&[1, 2, 3], 1),
+            (&[0, 1, 5, 6, 7], 1),
+            (&[10, 20, 30], 1),
+            (&[5, 4, 3, 7, 8, 9], 1),
+            // negatives: longest strict run is < 3
+            (&[1, 2], 0),
+            (&[1, 5, 3], 0), // not strictly increasing across the descent
+            (&[3, 3, 4], 0), // 3,3 is not strict; 3,4 is a run of length 2
+            (&[5, 4, 3, 2, 1], 0),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "has_strictly_increasing_run not learned: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_has_strictly_increasing_run");
+    assert!(result.code.contains("run >= 3"), "expected run >= 3 threshold; got: {}", result.code);
+}
+
 /// Every string-output benchmark problem is solved by the main pipeline and the
 /// emitted program verifies on its held-out examples.
 #[test]

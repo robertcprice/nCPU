@@ -85,6 +85,28 @@ ARRAY_FEATURE_REQUEST = {
     ],
 }
 
+STRICTLY_INCREASING_REQUEST = {
+    "name": "strictly_increasing_ok",
+    "examples": [
+        {"inputs": [[1, 2, 3]], "expected": 1},
+        {"inputs": [[0, 5]], "expected": 1},
+        {"inputs": [[-3, -1, 0, 7, 100]], "expected": 1},
+        {"inputs": [[10, 20, 30, 40, 50]], "expected": 1},
+        {"inputs": [[1, 1, 2]], "expected": 0},
+        {"inputs": [[2, 2]], "expected": 0},
+        {"inputs": [[5, 5, 5, 6]], "expected": 0},
+        {"inputs": [[3, 2, 1]], "expected": 0},
+        {"inputs": [[10, 0]], "expected": 0},
+        {"inputs": [[1, 5, 4, 9]], "expected": 0},
+    ],
+    "holdouts": [
+        {"inputs": [[100, 200]], "expected": 1},
+        {"inputs": [[1, 1]], "expected": 0},
+        {"inputs": [[1, 2, 1]], "expected": 0},
+        {"inputs": [[0, 0, 1]], "expected": 0},
+    ],
+}
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -204,6 +226,14 @@ def test_array_feature_dnf_problem_solves_through_api(server):
     assert body["success"] is True, body
     assert body["method"] == "search_array_feature_dnf"
     assert "array_feature_ok" in body["code"]
+
+
+def test_strictly_increasing_problem_solves_through_api(server):
+    status, body = _request(server, "/synthesize", STRICTLY_INCREASING_REQUEST)
+    assert status == 200
+    assert body["success"] is True, body
+    assert body["method"] == "search_strictly_increasing"
+    assert "strictly_increasing_ok" in body["code"]
 
 
 def test_repeat_request_hits_solved_cache(server):

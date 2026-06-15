@@ -70,7 +70,9 @@ required token in a disjunct returns `1`. Test:
 // post_enumerative.rs
 | "search_array_sequence"
 | "search_array_feature_dnf"
-| "search_string_subsequence_class" => true,
+| "search_string_subsequence_class"
+| "search_strictly_increasing"
+| "search_has_strictly_increasing_run" => true,
 ```
 
 Each new teacher appears in the preemption whitelist so the
@@ -85,6 +87,32 @@ for each new teacher:
 
 A phantom entry on either side would silently waste cycles; the test
 fails the build before any benchmark regression can sneak in.
+
+## Related teachers (live in `search_catalog_advanced.rs`)
+
+These two unary-array teachers were added alongside the `ArrayFeature`
+taxonomy because they round out the strictly-monotonicity surface and
+sit naturally between `search_is_sorted` (≤) and the DNF teacher
+(set-membership DNF):
+
+### `search_strictly_increasing`
+
+Returns `1` iff every adjacent pair satisfies `arr[i] < arr[i-1]` (no
+equal neighbours allowed). Codegen uses a single-pass `while` loop with
+an early `return 0` on `arr[i] <= arr[i-1]`. Test:
+`search_strictly_increasing_learns_strict_inequality`.
+
+### `search_has_strictly_increasing_run`
+
+Returns `1` iff the array contains a strictly increasing run of length
+≥ k. The teacher tries k ∈ {2, 3, 4, 5} in order and emits the first k
+whose verification pass succeeds. Codegen is a running-counter loop
+with the threshold inlined. Test:
+`search_has_strictly_increasing_run_learns_run_length`.
+
+Both are added to `SEARCH_CANDIDATES` and the preemption whitelist; the
+extended regression test (`new_teacher_preemption_cases.rs`) now covers
+all five new teachers.
 
 ## End-to-end coverage
 

@@ -43,6 +43,32 @@ pub(super) fn is_sorted_rust(arr: &[i64]) -> i64 {
     }
 }
 
+pub(super) fn strictly_increasing_rust(arr: &[i64]) -> i64 {
+    if arr.windows(2).all(|window| window[0] < window[1]) {
+        1
+    } else {
+        0
+    }
+}
+
+pub(super) fn has_strictly_increasing_run_rust(arr: &[i64], length: i64) -> i64 {
+    if length <= 1 || arr.is_empty() {
+        return 1;
+    }
+    let mut run = 1i64;
+    for index in 1..arr.len() {
+        if arr[index] > arr[index - 1] {
+            run += 1;
+            if run >= length {
+                return 1;
+            }
+        } else {
+            run = 1;
+        }
+    }
+    0
+}
+
 pub(super) fn longest_increasing_run_rust(arr: &[i64]) -> i64 {
     let mut best = 1i64;
     let mut current = 1i64;

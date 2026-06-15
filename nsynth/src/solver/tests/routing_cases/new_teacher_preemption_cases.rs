@@ -57,15 +57,50 @@ fn every_preempting_method_has_a_registered_search_candidate() {
     // Note: kept narrow on purpose. Many preemption entries come from
     // other routing families (e.g. affine / modular_cases / piecewise
     // affine) and are *not* in SEARCH_CANDIDATES — this test would be
-    // noisy. It covers the two newest search teachers only.
+    // noisy. It covers the newest search teachers only.
     let candidates = candidate_methods();
-    for m in &["search_array_feature_dnf", "search_string_subsequence_class"] {
+    for m in &[
+        "search_array_feature_dnf",
+        "search_string_subsequence_class",
+        "search_strictly_increasing",
+        "search_has_strictly_increasing_run",
+    ] {
         assert!(
             candidates.contains(m),
             "preemption whitelist claims {m:?} but the method is not \
              registered in SEARCH_CANDIDATES — a phantom entry.",
         );
     }
+}
+
+#[test]
+fn search_strictly_increasing_is_registered_and_preempts_gradient() {
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_strictly_increasing"),
+        "search_strictly_increasing missing from SEARCH_CANDIDATES; \
+         a teacher must be registered to run.",
+    );
+    let fake = make_solve_result("search_strictly_increasing", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_strictly_increasing not in preemption whitelist; it would \
+         be returned only to be re-distilled through the slow gradient path.",
+    );
+}
+
+#[test]
+fn search_has_strictly_increasing_run_is_registered_and_preempts_gradient() {
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_has_strictly_increasing_run"),
+        "search_has_strictly_increasing_run missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_has_strictly_increasing_run", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_has_strictly_increasing_run not in preemption whitelist.",
+    );
 }
 
 fn make_solve_result(method: &str, code: &str) -> crate::solver::SolveResult {
