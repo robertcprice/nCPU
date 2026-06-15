@@ -50,6 +50,16 @@ pub const REG_VERBS: &[(&str, &str)] = &[
     ("try", "tries"), ("reply", "replies"), ("bury", "buries"),
 ];
 
+/// Irregular 3sg verbs — suppletive/contracted forms no rule predicts. These are
+/// a lexicon (stored), composed with the regular rule above.
+pub const IRREGULAR_VERBS: &[(&str, &str)] = &[
+    ("have", "has"), ("be", "is"), ("do", "does"), ("go", "goes"),
+];
+
+/// Sentinel returned by the irregular lexicon for a regular verb ("not
+/// irregular — apply the rule"). Picked so no real 3sg form collides with it.
+const REGULAR_SENTINEL: &str = "-";
+
 /// Function/auxiliary/question words — non-nouns; enough of them that "not a
 /// noun" (0) is the majority label, so unseen words default to non-noun.
 pub const FUNCTION_WORDS: &[&str] = &[
@@ -206,9 +216,22 @@ fn valid_agreement_program() -> (String, String) {
     synth("valid_agreement", "fn valid_agreement(arr: [i64]) -> i64", ex)
 }
 
-fn verb_3sg_program() -> (String, String) {
+/// Regular 3sg as a suffix-transduction rule (no irregulars, so the rule stays
+/// clean and generalizes: describe→describes, not the spurious "strip be add is").
+fn regular_3sg_program() -> (String, String) {
     let ex = REG_VERBS.iter().map(|(b, t)| ex_str_str(b, t)).collect();
-    synth("verb_3sg", "fn verb_3sg(s: string) -> string", ex)
+    synth("regular_3sg", "fn regular_3sg(s: string) -> string", ex)
+}
+
+/// Irregular 3sg as a whole-word lexicon: the four suppletive verbs map to their
+/// forms, every regular verb maps to the sentinel (handled by the rule). No
+/// suffix transduction fits this, so the string-lexicon teacher recovers it.
+fn irregular_3sg_program() -> (String, String) {
+    let mut ex: Vec<Example> = IRREGULAR_VERBS.iter().map(|(b, t)| ex_str_str(b, t)).collect();
+    for (b, _) in REG_VERBS {
+        ex.push(ex_str_str(b, REGULAR_SENTINEL));
+    }
+    synth("irregular_3sg", "fn irregular_3sg(s: string) -> string", ex)
 }
 
 fn prop_id_program() -> (String, String) {
@@ -311,16 +334,25 @@ impl Engine {
         let (vr, vr_m) = valid_roles_program();
         let (es, es_m) = ends_s_program();
         let (ag, ag_m) = valid_agreement_program();
-        let (v3, v3_m) = verb_3sg_program();
+        let (reg, reg_m) = regular_3sg_program();
+        let (irr, irr_m) = irregular_3sg_program();
         let (pid, pid_m) = prop_id_program();
         let (neg, neg_m) = has_negation_program();
         let (arg, arg_m) = valid_argument_program();
-        let program = format!("{na}\n{vr}\n{es}\n{ag}\n{v3}\n{pid}\n{neg}\n{arg}\n{WRAPPERS}");
+        // Compose 3sg inflection: irregular lexicon first, regular rule otherwise.
+        let verb_3sg_wrapper = format!(
+            "fn verb_3sg(s: string) -> string {{\n    irr := irregular_3sg(s);\n    \
+             if irr == \"{REGULAR_SENTINEL}\" {{ return regular_3sg(s); }}\n    return irr;\n}}\n"
+        );
+        let program = format!(
+            "{na}\n{vr}\n{es}\n{ag}\n{reg}\n{irr}\n{pid}\n{neg}\n{arg}\n{WRAPPERS}\n{verb_3sg_wrapper}"
+        );
         Engine {
             program,
             methods: vec![
                 ("noun_animacy", na_m), ("valid_roles", vr_m), ("ends_s", es_m),
-                ("valid_agreement", ag_m), ("verb_3sg", v3_m), ("prop_id", pid_m),
+                ("valid_agreement", ag_m), ("regular_3sg", reg_m),
+                ("irregular_3sg", irr_m), ("prop_id", pid_m),
                 ("has_negation", neg_m), ("valid_argument", arg_m),
             ],
         }

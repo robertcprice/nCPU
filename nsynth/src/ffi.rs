@@ -15,6 +15,36 @@ use std::ffi::{c_char, CStr};
 
 use crate::comprehension::Engine;
 
+/// Third-person-singular form of a verb base, written NUL-terminated into `out`
+/// (capacity `cap` bytes). Regular verbs go through the synthesized rule;
+/// irregulars (have→has, be→is, do→does, go→goes) through the synthesized
+/// lexicon. Returns the byte length written (excluding NUL), -1 on null/invalid
+/// input, or -2 if the buffer is too small.
+///
+/// # Safety
+/// `engine` must be a valid handle; `base` a valid NUL-terminated UTF-8 string;
+/// `out` must point to at least `cap` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn ncpu_verb_3sg(
+    engine: *const NcpuEngine,
+    base: *const c_char,
+    out: *mut c_char,
+    cap: usize,
+) -> i32 {
+    if engine.is_null() || base.is_null() || out.is_null() || cap == 0 {
+        return -1;
+    }
+    let Ok(b) = CStr::from_ptr(base).to_str() else { return -1 };
+    let form = (*engine).0.verb_3sg(b);
+    let bytes = form.as_bytes();
+    if bytes.len() + 1 > cap {
+        return -2;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, bytes.len());
+    *out.add(bytes.len()) = 0;
+    bytes.len() as i32
+}
+
 /// Opaque handle to a built engine. Create with [`ncpu_engine_new`], release with
 /// [`ncpu_engine_free`].
 pub struct NcpuEngine(Engine);

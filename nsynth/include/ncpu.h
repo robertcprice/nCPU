@@ -6,6 +6,8 @@
 #ifndef NCPU_H
 #define NCPU_H
 
+#include <stddef.h> /* size_t */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -33,6 +35,11 @@ int ncpu_is_person(const NcpuEngine *engine, const char *word);
 
 /* Judge a conditional argument: 1 valid, 0 invalid, -1 unparseable/invalid. */
 int ncpu_judge_argument(const NcpuEngine *engine, const char *sentence);
+
+/* Write the third-person-singular form of `base` (NUL-terminated) into `out`
+ * (capacity `cap`). Returns bytes written (excl NUL), -1 on invalid input,
+ * -2 if the buffer is too small. Regulars via rule, irregulars via lexicon. */
+int ncpu_verb_3sg(const NcpuEngine *engine, const char *base, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

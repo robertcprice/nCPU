@@ -13,6 +13,67 @@ fn has_non_scalar_input(problem: &Problem) -> bool {
     })
 }
 
+/// Emit a learned string->string lookup table: `if s == "k" { return "v"; } ...
+/// return "<default>";`. This is how an *arbitrary* string lexicon (e.g.
+/// irregular inflection: have->has, be->is) is recovered — facts with no
+/// transduction rule must be stored as a verified program.
+fn code_string_string_map(fn_name: &str, default: &str, branches: &[(String, String)]) -> String {
+    let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+    let mut body = String::new();
+    for (k, v) in branches {
+        body.push_str(&format!("    if s == {} {{\n        return {};\n    }}\n", q(k), q(v)));
+    }
+    format!("fn {fn_name}(s: string) -> string {{\n{body}    return {};\n}}\n", q(default))
+}
+
+/// Whole-word string->string lexicon teacher. Runs AFTER the suffix-transduction
+/// specialist, so it only claims a problem when the mapping is an arbitrary
+/// lookup no rule explains. The string sibling of `search_string_equality_map`.
+fn solve_string_lexicon(
+    problem: &Problem,
+    train: &[(Vec<String>, String)],
+    fn_name: &str,
+) -> Option<SolveResult> {
+    use std::collections::BTreeMap;
+    if train.len() < 3 || !train.iter().all(|(i, _)| i.len() == 1) {
+        return None;
+    }
+    // Consistent whole-word map (same input -> one output).
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    for (i, o) in train {
+        match map.get(&i[0]) {
+            Some(prev) if prev != o => return None,
+            _ => {
+                map.insert(i[0].clone(), o.clone());
+            }
+        }
+    }
+    // Need at least two distinct outputs (else a constant function).
+    let distinct: std::collections::BTreeSet<&String> = map.values().collect();
+    if distinct.len() < 2 {
+        return None;
+    }
+    // Default = most frequent output; only off-default words get a branch.
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, o) in train {
+        *counts.entry(o.clone()).or_insert(0) += 1;
+    }
+    let default = counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(o, _)| o)?;
+    let mut branches: Vec<(String, String)> =
+        map.into_iter().filter(|(_, o)| *o != default).collect();
+    branches.sort();
+    let code = code_string_string_map(fn_name, &default, &branches);
+    crate::runtime::verify_problem_code_strict(problem, &code).ok()?;
+    Some(SolveResult {
+        success: true,
+        code,
+        method: "string_lexicon_map".to_string(),
+        error: None,
+        metadata: Default::default(),
+    })
+}
+
 /// Route string-output problems (signature `-> string`) to the string-program
 /// path: the fast morphology specialist, then the general enumerative string
 /// synthesizer. Returns None for non-string problems so the numeric pipeline runs.
@@ -64,6 +125,12 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
                 error: None,
                 metadata: Default::default(),
             });
+        }
+
+        // Whole-word lexicon lookup for arbitrary string->string maps no suffix
+        // transduction explains (e.g. irregular inflection: have->has, be->is).
+        if let Some(result) = solve_string_lexicon(problem, &train, fn_name) {
+            return Some(result);
         }
     }
 
@@ -297,4 +364,49 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         };
     }
     result
+}
+
+#[cfg(test)]
+mod string_lexicon_tests {
+    use crate::benchmark::{Example, Problem, Value};
+    use crate::solver::solve_problem;
+
+    fn str_str_problem(rows: &[(&str, &str)]) -> Problem {
+        Problem {
+            name: "irregular_3sg".to_string(),
+            category: "comprehension",
+            description: "",
+            signature: "fn irregular_3sg(s: string) -> string",
+            examples: rows.iter().map(|(i, o)| Example {
+                inputs: vec![Value::Str((*i).to_string())],
+                expected: Value::Str((*o).to_string()),
+            }).collect(),
+            holdouts: vec![],
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+        }
+    }
+
+    // Irregular inflection is an arbitrary string->string lexicon no suffix rule
+    // explains; the string-lexicon teacher must recover it as a verified lookup.
+    #[test]
+    fn string_lexicon_recovers_irregular_inflection() {
+        let problem = str_str_problem(&[
+            ("have", "has"), ("be", "is"), ("do", "does"), ("go", "goes"),
+            ("walk", "-"), ("read", "-"), ("write", "-"), ("help", "-"),
+            ("open", "-"), ("call", "-"),
+        ]);
+        let result = solve_problem(&problem);
+        assert!(result.success, "failed to recover the irregular lexicon");
+        assert_eq!(result.method, "string_lexicon_map",
+                   "expected the string-lexicon teacher, got {}", result.method);
+        assert!(result.code.contains("if s == \"have\""));
+        assert!(result.code.contains("return \"has\";"));
+        // The regular majority is the default sentinel, not an explicit branch.
+        assert!(!result.code.contains("if s == \"walk\""));
+    }
 }

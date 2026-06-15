@@ -189,6 +189,33 @@ fn demo_reason(engine: &Engine) {
     println!("\nValidity decided by synthesized programs — no Python classifier in the reasoning path.");
 }
 
+fn demo_inflect(engine: &Engine) {
+    println!("nCPU inflecting — 3sg = synthesized regular rule + irregular lexicon:\n");
+    for (name, method) in &engine.methods {
+        if matches!(*name, "regular_3sg" | "irregular_3sg") {
+            println!("  {name:<16}: via {method}");
+        }
+    }
+    println!();
+    let regular = ["walk", "write", "watch", "carry", "describe"];
+    let irregular = ["have", "be", "do", "go"];
+    let trap = ["scribe", "tribe"]; // end in "be" but are NOT the verb "be"
+    println!("  regular (rule: +s / +es / y->ies):");
+    for v in regular {
+        println!("     {v:<10} -> {}", engine.verb_3sg(v));
+    }
+    println!("  irregular (lexicon: suppletive forms):");
+    for v in irregular {
+        println!("     {v:<10} -> {}", engine.verb_3sg(v));
+    }
+    println!("  trap — words ending in \"be\" that are NOT the verb \"be\":");
+    for v in trap {
+        println!("     {v:<10} -> {}  (rule, not the \"be\"->\"is\" lexicon)", engine.verb_3sg(v));
+    }
+    println!("\n  The irregular lexicon keys on whole words, so \"be\"->\"is\" never leaks");
+    println!("  into \"scribe\"; regular verbs stay on the rule.");
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
     eprintln!("[building comprehension engine — synthesizing verified programs...]");
@@ -197,8 +224,11 @@ fn main() {
         "comprehend" => demo_comprehend(&engine),
         "converse" => demo_converse(&engine),
         "reason" => demo_reason(&engine),
+        "inflect" => demo_inflect(&engine),
         _ => {
             demo_comprehend(&engine);
+            println!("\n{}\n", "=".repeat(72));
+            demo_inflect(&engine);
             println!("\n{}\n", "=".repeat(72));
             demo_converse(&engine);
             println!("\n{}\n", "=".repeat(72));

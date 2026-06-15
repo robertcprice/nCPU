@@ -47,6 +47,15 @@ int main(void) {
     printf("    %s  affirming the consequent\n", verdict(ncpu_judge_argument(e,
         "If the alarm rings, then the guard wakes. The guard wakes. Thus, the alarm rings.")));
 
+    printf("\n  3sg inflection (regular rule + irregular lexicon):\n");
+    const char *verbs[] = {"write", "carry", "have", "be", "go", "scribe"};
+    for (int i = 0; i < 6; i++) {
+        char buf[64];
+        if (ncpu_verb_3sg(e, verbs[i], buf, sizeof buf) >= 0) {
+            printf("    %-8s -> %s\n", verbs[i], buf);
+        }
+    }
+
     ncpu_engine_free(e);
     printf("\nevery answer above was decided by a synthesized Mog program, called from C.\n");
     return 0;
