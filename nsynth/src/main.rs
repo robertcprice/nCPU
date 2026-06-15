@@ -67,6 +67,8 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
                 // returns None for them); integers keep their `Int` lane. Stored
                 // as IEEE bits (Value keeps Eq/Ord).
                 inputs.push(Value::Float(inp.as_f64().unwrap().to_bits()));
+            } else if let Some(b) = inp.as_bool() {
+                inputs.push(Value::Bool(b));
             } else if let Some(arr) = inp.as_array() {
                 let vals: Vec<i64> = arr.iter().filter_map(|x| x.as_i64()).collect();
                 inputs.push(Value::Array(vals));
@@ -76,12 +78,14 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
                 return Err(format!("unsupported input type: {inp}"));
             }
         }
-        // Expected output may be int, string, or array — all first-class now.
+        // Expected output may be int, bool, string, or array — all first-class now.
         let exp = &v["expected"];
         let expected = if let Some(n) = exp.as_i64() {
             Value::Int(n)
         } else if exp.is_f64() {
             Value::Float(exp.as_f64().unwrap().to_bits())
+        } else if let Some(b) = exp.as_bool() {
+            Value::Bool(b)
         } else if let Some(s) = exp.as_str() {
             Value::Str(s.to_string())
         } else if let Some(arr) = exp.as_array() {

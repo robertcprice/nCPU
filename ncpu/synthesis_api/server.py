@@ -216,8 +216,17 @@ def _validate_examples(examples: Any, where: str, allow_empty: bool) -> None:
         for j, value in enumerate(inputs):
             _validate_value(value, f"{where}[{i}].inputs[{j}]")
         expected = ex["expected"]
-        if isinstance(expected, bool) or not isinstance(expected, int):
-            raise ValueError(f"{where}[{i}].expected must be an integer")
+        if isinstance(expected, bool):
+            # Booleans are first-class on the wire (real code returns
+            # true/false), but the Mog solver currently treats the
+            # 0/1 int lane as the canonical predicate form. Coerce on
+            # the way through so a `{expected: true}` request lands
+            # the same problem-json the existing i64 search teachers
+            # already solve against.
+            ex["expected"] = int(expected)
+            expected = ex["expected"]
+        if not isinstance(expected, int) or isinstance(expected, bool):
+            raise ValueError(f"{where}[{i}].expected must be an integer or bool")
         if not (_I64_MIN <= expected <= _I64_MAX):
             raise ValueError(f"{where}[{i}].expected out of i64 range")
 
