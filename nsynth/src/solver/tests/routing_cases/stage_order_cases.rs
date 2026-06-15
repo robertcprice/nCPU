@@ -27,6 +27,11 @@ fn scalar_template_fallback_is_explicit() {
         ],
         holdouts: vec![],
         reference_code: "",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
     };
     let result = crate::synthesis::synthesize_scalar_templates_only(&problem)
         .expect("template fallback should solve positive_or_default");
@@ -61,6 +66,11 @@ fn expr_template_fallback_is_explicit() {
         ],
         holdouts: vec![],
         reference_code: "",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
     };
     let result = crate::synthesis::synthesize_scalar_expr_templates_only(&problem)
         .expect("expr template fallback should solve manhattan distance");
@@ -83,6 +93,11 @@ fn reference_distillation_precedes_template_reference() {
         ],
         holdouts: vec![],
         reference_code: "fn abs_diff_reference_custom(a: i64, b: i64) -> i64 {\n    if a >= b { return a - b; }\n    return b - a;\n}\n",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
     };
     let stages = post_enumerative_stage_order(&problem);
     let distill_idx = stages
@@ -115,6 +130,11 @@ fn native_scalar_distillation_precedes_template_reference() {
         ],
         holdouts: vec![],
         reference_code: "fn abs_diff_native_reference_custom(a: i64, b: i64) -> i64 {\n    if a >= b { return a - b; }\n    return b - a;\n}\n",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
     };
     let stages = post_enumerative_stage_order(&problem);
     let native_distill_idx = stages
@@ -147,6 +167,11 @@ fn array_reference_distillation_precedes_template_reference() {
         ],
         holdouts: vec![],
         reference_code: "fn count_positive_reference_custom(arr: [i64]) -> i64 {\n    count: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] > 0 { count = count + 1; }\n        i = i + 1;\n    }\n    return count;\n}\n",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
     };
     let stages = post_enumerative_stage_order(&problem);
     let arr_distill_idx = stages
@@ -183,6 +208,11 @@ fn expr_templates_precede_scalar_and_reference_templates() {
         ],
         holdouts: vec![],
         reference_code: "fn manhattan_reference_custom(x1: i64, y1: i64, x2: i64, y2: i64) -> i64 {\n    dx: i64 = x1 - x2;\n    if dx < 0 { dx = 0 - dx; }\n    dy: i64 = y1 - y2;\n    if dy < 0 { dy = 0 - dy; }\n    return dx + dy;\n}\n",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
     };
     let stages = post_enumerative_stage_order(&problem);
     let expr_tpl_idx = stages
@@ -219,6 +249,11 @@ fn differentiable_bridge_precedes_reference_and_template_fallbacks() {
         ],
         holdouts: vec![],
         reference_code: "fn abs_diff_bridge_custom(a: i64, b: i64) -> i64 {\n    if a >= b { return a - b; }\n    return b - a;\n}\n",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
     };
     let stages = post_enumerative_stage_order(&problem);
     let bridge_idx = stages

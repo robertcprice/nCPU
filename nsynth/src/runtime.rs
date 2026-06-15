@@ -2721,6 +2721,17 @@ fn main() -> i64 {
             ],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         let code = "fn is_positive_bool_v0(x: i64) -> i64 {\n    if 0 < x {\n        return 1;\n    }\n    return 0;\n}\n";
         verify_problem_code(&problem, code)
@@ -2749,6 +2760,17 @@ fn main() -> i64 {
             ],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         let code = "fn is_positive_bool_to_int_v0(x: i64) -> i64 {\n    if 0 < x {\n        return 1;\n    } else {\n        return 0;\n    }\n}\n";
         verify_problem_code(&problem, code)
@@ -2778,6 +2800,17 @@ fn main() -> i64 {
             ],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         let code = "fn double_float_v0(x: i64) -> i64 {\n    return x * 2;\n}\n";
         verify_problem_code(&problem, code)

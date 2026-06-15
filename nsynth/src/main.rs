@@ -175,6 +175,17 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         examples,
         holdouts,
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     })
 }
 

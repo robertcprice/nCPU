@@ -1,0 +1,283 @@
+================================================================================
+STAGE 4 TIME-PARAMETERIZED SYNTHESIS TEACHERS - DESIGN SUMMARY
+================================================================================
+
+================================================================================
+1. TEACHER SIGNATURES
+================================================================================
+
+pub(super) fn search_polynomial_time(problem: &Problem, fn_name: &str) -> Option<SolveResult>
+  - Recognizes polynomial patterns (linear, quadratic, cubic)
+  - Input: single i64 parameter t, arity=1
+  - Examples: >= 5 points, outputs grow polynomially with t
+  - Output: Option<SolveResult> with Mog code: y = a*t^d + ... + const
+
+pub(super) fn search_exponential_time(problem: &Problem, fn_name: &str) -> Option<SolveResult>
+  - Recognizes exponential patterns (2^t, 3^t, Fibonacci)
+  - Input: single i64 parameter t, arity=1
+  - Examples: >= 4 points, outputs grow exponentially with t
+  - Output: Option<SolveResult> with Mog code: 2^t or 3^t or fib(t)
+
+pub(super) fn search_factorial_time(problem: &Problem, fn_name: &str) -> Option<SolveResult>
+  - Recognizes factorial pattern n!
+  - Input: single i64 parameter n, arity=1
+  - Examples: >= 4 points matching factorial sequence (1, 1, 2, 6, 24, ...)
+  - Output: Option<SolveResult> with Mog code: r *= i loop
+
+pub(super) fn search_triangular_time(problem: &Problem, fn_name: &str) -> Option<SolveResult>
+  - Recognizes triangular/cumulative sum pattern
+  - Input: single i64 parameter t, arity=1
+  - Examples: >= 4 points matching triangular sequence (0, 1, 3, 6, 10, ...)
+  - Output: Option<SolveResult> with Mog code: (t * (t + 1)) / 2
+
+================================================================================
+2. PATTERN RECOGNITION HEURISTICS
+================================================================================
+
+POLYNOMIAL TIME:
+  1. Extract (t, output) pairs from examples, sort by t
+  2. Compute finite differences (Δ¹, Δ², Δ³)
+  3. Check if any level is constant:
+     - Δ¹ constant → degree 1 (linear): y = a*t + b
+     - Δ² constant → degree 2 (quadratic): y = a*t² + b*t + c
+     - Δ³ constant → degree 3 (cubic): y = a*t³ + b*t² + c*t + d
+  4. Fit via Gaussian elimination (Vandermonde system)
+  5. Verify ALL examples match polynomial exactly
+  6. Guard: reject if coefficients > 1000 (implausibly large)
+  7. Accept on perfect match
+
+EXPONENTIAL TIME:
+  1. Extract (t, output) pairs, sort by t
+  2. Check growth rate: ratio[i] = output[i+1] / output[i]
+  3. Match ratios to base:
+     - All ratios ≈ 2.0 → try 2^t (max t=62 to avoid overflow)
+     - All ratios ≈ 3.0 → try 3^t (max t=39)
+     - Ratios follow harmonic pattern → try Fibonacci (max t=92)
+     - Else reject (not exponential)
+  4. Verify ALL examples match pattern exactly
+  5. Order preference: 2^t > 3^t > Fibonacci (by likelihood)
+  6. Accept on perfect match
+
+FACTORIAL TIME:
+  1. Extract (t, output) pairs, sort by t
+  2. Check against factorial table (precomputed 0!..20!)
+  3. Guard: all t in [0, 20] (21! overflows i64)
+  4. Verify ALL examples match factorial table exactly
+  5. Accept on perfect match
+
+TRIANGULAR TIME:
+  1. Extract (t, output) pairs, sort by t
+  2. Check via formula: output = t*(t+1)/2 for all t
+  3. OR check via differences: Δ¹ = [1, 2, 3, 4, ...] (cumulative step pattern)
+  4. Guard: all t in [0, 1000000] (no overflow risk)
+  5. Verify ALL examples match pattern exactly
+  6. Accept on perfect match
+
+COMMON GUARDS (all teachers):
+  - Require examples.len() >= 4 or 5 (enough to distinguish pattern)
+  - Require arity = 1 (single input, time-parameterized)
+  - Verify ALL examples match proposed pattern (no approximation)
+  - Reject implausibly large coefficients or overflow risk
+  - Return None if pattern doesn't match (fall through to next teacher)
+
+================================================================================
+3. CODEGEN TEMPLATES
+================================================================================
+
+POLYNOMIAL TIME (variable degree):
+  fn {fn_name}(t: i64) -> i64 {
+      return {coeff_0}*t^{degree} + {coeff_1}*t^{degree-1} + ... + {const};
+  }
+
+  Examples:
+    Linear y=2t+1:    return 2*t + 1;
+    Quadratic y=t²:   return 1*t*t + 0*t + 0;
+    Cubic y=t³+2t:    return 1*t*t*t + 0*t*t + 2*t + 0;
+
+EXPONENTIAL TIME - POWER OF 2:
+  fn {fn_name}(t: i64) -> i64 {
+      if t < 0 { return 1; }
+      if t >= 63 { return -1; }  // overflow sentinel
+      acc: i64 = 1;
+      i: i64 = 0;
+      while i < t {
+          acc = acc * 2;
+          i = i + 1;
+      }
+      return acc;
+  }
+
+EXPONENTIAL TIME - POWER OF 3:
+  fn {fn_name}(t: i64) -> i64 {
+      if t < 0 { return 1; }
+      if t >= 40 { return -1; }  // overflow sentinel
+      acc: i64 = 1;
+      i: i64 = 0;
+      while i < t {
+          acc = acc * 3;
+          i = i + 1;
+      }
+      return acc;
+  }
+
+EXPONENTIAL TIME - FIBONACCI:
+  fn {fn_name}(n: i64) -> i64 {
+      if n == 0 { return 0; }
+      if n == 1 { return 1; }
+      a: i64 = 0;
+      b: i64 = 1;
+      i: i64 = 2;
+      while i <= n {
+          tmp: i64 = a + b;
+          a = b;
+          b = tmp;
+          i = i + 1;
+      }
+      return b;
+  }
+
+FACTORIAL TIME:
+  fn {fn_name}(n: i64) -> i64 {
+      if n < 0 { return 1; }
+      if n > 20 { return -1; }  // overflow sentinel
+      r: i64 = 1;
+      i: i64 = 1;
+      while i <= n {
+          r = r * i;
+          i = i + 1;
+      }
+      return r;
+  }
+
+TRIANGULAR TIME:
+  fn {fn_name}(t: i64) -> i64 {
+      if t < 0 { return 0; }
+      return (t * (t + 1)) / 2;
+  }
+
+================================================================================
+4. ESTIMATED COVERAGE
+================================================================================
+
+INDIVIDUAL COVERAGE (on 105-problem nsynth benchmark):
+  search_factorial_time:    2-3 problems  (2-3%)    [rare]
+  search_exponential_time:  8-12 problems (8-12%)   [Fibonacci, powers]
+  search_triangular_time:   2-4 problems  (2-4%)    [cumsum patterns]
+  search_polynomial_time:   15-25 problems (15-25%) [most common]
+
+COMBINED COVERAGE (4 teachers): 27-44 problems (27-44% of 105)
+
+TYPICAL PROBLEM FAMILIES SOLVED:
+  - fibonacci variants (search_exponential_time)
+  - polynomial_quadratic variants (search_polynomial_time with degree=2)
+  - triangular_check variants (search_triangular_time)
+  - arithmetic sequence / linear patterns (search_polynomial_time with degree=1)
+  - power_loop variants (search_exponential_time with base=2)
+  - digit loop patterns that reduce to closed form (polynomial if finite)
+
+NON-OVERLAP WITH EXISTING TEACHERS:
+  - search_fib_iter_loop exists (hardcoded loop), search_exponential_time is closed-form
+  - search_polynomial_quadratic brute-forces degree-2, search_polynomial_time generalizes to 1-3
+  - search_triangular_check_loop checks membership (bool), search_triangular_time returns value
+  - search_scalar_expr does generic expression search (more expensive), time teachers are specialized fast paths
+
+FALLTHROUGH:
+  - Patterns not matching any teacher (Catalan, partitions, advanced sequences) fall through to
+    search_scalar_expr (differentiable solver) or template family
+
+================================================================================
+IMPLEMENTATION LOCATION
+================================================================================
+
+File: /Users/bobbyprice/projects/nCPU/nsynth/src/solver/search_time_families.rs
+  - Module: search_time_families
+  - Implements: 4 pub(super) fn teachers
+  - Helpers: compute_finite_differences, fit_polynomial, verify_polynomial, Gaussian elimination
+  - Tests: 8 unit tests covering each teacher + pattern detection
+
+Integration:
+  - Add to src/solver/mod.rs: mod search_time_families; use super::search_time_families::*;
+  - Add to src/solver/search.rs: SEARCH_CANDIDATES array (4 new entries)
+  - Place before search_scalar_expr (which is expensive), after specific structural solvers
+  - Order: search_factorial_time, search_exponential_time, search_triangular_time, search_polynomial_time
+
+Dependencies:
+  - super::search_codegen::* (for code_fib_iter_loop_search, verified_result)
+  - super::search_runtime::* (for fibonacci, gcd helpers)
+  - super::* (for Problem, ParamType, int_value, parse_param_types, SolveResult)
+
+================================================================================
+KEY DESIGN PRINCIPLES
+================================================================================
+
+1. SINGLE SCALAR INPUT ONLY
+   - Time-parameterized teachers work ONLY on single i64 input problems
+   - Multi-input problems handled by composition or branching elsewhere
+   - Guard: parse_param_types(problem.signature) != [ParamType::I64] → return None
+
+2. CLOSED-FORM PREFERENCE
+   - All templates are closed-form or O(t) loop (no expensive enumeration)
+   - Makes them fast (<10ms pattern recognition), cacheable for repeated calls
+   - Compete well with gradient/enumerative methods on sequence recognition
+
+3. EXACT MATCH REQUIRED
+   - Teachers are high-precision: ALL examples must match pattern exactly
+   - No approximation, no fitting tolerance, no partial credit
+   - Prevents false positives and ensures generalization
+
+4. OVERFLOW GUARDS
+   - Factorial: max t=20 (21! > i64::MAX)
+   - Exponential (2^t): max t=62 (2^63 > i64::MAX)
+   - Exponential (3^t): max t=39 (3^40 > i64::MAX)
+   - Triangular: no practical risk (t*(t+1)/2 grows slowly)
+   - All emit sentinel (-1 or 0) on overflow to fail gracefully
+
+5. NO HEURISTIC GUESSING
+   - Teachers recognize patterns from data (finite differences, growth ratios)
+   - Classical numerical methods (Newton differences, Lagrange, Gaussian elimination)
+   - Not statistical (no curve-fitting confidence intervals)
+
+6. ORDERING BY SPECIFICITY
+   - Teachers tried in order: factorial → exponential → triangular → polynomial
+   - Most specific patterns checked first, most general (polynomial) last
+   - Prevents shadowing (e.g., don't fit polynomial to triangular data)
+
+================================================================================
+TESTING & VALIDATION
+================================================================================
+
+Unit Tests (in search_time_families.rs):
+  - test_polynomial_time_linear: y=2t+1
+  - test_polynomial_time_quadratic: y=t²
+  - test_factorial_pattern: 0! through 4!
+  - test_triangular_pattern: triangular(0) through triangular(4)
+  - test_triangular_from_differences: cumsum pattern detection
+  - test_power_of_2: 2^t growth
+  - test_fibonacci_pattern: Fibonacci sequence
+
+Integration:
+  - Run with: cargo test --lib solver::search_time_families::tests
+  - Benchmark: measure per-teacher solve time (expect <10ms pattern recognition)
+  - Coverage: "X/105 problems solved by time-parameterized teachers" in benchmark report
+
+Regression Gates:
+  - Ensure no existing solved problems regress (false negatives)
+  - Ensure no shadowing of existing solvers (pattern specificity ordering verified)
+  - Ensure overflow guards work (no panics on large inputs)
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+
+Teacher                Pattern               Guard             Output         Coverage
+─────────────────────────────────────────────────────────────────────────────────────
+search_factorial_time  n!                    n in [0,20]       loop:r*=i      2-3%
+search_exponential_time 2^t, 3^t, fib(t)    t in [0,62]       loop:acc*=base 8-12%
+search_triangular_time t*(t+1)/2            t in [0,1M]       formula        2-4%
+search_polynomial_time ax^d+...+const       deg in [1,3]      formula        15-25%
+─────────────────────────────────────────────────────────────────────────────────────
+TOTAL (4 teachers)                                                             27-44%
+
+================================================================================
+END OF DESIGN SUMMARY
+================================================================================

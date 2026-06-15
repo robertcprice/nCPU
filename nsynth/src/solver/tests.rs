@@ -25,6 +25,17 @@ fn aliased_problem(
         examples: source.examples,
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     }
 }
 
@@ -187,6 +198,17 @@ fn str_class_problem(name: &'static str, signature: &'static str, rows: &[(&str,
             .collect(),
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     }
 }
 
@@ -295,6 +317,17 @@ fn arr_class_problem(
             .collect(),
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     }
 }
 
@@ -564,6 +597,17 @@ fn search_array_dnf_learns_inference_validity() {
             .collect(),
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
 
     let result = solve_problem_search_only(&problem);
@@ -688,6 +732,17 @@ fn search_first_index_of_learns_target_value() {
                 .collect(),
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         }
     }
 
@@ -766,6 +821,17 @@ fn search_last_index_of_learns_target_value() {
                 .collect(),
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         }
     }
 
@@ -880,6 +946,17 @@ fn search_is_anagram_learns_permutation_equivalence() {
                 .collect(),
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         }
     }
 
@@ -993,6 +1070,17 @@ fn search_intersects_learns_set_membership() {
                 .collect(),
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         }
     }
 
@@ -1160,6 +1248,17 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
                 .collect(),
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         }
     }
 
@@ -1287,6 +1386,17 @@ fn solve_problem_handles_string_output() {
         ],
         holdouts: vec![str_ex("world", "dlrow"), str_ex("nsynth", "htnysn")],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let result = solve_problem(&problem);
     assert!(

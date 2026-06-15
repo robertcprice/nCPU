@@ -823,6 +823,17 @@ mod tests {
             ],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         let teacher_code = "fn abs_diff_custom(a: i64, b: i64) -> i64 {\n    if a >= b { return a - b; }\n    return b - a;\n}\n";
         let examples = teacher_examples_from_code(&problem, teacher_code, None, None)

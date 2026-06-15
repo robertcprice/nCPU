@@ -36,6 +36,17 @@ fn native_scalar_teacher_distillation_solves_add_two() {
             },
         ],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let teacher_code = "fn add_two_teacher(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n";
     let result = crate::synthesis::synthesize_scalar_from_teacher(&problem, teacher_code)
@@ -80,6 +91,17 @@ fn native_scalar_teacher_distillation_solves_digit_sum_loop() {
             },
         ],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let teacher_code = "fn digit_sum_teacher(n: i64) -> i64 {\n    x: i64 = n;\n    acc: i64 = 0;\n    while x > 0 {\n        acc = acc + x % 10;\n        x = x / 10;\n    }\n    return acc;\n}\n";
     let result = crate::synthesis::synthesize_scalar_from_teacher(&problem, teacher_code)
@@ -125,6 +147,17 @@ fn native_scalar_teacher_distillation_solves_is_prime_loop() {
             },
         ],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let teacher_code = "fn is_prime_teacher(n: i64) -> i64 {\n    count: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        if n % i == 0 { count = count + 1; }\n        i = i + 1;\n    }\n    if count == 2 { return 1; }\n    return 0;\n}\n";
     let result = crate::synthesis::synthesize_scalar_from_teacher(&problem, teacher_code)
@@ -170,6 +203,17 @@ fn native_scalar_teacher_distillation_solves_gcd_loop() {
             },
         ],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let teacher_code = "fn gcd_teacher(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n";
     let result = crate::synthesis::synthesize_scalar_from_teacher(&problem, teacher_code)

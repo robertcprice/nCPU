@@ -766,6 +766,17 @@ mod tests {
             examples,
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         }
     }
 
@@ -882,6 +893,17 @@ mod tests {
             ],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         let pf = extract_problem_features(&p);
         assert!(pf[26] > 0.0, "slot 26 (n_args × monotone) must fire");
@@ -1073,6 +1095,17 @@ mod tests {
                     }],
                     holdouts: vec![],
                     reference_code: "",
+
+                synthetic_args: Vec::new(),
+
+                synthetic_values: Vec::new(),
+
+                recursive_allowed: false,
+
+                tree_input: false,
+
+                explicit_stack: false,
+
                 },
                 candidates,
                 3,

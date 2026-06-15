@@ -18,3 +18,4 @@ pub mod strategy;
 pub mod string_synth;
 pub mod synthesis;
 pub mod tensor_codegen;
+pub mod time_codegen;

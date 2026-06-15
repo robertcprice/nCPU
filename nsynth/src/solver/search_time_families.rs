@@ -9,7 +9,6 @@
 /// 4. search_triangular_time - Recognizes triangular/cumsum pattern (t*(t+1)/2)
 
 use super::search_codegen::*;
-use super::search_runtime::*;
 use super::*;
 use crate::time_codegen::*;
 

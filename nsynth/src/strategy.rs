@@ -507,6 +507,17 @@ mod tests {
             ],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         let strats = default_strategies();
         let result = run_strategies(&strats, &problem).expect("should solve add_two");
@@ -532,6 +543,17 @@ mod tests {
             }],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         assert!(!GradientOnly.applicable(&problem));
         assert!(!ScalarExprOnly.applicable(&problem));
@@ -557,6 +579,17 @@ mod tests {
             }],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         assert!(CachedTeachers.applicable(&scalar));
         assert_eq!(CachedTeachers.name(), "cached_teachers");
@@ -585,6 +618,17 @@ mod tests {
             }],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         assert!(PureEmergent.applicable(&scalar));
         assert_eq!(PureEmergent.name(), "pure_emergent");
@@ -600,6 +644,17 @@ mod tests {
             }],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         assert!(!PureEmergent.applicable(&array));
 
@@ -653,6 +708,17 @@ mod tests {
             }],
             holdouts: vec![],
             reference_code: "",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         };
         assert!(!GradientOnly.applicable(&problem));
         assert!(!ScalarTemplates.applicable(&problem));

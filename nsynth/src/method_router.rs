@@ -394,6 +394,17 @@ mod tests {
             }],
             holdouts: vec![],
             reference_code: "fn test() -> i64 { return 0; }",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         }
     }
 

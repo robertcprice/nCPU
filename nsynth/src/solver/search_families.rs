@@ -551,6 +551,10 @@ pub(super) fn search_stateful_reducer_event(
     if param_types
         != [ParamType::I64, ParamType::I64, ParamType::ArrayI64]
     {
+        eprintln!(
+            "[search_stateful_reducer_temporal] param_types={:?} for sig={}",
+            param_types, problem.signature
+        );
         return None;
     }
     let state_arg = "state";

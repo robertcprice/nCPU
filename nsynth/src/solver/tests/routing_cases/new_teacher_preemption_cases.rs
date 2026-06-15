@@ -13,7 +13,7 @@ use super::super::search::enumerate_search_candidate_keys;
 
 use crate::benchmark::{Example, Problem, Value as BmValue};
 use crate::runtime::verify_problem_code_strict;
-use crate::solver::{solve_problem, solve_problem_search_only};
+use crate::solver::solve_problem_search_only;
 
 fn candidate_methods() -> Vec<&'static str> {
     let mut keys = enumerate_search_candidate_keys();
@@ -213,6 +213,17 @@ fn search_stateful_reducer_solves_state_plus_array_sum() {
         ],
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let result = solve_problem_search_only(&problem);
     assert!(result.success, "stateful reducer failed: {:?}", result.error);
@@ -344,6 +355,17 @@ fn search_stateful_reducer_dual_solves_delta_accumulator() {
         ],
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -400,6 +422,17 @@ fn search_stateful_replace_solves_flip_on_positive() {
         ],
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -477,6 +510,17 @@ fn search_stateful_reducer_event_solves_event_modulated_sum() {
         ],
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -537,6 +581,17 @@ fn search_stateful_reducer_event_solves_gated_contribution() {
         ],
         holdouts: vec![],
         reference_code: "",
+
+    synthetic_args: Vec::new(),
+
+    synthetic_values: Vec::new(),
+
+    recursive_allowed: false,
+
+    tree_input: false,
+
+    explicit_stack: false,
+
     };
     let result = solve_problem_search_only(&problem);
     assert!(

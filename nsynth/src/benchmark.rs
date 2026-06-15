@@ -94,6 +94,11 @@ pub struct Problem {
     pub examples: Vec<Example>,
     pub holdouts: Vec<Example>,
     pub reference_code: &'static str,
+    pub synthetic_args: Vec<String>,
+    pub synthetic_values: Vec<Vec<i64>>,
+    pub recursive_allowed: bool,
+    pub tree_input: bool,
+    pub explicit_stack: bool,
 }
 
 impl Problem {
@@ -129,14 +134,22 @@ impl Problem {
             "println_i64"
         };
         let mut lines = vec!["fn main() -> i64 {".to_string()];
-        for example in &self.examples {
-            let args = example
+        for (example_idx, example) in self.examples.iter().enumerate() {
+            let mut args = example
                 .inputs
                 .iter()
                 .map(|value| render_value(self, value))
-                .collect::<Result<Vec<_>, _>>()?
-                .join(", ");
-            lines.push(format!("    {print}({fn_name}({args}));"));
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // Append synthetic args if present
+            for arg_idx in 0..self.synthetic_args.len() {
+                if let Some(val) = self.synthetic_arg_value(arg_idx, example_idx) {
+                    args.push(val.to_string());
+                }
+            }
+
+            let args_str = args.join(", ");
+            lines.push(format!("    {print}({fn_name}({args_str}));"));
         }
         lines.push("    return 0;".to_string());
         lines.push("}".to_string());
@@ -149,6 +162,21 @@ impl Problem {
             generated_code.trim_end(),
             self.build_wrapper()?
         ))
+    }
+
+    /// Check if this problem has synthetic args (e.g., time parameter).
+    pub fn has_synthetic_args(&self) -> bool {
+        !self.synthetic_args.is_empty()
+    }
+
+    /// Get synthetic arg value for a given example index.
+    /// Returns None if no synthetic args are defined or index is out of bounds.
+    pub fn synthetic_arg_value(&self, arg_index: usize, example_index: usize) -> Option<i64> {
+        if arg_index < self.synthetic_values.len() {
+            self.synthetic_values[arg_index].get(example_index).copied()
+        } else {
+            None
+        }
     }
 }
 
@@ -286,6 +314,11 @@ fn problem(
         examples,
         holdouts,
         reference_code,
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
     }
 }
 

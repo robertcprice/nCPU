@@ -167,6 +167,11 @@ fn grouped_interactive_problem(
             examples,
             holdouts: vec![],
             reference_code: "",
+            synthetic_args: vec![],
+            synthetic_values: vec![],
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
         },
         traces: traces.to_vec(),
     })

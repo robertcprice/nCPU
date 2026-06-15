@@ -705,6 +705,17 @@ mod tests {
             examples,
             holdouts: vec![],
             reference_code: "fn test(a: i64) -> i64 { return a; }\n",
+
+        synthetic_args: Vec::new(),
+
+        synthetic_values: Vec::new(),
+
+        recursive_allowed: false,
+
+        tree_input: false,
+
+        explicit_stack: false,
+
         }
     }
 
