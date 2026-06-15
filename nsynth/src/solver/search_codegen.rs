@@ -1635,6 +1635,23 @@ pub(super) fn code_struct_conditional_fields(
 
 /// Emit Mog for temporal stateful reducer: state combined with reduction of array,
 /// parameterized by time variable t.
+pub(super) fn code_stateful_reducer_temporal(
+    fn_name: &str,
+    state_arg: &str,
+    time_arg: &str,
+    arr_arg: &str,
+    reducer_kind: &str,
+    op_state: &str,
+    time_kind: &str,
+    time_op: &str,
+) -> String {
+    // Reduction step
+    let reduction = match reducer_kind {
+        "sum" => format!(
+            "    s: i64 = 0;\n    for v in {arr_arg} {{\n        s = s + v;\n    }}\n    r := s;\n",
+            arr_arg = arr_arg
+        ),
+        "max" => format!(
             "    r: i64 = {arr_arg}[0];\n    for v in {arr_arg} {{\n        if v > r {{ r = v; }}\n    }}\n",
             arr_arg = arr_arg
         ),
