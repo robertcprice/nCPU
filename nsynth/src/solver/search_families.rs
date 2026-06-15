@@ -1787,10 +1787,17 @@ pub(super) fn search_stateful_reducer_temporal(
     fn_name: &str,
 ) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
+    eprintln!("[temporal] sig={} param_types={:?}", problem.signature, param_types);
     if param_types
         != [ParamType::I64, ParamType::I64, ParamType::ArrayI64]
     {
         return None;
+    }
+    eprintln!("[temporal] ENTERED");
+
+    eprintln!("[temporal] examples.len()={}", problem.examples.len());
+    for ex in &problem.examples {
+        eprintln!("[temporal]   ex: inputs.len()={} expected={:?}", ex.inputs.len(), ex.expected);
     }
 
     let time_kinds: &[&str] = &[
@@ -1808,6 +1815,7 @@ pub(super) fn search_stateful_reducer_temporal(
     let no_reducer_combos: &[&str] = &["+", "-"];
 
     for &(reducer, op_state) in reducer_combos {
+        eprintln!("[temporal] with-reducer loop: reducer={} op_state={}", reducer, op_state);
         let reducer_fn = match reducer_fn(reducer) {
             Some(f) => f,
             None => continue,
@@ -1875,9 +1883,12 @@ pub(super) fn search_stateful_reducer_temporal(
             }
         }
     }
+    eprintln!("[temporal] about to enter no-reducer loop");
 
     for &op_state in no_reducer_combos {
+        eprintln!("[temporal] no-reducer loop entered with op_state={}", op_state);
         for &time_kind in time_kinds {
+            eprintln!("[temporal] trying no-reducer op={} time_kind={}", op_state, time_kind);
             let passes = problem.examples.iter().all(|ex| {
                 if ex.inputs.len() != 3 {
                     return false;
@@ -1931,4 +1942,75 @@ pub(super) fn search_stateful_reducer_temporal(
     }
 
     None
+}
+
+/// Stage 5: Factorial pattern recognition (explicit-stack iteration).
+pub(super) fn search_recursive_factorial(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    for ex in &problem.examples {
+        let n = match ex.inputs.first() {
+            Some(Value::Int(v)) => *v,
+            _ => return None,
+        };
+        let expected = ex.expected_int();
+
+        let factorial: i64 = (1..=n).product();
+        if factorial != expected {
+            return None;
+        }
+    }
+
+    let code = code_explicit_stack_factorial(fn_name, "n");
+    verified_result(problem, code, "search_recursive_factorial")
+}
+
+/// Stage 5: Fibonacci pattern recognition (explicit-stack iteration).
+pub(super) fn search_recursive_fibonacci(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    // Fib sequence: 0, 1, 1, 2, 3, 5, 8, 13, ...
+    let mut prev = 0i64;
+    let mut curr = 1i64;
+
+    for ex in &problem.examples {
+        let n = match ex.inputs.first() {
+            Some(Value::Int(v)) => *v,
+            _ => return None,
+        };
+        let expected = ex.expected_int();
+
+        let fib = if n == 0 {
+            0
+        } else if n == 1 {
+            1
+        } else {
+            let (mut a, mut b) = (0i64, 1i64);
+            for _ in 2..=n {
+                let tmp = a + b;
+                a = b;
+                b = tmp;
+            }
+            b
+        };
+
+        if fib != expected {
+            return None;
+        }
+    }
+
+    let code = code_explicit_stack_fibonacci(fn_name, "n");
+    verified_result(problem, code, "search_recursive_fibonacci")
 }

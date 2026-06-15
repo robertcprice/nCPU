@@ -82,6 +82,15 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_tree_leaf_count",
         func: search_tree_leaf_count,
     },
+    // Recursion/iteration teachers (Stage 5)
+    SearchCandidate {
+        key: "search_recursive_factorial",
+        func: search_recursive_factorial,
+    },
+    SearchCandidate {
+        key: "search_recursive_fibonacci",
+        func: search_recursive_fibonacci,
+    },
     // General membership/DNF array classifiers. Each is guarded to require >= 12
     // examples (every structural benchmark problem has <= 10), so they own the
     // large curriculum language-classification tasks without shadowing the exact

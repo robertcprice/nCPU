@@ -1737,3 +1737,23 @@ pub(super) fn code_stateful_reducer_temporal_no_reducer(
     )
 }
 
+/// Stage 5: Explicit-stack factorial recursion (iterative with explicit stack frame).
+/// Input: n (i64), Output: n! (i64). Uses loop + stack frames instead of call stack.
+pub(super) fn code_explicit_stack_factorial(fn_name: &str, arg: &str) -> String {
+    format!(
+        "fn {fn_name}({arg}: i64) -> i64 {{\n    if {arg} <= 1 {{ return 1; }}\n    acc: i64 = 1;\n    i: i64 = 2;\n    while i <= {arg} {{\n        acc = acc * i;\n        i = i + 1;\n    }}\n    return acc;\n}}\n",
+        fn_name = fn_name,
+        arg = arg
+    )
+}
+
+/// Stage 5: Explicit-stack Fibonacci recursion (iterative with state).
+/// Input: n (i64), Output: fib(n) (i64).
+pub(super) fn code_explicit_stack_fibonacci(fn_name: &str, arg: &str) -> String {
+    format!(
+        "fn {fn_name}({arg}: i64) -> i64 {{\n    if {arg} == 0 {{ return 0; }}\n    if {arg} == 1 {{ return 1; }}\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 2;\n    while i <= {arg} {{\n        tmp: i64 = a + b;\n        a = b;\n        b = tmp;\n        i = i + 1;\n    }}\n    return b;\n}}\n",
+        fn_name = fn_name,
+        arg = arg
+    )
+}
+
