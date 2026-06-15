@@ -1632,3 +1632,86 @@ pub(super) fn code_struct_conditional_fields(
         }}\n"
     )
 }
+
+/// Emit Mog for temporal stateful reducer: state combined with reduction of array,
+/// parameterized by time variable t.
+            "    r: i64 = {arr_arg}[0];\n    for v in {arr_arg} {{\n        if v > r {{ r = v; }}\n    }}\n",
+            arr_arg = arr_arg
+        ),
+        "min" => format!(
+            "    r: i64 = {arr_arg}[0];\n    for v in {arr_arg} {{\n        if v < r {{ r = v; }}\n    }}\n",
+            arr_arg = arr_arg
+        ),
+        "count_positive" => format!(
+            "    s: i64 = 0;\n    for v in {arr_arg} {{\n        if v > 0 {{ s = s + 1; }}\n    }}\n    r := s;\n",
+            arr_arg = arr_arg
+        ),
+        _ => format!("    r: i64 = 0; // reducer: {}\n", reducer_kind),
+    };
+
+    // Time adjustment
+    let time_adjust = match time_kind {
+        "exponential_decay" => match time_op {
+            "multiply" => format!("    r = r * {time_arg} / ({time_arg} + 1);\n", time_arg = time_arg),
+            "divide" => format!("    r = r / ({time_arg} + 1);\n", time_arg = time_arg),
+            _ => format!("    r = r * {time_arg};\n", time_arg = time_arg),
+        },
+        "polynomial" => match time_op {
+            "power2" => format!("    r = r * {time_arg} * {time_arg};\n", time_arg = time_arg),
+            "power3" => format!("    r = r * {time_arg} * {time_arg} * {time_arg};\n", time_arg = time_arg),
+            _ => format!("    r = r * {time_arg};\n", time_arg = time_arg),
+        },
+        _ => format!("    // time_kind: {}\n", time_kind),
+    };
+
+    // Combine with state
+    let combine = match op_state {
+        "+" => format!("    return {state} + r;\n", state = state_arg),
+        "-" => format!("    return {state} - r;\n", state = state_arg),
+        "*" => format!("    return {state} * r;\n", state = state_arg),
+        _ => format!("    return r;\n"),
+    };
+
+    format!(
+        "fn {fn_name}({state_arg}: i64, {time_arg}: i64, {arr_arg}: [i64]) -> i64 {{\n{reduction}{time_adjust}{combine}}}\n",
+        fn_name = fn_name,
+        state_arg = state_arg,
+        time_arg = time_arg,
+        arr_arg = arr_arg,
+    )
+}
+
+/// Emit Mog for temporal stateful update without reducer: pure state + time transformation.
+pub(super) fn code_stateful_reducer_temporal_no_reducer(
+    fn_name: &str,
+    state_arg: &str,
+    time_arg: &str,
+    op_state: &str,
+    time_kind: &str,
+) -> String {
+    // Time transformation
+    let time_expr = match time_kind {
+        "exponential_decay" => format!("{time_arg} / ({time_arg} + 1)", time_arg = time_arg),
+        "polynomial_linear" => format!("{time_arg}", time_arg = time_arg),
+        "polynomial_square" => format!("{time_arg} * {time_arg}", time_arg = time_arg),
+        "polynomial_cube" => format!("{time_arg} * {time_arg} * {time_arg}", time_arg = time_arg),
+        _ => format!("{time_arg}", time_arg = time_arg),
+    };
+
+    // Combine state with time
+    let result = match op_state {
+        "+" => format!("    return {state} + {time_expr};\n", state = state_arg, time_expr = time_expr),
+        "-" => format!("    return {state} - {time_expr};\n", state = state_arg, time_expr = time_expr),
+        "*" => format!("    return {state} * {time_expr};\n", state = state_arg, time_expr = time_expr),
+        "divide" => format!("    return {state} / ({time_expr} + 1);\n", state = state_arg, time_expr = time_expr),
+        _ => format!("    return {state};\n", state = state_arg),
+    };
+
+    format!(
+        "fn {fn_name}({state_arg}: i64, {time_arg}: i64) -> i64 {{\n{result}}}\n",
+        fn_name = fn_name,
+        state_arg = state_arg,
+        time_arg = time_arg,
+    )
+}
+
