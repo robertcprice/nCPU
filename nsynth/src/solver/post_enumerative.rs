@@ -178,7 +178,8 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_array_feature_dnf"
         | "search_string_subsequence_class"
         | "search_strictly_increasing"
-        | "search_has_strictly_increasing_run" => true,
+        | "search_has_strictly_increasing_run"
+        | "search_first_index_of" => true,
         "search_unary_range_loop" => {
             result.code.contains("acc = acc + i;") || result.code.contains("acc = acc * i;")
         }

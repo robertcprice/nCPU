@@ -72,7 +72,8 @@ required token in a disjunct returns `1`. Test:
 | "search_array_feature_dnf"
 | "search_string_subsequence_class"
 | "search_strictly_increasing"
-| "search_has_strictly_increasing_run" => true,
+| "search_has_strictly_increasing_run"
+| "search_first_index_of" => true,
 ```
 
 Each new teacher appears in the preemption whitelist so the
@@ -87,6 +88,42 @@ for each new teacher:
 
 A phantom entry on either side would silently waste cycles; the test
 fails the build before any benchmark regression can sneak in.
+
+## Related teachers (live in `search_catalog_advanced.rs`)
+
+These unary-array teachers were added alongside the `ArrayFeature`
+taxonomy. They round out the strictly-monotonicity and positional-query
+surfaces and sit naturally between the existing array-reduction
+teachers and the DNF teacher.
+
+### `search_strictly_increasing`
+
+Returns `1` iff every adjacent pair satisfies `arr[i] < arr[i-1]` (no
+equal neighbours allowed). Codegen uses a single-pass `while` loop with
+an early `return 0` on `arr[i] <= arr[i-1]`. Test:
+`search_strictly_increasing_learns_strict_inequality`.
+
+### `search_has_strictly_increasing_run`
+
+Returns `1` iff the array contains a strictly increasing run of length
+≥ k. The teacher tries k ∈ {2, 3, 4, 5} in order and emits the first k
+whose verification pass succeeds. Codegen is a running-counter loop
+with the threshold inlined. Test:
+`search_has_strictly_increasing_run_learns_run_length`.
+
+### `search_first_index_of`
+
+Returns the first index `i` where `arr[i] == target`, or `-1` if absent.
+The teacher tries a fixed set of candidate targets
+({0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5}) and emits the
+first that matches every example. The expected output is a free `i64`
+(not a 0/1 classifier), so the test uses an `int_arr_problem` builder
+and `assert_search_generalizes_problem` to verify on held-out inputs.
+Test: `search_first_index_of_learns_target_value`.
+
+All three are added to `SEARCH_CANDIDATES` and the preemption whitelist;
+the extended regression test (`new_teacher_preemption_cases.rs`) now
+covers all six new teachers.
 
 ## Related teachers (live in `search_catalog_advanced.rs`)
 

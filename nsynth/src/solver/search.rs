@@ -96,6 +96,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_has_strictly_increasing_run,
     },
     SearchCandidate {
+        key: "search_first_index_of",
+        func: search_first_index_of,
+    },
+    SearchCandidate {
         key: "search_longest_increasing_run",
         func: search_longest_increasing_run,
     },

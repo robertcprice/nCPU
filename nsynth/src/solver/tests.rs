@@ -664,6 +664,85 @@ fn search_has_strictly_increasing_run_learns_run_length() {
     assert!(result.code.contains("run >= 3"), "expected run >= 3 threshold; got: {}", result.code);
 }
 
+/// `first_index_of(arr, target) -> first i where arr[i] == target, else -1`.
+/// Returns an Int (not a 0/1 classifier), so this test uses an `int_class_problem`
+/// builder to keep the expected output as an arbitrary i64.
+#[test]
+fn search_first_index_of_learns_target_value() {
+    fn int_arr_problem(
+        name: &'static str,
+        signature: &'static str,
+        rows: &[(&[i64], i64)],
+    ) -> Problem {
+        Problem {
+            name: name.to_string(),
+            category: "array_index",
+            description: "",
+            signature,
+            examples: rows
+                .iter()
+                .map(|(arr, label)| Example {
+                    inputs: vec![Value::Array(arr.to_vec())],
+                    expected: Value::Int(*label),
+                })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    let problem = int_arr_problem(
+        "first_index_of_5",
+        "fn first_index_of_5(arr: [i64]) -> i64",
+        &[
+            // target = 5
+            (&[1, 2, 5, 7], 2),
+            (&[5, 5, 5], 0),    // first occurrence at index 0
+            (&[0, 0, 0, 5], 3), // first 5 at index 3
+            (&[10, 20, 30], 4 - 1), // no 5; -1 = length-1
+            // wait that's 4-1=3 not -1. Let me use the actual -1.
+        ],
+    );
+    // Fix: the last entry above is wrong. Build the problem correctly.
+    let problem = int_arr_problem(
+        "first_index_of_5",
+        "fn first_index_of_5(arr: [i64]) -> i64",
+        &[
+            (&[1, 2, 5, 7], 2),
+            (&[5, 5, 5], 0),
+            (&[0, 0, 0, 5], 3),
+            (&[10, 20, 30], -1),  // -1: target not present
+            (&[5], 0),            // target at index 0
+            (&[1, 2, 3, 4, 6, 7, 5, 8, 9, 5], 6), // first 5 at index 6
+            (&[1, 2, 3, 4], -1),
+            (&[5, 1, 2, 3, 4, 5], 0),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "first_index_of not learned: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_first_index_of");
+    assert!(
+        result.code.contains("arr[i] == 5"),
+        "expected equality check against target 5; got: {}",
+        result.code
+    );
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![2, 5, 8])], 1),
+            (vec![Value::Array(vec![5, 5])], 0),
+            (vec![Value::Array(vec![1, 2, 3])], -1),
+            (vec![Value::Array(vec![5])], 0),
+        ],
+    );
+}
+
 /// Every string-output benchmark problem is solved by the main pipeline and the
 /// emitted program verifies on its held-out examples.
 #[test]

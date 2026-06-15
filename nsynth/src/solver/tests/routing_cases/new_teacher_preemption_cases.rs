@@ -64,6 +64,7 @@ fn every_preempting_method_has_a_registered_search_candidate() {
         "search_string_subsequence_class",
         "search_strictly_increasing",
         "search_has_strictly_increasing_run",
+        "search_first_index_of",
     ] {
         assert!(
             candidates.contains(m),
@@ -100,6 +101,21 @@ fn search_has_strictly_increasing_run_is_registered_and_preempts_gradient() {
     assert!(
         search_result_preempts_native_gradient(&fake),
         "search_has_strictly_increasing_run not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_first_index_of_is_registered_and_preempts_gradient() {
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_first_index_of"),
+        "search_first_index_of missing from SEARCH_CANDIDATES; \
+         a teacher must be registered to run.",
+    );
+    let fake = make_solve_result("search_first_index_of", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_first_index_of not in preemption whitelist.",
     );
 }
 

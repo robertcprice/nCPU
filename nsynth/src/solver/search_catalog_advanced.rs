@@ -244,6 +244,51 @@ pub(super) fn search_has_strictly_increasing_run(
     None
 }
 
+fn code_first_index_of(fn_name: &str, target: i64) -> String {
+    let target_str = target.to_string();
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    i: i64 = 0;
+    while i < arr.len {
+        if arr[i] == __T__ { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+"#,
+        fn_name,
+    )
+    .replace("__T__", &target_str)
+}
+
+pub(super) fn search_first_index_of(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    const CANDIDATE_TARGETS: &[i64] = &[
+        0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5,
+    ];
+
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let arrays = unary_array_examples(problem)?;
+    for &target in CANDIDATE_TARGETS {
+        let candidate = |arr: &[i64]| first_index_of_rust(arr, target);
+        if validate_unary_array(problem, candidate) {
+            let _ = arrays;
+            return verified_result(
+                problem,
+                code_first_index_of(fn_name, target),
+                "search_first_index_of",
+            );
+        }
+    }
+    None
+}
+
 fn code_longest_increasing_run(fn_name: &str) -> String {
     templ(
         r#"fn __FN__(arr: [i64]) -> i64 {
