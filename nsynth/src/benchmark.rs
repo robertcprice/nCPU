@@ -268,6 +268,39 @@ fn quad(a: i64, b: i64, c: i64, d: i64) -> Value {
     Value::Quad(a, b, c, d)
 }
 
+fn tree(nodes: Vec<TreeNode>) -> Value {
+    Value::Tree(nodes)
+}
+
+fn tree_node(value: i64, left: i32, right: i32) -> TreeNode {
+    TreeNode { value, left, right }
+}
+
+fn tree_from_edges(edges: Vec<(i64, i32, i32)>) -> Value {
+    let nodes = edges
+        .into_iter()
+        .map(|(value, left, right)| TreeNode { value, left, right })
+        .collect();
+    Value::Tree(nodes)
+}
+
+fn get_tree_root(value: &Value) -> Option<&[TreeNode]> {
+    match value {
+        Value::Tree(nodes) => {
+            if nodes.is_empty() {
+                None
+            } else {
+                Some(nodes)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn tree_size(tree: &[TreeNode]) -> usize {
+    tree.len()
+}
+
 fn render_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
