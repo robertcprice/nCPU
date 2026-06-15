@@ -1776,3 +1776,159 @@ pub(super) fn search_matmul_template(problem: &Problem, fn_name: &str) -> Option
         None
     }
 }
+
+/// Stage 4 completion: 3-arg `(state, t, arr) -> state` time-lane
+/// teacher. Enumerates `state = state OP1 r(arr) OP2 f(t)` patterns
+/// where `f(t)` is one of `t`, `-t`, or `(t % N == 0 ? 1 : 0)`
+/// (periodic tick). Captures aging, decay, rate × time, and
+/// periodic-tick accumulators that the event teacher cannot express.
+pub(super) fn search_stateful_reducer_temporal(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types
+        != [ParamType::I64, ParamType::I64, ParamType::ArrayI64]
+    {
+        return None;
+    }
+
+    let time_kinds: &[&str] = &[
+        "identity", "neg", "tick_n2", "tick_n3", "tick_n4",
+        "tick_n5", "tick_n6", "odd_n2", "odd_n3",
+    ];
+    let reducer_combos: &[(&str, &str)] = &[
+        ("sum", "+"),
+        ("sum", "-"),
+        ("max", "+"),
+        ("min", "-"),
+        ("count_positive", "+"),
+        ("count_negative", "-"),
+    ];
+    let no_reducer_combos: &[&str] = &["+", "-"];
+
+    for &(reducer, op_state) in reducer_combos {
+        let reducer_fn = match reducer_fn(reducer) {
+            Some(f) => f,
+            None => continue,
+        };
+        for &time_kind in time_kinds {
+            for &time_op in &["+", "*"] {
+                let passes = problem.examples.iter().all(|ex| {
+                    if ex.inputs.len() != 3 {
+                        return false;
+                    }
+                    let state = match &ex.inputs[0] {
+                        Value::Int(v) => *v,
+                        _ => return false,
+                    };
+                    let t = match &ex.inputs[1] {
+                        Value::Int(v) => *v,
+                        _ => return false,
+                    };
+                    let arr = match &ex.inputs[2] {
+                        Value::Array(v) => v.clone(),
+                        _ => return false,
+                    };
+                    let r = reducer_fn(&arr);
+                    let r_part = match op_state {
+                        "+" => state + r,
+                        "-" => state - r,
+                        _ => return false,
+                    };
+                    let time_expr: i64 = match time_kind {
+                        "identity" => t,
+                        "neg" => -t,
+                        "tick_n2" => if t % 2 == 0 { 1 } else { 0 },
+                        "tick_n3" => if t % 3 == 0 { 1 } else { 0 },
+                        "tick_n4" => if t % 4 == 0 { 1 } else { 0 },
+                        "tick_n5" => if t % 5 == 0 { 1 } else { 0 },
+                        "tick_n6" => if t % 6 == 0 { 1 } else { 0 },
+                        "odd_n2" => if t % 2 == 1 { 1 } else { 0 },
+                        "odd_n3" => if t % 3 == 1 { 1 } else { 0 },
+                        _ => return false,
+                    };
+                    let got = match time_op {
+                        "+" => r_part + time_expr,
+                        "*" => r_part * time_expr,
+                        _ => return false,
+                    };
+                    got == ex.expected_int()
+                });
+                if passes {
+                    let code = code_stateful_reducer_temporal(
+                        fn_name,
+                        "state",
+                        "t",
+                        "arr",
+                        reducer,
+                        op_state,
+                        time_kind,
+                        time_op,
+                    );
+                    return verified_result(
+                        problem,
+                        code,
+                        "search_stateful_reducer_temporal",
+                    );
+                }
+            }
+        }
+    }
+
+    for &op_state in no_reducer_combos {
+        for &time_kind in time_kinds {
+            let passes = problem.examples.iter().all(|ex| {
+                if ex.inputs.len() != 3 {
+                    return false;
+                }
+                let state = match &ex.inputs[0] {
+                    Value::Int(v) => *v,
+                    _ => return false,
+                };
+                let t = match &ex.inputs[1] {
+                    Value::Int(v) => *v,
+                    _ => return false,
+                };
+                let _arr = match &ex.inputs[2] {
+                    Value::Array(v) => v.clone(),
+                    _ => return false,
+                };
+                let time_expr: i64 = match time_kind {
+                    "identity" => t,
+                    "neg" => -t,
+                    "tick_n2" => if t % 2 == 0 { 1 } else { 0 },
+                    "tick_n3" => if t % 3 == 0 { 1 } else { 0 },
+                    "tick_n4" => if t % 4 == 0 { 1 } else { 0 },
+                    "tick_n5" => if t % 5 == 0 { 1 } else { 0 },
+                    "tick_n6" => if t % 6 == 0 { 1 } else { 0 },
+                    "odd_n2" => if t % 2 == 1 { 1 } else { 0 },
+                    "odd_n3" => if t % 3 == 1 { 1 } else { 0 },
+                    _ => return false,
+                };
+                let got = match op_state {
+                    "+" => state + time_expr,
+                    "-" => state - time_expr,
+                    _ => return false,
+                };
+                got == ex.expected_int()
+            });
+            if passes {
+                let code = code_stateful_reducer_temporal_no_reducer(
+                    fn_name,
+                    "state",
+                    "t",
+                    op_state,
+                    time_kind,
+                );
+                return verified_result(
+                    problem,
+                    code,
+                    "search_stateful_reducer_temporal",
+                );
+            }
+        }
+    }
+
+    None
+}

@@ -37,6 +37,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_stateful_reducer_event,
     },
     SearchCandidate {
+        key: "search_stateful_reducer_temporal",
+        func: search_stateful_reducer_temporal,
+    },
+    SearchCandidate {
         key: "search_stateful_replace",
         func: search_stateful_replace,
     },
