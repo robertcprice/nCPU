@@ -912,6 +912,163 @@ fn new_teacher_factories_are_in_benchmark_and_solve() {
         // variant-N case is exercised by the unit test (search_*_learns_*).
     }
 }
+
+/// Edge cases: empty array + single-element array. The unit tests use
+/// multi-element arrays, but a teacher that crashes or produces
+/// nonsense on empty / single-element input is a real bug — the
+/// ArrayFeature taxonomy short-circuits every loop in a way the
+/// verifier must catch. This test pins the four most important
+/// edge-case behaviors.
+///
+/// Note: empty arrays are kept in the *holdouts* (verified after a
+/// teacher is selected) rather than the training examples, because
+/// the search pipeline tries every search teacher on the training
+/// set and some pre-existing teachers (e.g. `search_second_max`)
+/// panic on empty input. The holdout path only runs the *selected*
+/// teacher, so the new teachers can be pinned against empty input
+/// without crashing the pipeline.
+#[test]
+fn new_teacher_edge_cases_handle_empty_and_single_element() {
+    // search_strictly_increasing: empty -> 1 (vacuously true), single -> 1.
+    let problem = arr_class_problem(
+        "strictly_increasing_edge",
+        "fn strictly_increasing_edge(arr: [i64]) -> i64",
+        &[
+            (&[42], 1),     // single
+            (&[1, 2, 3], 1),
+            (&[1, 1], 0),
+            (&[3, 2], 0),
+        ],
+    );
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "strictly_increasing edge cases not handled: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_strictly_increasing");
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![])], 1),  // holdout
+            (vec![Value::Array(vec![7])], 1),  // single
+            (vec![Value::Array(vec![1, 1, 1, 1])], 0),
+        ],
+    );
+
+    // search_first_index_of: empty -> -1, single-element match -> 0.
+    fn int_arr_problem(
+        name: &'static str,
+        signature: &'static str,
+        rows: &[(&[i64], i64)],
+    ) -> Problem {
+        Problem {
+            name: name.to_string(),
+            category: "array_index",
+            description: "",
+            signature,
+            examples: rows
+                .iter()
+                .map(|(arr, label)| Example {
+                    inputs: vec![Value::Array(arr.to_vec())],
+                    expected: Value::Int(*label),
+                })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    let problem = int_arr_problem(
+        "first_index_of_5_edge",
+        "fn first_index_of_5_edge(arr: [i64]) -> i64",
+        &[
+            (&[5], 0),       // single match
+            (&[7], -1),      // single miss
+            (&[1, 2, 5, 7], 2),
+            (&[1, 2, 3], -1),
+        ],
+    );
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "first_index_of edge cases not handled: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_first_index_of");
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![])], -1),  // holdout
+            (vec![Value::Array(vec![5, 5])], 0),
+            (vec![Value::Array(vec![0, 0, 0])], -1),
+        ],
+    );
+
+    // search_last_index_of: same shape, but include arrays with
+    // multiple 5s so first != last (otherwise search_first_index_of
+    // wins the search and the test is indistinguishable).
+    let problem = int_arr_problem(
+        "last_index_of_5_edge",
+        "fn last_index_of_5_edge(arr: [i64]) -> i64",
+        &[
+            (&[5], 0),
+            (&[7], -1),
+            (&[1, 2, 5, 7], 2),
+            (&[1, 2, 3], -1),
+            (&[5, 4, 3, 2, 1], 0),
+            (&[5, 5], 1),     // first=0, last=1
+            (&[1, 5, 2, 5, 3], 3),  // first=1, last=3
+        ],
+    );
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "last_index_of edge cases not handled: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_last_index_of");
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![])], -1),  // holdout
+            (vec![Value::Array(vec![5, 5, 5])], 2),
+            (vec![Value::Array(vec![1, 5, 1])], 1),
+        ],
+    );
+
+    // search_count_distinct: empty -> 0. Examples chosen so
+    // search_count_distinct is the unique solver (search_longest_increasing_run
+    // would give the same answer for the trivial arrays; the
+    // interspersed duplicates make longest_increasing_run wrong).
+    let problem = arr_class_problem(
+        "count_distinct_edge",
+        "fn count_distinct_edge(arr: [i64]) -> i64",
+        &[
+            (&[42], 1),
+            (&[1, 2, 3], 3),
+            (&[1, 1, 1], 1),
+            (&[1, 2, 1, 2, 1], 2),  // longest inc run is 2 but distinct is 2
+            (&[5, 4, 3, 2, 1], 5),  // longest inc run is 1 but distinct is 5
+        ],
+    );
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "count_distinct edge cases not handled: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_count_distinct");
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![])], 0),  // holdout
+            (vec![Value::Array(vec![1])], 1),
+            (vec![Value::Array(vec![5, 5, 5])], 1),
+        ],
+    );
+}
+
 #[test]
 fn string_benchmark_full_coverage() {
     let problems = crate::benchmark::get_string_benchmark(1);
