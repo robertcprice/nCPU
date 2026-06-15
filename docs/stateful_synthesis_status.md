@@ -28,6 +28,19 @@
 * The existing `search_array_compose` and `search_array_feature_dnf` teachers cover the array half. Add a small wrapper teacher that for a 2-arg `(i64, [i64]) -> i64` problem enumerates `f(state, arr) = state op g(arr)` for `g` from a small set (`sum`, `max`, `min`, `count_positive`, `count_zeros`, …) and `op` from `{+, -, *, /, max, min}`.
 * Effort: 1 day. Solves a class of "state + per-frame array contribution" problems in one shot.
 * Coverage: ~10–20 new benchmark problems.
+* **Status: SHIPPED** as `search_stateful_reducer` (the original 2-arg wrapper) with 7 reducers × 5 ops = 35 enumerations per problem.
+
+### Stage 1.5 — Event-modulated 3-arg reducer (small) — NEW
+
+* 3-arg `(state, event, arr) -> state` wrapper. Enumerates
+  `f(state, event, arr) = state OP r(arr)` plus the event as a
+  multiplier/addend or as a gate (`if event > 0 then ... else
+  state`).
+* Effort: 1 day. Solves the per-tick game-loop / physics pattern
+  where a single scalar event decides how the array contribution
+  applies to the state.
+* **Status: SHIPPED** as `search_stateful_reducer_event` with 5
+  reducers × 2 ops × 4 gate kinds = 40+ enumerations per problem.
 
 ### Stage 2 — `tensor<N, dtype>` type in the AST/executor (medium)
 
@@ -73,3 +86,41 @@
 3. While Stage 1/2 are in flight, add Stage 3/4 as parallel tracks
    — they share the `state` register shape but the search spaces
    are independent.
+
+## Stage 1.5 — landed in this session
+
+In addition to the Stage 1 `search_stateful_reducer` teacher
+(`state = state OP g(arr)`), this session added three more search
+teachers and 16 new benchmarks, growing the stateful surface without
+touching the AST:
+
+| Teacher | Signature | Enumerates |
+|---|---|---|
+| `search_stateful_reducer_dual` | `(state, a, b) -> state` | `state = state OP1 r1(a) OP2 r2(b)` for `r1, r2 ∈ {sum, max, min, count_positive, count_zero, count_negative}`, `OP1, OP2 ∈ {+, -}` |
+| `search_stateful_replace` | `(state, arr) -> state` | `if pred(arr) then state = g(arr) else state` for `pred ∈ {any_pos, any_neg, all_pos, all_neg, max_gt_zero, min_lt_zero}`, `g ∈ {max, min, zero, one, neg_one, neg_state, state_plus_one, state_minus_one}` |
+| `search_stateful_reducer_event` | `(state, event, arr) -> state` | `state = state OP r(arr)` where `OP ∈ {+, -}` × `r ∈ {sum, max, min, count_positive, count_negative}`, optionally gated on `event > 0`, `event < 0`, `event <= 0`, `event == 0`, or with the event as a multiplier/addend |
+
+New benchmarks exercising the three new teachers (and the original
+reducer with new reducer × op combinations):
+
+* `delta_accumulator` — `state + sum(a) - sum(b)` (dual)
+* `signed_count_delta` — `state + count_positive(a) - count_negative(b)` (dual)
+* `cross_range_state` — `state + max(a) - min(b)` (dual)
+* `boost_positive` — `state + count_positive(a) + count_positive(b)` (dual)
+* `running_max` — `max(state, max(arr))` (reducer with op=max)
+* `running_min` — `min(state, min(arr))` (reducer with op=min)
+* `flip_on_positive` — `-state if any(arr > 0) else state` (replace)
+* `increment_on_positive` — `state + 1 if any(arr > 0) else state` (replace)
+* `reset_on_negative` — `0 if any(arr < 0) else state` (replace)
+* `loss_accumulator` — `state - sum(arr)` (reducer with op=-)
+* `inventory_total` — `state + count_positive(arr)` (reducer with count reducer)
+* `physics_step_1d` — `pos + vel * sum(arr)` (event: `mul_event` + `sum`)
+* `brake_accumulator` — `if brake <= 0 then state + sum(arr) else state` (event: `event_le_0` gate)
+* `boost_modulated` — `state + boost * count_positive(arr)` (event: `mul_event` + `count_positive`)
+* `turn_counter_gated` — `if turn == 0 then state else state + sum(arr)` (event: `event_eq_0` gate)
+* `damage_with_event` — `state - event - sum(arr)` (event: `add_event` + `op = -`)
+
+All 16 solve end-to-end through `mog_synth --problem-json` in 0.0s via
+their respective teachers. The new teachers are registered in
+`SEARCH_CANDIDATES` and the preemption whitelist, with regression
+tests in `new_teacher_preemption_cases.rs`. Routing tests green.

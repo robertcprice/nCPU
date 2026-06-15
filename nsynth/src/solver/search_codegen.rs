@@ -857,6 +857,18 @@ pub(super) fn code_stateful_reducer_event(
             state = state_arg,
             expr = combined_expr,
         ),
+        "event_le_0" => format!(
+            "    if {event} <= 0 {{\n        return {expr};\n    }}\n    return {state};\n",
+            event = event_arg,
+            expr = combined_expr,
+            state = state_arg,
+        ),
+        "event_lt_0" => format!(
+            "    if {event} < 0 {{\n        return {expr};\n    }}\n    return {state};\n",
+            event = event_arg,
+            expr = combined_expr,
+            state = state_arg,
+        ),
         _ => format!("    return {expr};\n", expr = combined_expr),
     };
     format!(

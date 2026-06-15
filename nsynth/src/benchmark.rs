@@ -9,6 +9,8 @@ pub enum Value {
     Bool(bool),
     Array(Vec<i64>),
     Pair(i64, i64),
+    /// 4-field struct for struct-of-state benchmarks (e.g., {a, b, c, d}).
+    Quad(i64, i64, i64, i64),
 }
 
 impl std::fmt::Display for Value {
@@ -27,6 +29,7 @@ impl std::fmt::Display for Value {
                     .join(", ")
             ),
             Value::Pair(a, b) => write!(f, "({a}, {b})"),
+            Value::Quad(a, b, c, d) => write!(f, "({a}, {b}, {c}, {d})"),
         }
     }
 }
@@ -45,6 +48,7 @@ impl Example {
         match &self.expected {
             Value::Int(i) => *i,
             Value::Pair(a, _) => *a,
+            Value::Quad(a, _, _, _) => *a,
             _ => 0,
         }
     }
@@ -155,6 +159,14 @@ fn example(inputs: Vec<Value>, expected: i64) -> Example {
     }
 }
 
+/// An example with a struct (Quad) expected output.
+fn example_quad(inputs: Vec<Value>, expected: Value) -> Example {
+    Example {
+        inputs,
+        expected,
+    }
+}
+
 /// An example with a string expected output (for string-returning problems).
 #[allow(dead_code)]
 fn example_str(inputs: Vec<Value>, expected: &str) -> Example {
@@ -179,6 +191,7 @@ fn render_expected(value: &Value) -> String {
                 .join(", ")
         ),
         Value::Pair(a, b) => format!("({a}, {b})"),
+        Value::Quad(a, b, c, d) => format!("({a}, {b}, {c}, {d})"),
     }
 }
 
@@ -196,6 +209,10 @@ fn array(v: &[i64]) -> Value {
 
 fn pair(a: i64, b: i64) -> Value {
     Value::Pair(a, b)
+}
+
+fn quad(a: i64, b: i64, c: i64, d: i64) -> Value {
+    Value::Quad(a, b, c, d)
 }
 
 fn render_string(value: &str) -> String {
@@ -224,6 +241,26 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
             } else {
                 Err(format!(
                     "cannot render pair literal for {} with signature {}",
+                    problem.name, problem.signature
+                ))
+            }
+        }
+        Value::Quad(a, b, c, d) => {
+            if problem.signature.contains("DualTally") {
+                Ok(format!("DualTally {{ pos_count: {a}, neg_count: {b}, zero_count: {c}, total: {d} }}"))
+            } else if problem.signature.contains("RateLimiter") {
+                Ok(format!("RateLimiter {{ total: {a}, exceeded: {b}, count: {c}, limit_reached: {d} }}"))
+            } else if problem.signature.contains("RunningCorrelation") {
+                Ok(format!("RunningCorrelation {{ sum_x: {a}, sum_y: {b}, sum_xy: {c}, count: {d} }}"))
+            } else if problem.signature.contains("MutualInfo") {
+                Ok(format!("MutualInfo {{ joint_00: {a}, joint_01: {b}, joint_10: {c}, joint_11: {d} }}"))
+            } else if problem.signature.contains("ThresholdClassifier") {
+                Ok(format!("ThresholdClassifier {{ below: {a}, between: {b}, above: {c}, total: {d} }}"))
+            } else if problem.signature.contains("PairedExtrema") {
+                Ok(format!("PairedExtrema {{ min: {a}, min_idx: {b}, max: {c}, max_idx: {d} }}"))
+            } else {
+                Err(format!(
+                    "cannot render quad literal for {} with signature {}",
                     problem.name, problem.signature
                 ))
             }
@@ -1697,6 +1734,42 @@ pub const FACTORIES: &[Factory] = &[
     make_turn_order_rotate,
     make_grid_bounds_check,
     make_simulate_gravity,
+    // Stage 2 starter: event-modulated stateful benchmarks (June 2026).
+    // These exercise the `search_stateful_reducer_event` teacher
+    // for the (state, event, arr) -> state signature — per-tick
+    // game-loop / physics patterns where the event scalar gates or
+    // modulates the array contribution to the state. See
+    // `docs/stateful_synthesis_status.md` Stage 2 section.
+    make_physics_step_1d,
+    make_brake_accumulator,
+    make_boost_modulated,
+    make_turn_counter_gated,
+    make_damage_with_event,
+    make_delta_accumulator,
+    make_signed_count_delta,
+    make_cross_range_state,
+    make_boost_positive,
+    make_running_max,
+    make_running_min,
+    make_flip_on_positive,
+    make_increment_on_positive,
+    make_reset_on_negative,
+    make_loss_accumulator,
+    make_inventory_total,
+    // Stage 2: tensor benchmarks (June 2026) — COMMENTED OUT pending tensor codegen impl
+    // make_matrix_diagonal_sum,
+    // make_dot_product_4d,
+    // make_matrix_multiply_2x2,
+    // make_broadcast_scale_sum,
+    // make_outer_product_norm_sq,
+    // make_convolution_1d_sum,
+    // Stage 3: struct-of-state benchmarks (June 2026) — COMMENTED OUT pending struct-of-state impl
+    // make_dual_tally,
+    // make_rate_limiter,
+    // make_running_correlation,
+    // make_mutual_info_tracker,
+    // make_dual_threshold_classifier,
+    // make_paired_extrema,
 ];
 
 fn make_kth_smallest(variant: usize) -> Problem {
@@ -3173,5 +3246,710 @@ fn make_simulate_gravity(variant: usize) -> Problem {
             example(vec![int(3), int(1), int(7)], 10),
         ],
         "fn simulate_gravity(v: i64, g: i64, t: i64) -> i64 {\n    r: i64 = v + g * t;\n    if r > 100 { return 100; }\n    if r < 0 { return 0; }\n    return r;\n}\n",
+    )
+}
+
+// ====================================================================
+// Stage 2 starter: event-modulated stateful benchmarks.
+//
+// Each has the (state, event, arr) -> state signature covered by
+// `search_stateful_reducer_event`. The benchmarks use realistic
+// game-loop / physics / inventory patterns where the event scalar
+// decides how the array contributes to the state. See
+// `docs/stateful_synthesis_status.md` Stage 2 section.
+// ====================================================================
+
+/// 1D physics step: `f(pos, vel, dt) = pos + vel * dt`.
+///
+/// Standard semi-implicit Euler for a single axis. The event
+/// (`dt`) is a positive time delta; the array `vel` is the per-frame
+/// velocity samples (treated as a 1D reduction by the teacher).
+/// Tests the `mul_event` combine with `sum` reducer.
+fn make_physics_step_1d(variant: usize) -> Problem {
+    problem(
+        "physics_step_1d",
+        variant,
+        "game",
+        "1D Euler step: pos += vel_sum * dt (treats vel array as scalar via sum).",
+        "fn physics_step_1d(pos: i64, vel: i64, arr: [i64]) -> i64",
+        vec![
+            // pos=0, vel=3, arr=[1,2,3] -> 0 + 3*6 = 18
+            example(vec![int(0), int(3), array(&[1, 2, 3])], 18),
+            // pos=10, vel=2, arr=[1,4] -> 10 + 2*5 = 20
+            example(vec![int(10), int(2), array(&[1, 4])], 20),
+            // pos=5, vel=0, arr=[1,3] -> 5 + 0*4 = 5  (dt=0 means hold)
+            example(vec![int(5), int(0), array(&[1, 3])], 5),
+            // pos=-3, vel=-2, arr=[1,3] -> -3 + -2*4 = -11
+            example(vec![int(-3), int(-2), array(&[1, 3])], -11),
+            // pos=100, vel=1, arr=[2,2,2] -> 100 + 1*6 = 106
+            example(vec![int(100), int(1), array(&[2, 2, 2])], 106),
+        ],
+        vec![
+            example(vec![int(7), int(3), array(&[0, 0, 5])], 22),
+            example(vec![int(0), int(1), array(&[10])], 10),
+        ],
+        // Reference Mog: state = pos, event = dt, r = sum(arr), return pos + dt*r
+        "fn physics_step_1d(pos: i64, dt: i64, arr: [i64]) -> i64 {\n    r: i64 = 0;\n    for v in arr { r = r + v; }\n    return pos + dt * r;\n}\n",
+    )
+}
+
+/// Brake accumulator: `f(state, brake, arr) = if brake <= 0 then state + sum(arr) else state`.
+///
+/// The `brake` event is a positive integer when the brake is
+/// engaged; when zero or negative, the per-tick array contribution
+/// is added to the state. Tests the `event_le_0` gate.
+fn make_brake_accumulator(variant: usize) -> Problem {
+    problem(
+        "brake_accumulator",
+        variant,
+        "game",
+        "If brake>0: hold state. Else (brake <= 0): state += sum(arr).",
+        "fn brake_accumulator(state: i64, brake: i64, arr: [i64]) -> i64",
+        vec![
+            // brake=0 -> state + sum = 0 + 6 = 6
+            example(vec![int(0), int(0), array(&[1, 2, 3])], 6),
+            // brake=1 -> state held = 7
+            example(vec![int(7), int(1), array(&[1, 2, 3])], 7),
+            // brake=-1 -> state + sum = -2 + 30 = 28
+            example(vec![int(-2), int(-1), array(&[10, 20])], 28),
+            // brake=5 -> state held = 4
+            example(vec![int(4), int(5), array(&[4, 5])], 4),
+            // brake=0 again, negative sum: 100 + (-6) = 94
+            example(vec![int(100), int(0), array(&[-1, -2, -3])], 94),
+        ],
+        vec![
+            example(vec![int(50), int(0), array(&[1, 1, 1, 1])], 54),
+            example(vec![int(50), int(1), array(&[1, 1, 1, 1])], 50),
+        ],
+        "fn brake_accumulator(state: i64, brake: i64, arr: [i64]) -> i64 {\n    r: i64 = 0;\n    for v in arr { r = r + v; }\n    if brake <= 0 { return state + r; }\n    return state;\n}\n",
+    )
+}
+
+/// Boost modulated: `f(state, boost, arr) = state + boost * count_positive(arr)`.
+///
+/// The `boost` event multiplies the number of positive entries in
+/// the array. Tests `mul_event` combine with the `count_positive`
+/// reducer — a non-sum reduction.
+fn make_boost_modulated(variant: usize) -> Problem {
+    problem(
+        "boost_modulated",
+        variant,
+        "game",
+        "state += boost * count_positive(arr).",
+        "fn boost_modulated(state: i64, boost: i64, arr: [i64]) -> i64",
+        vec![
+            // boost=3, count_pos of [1,-2,3] = 2 -> 0 + 3*2 = 6
+            example(vec![int(0), int(3), array(&[1, -2, 3])], 6),
+            // boost=2, count_pos of [1,4] = 2 -> 10 + 2*2 = 14
+            example(vec![int(10), int(2), array(&[1, 4])], 14),
+            // boost=0 -> 5 + 0*2 = 5
+            example(vec![int(5), int(0), array(&[1, -1])], 5),
+            // boost=-1, count_pos of [-1,-2] = 0 -> 7 + -1*0 = 7
+            example(vec![int(7), int(-1), array(&[-1, -2])], 7),
+            // boost=4, count_pos of [0,1,2,3] = 3 -> 1 + 4*3 = 13
+            example(vec![int(1), int(4), array(&[0, 1, 2, 3])], 13),
+        ],
+        vec![
+            example(vec![int(20), int(2), array(&[-5, -10, -15])], 20),
+            example(vec![int(0), int(5), array(&[1, 1, 1])], 15),
+        ],
+        "fn boost_modulated(state: i64, boost: i64, arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for v in arr { if v > 0 { s = s + 1; } }\n    return state + boost * s;\n}\n",
+    )
+}
+
+/// Turn counter gated on zero: `f(state, turn, arr) = if turn != 0 then state + sum(arr) else state`.
+///
+/// The `turn` event is the current turn index; on the opening turn
+/// (`turn == 0`) the state is held, on subsequent turns the array
+/// contributes. Tests the `event_eq_0` gate.
+fn make_turn_counter_gated(variant: usize) -> Problem {
+    problem(
+        "turn_counter_gated",
+        variant,
+        "game",
+        "On turn==0 hold state, else state += sum(arr).",
+        "fn turn_counter_gated(state: i64, turn: i64, arr: [i64]) -> i64",
+        vec![
+            // turn=0 -> hold = 5
+            example(vec![int(5), int(0), array(&[1, 2, 3])], 5),
+            // turn=1 -> state + sum = 5+6 = 11
+            example(vec![int(5), int(1), array(&[1, 2, 3])], 11),
+            // turn=2 -> state + sum = 11+6 = 17
+            example(vec![int(11), int(2), array(&[1, 2, 3])], 17),
+            // turn=0 with negative state
+            example(vec![int(-10), int(0), array(&[5])], -10),
+            // turn=3 with bigger array
+            example(vec![int(0), int(3), array(&[2, 2, 2, 2])], 8),
+        ],
+        vec![
+            example(vec![int(100), int(0), array(&[1, 2])], 100),
+            example(vec![int(100), int(5), array(&[1, 2])], 103),
+        ],
+        "fn turn_counter_gated(state: i64, turn: i64, arr: [i64]) -> i64 {\n    r: i64 = 0;\n    for v in arr { r = r + v; }\n    if turn == 0 { return state; }\n    return state + r;\n}\n",
+    )
+}
+
+/// Damage with event-modulated subtraction: `f(state, event, arr) = state - event - sum(arr)`.
+///
+/// The event is the flat-damage scalar; the array is the per-hit
+/// damage rolls. Combined subtraction. Tests the `add_event`
+/// combine with `op = -`.
+fn make_damage_with_event(variant: usize) -> Problem {
+    problem(
+        "damage_with_event",
+        variant,
+        "game",
+        "state -= event + sum(arr) (event is flat damage, arr is per-hit rolls).",
+        "fn damage_with_event(state: i64, event: i64, arr: [i64]) -> i64",
+        vec![
+            // state=10, event=2, arr=[1,1,1] -> 10 - 2 - 3 = 5
+            example(vec![int(10), int(2), array(&[1, 1, 1])], 5),
+            // state=100, event=0, arr=[5,5] -> 100 - 0 - 10 = 90
+            example(vec![int(100), int(0), array(&[5, 5])], 90),
+            // state=0, event=5, arr=[-2,-3] -> 0 - 5 - (-5) = 0
+            example(vec![int(0), int(5), array(&[-2, -3])], 0),
+            // state=20, event=10, arr=[] -> 20 - 10 - 0 = 10
+            example(vec![int(20), int(10), array(&[])], 10),
+            // state=50, event=3, arr=[2,2,2,2,2] -> 50 - 3 - 10 = 37
+            example(vec![int(50), int(3), array(&[2, 2, 2, 2, 2])], 37),
+        ],
+        vec![
+            example(vec![int(7), int(7), array(&[0, 0, 0])], 0),
+            example(vec![int(1), int(0), array(&[1])], 0),
+        ],
+        "fn damage_with_event(state: i64, event: i64, arr: [i64]) -> i64 {\n    r: i64 = 0;\n    for v in arr { r = r + v; }\n    return state - event - r;\n}\n",
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1.5 stateful reducer benchmarks
+//
+// These exercise the two new search teachers:
+//   * `search_stateful_reducer_dual` — 3-arg (state, a, b) -> state
+//   * `search_stateful_replace`      — 2-arg (state, arr) -> state
+//                                      with conditional update
+// All are real stateful-update shapes: delta accumulators, running
+// max/min, trigger counters, signed balances.
+// ---------------------------------------------------------------------------
+
+/// `state = state + sum(a) - sum(b)` — running delta of two streams.
+fn make_delta_accumulator(variant: usize) -> Problem {
+    problem(
+        "delta_accumulator",
+        variant,
+        "stateful",
+        "Running delta: state + sum(a) - sum(b).",
+        "fn delta_accumulator(state: i64, a: [i64], b: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[1, 2, 3]), array(&[1, 0, 0])], 5),
+            example(vec![int(10), array(&[5, 5]), array(&[2, 3])], 15),
+            example(vec![int(-5), array(&[3, 3, 3]), array(&[1, 1, 1])], 1),
+            example(vec![int(100), array(&[0, 0, 0]), array(&[10, 20])], 70),
+        ],
+        vec![
+            example(vec![int(7), array(&[1, 1, 1]), array(&[0, 0, 0])], 10),
+            example(vec![int(0), array(&[4, 4]), array(&[2, 2])], 4),
+        ],
+        "fn delta_accumulator(state: i64, a: [i64], b: [i64]) -> i64 {\n    sa: i64 = 0;\n    for v in a { sa = sa + v; }\n    sb: i64 = 0;\n    for v in b { sb = sb + v; }\n    return state + sa - sb;\n}\n",
+    )
+}
+
+/// `state = state + count_positive(a) - count_negative(b)`.
+fn make_signed_count_delta(variant: usize) -> Problem {
+    problem(
+        "signed_count_delta",
+        variant,
+        "stateful",
+        "Signed-count delta: state + count_positive(a) - count_negative(b).",
+        "fn signed_count_delta(state: i64, a: [i64], b: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[1, -2, 3]), array(&[-1, 2])], 1),
+            example(vec![int(10), array(&[5, 5, 5]), array(&[-1, -1])], 11),
+            example(vec![int(0), array(&[0, 0]), array(&[0, 0])], 0),
+            example(vec![int(-5), array(&[1, 2, 3, 4]), array(&[-5])], -2),
+        ],
+        vec![
+            example(vec![int(3), array(&[-1]), array(&[1, 2])], 3),
+            example(vec![int(0), array(&[1]), array(&[0])], 1),
+        ],
+        "fn signed_count_delta(state: i64, a: [i64], b: [i64]) -> i64 {\n    pa: i64 = 0;\n    for v in a { if v > 0 { pa = pa + 1; } }\n    nb: i64 = 0;\n    for v in b { if v < 0 { nb = nb + 1; } }\n    return state + pa - nb;\n}\n",
+    )
+}
+
+/// `state = state + max(a) - min(b)`.
+fn make_cross_range_state(variant: usize) -> Problem {
+    problem(
+        "cross_range_state",
+        variant,
+        "stateful",
+        "Cross-range state: state + max(a) - min(b).",
+        "fn cross_range_state(state: i64, a: [i64], b: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[3, 7, 1]), array(&[-5, 10])], 12),
+            example(vec![int(10), array(&[5, 5]), array(&[2, 3])], 13),
+            example(vec![int(-5), array(&[10, 20]), array(&[1, 1])], 14),
+            example(vec![int(100), array(&[0]), array(&[-50])], 150),
+        ],
+        vec![
+            example(vec![int(7), array(&[1, 1, 1]), array(&[0, 0, 0])], 8),
+            example(vec![int(0), array(&[4, 4]), array(&[2, 2])], 2),
+        ],
+        "fn cross_range_state(state: i64, a: [i64], b: [i64]) -> i64 {\n    ma: i64 = a[0];\n    for v in a { if v > ma { ma = v; } }\n    mb: i64 = b[0];\n    for v in b { if v < mb { mb = v; } }\n    return state + ma - mb;\n}\n",
+    )
+}
+
+/// `state = state + count_positive(a) + count_positive(b)`.
+fn make_boost_positive(variant: usize) -> Problem {
+    problem(
+        "boost_positive",
+        variant,
+        "stateful",
+        "Boost: state + count_positive(a) + count_positive(b).",
+        "fn boost_positive(state: i64, a: [i64], b: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[1, 2, 3]), array(&[-1, -2])], 3),
+            example(vec![int(10), array(&[5, 5, 5]), array(&[1, 2])], 15),
+            example(vec![int(0), array(&[0, 0]), array(&[0, 0])], 0),
+            example(vec![int(-5), array(&[1, 2, 3, 4]), array(&[1])], 0),
+        ],
+        vec![
+            example(vec![int(3), array(&[-1]), array(&[1, 2])], 5),
+            example(vec![int(0), array(&[1]), array(&[0])], 1),
+        ],
+        "fn boost_positive(state: i64, a: [i64], b: [i64]) -> i64 {\n    pa: i64 = 0;\n    for v in a { if v > 0 { pa = pa + 1; } }\n    pb: i64 = 0;\n    for v in b { if v > 0 { pb = pb + 1; } }\n    return state + pa + pb;\n}\n",
+    )
+}
+
+/// `if max(arr) > state then state = max(arr) else state` — running max.
+fn make_running_max(variant: usize) -> Problem {
+    problem(
+        "running_max",
+        variant,
+        "stateful",
+        "Running max: if max(arr) > state then state = max(arr) else state.",
+        "fn running_max(state: i64, arr: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[3, 7, 1])], 7),
+            example(vec![int(10), array(&[5, 5, 5])], 10),
+            example(vec![int(100), array(&[1, 2, 3])], 100),
+            example(vec![int(-5), array(&[-10, 0, 1])], 1),
+        ],
+        vec![
+            example(vec![int(7), array(&[0, 0, 0])], 7),
+            example(vec![int(0), array(&[100])], 100),
+        ],
+        "fn running_max(state: i64, arr: [i64]) -> i64 {\n    r: i64 = arr[0];\n    for v in arr { if v > r { r = v; } }\n    if r > state { return r; }\n    return state;\n}\n",
+    )
+}
+
+/// `if min(arr) < state then state = min(arr) else state` — running min.
+fn make_running_min(variant: usize) -> Problem {
+    problem(
+        "running_min",
+        variant,
+        "stateful",
+        "Running min: if min(arr) < state then state = min(arr) else state.",
+        "fn running_min(state: i64, arr: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[3, 7, 1])], 0),
+            example(vec![int(10), array(&[5, 5, 5])], 5),
+            example(vec![int(100), array(&[200, 300])], 100),
+            example(vec![int(-5), array(&[-10, 0, 1])], -10),
+        ],
+        vec![
+            example(vec![int(7), array(&[100, 200])], 7),
+            example(vec![int(0), array(&[-100])], -100),
+        ],
+        "fn running_min(state: i64, arr: [i64]) -> i64 {\n    r: i64 = arr[0];\n    for v in arr { if v < r { r = v; } }\n    if r < state { return r; }\n    return state;\n}\n",
+    )
+}
+
+/// `if any(arr > 0) then state = -state else state` — flip on positive.
+fn make_flip_on_positive(variant: usize) -> Problem {
+    problem(
+        "flip_on_positive",
+        variant,
+        "stateful",
+        "Flip: if any(arr > 0) then state = -state else state.",
+        "fn flip_on_positive(state: i64, arr: [i64]) -> i64",
+        vec![
+            example(vec![int(1), array(&[3, 7, 1])], -1),
+            example(vec![int(5), array(&[-1, -2])], 5),
+            example(vec![int(0), array(&[-3])], 0),
+            example(vec![int(-7), array(&[0, 0, 1])], 7),
+        ],
+        vec![
+            example(vec![int(2), array(&[0, 0, 0])], 2),
+            example(vec![int(-3), array(&[-1])], -3),
+        ],
+        "fn flip_on_positive(state: i64, arr: [i64]) -> i64 {\n    p: i64 = 0;\n    for v in arr { if v > 0 { p = 1; } }\n    if p == 1 { return -state; }\n    return state;\n}\n",
+    )
+}
+
+/// `if any(arr > 0) then state = state + 1 else state` — trigger counter.
+fn make_increment_on_positive(variant: usize) -> Problem {
+    problem(
+        "increment_on_positive",
+        variant,
+        "stateful",
+        "Trigger counter: if any(arr > 0) then state + 1 else state.",
+        "fn increment_on_positive(state: i64, arr: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[3, 7, 1])], 1),
+            example(vec![int(5), array(&[-1, -2])], 5),
+            example(vec![int(0), array(&[-3])], 0),
+            example(vec![int(-7), array(&[0, 0, 1])], -6),
+        ],
+        vec![
+            example(vec![int(2), array(&[0, 0, 0])], 2),
+            example(vec![int(-3), array(&[-1, 0])], -3),
+        ],
+        "fn increment_on_positive(state: i64, arr: [i64]) -> i64 {\n    p: i64 = 0;\n    for v in arr { if v > 0 { p = 1; } }\n    if p == 1 { return state + 1; }\n    return state;\n}\n",
+    )
+}
+
+/// `if any(arr < 0) then state = 0 else state` — reset on negative.
+fn make_reset_on_negative(variant: usize) -> Problem {
+    problem(
+        "reset_on_negative",
+        variant,
+        "stateful",
+        "Reset: if any(arr < 0) then state = 0 else state.",
+        "fn reset_on_negative(state: i64, arr: [i64]) -> i64",
+        vec![
+            example(vec![int(5), array(&[-1, 0, 0])], 0),
+            example(vec![int(3), array(&[1, 2])], 3),
+            example(vec![int(0), array(&[-3, -4])], 0),
+            example(vec![int(-7), array(&[0, 1, 2])], -7),
+        ],
+        vec![
+            example(vec![int(2), array(&[0, 0, 0])], 2),
+            example(vec![int(-3), array(&[-1])], 0),
+        ],
+        "fn reset_on_negative(state: i64, arr: [i64]) -> i64 {\n    p: i64 = 0;\n    for v in arr { if v < 0 { p = 1; } }\n    if p == 1 { return 0; }\n    return state;\n}\n",
+    )
+}
+
+/// `state = state - sum(arr)` — running loss (extending the existing
+/// `search_stateful_reducer` teacher to a new reducer × op pair).
+fn make_loss_accumulator(variant: usize) -> Problem {
+    problem(
+        "loss_accumulator",
+        variant,
+        "stateful",
+        "Running loss: state - sum(arr).",
+        "fn loss_accumulator(state: i64, arr: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[1, 2, 3])], -6),
+            example(vec![int(10), array(&[1, 1, 1])], 7),
+            example(vec![int(100), array(&[50, 30])], 20),
+            example(vec![int(0), array(&[0, 0, 0])], 0),
+        ],
+        vec![
+            example(vec![int(7), array(&[1, 2])], 4),
+            example(vec![int(0), array(&[-1, 2])], -1),
+        ],
+        "fn loss_accumulator(state: i64, arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for v in arr { s = s + v; }\n    return state - s;\n}\n",
+    )
+}
+
+/// `state = state + count_positive(arr)` — running positive count.
+fn make_inventory_total(variant: usize) -> Problem {
+    problem(
+        "inventory_total",
+        variant,
+        "stateful",
+        "Running positive count: state + count_positive(arr).",
+        "fn inventory_total(state: i64, arr: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[1, -2, 3])], 2),
+            example(vec![int(5), array(&[1, 1, 1])], 8),
+            example(vec![int(0), array(&[-1, -2])], 0),
+            example(vec![int(-3), array(&[1, 2, 3, 4])], 1),
+        ],
+        vec![
+            example(vec![int(3), array(&[0, 0, 0])], 3),
+            example(vec![int(0), array(&[1])], 1),
+        ],
+        "fn inventory_total(state: i64, arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for v in arr { if v > 0 { s = s + 1; } }\n    return state + s;\n}\n",
+    )
+}
+
+/// Stage 3: struct-of-state benchmarks (June 2026)
+/// Count positive and negative values separately.
+/// struct DualTally { pos_count: i64, neg_count: i64, zero_count: i64, total: i64 }
+fn make_dual_tally(variant: usize) -> Problem {
+    problem(
+        "dual_tally",
+        variant,
+        "struct_of_state",
+        "Count positive, negative, and zero values: {pos_count, neg_count, zero_count, total}.",
+        "fn dual_tally(arr: [i64]) -> DualTally",
+        vec![
+            example_quad(vec![array(&[1, -2, 3])], quad(2, 1, 0, 3)),
+            example_quad(vec![array(&[0, 0, 5, -3])], quad(1, 1, 2, 4)),
+            example_quad(vec![array(&[-1, -1, -1])], quad(0, 3, 0, 3)),
+        ],
+        vec![
+            example_quad(vec![array(&[2, 0, -1, 3, 0])], quad(2, 1, 2, 5)),
+            example_quad(vec![array(&[10])], quad(1, 0, 0, 1)),
+        ],
+        "struct DualTally {\n    pos_count: i64,\n    neg_count: i64,\n    zero_count: i64,\n    total: i64,\n}\n\nfn dual_tally(arr: [i64]) -> DualTally {\n    pos: i64 = 0;\n    neg: i64 = 0;\n    zero: i64 = 0;\n    for v in arr {\n        if v > 0 { pos = pos + 1; }\n        else if v < 0 { neg = neg + 1; }\n        else { zero = zero + 1; }\n    }\n    return DualTally { pos_count: pos, neg_count: neg, zero_count: zero, total: arr.len };\n}\n",
+    )
+}
+
+/// Rate limiter tracking: cumulative sum and breach count.
+/// struct RateLimiter { total: i64, exceeded: i64, count: i64, limit_reached: i64 }
+fn make_rate_limiter(variant: usize) -> Problem {
+    problem(
+        "rate_limiter",
+        variant,
+        "struct_of_state",
+        "Track cumulative sum and threshold breaches: {total, exceeded, count, limit_reached}.",
+        "fn rate_limiter(arr: [i64], limit: i64) -> RateLimiter",
+        vec![
+            example_quad(vec![array(&[1, 2, 3]), int(5)], quad(6, 1, 3, 1)),
+            example_quad(vec![array(&[1, 1, 1]), int(2)], quad(3, 1, 3, 1)),
+            example_quad(vec![array(&[1, 2]), int(10)], quad(3, 0, 2, 0)),
+        ],
+        vec![
+            example_quad(vec![array(&[2, 2, 2]), int(5)], quad(6, 1, 3, 1)),
+            example_quad(vec![array(&[1, 1, 1, 1]), int(3)], quad(4, 1, 4, 1)),
+        ],
+        "struct RateLimiter {\n    total: i64,\n    exceeded: i64,\n    count: i64,\n    limit_reached: i64,\n}\n\nfn rate_limiter(arr: [i64], limit: i64) -> RateLimiter {\n    total: i64 = 0;\n    exceeded: i64 = 0;\n    limit_hit: i64 = 0;\n    for v in arr {\n        total = total + v;\n        if total > limit { exceeded = exceeded + 1; limit_hit = 1; }\n    }\n    return RateLimiter { total: total, exceeded: exceeded, count: arr.len, limit_reached: limit_hit };\n}\n",
+    )
+}
+
+/// Running correlation accumulators: sum_x, sum_y, sum_xy.
+/// struct RunningCorrelation { sum_x: i64, sum_y: i64, sum_xy: i64, count: i64 }
+fn make_running_correlation(variant: usize) -> Problem {
+    problem(
+        "running_correlation",
+        variant,
+        "struct_of_state",
+        "Compute correlation accumulators: {sum_x, sum_y, sum_xy, count}.",
+        "fn running_correlation(pairs: [(i64, i64)]) -> RunningCorrelation",
+        vec![
+            example_quad(vec![array(&[1, 2, 2, 3])], quad(3, 5, 8, 2)),
+            example_quad(vec![array(&[0, 0, 1, 1])], quad(1, 1, 1, 2)),
+            example_quad(vec![array(&[2, 2])], quad(2, 2, 4, 1)),
+        ],
+        vec![
+            example_quad(vec![array(&[1, 1, 3, 3])], quad(4, 4, 12, 2)),
+            example_quad(vec![array(&[5, 10])], quad(5, 10, 50, 1)),
+        ],
+        "struct RunningCorrelation {\n    sum_x: i64,\n    sum_y: i64,\n    sum_xy: i64,\n    count: i64,\n}\n\nfn running_correlation(pairs: [(i64, i64)]) -> RunningCorrelation {\n    sx: i64 = 0; sy: i64 = 0; sxy: i64 = 0;\n    for i in 0..pairs.len {\n        x: i64 = pairs[i].0; y: i64 = pairs[i].1;\n        sx = sx + x; sy = sy + y; sxy = sxy + (x * y);\n    }\n    return RunningCorrelation { sum_x: sx, sum_y: sy, sum_xy: sxy, count: pairs.len };\n}\n",
+    )
+}
+
+/// Mutual information: 2×2 confusion matrix.
+/// struct MutualInfo { joint_00: i64, joint_01: i64, joint_10: i64, joint_11: i64 }
+fn make_mutual_info_tracker(variant: usize) -> Problem {
+    problem(
+        "mutual_info_tracker",
+        variant,
+        "struct_of_state",
+        "Build confusion matrix from paired bits: {joint_00, joint_01, joint_10, joint_11}.",
+        "fn mutual_info_tracker(pairs: [(i64, i64)]) -> MutualInfo",
+        vec![
+            example_quad(vec![array(&[0, 0, 0, 1, 1, 1])], quad(1, 1, 1, 1)),
+            example_quad(vec![array(&[0, 0, 1, 1])], quad(1, 1, 1, 0)),
+            example_quad(vec![array(&[0, 0, 0, 0])], quad(2, 0, 0, 0)),
+        ],
+        vec![
+            example_quad(vec![array(&[1, 1, 1, 1])], quad(0, 0, 0, 2)),
+            example_quad(vec![array(&[0, 1, 1, 0])], quad(1, 0, 1, 1)),
+        ],
+        "struct MutualInfo {\n    joint_00: i64,\n    joint_01: i64,\n    joint_10: i64,\n    joint_11: i64,\n}\n\nfn mutual_info_tracker(pairs: [(i64, i64)]) -> MutualInfo {\n    j00: i64 = 0; j01: i64 = 0; j10: i64 = 0; j11: i64 = 0;\n    for i in 0..pairs.len {\n        a: i64 = if pairs[i].0 > 0 { 1 } else { 0 };\n        b: i64 = if pairs[i].1 > 0 { 1 } else { 0 };\n        if a == 0 && b == 0 { j00 = j00 + 1; }\n        else if a == 0 && b == 1 { j01 = j01 + 1; }\n        else if a == 1 && b == 0 { j10 = j10 + 1; }\n        else { j11 = j11 + 1; }\n    }\n    return MutualInfo { joint_00: j00, joint_01: j01, joint_10: j10, joint_11: j11 };\n}\n",
+    )
+}
+
+/// Dual-threshold classifier: count values below, between, and above thresholds.
+/// struct ThresholdClassifier { below: i64, between: i64, above: i64, total: i64 }
+fn make_dual_threshold_classifier(variant: usize) -> Problem {
+    problem(
+        "dual_threshold_classifier",
+        variant,
+        "struct_of_state",
+        "Classify by two thresholds: {below, between, above, total}.",
+        "fn dual_threshold_classifier(arr: [i64], low: i64, high: i64) -> ThresholdClassifier",
+        vec![
+            example_quad(vec![array(&[1, 5, 10]), int(3), int(8)], quad(1, 2, 0, 3)),
+            example_quad(vec![array(&[0, 5, 15]), int(5), int(10)], quad(1, 1, 1, 3)),
+            example_quad(vec![array(&[1, 2, 3, 4, 5]), int(2), int(4)], quad(1, 3, 1, 5)),
+        ],
+        vec![
+            example_quad(vec![array(&[1, 3, 6, 9]), int(3), int(7)], quad(2, 1, 1, 4)),
+            example_quad(vec![array(&[10, 20]), int(5), int(15)], quad(0, 1, 1, 2)),
+        ],
+        "struct ThresholdClassifier {\n    below: i64,\n    between: i64,\n    above: i64,\n    total: i64,\n}\n\nfn dual_threshold_classifier(arr: [i64], low: i64, high: i64) -> ThresholdClassifier {\n    below: i64 = 0; between: i64 = 0; above: i64 = 0;\n    for v in arr {\n        if v < low { below = below + 1; }\n        else if v <= high { between = between + 1; }\n        else { above = above + 1; }\n    }\n    return ThresholdClassifier { below: below, between: between, above: above, total: arr.len };\n}\n",
+    )
+}
+
+/// Paired extrema: min, min_idx, max, max_idx.
+/// struct PairedExtrema { min: i64, min_idx: i64, max: i64, max_idx: i64 }
+fn make_paired_extrema(variant: usize) -> Problem {
+    problem(
+        "paired_extrema",
+        variant,
+        "struct_of_state",
+        "Find min/max and their indices: {min, min_idx, max, max_idx}.",
+        "fn paired_extrema(arr: [i64]) -> PairedExtrema",
+        vec![
+            example_quad(vec![array(&[5, 2, 8, 1])], quad(1, 3, 8, 2)),
+            example_quad(vec![array(&[3, 3, 3])], quad(3, 0, 3, 0)),
+            example_quad(vec![array(&[10, 5])], quad(5, 1, 10, 0)),
+        ],
+        vec![
+            example_quad(vec![array(&[-1, 0, 2, -3, 4])], quad(-3, 3, 4, 4)),
+            example_quad(vec![array(&[7])], quad(7, 0, 7, 0)),
+        ],
+        "struct PairedExtrema {\n    min: i64,\n    min_idx: i64,\n    max: i64,\n    max_idx: i64,\n}\n\nfn paired_extrema(arr: [i64]) -> PairedExtrema {\n    min_val: i64 = arr[0]; max_val: i64 = arr[0];\n    min_i: i64 = 0; max_i: i64 = 0;\n    for i in 0..arr.len {\n        if arr[i] < min_val { min_val = arr[i]; min_i = i; }\n        if arr[i] > max_val { max_val = arr[i]; max_i = i; }\n    }\n    return PairedExtrema { min: min_val, min_idx: min_i, max: max_val, max_idx: max_i };\n}\n",
+    )
+}
+
+/// Sum of diagonal elements of a 4×4 matrix (flattened as 16-element array).
+/// Input: matrix as [i64; 16] (row-major: [row0[0..4], row1[0..4], row2[0..4], row3[0..4]]).
+/// Output: sum of elements [0], [5], [10], [15] (the diagonal).
+fn make_matrix_diagonal_sum(variant: usize) -> Problem {
+    problem(
+        "matrix_diagonal_sum",
+        variant,
+        "tensor",
+        "Sum the diagonal elements of a 4x4 matrix (row-major order).",
+        "fn matrix_diagonal_sum(matrix: [i64; 16]) -> i64",
+        vec![
+            example(vec![array(&[1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4])], 10),
+            example(vec![array(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])], 34),
+            example(vec![array(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])], 0),
+            example(vec![array(&[5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 5, 12, 13, 14, 5])], 20),
+        ],
+        vec![
+            example(vec![array(&[2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 0, 0, 0, 5])], 14),
+            example(vec![array(&[10, 20, 30, 40, 50, 10, 60, 70, 80, 90, 10, 100, 110, 120, 10, 130])], 160),
+        ],
+        "fn matrix_diagonal_sum(matrix: [i64; 16]) -> i64 {\n    sum: i64 = 0;\n    i: i64 = 0;\n    while i < 4 {\n        idx: i64 = i * 5;\n        sum = sum + matrix[idx];\n        i = i + 1;\n    }\n    return sum;\n}\n",
+    )
+}
+
+/// Dot product of two 4-element vectors.
+/// Input: two arrays of 4 elements each.
+/// Output: sum of element-wise products.
+fn make_dot_product_4d(variant: usize) -> Problem {
+    problem(
+        "dot_product_4d",
+        variant,
+        "tensor",
+        "Compute dot product of two 4-element vectors.",
+        "fn dot_product_4d(a: [i64; 4], b: [i64; 4]) -> i64",
+        vec![
+            example(vec![array(&[1, 2, 3, 4]), array(&[5, 6, 7, 8])], 70),
+            example(vec![array(&[2, 0, 0, 3]), array(&[1, 1, 1, 1])], 5),
+            example(vec![array(&[1, 1, 1, 1]), array(&[1, 1, 1, 1])], 4),
+            example(vec![array(&[0, 0, 0, 0]), array(&[5, 5, 5, 5])], 0),
+        ],
+        vec![
+            example(vec![array(&[3, 4, 0, 0]), array(&[1, 0, 2, 3])], 3),
+            example(vec![array(&[10, 20, 30, 40]), array(&[1, 1, 1, 1])], 100),
+        ],
+        "fn dot_product_4d(a: [i64; 4], b: [i64; 4]) -> i64 {\n    sum: i64 = 0;\n    i: i64 = 0;\n    while i < 4 {\n        sum = sum + a[i] * b[i];\n        i = i + 1;\n    }\n    return sum;\n}\n",
+    )
+}
+
+/// Matrix multiply two 2x2 matrices (trace-like reduction).
+/// For simplicity, compute: sum of all products M1[i][j] * M2[j][i] for all i,j.
+/// Input: two 4-element arrays (row-major 2×2 matrices).
+/// Output: scalar result.
+fn make_matrix_multiply_2x2(variant: usize) -> Problem {
+    problem(
+        "matrix_multiply_2x2",
+        variant,
+        "tensor",
+        "Multiply two 2x2 matrices (return trace-like scalar).",
+        "fn matrix_multiply_2x2(m1: [i64; 4], m2: [i64; 4]) -> i64",
+        vec![
+            example(vec![array(&[1, 2, 3, 4]), array(&[5, 6, 7, 8])], 69),
+            example(vec![array(&[1, 0, 0, 1]), array(&[2, 3, 4, 5])], 7),
+            example(vec![array(&[0, 0, 0, 0]), array(&[1, 2, 3, 4])], 0),
+            example(vec![array(&[2, 1, 1, 2]), array(&[1, 1, 1, 1])], 8),
+        ],
+        vec![
+            example(vec![array(&[1, 1, 1, 1]), array(&[1, 1, 1, 1])], 4),
+            example(vec![array(&[3, 0, 0, 3]), array(&[2, 1, 1, 2])], 12),
+        ],
+        "fn matrix_multiply_2x2(m1: [i64; 4], m2: [i64; 4]) -> i64 {\n    sum: i64 = 0;\n    i: i64 = 0;\n    while i < 2 {\n        j: i64 = 0;\n        while j < 2 {\n            idx1: i64 = i * 2 + j;\n            idx2: i64 = j * 2 + i;\n            sum = sum + m1[idx1] * m2[idx2];\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return sum;\n}\n",
+    )
+}
+
+/// Broadcast a scalar to a 4-element vector and multiply element-wise, returning the sum.
+/// Input: scalar s and array a of 4 elements.
+/// Output: sum of s * a[i] for all i (equivalent to s * sum(a)).
+fn make_broadcast_scale_sum(variant: usize) -> Problem {
+    problem(
+        "broadcast_scale_sum",
+        variant,
+        "tensor",
+        "Broadcast a scalar to a 4-element vector, multiply element-wise, and sum.",
+        "fn broadcast_scale_sum(scalar: i64, vec: [i64; 4]) -> i64",
+        vec![
+            example(vec![int(2), array(&[1, 2, 3, 4])], 20),
+            example(vec![int(3), array(&[1, 0, 1, 0])], 6),
+            example(vec![int(0), array(&[5, 5, 5, 5])], 0),
+            example(vec![int(1), array(&[1, 2, 3, 4])], 10),
+        ],
+        vec![
+            example(vec![int(5), array(&[1, 1, 1, 1])], 20),
+            example(vec![int(10), array(&[2, 0, 1, 3])], 60),
+        ],
+        "fn broadcast_scale_sum(scalar: i64, vec: [i64; 4]) -> i64 {\n    sum: i64 = 0;\n    i: i64 = 0;\n    while i < 4 {\n        sum = sum + scalar * vec[i];\n        i = i + 1;\n    }\n    return sum;\n}\n",
+    )
+}
+
+/// Compute the Frobenius norm squared of the outer product of two 2-element vectors.
+/// Outer product: a ⊗ b = [[a[0]*b[0], a[0]*b[1]], [a[1]*b[0], a[1]*b[1]]] (4 elements).
+/// Return: sum of squared elements (pre-sqrt for integer output).
+fn make_outer_product_norm_sq(variant: usize) -> Problem {
+    problem(
+        "outer_product_norm_sq",
+        variant,
+        "tensor",
+        "Compute sum of squared elements of the outer product of two 2-element vectors.",
+        "fn outer_product_norm_sq(a: [i64; 2], b: [i64; 2]) -> i64",
+        vec![
+            example(vec![array(&[2, 3]), array(&[4, 5])], 533),
+            example(vec![array(&[1, 1]), array(&[1, 1])], 4),
+            example(vec![array(&[0, 2]), array(&[3, 0])], 36),
+            example(vec![array(&[1, 2]), array(&[1, 2])], 25),
+        ],
+        vec![
+            example(vec![array(&[3, 0]), array(&[2, 0])], 36),
+            example(vec![array(&[1, 0]), array(&[0, 1])], 1),
+        ],
+        "fn outer_product_norm_sq(a: [i64; 2], b: [i64; 2]) -> i64 {\n    sum: i64 = 0;\n    i: i64 = 0;\n    while i < 2 {\n        j: i64 = 0;\n        while j < 2 {\n            prod: i64 = a[i] * b[j];\n            sum = sum + prod * prod;\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return sum;\n}\n",
+    )
+}
+
+/// Convolve a 1D signal with a 1D filter (valid convolution, no padding).
+/// Input: signal [i64; 8], filter [i64; 3].
+/// Output: sum of all convolution outputs.
+/// Valid convolution has 8 - 3 + 1 = 6 outputs.
+fn make_convolution_1d_sum(variant: usize) -> Problem {
+    problem(
+        "convolution_1d_sum",
+        variant,
+        "tensor",
+        "Compute valid 1D convolution of signal [i64; 8] with filter [i64; 3], return sum of outputs.",
+        "fn convolution_1d_sum(signal: [i64; 8], filter: [i64; 3]) -> i64",
+        vec![
+            example(vec![array(&[1, 2, 3, 4, 5, 6, 7, 8]), array(&[1, 0, -1])], -12),
+            example(vec![array(&[1, 1, 1, 1, 1, 1, 1, 1]), array(&[1, 1, 1])], 18),
+            example(vec![array(&[0, 0, 0, 0, 0, 0, 0, 0]), array(&[1, 1, 1])], 0),
+            example(vec![array(&[2, 0, 2, 0, 2, 0, 2, 0]), array(&[1, 0, 1])], 12),
+        ],
+        vec![
+            example(vec![array(&[1, 2, 1, 2, 1, 2, 1, 2]), array(&[1, 1, 1])], 24),
+            example(vec![array(&[5, 5, 5, 5, 5, 5, 5, 5]), array(&[2, 0, 1])], 84),
+        ],
+        "fn convolution_1d_sum(signal: [i64; 8], filter: [i64; 3]) -> i64 {\n    sum: i64 = 0;\n    i: i64 = 0;\n    while i < 6 {\n        out: i64 = 0;\n        j: i64 = 0;\n        while j < 3 {\n            out = out + signal[i + j] * filter[j];\n            j = j + 1;\n        }\n        sum = sum + out;\n        i = i + 1;\n    }\n    return sum;\n}\n",
     )
 }

@@ -581,6 +581,12 @@ pub(super) fn search_stateful_reducer_event(
         ("sum", "add_arr", "+", "event_eq_0"),       // if event==0 then state else state+sum(arr)
         ("sum", "add_arr", "-", "event_gt_0"),       // if event>0 then state-sum(arr) else state
         ("sum", "add_arr", "-", "event_eq_0"),       // if event==0 then state else state-sum(arr)
+        ("sum", "add_arr", "+", "event_le_0"),       // if event<=0 then state+sum(arr) else state
+        ("sum", "add_arr", "-", "event_le_0"),       // if event<=0 then state-sum(arr) else state
+        ("sum", "add_arr", "+", "event_lt_0"),       // if event<0 then state+sum(arr) else state
+        ("sum", "add_arr", "-", "event_lt_0"),       // if event<0 then state-sum(arr) else state
+        ("count_positive", "mul_event", "+", ""),    // state + event*count_positive(arr)
+        ("count_positive", "mul_event", "-", ""),    // state - event*count_positive(arr)
         // Composite patterns use two reducers.
         // We handle them as a separate small set below.
     ];
@@ -643,6 +649,12 @@ pub(super) fn search_stateful_reducer_event(
                 }
                 "event_eq_0" => {
                     if event == 0 { state } else { combined }
+                }
+                "event_le_0" => {
+                    if event <= 0 { combined } else { state }
+                }
+                "event_lt_0" => {
+                    if event < 0 { combined } else { state }
                 }
                 _ => return false,
             };
