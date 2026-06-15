@@ -1,7 +1,7 @@
 {
   "pluralize": {
     "fn": "pluralize",
-    "code": "fn pluralize(s: string) -> string {\n    if s.ends_with(\"h\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"s\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"x\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"y\") {\n        return s.slice(0, s.len - 1) + \"ies\";\n    }\n    return s + \"s\";\n}\n"
+    "code": "fn pluralize(s: string) -> string {\n    if s.ends_with(\"h\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"s\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"x\") {\n        return s + \"es\";\n    }\n    if s.ends_with(\"y\") {\n        return s.slice(0, s.len - 1) + \"ies\";\n    }\n    if s.ends_with(\"z\") {\n        return s + \"es\";\n    }\n    return s + \"s\";\n}\n"
   },
   "reverse": {
     "fn": "reverse",

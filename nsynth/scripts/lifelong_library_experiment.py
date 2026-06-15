@@ -122,18 +122,36 @@ def build_domains() -> dict[str, dict]:
     lex = [w for w in lex if w not in _IRREGULAR_PLURAL]
 
     def bucket(word: str) -> str:
-        if word.endswith(("s", "x", "z", "ch", "sh")):
-            return "es"                      # bus->buses, fox->foxes, dish->dishes
+        if word.endswith(("ch", "sh")):
+            return "es_" + word[-2:]          # dish->dishes, brush->brushes
+        if word.endswith(("s", "x", "z")):
+            return "es_" + word[-1]           # bus/fox/buzz each get train coverage
         if word.endswith("y") and word[-2:-1] not in "aeiou":
-            return "ies"                     # baby->babies
-        return "s"                           # cat->cats
+            return "ies"                      # baby->babies
+        return "s"                            # cat->cats
 
-    by_bucket: dict[str, list[str]] = {"s": [], "es": [], "ies": []}
+    by_bucket: dict[str, list[str]] = {
+        "s": [],
+        "es_s": [],
+        "es_x": [],
+        "es_z": [],
+        "es_ch": [],
+        "es_sh": [],
+        "ies": [],
+    }
     for w in lex:
         by_bucket[bucket(w)].append(w)
     # take a balanced, deterministic slice from each bucket
     plural_words: list[str] = []
-    for b, n in (("s", 40), ("es", 24), ("ies", 16)):
+    for b, n in (
+        ("s", 40),
+        ("es_s", 5),
+        ("es_x", 5),
+        ("es_z", 5),
+        ("es_ch", 5),
+        ("es_sh", 5),
+        ("ies", 16),
+    ):
         plural_words += by_bucket[b][:n]
     plural_words = sorted(set(plural_words))
     d1_pairs = [(w, pluralize(w)) for w in plural_words]
