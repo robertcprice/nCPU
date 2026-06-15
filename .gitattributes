@@ -1,1 +1,10 @@
 *.pt filter=lfs diff=lfs merge=lfs -text
+nsynth/data/prior_net_train_300k.jsonl filter=lfs diff=lfs merge=lfs -text
+nsynth/data/prior_net_train.jsonl filter=lfs diff=lfs merge=lfs -text
+nsynth/data/synth_1arg_50k.jsonl filter=lfs diff=lfs merge=lfs -text
+nsynth/data/combined_v5.jsonl filter=lfs diff=lfs merge=lfs -text
+nsynth/data/combined_v4.jsonl filter=lfs diff=lfs merge=lfs -text
+nsynth/data/combined_v3.jsonl filter=lfs diff=lfs merge=lfs -text
+nsynth/data/known_programs.jsonl filter=lfs diff=lfs merge=lfs -text
+nsynth/data/known_programs_v3.jsonl filter=lfs diff=lfs merge=lfs -text
+nsynth/data/known_programs_v2.jsonl filter=lfs diff=lfs merge=lfs -text
