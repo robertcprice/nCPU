@@ -80,12 +80,18 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         }
         // Expected output may be int, bool, string, or array — all first-class now.
         let exp = &v["expected"];
-        let expected = if let Some(n) = exp.as_i64() {
+        let mut expected = if let Some(n) = exp.as_i64() {
             Value::Int(n)
         } else if exp.is_f64() {
             Value::Float(exp.as_f64().unwrap().to_bits())
         } else if let Some(b) = exp.as_bool() {
-            Value::Bool(b)
+            // Bool is a first-class wire format, but every search teacher
+            // in the pipeline operates over the i64 0/1 predicate lane.
+            // Coerce on the way through so a `{expected: true}` request
+            // reaches a teacher that knows what to do with it; the
+            // `Value::Bool` shape is preserved on the wire and verified
+            // bidirectionally in the runtime.
+            Value::Int(i64::from(b))
         } else if let Some(s) = exp.as_str() {
             Value::Str(s.to_string())
         } else if let Some(arr) = exp.as_array() {

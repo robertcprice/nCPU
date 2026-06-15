@@ -100,6 +100,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_first_index_of,
     },
     SearchCandidate {
+        key: "search_last_index_of",
+        func: search_last_index_of,
+    },
+    SearchCandidate {
         key: "search_longest_increasing_run",
         func: search_longest_increasing_run,
     },

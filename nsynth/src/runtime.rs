@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
-use crate::benchmark::{generated_holdouts, Problem, Value as BenchmarkValue};
+use crate::benchmark::{generated_holdouts, Example, Problem, Value as BenchmarkValue};
+use crate::benchmark::Value as BmValue;
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -374,6 +375,12 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
     use crate::benchmark::Value as BV;
     match (actual, expected) {
         (Value::Int(a), BV::Int(b)) => a == b,
+        // Predicate bridge: an i64 0/1 output matches a bool expected
+        // (so a solver that emits `return 1;` still verifies against
+        // `expected: true`), and a bool output matches an i64 0/1
+        // expected (so a 0/1 lane can also be the canonical carrier
+        // for a problem posed as `expected: 1`).
+        (Value::Int(a), BV::Bool(b)) => (*a != 0) == *b,
         (Value::Bool(a), BV::Int(b)) => i64::from(*a) == *b,
         (Value::Bool(a), BV::Bool(b)) => a == b,
         (Value::Str(a), BV::Str(b)) => a == b,
@@ -2670,5 +2677,71 @@ fn main() -> i64 {
                 problem.name
             );
         }
+    }
+
+    #[test]
+    fn verifies_bool_expected_against_int_output() {
+        // The i64 0/1 lane verifies against a `Value::Bool` expected:
+        // a predicate that returns 1 must verify when expected is `true`,
+        // and a predicate that returns 0 must verify when expected is
+        // `false`. This is the bridge the new bool-expected problem
+        // shape relies on.
+        let problem = Problem {
+            name: "is_positive_bool_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn is_positive_bool_v0(a: i64) -> i64",
+            examples: vec![
+                Example {
+                    inputs: vec![BmValue::Int(3)],
+                    expected: BmValue::Bool(true),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(-5)],
+                    expected: BmValue::Bool(false),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(0)],
+                    expected: BmValue::Bool(false),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(10)],
+                    expected: BmValue::Bool(true),
+                },
+            ],
+            holdouts: vec![],
+            reference_code: "",
+        };
+        let code = "fn is_positive_bool_v0(x: i64) -> i64 {\n    if 0 < x {\n        return 1;\n    }\n    return 0;\n}\n";
+        verify_problem_code(&problem, code)
+            .unwrap_or_else(|err| panic!("bool→int verify failed: {err}"));
+    }
+
+    #[test]
+    fn verifies_int_expected_against_bool_output() {
+        // The mirror of the above: a `Value::Bool` actual output (e.g.
+        // a literal `if x > 0 { true } else { false }`) verifies against
+        // an i64 0/1 expected. This is the bridge the other way.
+        let problem = Problem {
+            name: "is_positive_bool_to_int_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn is_positive_bool_to_int_v0(a: i64) -> i64",
+            examples: vec![
+                Example {
+                    inputs: vec![BmValue::Int(3)],
+                    expected: BmValue::Int(1),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(-5)],
+                    expected: BmValue::Int(0),
+                },
+            ],
+            holdouts: vec![],
+            reference_code: "",
+        };
+        let code = "fn is_positive_bool_to_int_v0(x: i64) -> i64 {\n    if 0 < x {\n        return 1;\n    } else {\n        return 0;\n    }\n}\n";
+        verify_problem_code(&problem, code)
+            .unwrap_or_else(|err| panic!("int→bool verify failed: {err}"));
     }
 }

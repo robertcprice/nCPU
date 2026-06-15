@@ -44,6 +44,20 @@ ADD_TWO_REQUEST = {
     ],
 }
 
+# Bool-expected predicate problem: the wire format is `{expected: true|false}`,
+# the API coerces to the i64 0/1 lane, and the search teachers solve it.
+# Mirrors the integration test in `is_sorted_bool_v0` in nsynth's benchmark.
+IS_POSITIVE_BOOL_REQUEST = {
+    "name": "is_positive_bool",
+    "examples": [
+        {"inputs": [3], "expected": True},
+        {"inputs": [-5], "expected": False},
+        {"inputs": [0], "expected": False},
+        {"inputs": [10], "expected": True},
+        {"inputs": [-1], "expected": False},
+    ],
+}
+
 # Verified manually against the release binary: the solver refuses this
 # patternless string→int mapping instantly (search teachers all miss and
 # the differentiable solver does not support string inputs) — an honest
@@ -104,6 +118,62 @@ STRICTLY_INCREASING_REQUEST = {
         {"inputs": [[1, 1]], "expected": 0},
         {"inputs": [[1, 2, 1]], "expected": 0},
         {"inputs": [[0, 0, 1]], "expected": 0},
+    ],
+}
+
+# Struct input — the user supplies a `Point` signature so the request
+# looks like a real domain problem (geometry, graphics, etc.). The
+# solver already knows how to round-trip a Point literal and the
+# `synthesize_array` fallback returns the verified program.
+POINT_SUM_REQUEST = {
+    "name": "point_sum_ok",
+    "signature": "fn point_sum_ok(p: Point) -> i64",
+    "examples": [
+        {"inputs": [[2, 3]], "expected": 5},
+        {"inputs": [[0, 0]], "expected": 0},
+        {"inputs": [[10, -4]], "expected": 6},
+        {"inputs": [[-5, -3]], "expected": -8},
+    ],
+    "holdouts": [
+        {"inputs": [[100, 200]], "expected": 300},
+        {"inputs": [[-1, 1]], "expected": 0},
+    ],
+}
+
+LAST_INDEX_OF_REQUEST = {
+    "name": "last_index_of_5_ok",
+    "examples": [
+        # positives: 5 is the last element (or only 5)
+        {"inputs": [[1, 2, 3, 4, 5]], "expected": 4},
+        {"inputs": [[5]], "expected": 0},
+        {"inputs": [[1, 2, 5]], "expected": 2},
+        # negatives: array doesn't end with 5
+        {"inputs": [[1, 2, 3]], "expected": -1},
+        {"inputs": [[1, 2, 3, 4]], "expected": -1},
+        {"inputs": [[5, 4, 3, 2, 1]], "expected": 0},  # 5 at index 0, last
+    ],
+    "holdouts": [
+        {"inputs": [[1, 5, 2, 5]], "expected": 3},
+        {"inputs": [[5, 5, 5]], "expected": 2},
+        {"inputs": [[1, 2, 3, 4, 5, 6]], "expected": 4},
+    ],
+}
+
+COUNT_DISTINCT_REQUEST = {
+    "name": "count_distinct_ok",
+    "examples": [
+        {"inputs": [[1, 2, 3]], "expected": 3},
+        {"inputs": [[1, 1, 1]], "expected": 1},
+        {"inputs": [[1, 2, 1, 2, 1]], "expected": 2},
+        {"inputs": [[5, 4, 3, 2, 1]], "expected": 5},
+        {"inputs": [[7]], "expected": 1},
+        {"inputs": [[0, 0, 0, 0, 0, 0]], "expected": 1},
+        {"inputs": [[10, 20, 10, 20, 30]], "expected": 3},
+    ],
+    "holdouts": [
+        {"inputs": [[42]], "expected": 1},
+        {"inputs": [[1, 2, 3, 4, 5]], "expected": 5},
+        {"inputs": [[]], "expected": 0},
     ],
 }
 
@@ -228,12 +298,48 @@ def test_array_feature_dnf_problem_solves_through_api(server):
     assert "array_feature_ok" in body["code"]
 
 
+def test_bool_predicate_solves_through_api(server):
+    status, body = _request(server, "/synthesize", IS_POSITIVE_BOOL_REQUEST)
+    assert status == 200
+    assert body["success"] is True, body
+    # The bool expected is coerced to the i64 0/1 lane; the search
+    # teachers (single_branch / two_branch / predicate_branch) own it.
+    assert "is_positive_bool" in body["code"]
+    assert body["error"] is None
+
+
+def test_struct_input_point_solves_through_api(server):
+    status, body = _request(server, "/synthesize", POINT_SUM_REQUEST)
+    assert status == 200
+    assert body["success"] is True, body
+    # The struct signature is preserved; the Mog function it returns
+    # operates over the Point input the user asked for.
+    assert "point_sum_ok" in body["code"]
+    assert body["error"] is None
+
+
 def test_strictly_increasing_problem_solves_through_api(server):
     status, body = _request(server, "/synthesize", STRICTLY_INCREASING_REQUEST)
     assert status == 200
     assert body["success"] is True, body
     assert body["method"] == "search_strictly_increasing"
     assert "strictly_increasing_ok" in body["code"]
+
+
+def test_last_index_of_problem_solves_through_api(server):
+    status, body = _request(server, "/synthesize", LAST_INDEX_OF_REQUEST)
+    assert status == 200
+    assert body["success"] is True, body
+    assert body["method"] == "search_last_index_of"
+    assert "last_index_of_5_ok" in body["code"]
+
+
+def test_count_distinct_problem_solves_through_api(server):
+    status, body = _request(server, "/synthesize", COUNT_DISTINCT_REQUEST)
+    assert status == 200
+    assert body["success"] is True, body
+    assert body["method"] == "search_count_distinct"
+    assert "count_distinct_ok" in body["code"]
 
 
 def test_repeat_request_hits_solved_cache(server):

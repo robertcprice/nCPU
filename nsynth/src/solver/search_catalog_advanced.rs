@@ -289,6 +289,60 @@ pub(super) fn search_first_index_of(
     None
 }
 
+fn code_last_index_of(fn_name: &str, target: i64) -> String {
+    let target_str = target.to_string();
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    i: i64 = arr.len - 1;
+    while i >= 0 {
+        if arr[i] == __T__ { return i; }
+        i = i - 1;
+    }
+    return 0 - 1;
+}
+"#,
+        fn_name,
+    )
+    .replace("__T__", &target_str)
+}
+
+pub(super) fn search_last_index_of(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    const CANDIDATE_TARGETS: &[i64] = &[
+        0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5,
+    ];
+
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+
+    let _arrays = unary_array_examples(problem)?;
+    for &target in CANDIDATE_TARGETS {
+        let candidate = |arr: &[i64]| last_index_of_rust(arr, target);
+        if validate_unary_array(problem, candidate) {
+            return verified_result(
+                problem,
+                code_last_index_of(fn_name, target),
+                "search_last_index_of",
+            );
+        }
+    }
+    None
+}
+
+// Note: `search_count_distinct` already exists in this file (line ~501).
+// It uses sort + adjacent-unique counting, which is the canonical
+// implementation. We don't add a table-lookup variant with a different
+// name — same problem shape, same solution, just two codegen bodies.
+
+// Note: `search_kth_smallest` (the arr + k binary version) already
+// exists in this file at line ~91. We don't add a second copy with a
+// fixed-k signature; the binary version is more general and covers the
+// same use cases via Mog's overloaded signatures.
+
 fn code_longest_increasing_run(fn_name: &str) -> String {
     templ(
         r#"fn __FN__(arr: [i64]) -> i64 {
@@ -396,6 +450,7 @@ pub(super) fn search_two_sum_exists(problem: &Problem, fn_name: &str) -> Option<
 fn code_count_distinct(fn_name: &str) -> String {
     templ(
         r#"fn __FN__(arr: [i64]) -> i64 {
+    if arr.len == 0 { return 0; }
     arr.sort();
     count: i64 = 1;
     i: i64 = 1;

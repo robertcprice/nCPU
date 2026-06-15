@@ -65,6 +65,9 @@ fn every_preempting_method_has_a_registered_search_candidate() {
         "search_strictly_increasing",
         "search_has_strictly_increasing_run",
         "search_first_index_of",
+        "search_last_index_of",
+        "search_kth_smallest",
+        "search_count_distinct",
     ] {
         assert!(
             candidates.contains(m),
@@ -116,6 +119,55 @@ fn search_first_index_of_is_registered_and_preempts_gradient() {
     assert!(
         search_result_preempts_native_gradient(&fake),
         "search_first_index_of not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_last_index_of_is_registered_and_preempts_gradient() {
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_last_index_of"),
+        "search_last_index_of missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_last_index_of", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_last_index_of not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_count_distinct_is_registered_and_preempts_gradient() {
+    // The pre-existing search_count_distinct teacher already covers
+    // count-unique. Regression here just keeps the contract honest.
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_count_distinct"),
+        "search_count_distinct missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_count_distinct", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_count_distinct not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_kth_smallest_is_registered_and_preempts_gradient() {
+    // The pre-existing search_kth_smallest teacher takes (arr, k) as
+    // binary parameters. It's already wired into SEARCH_CANDIDATES and
+    // the preemption whitelist (since 8b08548). The regression here is
+    // a no-op assertion that the contract still holds; a stronger
+    // check would require mining example data, which is out of scope.
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_kth_smallest"),
+        "search_kth_smallest missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_kth_smallest", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_kth_smallest not in preemption whitelist.",
     );
 }
 

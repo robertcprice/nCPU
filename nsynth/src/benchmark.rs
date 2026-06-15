@@ -1638,6 +1638,7 @@ pub const FACTORIES: &[Factory] = &[
     make_kth_smallest,
     make_max_stock_profit,
     make_is_sorted,
+    make_is_sorted_bool,
     make_longest_increasing_run,
     make_digital_root,
     make_two_sum_exists,
@@ -1747,6 +1748,35 @@ fn make_is_sorted(variant: usize) -> Problem {
             example(vec![array(&[-2, 0, 4])], 1),
         ],
         "fn is_sorted(arr: [i64]) -> i64 {\n    i: i64 = 1;\n    while i < arr.len {\n        if arr[i] < arr[i - 1] { return 0; }\n        i = i + 1;\n    }\n    return 1;\n}\n",
+    )
+}
+
+fn example_bool(inputs: Vec<Value>, expected: bool) -> Example {
+    Example { inputs, expected: Value::Bool(expected) }
+}
+
+/// Same task as `is_sorted` but the predicate is carried in Mog's
+/// native `bool` lane (`-> i64` return + `Value::Bool` expected). The
+/// new `output_matches` bridge makes this interchangeable with the
+/// 0/1 int lane; the bool shape exercises it.
+fn make_is_sorted_bool(variant: usize) -> Problem {
+    problem(
+        "is_sorted_bool",
+        variant,
+        "arrays",
+        "Return true if the array is sorted in non-decreasing order.",
+        "fn is_sorted_bool(arr: [i64]) -> i64",
+        vec![
+            example_bool(vec![array(&[1, 2, 3])], true),
+            example_bool(vec![array(&[3, 2, 1])], false),
+            example_bool(vec![array(&[1, 1, 2])], true),
+            example_bool(vec![array(&[5])], true),
+        ],
+        vec![
+            example_bool(vec![array(&[1, 3, 2])], false),
+            example_bool(vec![array(&[-2, 0, 4])], true),
+        ],
+        "fn is_sorted_bool(arr: [i64]) -> i64 {\n    i: i64 = 1;\n    while i < arr.len {\n        if arr[i] < arr[i - 1] { return 0; }\n        i = i + 1;\n    }\n    return 1;\n}\n",
     )
 }
 

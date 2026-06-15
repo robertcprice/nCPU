@@ -743,6 +743,119 @@ fn search_first_index_of_learns_target_value() {
     );
 }
 
+/// `last_index_of(arr, target) -> last i where arr[i] == target, else -1`.
+/// Mirror of `search_first_index_of`, but scans in reverse.
+#[test]
+fn search_last_index_of_learns_target_value() {
+    fn int_arr_problem(
+        name: &'static str,
+        signature: &'static str,
+        rows: &[(&[i64], i64)],
+    ) -> Problem {
+        Problem {
+            name: name.to_string(),
+            category: "array_index",
+            description: "",
+            signature,
+            examples: rows
+                .iter()
+                .map(|(arr, label)| Example {
+                    inputs: vec![Value::Array(arr.to_vec())],
+                    expected: Value::Int(*label),
+                })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    let problem = int_arr_problem(
+        "last_index_of_5",
+        "fn last_index_of_5(arr: [i64]) -> i64",
+        &[
+            // last 5 at index 2
+            (&[1, 2, 5, 7], 2),
+            // all 5s: last 5 is at the last index
+            (&[5, 5, 5], 2),
+            // one 5: last 5 is at index 3
+            (&[0, 0, 0, 5], 3),
+            // no 5: -1
+            (&[10, 20, 30], -1),
+            // target at index 0 (only one)
+            (&[5], 0),
+            // multiple 5s, last one at index 9
+            (&[1, 2, 3, 4, 6, 7, 5, 8, 9, 5], 9),
+            // no 5: -1
+            (&[1, 2, 3, 4], -1),
+            // first 5 at index 0, last 5 also at index 0 (only one)
+            (&[5, 1, 2, 3, 4], 0),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "last_index_of not learned: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_last_index_of");
+    assert!(
+        result.code.contains("arr[i] == 5"),
+        "expected equality check against target 5; got: {}",
+        result.code
+    );
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![2, 5, 8])], 1),
+            (vec![Value::Array(vec![5, 5])], 1),
+            (vec![Value::Array(vec![1, 2, 3])], -1),
+            (vec![Value::Array(vec![5, 1, 5, 2])], 2),
+        ],
+    );
+}
+
+/// `count_distinct(arr) -> number of distinct values in arr`. The
+/// pre-existing `search_count_distinct` teacher uses sort + adjacent
+/// uniqueness counting; this test exercises the full pipeline through
+/// that teacher.
+#[test]
+fn search_count_distinct_learns_distinct_count() {
+    let problem = arr_class_problem(
+        "count_distinct_v0",
+        "fn count_distinct_v0(arr: [i64]) -> i64",
+        &[
+            (&[1, 2, 3], 3),
+            (&[1, 1, 1], 1),
+            (&[1, 2, 1, 2, 1], 2),
+            (&[5, 4, 3, 2, 1], 5),
+            (&[-1, -2, -3], 3),
+            (&[7], 1),
+            (&[0, 0, 0, 0, 0, 0], 1),
+            (&[10, 20, 10, 20, 30], 3),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "count_distinct not learned: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_count_distinct");
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![42])], 1),
+            (vec![Value::Array(vec![1, 1, 1, 1])], 1),
+            (vec![Value::Array(vec![1, 2, 3, 4, 5])], 5),
+            (vec![Value::Array(vec![])], 0),
+        ],
+    );
+}
+
 /// Every string-output benchmark problem is solved by the main pipeline and the
 /// emitted program verifies on its held-out examples.
 #[test]

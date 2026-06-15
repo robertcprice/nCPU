@@ -78,6 +78,15 @@ pub(super) fn first_index_of_rust(arr: &[i64], target: i64) -> i64 {
     -1
 }
 
+pub(super) fn last_index_of_rust(arr: &[i64], target: i64) -> i64 {
+    for (i, &v) in arr.iter().enumerate().rev() {
+        if v == target {
+            return i as i64;
+        }
+    }
+    -1
+}
+
 pub(super) fn longest_increasing_run_rust(arr: &[i64]) -> i64 {
     let mut best = 1i64;
     let mut current = 1i64;
