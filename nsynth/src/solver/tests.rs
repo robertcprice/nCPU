@@ -297,6 +297,72 @@ fn search_suffix_class_learns_sibilant_plural_rule() {
     );
 }
 
+/// LinguaGenesis x nsynth: animacy is an *arbitrary lexical fact* — "teacher" is
+/// animate, "report" is not, and no spelling rule predicts which (agents and
+/// patients even share endings). The synthesizer must therefore RECOVER THE
+/// LEXICON, not a rule: the string-equality-map teacher emits a verified lookup
+/// table (off-default words only) encoding the animacy knowledge as a program.
+/// The colliding suffixes (teacher/-her vs weather/-her, doctor/-tor vs
+/// tractor/-tor) defeat any spurious suffix rule, so the lexicon teacher wins.
+#[test]
+fn search_string_equality_map_learns_animacy_lexicon() {
+    let problem = str_class_problem(
+        "is_animate",
+        "fn is_animate(s: string) -> i64",
+        &[
+            ("teacher", 1), ("doctor", 1), ("actor", 1), ("singer", 1),
+            ("painter", 1), ("baker", 1), ("dog", 1), ("cat", 1),
+            ("weather", 0), ("tractor", 0), ("finger", 0), ("printer", 0),
+            ("marker", 0), ("fog", 0), ("mat", 0), ("report", 0),
+            ("song", 0), ("door", 0),
+        ],
+    );
+    let result = solve_problem_search_only(&problem);
+    assert!(result.success, "failed to recover the animacy lexicon");
+    assert_eq!(
+        result.method, "search_string_equality_map",
+        "expected the lexical-lookup teacher to fire, got {}",
+        result.method
+    );
+    // The semantic content is in the program: animate words become explicit
+    // equality branches; the inanimate majority is the default return.
+    assert!(result.code.contains("if s == \"teacher\""));
+    assert!(result.code.contains("if s == \"dog\""));
+    assert!(!result.code.contains("if s == \"report\""));
+}
+
+/// The string-equality-map teacher must DEFER to a general orthographic rule when
+/// one explains the data — a rule generalizes, a lookup table does not. Here
+/// every -s word is positive and no negative ends in -s, so the suffix teacher
+/// should win and the lookup teacher must stand down.
+#[test]
+fn search_string_equality_map_defers_to_suffix_rule() {
+    let problem = str_class_problem(
+        "ends_s",
+        "fn ends_s(s: string) -> i64",
+        &[
+            ("walks", 1), ("runs", 1), ("plays", 1), ("reads", 1),
+            ("jumps", 1), ("calls", 1), ("opens", 1), ("needs", 1),
+            ("walk", 0), ("run", 0), ("play", 0), ("read", 0),
+            ("jump", 0), ("call", 0), ("open", 0), ("need", 0),
+        ],
+    );
+    let result = solve_problem_search_only(&problem);
+    assert!(result.success);
+    // A general orthographic-rule teacher (suffix / contains / starts_with) must
+    // win — NOT the lookup table, which would only memorize and not generalize.
+    assert_ne!(
+        result.method, "search_string_equality_map",
+        "lookup teacher should have deferred to a general rule, but it fired"
+    );
+    assert!(
+        result.code.contains("ends_with") || result.code.contains("contains")
+            || result.code.contains("starts_with"),
+        "expected an orthographic-rule program, got: {}",
+        result.code
+    );
+}
+
 /// Build a unary-array classification Problem from (array, label) pairs.
 fn arr_class_problem(
     name: &'static str,

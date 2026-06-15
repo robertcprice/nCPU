@@ -651,7 +651,15 @@ def task_noun_animacy() -> dict:
             forms = w if isinstance(w, (tuple, list)) else (w,)  # verbs are (base, 3sg)
             for form in forms:
                 nonnouns.add(str(form).lower())
-    nonnouns.update({"the", "a", "is", "are", "not", "does", "do", "always", "to"})
+    # Function/auxiliary/question words — non-nouns, and enough of them that 0
+    # ("not a noun") is the majority label, so the synthesized lexicon defaults an
+    # unseen word to "not a noun" (the safe choice for parsing and dialogue).
+    nonnouns.update({
+        "the", "a", "an", "is", "are", "was", "were", "be", "not", "does", "do",
+        "did", "can", "could", "will", "would", "should", "may", "might", "must",
+        "always", "to", "what", "who", "why", "how", "when", "where", "yes", "no",
+        "and", "or", "but", "this", "that", "it", "they", "she", "he",
+    })
     rows += [(w, 0) for w in nonnouns]
     rows = sorted(set(rows))
     examples = [{"inputs": [w], "expected": label} for w, label in rows]
@@ -758,6 +766,66 @@ def task_ends_s() -> dict:
     }
 
 
+def task_prop_lexicon() -> dict:
+    """The reasoning parser's LEXICON: map a proposition clause to a symbol id.
+
+    Logical validity is about the FORM of an argument — whether the premise
+    asserts the conditional's antecedent or its consequent. Deciding that means
+    recognizing WHICH proposition a clause states. The curriculum draws clauses
+    from a fixed pool (PROPOSITION_PAIRS), so "the alarm rings" is always the same
+    proposition. We synthesize `prop_id(clause) -> symbol` as a verified lookup
+    (string-equality-map teacher), turning the Python `prop == antecedent` string
+    compare into program-level proposition identity. Each distinct clause gets a
+    unique id; comparing two clauses' ids tells the reasoner if they match.
+    """
+    sys.path.insert(0, str(LINGUAGENESIS))
+    from v2.curriculum import formal_logic as fl  # type: ignore
+
+    clauses = []
+    for pair in fl.PROPOSITION_PAIRS:
+        clauses.append(pair.antecedent.lower())
+        clauses.append(pair.consequent.lower())
+    clauses = sorted(set(clauses))
+    examples = [{"inputs": [c], "expected": i + 1} for i, c in enumerate(clauses)]
+    return {
+        "name": "prop_id",
+        "signature": "fn prop_id(s: string) -> i64",
+        "examples": examples,
+        "holdouts": [],
+    }
+
+
+def task_negation_detect() -> dict:
+    """Synthesized negation detector for the reasoning parser: does a clause carry
+    a negation? Replaces the Python `"is not true" in clause` test. The marker the
+    curriculum uses always contains "not", so nSynth learns `contains("not")` — a
+    rule that generalizes — via the contains-literal teacher.
+    """
+    sys.path.insert(0, str(LINGUAGENESIS))
+    from v2.curriculum import formal_logic as fl  # type: ignore
+
+    rows = []
+    for pair in fl.PROPOSITION_PAIRS:
+        for clause in (pair.antecedent, pair.consequent):
+            c = clause.lower()
+            rows.append((c, 0))                              # plain: no negation
+            # Affirmative framings (label 0) that ALSO contain "is"/"true"/"that",
+            # so those words can't discriminate — together with same-ending negated
+            # forms this leaves contains("not") as the only clean cue, the rule that
+            # actually generalizes.
+            rows.append((f"it is true that {c}", 0))         # affirmative w/ is+true+that
+            rows.append((f"it is not true that {c}", 1))     # negated, same ending
+            rows.append((f"{c} is not true", 1))             # negated, variant
+    rows = sorted(set(rows))
+    examples = [{"inputs": [c], "expected": label} for c, label in rows]
+    return {
+        "name": "has_negation",
+        "signature": "fn has_negation(s: string) -> i64",
+        "examples": examples,
+        "holdouts": [],
+    }
+
+
 TASKS = {
     "verb_3sg_es": task_verb_3sg_es,
     "animacy_lexicon": task_animacy_lexicon,
@@ -765,6 +833,8 @@ TASKS = {
     "roles_rule": task_roles_rule,
     "agreement_rule": task_agreement_rule,
     "ends_s": task_ends_s,
+    "prop_lexicon": task_prop_lexicon,
+    "negation_detect": task_negation_detect,
     "sentence_3sg": task_sentence_3sg,
     "sentence_gerund": task_sentence_gerund,
     "sentence_past": task_sentence_past,
