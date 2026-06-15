@@ -686,6 +686,77 @@ pub(super) fn code_count_positive(fn_name: &str) -> String {
     )
 }
 
+/// 2-arg stateful reducer: `f(state, arr) = state op g(arr)`. The
+/// `op` is one of `+ - * min max`; `g` is one of `sum / max / min /
+/// count_positive / count_zero / count_negative / all_zero`. This
+/// is the per-tick shape the rest of the nsynth search catalogue
+/// doesn't cover — see `docs/stateful_synthesis_status.md` Stage 1.
+pub(super) fn code_stateful_reducer(
+    fn_name: &str,
+    state_arg: &str,
+    arr_arg: &str,
+    op_token: &str,
+    reducer_kind: &str,
+) -> String {
+    let reduction = match reducer_kind {
+        "sum" => format!(
+            "    s: i64 = 0;\n    for v in {arr_arg} {{\n        s = s + v;\n    }}\n    r := s;\n",
+            arr_arg = arr_arg
+        ),
+        "max" => format!(
+            "    r: i64 = {arr_arg}[0];\n    for v in {arr_arg} {{\n        if v > r {{ r = v; }}\n    }}\n",
+            arr_arg = arr_arg
+        ),
+        "min" => format!(
+            "    r: i64 = {arr_arg}[0];\n    for v in {arr_arg} {{\n        if v < r {{ r = v; }}\n    }}\n",
+            arr_arg = arr_arg
+        ),
+        "count_positive" => format!(
+            "    s: i64 = 0;\n    for v in {arr_arg} {{\n        if v > 0 {{ s = s + 1; }}\n    }}\n    r := s;\n",
+            arr_arg = arr_arg
+        ),
+        "count_zero" => format!(
+            "    s: i64 = 0;\n    for v in {arr_arg} {{\n        if v == 0 {{ s = s + 1; }}\n    }}\n    r := s;\n",
+            arr_arg = arr_arg
+        ),
+        "count_negative" => format!(
+            "    s: i64 = 0;\n    for v in {arr_arg} {{\n        if v < 0 {{ s = s + 1; }}\n    }}\n    r := s;\n",
+            arr_arg = arr_arg
+        ),
+        "all_zero" => {
+            // Reducer that returns 1 if every element is zero, else 0.
+            "    r: i64 = 1;\n    for v in arr {\n        if v != 0 { r = 0; }\n    }\n".to_string()
+        }
+        other => format!("    r: i64 = 0; // unknown reducer kind: {}\n", other),
+    };
+    // Combine: result = (state) op (reduction result).
+    let combine = match op_token {
+        "+" => format!("    return {state} + r;\n", state = state_arg),
+        "-" => format!("    return {state} - r;\n", state = state_arg),
+        "*" => format!("    return {state} * r;\n", state = state_arg),
+        "min" => {
+            if state_arg == arr_arg {
+                "    if r > state { r = state; }\n    return r;\n".to_string()
+            } else {
+                format!("    if r > {state} {{ r = {state}; }}\n    return r;\n", state = state_arg)
+            }
+        }
+        "max" => {
+            if state_arg == arr_arg {
+                "    if r < state { r = state; }\n    return r;\n".to_string()
+            } else {
+                format!("    if r < {state} {{ r = {state}; }}\n    return r;\n", state = state_arg)
+            }
+        }
+        other => format!("    return r; // unknown op: {}\n", other),
+    };
+    format!(
+        "fn __FN__({state_arg}: i64, {arr_arg}: [i64]) -> i64 {{\n{reduction}{combine}}}\n",
+        state_arg = state_arg,
+        arr_arg = arr_arg
+    )
+}
+
 pub(super) fn code_is_even(fn_name: &str) -> String {
     templ(
         r#"fn __FN__(x: i64) -> i64 {

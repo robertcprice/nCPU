@@ -375,6 +375,13 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
     use crate::benchmark::Value as BV;
     match (actual, expected) {
         (Value::Int(a), BV::Int(b)) => a == b,
+        // Float bridge: a float output matches an int expected when the
+        // float rounds back to that int (so the float-regression lane
+        // is interchangeable with the int lane on the wire). The
+        // reverse direction widens an int to f64 for comparison.
+        (Value::Float(a), BV::Int(b)) => *a == *b as f64,
+        (Value::Int(a), BV::Float(b)) => *a as f64 == f64::from_bits(*b),
+        (Value::Float(a), BV::Float(b)) => *a == f64::from_bits(*b),
         // Predicate bridge: an i64 0/1 output matches a bool expected
         // (so a solver that emits `return 1;` still verifies against
         // `expected: true`), and a bool output matches an i64 0/1
@@ -2743,5 +2750,34 @@ fn main() -> i64 {
         let code = "fn is_positive_bool_to_int_v0(x: i64) -> i64 {\n    if 0 < x {\n        return 1;\n    } else {\n        return 0;\n    }\n}\n";
         verify_problem_code(&problem, code)
             .unwrap_or_else(|err| panic!("int→bool verify failed: {err}"));
+    }
+
+    #[test]
+    fn verifies_float_expected_against_int_output() {
+        // A solver that emits an i64 result verifies against a
+        // `Value::Float` expected (so the int lane is interchangeable
+        // with the float lane on the wire — same trick that opened
+        // the bool lane).
+        let problem = Problem {
+            name: "double_float_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn double_float_v0(a: i64) -> i64",
+            examples: vec![
+                Example {
+                    inputs: vec![BmValue::Int(3)],
+                    expected: BmValue::Float(6.0_f64.to_bits()),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(-5)],
+                    expected: BmValue::Float((-10.0_f64).to_bits()),
+                },
+            ],
+            holdouts: vec![],
+            reference_code: "",
+        };
+        let code = "fn double_float_v0(x: i64) -> i64 {\n    return x * 2;\n}\n";
+        verify_problem_code(&problem, code)
+            .unwrap_or_else(|err| panic!("int→float verify failed: {err}"));
     }
 }

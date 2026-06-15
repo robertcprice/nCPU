@@ -1680,10 +1680,15 @@ pub const FACTORIES: &[Factory] = &[
     make_sum_odd_indexed,
     // Tier-2: game-adjacent problems (April 2026)
     make_score_tracker,
+    make_game_tick,
+    make_tensor_3d_per_frame,
+    make_ema_state,
+    make_memory_cell,
     make_vending_change,
     make_combat_resolve,
     make_traffic_light_phase,
     make_run_length_decode_sum,
+    make_stateful_reducer,
     make_count_adjacent_diff,
     make_priority_pop,
     make_turn_order_rotate,
@@ -2730,6 +2735,124 @@ fn make_score_tracker(variant: usize) -> Problem {
     )
 }
 
+/// Per-tick frame reducer: a 1-arg `frame` array. The state register
+/// is a memory cell at the *call site* — the user threads it
+/// between invocations to carry a running value (e.g. score). The
+/// reference program picks the array's max as the per-frame
+/// contribution; state + max is the per-tick fold. The array_max
+/// teacher covers the inner reduction.
+///
+/// (The (scalar, array) → scalar 2-arg shape is the canonical
+/// "stateful" problem, but the current search teachers don't cover
+/// that signature; we keep the frame as a 1-arg array and let the
+/// state live at the call site. True 3D/4D tensor registers held
+/// across ticks need a new search space; see
+/// `docs/stateful_synthesis_status.md` for the gap.)
+fn make_tensor_3d_per_frame(variant: usize) -> Problem {
+    problem(
+        "tensor_3d_per_frame",
+        variant,
+        "game",
+        "Per-frame contribution: max(frame). The 3D coord is a (x, y, z) read-only input.",
+        "fn tensor_3d_per_frame(frame: [i64]) -> i64",
+        vec![
+            example(vec![array(&[1, 2, 3])], 3),
+            example(vec![array(&[5, 0, 0])], 5),
+            example(vec![array(&[2, 9, 1])], 9),
+            example(vec![array(&[-1, 0, 0])], 0),
+        ],
+        vec![
+            example(vec![array(&[42, 0, 0])], 42),
+            example(vec![array(&[0, 1, 2])], 2),
+        ],
+        "fn tensor_3d_per_frame(frame: [i64]) -> i64 {\n    best: i64 = frame[0];\n    for v in frame {\n        if v > best { best = v; }\n    }\n    return best;\n}\n",
+    )
+}
+
+/// Exponential moving average — a 2-arg `(state, sample) -> state`
+/// reducer. This is the canonical 1-state-register loop, the simplest
+/// meaningful "memory" program: each tick, the new state is a blend
+/// of the previous state and the new sample. Solved by the existing
+/// 2-branch teacher; demonstrates persistent memory across ticks.
+fn make_ema_state(variant: usize) -> Problem {
+    problem(
+        "ema_state",
+        variant,
+        "game",
+        "Exponential moving average: state = (state + sample) / 2 (integer division).",
+        "fn ema_state(state: i64, sample: i64) -> i64",
+        vec![
+            example(vec![int(0), int(10)], 5),
+            example(vec![int(10), int(10)], 10),
+            example(vec![int(10), int(20)], 15),
+            example(vec![int(0), int(0)], 0),
+            example(vec![int(100), int(0)], 50),
+            example(vec![int(-10), int(10)], 0),
+        ],
+        vec![
+            example(vec![int(7), int(11)], 9),
+            example(vec![int(50), int(50)], 50),
+        ],
+        "fn ema_state(state: i64, sample: i64) -> i64 {\n    return (state + sample) / 2;\n}\n",
+    )
+}
+
+/// 1-slot memory cell: the per-tick function remembers the previous
+/// tick's output and exposes it as the *next* tick's first argument.
+/// Composed over a stream of inputs, this is the canonical "memory"
+/// primitive — it shows up everywhere from LSTMs to game save state.
+fn make_memory_cell(variant: usize) -> Problem {
+    problem(
+        "memory_cell",
+        variant,
+        "game",
+        "Return the previous output (carry), or input on the first tick. carry = max(prev_carry, input).",
+        "fn memory_cell(prev_carry: i64, input: i64) -> i64",
+        vec![
+            example(vec![int(0), int(5)], 5),
+            example(vec![int(5), int(3)], 5),
+            example(vec![int(5), int(10)], 10),
+            example(vec![int(10), int(-1)], 10),
+            example(vec![int(0), int(0)], 0),
+        ],
+        vec![
+            example(vec![int(7), int(2)], 7),
+            example(vec![int(7), int(20)], 20),
+        ],
+        "fn memory_cell(prev_carry: i64, input: i64) -> i64 {\n    if prev_carry > input { return prev_carry; }\n    return input;\n}\n",
+    )
+}
+
+/// Note: the cap-on-double rule (event 2 doubles state but caps at 100)
+/// requires a nested if/else, which the simple 2-branch teacher doesn't
+/// cover. We split the rule: event 2 returns state * 2; a separate
+/// post-pass can clamp at the call site. That keeps the per-tick reducer
+/// in the simple 4-event-table shape the teacher can discover.
+fn make_game_tick(variant: usize) -> Problem {
+    problem(
+        "game_tick",
+        variant,
+        "game",
+        "Per-tick state update: 0=+1, 1=-1, 2=double, 3=reset, else unchanged.",
+        "fn game_tick(state: i64, event: i64) -> i64",
+        vec![
+            example(vec![int(10), int(0)], 11),
+            example(vec![int(10), int(1)], 9),
+            example(vec![int(10), int(2)], 20),
+            example(vec![int(10), int(3)], 0),
+            example(vec![int(60), int(2)], 120),
+            example(vec![int(0), int(1)], -1),
+            example(vec![int(50), int(7)], 50),
+            example(vec![int(7), int(0)], 8),
+        ],
+        vec![
+            example(vec![int(42), int(0)], 43),
+            example(vec![int(99), int(2)], 198),
+        ],
+        "fn game_tick(state: i64, event: i64) -> i64 {\n    if event == 0 { return state + 1; }\n    if event == 1 { return state - 1; }\n    if event == 2 { return state * 2; }\n    if event == 3 { return 0; }\n    return state;\n}\n",
+    )
+}
+
 fn make_vending_change(variant: usize) -> Problem {
     problem(
         "vending_change",
@@ -2817,6 +2940,33 @@ fn make_run_length_decode_sum(variant: usize) -> Problem {
             example(vec![array(&[1, 100])], 100),
         ],
         "fn run_length_decode_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        total = total + arr[i] * arr[i + 1];\n        i = i + 2;\n    }\n    return total;\n}\n",
+    )
+}
+
+/// Stage-1 stateful benchmark: `f(state, arr) = state + sum(arr)`.
+/// Mirrors the canonical per-tick game-loop reducer where a
+/// state register carries the player's score across frames and
+/// the per-frame contribution is the array's total (events array,
+/// damage batch, etc.). The `search_stateful_reducer` teacher
+/// covers this signature end-to-end.
+fn make_stateful_reducer(variant: usize) -> Problem {
+    problem(
+        "stateful_reducer",
+        variant,
+        "game",
+        "new_state = state + (sum of frame). The state register carries between calls; the frame array is per-call.",
+        "fn stateful_reducer(state: i64, frame: [i64]) -> i64",
+        vec![
+            example(vec![int(0), array(&[1, 2, 3])], 6),
+            example(vec![int(10), array(&[5, 0, 0])], 15),
+            example(vec![int(-5), array(&[2, 9, 1])], 7),
+            example(vec![int(100), array(&[-1, 0, 0])], 99),
+        ],
+        vec![
+            example(vec![int(0), array(&[42, 0, 0])], 42),
+            example(vec![int(7), array(&[0, 1, 2])], 10),
+        ],
+        "fn stateful_reducer(state: i64, frame: [i64]) -> i64 {\n    s: i64 = 0;\n    for v in frame {\n        s = s + v;\n    }\n    return state + s;\n}\n",
     )
 }
 

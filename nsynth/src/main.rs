@@ -310,8 +310,9 @@ fn main() {
             "rust" => mog_synth::mog_transpile::to_rust(&mog),
             "typescript" => mog_synth::mog_transpile::to_typescript(&mog),
             "go" => mog_synth::mog_transpile::to_go(&mog),
+            "java" => mog_synth::mog_transpile::to_java(&mog),
             other => {
-                eprintln!("unknown transpile target: {other} (expected python|rust|typescript|go)");
+                eprintln!("unknown transpile target: {other} (expected python|rust|typescript|go|java)");
                 std::process::exit(1);
             }
         };

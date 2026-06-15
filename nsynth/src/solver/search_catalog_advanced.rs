@@ -338,6 +338,117 @@ pub(super) fn search_last_index_of(
 // implementation. We don't add a table-lookup variant with a different
 // name — same problem shape, same solution, just two codegen bodies.
 
+fn code_is_anagram(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(a: [i64], b: [i64]) -> i64 {
+    if a.len != b.len { return 0; }
+    sa: [i64] = a;
+    sb: [i64] = b;
+    sa.sort();
+    sb.sort();
+    i: i64 = 0;
+    while i < a.len {
+        if sa[i] != sb[i] { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+"#,
+        fn_name,
+    )
+}
+
+pub(super) fn search_is_anagram(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64, ParamType::ArrayI64] {
+        return None;
+    }
+    if !validate_two_arrays(problem, is_anagram_rust) {
+        return None;
+    }
+    verified_result(problem, code_is_anagram(fn_name), "search_is_anagram")
+}
+
+fn code_longest_run(fn_name: &str, target: i64) -> String {
+    let target_str = target.to_string();
+    templ(
+        r#"fn __FN__(arr: [i64]) -> i64 {
+    best: i64 = 0;
+    cur: i64 = 0;
+    for v in arr {
+        if v == __T__ {
+            cur = cur + 1;
+            if cur > best { best = cur; }
+        } else {
+            cur = 0;
+        }
+    }
+    return best;
+}
+"#,
+        fn_name,
+    )
+    .replace("__T__", &target_str)
+}
+
+pub(super) fn search_longest_run(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    const CANDIDATE_TARGETS: &[i64] = &[
+        0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5,
+    ];
+
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    let _arrays = unary_array_examples(problem)?;
+    for &target in CANDIDATE_TARGETS {
+        let candidate = |arr: &[i64]| longest_run_rust(arr, target);
+        if validate_unary_array(problem, candidate) {
+            return verified_result(
+                problem,
+                code_longest_run(fn_name, target),
+                "search_longest_run",
+            );
+        }
+    }
+    None
+}
+
+fn code_intersects(fn_name: &str) -> String {
+    templ(
+        r#"fn __FN__(a: [i64], b: [i64]) -> i64 {
+    for x in a {
+        for y in b {
+            if x == y { return 1; }
+        }
+    }
+    return 0;
+}
+"#,
+        fn_name,
+    )
+}
+
+pub(super) fn search_intersects(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::ArrayI64, ParamType::ArrayI64] {
+        return None;
+    }
+    if !validate_two_arrays(problem, intersects_rust) {
+        return None;
+    }
+    verified_result(problem, code_intersects(fn_name), "search_intersects")
+}
+
 // Note: `search_kth_smallest` (the arr + k binary version) already
 // exists in this file at line ~91. We don't add a second copy with a
 // fixed-k signature; the binary version is more general and covers the

@@ -66,6 +66,9 @@ fn every_preempting_method_has_a_registered_search_candidate() {
         "search_has_strictly_increasing_run",
         "search_first_index_of",
         "search_last_index_of",
+        "search_is_anagram",
+        "search_longest_run",
+        "search_intersects",
         "search_kth_smallest",
         "search_count_distinct",
     ] {
@@ -149,6 +152,48 @@ fn search_count_distinct_is_registered_and_preempts_gradient() {
     assert!(
         search_result_preempts_native_gradient(&fake),
         "search_count_distinct not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_is_anagram_is_registered_and_preempts_gradient() {
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_is_anagram"),
+        "search_is_anagram missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_is_anagram", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_is_anagram not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_longest_run_is_registered_and_preempts_gradient() {
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_longest_run"),
+        "search_longest_run missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_longest_run", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_longest_run not in preemption whitelist.",
+    );
+}
+
+#[test]
+fn search_intersects_is_registered_and_preempts_gradient() {
+    let candidates = candidate_methods();
+    assert!(
+        candidates.contains(&"search_intersects"),
+        "search_intersects missing from SEARCH_CANDIDATES.",
+    );
+    let fake = make_solve_result("search_intersects", "");
+    assert!(
+        search_result_preempts_native_gradient(&fake),
+        "search_intersects not in preemption whitelist.",
     );
 }
 

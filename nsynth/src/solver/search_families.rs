@@ -172,6 +172,103 @@ pub(super) fn search_array_item_loop(problem: &Problem, fn_name: &str) -> Option
     None
 }
 
+/// Stage-1 stateful synthesis: the `(state, array) -> state` per-tick
+/// reducer. The existing search catalogue covers `(scalar, scalar)`
+/// and `(array)` separately, but not the cross product. This
+/// teacher enumerates `f(state, arr) = state op g(arr)` for `g` in
+/// {sum, max, min, count_positive, count_zero, count_negative} and
+/// `op` in {+, -, *, min, max} — the small set of per-tick game-loop
+/// shapes that already run in production games. See
+/// `docs/stateful_synthesis_status.md` Stage 1.
+pub(super) fn search_stateful_reducer(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64, ParamType::ArrayI64] {
+        return None;
+    }
+    // Args: first is `state: i64`, second is `arr: [i64]`.
+    let state_arg = "state";
+    let arr_arg = "arr";
+
+    let reducers: &[&str] = &[
+        "sum",
+        "max",
+        "min",
+        "count_positive",
+        "count_zero",
+        "count_negative",
+    ];
+    let ops: &[&str] = &["+", "-", "*", "min", "max"];
+
+    for reducer in reducers {
+        for op in ops {
+            // Reducer ground truth: apply the reduction to the array.
+            let reducer_fn: Box<dyn Fn(&[i64]) -> i64> = match *reducer {
+                "sum" => Box::new(|arr: &[i64]| arr.iter().sum()),
+                "max" => Box::new(|arr: &[i64]| {
+                    arr.iter().copied().max().unwrap_or(0)
+                }),
+                "min" => Box::new(|arr: &[i64]| {
+                    arr.iter().copied().min().unwrap_or(0)
+                }),
+                "count_positive" => Box::new(|arr: &[i64]| {
+                    arr.iter().filter(|&&x| x > 0).count() as i64
+                }),
+                "count_zero" => Box::new(|arr: &[i64]| {
+                    arr.iter().filter(|&&x| x == 0).count() as i64
+                }),
+                "count_negative" => Box::new(|arr: &[i64]| {
+                    arr.iter().filter(|&&x| x < 0).count() as i64
+                }),
+                _ => continue,
+            };
+            // Validate against the problem's examples directly so we
+            // can pass the array by reference (the generic
+            // `validate_binary_int` is scalar-only).
+            let passes = problem.examples.iter().all(|ex| {
+                if ex.inputs.len() != 2 {
+                    return false;
+                }
+                let state = match &ex.inputs[0] {
+                    Value::Int(v) => *v,
+                    _ => return false,
+                };
+                let arr = match &ex.inputs[1] {
+                    Value::Array(v) => v.clone(),
+                    _ => return false,
+                };
+                let r = reducer_fn(&arr);
+                let got = match *op {
+                    "+" => state + r,
+                    "-" => state - r,
+                    "*" => state * r,
+                    "min" => state.min(r),
+                    "max" => state.max(r),
+                    _ => 0,
+                };
+                got == ex.expected_int()
+            });
+            if passes {
+                let code = code_stateful_reducer(
+                    fn_name,
+                    state_arg,
+                    arr_arg,
+                    op,
+                    reducer,
+                );
+                return verified_result(
+                    problem,
+                    code,
+                    "search_stateful_reducer",
+                );
+            }
+        }
+    }
+    None
+}
+
 pub(super) fn search_run_length_decode_sum(
     problem: &Problem,
     fn_name: &str,

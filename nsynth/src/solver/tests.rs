@@ -856,6 +856,190 @@ fn search_count_distinct_learns_distinct_count() {
     );
 }
 
+/// `is_anagram(a, b) -> 1 iff a and b are anagrams of each other
+/// (same length, same multiset of elements)`. The teacher sorts both
+/// arrays and checks element-wise equality.
+#[test]
+fn search_is_anagram_learns_permutation_equivalence() {
+    fn two_arr_problem(
+        name: &'static str,
+        signature: &'static str,
+        rows: &[(&[i64], &[i64], i64)],
+    ) -> Problem {
+        Problem {
+            name: name.to_string(),
+            category: "array_pair",
+            description: "",
+            signature,
+            examples: rows
+                .iter()
+                .map(|(a, b, label)| Example {
+                    inputs: vec![Value::Array(a.to_vec()), Value::Array(b.to_vec())],
+                    expected: Value::Int(*label),
+                })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    let problem = two_arr_problem(
+        "demo_is_anagram",
+        "fn demo_is_anagram(a: [i64], b: [i64]) -> i64",
+        &[
+            (&[1, 2, 3], &[3, 2, 1], 1),
+            (&[1, 2, 2, 3], &[2, 3, 1, 2], 1),
+            (&[1, 1, 2], &[1, 2, 1], 1),
+            (&[1, 2, 3], &[1, 2, 4], 0),
+            (&[1, 2, 3], &[1, 2], 0),
+            (&[], &[], 1),
+            (&[1, 2, 3], &[3, 3, 2], 0),
+            (&[-1, 0, 1], &[1, 0, -1], 1),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "is_anagram not learned: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_is_anagram");
+    assert!(
+        result.code.contains("sa.sort()"),
+        "expected sort + compare codegen; got: {}",
+        result.code
+    );
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (
+                vec![Value::Array(vec![4, 5, 6]), Value::Array(vec![6, 4, 5])],
+                1,
+            ),
+            (
+                vec![Value::Array(vec![1, 2]), Value::Array(vec![2, 1, 1])],
+                0,
+            ),
+        ],
+    );
+}
+
+/// `longest_run(arr, target) -> length of the longest contiguous run
+/// of target in arr`. Mirrors `search_has_strictly_increasing_run` but
+/// for arbitrary tokens (not just strictly-increasing runs).
+#[test]
+fn search_longest_run_learns_target_run_length() {
+    let problem = arr_class_problem(
+        "demo_longest_run_5",
+        "fn demo_longest_run_5(arr: [i64]) -> i64",
+        &[
+            (&[5, 5, 5], 3),
+            (&[1, 2, 5, 5, 5, 6, 7], 3),
+            (&[0, 0, 0, 0, 0], 0),  // no 5s
+            (&[5], 1),
+            (&[1, 5, 2, 5, 5, 3, 5], 2),
+            (&[1, 2, 3, 4], 0),
+            (&[1, 5, 1, 5, 1], 1),
+            (&[5, 6, 5, 6, 5], 1),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "longest_run not learned: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_longest_run");
+    assert!(
+        result.code.contains("v == 5"),
+        "expected equality check against target 5; got: {}",
+        result.code
+    );
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (vec![Value::Array(vec![])], 0),
+            (vec![Value::Array(vec![5, 5, 5, 5, 5, 5])], 6),
+            (vec![Value::Array(vec![1, 2, 3])], 0),
+        ],
+    );
+}
+
+/// `intersects(a, b) -> 1 iff a and b share at least one element`.
+/// O(n*m) by design — Mog has no built-in set, so a table-array
+/// check would just move the constant.
+#[test]
+fn search_intersects_learns_set_membership() {
+    fn two_arr_problem(
+        name: &'static str,
+        signature: &'static str,
+        rows: &[(&[i64], &[i64], i64)],
+    ) -> Problem {
+        Problem {
+            name: name.to_string(),
+            category: "array_pair",
+            description: "",
+            signature,
+            examples: rows
+                .iter()
+                .map(|(a, b, label)| Example {
+                    inputs: vec![Value::Array(a.to_vec()), Value::Array(b.to_vec())],
+                    expected: Value::Int(*label),
+                })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+        }
+    }
+
+    let problem = two_arr_problem(
+        "demo_intersects",
+        "fn demo_intersects(a: [i64], b: [i64]) -> i64",
+        &[
+            (&[1, 2, 3], &[4, 5, 6], 0),
+            (&[1, 2, 3], &[3, 4, 5], 1),
+            (&[1, 2, 3], &[1, 2, 3], 1),
+            (&[1, 2, 3], &[4, 5, 1], 1),
+            (&[], &[1, 2, 3], 0),
+            (&[1, 2, 3], &[], 0),
+            (&[], &[], 0),
+            (&[7], &[1, 2, 3, 7, 8], 1),
+            (&[-1, 0, 1], &[2, 3, 4], 0),
+        ],
+    );
+
+    let result = solve_problem_search_only(&problem);
+    assert!(
+        result.success,
+        "intersects not learned: {:?}",
+        result.error
+    );
+    assert_eq!(result.method, "search_intersects");
+    assert!(
+        result.code.contains("for x in a") && result.code.contains("for y in b"),
+        "expected nested-loop codegen; got: {}",
+        result.code
+    );
+
+    assert_search_generalizes_problem(
+        problem,
+        vec![
+            (
+                vec![Value::Array(vec![10, 20, 30]), Value::Array(vec![40, 50, 30])],
+                1,
+            ),
+            (
+                vec![Value::Array(vec![1]), Value::Array(vec![2])],
+                0,
+            ),
+        ],
+    );
+}
+
 /// The new structural-array teachers are also added to the benchmark
 /// factory list so the full benchmark sweep exercises them. This test
 /// asserts that each new factory emits a problem that the corresponding

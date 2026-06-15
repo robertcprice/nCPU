@@ -87,6 +87,51 @@ pub(super) fn last_index_of_rust(arr: &[i64], target: i64) -> i64 {
     -1
 }
 
+pub(super) fn is_anagram_rust(a: &[i64], b: &[i64]) -> i64 {
+    if a.len() != b.len() {
+        return 0;
+    }
+    let mut sa: Vec<i64> = a.to_vec();
+    let mut sb: Vec<i64> = b.to_vec();
+    sa.sort();
+    sb.sort();
+    if sa == sb {
+        1
+    } else {
+        0
+    }
+}
+
+pub(super) fn longest_run_rust(arr: &[i64], target: i64) -> i64 {
+    let mut best = 0i64;
+    let mut current = 0i64;
+    for &v in arr {
+        if v == target {
+            current += 1;
+            if current > best {
+                best = current;
+            }
+        } else {
+            current = 0;
+        }
+    }
+    best
+}
+
+pub(super) fn intersects_rust(a: &[i64], b: &[i64]) -> i64 {
+    // O(n*m) but n, m are usually small. Could be O(n + m) with a
+    // hash set, but Mog has no built-in set; a table-array check
+    // would just move the constant.
+    for &x in a {
+        for &y in b {
+            if x == y {
+                return 1;
+            }
+        }
+    }
+    0
+}
+
 pub(super) fn longest_increasing_run_rust(arr: &[i64]) -> i64 {
     let mut best = 1i64;
     let mut current = 1i64;

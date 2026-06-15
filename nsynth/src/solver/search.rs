@@ -24,6 +24,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_array_item_loop,
     },
     SearchCandidate {
+        key: "search_stateful_reducer",
+        func: search_stateful_reducer,
+    },
+    SearchCandidate {
         key: "search_run_length_decode_sum",
         func: search_run_length_decode_sum,
     },
@@ -102,6 +106,18 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_last_index_of",
         func: search_last_index_of,
+    },
+    SearchCandidate {
+        key: "search_is_anagram",
+        func: search_is_anagram,
+    },
+    SearchCandidate {
+        key: "search_longest_run",
+        func: search_longest_run,
+    },
+    SearchCandidate {
+        key: "search_intersects",
+        func: search_intersects,
     },
     SearchCandidate {
         key: "search_longest_increasing_run",
