@@ -28,6 +28,7 @@ mod search_numeric_families;
 mod search_runtime;
 mod search_scalar_families;
 mod search_text_families;
+mod search_time_families;
 mod signature;
 
 use self::helpers::{

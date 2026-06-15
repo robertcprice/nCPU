@@ -8,6 +8,7 @@ use super::search_families::*;
 use super::search_numeric_families::*;
 use super::search_scalar_families::*;
 use super::search_text_families::*;
+use super::search_time_families::*;
 use super::*;
 
 type SearchFn = fn(&Problem, &str) -> Option<SolveResult>;
@@ -382,6 +383,22 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_polynomial_quadratic",
         func: search_polynomial_quadratic,
+    },
+    SearchCandidate {
+        key: "search_polynomial_time",
+        func: search_polynomial_time,
+    },
+    SearchCandidate {
+        key: "search_exponential_time",
+        func: search_exponential_time,
+    },
+    SearchCandidate {
+        key: "search_factorial_time",
+        func: search_factorial_time,
+    },
+    SearchCandidate {
+        key: "search_triangular_time",
+        func: search_triangular_time,
     },
     SearchCandidate {
         key: "search_min3_branch",
