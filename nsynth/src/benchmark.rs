@@ -6,6 +6,7 @@ pub enum Value {
     /// `Eq` nor `Ord`. Recover with `f64::from_bits`.
     Float(u64),
     Str(String),
+    Bool(bool),
     Array(Vec<i64>),
     Pair(i64, i64),
 }
@@ -16,6 +17,7 @@ impl std::fmt::Display for Value {
             Value::Int(v) => write!(f, "{v}"),
             Value::Float(b) => write!(f, "{}", f64::from_bits(*b)),
             Value::Str(s) => write!(f, "{s}"),
+            Value::Bool(b) => write!(f, "{b}"),
             Value::Array(a) => write!(
                 f,
                 "[{}]",
@@ -44,6 +46,17 @@ impl Example {
             Value::Int(i) => *i,
             Value::Pair(a, _) => *a,
             _ => 0,
+        }
+    }
+
+    /// The expected output as a bool. Returns `None` for non-bool expected
+    /// outputs so the caller (typically the predicate-style classifier or a
+    /// structural branch solver) can refuse cleanly instead of fabricating a
+    /// default.
+    pub fn expected_bool(&self) -> Option<bool> {
+        match &self.expected {
+            Value::Bool(b) => Some(*b),
+            _ => None,
         }
     }
 
@@ -157,6 +170,7 @@ fn render_expected(value: &Value) -> String {
         Value::Int(v) => v.to_string(),
         Value::Float(b) => format!("{:.7}", f64::from_bits(*b)),
         Value::Str(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
         Value::Array(a) => format!(
             "[{}]",
             a.iter()
@@ -193,6 +207,7 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
         Value::Int(v) => Ok(v.to_string()),
         Value::Float(b) => Ok(format!("{:.7}", f64::from_bits(*b))),
         Value::Str(v) => Ok(render_string(v)),
+        Value::Bool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
         Value::Array(values) => Ok(format!(
             "[{}]",
             values

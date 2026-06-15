@@ -42,6 +42,7 @@ fn fingerprint_value(v: &Value) -> String {
     match v {
         Value::Int(i) => format!("i:{i}"),
         Value::Float(b) => format!("f:{b}"),
+        Value::Bool(b) => format!("b:{b}"),
         Value::Str(s) => format!("s:{}", s.replace('|', "\\|").replace('~', "\\~")),
         Value::Array(xs) => {
             let joined: Vec<String> = xs.iter().map(|x| x.to_string()).collect();

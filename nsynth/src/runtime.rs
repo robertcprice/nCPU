@@ -375,6 +375,7 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
     match (actual, expected) {
         (Value::Int(a), BV::Int(b)) => a == b,
         (Value::Bool(a), BV::Int(b)) => i64::from(*a) == *b,
+        (Value::Bool(a), BV::Bool(b)) => a == b,
         (Value::Str(a), BV::Str(b)) => a == b,
         (Value::Array(a), BV::Array(b)) => {
             a.len() == b.len()
@@ -433,6 +434,7 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
     match value {
         BenchmarkValue::Int(v) => Ok(Value::Int(*v)),
         BenchmarkValue::Float(b) => Ok(Value::Float(f64::from_bits(*b))),
+        BenchmarkValue::Bool(b) => Ok(Value::Bool(*b)),
         BenchmarkValue::Str(v) => Ok(Value::Str(v.clone())),
         BenchmarkValue::Array(values) => Ok(Value::Array(
             values.iter().copied().map(Value::Int).collect::<Vec<_>>(),
