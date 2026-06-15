@@ -9,6 +9,7 @@ use super::search_numeric_families::*;
 use super::search_scalar_families::*;
 use super::search_text_families::*;
 use super::search_time_families::*;
+use super::search_tree_families::*;
 use super::*;
 
 type SearchFn = fn(&Problem, &str) -> Option<SolveResult>;
@@ -59,6 +60,27 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
     SearchCandidate {
         key: "search_array_range",
         func: search_array_range,
+    },
+    // Tree synthesis teachers (Stage 5)
+    SearchCandidate {
+        key: "search_tree_count_nodes",
+        func: search_tree_count_nodes,
+    },
+    SearchCandidate {
+        key: "search_tree_sum_values",
+        func: search_tree_sum_values,
+    },
+    SearchCandidate {
+        key: "search_tree_max_value",
+        func: search_tree_max_value,
+    },
+    SearchCandidate {
+        key: "search_tree_height",
+        func: search_tree_height,
+    },
+    SearchCandidate {
+        key: "search_tree_leaf_count",
+        func: search_tree_leaf_count,
     },
     // General membership/DNF array classifiers. Each is guarded to require >= 12
     // examples (every structural benchmark problem has <= 10), so they own the
