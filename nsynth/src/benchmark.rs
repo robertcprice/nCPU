@@ -1,3 +1,12 @@
+/// Binary tree node for Stage 5 tree synthesis problems.
+/// left/right are indices into a Vec<TreeNode> (negative means null).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub struct TreeNode {
+    pub value: i64,
+    pub left: i32,
+    pub right: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Int(i64),
@@ -11,6 +20,8 @@ pub enum Value {
     Pair(i64, i64),
     /// 4-field struct for struct-of-state benchmarks (e.g., {a, b, c, d}).
     Quad(i64, i64, i64, i64),
+    /// Binary tree for Stage 5 tree synthesis (index 0 is root, negative indices mean null).
+    Tree(Vec<TreeNode>),
 }
 
 impl std::fmt::Display for Value {
@@ -30,6 +41,14 @@ impl std::fmt::Display for Value {
             ),
             Value::Pair(a, b) => write!(f, "({a}, {b})"),
             Value::Quad(a, b, c, d) => write!(f, "({a}, {b}, {c}, {d})"),
+            Value::Tree(nodes) => {
+                write!(f, "Tree[")?;
+                for (i, node) in nodes.iter().enumerate() {
+                    if i > 0 { write!(f, "; ")?; }
+                    write!(f, "({}, {}, {})", node.value, node.left, node.right)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }
@@ -220,6 +239,12 @@ fn render_expected(value: &Value) -> String {
         ),
         Value::Pair(a, b) => format!("({a}, {b})"),
         Value::Quad(a, b, c, d) => format!("({a}, {b}, {c}, {d})"),
+        Value::Tree(nodes) => {
+            let node_strs: Vec<String> = nodes.iter()
+                .map(|n| format!("({},{},{})", n.value, n.left, n.right))
+                .collect();
+            format!("Tree[{}]", node_strs.join(";"))
+        }
     }
 }
 
@@ -292,6 +317,12 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
                     problem.name, problem.signature
                 ))
             }
+        }
+        Value::Tree(_nodes) => {
+            Err(format!(
+                "tree rendering not yet implemented for {}",
+                problem.name
+            ))
         }
     }
 }
@@ -3985,4 +4016,120 @@ fn make_convolution_1d_sum(variant: usize) -> Problem {
         ],
         "fn convolution_1d_sum(signal: [i64; 8], filter: [i64; 3]) -> i64 {\n    sum: i64 = 0;\n    i: i64 = 0;\n    while i < 6 {\n        out: i64 = 0;\n        j: i64 = 0;\n        while j < 3 {\n            out = out + signal[i + j] * filter[j];\n            j = j + 1;\n        }\n        sum = sum + out;\n        i = i + 1;\n    }\n    return sum;\n}\n",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tree_node_creation() {
+        let node = TreeNode {
+            value: 42,
+            left: 0,
+            right: 1,
+        };
+        assert_eq!(node.value, 42);
+        assert_eq!(node.left, 0);
+        assert_eq!(node.right, 1);
+    }
+
+    #[test]
+    fn test_value_tree_creation() {
+        let nodes = vec![
+            TreeNode {
+                value: 1,
+                left: 1,
+                right: 2,
+            },
+            TreeNode {
+                value: 2,
+                left: -1,
+                right: -1,
+            },
+            TreeNode {
+                value: 3,
+                left: -1,
+                right: -1,
+            },
+        ];
+        let tree_val = Value::Tree(nodes);
+        match tree_val {
+            Value::Tree(nodes) => {
+                assert_eq!(nodes.len(), 3);
+                assert_eq!(nodes[0].value, 1);
+                assert_eq!(nodes[1].value, 2);
+                assert_eq!(nodes[2].value, 3);
+            }
+            _ => panic!("Expected Value::Tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_helper_functions() {
+        let edges = vec![(10, 1, 2), (20, -1, -1), (30, -1, -1)];
+        let tree_val = tree_from_edges(edges);
+        assert!(matches!(tree_val, Value::Tree(_)));
+
+        if let Some(nodes) = get_tree_root(&tree_val) {
+            assert_eq!(tree_size(nodes), 3);
+            assert_eq!(nodes[0].value, 10);
+        } else {
+            panic!("Expected to get tree root");
+        }
+    }
+
+    #[test]
+    fn test_tree_comparison() {
+        let nodes1 = vec![TreeNode {
+            value: 5,
+            left: -1,
+            right: -1,
+        }];
+        let nodes2 = vec![TreeNode {
+            value: 5,
+            left: -1,
+            right: -1,
+        }];
+        let tree1 = Value::Tree(nodes1);
+        let tree2 = Value::Tree(nodes2);
+        assert_eq!(tree1, tree2);
+    }
+
+    #[test]
+    fn test_tree_render() {
+        let nodes = vec![
+            TreeNode {
+                value: 1,
+                left: 1,
+                right: 2,
+            },
+            TreeNode {
+                value: 2,
+                left: -1,
+                right: -1,
+            },
+        ];
+        let tree_val = Value::Tree(nodes);
+        let dummy_problem = Problem {
+            name: "test_tree".to_string(),
+            category: "trees",
+            description: "Test tree rendering",
+            signature: "fn test_tree(t: Tree) -> i64",
+            examples: vec![],
+            holdouts: vec![],
+            reference_code: "",
+            synthetic_args: vec![],
+            synthetic_values: vec![],
+            recursive_allowed: false,
+            tree_input: true,
+            explicit_stack: false,
+        };
+        let rendered = render_value(&dummy_problem, &tree_val);
+        assert!(rendered.is_ok());
+        let rendered_str = rendered.unwrap();
+        assert!(rendered_str.contains("Tree"));
+        assert!(rendered_str.contains("1"));
+        assert!(rendered_str.contains("2"));
+    }
 }

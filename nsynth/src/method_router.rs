@@ -76,6 +76,7 @@ impl ProblemFeatures {
                             Value::Str(_) => st = true,
                             Value::Pair(_, _) => pr = true,
                             Value::Quad(_, _, _, _) => pr = true,
+                            Value::Tree(_) => pr = true,
                             Value::Int(_) | Value::Float(_) | Value::Bool(_) => {}
                         }
                     }
