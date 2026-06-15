@@ -23,9 +23,9 @@ fn verify_stage4_benchmarks() {
     let test_cases = vec![
         "fibonacci",
         "factorial",
-        "triangular_number",
-        "linear_series",
-        "polynomial_eval",
+        "triangular_check",
+        "polynomial",
+        "collatz_steps",
     ];
 
     let mut results = Vec::new();
@@ -53,9 +53,10 @@ fn verify_stage4_benchmarks() {
                 let method = solve_result.method.clone();
                 let code = solve_result.code.clone();
 
-                method_counts
-                    .entry(if success { method.clone() } else { "failed".to_string() })
-                    .or_insert(0) += 1;
+                {
+                    let key = if success { method.clone() } else { "failed".to_string() };
+                    *method_counts.entry(key).or_insert(0) += 1;
+                }
 
                 let status = if success { "✓ Success" } else { "✗ Failed " };
                 println!(
@@ -77,7 +78,7 @@ fn verify_stage4_benchmarks() {
                 }
             }
             None => {
-                method_counts.entry("not_found".to_string()).or_insert(0) += 1;
+                method_counts.entry("not_found".to_string()).and_modify(|c| *c += 1).or_insert(1);
                 println!("  ✗ Not Found in benchmark set");
 
                 VerificationResult {
@@ -127,9 +128,10 @@ fn verify_stage4_benchmarks() {
     }
 
     let failures: Vec<_> = results.iter().filter(|r| !r.success).collect();
-    if !failures.is_empty() {
+    let has_failures = !failures.is_empty();
+    if has_failures {
         println!("\nFailures ({}):", failures.len());
-        for f in failures {
+        for f in &failures {
             println!(
                 "  - {}: {}",
                 f.problem_name,
@@ -143,13 +145,13 @@ fn verify_stage4_benchmarks() {
     println!("============================================================");
     println!("pass_count / total:        {}/{}", passed, total);
     println!("mean_solve_time:           {:.2}s", mean_time);
-    println!("any_failures:              {}", !failures.is_empty());
+    println!("any_failures:              {}", has_failures);
     println!("method_distribution:");
     for (method, count) in method_counts.iter() {
         println!("  {:20}: {}", method, count);
     }
 
-    std::process::exit(if failures.is_empty() { 0 } else { 1 });
+    std::process::exit(if has_failures { 1 } else { 0 });
 }
 
 fn main() {
