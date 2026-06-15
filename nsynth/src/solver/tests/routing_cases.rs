@@ -10,3 +10,5 @@ mod stage_order_cases;
 mod teacher_distillation_cases;
 #[path = "routing_cases/new_teacher_preemption_cases.rs"]
 mod new_teacher_preemption_cases;
+#[path = "routing_cases/stage2_stage3_preemption_cases.rs"]
+mod stage2_stage3_preemption_cases;

@@ -12,6 +12,8 @@ pub enum Value {
     Bool(bool),
     Str(String),
     Array(Vec<Value>),
+    Pair(i64, i64),
+    Quad(i64, i64, i64, i64),
     Struct {
         name: String,
         fields: HashMap<String, Value>,
@@ -453,6 +455,7 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
         BenchmarkValue::Array(values) => Ok(Value::Array(
             values.iter().copied().map(Value::Int).collect::<Vec<_>>(),
         )),
+        BenchmarkValue::Quad(a, b, c, d) => Ok(Value::Quad(*a, *b, *c, *d)),
         BenchmarkValue::Pair(a, b) => {
             let (name, lhs, rhs) = if problem_name.starts_with("point_sum") {
                 ("Point", "x", "y")

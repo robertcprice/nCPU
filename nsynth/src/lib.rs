@@ -17,3 +17,4 @@ pub mod solver;
 pub mod strategy;
 pub mod string_synth;
 pub mod synthesis;
+pub mod tensor_codegen;

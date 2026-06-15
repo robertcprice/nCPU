@@ -1606,7 +1606,7 @@ fn make_last_first(variant: usize) -> Problem {
     )
 }
 
-pub const STRING_FACTORIES: &[Factory] = &[
+pub const STRING_FACTORIES: &[fn(usize) -> Problem; 6] = &[
     make_reverse_str,
     make_uppercase,
     make_capitalize,
@@ -1615,7 +1615,7 @@ pub const STRING_FACTORIES: &[Factory] = &[
     make_last_first,
 ];
 
-pub const FACTORIES: &[Factory] = &[
+pub const FACTORIES: &[fn(usize) -> Problem; 133] = &[
     make_add_two,
     make_abs_diff,
     make_max2,

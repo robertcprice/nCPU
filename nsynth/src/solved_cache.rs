@@ -49,6 +49,7 @@ fn fingerprint_value(v: &Value) -> String {
             format!("a:[{}]", joined.join(","))
         }
         Value::Pair(a, b) => format!("p:({a},{b})"),
+        Value::Quad(a, b, c, d) => format!("q:({a},{b},{c},{d})"),
     }
 }
 
