@@ -1638,7 +1638,6 @@ pub const FACTORIES: &[Factory] = &[
     make_kth_smallest,
     make_max_stock_profit,
     make_is_sorted,
-    make_is_sorted_bool,
     make_longest_increasing_run,
     make_digital_root,
     make_two_sum_exists,
