@@ -1647,6 +1647,9 @@ pub const FACTORIES: &[Factory] = &[
     make_has_strictly_increasing_run,
     make_first_index_of,
     make_last_index_of,
+    make_is_anagram,
+    make_longest_run,
+    make_intersects,
     make_longest_plateau,
     make_prefix_max_sum,
     make_cube,
@@ -2061,6 +2064,100 @@ fn make_binary_search(variant: usize) -> Problem {
         ],
         "fn binary_search(arr: [i64], target: i64) -> i64 {\n    lo: i64 = 0;\n    hi: i64 = arr.len - 1;\n    while lo <= hi {\n        mid: i64 = (lo + hi) / 2;\n        if arr[mid] == target { return mid; }\n        if arr[mid] < target { lo = mid + 1; }\n        if arr[mid] > target { hi = mid - 1; }\n    }\n    return -1;\n}\n",
     )
+}
+
+fn make_is_anagram(variant: usize) -> Problem {
+    // Each variant pairs a different word pair so the teacher
+    // exercises its sort + elementwise-compare codegen across
+    // multiple shapes.
+    let (a, b) = match variant % 4 {
+        0 => (&[1, 2, 3][..], &[3, 1, 2][..]),
+        1 => (&[1, 1, 2, 2][..], &[2, 1, 2, 1][..]),
+        2 => (&[5, 4, 3, 2, 1][..], &[1, 2, 3, 4, 5][..]),
+        _ => (&[0, 0, 1][..], &[0, 1, 0][..]),
+    };
+    let problem = problem(
+        "is_anagram",
+        variant,
+        "arrays",
+        "Return 1 iff the two arrays are permutations of each other.",
+        "fn is_anagram(a: [i64], b: [i64]) -> i64",
+        vec![
+            example(vec![array(a), array(b)], 1),
+            example(vec![array(&[1, 2, 3]), array(&[1, 2, 4])], 0),
+            example(vec![array(&[1, 2, 3]), array(&[3, 2, 1, 0])], 0),
+            example(vec![array(&[]), array(&[])], 1),
+        ],
+        vec![example(vec![array(&[10, 20, 30]), array(&[30, 10, 20])], 1)],
+        "fn is_anagram(a: [i64], b: [i64]) -> i64 {\n    if a.len != b.len { return 0; }\n    sa: [i64] = a;\n    sb: [i64] = b;\n    sa.sort();\n    sb.sort();\n    i: i64 = 0;\n    while i < a.len {\n        if sa[i] != sb[i] { return 0; }\n        i = i + 1;\n    }\n    return 1;\n}\n",
+    );
+    problem
+}
+
+fn make_longest_run(variant: usize) -> Problem {
+    // Cycle target values: 0, 1, 5, 7.
+    let target: i64 = match variant % 4 {
+        0 => 0,
+        1 => 1,
+        2 => 5,
+        _ => 7,
+    };
+    let name = format!("longest_run_{target}");
+    let reference: &'static str = Box::leak(
+        format!(
+            "fn {name}(arr: [i64]) -> i64 {{\n    best: i64 = 0;\n    cur: i64 = 0;\n    for v in arr {{\n        if v == {target} {{\n            cur = cur + 1;\n            if cur > best {{ best = cur; }}\n        }} else {{\n            cur = 0;\n        }}\n    }}\n    return best;\n}}\n"
+        )
+        .into_boxed_str(),
+    );
+    let signature: &'static str =
+        Box::leak(format!("fn {name}(arr: [i64]) -> i64").into_boxed_str());
+    let description: &'static str = Box::leak(
+        format!(
+            "Return the length of the longest contiguous run of {target} in arr."
+        )
+        .into_boxed_str(),
+    );
+    problem(
+        &name,
+        variant,
+        "arrays",
+        description,
+        signature,
+        vec![
+            example(vec![array(&[5, 5, 5])], 3),
+            example(vec![array(&[1, 2, 5, 5, 5, 6, 7])], 3),
+            example(vec![array(&[5])], 1),
+            example(vec![array(&[1, 2, 3, 4])], 0),
+        ],
+        vec![example(vec![array(&[5, 6, 5, 6, 5, 5])], 2)],
+        reference,
+    )
+}
+
+fn make_intersects(variant: usize) -> Problem {
+    // Each variant uses a different pair of arrays.
+    let (a, b) = match variant % 4 {
+        0 => (&[1, 2, 3][..], &[4, 5, 3][..]),
+        1 => (&[1, 2, 3][..], &[4, 5, 6][..]),
+        2 => (&[7, 8, 9][..], &[10, 11, 7][..]),
+        _ => (&[1, 1, 2][..], &[2, 3, 4][..]),
+    };
+    let problem = problem(
+        "intersects",
+        variant,
+        "arrays",
+        "Return 1 iff the two arrays share at least one element.",
+        "fn intersects(a: [i64], b: [i64]) -> i64",
+        vec![
+            example(vec![array(a), array(b)], 1),
+            example(vec![array(&[1, 2, 3]), array(&[4, 5, 6])], 0),
+            example(vec![array(&[]), array(&[1, 2, 3])], 0),
+            example(vec![array(&[1, 2, 3]), array(&[3, 2, 1])], 1),
+        ],
+        vec![example(vec![array(&[10, 20, 30]), array(&[40, 30, 50])], 1)],
+        "fn intersects(a: [i64], b: [i64]) -> i64 {\n    for x in a {\n        for y in b {\n            if x == y { return 1; }\n        }\n    }\n    return 0;\n}\n",
+    );
+    problem
 }
 
 fn make_longest_plateau(variant: usize) -> Problem {
