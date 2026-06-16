@@ -15,6 +15,7 @@ use crate::understanding::meaning::{Event, Meaning, Term};
 use crate::understanding::world_model::World;
 
 /// A running discourse: the world built so far plus coreference state.
+#[derive(Clone)]
 pub struct Discourse {
     /// the world model accumulated by reading
     pub world: World,

@@ -630,7 +630,14 @@ fn bivalent_complement(m: &Meaning) -> Option<Meaning> {
 /// Flip the polarity of an assertoric meaning, if it has one. Returns the
 /// negation of `m` (same content, opposite `negated`). `None` for
 /// non-assertoric meanings.
-fn polarity_flip(m: &Meaning) -> Option<Meaning> {
+///
+/// Exposed `pub` so counterfactual reasoning (`Mind::what_if_not`) can model
+/// "suppose this were NOT so" by asserting the sound contradictory of a fact
+/// into a CLONED world — we cannot truly delete an assertion, but asserting its
+/// polarity-flip is the sound way to suppose its falsity. Every flip this
+/// returns is a contradictory the input guarantees to be false, so asserting it
+/// into a clone is sound.
+pub fn polarity_flip(m: &Meaning) -> Option<Meaning> {
     match m {
         Meaning::Event(ev) => {
             let mut e = ev.clone();

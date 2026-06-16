@@ -112,6 +112,7 @@ pub struct Contradiction {
 }
 
 /// A small model: asserted event facts, entity categories, and known entities.
+#[derive(Clone)]
 pub struct World {
     /// asserted event facts. Each carries its own `negated` polarity, so a
     /// negated assertion ("the teacher does not write the report") is stored as

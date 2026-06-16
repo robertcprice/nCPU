@@ -467,6 +467,28 @@ impl Engine {
         out.lines().next().map(|l| l.trim().to_string()).unwrap_or_default()
     }
 
+    /// The full synthesized Mog program source this engine composes its answers
+    /// from — every per-component teacher output concatenated into one runnable
+    /// module (lexicon + inflection rules + wrappers). Exposed for metacognition
+    /// ("show me your code"): the source is otherwise private, used only
+    /// internally by [`call_int`](Self::call_int) / [`call_str`](Self::call_str)
+    /// to build a `main()` wrapper. Purely a read accessor — no behavior change.
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    /// The teacher label that recovered a given component (e.g. `"noun_animacy"`,
+    /// `"regular_3sg"`, `"valid_argument"`), looked up from [`methods`](Self::methods).
+    /// Returns the synthesizer/teacher String for that component, or `None` if the
+    /// component name is unknown. Metacognition accessor over provenance — which
+    /// teacher learned which piece — without exposing the methods Vec's tuple layout.
+    pub fn method_for(&self, component: &str) -> Option<&str> {
+        self.methods
+            .iter()
+            .find(|(name, _)| *name == component)
+            .map(|(_, teacher)| teacher.as_str())
+    }
+
     /// Animacy class of a single word: 1 animate noun, 2 inanimate noun, 0 not a noun.
     pub fn noun_class(&self, word: &str) -> i64 {
         self.call_int(&format!("noun_animacy({})", esc(word)))

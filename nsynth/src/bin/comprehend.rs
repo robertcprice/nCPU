@@ -4,8 +4,14 @@
 //! verified Mog programs and executes them in-process. No Python, no subprocess.
 //! The same engine is exposed to C via `mog_synth::ffi`.
 //!
-//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|all]
+//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|all]
 //! (the solver logs to stderr; pipe 2>/dev/null for clean output)
+//!
+//! The `reflect` subcommand showcases the metacognition layer: a stateful
+//! [`Mind`](mog_synth::understanding::mind::Mind) reads a short passage, then
+//! reflects on it via `explain_self`, `what_do_you_know`, `why`, `suppose`,
+//! `what_if_not`, `what_would_change_your_mind`, `gaps`, and `explain_cause` —
+//! each on a concrete read-then-reflect example.
 
 use mog_synth::comprehension::{capitalize, words_of, Engine, PROP_PAIRS};
 use mog_synth::understanding::discourse::Discourse;
@@ -688,6 +694,207 @@ fn show_relation(r: &Relation) -> &'static str {
     }
 }
 
+// ===========================================================================
+// reflect: the metacognition layer. A stateful `Mind` reads a short passage,
+// then REFLECTS on what it knows — every reflective method is a concrete
+// read-then-reflect example. The mind explains its own learned programs,
+// enumerates what it knows, shows its proofs, reasons hypothetically and
+// counterfactually, names its open questions, and abduces causes. Each method
+// is honest: it never fabricates knowledge, code, a counterfactual, or a cause.
+// ===========================================================================
+
+/// Print a labeled reflective block: a one-line caption, then the prompt(s) and
+/// the mind's reflected answer, indented so the read-then-reflect flow is clear.
+fn reflect_line(label: &str, prompt: &str, answer: &str) {
+    println!("     [{label}]");
+    println!("        prompt : {prompt}");
+    println!("        reflect: {answer}\n");
+}
+
+fn demo_reflect() {
+    // The reflective methods live on `Mind` (an Engine + a Discourse it reads
+    // into). `Mind::new()` is the public entry point the FFI / library callers
+    // use; it synthesizes its own engine, so this demo is fully self-contained.
+    use mog_synth::understanding::mind::Mind;
+
+    println!("nCPU reflecting — a stateful Mind reads a short passage, then turns its");
+    println!("reasoning on ITSELF: it explains its own synthesized programs, enumerates");
+    println!("what it knows, shows its proofs, reasons hypothetically and counterfactually,");
+    println!("names its open questions, and abduces causes. Every reflection is honest —");
+    println!("it never invents knowledge, code, a counterfactual, or a cause.\n");
+
+    let mut mind = Mind::new();
+
+    // -----------------------------------------------------------------------
+    // READ a small, connected passage. Everything reflected below is grounded
+    // ONLY in these sentences — the mind starts blank.
+    // -----------------------------------------------------------------------
+    println!("  {}", "-".repeat(70));
+    println!("  THE PASSAGE — read once, reflected on many ways");
+    println!("  {}", "-".repeat(70));
+    let passage = [
+        "The teacher writes the report.",
+        "The teacher is a person.",
+        "The author reads the book.",
+        "The street floods because the rain falls.",
+    ];
+    for s in passage {
+        let m = mind.read(s);
+        println!("     read: {s}");
+        println!("        => {}", show_meaning(&m));
+    }
+    println!();
+
+    // -----------------------------------------------------------------------
+    // (1) explain_self — "show me your code." The mind names the synthesized
+    // component, the teacher that recovered it, and quotes the ACTUAL Mog source.
+    // An unmapped topic returns an honest "I don't have a learned program".
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (1) explain_self — the mind surfaces its OWN learned programs");
+    println!("  {}", "=".repeat(70));
+    for topic in ["3sg inflection", "past tense", "noun animacy", "agreement", "quantum gravity"] {
+        let answer = mind.explain_self(topic);
+        // Keep the quoted Mog source compact in the transcript: show the framing
+        // line and a short head of the source so the demo stays readable.
+        let shown = trim_for_demo(&answer, 6);
+        println!("     [topic: {topic}]");
+        for line in shown.lines() {
+            println!("        {line}");
+        }
+        println!();
+    }
+
+    // -----------------------------------------------------------------------
+    // (2) what_do_you_know — enumerate every fact + sound consequence + taxonomy
+    // closure bearing on an entity. Unknown entities return nothing.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (2) what_do_you_know — everything bearing on an entity");
+    println!("  {}", "=".repeat(70));
+    for entity in ["teacher", "author", "dragon"] {
+        let facts = mind.what_do_you_know(entity);
+        println!("     [entity: {entity}]");
+        if facts.is_empty() {
+            println!("        (I know nothing about the {entity}.)");
+        } else {
+            for f in &facts {
+                println!("        - {f}");
+            }
+        }
+        println!();
+    }
+
+    // -----------------------------------------------------------------------
+    // (3) why — answer a question AND show the proof. Taxonomy makes
+    // "is the teacher an agent?" derivable (teacher -> person -> agent), so the
+    // "because" chain shows the intermediate step it routed through.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (3) why — the answer WITH the proof that backs it");
+    println!("  {}", "=".repeat(70));
+    for q in [
+        "Does the teacher write the report?", // directly asserted leaf
+        "Is the teacher an agent?",           // derived through the taxonomy
+    ] {
+        reflect_line("why", q, &mind.why(q));
+    }
+
+    // -----------------------------------------------------------------------
+    // (4) suppose — answer UNDER a hypothesis, without committing to it. The
+    // real world is untouched (Mind clones the discourse internally).
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (4) suppose — reasoning under a hypothesis (world untouched)");
+    println!("  {}", "=".repeat(70));
+    reflect_line(
+        "suppose",
+        "Suppose: \"The editor reads the book.\"  Then: Does the editor read the book?",
+        &mind.suppose("The editor reads the book.", "Does the editor read the book?"),
+    );
+    // Prove the hypothesis never leaked into the real world.
+    println!(
+        "        (sanity) after suppose, the real mind STILL answers \"Does the editor read the book?\" -> {}\n",
+        mind.ask("Does the editor read the book?")
+    );
+
+    // -----------------------------------------------------------------------
+    // (5) what_if_not — counterfactual retraction. Suppose a fact were NOT so,
+    // and contrast the answer. Modeled soundly via the fact's contradictory.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (5) what_if_not — counterfactual retraction (contrast the verdict)");
+    println!("  {}", "=".repeat(70));
+    reflect_line(
+        "what_if_not",
+        "Retract: \"The teacher writes the report.\"  Ask: Does the teacher write the report?",
+        &mind.what_if_not(
+            "The teacher writes the report.",
+            "Does the teacher write the report?",
+        ),
+    );
+
+    // -----------------------------------------------------------------------
+    // (6) what_would_change_your_mind — name the evidence that would FLIP the
+    // current verdict. Every flip is verified to actually move the answer.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (6) what_would_change_your_mind — the evidence that flips the verdict");
+    println!("  {}", "=".repeat(70));
+    for q in [
+        "Does the teacher write the report?", // determined Yes -> flippable
+        "Does the editor read the memo?",     // undetermined -> being told either way decides it
+    ] {
+        reflect_line("change_my_mind", q, &mind.what_would_change_your_mind(q));
+    }
+
+    // -----------------------------------------------------------------------
+    // (7) gaps — the honest open questions a query raises that the world has no
+    // verdict on. A fully-determined query reports no gap.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (7) gaps — the honest open questions the mind hasn't settled");
+    println!("  {}", "=".repeat(70));
+    for q in [
+        "Does the editor write the letter?",  // never read about -> open
+        "Does the teacher write the report?", // already known -> no gap
+    ] {
+        reflect_line("gaps", q, &mind.gaps(q));
+    }
+
+    // -----------------------------------------------------------------------
+    // (8) explain_cause — abduce the WHY behind an effect. The recorded "because"
+    // link is returned when the effect is attested; otherwise honest ignorance.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (8) explain_cause — abduce the cause behind an effect");
+    println!("  {}", "=".repeat(70));
+    for q in [
+        "Why does the street flood?",  // recorded cause: because the rain falls
+        "Why does the teacher write the report?", // no recorded cause -> honest
+    ] {
+        reflect_line("explain_cause", q, &mind.explain_cause(q));
+    }
+
+    println!("Every reflection above was grounded ONLY in the four sentences read at the top.");
+    println!("The mind explained its synthesized programs, showed its proofs, reasoned about");
+    println!("hypotheticals and counterfactuals against a private clone of its world, and was");
+    println!("honest about what it does not know — metacognition over learned understanding.");
+}
+
+/// Trim a multi-line reflective answer for the transcript: keep at most
+/// `max_lines` lines and mark a truncation, so a long quoted Mog program does
+/// not flood the demo output. Single-line answers pass through unchanged.
+fn trim_for_demo(s: &str, max_lines: usize) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    if lines.len() <= max_lines {
+        return s.to_string();
+    }
+    let mut out: Vec<String> = lines[..max_lines].iter().map(|l| l.to_string()).collect();
+    out.push(format!("... (+{} more lines of synthesized source)", lines.len() - max_lines));
+    out.join("\n")
+}
+
 /// Render a three-valued `world.holds` verdict for the demo.
 fn verdict_str(v: Option<bool>) -> &'static str {
     match v {
@@ -707,6 +914,7 @@ fn main() {
         "reason" => demo_reason(&engine),
         "inflect" => demo_inflect(&engine),
         "understand" => demo_understand(&engine),
+        "reflect" => demo_reflect(),
         _ => {
             demo_comprehend(&engine);
             println!("\n{}\n", "=".repeat(72));
@@ -717,6 +925,8 @@ fn main() {
             demo_reason(&engine);
             println!("\n{}\n", "=".repeat(72));
             demo_understand(&engine);
+            println!("\n{}\n", "=".repeat(72));
+            demo_reflect();
         }
     }
 }
