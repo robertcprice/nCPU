@@ -40,9 +40,54 @@ impl Discourse {
         }
     }
 
-    /// Understand a sentence, resolve its pronouns, assert it, and return the
-    /// resolved meaning.
+    /// Read a sentence into the world model. Clause/VP conjunction ("X and Y") is
+    /// split into independent conjuncts (a verb-initial conjunct inherits the
+    /// preceding subject), each understood, resolved, and asserted in turn, so
+    /// both facts enter the world. Returns the last conjunct's resolved meaning.
     pub fn read(&mut self, engine: &Engine, sentence: &str) -> Meaning {
+        let conjuncts = self.split_conjuncts(engine, sentence);
+        let mut result = Meaning::Unknown(sentence.to_string());
+        for part in &conjuncts {
+            result = self.read_one(engine, part);
+        }
+        result
+    }
+
+    /// Split "X and Y" into independent clauses. A conjunct that begins with a
+    /// verb (VP-ellipsis: "...writes the report and reads the book") inherits the
+    /// subject of the preceding conjunct. No clause-level "and" -> the sentence
+    /// unchanged.
+    fn split_conjuncts(&self, engine: &Engine, sentence: &str) -> Vec<String> {
+        let toks = crate::comprehension::words_of(sentence);
+        let Some(pos) = toks.iter().position(|w| w == "and") else {
+            return vec![sentence.to_string()];
+        };
+        if pos == 0 || pos + 1 >= toks.len() {
+            return vec![sentence.to_string()];
+        }
+        let left = &toks[..pos];
+        let right = &toks[pos + 1..];
+        let right_has_subject = matches!(
+            right.first().map(|s| s.as_str()),
+            Some("the") | Some("a") | Some("an")
+        ) || right.first().map(|w| engine.noun_class(w) > 0).unwrap_or(false);
+
+        let mut conjuncts = vec![left.join(" ")];
+        if right_has_subject {
+            conjuncts.extend(self.split_conjuncts(engine, &right.join(" ")));
+        } else if let Some(si) = left.iter().position(|w| engine.noun_class(w) > 0) {
+            // VP-ellipsis: re-attach the left subject to the verb-initial conjunct.
+            let elided = format!("the {} {}", left[si], right.join(" "));
+            conjuncts.extend(self.split_conjuncts(engine, &elided));
+        } else {
+            conjuncts.push(right.join(" "));
+        }
+        conjuncts
+    }
+
+    /// Understand one (already conjunction-free) clause, resolve its pronouns,
+    /// assert it, and return the resolved meaning.
+    fn read_one(&mut self, engine: &Engine, sentence: &str) -> Meaning {
         let raw = crate::understanding::semantics::understand(engine, sentence);
 
         // Record the animacy of every concrete entity this sentence introduces,

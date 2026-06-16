@@ -63,4 +63,22 @@ mod tests {
         // a category question, from animacy
         assert!(mind.ask("Is the report a person?").to_lowercase().starts_with("no"));
     }
+
+    #[test]
+    fn mind_understands_vp_conjunction() {
+        let mut mind = Mind::new();
+        // VP-conjunction with subject ellipsis: both facts must enter the world.
+        mind.read("The teacher writes the report and reads the book.");
+        assert!(mind.ask("Who writes the report?").to_lowercase().contains("teacher"));
+        assert!(mind.ask("Who reads the book?").to_lowercase().contains("teacher"));
+        assert!(mind.ask("What does the teacher read?").to_lowercase().contains("book"));
+    }
+
+    #[test]
+    fn mind_understands_clausal_conjunction() {
+        let mut mind = Mind::new();
+        mind.read("The teacher writes the report and the editor reads the book.");
+        assert!(mind.ask("Who writes the report?").to_lowercase().contains("teacher"));
+        assert!(mind.ask("Who reads the book?").to_lowercase().contains("editor"));
+    }
 }

@@ -261,6 +261,13 @@ fn try_string_program(json_str: &str) -> Option<String> {
         if m.success {
             return Some(result_json(m.success, m.code, m.method, m.error));
         }
+
+        // Whole-word lexicon lookup for arbitrary string->string maps no suffix
+        // transduction explains (irregular inflection: have->had, be->was, ...).
+        // Same recovery the in-process solver uses; correct on train by build.
+        if let Some(code) = mog_synth::solver::string_lexicon_map_code(&train, &fn_name) {
+            return Some(result_json(true, code, "string_lexicon_map".to_string(), None));
+        }
     }
 
     // 2. General enumerative string synthesizer; verify on train + holdouts.

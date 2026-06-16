@@ -183,6 +183,17 @@ pub fn solve_problem(problem: &Problem) -> SolveResult {
     pipeline::solve_problem(problem)
 }
 
+/// Build a whole-word string->string lookup-table program from single-arg
+/// examples (irregular inflection and similar arbitrary lexicons), or None if
+/// the mapping is not such a lexicon. Exposed so the `--problem-json` CLI shares
+/// the same lexicon recovery the in-process solver uses.
+pub fn string_lexicon_map_code(
+    train: &[(Vec<String>, String)],
+    fn_name: &str,
+) -> Option<String> {
+    pipeline::string_lexicon_map_code(train, fn_name)
+}
+
 pub fn solve_problem_search_only(problem: &Problem) -> SolveResult {
     search::solve_problem_search_only(problem)
 }

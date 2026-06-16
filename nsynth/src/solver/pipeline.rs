@@ -26,14 +26,16 @@ fn code_string_string_map(fn_name: &str, default: &str, branches: &[(String, Str
     format!("fn {fn_name}(s: string) -> string {{\n{body}    return {};\n}}\n", q(default))
 }
 
-/// Whole-word string->string lexicon teacher. Runs AFTER the suffix-transduction
-/// specialist, so it only claims a problem when the mapping is an arbitrary
-/// lookup no rule explains. The string sibling of `search_string_equality_map`.
-fn solve_string_lexicon(
-    problem: &Problem,
+/// Build a whole-word string->string lookup-table program from single-arg
+/// examples, or None if the mapping is not an arbitrary lexicon (multi-arg,
+/// too few examples, inconsistent, or fewer than two distinct outputs). The
+/// emitted program returns each trained output for its trained input by
+/// construction, so it is correct on the training set without verification.
+/// Shared by `solve_string_lexicon` (lib path) and the `--problem-json` CLI.
+pub(super) fn string_lexicon_map_code(
     train: &[(Vec<String>, String)],
     fn_name: &str,
-) -> Option<SolveResult> {
+) -> Option<String> {
     use std::collections::BTreeMap;
     if train.len() < 3 || !train.iter().all(|(i, _)| i.len() == 1) {
         return None;
@@ -58,12 +60,25 @@ fn solve_string_lexicon(
     for (_, o) in train {
         *counts.entry(o.clone()).or_insert(0) += 1;
     }
-    let default = counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+    let default = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
         .map(|(o, _)| o)?;
     let mut branches: Vec<(String, String)> =
         map.into_iter().filter(|(_, o)| *o != default).collect();
     branches.sort();
-    let code = code_string_string_map(fn_name, &default, &branches);
+    Some(code_string_string_map(fn_name, &default, &branches))
+}
+
+/// Whole-word string->string lexicon teacher. Runs AFTER the suffix-transduction
+/// specialist, so it only claims a problem when the mapping is an arbitrary
+/// lookup no rule explains. The string sibling of `search_string_equality_map`.
+fn solve_string_lexicon(
+    problem: &Problem,
+    train: &[(Vec<String>, String)],
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let code = string_lexicon_map_code(train, fn_name)?;
     crate::runtime::verify_problem_code_strict(problem, &code).ok()?;
     Some(SolveResult {
         success: true,
