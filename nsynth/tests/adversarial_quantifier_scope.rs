@@ -8,7 +8,7 @@
 
 use mog_synth::comprehension::Engine;
 use mog_synth::understanding::discourse::Discourse;
-use mog_synth::understanding::meaning::{Event, Meaning, Quantifier, Tense, Term};
+use mog_synth::understanding::meaning::{Aspect, Event, Meaning, Quantifier, Tense, Term};
 use mog_synth::understanding::semantics;
 use mog_synth::understanding::world_model::World;
 
@@ -20,6 +20,7 @@ fn write_event(agent: &str, patient: &str, negated: bool) -> Event {
         patient: Some(Term::Entity(patient.to_string())),
         recipient: None,
         tense: Tense::Present,
+        aspect: Aspect::Simple,
         negated,
     }
 }
@@ -32,6 +33,7 @@ fn quant_body(predicate: &str, patient: &str) -> Event {
         patient: Some(Term::Indefinite(patient.to_string())),
         recipient: None,
         tense: Tense::Present,
+        aspect: Aspect::Simple,
         negated: false,
     }
 }
@@ -150,6 +152,7 @@ fn universal_verdict_tracks_the_body_not_just_the_category() {
         patient: Some(Term::Entity("book".to_string())),
         recipient: None,
         tense: Tense::Present,
+        aspect: Aspect::Simple,
         negated: true,
     }));
     w.assert(&Meaning::Event(Event {
@@ -158,6 +161,7 @@ fn universal_verdict_tracks_the_body_not_just_the_category() {
         patient: Some(Term::Entity("book".to_string())),
         recipient: None,
         tense: Tense::Present,
+        aspect: Aspect::Simple,
         negated: true,
     }));
 

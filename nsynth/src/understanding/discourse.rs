@@ -223,6 +223,15 @@ impl Discourse {
                 var_category: var_category.clone(),
                 body: self.resolve_event(body),
             },
+            // PLACEHOLDER (skeleton): pass the new grammatical-core meanings
+            // through unchanged. The discourse owner adds pronoun resolution for
+            // their embedded terms/events (modal/temporal bodies, causal
+            // sub-meanings, restricted-term heads, degree subjects, inner Not).
+            Meaning::Modal { .. }
+            | Meaning::Temporal { .. }
+            | Meaning::Causal { .. }
+            | Meaning::DegreeQuestion { .. }
+            | Meaning::Not(_) => m.clone(),
             Meaning::Unknown(s) => Meaning::Unknown(s.clone()),
         }
     }
@@ -235,6 +244,7 @@ impl Discourse {
             patient: ev.patient.as_ref().map(|t| self.resolve(t)),
             recipient: ev.recipient.as_ref().map(|t| self.resolve(t)),
             tense: ev.tense,
+            aspect: ev.aspect,
             negated: ev.negated,
         }
     }
@@ -286,6 +296,15 @@ impl Discourse {
                 self.note_term_animacy(engine, body.patient.as_ref());
                 self.note_term_animacy(engine, body.recipient.as_ref());
             }
+            // PLACEHOLDER (skeleton): observe no entities yet for the new forms.
+            // The discourse owner notes animacy of the entities inside their
+            // bodies/sub-meanings (modal/temporal events, causal clauses, degree
+            // subject) when that logic lands.
+            Meaning::Modal { .. }
+            | Meaning::Temporal { .. }
+            | Meaning::Causal { .. }
+            | Meaning::DegreeQuestion { .. }
+            | Meaning::Not(_) => {}
             Meaning::Unknown(_) => {}
         }
     }
@@ -348,6 +367,15 @@ impl Discourse {
             | Meaning::Or(_)
             | Meaning::Cardinal { .. }
             | Meaning::CountQuestion { .. } => {}
+            // PLACEHOLDER (skeleton): register no new discourse referents for the
+            // new forms yet. The discourse owner registers concrete referents
+            // inside their bodies (modal/temporal/causal/degree subjects) so
+            // later anaphora can pick them up.
+            Meaning::Modal { .. }
+            | Meaning::Temporal { .. }
+            | Meaning::Causal { .. }
+            | Meaning::DegreeQuestion { .. }
+            | Meaning::Not(_) => {}
             Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => {}
         }
     }

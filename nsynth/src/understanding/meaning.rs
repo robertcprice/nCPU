@@ -11,12 +11,20 @@ pub enum Term {
     Indefinite(String),
     /// unresolved pronoun before coreference: "it"/"they" -> Pronoun("it")
     Pronoun(String),
+    /// definite term restricted by a relative clause:
+    /// "the teacher who writes the report" -> Restricted{head:"teacher",
+    /// clause: Event(write, patient=report)}. The referent is the entity of
+    /// category `head` that satisfies `clause`.
+    Restricted { head: String, clause: Box<Event> },
 }
 
 impl Term {
     /// surface noun/word of the term (without article)
     pub fn head(&self) -> &str {
-        match self { Term::Entity(s) | Term::Indefinite(s) | Term::Pronoun(s) => s }
+        match self {
+            Term::Entity(s) | Term::Indefinite(s) | Term::Pronoun(s) => s,
+            Term::Restricted { head, .. } => head,
+        }
     }
 }
 
@@ -30,7 +38,14 @@ pub enum Role { Agent, Patient, Recipient }
 pub enum Quantifier { Every, Some, No }   // universal, existential, negative
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Tense { Past, Present }
+pub enum Tense { Past, Present, Future }   // wrote / writes / will write
+
+/// Grammatical aspect on an event: how the action relates to its own internal
+/// time-course. `Simple` ("writes"/"wrote"), `Progressive` ("is writing" —
+/// ongoing), `Perfect` ("has written" — completed with present relevance).
+/// Both Progressive and Perfect entail the simple event holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Aspect { Simple, Progressive, Perfect }   // writes / is writing / has written
 
 /// An event/action predication: write(agent: teacher, patient: report), present, not negated.
 /// A ditransitive event also fills the `recipient` slot:
@@ -43,8 +58,20 @@ pub struct Event {
     /// ditransitive recipient ("... to the student"): `None` for 2-place verbs.
     pub recipient: Option<Term>,
     pub tense: Tense,
+    /// grammatical aspect: Simple / Progressive ("is writing") / Perfect ("has written").
+    pub aspect: Aspect,
     pub negated: bool,
 }
+
+/// Modal force over an event. `Can` possibility, `Must` necessity (entails
+/// `Can`), `Might` epistemic possibility, `Should` weak deontic necessity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Modality { Can, Must, Might, Should }
+
+/// Temporal ordering relation between two events. `Before` and `After` are
+/// converses; `Before` is transitive and asymmetric (sound).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TemporalRel { Before, After }
 
 /// The meaning of one sentence.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -85,6 +112,22 @@ pub enum Meaning {
     /// "how many teachers write a report?" — a counting question whose answer is
     /// the number of entities of `var_category` that satisfy `body`.
     CountQuestion { var_category: String, body: Event },
+    /// "the teacher can/must/might/should write the report" — modal force over an
+    /// event. `Must` entails `Can`; possibility does NOT entail actuality.
+    Modal { modality: Modality, body: Box<Event>, negated: bool },
+    /// "X writes the report before Y reads the book" — a temporal ordering of two
+    /// events. `Before` is transitive and asymmetric.
+    Temporal { rel: TemporalRel, first: Box<Event>, second: Box<Event> },
+    /// "the street floods because the rain falls" — a causal link. Asserting it
+    /// presupposes both `cause` and `effect` happened. NOT symmetric.
+    Causal { cause: Box<Meaning>, effect: Box<Meaning> },
+    /// "how long is the report?" — a degree question over a gradable `scale`,
+    /// answered from known comparison facts (or honestly "I don't know").
+    DegreeQuestion { subject: Term, scale: String },
+    /// outer (wide-scope) negation for SCOPE distinctions: "not every teacher
+    /// writes a report" -> Not(Quantified{Every,...}). Three-valued negation of
+    /// the inner meaning's truth.
+    Not(Box<Meaning>),
     /// unparseable into a meaning
     Unknown(String),
 }
@@ -107,6 +150,7 @@ mod tests {
             patient: Some(ent("book")),
             recipient: Some(ent("student")),
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         };
         assert_eq!(give.recipient, Some(ent("student")));
@@ -151,6 +195,7 @@ mod tests {
             patient: Some(Term::Indefinite("report".to_string())),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         };
         let cardinal = Meaning::Cardinal {

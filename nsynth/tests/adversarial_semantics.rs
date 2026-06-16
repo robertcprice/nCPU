@@ -7,7 +7,7 @@
 //! specific soundness traps named in the task.
 
 use mog_synth::understanding::inference::{relation, Relation};
-use mog_synth::understanding::meaning::{Event, Meaning, Quantifier, Tense, Term};
+use mog_synth::understanding::meaning::{Aspect, Event, Meaning, Quantifier, Tense, Term};
 use mog_synth::understanding::world_model::World;
 
 fn ent(s: &str) -> Term {
@@ -24,6 +24,7 @@ fn event(pred: &str, agent: Option<Term>, patient: Option<Term>, negated: bool) 
         patient,
         recipient: None,
         tense: Tense::Present,
+        aspect: Aspect::Simple,
         negated,
     })
 }
@@ -46,6 +47,7 @@ fn quantified(q: Quantifier, cat: &str) -> Meaning {
             patient: Some(indef("report")),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         },
     }

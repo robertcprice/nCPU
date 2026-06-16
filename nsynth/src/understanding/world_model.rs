@@ -11,7 +11,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::comprehension::{AGENTS, PATIENTS};
-use crate::understanding::meaning::{Event, Meaning, Quantifier, Term};
+use crate::understanding::meaning::{
+    Aspect, Event, Meaning, Modality, Quantifier, TemporalRel, Term,
+};
 
 /// The set of FACTIVE attitude verbs: "know that P" entails P. Everything else
 /// (believe/think/say/...) is non-factive — asserting the attitude says nothing
@@ -64,6 +66,40 @@ struct AttitudeFact {
     negated: bool,
 }
 
+/// One asserted modal fact: "the teacher can/must/might/should [not] write the
+/// report". Stored verbatim (modality, the event body, polarity). MONOTONICITY
+/// (`Must` entails `Can`) is NOT baked into the record — it is decided by
+/// `holds` at query time, so the stored facts stay minimal and auditable. A
+/// negated modal ("cannot write") is stored with `negated = true`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModalFact {
+    modality: Modality,
+    body: Event,
+    negated: bool,
+}
+
+/// One asserted temporal ordering of two events, canonicalized to `Before`:
+/// "X writes before Y reads" and "Y reads after X writes" both store
+/// `TemporalFact { earlier: write-event, later: read-event }`. Storing only the
+/// `Before` direction makes transitive closure and asymmetry uniform regardless
+/// of the surface relation word.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TemporalFact {
+    earlier: Event,
+    later: Event,
+}
+
+/// One asserted causal link: "the street floods BECAUSE the rain falls" stores
+/// `CausalFact { cause: rain-falls, effect: street-floods }`. Asserting the link
+/// presupposes both happened, so `assert` also records `cause` and `effect` as
+/// facts in their own right. The link is directed: storing C->E never records
+/// E->C (causation is not commutative).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CausalFact {
+    cause: Meaning,
+    effect: Meaning,
+}
+
 /// A small model: asserted event facts, entity categories, and known entities.
 pub struct World {
     /// asserted event facts. Each carries its own `negated` polarity, so a
@@ -81,6 +117,13 @@ pub struct World {
     orderings: Vec<Order>,
     /// asserted propositional attitudes ("the teacher knows that ...").
     attitudes: Vec<AttitudeFact>,
+    /// asserted modal facts ("the teacher can write the report").
+    modals: Vec<ModalFact>,
+    /// asserted temporal orderings of events ("X writes before Y reads"),
+    /// canonicalized to the `Before` direction.
+    temporals: Vec<TemporalFact>,
+    /// asserted causal links ("the street floods because the rain falls").
+    causals: Vec<CausalFact>,
 }
 
 impl World {
@@ -92,6 +135,9 @@ impl World {
             attributes: Vec::new(),
             orderings: Vec::new(),
             attitudes: Vec::new(),
+            modals: Vec::new(),
+            temporals: Vec::new(),
+            causals: Vec::new(),
         }
     }
 
@@ -164,6 +210,34 @@ impl World {
             | Meaning::YesNoQuestion(_)
             | Meaning::WhQuestion { .. }
             | Meaning::Unknown(_) => {}
+            // A modal ("the teacher can/must/might/should write the report")
+            // records the modal force over the (entity-resolved) event. We do NOT
+            // assert the bare event as a fact: "can write" / "might write" do not
+            // mean the writing actually happened (possibility is not actuality).
+            Meaning::Modal {
+                modality,
+                body,
+                negated,
+            } => self.assert_modal(*modality, body, *negated),
+            // A temporal ordering ("X writes before/after Y reads") records the
+            // ordered event pair (canonicalized to Before) AND asserts both events
+            // as facts — saying "X happens before Y" presupposes both happen.
+            Meaning::Temporal { rel, first, second } => {
+                self.assert_temporal(*rel, first, second)
+            }
+            // A causal link ("E because C") records the directed cause->effect link
+            // and ALSO asserts both the cause and the effect: asserting the link
+            // presupposes both happened.
+            Meaning::Causal { cause, effect } => self.assert_causal(cause, effect),
+            // Outer negation: assert the three-valued negation of the inner
+            // meaning. "X does not write the report" wrapped as Not(Event) records
+            // the event with flipped polarity; a Not over a quantifier records
+            // nothing storable (its truth is checked, not stored) — see
+            // `assert_not` for the case analysis.
+            Meaning::Not(inner) => self.assert_not(inner),
+            // A degree question ("how long is the report?") is a query, not an
+            // assertion — it carries no storable content.
+            Meaning::DegreeQuestion { .. } => {}
         }
     }
 
@@ -224,6 +298,23 @@ impl World {
             // truth value — it is answered via `count_satisfying`, never here.
             Meaning::CountQuestion { .. } => None,
             Meaning::Unknown(_) => None,
+            // Modal truth with monotonicity (`Must` |- `Can`, possibility does
+            // NOT entail actuality).
+            Meaning::Modal {
+                modality,
+                body,
+                negated,
+            } => self.holds_modal(*modality, body, *negated),
+            // Temporal-order truth by transitive closure of asserted `Before`
+            // pairs (asymmetric: a known reverse order makes the query false).
+            Meaning::Temporal { rel, first, second } => self.holds_temporal(*rel, first, second),
+            // Causal-link truth: is the directed cause->effect link known?
+            Meaning::Causal { cause, effect } => self.holds_causal(cause, effect),
+            // Three-valued negation of the inner meaning's truth.
+            Meaning::Not(inner) => negate3(self.holds(inner)),
+            // A degree question is a query whose answer is a comparison phrase, not
+            // a truth value — answered via `degree_position`, never here.
+            Meaning::DegreeQuestion { .. } => None,
         }
     }
 
@@ -335,16 +426,34 @@ impl World {
 
     /// Record an event predication. Registers its arguments as entities,
     /// derives their animacy categories, and stores the fact (deduplicated).
+    ///
+    /// RELATIVE CLAUSES: any argument that is a `Restricted{head, clause}` term is
+    /// resolved to the concrete entity of category `head` that satisfies `clause`
+    /// (when one is known) BEFORE the fact is stored, so the asserted fact carries
+    /// a plain entity and matches ordinary queries. The clause's own facts are
+    /// registered too (the relative clause presupposes its content), which is how
+    /// "the teacher who writes the report reads the book" makes both the read and
+    /// (already-known) write available.
     fn assert_event(&mut self, ev: &Event) {
+        // Register and resolve the arguments. We register the relative clause's
+        // participants so the head entity is known, then resolve the Restricted
+        // term to its referent for storage.
+        let mut stored = ev.clone();
         if let Some(t) = &ev.agent {
             self.register_term(t);
+            stored.agent = Some(self.resolve_restricted(t));
         }
         if let Some(t) = &ev.patient {
             self.register_term(t);
+            stored.patient = Some(self.resolve_restricted(t));
+        }
+        if let Some(t) = &ev.recipient {
+            self.register_term(t);
+            stored.recipient = Some(self.resolve_restricted(t));
         }
         // Deduplicate exact-equal facts so repeated reads don't bloat the model.
-        if !self.facts.iter().any(|f| f == ev) {
-            self.facts.push(ev.clone());
+        if !self.facts.iter().any(|f| f == &stored) {
+            self.facts.push(stored);
         }
     }
 
@@ -378,6 +487,24 @@ impl World {
                 self.derive_category(t);
             }
             Term::Pronoun(_) => {}
+            // A restricted term "the <head> who <clause>" names a head-category
+            // entity constrained by a relative clause. Register the head so it
+            // participates like a definite, AND register the clause's own
+            // participants (its patient/recipient) so they become known entities
+            // too — the relative clause is a presupposed predication, not a fresh
+            // assertion, so we register but do NOT add it as a standalone fact here
+            // (it is asserted in its own right elsewhere in the discourse). Note:
+            // we do not recurse into the clause's agent, which is the head itself.
+            Term::Restricted { head, clause } => {
+                self.entities.insert(head.clone());
+                self.derive_category(t);
+                if let Some(p) = &clause.patient {
+                    self.register_term(p);
+                }
+                if let Some(r) = &clause.recipient {
+                    self.register_term(r);
+                }
+            }
         }
     }
 
@@ -505,10 +632,39 @@ impl World {
     ///   - a negative fact makes its positive query false and its negative query true.
     /// If matching facts disagree we have a contradiction in the model; we report
     /// the most recent assertion (facts are appended in reading order).
+    ///
+    /// ASPECT ENTAILMENT: a stored Progressive ("is writing") or Perfect ("has
+    /// written") fact entails the SIMPLE event holds, so it answers a Simple query.
+    /// The converse is NOT sound (a habitual "writes" need not be ongoing right
+    /// now, nor completed), so a Progressive/Perfect *query* is satisfied only by a
+    /// fact of the SAME aspect. `aspect_satisfies` encodes this one-directional
+    /// subsumption.
+    ///
+    /// RELATIVE CLAUSES: a `Restricted{head, clause}` argument in the query is
+    /// resolved to its concrete referent before matching, so "does the teacher who
+    /// writes the report read the book?" is matched as "does the teacher read the
+    /// book?" once the teacher is identified.
     fn holds_event(&self, query: &Event) -> Option<bool> {
+        // Resolve any relative-clause arguments to their concrete referents.
+        let mut q = query.clone();
+        if let Some(a) = &query.agent {
+            q.agent = Some(self.resolve_restricted(a));
+        }
+        if let Some(p) = &query.patient {
+            q.patient = Some(self.resolve_restricted(p));
+        }
+        if let Some(r) = &query.recipient {
+            q.recipient = Some(self.resolve_restricted(r));
+        }
+        let query = &q;
+
         let mut verdict: Option<bool> = None;
         for fact in &self.facts {
             if !same_event_content(fact, query) {
+                continue;
+            }
+            // Aspect gate: the fact must be able to witness the query's aspect.
+            if !aspect_satisfies(fact.aspect, query.aspect) {
                 continue;
             }
             // Does this fact make the query true?
@@ -519,6 +675,36 @@ impl World {
             verdict = Some(fact_polarity == query_polarity);
         }
         verdict
+    }
+
+    /// Resolve a `Restricted{head, clause}` term to the concrete entity it
+    /// denotes: the known entity of category `head` for which `clause` holds (with
+    /// that entity bound as the clause's agent). When a unique such entity is
+    /// known we return it; otherwise (none found, or not a Restricted term) we
+    /// return the term unchanged except that a Restricted term collapses to its
+    /// head `Entity` (the curriculum's single-entity-per-noun default), which
+    /// keeps matching sound and total. Non-Restricted terms pass through.
+    fn resolve_restricted(&self, t: &Term) -> Term {
+        let Term::Restricted { head, clause } = t else {
+            return t.clone();
+        };
+        // Candidate entities: those of the head's category whose clause holds.
+        let mut matches: Vec<String> = Vec::new();
+        for member in self.category_members(head) {
+            let mut ev = (**clause).clone();
+            ev.agent = Some(Term::Entity(member.clone()));
+            if self.holds_event(&ev) == Some(true) {
+                matches.push(member);
+            }
+        }
+        match matches.as_slice() {
+            // Exactly one entity satisfies the restriction: that is the referent.
+            [only] => Term::Entity(only.clone()),
+            // Ambiguous or none proven: fall back to the head entity itself, which
+            // is the lexicon's canonical single referent for the noun. (If the head
+            // is itself a satisfier it will already be the [only] case.)
+            _ => Term::Entity(head.clone()),
+        }
     }
 
     /// Evaluate the truth of a category statement against recorded categories,
@@ -842,6 +1028,340 @@ impl World {
     }
 
     // ----------------------------------------------------------------------
+    // assertion + truth helpers for the grammatical-core domains
+    // (modal / temporal / causal / outer-negation / degree)
+    // ----------------------------------------------------------------------
+
+    /// Record a modal fact ("the teacher can/must/might/should [not] write the
+    /// report"). We register the event's participants but DO NOT assert the event
+    /// itself: modal force is not actuality ("can write" / "might write" leave the
+    /// actual writing open). Monotonicity (`Must` |- `Can`) is applied at query
+    /// time, not stored, so the record set stays minimal. A modal whose body is
+    /// actually KNOWN to hold is consistent with the modal but is recorded
+    /// separately as an ordinary event by whatever asserted it.
+    fn assert_modal(&mut self, modality: Modality, body: &Event, negated: bool) {
+        let resolved = self.resolve_event_terms(body);
+        let fact = ModalFact {
+            modality,
+            body: resolved,
+            negated,
+        };
+        if !self.modals.iter().any(|m| *m == fact) {
+            self.modals.push(fact);
+        }
+    }
+
+    /// Record a temporal ordering of two events, canonicalized to the `Before`
+    /// direction ("A after B" is stored as "B before A"). Asserting an ordering
+    /// PRESUPPOSES both events happen, so we also assert each as an ordinary fact
+    /// (this is what lets "X writes before Y reads" answer "does X write?" -> Yes).
+    /// Self-orderings (an event before itself) are degenerate and dropped.
+    fn assert_temporal(&mut self, rel: TemporalRel, first: &Event, second: &Event) {
+        let first = self.resolve_event_terms(first);
+        let second = self.resolve_event_terms(second);
+        // Both events occur (presupposition of the ordering).
+        self.assert_event(&first);
+        self.assert_event(&second);
+        // Canonicalize to Before: for `Before`, first precedes second; for
+        // `After`, the surface "first after second" means second precedes first.
+        let (earlier, later) = match rel {
+            TemporalRel::Before => (first, second),
+            TemporalRel::After => (second, first),
+        };
+        if self.temporal_same(&earlier, &later) {
+            // An event ordered before itself is degenerate; never store it.
+            return;
+        }
+        let fact = TemporalFact { earlier, later };
+        if !self.temporals.iter().any(|t| *t == fact) {
+            self.temporals.push(fact);
+        }
+    }
+
+    /// Record a causal link "EFFECT because CAUSE". Asserting it presupposes both
+    /// the cause and the effect occurred, so we assert BOTH as facts in their own
+    /// right, then store the directed cause->effect link. Direction is preserved
+    /// exactly — we never store the reverse link (causation is not commutative).
+    fn assert_causal(&mut self, cause: &Meaning, effect: &Meaning) {
+        // Presupposition: both happened.
+        self.assert(cause);
+        self.assert(effect);
+        let fact = CausalFact {
+            cause: cause.clone(),
+            effect: effect.clone(),
+        };
+        if !self.causals.iter().any(|c| *c == fact) {
+            self.causals.push(fact);
+        }
+    }
+
+    /// Assert an outer-negated meaning `Not(inner)`. Where `inner` has a storable
+    /// polarity we record its NEGATION as a fact so a later positive query of
+    /// `inner` returns `Some(false)`:
+    ///   - `Not(Event)` stores the event with flipped `negated`.
+    ///   - `Not(IsA/HasProperty/Comparison/Attitude)` re-asserts the polarity-
+    ///     flipped meaning through the normal path.
+    /// A `Not` over a QUANTIFIER ("not every teacher writes a report") is a CLAIM
+    /// to be checked, not a fact to materialize (its truth is computed in `holds`
+    /// from the inner quantifier's three-valued truth), so it no-ops on assert —
+    /// exactly mirroring how a plain existential/cardinal no-ops. This is what
+    /// keeps the two negation-scope readings distinct WITHOUT polluting the model.
+    fn assert_not(&mut self, inner: &Meaning) {
+        match inner {
+            Meaning::Event(ev) => {
+                let mut e = ev.clone();
+                e.negated = !e.negated;
+                self.assert_event(&e);
+            }
+            Meaning::IsA {
+                subject,
+                category,
+                negated,
+            } => self.assert_isa(subject, category, !*negated),
+            Meaning::HasProperty {
+                subject,
+                property,
+                negated,
+            } => self.assert_property(subject, property, !*negated),
+            Meaning::Comparison {
+                subject,
+                scale,
+                more,
+                than,
+                negated,
+            } => self.assert_comparison(subject, scale, *more, than, !*negated),
+            Meaning::Attitude {
+                holder,
+                verb,
+                content,
+                negated,
+            } => self.assert_attitude(holder, verb, content, !*negated),
+            // Quantified / Or / Cardinal / nested Not / questions: nothing storable
+            // — their negation is a checked claim, not a ground fact. (A nested
+            // double negation Not(Not(m)) is asserted as m, restoring the inner
+            // assertion.)
+            Meaning::Not(double) => self.assert(double),
+            Meaning::Quantified { .. }
+            | Meaning::Or(_)
+            | Meaning::Cardinal { .. }
+            | Meaning::Modal { .. }
+            | Meaning::Temporal { .. }
+            | Meaning::Causal { .. }
+            | Meaning::YesNoQuestion(_)
+            | Meaning::WhQuestion { .. }
+            | Meaning::CountQuestion { .. }
+            | Meaning::DegreeQuestion { .. }
+            | Meaning::Unknown(_) => {}
+        }
+    }
+
+    /// Modal truth with monotonicity and the possibility/actuality firewall.
+    ///
+    /// SOUNDNESS (the load-bearing modal logic):
+    ///   - `Must P` |- `Can P`: a stored *necessity* makes a *possibility* query
+    ///     true. (Necessity entails possibility.)
+    ///   - actuality |- possibility: if the bare event is KNOWN to hold in the
+    ///     world (`holds_event == Some(true)`), then `Can P` / `Might P` are true
+    ///     (what is actual is possible). Actuality does NOT make `Must`/`Should`
+    ///     true (deontic/alethic necessity is not entailed by a single occurrence).
+    ///   - possibility does NOT |- actuality: a stored `Can P`/`Might P` says
+    ///     NOTHING about whether the event holds, and never about a `Must` query.
+    ///   - a stored exact (modality, body, polarity) match is reported directly.
+    ///   - a stored NEGATED necessity-or-possibility is consulted for explicit
+    ///     denials ("cannot write" makes "can write" false).
+    /// Anything not provable stays `None` (open world).
+    fn holds_modal(&self, modality: Modality, body: &Event, negated: bool) -> Option<bool> {
+        let body = self.resolve_event_terms(body);
+
+        // 1) Exact stored match (same modality, body, ignoring stored polarity):
+        //    fold the stored polarity against the query polarity, most-recent wins.
+        let mut verdict: Option<bool> = None;
+        for m in &self.modals {
+            if m.modality == modality && self.modal_body_matches(&m.body, &body) {
+                verdict = Some(m.negated == negated);
+            }
+        }
+
+        // 2) MONOTONICITY: a stored, non-negated `Must` proves a `Can`/`Might`
+        //    query. (Necessity entails possibility.) Only strengthens a positive
+        //    possibility query; never fabricates a `Must`.
+        if !negated && is_possibility(modality) {
+            for m in &self.modals {
+                if !m.negated
+                    && m.modality == Modality::Must
+                    && self.modal_body_matches(&m.body, &body)
+                {
+                    return Some(true);
+                }
+            }
+            // 3) actuality |- possibility: a known occurrence makes "can/might"
+            //    true. We consult the bare event's truth.
+            if self.holds_event(&body) == Some(true) {
+                return Some(true);
+            }
+        }
+
+        verdict
+    }
+
+    /// Do two modal bodies denote the same event for modal matching? Reuses the
+    /// content comparison (predicate/args/tense) and the aspect subsumption, so a
+    /// modal over a Simple event is matched by a Simple-bodied stored modal. We do
+    /// NOT compare the body's `negated` flag here — body polarity is carried by
+    /// the surrounding modal's own `negated`, and the events constructed for modal
+    /// bodies are affirmative.
+    fn modal_body_matches(&self, a: &Event, b: &Event) -> bool {
+        same_event_content(a, b) && aspect_satisfies(a.aspect, b.aspect)
+    }
+
+    /// Temporal-order truth. The query asks "does `first` happen `rel` `second`?".
+    /// We canonicalize to a `Before` reachability question over the stored ordered
+    /// pairs and answer three-valued, SOUNDLY:
+    ///   - `Some(true)`  if `earlier -> later` is reachable by TRANSITIVE closure
+    ///     of the stored `Before` pairs;
+    ///   - `Some(false)` if the REVERSE ordering is reachable (Before is
+    ///     ASYMMETRIC: `B before A` |- ¬`A before B`);
+    ///   - `None` otherwise (open world: nothing orders this pair).
+    /// Termination: closure runs over a finite pair-set with a visited set.
+    fn holds_temporal(&self, rel: TemporalRel, first: &Event, second: &Event) -> Option<bool> {
+        let first = self.resolve_event_terms(first);
+        let second = self.resolve_event_terms(second);
+        // Canonicalize the QUERY to the Before direction.
+        let (earlier, later) = match rel {
+            TemporalRel::Before => (&first, &second),
+            TemporalRel::After => (&second, &first),
+        };
+        // A degenerate "X before X" is false (nothing strictly precedes itself).
+        if self.temporal_same(earlier, later) {
+            return Some(false);
+        }
+        if self.temporal_reachable(earlier, later) {
+            return Some(true);
+        }
+        // ASYMMETRY: the proven reverse ordering makes the forward one false.
+        if self.temporal_reachable(later, earlier) {
+            return Some(false);
+        }
+        None
+    }
+
+    /// Is `later` reachable from `earlier` through the stored `Before` pairs by
+    /// transitive closure? DFS over the event-ordering graph with a visited set on
+    /// event indices, so it always terminates (even on a malformed cycle).
+    fn temporal_reachable(&self, earlier: &Event, later: &Event) -> bool {
+        // Frontier of events known to come at-or-after `earlier`.
+        let mut stack: Vec<Event> = vec![earlier.clone()];
+        let mut visited: Vec<Event> = vec![earlier.clone()];
+        while let Some(node) = stack.pop() {
+            for t in &self.temporals {
+                if !self.temporal_same(&t.earlier, &node) {
+                    continue;
+                }
+                if self.temporal_same(&t.later, later) {
+                    return true;
+                }
+                if !visited.iter().any(|v| self.temporal_same(v, &t.later)) {
+                    visited.push(t.later.clone());
+                    stack.push(t.later.clone());
+                }
+            }
+        }
+        false
+    }
+
+    /// Two events are "the same" for temporal matching when their content +
+    /// (subsuming) aspect + polarity align — the same notion used to store pairs.
+    fn temporal_same(&self, a: &Event, b: &Event) -> bool {
+        same_event_content(a, b)
+            && (aspect_satisfies(a.aspect, b.aspect) || aspect_satisfies(b.aspect, a.aspect))
+            && a.negated == b.negated
+    }
+
+    /// Causal-link truth: is the directed `cause -> effect` link known? Matching
+    /// is structural on both meanings. `Some(true)` when the exact directed link
+    /// was asserted; `None` otherwise. We DELIBERATELY never report `true` for the
+    /// reverse link (causation is not commutative) and never derive a causal link
+    /// from a mere material conditional — only an explicitly asserted "because".
+    fn holds_causal(&self, cause: &Meaning, effect: &Meaning) -> Option<bool> {
+        for c in &self.causals {
+            if &c.cause == cause && &c.effect == effect {
+                return Some(true);
+            }
+        }
+        None
+    }
+
+    /// The cause of `effect`, if a causal link was asserted with this effect —
+    /// backs the "why does the street flood?" answer. Two `Event` effects match by
+    /// CONTENT (predicate + tense + agent/patient) so the question's surface aspect
+    /// need not equal the asserting sentence's; other meanings match exactly.
+    /// Returns the MOST-RECENTLY asserted cause for the effect, `None` if no link
+    /// records it. The reverse (effect->cause) direction is never consulted, so
+    /// causation's non-commutativity is preserved.
+    pub fn cause_of(&self, effect: &Meaning) -> Option<Meaning> {
+        self.causals
+            .iter()
+            .rev()
+            .find(|c| match (&c.effect, effect) {
+                (Meaning::Event(stored), Meaning::Event(asked)) => {
+                    same_event_content(stored, asked)
+                }
+                (stored, asked) => stored == asked,
+            })
+            .map(|c| c.cause.clone())
+    }
+
+    /// DEGREE-QUESTION SUPPORT: the known comparative position of `entity` on
+    /// `scale`, as a `(more, other)` pair meaning "`entity` is more/less than
+    /// `other`". We answer from asserted comparison facts: if the entity is the
+    /// greater end of some ordering on the scale we report `(true, lesser)` ("it
+    /// is longer than <lesser>"); if it is the lesser end we report
+    /// `(false, greater)` ("it is shorter than <greater>"). `None` when no
+    /// comparison on the scale mentions the entity — honestly "I don't know",
+    /// since the world has no numeric measures, only relative comparisons.
+    ///
+    /// SOUNDNESS: we only surface a DIRECTLY-asserted, non-negated ordering edge
+    /// incident to the entity; we do not invent magnitudes. Preference is given to
+    /// a "greater-than" framing (it reads more naturally as an answer) but either
+    /// is correct.
+    pub fn degree_position(&self, entity: &str, scale: &str) -> Option<(bool, String)> {
+        // Prefer "entity is greater than X".
+        if let Some(o) = self
+            .orderings
+            .iter()
+            .find(|o| !o.negated && o.scale == scale && o.greater == entity)
+        {
+            return Some((true, o.lesser.clone()));
+        }
+        // Else "entity is less than X".
+        if let Some(o) = self
+            .orderings
+            .iter()
+            .find(|o| !o.negated && o.scale == scale && o.lesser == entity)
+        {
+            return Some((false, o.greater.clone()));
+        }
+        None
+    }
+
+    /// Resolve every relative-clause argument of an event to its concrete
+    /// referent, leaving plain terms untouched. Used by the modal/temporal/causal
+    /// asserters and queries so a `Restricted` subject is matched consistently.
+    fn resolve_event_terms(&self, ev: &Event) -> Event {
+        let mut out = ev.clone();
+        if let Some(a) = &ev.agent {
+            out.agent = Some(self.resolve_restricted(a));
+        }
+        if let Some(p) = &ev.patient {
+            out.patient = Some(self.resolve_restricted(p));
+        }
+        if let Some(r) = &ev.recipient {
+            out.recipient = Some(self.resolve_restricted(r));
+        }
+        out
+    }
+
+    // ----------------------------------------------------------------------
     // taxonomy / category membership
     // ----------------------------------------------------------------------
 
@@ -1004,10 +1524,44 @@ fn same_event_content(a: &Event, b: &Event) -> bool {
         && terms_match(&a.patient, &b.patient)
 }
 
+/// Aspect subsumption for event matching: can a stored fact of aspect
+/// `fact_aspect` WITNESS a query of aspect `query_aspect`?
+///
+/// ENTAILMENT DIRECTION (sound): a Progressive ("is writing") or Perfect ("has
+/// written") event entails the SIMPLE event holds, so a fact of ANY aspect
+/// satisfies a Simple query. The converse is unsound — a habitual/simple "writes"
+/// need not be ongoing right now (Progressive) nor completed (Perfect) — so a
+/// Progressive/Perfect query is satisfied ONLY by a fact of the exact same
+/// aspect. (Progressive and Perfect are not interderivable from each other
+/// either, so they only match like-for-like.)
+fn aspect_satisfies(fact_aspect: Aspect, query_aspect: Aspect) -> bool {
+    match query_aspect {
+        // Any aspect entails the simple event holds.
+        Aspect::Simple => true,
+        // A marked aspect requires a like-marked witness.
+        Aspect::Progressive => fact_aspect == Aspect::Progressive,
+        Aspect::Perfect => fact_aspect == Aspect::Perfect,
+    }
+}
+
+/// Is `modality` a POSSIBILITY operator (`Can`/`Might`)? Possibility is entailed
+/// by necessity (`Must`) and by actuality; necessity operators (`Must`/`Should`)
+/// are not. Used to gate the monotonicity rule in `holds_modal`.
+fn is_possibility(modality: Modality) -> bool {
+    matches!(modality, Modality::Can | Modality::Might)
+}
+
+/// Three-valued (Kleene) negation of a truth value: `Some(true)` <-> `Some(false)`,
+/// and `None` (undetermined) negates to `None`. This is the truth function behind
+/// the outer-scope `Not(m)` meaning — distinct from a leaf's own `negated` flag.
+fn negate3(v: Option<bool>) -> Option<bool> {
+    v.map(|b| !b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::understanding::meaning::Tense;
+    use crate::understanding::meaning::{Aspect, Modality, TemporalRel, Tense};
 
     /// Build a present, affirmative (or negated) write(agent, patient) event.
     fn write_event(agent: &str, patient: &str, negated: bool) -> Event {
@@ -1017,6 +1571,7 @@ mod tests {
             patient: Some(Term::Entity(patient.to_string())),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated,
         }
     }
@@ -1057,6 +1612,7 @@ mod tests {
             patient: Some(Term::Indefinite("report".to_string())),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         });
         assert_eq!(w.holds(&q), Some(true));
@@ -1172,6 +1728,7 @@ mod tests {
             patient: Some(Term::Indefinite(patient.to_string())),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         }
     }
@@ -1266,6 +1823,7 @@ mod tests {
             patient: Some(Term::Indefinite("report".to_string())),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         });
         assert_eq!(w.holds(&q), Some(true));
@@ -1617,6 +2175,514 @@ mod tests {
         assert_eq!(w.holds(&cq), None);
         // We do know of 3 persons total (teacher, editor, author).
         assert_eq!(w.category_member_count("person"), 3);
+    }
+
+    // ===================================================================
+    // GRAMMATICAL-CORE DOMAINS (the nine new forms)
+    // ===================================================================
+
+    /// A write(agent, patient) event with explicit tense + aspect.
+    fn write_ta(agent: &str, patient: &str, tense: Tense, aspect: Aspect) -> Event {
+        Event {
+            predicate: "write".to_string(),
+            agent: Some(Term::Entity(agent.to_string())),
+            patient: Some(Term::Entity(patient.to_string())),
+            recipient: None,
+            tense,
+            aspect,
+            negated: false,
+        }
+    }
+
+    // ---- (1) ASPECT ---------------------------------------------------
+
+    #[test]
+    fn aspect_progressive_and_perfect_entail_simple() {
+        // "the teacher is writing the report" (Progressive) makes the SIMPLE event
+        // hold, and likewise a Perfect fact.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Progressive,
+        )));
+        let simple = Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Simple));
+        assert_eq!(w.holds(&simple), Some(true));
+
+        let mut w2 = World::new();
+        w2.assert(&Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Perfect,
+        )));
+        assert_eq!(w2.holds(&simple), Some(true));
+    }
+
+    #[test]
+    fn aspect_simple_does_not_entail_progressive_or_perfect() {
+        // SOUNDNESS: a habitual/simple "writes" must NOT make "is writing" or "has
+        // written" true — the converse aspect entailment is invalid.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+        )));
+        let prog =
+            Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Progressive));
+        let perf = Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Perfect));
+        assert_eq!(w.holds(&prog), None);
+        assert_eq!(w.holds(&perf), None);
+    }
+
+    #[test]
+    fn aspect_progressive_query_matches_progressive_fact() {
+        // A like-for-like aspect query is answered.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Progressive,
+        )));
+        let prog =
+            Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Progressive));
+        assert_eq!(w.holds(&prog), Some(true));
+    }
+
+    #[test]
+    fn future_tense_is_distinct_from_present() {
+        // "will write" (Future) is a different fact from "writes" (Present): one
+        // does not answer the other.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Future,
+            Aspect::Simple,
+        )));
+        let future = Meaning::Event(write_ta("teacher", "report", Tense::Future, Aspect::Simple));
+        let present = Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Simple));
+        assert_eq!(w.holds(&future), Some(true));
+        assert_eq!(w.holds(&present), None);
+    }
+
+    // ---- (2) MODALITY -------------------------------------------------
+
+    fn modal(modality: Modality, negated: bool) -> Meaning {
+        Meaning::Modal {
+            modality,
+            body: Box::new(write_ta("teacher", "report", Tense::Present, Aspect::Simple)),
+            negated,
+        }
+    }
+
+    #[test]
+    fn modal_must_entails_can_not_converse() {
+        // "the teacher MUST write the report" makes "CAN write" true (necessity
+        // entails possibility)...
+        let mut w = World::new();
+        w.assert(&modal(Modality::Must, false));
+        assert_eq!(w.holds(&modal(Modality::Must, false)), Some(true));
+        assert_eq!(w.holds(&modal(Modality::Can, false)), Some(true));
+        assert_eq!(w.holds(&modal(Modality::Might, false)), Some(true));
+
+        // ...but the CONVERSE fails: "can write" does NOT make "must write" true.
+        let mut w2 = World::new();
+        w2.assert(&modal(Modality::Can, false));
+        assert_eq!(w2.holds(&modal(Modality::Can, false)), Some(true));
+        assert_eq!(w2.holds(&modal(Modality::Must, false)), None);
+    }
+
+    #[test]
+    fn modal_possibility_does_not_entail_actuality() {
+        // SOUNDNESS: "the teacher can write the report" says NOTHING about whether
+        // the writing actually happens.
+        let mut w = World::new();
+        w.assert(&modal(Modality::Can, false));
+        let actual = Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Simple));
+        assert_eq!(w.holds(&actual), None);
+        // ...and "might" likewise.
+        let mut w2 = World::new();
+        w2.assert(&modal(Modality::Might, false));
+        assert_eq!(w2.holds(&actual), None);
+    }
+
+    #[test]
+    fn modal_actuality_entails_possibility() {
+        // A KNOWN occurrence makes "can/might" true (what is actual is possible)
+        // but never fabricates a necessity.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+        )));
+        assert_eq!(w.holds(&modal(Modality::Can, false)), Some(true));
+        assert_eq!(w.holds(&modal(Modality::Might, false)), Some(true));
+        assert_eq!(w.holds(&modal(Modality::Must, false)), None);
+        assert_eq!(w.holds(&modal(Modality::Should, false)), None);
+    }
+
+    #[test]
+    fn modal_negation_and_open_world() {
+        // "the teacher cannot write the report": the positive "can" is false.
+        let mut w = World::new();
+        w.assert(&modal(Modality::Can, true));
+        assert_eq!(w.holds(&modal(Modality::Can, false)), Some(false));
+        // Nothing asserted -> open world.
+        let w2 = World::new();
+        assert_eq!(w2.holds(&modal(Modality::Can, false)), None);
+    }
+
+    // ---- (3) RELATIVE CLAUSES -----------------------------------------
+
+    #[test]
+    fn relative_clause_subject_resolves_to_matching_entity() {
+        // "the teacher who writes the report reads the book": the subject is the
+        // teacher that satisfies the clause; the read fact is about that teacher.
+        let mut w = World::new();
+        // The clause content is already known.
+        w.assert(&Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+        )));
+        let restricted = Term::Restricted {
+            head: "teacher".to_string(),
+            clause: Box::new(write_ta("teacher", "report", Tense::Present, Aspect::Simple)),
+        };
+        let read = Event {
+            predicate: "read".to_string(),
+            agent: Some(restricted.clone()),
+            patient: Some(Term::Entity("book".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        };
+        w.assert(&Meaning::Event(read));
+        // The read fact is stored as the plain teacher reading the book.
+        let q = Event {
+            predicate: "read".to_string(),
+            agent: Some(Term::Entity("teacher".to_string())),
+            patient: Some(Term::Entity("book".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        };
+        assert_eq!(w.holds(&Meaning::Event(q)), Some(true));
+    }
+
+    // ---- (4) PASSIVE --------------------------------------------------
+
+    #[test]
+    fn passive_maps_to_active_predicate_argument_structure() {
+        // "the report was written by the teacher" is the SAME fact as the active
+        // "the teacher wrote the report" (agent=teacher, patient=report, past).
+        let mut w = World::new();
+        // Active assertion.
+        w.assert(&Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Past,
+            Aspect::Simple,
+        )));
+        // The passive surface produces the same Event shape, so the same query
+        // answers Yes.
+        let passive_as_active =
+            Meaning::Event(write_ta("teacher", "report", Tense::Past, Aspect::Simple));
+        assert_eq!(w.holds(&passive_as_active), Some(true));
+    }
+
+    // ---- (5) PLURALS / distributive -----------------------------------
+
+    #[test]
+    fn plural_distributive_universal_over_known_members() {
+        // "teachers write reports" reads as Every-over-known-persons; asserting it
+        // makes each known person write, and the universal query holds.
+        let mut w = World::new();
+        // Two known persons.
+        w.assert(&Meaning::IsA {
+            subject: Term::Entity("teacher".to_string()),
+            category: "person".to_string(),
+            negated: false,
+        });
+        w.assert(&Meaning::IsA {
+            subject: Term::Entity("editor".to_string()),
+            category: "person".to_string(),
+            negated: false,
+        });
+        // Distributive plural represented as a universal (the chosen rep).
+        w.assert(&Meaning::Quantified {
+            quant: Quantifier::Every,
+            var_category: "person".to_string(),
+            body: quant_body("report"),
+        });
+        let teacher_writes = Meaning::Event(Event {
+            predicate: "write".to_string(),
+            agent: Some(Term::Entity("teacher".to_string())),
+            patient: Some(Term::Indefinite("report".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        });
+        assert_eq!(w.holds(&teacher_writes), Some(true));
+    }
+
+    // ---- (6) TEMPORAL -------------------------------------------------
+
+    fn read_event(agent: &str, patient: &str) -> Event {
+        Event {
+            predicate: "read".to_string(),
+            agent: Some(Term::Entity(agent.to_string())),
+            patient: Some(Term::Entity(patient.to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        }
+    }
+
+    fn temporal(rel: TemporalRel, first: Event, second: Event) -> Meaning {
+        Meaning::Temporal {
+            rel,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
+    #[test]
+    fn temporal_before_truth_and_presupposition() {
+        // "the teacher writes the report before the editor reads the book".
+        let mut w = World::new();
+        let write = write_ta("teacher", "report", Tense::Present, Aspect::Simple);
+        let read = read_event("editor", "book");
+        w.assert(&temporal(TemporalRel::Before, write.clone(), read.clone()));
+        // The ordering holds.
+        assert_eq!(
+            w.holds(&temporal(TemporalRel::Before, write.clone(), read.clone())),
+            Some(true)
+        );
+        // PRESUPPOSITION: both events are now facts.
+        assert_eq!(w.holds(&Meaning::Event(write.clone())), Some(true));
+        assert_eq!(w.holds(&Meaning::Event(read.clone())), Some(true));
+        // "after" is the converse and is the same stored ordering.
+        assert_eq!(
+            w.holds(&temporal(TemporalRel::After, read.clone(), write.clone())),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn temporal_asymmetry() {
+        // SOUNDNESS: "A before B" makes "B before A" FALSE (asymmetric), never
+        // silently true.
+        let mut w = World::new();
+        let a = write_ta("teacher", "report", Tense::Present, Aspect::Simple);
+        let b = read_event("editor", "book");
+        w.assert(&temporal(TemporalRel::Before, a.clone(), b.clone()));
+        assert_eq!(
+            w.holds(&temporal(TemporalRel::Before, b.clone(), a.clone())),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn temporal_transitivity() {
+        // A before B and B before C entail A before C (and not C before A).
+        let mut w = World::new();
+        let a = write_ta("teacher", "report", Tense::Present, Aspect::Simple);
+        let b = read_event("editor", "book");
+        let c = Event {
+            predicate: "send".to_string(),
+            agent: Some(Term::Entity("clerk".to_string())),
+            patient: Some(Term::Entity("memo".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        };
+        w.assert(&temporal(TemporalRel::Before, a.clone(), b.clone()));
+        w.assert(&temporal(TemporalRel::Before, b.clone(), c.clone()));
+        assert_eq!(
+            w.holds(&temporal(TemporalRel::Before, a.clone(), c.clone())),
+            Some(true)
+        );
+        assert_eq!(
+            w.holds(&temporal(TemporalRel::Before, c.clone(), a.clone())),
+            Some(false)
+        );
+        // An unordered pair stays open.
+        let d = read_event("author", "letter");
+        assert_eq!(
+            w.holds(&temporal(TemporalRel::Before, a, d)),
+            None
+        );
+    }
+
+    #[test]
+    fn temporal_cycle_terminates() {
+        // Defensive: a (degenerate) cycle must not hang.
+        let mut w = World::new();
+        let a = write_ta("teacher", "report", Tense::Present, Aspect::Simple);
+        let b = read_event("editor", "book");
+        w.assert(&temporal(TemporalRel::Before, a.clone(), b.clone()));
+        w.assert(&temporal(TemporalRel::Before, b.clone(), a.clone()));
+        let _ = w.holds(&temporal(TemporalRel::Before, a.clone(), b.clone()));
+        let _ = w.holds(&temporal(TemporalRel::Before, b, a));
+    }
+
+    // ---- (7) CAUSAL ---------------------------------------------------
+
+    fn flood() -> Meaning {
+        Meaning::Event(Event {
+            predicate: "flood".to_string(),
+            agent: Some(Term::Entity("street".to_string())),
+            patient: None,
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        })
+    }
+    fn rain_falls() -> Meaning {
+        Meaning::Event(Event {
+            predicate: "fall".to_string(),
+            agent: Some(Term::Entity("rain".to_string())),
+            patient: None,
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        })
+    }
+
+    #[test]
+    fn causal_link_truth_presupposition_and_noncommutativity() {
+        // "the street floods because the rain falls".
+        let mut w = World::new();
+        let causal = Meaning::Causal {
+            cause: Box::new(rain_falls()),
+            effect: Box::new(flood()),
+        };
+        w.assert(&causal);
+        // The link holds...
+        assert_eq!(w.holds(&causal), Some(true));
+        // PRESUPPOSITION: both cause and effect are facts.
+        assert_eq!(w.holds(&rain_falls()), Some(true));
+        assert_eq!(w.holds(&flood()), Some(true));
+        // NON-COMMUTATIVITY: the reverse link is NOT known.
+        let reverse = Meaning::Causal {
+            cause: Box::new(flood()),
+            effect: Box::new(rain_falls()),
+        };
+        assert_eq!(w.holds(&reverse), None);
+        // cause_of backs the "why" answer.
+        assert_eq!(w.cause_of(&flood()), Some(rain_falls()));
+        assert_eq!(w.cause_of(&rain_falls()), None);
+    }
+
+    // ---- (8) DEGREE QUESTIONS -----------------------------------------
+
+    #[test]
+    fn degree_position_from_comparison_facts() {
+        // "how long is the report?" answerable from "the report is longer than the
+        // book": the report's known position on length is greater-than book.
+        let mut w = World::new();
+        w.assert(&Meaning::Comparison {
+            subject: Term::Entity("report".to_string()),
+            scale: "length".to_string(),
+            more: true,
+            than: Term::Entity("book".to_string()),
+            negated: false,
+        });
+        assert_eq!(
+            w.degree_position("report", "length"),
+            Some((true, "book".to_string()))
+        );
+        // The book's position is the lesser end.
+        assert_eq!(
+            w.degree_position("book", "length"),
+            Some((false, "report".to_string()))
+        );
+        // Unknown scale / entity -> honest None.
+        assert_eq!(w.degree_position("report", "weight"), None);
+        assert_eq!(w.degree_position("memo", "length"), None);
+        // The DegreeQuestion meaning itself is never truth-evaluated.
+        let dq = Meaning::DegreeQuestion {
+            subject: Term::Entity("report".to_string()),
+            scale: "length".to_string(),
+        };
+        assert_eq!(w.holds(&dq), None);
+    }
+
+    // ---- (9) NEGATION SCOPE -------------------------------------------
+
+    #[test]
+    fn negation_scope_two_readings_differ() {
+        // World: teacher writes a report, editor does NOT.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        w.assert(&Meaning::Event(write_event("editor", "report", true)));
+
+        // Reading A: "NOT every teacher writes a report" = Not(Every ...).
+        // "every person writes" is false (editor counterexample), so Not(...) is
+        // TRUE ("some person does not write").
+        let not_every = Meaning::Not(Box::new(Meaning::Quantified {
+            quant: Quantifier::Every,
+            var_category: "person".to_string(),
+            body: quant_body("report"),
+        }));
+        assert_eq!(w.holds(&not_every), Some(true));
+
+        // Reading B: "every person does NOT write a report" = Every with negated
+        // body = "no person writes". teacher DOES write, so this is FALSE.
+        let mut negated_body = quant_body("report");
+        negated_body.negated = true;
+        let every_not = Meaning::Quantified {
+            quant: Quantifier::Every,
+            var_category: "person".to_string(),
+            body: negated_body,
+        };
+        assert_eq!(w.holds(&every_not), Some(false));
+
+        // The two readings get DIFFERENT truth values from the same world.
+        assert_ne!(w.holds(&not_every), w.holds(&every_not));
+    }
+
+    #[test]
+    fn outer_negation_is_three_valued() {
+        // Not(m) negates m's three-valued truth: true<->false, None stays None.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        let p = Meaning::Event(write_event("teacher", "report", false));
+        assert_eq!(w.holds(&Meaning::Not(Box::new(p.clone()))), Some(false));
+        // Double negation restores the value.
+        assert_eq!(
+            w.holds(&Meaning::Not(Box::new(Meaning::Not(Box::new(p))))),
+            Some(true)
+        );
+        // Unknown inner -> Not is also None (honest).
+        let unknown = Meaning::Event(write_event("author", "book", false));
+        assert_eq!(w.holds(&Meaning::Not(Box::new(unknown))), None);
+    }
+
+    #[test]
+    fn assert_not_event_records_negation() {
+        // Asserting Not(Event) records the event as negated, so the positive query
+        // is Some(false).
+        let mut w = World::new();
+        let p = Meaning::Event(write_event("teacher", "report", false));
+        w.assert(&Meaning::Not(Box::new(p.clone())));
+        assert_eq!(w.holds(&p), Some(false));
     }
 }
 

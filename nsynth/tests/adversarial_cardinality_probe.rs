@@ -13,7 +13,7 @@
 
 use mog_synth::comprehension::Engine;
 use mog_synth::understanding::discourse::Discourse;
-use mog_synth::understanding::meaning::{Event, Meaning, Tense, Term};
+use mog_synth::understanding::meaning::{Aspect, Event, Meaning, Tense, Term};
 use mog_synth::understanding::world_model::World;
 use mog_synth::understanding::{qa, semantics};
 
@@ -24,6 +24,7 @@ fn write_event(agent: &str, patient: &str, negated: bool) -> Event {
         patient: Some(Term::Entity(patient.to_string())),
         recipient: None,
         tense: Tense::Present,
+        aspect: Aspect::Simple,
         negated,
     }
 }
@@ -36,6 +37,7 @@ fn report_body() -> Event {
         patient: Some(Term::Indefinite("report".to_string())),
         recipient: None,
         tense: Tense::Present,
+        aspect: Aspect::Simple,
         negated: false,
     }
 }

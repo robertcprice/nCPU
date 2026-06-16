@@ -103,6 +103,18 @@ pub const IRREGULAR_PAST: &[(&str, &str)] = &[
     ("tell", "told"), ("teach", "taught"),
 ];
 
+/// Past participles for the PASSIVE voice and the PERFECT aspect ("the report
+/// was/has been written"). For a REGULAR verb the participle equals its past
+/// form (`-ed`), so only the IRREGULAR participles are stored here as a lexicon
+/// — callers fall back to `verb_past` for verbs absent from this table. The
+/// ditransitive verbs carry their participles too (given/sent/shown/told/taught).
+pub const PAST_PARTICIPLE: &[(&str, &str)] = &[
+    // Irregular participles distinct from the regular `-ed` past.
+    ("write", "written"), ("read", "read"), ("give", "given"),
+    ("send", "sent"), ("show", "shown"), ("tell", "told"),
+    ("teach", "taught"), ("do", "done"), ("go", "gone"),
+];
+
 /// Sentinel returned by the irregular lexicon for a regular verb ("not
 /// irregular — apply the rule"). Picked so no real 3sg form collides with it.
 const REGULAR_SENTINEL: &str = "-";
@@ -223,6 +235,19 @@ fn noun_animacy_program() -> (String, String) {
     }
     for w in FUNCTION_WORDS {
         push(w.to_string(), 0, &mut ex, &mut seen);
+    }
+    // Causal/conditional-clause subjects from the curriculum's PROP_PAIRS (e.g.
+    // "the rain falls", "the street floods"). These are inanimate eventive nouns:
+    // class 2 ("thing"), so the semantic parser recognizes them as NP heads and
+    // the causal layer can understand "<effect> because <cause>" clauses. Derived
+    // from PROP_PAIRS so the lexicon stays in sync if the curriculum grows. Pushed
+    // last: agents that double as clause subjects (teacher/student) keep class 1.
+    for (a, b) in PROP_PAIRS {
+        for clause in [a, b] {
+            if let Some(subj) = clause.split_whitespace().nth(1) {
+                push(subj.to_string(), 2, &mut ex, &mut seen);
+            }
+        }
     }
     synth("noun_animacy", "fn noun_animacy(s: string) -> i64", ex)
 }

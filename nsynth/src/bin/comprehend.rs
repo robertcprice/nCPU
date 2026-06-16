@@ -10,7 +10,7 @@
 use mog_synth::comprehension::{capitalize, words_of, Engine, PROP_PAIRS};
 use mog_synth::understanding::discourse::Discourse;
 use mog_synth::understanding::inference::{consequences, relation, Relation};
-use mog_synth::understanding::meaning::{Event, Meaning, Quantifier, Tense, Term};
+use mog_synth::understanding::meaning::{Aspect, Event, Meaning, Quantifier, Tense, Term};
 use mog_synth::understanding::{qa, semantics};
 
 fn demo_comprehend(engine: &Engine) {
@@ -236,6 +236,9 @@ fn show_term(t: &Term) -> String {
         Term::Entity(s) => s.clone(),
         Term::Indefinite(s) => format!("a:{s}"),
         Term::Pronoun(s) => format!("?{s}"),
+        // PLACEHOLDER (skeleton): print the restricted head; the relative-clause
+        // owner can enrich this to show the clause once logic lands.
+        Term::Restricted { head, .. } => format!("{head}[rel]"),
     }
 }
 
@@ -250,6 +253,15 @@ fn show_tense(t: Tense) -> &'static str {
     match t {
         Tense::Present => "pres",
         Tense::Past => "past",
+        Tense::Future => "fut",
+    }
+}
+
+fn show_aspect(a: Aspect) -> &'static str {
+    match a {
+        Aspect::Simple => "simple",
+        Aspect::Progressive => "prog",
+        Aspect::Perfect => "perf",
     }
 }
 
@@ -264,9 +276,10 @@ fn show_meaning(m: &Meaning) -> String {
                 None => String::new(),
             };
             format!(
-                "{neg}Event{{ {}({}, agent={}, patient={}{recip}) }}",
+                "{neg}Event{{ {}({}/{}, agent={}, patient={}{recip}) }}",
                 ev.predicate,
                 show_tense(ev.tense),
+                show_aspect(ev.aspect),
                 show_opt_term(&ev.agent),
                 show_opt_term(&ev.patient),
             )
@@ -317,6 +330,29 @@ fn show_meaning(m: &Meaning) -> String {
             "Count?{{ {var_category}: {} }}",
             show_meaning(&Meaning::Event(body.clone()))
         ),
+        // PLACEHOLDER (skeleton): readable prints for the new grammatical-core
+        // meanings. The owners can enrich these as the logic lands.
+        Meaning::Modal { modality, body, negated } => {
+            let neg = if *negated { "¬" } else { "" };
+            format!(
+                "{neg}Modal{{ {modality:?}: {} }}",
+                show_meaning(&Meaning::Event((**body).clone()))
+            )
+        }
+        Meaning::Temporal { rel, first, second } => format!(
+            "Temporal{{ {} {rel:?} {} }}",
+            show_meaning(&Meaning::Event((**first).clone())),
+            show_meaning(&Meaning::Event((**second).clone()))
+        ),
+        Meaning::Causal { cause, effect } => format!(
+            "Causal{{ effect={} because cause={} }}",
+            show_meaning(effect),
+            show_meaning(cause)
+        ),
+        Meaning::DegreeQuestion { subject, scale } => {
+            format!("Degree?{{ {}: {scale} }}", show_term(subject))
+        }
+        Meaning::Not(inner) => format!("¬( {} )", show_meaning(inner)),
         Meaning::Unknown(s) => format!("Unknown({s:?})"),
     }
 }
@@ -439,6 +475,7 @@ fn demo_understand(engine: &Engine) {
             patient: Some(Term::Indefinite("report".to_string())),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         },
     };
@@ -460,6 +497,7 @@ fn demo_understand(engine: &Engine) {
             patient: Some(Term::Indefinite("book".to_string())),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         },
     };

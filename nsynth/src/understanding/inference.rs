@@ -27,7 +27,9 @@
 //!     derives each entity's hypernym `IsA`s so QA can answer derived knowledge.
 
 use crate::comprehension::{AGENTS, PATIENTS};
-use crate::understanding::meaning::{Event, Meaning, Quantifier, Term};
+use crate::understanding::meaning::{
+    Aspect, Event, Meaning, Modality, Quantifier, Tense, TemporalRel, Term,
+};
 
 /// The set of FACTIVE attitude verbs: "know that P" entails P. Non-factive
 /// attitudes (believe/think/say) carry no commitment to the truth of their
@@ -110,6 +112,28 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
             // negation, dropping/weakening an argument is unsound, so we emit
             // no generalizations there.
             if !ev.negated {
+                // 0) ASPECT REDUCTION. A Progressive ("is writing") or Perfect
+                //    ("has written") event entails that the corresponding SIMPLE
+                //    event holds: writing-in-progress / having-written both make
+                //    "writes/wrote" true. So emit the Simple-aspect twin (and let
+                //    the steps below generalize ITS arguments too — handled because
+                //    we recurse the generalizers over the reduced event).
+                //
+                //    SOUNDNESS GUARDS:
+                //      * Only reduce Present/Past. FUTURE ("will write") describes
+                //        an event that has NOT happened, so "will write" does NOT
+                //        entail "writes" — never reduce a Future.
+                //      * Only for affirmative events (we are inside `!ev.negated`).
+                if ev.aspect != Aspect::Simple && ev.tense != Tense::Future {
+                    let mut simple = ev.clone();
+                    simple.aspect = Aspect::Simple;
+                    // The simple twin and all of ITS sound generalizations.
+                    push_unique(&mut out, Meaning::Event(simple.clone()));
+                    for c in consequences(&Meaning::Event(simple)) {
+                        push_unique(&mut out, c);
+                    }
+                }
+
                 // 1) Drop the patient: "teacher writes the report"
                 //    entails "teacher writes [something]".
                 if ev.patient.is_some() {
@@ -350,6 +374,111 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
         Meaning::CountQuestion { .. } => {}
         // Questions / Unknowns assert nothing, so they entail nothing.
         Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => {}
+        // MODAL. The one SOUND single-meaning modal entailment is necessity ->
+        // possibility: "the teacher MUST write the report" entails "the teacher
+        // CAN write the report" (`Must |- Can`). The converse is UNSOUND (can does
+        // not entail must) and is never emitted, and possibility does NOT entail
+        // ACTUALITY (we emit no bare `Event` from a modal — "can write" says
+        // nothing about whether the teacher writes). Under negation we emit
+        // nothing: "must not write" does not entail "can not write" in any useful
+        // monotone direction we model, so we under-derive (safe).
+        Meaning::Modal {
+            modality,
+            body,
+            negated,
+        } => {
+            if !negated && *modality == Modality::Must {
+                push_unique(
+                    &mut out,
+                    Meaning::Modal {
+                        modality: Modality::Can,
+                        body: body.clone(),
+                        negated: false,
+                    },
+                );
+            }
+        }
+        // TEMPORAL. `Before` and `After` are CONVERSES, so "A before B" is
+        // logically equivalent to "B after A" — emit that restatement (sound, like
+        // the comparison converse). ASYMMETRY: a sound strict order means "A before
+        // B" entails it is NOT the case that "B before A"; we surface this as a
+        // wide-scope `Not(Temporal{rel, B, A})` consequence so `relation` reports
+        // Contradicts against the reversed ordering. (`Temporal` has no `negated`
+        // field; outer `Not` is the only way to express the denial as a Meaning.)
+        // TRANSITIVITY needs a SECOND ordering fact (A<B together with B<C) and is
+        // a multi-fact derivation handled by the world model's closure, not by the
+        // consequences of one meaning — so we do not chain here.
+        Meaning::Temporal { rel, first, second } => {
+            let converse_rel = match rel {
+                TemporalRel::Before => TemporalRel::After,
+                TemporalRel::After => TemporalRel::Before,
+            };
+            // (1) Converse restatement: "A before B" <=> "B after A".
+            push_unique(
+                &mut out,
+                Meaning::Temporal {
+                    rel: converse_rel,
+                    first: second.clone(),
+                    second: first.clone(),
+                },
+            );
+            // (2) Asymmetry: "A before B" entails NOT "B before A" (reverse
+            //     ordering, same relation, swapped operands, denied).
+            push_unique(
+                &mut out,
+                Meaning::Not(Box::new(Meaning::Temporal {
+                    rel: *rel,
+                    first: second.clone(),
+                    second: first.clone(),
+                })),
+            );
+        }
+        // CAUSAL. Asserting "E because C" presupposes BOTH the cause and the
+        // effect happened, so a causal link entails each of its relata (and their
+        // sound consequences). This is the load-bearing factual entailment — and
+        // it is the ONLY thing we derive: causation is NOT commutative ("E because
+        // C" does NOT yield "C because E"), and a causal link is strictly stronger
+        // than a material conditional, so we never derive C->E as an implication.
+        Meaning::Causal { cause, effect } => {
+            push_unique(&mut out, (**cause).clone());
+            for c in consequences(cause) {
+                push_unique(&mut out, c);
+            }
+            push_unique(&mut out, (**effect).clone());
+            for c in consequences(effect) {
+                push_unique(&mut out, c);
+            }
+        }
+        // OUTER NEGATION. Two sound entailments of `Not(inner)`:
+        //   (a) DOUBLE NEGATION ELIMINATION: `Not(Not(m)) |- m` (plus m's own
+        //       consequences).
+        //   (b) WIDE->NARROW NEGATION: when `inner` has a genuine BIVALENT
+        //       complement expressible by flipping its own `negated` field (an
+        //       Event/IsA/HasProperty/Comparison/Attitude/Modal — forms where
+        //       "not P" is logically the same as "P-with-negation"), `Not(inner)`
+        //       entails that narrow-scope negation. This is what makes
+        //       "it is not the case that the teacher writes" entail the negated
+        //       event "the teacher does not write".
+        //
+        //       We deliberately do NOT do this for `Quantified`: `Not(Every X P)`
+        //       is "SOME X not-P", which is NOT "No X P" (Every and No are CONTRARY,
+        //       not contradictory), so reusing the quantifier flip would be UNSOUND.
+        //       Restricting to the bivalent-complement forms keeps soundness.
+        Meaning::Not(inner) => {
+            if let Meaning::Not(innermost) = inner.as_ref() {
+                push_unique(&mut out, (**innermost).clone());
+                for c in consequences(innermost) {
+                    push_unique(&mut out, c);
+                }
+            } else if let Some(narrow) = bivalent_complement(inner) {
+                push_unique(&mut out, narrow.clone());
+                for c in consequences(&narrow) {
+                    push_unique(&mut out, c);
+                }
+            }
+        }
+        // A degree question asserts nothing, so it entails nothing.
+        Meaning::DegreeQuestion { .. } => {}
     }
 
     out
@@ -367,6 +496,8 @@ fn is_non_assertoric(m: &Meaning) -> bool {
             | Meaning::WhQuestion { .. }
             // A counting question is interrogative, not assertoric.
             | Meaning::CountQuestion { .. }
+            // A degree question ("how long is the report?") is interrogative too.
+            | Meaning::DegreeQuestion { .. }
             | Meaning::Unknown(_)
     )
 }
@@ -390,6 +521,29 @@ fn entails(premise: &Meaning, hypothesis: &Meaning) -> bool {
 /// consequence, not be loosely "close".
 fn meaning_eq(a: &Meaning, b: &Meaning) -> bool {
     a == b
+}
+
+/// The narrow-scope, BIVALENT-equivalent negation of `m`, for the meanings whose
+/// "not P" is logically identical to "P with its own `negated` flag set" — i.e.
+/// forms with a genuine boolean complement (Event/IsA/HasProperty/Comparison/
+/// Attitude/Modal). For these, `Not(P)` and the flipped form denote the same
+/// truth condition, so an outer negation may soundly be pushed inward.
+///
+/// Returns `None` for forms WITHOUT a bivalent complement: a `Quantified`
+/// (Every/No are CONTRARY, not contradictory — `Not(Every X P)` is "some X
+/// not-P", not "No X P"), `Or`/`Cardinal`/`Temporal`/`Causal`/questions/`Not`.
+/// Keeping those `None` is what stops the wide->narrow rule from over-deriving.
+fn bivalent_complement(m: &Meaning) -> Option<Meaning> {
+    match m {
+        Meaning::Event(_)
+        | Meaning::IsA { .. }
+        | Meaning::HasProperty { .. }
+        | Meaning::Comparison { .. }
+        | Meaning::Attitude { .. }
+        | Meaning::Modal { .. } => polarity_flip(m),
+        // No bivalent complement: leave the negation wide-scope (sound).
+        _ => None,
+    }
 }
 
 /// Flip the polarity of an assertoric meaning, if it has one. Returns the
@@ -500,6 +654,45 @@ fn polarity_flip(m: &Meaning) -> Option<Meaning> {
         // A counting question is non-assertoric — no polarity to flip.
         Meaning::CountQuestion { .. } => None,
         Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => None,
+        // MODAL contradictory: the same modal force over the same body with the
+        // polarity flipped — "the teacher CAN write the report" contradicts "the
+        // teacher CANNOT write the report". Sound for every modality (it is a
+        // claim about the modal status itself). We do NOT flip across modalities
+        // (can vs must), and we do NOT touch the embedded body's own polarity.
+        Meaning::Modal {
+            modality,
+            body,
+            negated,
+        } => Some(Meaning::Modal {
+            modality: *modality,
+            body: body.clone(),
+            negated: !negated,
+        }),
+        // TEMPORAL contradictory: `Temporal` has no `negated` field, so its
+        // denial is expressed as a wide-scope `Not(Temporal{..})` of the SAME
+        // ordering. "A before B" guarantees "NOT (A before B)" is false (and vice
+        // versa). The asymmetry contradiction ("A before B" vs "B before A") is
+        // reached SEPARATELY through the asymmetry consequence emitted above plus
+        // this same-shape flip, all soundly — we do NOT map the operands here.
+        Meaning::Temporal { rel, first, second } => {
+            Some(Meaning::Not(Box::new(Meaning::Temporal {
+                rel: *rel,
+                first: first.clone(),
+                second: second.clone(),
+            })))
+        }
+        // OUTER NEGATION contradictory: `Not(inner)` guarantees `inner` is false,
+        // so the contradictory of `Not(inner)` is `inner` itself. This makes
+        // `relation` report Contradicts between a meaning and its outer negation in
+        // BOTH directions (m vs Not(m)), and chains correctly through double
+        // negation (flip of `Not(Not(m))` is `Not(m)`).
+        Meaning::Not(inner) => Some((**inner).clone()),
+        // CAUSAL has no single-meaning contradictory in our vocabulary (the
+        // negation of "E because C" is "E does not hold, or holds for some other
+        // reason" — not expressible as one Meaning). Reporting a same-shape flip
+        // would be UNSOUND, so we stay open (Neutral). A degree question is
+        // non-assertoric — no polarity to flip.
+        Meaning::Causal { .. } | Meaning::DegreeQuestion { .. } => None,
     }
 }
 
@@ -513,6 +706,14 @@ fn generalize_term(t: &Option<Term>) -> Option<Term> {
         // Already existential, or an unresolved pronoun (no sound
         // generalization), or no argument at all.
         Some(Term::Indefinite(_)) | Some(Term::Pronoun(_)) | None => None,
+        // RELATIVE CLAUSE: a restricted definite ("the teacher who writes the
+        // report") existentially generalizes to its bare head ("a teacher"). This
+        // is sound — the restricted referent IS a teacher — and intentionally
+        // DROPS the restriction, since "a teacher" is strictly weaker than "a
+        // teacher who writes the report" (a weakening is what generalization
+        // produces). We never strengthen by inventing a restriction the input did
+        // not carry.
+        Some(Term::Restricted { head, .. }) => Some(Term::Indefinite(head.clone())),
     }
 }
 
@@ -622,6 +823,11 @@ pub fn closure(facts: &[Event]) -> Vec<Meaning> {
             let head = match term {
                 Term::Entity(s) | Term::Indefinite(s) => s.clone(),
                 Term::Pronoun(_) => continue,
+                // A restricted term ("the teacher who writes the report") names
+                // an entity of its head category; type it by the head noun. The
+                // restriction does not change the entity's TAXONOMY, so deriving
+                // the head's hypernym IsAs is sound.
+                Term::Restricted { head, .. } => head.clone(),
             };
             if seen_entities.iter().any(|e| e == &head) {
                 continue;
@@ -670,7 +876,7 @@ fn push_unique(out: &mut Vec<Meaning>, m: Meaning) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::understanding::meaning::{Event, Tense};
+    use crate::understanding::meaning::{Aspect, Event, Tense};
 
     fn ev(agent: Term, patient: Option<Term>, negated: bool) -> Meaning {
         Meaning::Event(Event {
@@ -679,6 +885,7 @@ mod tests {
             patient,
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated,
         })
     }
@@ -747,6 +954,7 @@ mod tests {
             patient: Some(entity("report")),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: true,
         };
         assert!(consequences(&Meaning::Event(p)).is_empty());
@@ -775,6 +983,7 @@ mod tests {
                 patient: Some(Term::Indefinite("report".to_string())),
                 recipient: None,
                 tense: Tense::Present,
+                aspect: Aspect::Simple,
                 negated: false,
             },
         }
@@ -895,6 +1104,7 @@ mod tests {
             patient: Some(entity("report")),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         };
         let derived = closure(&[fact]);
@@ -916,6 +1126,7 @@ mod tests {
             patient: Some(entity("report")),
             recipient: None,
             tense: Tense::Present,
+            aspect: Aspect::Simple,
             negated: false,
         };
         let derived2 = closure(&[fact2.clone(), fact2]);
@@ -946,6 +1157,7 @@ mod tests {
                 patient: Some(Term::Indefinite("report".to_string())),
                 recipient: None,
                 tense: Tense::Present,
+                aspect: Aspect::Simple,
                 negated: false,
             },
         }
@@ -1127,6 +1339,7 @@ mod tests {
                 patient: Some(Term::Indefinite("report".to_string())),
                 recipient: None,
                 tense: Tense::Present,
+                aspect: Aspect::Simple,
                 negated: false,
             },
         };
@@ -1171,6 +1384,7 @@ mod tests {
                 patient: Some(Term::Indefinite("report".to_string())),
                 recipient: None,
                 tense: Tense::Present,
+                aspect: Aspect::Simple,
                 negated: false,
             },
         };
@@ -1178,5 +1392,479 @@ mod tests {
         let p = ev(entity("teacher"), Some(entity("report")), false);
         assert!(matches!(relation(&p, &cq), Relation::Neutral));
         assert!(matches!(relation(&cq, &p), Relation::Neutral));
+    }
+
+    // ==================================================================
+    // GRAMMATICAL-CORE DOMAINS: aspect / modal / temporal / causal /
+    // negation-scope. Soundness is the priority — each test pins a TRUE
+    // entailment AND a NON-entailment guard against over-derivation.
+    // ==================================================================
+
+    /// A write(agent, patient) event with explicit tense and aspect.
+    fn ev_ta(agent: Term, patient: Option<Term>, tense: Tense, aspect: Aspect) -> Event {
+        Event {
+            predicate: "write".to_string(),
+            agent: Some(agent),
+            patient,
+            recipient: None,
+            tense,
+            aspect,
+            negated: false,
+        }
+    }
+
+    fn modal(modality: Modality, negated: bool) -> Meaning {
+        Meaning::Modal {
+            modality,
+            body: Box::new(ev_ta(
+                entity("teacher"),
+                Some(entity("report")),
+                Tense::Present,
+                Aspect::Simple,
+            )),
+            negated,
+        }
+    }
+
+    /// A canonical "teacher writes the report" event (the temporal `first`).
+    fn ev_writes() -> Event {
+        ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Simple,
+        )
+    }
+    /// A canonical "editor reads the book" event (the temporal `second`).
+    fn ev_reads() -> Event {
+        Event {
+            predicate: "read".to_string(),
+            agent: Some(entity("editor")),
+            patient: Some(entity("book")),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        }
+    }
+
+    /// `rel(first, second)` over the two canonical events above.
+    fn temporal(rel: TemporalRel, first: Event, second: Event) -> Meaning {
+        Meaning::Temporal {
+            rel,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
+    // ------------------------------- ASPECT ----------------------------
+
+    #[test]
+    fn perfect_entails_simple_event() {
+        // "the teacher has written the report" (Perfect) entails the SIMPLE
+        // "the teacher writes the report" — the event occurred.
+        let perfect = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Perfect,
+        ));
+        let simple = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Simple,
+        ));
+        assert!(matches!(relation(&perfect, &simple), Relation::Entails));
+        // ...and (composed with arg-generalization) "the teacher writes something".
+        let simple_dropped = Meaning::Event(ev_ta(
+            entity("teacher"),
+            None,
+            Tense::Present,
+            Aspect::Simple,
+        ));
+        assert!(matches!(
+            relation(&perfect, &simple_dropped),
+            Relation::Entails
+        ));
+    }
+
+    #[test]
+    fn progressive_entails_simple_event() {
+        // "is writing" (Progressive) entails "writes" (the action is underway,
+        // hence happening).
+        let prog = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Progressive,
+        ));
+        let simple = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Simple,
+        ));
+        assert!(matches!(relation(&prog, &simple), Relation::Entails));
+    }
+
+    #[test]
+    fn simple_does_not_entail_perfect_or_progressive() {
+        // SOUNDNESS: "writes" does NOT entail "has written" or "is writing"
+        // (a simple present is aspectually weaker). Reduction is one-directional.
+        let simple = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Simple,
+        ));
+        let perfect = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Perfect,
+        ));
+        let prog = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Progressive,
+        ));
+        assert!(!matches!(relation(&simple, &perfect), Relation::Entails));
+        assert!(!matches!(relation(&simple, &prog), Relation::Entails));
+    }
+
+    #[test]
+    fn future_does_not_entail_present_event() {
+        // SOUNDNESS: "will write" (Future) describes an event that has NOT
+        // happened, so it must NOT entail the present "writes". We never reduce a
+        // Future to a Simple present.
+        let future = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Future,
+            Aspect::Simple,
+        ));
+        let present = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Simple,
+        ));
+        assert!(!matches!(relation(&future, &present), Relation::Entails));
+    }
+
+    #[test]
+    fn negated_perfect_yields_no_aspect_reduction() {
+        // SOUNDNESS: a NEGATED perfect ("the teacher has NOT written the report")
+        // must not produce a positive simple event. No consequences under negation.
+        let mut neg_perfect = ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Perfect,
+        );
+        neg_perfect.negated = true;
+        assert!(consequences(&Meaning::Event(neg_perfect)).is_empty());
+    }
+
+    // ------------------------------- MODAL -----------------------------
+
+    #[test]
+    fn must_entails_can() {
+        // "the teacher MUST write the report" entails "the teacher CAN write the
+        // report" (necessity -> possibility).
+        assert!(matches!(
+            relation(&modal(Modality::Must, false), &modal(Modality::Can, false)),
+            Relation::Entails
+        ));
+    }
+
+    #[test]
+    fn can_does_not_entail_must() {
+        // SOUNDNESS: the converse is invalid — "can" does NOT entail "must".
+        assert!(!matches!(
+            relation(&modal(Modality::Can, false), &modal(Modality::Must, false)),
+            Relation::Entails
+        ));
+    }
+
+    #[test]
+    fn modal_does_not_entail_actuality() {
+        // SOUNDNESS: possibility does NOT entail the event happens. "can write"
+        // (and even "must write") must NOT entail the bare event "writes".
+        let bare = Meaning::Event(ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Simple,
+        ));
+        assert!(!matches!(
+            relation(&modal(Modality::Can, false), &bare),
+            Relation::Entails
+        ));
+        assert!(!matches!(
+            relation(&modal(Modality::Must, false), &bare),
+            Relation::Entails
+        ));
+    }
+
+    #[test]
+    fn modal_polarity_contradiction() {
+        // "the teacher can write the report" contradicts "the teacher cannot
+        // write the report" (same force, flipped polarity).
+        assert!(matches!(
+            relation(&modal(Modality::Can, false), &modal(Modality::Can, true)),
+            Relation::Contradicts
+        ));
+        // SOUNDNESS: "can" does NOT contradict "must" (both can hold together).
+        assert!(matches!(
+            relation(&modal(Modality::Can, false), &modal(Modality::Must, false)),
+            Relation::Neutral
+        ));
+    }
+
+    // ----------------------------- TEMPORAL ----------------------------
+
+    #[test]
+    fn before_entails_converse_after() {
+        // "the teacher writes BEFORE the editor reads" entails "the editor reads
+        // AFTER the teacher writes" (converse: swap operands, flip rel).
+        let before = temporal(TemporalRel::Before, ev_writes(), ev_reads());
+        let after = temporal(TemporalRel::After, ev_reads(), ev_writes());
+        assert!(matches!(relation(&before, &after), Relation::Entails));
+    }
+
+    #[test]
+    fn before_is_asymmetric_contradiction_not_entailment() {
+        // SOUNDNESS: "A before B" must NOT entail "B before A" (asymmetry); it
+        // CONTRADICTS it. The reversed ordering swaps the SAME two events.
+        let ab = temporal(TemporalRel::Before, ev_writes(), ev_reads());
+        let ba = temporal(TemporalRel::Before, ev_reads(), ev_writes());
+        assert!(!matches!(relation(&ab, &ba), Relation::Entails));
+        assert!(matches!(relation(&ab, &ba), Relation::Contradicts));
+    }
+
+    #[test]
+    fn temporal_self_negation_contradiction() {
+        // "A before B" contradicts "NOT (A before B)".
+        let ab = temporal(TemporalRel::Before, ev_writes(), ev_reads());
+        let not_ab = Meaning::Not(Box::new(ab.clone()));
+        assert!(matches!(relation(&ab, &not_ab), Relation::Contradicts));
+        assert!(matches!(relation(&not_ab, &ab), Relation::Contradicts));
+    }
+
+    #[test]
+    fn temporal_unrelated_pair_is_neutral() {
+        // SOUNDNESS: an ordering of one event pair says nothing about a disjoint
+        // pair of events.
+        let ab = temporal(TemporalRel::Before, ev_writes(), ev_reads());
+        let other_a = Event {
+            predicate: "sign".to_string(),
+            agent: Some(entity("author")),
+            patient: Some(entity("letter")),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        };
+        let other_b = Event {
+            predicate: "file".to_string(),
+            agent: Some(entity("clerk")),
+            patient: Some(entity("memo")),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        };
+        let cd = temporal(TemporalRel::Before, other_a, other_b);
+        assert!(matches!(relation(&ab, &cd), Relation::Neutral));
+    }
+
+    // ------------------------------ CAUSAL -----------------------------
+
+    fn flood_because_rain() -> Meaning {
+        // effect: street floods ; cause: rain falls.
+        let cause = Meaning::Event(Event {
+            predicate: "fall".to_string(),
+            agent: Some(entity("rain")),
+            patient: None,
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        });
+        let effect = Meaning::Event(Event {
+            predicate: "flood".to_string(),
+            agent: Some(entity("street")),
+            patient: None,
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        });
+        Meaning::Causal {
+            cause: Box::new(cause),
+            effect: Box::new(effect),
+        }
+    }
+
+    #[test]
+    fn causal_entails_both_cause_and_effect() {
+        // "the street floods because the rain falls" entails BOTH "the rain falls"
+        // and "the street floods" (asserting the link presupposes both happened).
+        let causal = flood_because_rain();
+        let rain_falls = Meaning::Event(Event {
+            predicate: "fall".to_string(),
+            agent: Some(entity("rain")),
+            patient: None,
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        });
+        let street_floods = Meaning::Event(Event {
+            predicate: "flood".to_string(),
+            agent: Some(entity("street")),
+            patient: None,
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        });
+        assert!(matches!(relation(&causal, &rain_falls), Relation::Entails));
+        assert!(matches!(
+            relation(&causal, &street_floods),
+            Relation::Entails
+        ));
+    }
+
+    #[test]
+    fn causal_is_not_commutative() {
+        // SOUNDNESS: "E because C" does NOT entail "C because E". The swapped
+        // causal link is a DIFFERENT, unentailed claim.
+        let forward = flood_because_rain();
+        let Meaning::Causal { cause, effect } = &forward else {
+            panic!("expected Causal");
+        };
+        let swapped = Meaning::Causal {
+            cause: effect.clone(),
+            effect: cause.clone(),
+        };
+        assert!(!matches!(relation(&forward, &swapped), Relation::Entails));
+    }
+
+    // -------------------------- NEGATION SCOPE -------------------------
+
+    #[test]
+    fn double_negation_elimination() {
+        // Not(Not(m)) entails m (and m entails... nothing back, but the forward
+        // direction is the sound DNE rule).
+        let m = ev(entity("teacher"), Some(entity("report")), false);
+        let not_not_m = Meaning::Not(Box::new(Meaning::Not(Box::new(m.clone()))));
+        assert!(matches!(relation(&not_not_m, &m), Relation::Entails));
+    }
+
+    #[test]
+    fn outer_negation_contradicts_inner() {
+        // m contradicts Not(m), and Not(m) contradicts m — the basic scope-level
+        // contradiction.
+        let m = ev(entity("teacher"), Some(entity("report")), false);
+        let not_m = Meaning::Not(Box::new(m.clone()));
+        assert!(matches!(relation(&m, &not_m), Relation::Contradicts));
+        assert!(matches!(relation(&not_m, &m), Relation::Contradicts));
+    }
+
+    #[test]
+    fn negation_scope_readings_are_distinct() {
+        // The two scope readings must NOT entail each other and must NOT be the
+        // same Meaning:
+        //   "not every teacher writes a report"  = Not(Quantified{Every, body})
+        //   "every teacher does not write ... "  = Quantified{Every, body-negated}
+        let body = Event {
+            predicate: "write".to_string(),
+            agent: None,
+            patient: Some(Term::Indefinite("report".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        };
+        let mut body_neg = body.clone();
+        body_neg.negated = true;
+        let not_every = Meaning::Not(Box::new(Meaning::Quantified {
+            quant: Quantifier::Every,
+            var_category: "teacher".to_string(),
+            body: body.clone(),
+        }));
+        let every_not = Meaning::Quantified {
+            quant: Quantifier::Every,
+            var_category: "teacher".to_string(),
+            body: body_neg,
+        };
+        // Distinct structures.
+        assert_ne!(not_every, every_not);
+        // Neither entails the other (different truth conditions: "some teacher
+        // doesn't write" vs "no teacher writes").
+        assert!(!matches!(
+            relation(&not_every, &every_not),
+            Relation::Entails
+        ));
+        assert!(!matches!(
+            relation(&every_not, &not_every),
+            Relation::Entails
+        ));
+    }
+
+    // ------------------------- RELATIVE CLAUSE -------------------------
+
+    #[test]
+    fn restricted_subject_generalizes_to_bare_head() {
+        // "the teacher who writes the report reads the book" entails the weaker
+        // "a teacher reads the book" — the restricted referent IS a teacher, and
+        // generalization soundly drops the restriction.
+        let clause = ev_ta(
+            entity("teacher"),
+            Some(entity("report")),
+            Tense::Present,
+            Aspect::Simple,
+        );
+        let restricted = Term::Restricted {
+            head: "teacher".to_string(),
+            clause: Box::new(clause),
+        };
+        let reads = Meaning::Event(Event {
+            predicate: "read".to_string(),
+            agent: Some(restricted),
+            patient: Some(entity("book")),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        });
+        let weaker = Meaning::Event(Event {
+            predicate: "read".to_string(),
+            agent: Some(Term::Indefinite("teacher".to_string())),
+            patient: Some(entity("book")),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        });
+        assert!(matches!(relation(&reads, &weaker), Relation::Entails));
+    }
+
+    #[test]
+    fn degree_question_is_non_assertoric() {
+        // "how long is the report?" carries no assertion: no consequences, and
+        // Neutral against any fact in both directions.
+        let dq = Meaning::DegreeQuestion {
+            subject: entity("report"),
+            scale: "length".to_string(),
+        };
+        assert!(consequences(&dq).is_empty());
+        let p = ev(entity("teacher"), Some(entity("report")), false);
+        assert!(matches!(relation(&p, &dq), Relation::Neutral));
+        assert!(matches!(relation(&dq, &p), Relation::Neutral));
     }
 }
