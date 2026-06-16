@@ -21,3 +21,4 @@ pub mod string_synth;
 pub mod synthesis;
 pub mod tensor_codegen;
 pub mod time_codegen;
+pub mod understanding;

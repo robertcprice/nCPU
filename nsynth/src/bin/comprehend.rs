@@ -8,6 +8,10 @@
 //! (the solver logs to stderr; pipe 2>/dev/null for clean output)
 
 use mog_synth::comprehension::{capitalize, words_of, Engine, PROP_PAIRS};
+use mog_synth::understanding::discourse::Discourse;
+use mog_synth::understanding::inference::{consequences, relation, Relation};
+use mog_synth::understanding::meaning::{Meaning, Tense, Term};
+use mog_synth::understanding::{qa, semantics};
 
 fn demo_comprehend(engine: &Engine) {
     println!("nCPU comprehending — every semantic decision is a synthesized program:\n");
@@ -216,6 +220,153 @@ fn demo_inflect(engine: &Engine) {
     println!("  into \"scribe\"; regular verbs stay on the rule.");
 }
 
+// ===========================================================================
+// understand: the understanding layer (meaning representation, world model,
+// coreference, truth evaluation, inference, QA) built on the synthesized engine.
+// ===========================================================================
+
+/// Pretty-print a Term as a compact logical-form atom.
+fn show_term(t: &Term) -> String {
+    match t {
+        Term::Entity(s) => s.clone(),
+        Term::Indefinite(s) => format!("a:{s}"),
+        Term::Pronoun(s) => format!("?{s}"),
+    }
+}
+
+fn show_opt_term(t: &Option<Term>) -> String {
+    match t {
+        Some(t) => show_term(t),
+        None => "_".to_string(),
+    }
+}
+
+fn show_tense(t: Tense) -> &'static str {
+    match t {
+        Tense::Present => "pres",
+        Tense::Past => "past",
+    }
+}
+
+/// Pretty-print a Meaning as a readable logical form.
+fn show_meaning(m: &Meaning) -> String {
+    match m {
+        Meaning::Event(ev) => {
+            let neg = if ev.negated { "¬" } else { "" };
+            format!(
+                "{neg}Event{{ {}({}, agent={}, patient={}) }}",
+                ev.predicate,
+                show_tense(ev.tense),
+                show_opt_term(&ev.agent),
+                show_opt_term(&ev.patient),
+            )
+        }
+        Meaning::IsA { subject, category, negated } => {
+            let neg = if *negated { "¬" } else { "" };
+            format!("{neg}IsA{{ subject={}, category={category} }}", show_term(subject))
+        }
+        Meaning::YesNoQuestion(inner) => format!("YesNo?( {} )", show_meaning(inner)),
+        Meaning::WhQuestion { slot, body } => format!(
+            "Wh?{{ slot={slot:?}, body={} }}",
+            show_meaning(&Meaning::Event(body.clone()))
+        ),
+        Meaning::Unknown(s) => format!("Unknown({s:?})"),
+    }
+}
+
+fn demo_understand(engine: &Engine) {
+    println!("nCPU understanding — it builds a meaning representation, a world model it");
+    println!("evaluates truth against, resolves reference across discourse, and answers");
+    println!("questions from what it read. The lexicon/rules underneath are synthesized.\n");
+
+    // (a) READ a short passage sentence-by-sentence, printing each logical form.
+    println!("  [reading the passage — each sentence becomes a logical form]");
+    let mut disc = Discourse::new();
+    let passage = [
+        "The teacher writes the report.",
+        "The teacher does not write the letter.",
+        "The author reads the book.",
+        "The teacher is a person.",
+    ];
+    for s in passage {
+        let m = disc.read(engine, s);
+        println!("     {s}");
+        println!("        => {}", show_meaning(&m));
+    }
+
+    // (b) COREFERENCE: a later sentence with "it"/"they" resolved to the right entity.
+    println!("\n  [coreference — pronouns resolved against discourse history]");
+    // "they" should resolve to an animate entity (the author/teacher);
+    // "it" to the most recent inanimate entity (the book).
+    for s in ["They read it.", "It is a thing."] {
+        let m = disc.read(engine, s);
+        println!("     {s}");
+        println!("        => {}   (pronouns resolved to concrete entities)", show_meaning(&m));
+    }
+
+    // (c) TRUTH EVALUATION against the world built by reading.
+    println!("\n  [truth evaluation — world.holds() over asserted facts]");
+    let probes: [(&str, &str); 3] = [
+        ("the teacher writes the report", "a TRUE statement"),
+        ("the teacher writes the letter", "a FALSE statement (negated fact)"),
+        ("the editor writes the report", "an UNKNOWN statement (open-world)"),
+    ];
+    for (s, why) in probes {
+        let m = semantics::understand(engine, s);
+        let verdict = match disc.world.holds(&m) {
+            Some(true) => "TRUE  (Yes)",
+            Some(false) => "FALSE (No)",
+            None => "UNKNOWN (don't know)",
+        };
+        println!("     {why:<34}: \"{s}\"\n        => {verdict}");
+    }
+
+    // (d) QA: a yes/no, a wh-question, and a category question.
+    println!("\n  [question answering — answers come from the world model]");
+    let questions = [
+        "Does the teacher write the report?",
+        "Who writes the report?",
+        "What does the author read?",
+        "Is the teacher a person?",
+        "Is the report a person?",
+    ];
+    for q in questions {
+        let a = qa::answer(engine, &disc, q);
+        println!("     Q: {q}");
+        println!("     A: {a}");
+    }
+
+    // (e) INFERENCE: an entailing pair, a contradicting pair, and consequences.
+    println!("\n  [inference — natural-language inference over meanings]");
+    let p = semantics::understand(engine, "the teacher writes the report");
+    let h_entail = semantics::understand(engine, "a teacher writes the report");
+    let h_contra = semantics::understand(engine, "the teacher does not write the report");
+    let rel_e = relation(&p, &h_entail);
+    let rel_c = relation(&p, &h_contra);
+    println!("     premise   : {}", show_meaning(&p));
+    println!("     hypothesis: {}", show_meaning(&h_entail));
+    println!("        => relation = {}", show_relation(&rel_e));
+    println!("     premise   : {}", show_meaning(&p));
+    println!("     hypothesis: {}", show_meaning(&h_contra));
+    println!("        => relation = {}", show_relation(&rel_c));
+    println!("\n     consequences of \"{}\":", show_meaning(&p));
+    for c in consequences(&p) {
+        println!("        ⊢ {}", show_meaning(&c));
+    }
+
+    println!("\nEvery lexical fact (animacy, verb inflection, agreement) under this layer is a");
+    println!("verified synthesized Mog program; the meaning/world/inference/QA reasoning sits");
+    println!("on top of those recovered programs — manipulation became understanding.");
+}
+
+fn show_relation(r: &Relation) -> &'static str {
+    match r {
+        Relation::Entails => "Entails",
+        Relation::Contradicts => "Contradicts",
+        Relation::Neutral => "Neutral",
+    }
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
     eprintln!("[building comprehension engine — synthesizing verified programs...]");
@@ -225,6 +376,7 @@ fn main() {
         "converse" => demo_converse(&engine),
         "reason" => demo_reason(&engine),
         "inflect" => demo_inflect(&engine),
+        "understand" => demo_understand(&engine),
         _ => {
             demo_comprehend(&engine);
             println!("\n{}\n", "=".repeat(72));
@@ -233,6 +385,8 @@ fn main() {
             demo_converse(&engine);
             println!("\n{}\n", "=".repeat(72));
             demo_reason(&engine);
+            println!("\n{}\n", "=".repeat(72));
+            demo_understand(&engine);
         }
     }
 }
