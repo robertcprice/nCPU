@@ -23,6 +23,12 @@ impl Term {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role { Agent, Patient }
 
+/// A natural-language quantifier scoping over a category variable.
+/// `Every` is universal ("every teacher"), `Some` existential ("some teacher"),
+/// `No` negative-existential ("no teacher").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Quantifier { Every, Some, No }   // universal, existential, negative
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tense { Past, Present }
 
@@ -47,6 +53,16 @@ pub enum Meaning {
     YesNoQuestion(Box<Meaning>),
     /// a wh-question: "who writes the report?" -> { slot: Agent, body: Event(write, patient=report) }
     WhQuestion { slot: Role, body: Event },
+    /// "every/some/no <category> <verb> ..." e.g. Every teacher writes a report.
+    /// `var_category` is the lemma of the quantified noun ("teacher"); `body`
+    /// is the verbal predication whose agent ranges over entities of that
+    /// category (the body's agent slot is left None or a fresh Indefinite
+    /// placeholder — the quantifier binds it).
+    Quantified { quant: Quantifier, var_category: String, body: Event },
+    /// "X or Y" — true iff any disjunct is true.
+    Or(Vec<Meaning>),
+    /// "the teacher is careful" — an adjectival property of an entity.
+    HasProperty { subject: Term, property: String, negated: bool },
     /// unparseable into a meaning
     Unknown(String),
 }

@@ -10,7 +10,7 @@
 use mog_synth::comprehension::{capitalize, words_of, Engine, PROP_PAIRS};
 use mog_synth::understanding::discourse::Discourse;
 use mog_synth::understanding::inference::{consequences, relation, Relation};
-use mog_synth::understanding::meaning::{Meaning, Tense, Term};
+use mog_synth::understanding::meaning::{Event, Meaning, Quantifier, Tense, Term};
 use mog_synth::understanding::{qa, semantics};
 
 fn demo_comprehend(engine: &Engine) {
@@ -275,6 +275,18 @@ fn show_meaning(m: &Meaning) -> String {
             "Wh?{{ slot={slot:?}, body={} }}",
             show_meaning(&Meaning::Event(body.clone()))
         ),
+        Meaning::Quantified { quant, var_category, body } => format!(
+            "Quantified{{ {quant:?} {var_category}: {} }}",
+            show_meaning(&Meaning::Event(body.clone()))
+        ),
+        Meaning::Or(disjuncts) => {
+            let parts: Vec<String> = disjuncts.iter().map(show_meaning).collect();
+            format!("Or( {} )", parts.join(" ∨ "))
+        }
+        Meaning::HasProperty { subject, property, negated } => {
+            let neg = if *negated { "¬" } else { "" };
+            format!("{neg}HasProperty{{ subject={}, property={property} }}", show_term(subject))
+        }
         Meaning::Unknown(s) => format!("Unknown({s:?})"),
     }
 }
@@ -359,6 +371,121 @@ fn demo_understand(engine: &Engine) {
         println!("        ⊢ {}", show_meaning(&c));
     }
 
+    // -----------------------------------------------------------------------
+    // (f) DEEP SEMANTICS: quantifiers, taxonomy, attributes, disjunction.
+    // A fresh discourse so the world is built only from this section's reads.
+    // -----------------------------------------------------------------------
+    println!("\n  {}", "-".repeat(68));
+    println!("  DEEP SEMANTICS — quantified, derived, and attribute knowledge");
+    println!("  {}", "-".repeat(68));
+
+    let mut deep = Discourse::new();
+    let facts = [
+        "The teacher writes the report.",
+        "The editor writes the report.",
+        "The editor does not read the book.",
+        "The teacher is careful.",
+    ];
+    println!("\n  [establishing the world]");
+    for s in facts {
+        deep.read(engine, s);
+        println!("     read: {s}");
+    }
+    println!(
+        "     known entities: {}",
+        deep.world.entities().join(", ")
+    );
+
+    // (f.a) QUANTIFIER truth over a category. "agent" is a taxonomy class whose
+    // members (by hypernymy) are the teacher and the editor — both write a
+    // report, so a universal is TRUE and an existential is TRUE.
+    println!("\n  [quantifiers — truth over every/some/no member of a category]");
+    let write_report = |q: Quantifier, cat: &str| Meaning::Quantified {
+        quant: q,
+        var_category: cat.to_string(),
+        body: Event {
+            predicate: "write".to_string(),
+            agent: None,
+            patient: Some(Term::Indefinite("report".to_string())),
+            tense: Tense::Present,
+            negated: false,
+        },
+    };
+    // Universal over the AGENT category (teacher + editor both qualify).
+    let univ_agent = write_report(Quantifier::Every, "agent");
+    println!("     {}", show_meaning(&univ_agent));
+    println!("        => {}", verdict_str(deep.world.holds(&univ_agent)));
+    // Existential over the same category.
+    let exist_agent = write_report(Quantifier::Some, "agent");
+    println!("     {}", show_meaning(&exist_agent));
+    println!("        => {}", verdict_str(deep.world.holds(&exist_agent)));
+    // A universal that is FALSE: not every agent reads a book (none do here).
+    let univ_read_book = Meaning::Quantified {
+        quant: Quantifier::Every,
+        var_category: "agent".to_string(),
+        body: Event {
+            predicate: "read".to_string(),
+            agent: None,
+            patient: Some(Term::Indefinite("book".to_string())),
+            tense: Tense::Present,
+            negated: false,
+        },
+    };
+    println!("     {}", show_meaning(&univ_read_book));
+    println!(
+        "        => {}   (the editor is a counterexample — does not read a book)",
+        verdict_str(deep.world.holds(&univ_read_book))
+    );
+    // The parser path too: "does every teacher write a report?".
+    let q = "Does every teacher write a report?";
+    println!("     Q: {q}");
+    println!("     A: {}", qa::answer(engine, &deep, q));
+
+    // (f.b) TAXONOMY / HYPERNYMY: derived membership the world never read.
+    println!("\n  [taxonomy — derived super-category membership (never asserted)]");
+    for q in [
+        "Is the teacher an agent?",  // teacher -> person -> agent : Yes
+        "Is the teacher a person?",  // direct hypernym            : Yes
+        "Is the report a thing?",    // report -> document -> thing: Yes
+        "Is the report a person?",   // cross-branch               : No
+    ] {
+        println!("     Q: {q}");
+        println!("     A: {}", qa::answer(engine, &deep, q));
+    }
+    // The forward-chaining closure: facts derivable but never directly asserted.
+    println!("\n     forward-chained closure (derived IsA facts):");
+    for c in deep.world.closure() {
+        println!("        ⊢ {}", show_meaning(&c));
+    }
+
+    // (f.c) ATTRIBUTE: "the teacher is careful" -> queryable property.
+    println!("\n  [attributes — adjectival properties of entities]");
+    for q in ["Is the teacher careful?", "Is the editor careful?"] {
+        println!("     Q: {q}");
+        println!("     A: {}", qa::answer(engine, &deep, q));
+    }
+
+    // (f.d) DISJUNCTION: true iff any disjunct holds.
+    println!("\n  [disjunction — true iff any disjunct holds]");
+    let disj_true = semantics::understand(
+        engine,
+        "the editor writes the report or the editor reads the book",
+    );
+    println!("     {}", show_meaning(&disj_true));
+    println!(
+        "        => {}   (first disjunct is a known fact)",
+        verdict_str(deep.world.holds(&disj_true))
+    );
+    let disj_false = semantics::understand(
+        engine,
+        "the teacher reads the book or the editor reads the book",
+    );
+    println!("     {}", show_meaning(&disj_false));
+    println!(
+        "        => {}   (neither disjunct is established)",
+        verdict_str(deep.world.holds(&disj_false))
+    );
+
     println!("\nEvery lexical fact (animacy, verb inflection, agreement) under this layer is a");
     println!("verified synthesized Mog program; the meaning/world/inference/QA reasoning sits");
     println!("on top of those recovered programs — manipulation became understanding.");
@@ -369,6 +496,15 @@ fn show_relation(r: &Relation) -> &'static str {
         Relation::Entails => "Entails",
         Relation::Contradicts => "Contradicts",
         Relation::Neutral => "Neutral",
+    }
+}
+
+/// Render a three-valued `world.holds` verdict for the demo.
+fn verdict_str(v: Option<bool>) -> &'static str {
+    match v {
+        Some(true) => "TRUE  (Yes)",
+        Some(false) => "FALSE (No)",
+        None => "UNKNOWN (don't know)",
     }
 }
 

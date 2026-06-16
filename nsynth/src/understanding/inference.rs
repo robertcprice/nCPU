@@ -8,8 +8,26 @@
 //! Event entails that its agent "did something"; dropping the patient gives
 //! "teacher writes [something]"; an IsA person entails not-a-thing). Only valid
 //! entailments — keep it sound.
+//!
+//! Deepened semantics (quantifiers / disjunction / attributes / taxonomy /
+//! forward-chaining):
+//!   * Taxonomy: a noun subsumes its hypernym chain (teacher ⊑ person ⊑ agent,
+//!     report ⊑ document ⊑ thing). `IsA{x, teacher}` therefore entails
+//!     `IsA{x, person}` and `IsA{x, agent}`. The two branches (animate vs
+//!     inanimate) are mutually exclusive, so a person/agent is NOT a
+//!     thing/document and vice versa.
+//!   * Quantified `Every` entails its existential `Some` (existential-import
+//!     reading the curriculum uses — "every teacher" presupposes a teacher) and
+//!     entails `No` is its negation. `Some`/`No` are negations of each other.
+//!   * `Or` is entailed BY any of its disjuncts; the disjunction itself entails
+//!     nothing in general (we cannot pick a true disjunct).
+//!   * `HasProperty` entails itself (reflexive) and flips polarity under
+//!     negation.
+//!   * `closure` is sound, terminating forward-chaining: given asserted facts it
+//!     derives each entity's hypernym `IsA`s so QA can answer derived knowledge.
 
-use crate::understanding::meaning::{Meaning, Term};
+use crate::comprehension::{AGENTS, PATIENTS};
+use crate::understanding::meaning::{Event, Meaning, Quantifier, Term};
 
 /// How a hypothesis relates to a premise under natural-language inference.
 pub enum Relation {
@@ -40,6 +58,19 @@ pub fn relation(premise: &Meaning, hypothesis: &Meaning) -> Relation {
     // Entailment: hypothesis is the premise itself or a sound consequence of it.
     if entails(premise, hypothesis) {
         return Relation::Entails;
+    }
+
+    // Disjunction in the hypothesis: a premise entails "A or B" iff it entails
+    // some disjunct. This is the ONLY sound direction for `Or` on the
+    // hypothesis side (the premise need not pin down which disjunct, only that
+    // at least one is guaranteed).
+    if let Meaning::Or(disjuncts) = hypothesis {
+        if disjuncts
+            .iter()
+            .any(|d| matches!(relation(premise, d), Relation::Entails))
+        {
+            return Relation::Entails;
+        }
     }
 
     // Contradiction: the premise (or one of its consequences) entails the
@@ -112,20 +143,75 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
             negated,
         } => {
             if !negated {
-                // "X is a person" entails "X is NOT a thing", and vice versa,
-                // for the two mutually-exclusive animacy categories we model.
-                if let Some(opp) = opposite_category(category) {
+                // TAXONOMY: a category subsumes its hypernym chain, so
+                // "X is a teacher" entails "X is a person" and "X is an agent"
+                // (person ⊑ agent). Emit every strict hypernym of the asserted
+                // category as a positive IsA. This is the engine that lets QA
+                // answer "is the teacher an agent?" -> Yes from "teacher".
+                for hyper in hypernyms(category) {
                     push_unique(
                         &mut out,
                         Meaning::IsA {
                             subject: subject.clone(),
-                            category: opp,
+                            category: hyper.to_string(),
+                            negated: false,
+                        },
+                    );
+                }
+                // MUTUAL EXCLUSION across the animate/inanimate branches: an
+                // entity in the {person, agent, <animate noun>} branch is NOT in
+                // the {thing, document, <inanimate noun>} branch and vice versa.
+                // Emit the negative IsA for each category in the opposite branch
+                // (only the stable hypernym labels — we do not enumerate every
+                // noun, just the branch roots that QA actually queries).
+                for opp in opposite_branch_labels(category) {
+                    push_unique(
+                        &mut out,
+                        Meaning::IsA {
+                            subject: subject.clone(),
+                            category: opp.to_string(),
                             negated: true,
                         },
                     );
                 }
             }
         }
+        Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } => {
+            match quant {
+                // UNIVERSAL: "every teacher writes a report" entails the
+                // existential "some teacher writes a report". Sound under the
+                // existential-import reading the curriculum uses (a universal
+                // claim about a named kind presupposes the kind is non-empty;
+                // empty-domain truth is handled separately by the world model's
+                // vacuous-truth rule, which does not flow through here).
+                Quantifier::Every => {
+                    push_unique(
+                        &mut out,
+                        Meaning::Quantified {
+                            quant: Quantifier::Some,
+                            var_category: var_category.clone(),
+                            body: body.clone(),
+                        },
+                    );
+                }
+                // EXISTENTIAL / NEGATIVE carry no further generalization that is
+                // sound without the entity domain; their truth is evaluated by
+                // the world model. (We deliberately do NOT derive `Some` from
+                // `No`, nor any specific-entity body, here.)
+                Quantifier::Some | Quantifier::No => {}
+            }
+        }
+        // `Or` entails nothing in general: knowing "A or B" does not let us pick
+        // a true disjunct, so there is no sound consequence to emit. (The
+        // entailed-BY-a-disjunct direction is handled in `relation`.)
+        Meaning::Or(_) => {}
+        // `HasProperty` entails itself; reflexivity is covered by `entails`'s
+        // equality check, so there is no extra consequence to derive.
+        Meaning::HasProperty { .. } => {}
         // Questions / Unknowns assert nothing, so they entail nothing.
         Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => {}
     }
@@ -185,6 +271,46 @@ fn polarity_flip(m: &Meaning) -> Option<Meaning> {
             category: category.clone(),
             negated: !negated,
         }),
+        // `polarity_flip` here returns a sound CONTRADICTORY (a meaning that the
+        // input guarantees to be false), which is exactly what the `relation`
+        // contradiction check consumes. For quantifiers over the SAME category
+        // and body, `Every` and `No` are mutually exclusive under the curriculum's
+        // existential-import reading: "every teacher writes" guarantees "no
+        // teacher writes" is FALSE, and vice versa. So we map `Every` -> `No` and
+        // `No` -> `Every`. (These are contradictory, not full logical negations —
+        // the strict negation of "every X P" is "some X not-P", which we do not
+        // model as a single Meaning.) `Some` has no single-statement
+        // contradictory in our vocabulary, so it does not flip.
+        Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } => match quant {
+            Quantifier::Every => Some(Meaning::Quantified {
+                quant: Quantifier::No,
+                var_category: var_category.clone(),
+                body: body.clone(),
+            }),
+            Quantifier::No => Some(Meaning::Quantified {
+                quant: Quantifier::Every,
+                var_category: var_category.clone(),
+                body: body.clone(),
+            }),
+            Quantifier::Some => None,
+        },
+        Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } => Some(Meaning::HasProperty {
+            subject: subject.clone(),
+            property: property.clone(),
+            negated: !negated,
+        }),
+        // A disjunction has no single-meaning polarity flip (its negation is a
+        // conjunction of negated disjuncts, not representable as one `Meaning`),
+        // so we report no flip and let it read as Neutral under contradiction.
+        Meaning::Or(_) => None,
         Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => None,
     }
 }
@@ -202,15 +328,148 @@ fn generalize_term(t: &Option<Term>) -> Option<Term> {
     }
 }
 
-/// The mutually-exclusive opposite of an animacy category, if one exists.
-/// "person" and "thing" are the two categories the world model derives from
-/// noun animacy, and they are mutually exclusive.
-fn opposite_category(category: &str) -> Option<String> {
-    match category {
-        "person" => Some("thing".to_string()),
-        "thing" => Some("person".to_string()),
-        _ => None,
+// ----------------------------------------------------------------------------
+// Taxonomy / hypernymy
+// ----------------------------------------------------------------------------
+//
+// Two disjoint subsumption chains, rooted in the synthesized lexicon:
+//   * every AGENT noun (animate)   ⊑ person   ⊑ agent
+//   * every PATIENT noun (inanimate) ⊑ document ⊑ thing
+// Plus the intermediate labels subsume upward: person ⊑ agent, document ⊑ thing.
+// The two branches are mutually exclusive: nothing is both an agent and a thing.
+//
+// NOTE FOR THE INTEGRATOR: the parallel `world_model.rs` is specified to provide
+// its own `hypernyms(noun)` table for `holds`. This module keeps a SELF-CONTAINED
+// copy (so `inference.rs` is sound standalone and does not depend on the sibling
+// module's exact signature). The two tables MUST agree; if you unify them, expose
+// one canonical `hypernyms`/branch helper and have both call it. The labels here
+// — person, agent, document, thing — are the stable query targets QA uses.
+
+/// The branch a category/noun belongs to: `true` = animate (person/agent
+/// branch), `false` = inanimate (thing/document branch). `None` if the label is
+/// not part of either chain.
+fn branch_is_animate(label: &str) -> Option<bool> {
+    match label {
+        "person" | "agent" => Some(true),
+        "thing" | "document" => Some(false),
+        _ => {
+            if AGENTS.iter().any(|w| *w == label) {
+                Some(true)
+            } else if PATIENTS.iter().any(|w| *w == label) {
+                Some(false)
+            } else {
+                None
+            }
+        }
     }
+}
+
+/// The strict hypernyms (proper super-categories) of a category or noun, in
+/// ascending generality. A bottom noun yields its full chain; an intermediate
+/// label yields only what is strictly above it; a top label yields nothing.
+///
+///   teacher  -> ["person", "agent"]
+///   report   -> ["document", "thing"]
+///   person   -> ["agent"]
+///   document -> ["thing"]
+///   agent / thing -> []
+pub fn hypernyms(category: &str) -> Vec<&'static str> {
+    match category {
+        // Top-of-chain labels: nothing strictly above them.
+        "agent" | "thing" => Vec::new(),
+        // Intermediate labels.
+        "person" => vec!["agent"],
+        "document" => vec!["thing"],
+        // Bottom nouns: walk the whole branch above them.
+        other => match branch_is_animate(other) {
+            Some(true) => vec!["person", "agent"],
+            Some(false) => vec!["document", "thing"],
+            None => Vec::new(),
+        },
+    }
+}
+
+/// The stable category labels of the OPPOSITE branch from `category`, used to
+/// emit mutual-exclusion negatives ("X is a person" ⊨ "X is NOT a thing/
+/// document"). Only the branch-root labels are returned — we do not enumerate
+/// every individual noun, since QA queries the labels.
+fn opposite_branch_labels(category: &str) -> Vec<&'static str> {
+    match branch_is_animate(category) {
+        // An animate thing is NOT in the inanimate branch.
+        Some(true) => vec!["thing", "document"],
+        // An inanimate thing is NOT in the animate branch.
+        Some(false) => vec!["person", "agent"],
+        None => Vec::new(),
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Forward-chaining closure
+// ----------------------------------------------------------------------------
+
+/// Sound, terminating forward-chaining over a set of asserted event facts: for
+/// every concrete entity that appears as an argument, derive the `IsA` facts
+/// implied by the taxonomy (its hypernym chain) so QA can consult DERIVED
+/// knowledge ("is the teacher an agent?" -> Yes, even though only the verb fact
+/// was asserted).
+///
+/// Termination: the derivation set is bounded — each entity contributes at most
+/// (1 base IsA + |hypernyms| ≤ 2) `IsA` meanings, and `hypernyms` is acyclic by
+/// construction, so a single pass reaches fixpoint. We do not chain over derived
+/// IsAs again because `hypernyms(label)` already returns the FULL upward chain
+/// from any node, making one pass complete.
+///
+/// Soundness: every emitted meaning is a positive `IsA{entity, C}` where `C` is
+/// the entity's own noun or a genuine super-category of it — true whenever the
+/// entity exists in the world. We emit no negatives and no event facts here, so
+/// nothing unsound can leak in.
+pub fn closure(facts: &[Event]) -> Vec<Meaning> {
+    let mut out: Vec<Meaning> = Vec::new();
+    let mut seen_entities: Vec<String> = Vec::new();
+
+    for ev in facts {
+        for term in [ev.agent.as_ref(), ev.patient.as_ref()].into_iter().flatten() {
+            // Only concrete entities (definite/indefinite) name a real referent
+            // we can type. Unresolved pronouns carry no noun to look up.
+            let head = match term {
+                Term::Entity(s) | Term::Indefinite(s) => s.clone(),
+                Term::Pronoun(_) => continue,
+            };
+            if seen_entities.iter().any(|e| e == &head) {
+                continue;
+            }
+            seen_entities.push(head.clone());
+
+            // Only nouns that sit in a known taxonomy branch get typed; an
+            // unknown head yields no sound IsA.
+            if branch_is_animate(&head).is_none() {
+                continue;
+            }
+            let subject = Term::Entity(head.clone());
+            // The entity is-a its own noun ("the teacher is a teacher").
+            push_unique(
+                &mut out,
+                Meaning::IsA {
+                    subject: subject.clone(),
+                    category: head.clone(),
+                    negated: false,
+                },
+            );
+            // ... and is-a each of its hypernyms.
+            for hyper in hypernyms(&head) {
+                push_unique(
+                    &mut out,
+                    Meaning::IsA {
+                        subject: subject.clone(),
+                        category: hyper.to_string(),
+                        negated: false,
+                    },
+                );
+            }
+        }
+    }
+
+    out
 }
 
 /// Push `m` into `out` only if structurally new.
@@ -301,5 +560,172 @@ mod tests {
             negated: true,
         };
         assert!(consequences(&Meaning::Event(p)).is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // Deepened semantics: taxonomy / quantifiers / disjunction / attributes
+    // ------------------------------------------------------------------
+    // (`Quantifier` is already in scope via `use super::*`.)
+
+    fn isa(subject: Term, category: &str, negated: bool) -> Meaning {
+        Meaning::IsA {
+            subject,
+            category: category.to_string(),
+            negated,
+        }
+    }
+
+    fn quant(q: Quantifier) -> Meaning {
+        Meaning::Quantified {
+            quant: q,
+            var_category: "teacher".to_string(),
+            body: Event {
+                predicate: "write".to_string(),
+                agent: None,
+                patient: Some(Term::Indefinite("report".to_string())),
+                tense: Tense::Present,
+                negated: false,
+            },
+        }
+    }
+
+    #[test]
+    fn taxonomy_hypernym_chain() {
+        // teacher ⊑ person ⊑ agent ; report ⊑ document ⊑ thing.
+        assert_eq!(hypernyms("teacher"), vec!["person", "agent"]);
+        assert_eq!(hypernyms("report"), vec!["document", "thing"]);
+        assert_eq!(hypernyms("person"), vec!["agent"]);
+        assert_eq!(hypernyms("document"), vec!["thing"]);
+        assert!(hypernyms("agent").is_empty());
+        assert!(hypernyms("thing").is_empty());
+        assert!(hypernyms("banana").is_empty()); // unknown noun: no chain
+    }
+
+    #[test]
+    fn isa_teacher_entails_agent_via_taxonomy() {
+        // "the teacher is a teacher" entails "the teacher is an agent".
+        let p = isa(entity("teacher"), "teacher", false);
+        let h = isa(entity("teacher"), "agent", false);
+        assert!(matches!(relation(&p, &h), Relation::Entails));
+        // ... and "the teacher is a person".
+        let h2 = isa(entity("teacher"), "person", false);
+        assert!(matches!(relation(&p, &h2), Relation::Entails));
+    }
+
+    #[test]
+    fn isa_teacher_contradicts_thing_branch() {
+        // An agent (animate branch) is NOT a thing/document (inanimate branch).
+        let p = isa(entity("teacher"), "teacher", false);
+        assert!(matches!(
+            relation(&p, &isa(entity("teacher"), "thing", false)),
+            Relation::Contradicts
+        ));
+        assert!(matches!(
+            relation(&p, &isa(entity("teacher"), "document", false)),
+            Relation::Contradicts
+        ));
+    }
+
+    #[test]
+    fn isa_taxonomy_is_directional_not_symmetric() {
+        // "teacher" entails "agent", but a bare "agent" does NOT entail "teacher"
+        // (an agent need not be a teacher). Soundness: no false specialization.
+        let agent_claim = isa(entity("x"), "agent", false);
+        let teacher_claim = isa(entity("x"), "teacher", false);
+        assert!(matches!(
+            relation(&agent_claim, &teacher_claim),
+            Relation::Neutral
+        ));
+    }
+
+    #[test]
+    fn every_entails_some_not_no() {
+        // "every teacher writes a report" entails "some teacher writes a report".
+        assert!(matches!(
+            relation(&quant(Quantifier::Every), &quant(Quantifier::Some)),
+            Relation::Entails
+        ));
+        // ... and contradicts "no teacher writes a report".
+        assert!(matches!(
+            relation(&quant(Quantifier::Every), &quant(Quantifier::No)),
+            Relation::Contradicts
+        ));
+        // Soundness guard: "some" does NOT entail "every".
+        assert!(matches!(
+            relation(&quant(Quantifier::Some), &quant(Quantifier::Every)),
+            Relation::Neutral
+        ));
+    }
+
+    #[test]
+    fn disjunct_entails_disjunction() {
+        // A premise entails "A or B" when it entails a disjunct.
+        let a = ev(entity("teacher"), Some(entity("report")), false);
+        let b = ev(entity("author"), Some(entity("book")), false);
+        let disjunction = Meaning::Or(vec![a.clone(), b.clone()]);
+        // Asserting A entails "A or B".
+        assert!(matches!(relation(&a, &disjunction), Relation::Entails));
+        // An unrelated premise does not entail the disjunction.
+        let unrelated = ev(entity("doctor"), Some(entity("letter")), false);
+        assert!(matches!(
+            relation(&unrelated, &disjunction),
+            Relation::Neutral
+        ));
+    }
+
+    #[test]
+    fn has_property_reflexive_and_polarity() {
+        let careful = Meaning::HasProperty {
+            subject: entity("teacher"),
+            property: "careful".to_string(),
+            negated: false,
+        };
+        // Reflexive entailment.
+        assert!(matches!(relation(&careful, &careful), Relation::Entails));
+        // "careful" contradicts "not careful".
+        let not_careful = Meaning::HasProperty {
+            subject: entity("teacher"),
+            property: "careful".to_string(),
+            negated: true,
+        };
+        assert!(matches!(
+            relation(&careful, &not_careful),
+            Relation::Contradicts
+        ));
+    }
+
+    #[test]
+    fn closure_derives_hypernym_isas() {
+        // From "the teacher writes the report", forward-chaining derives that the
+        // teacher is a person/agent and the report is a document/thing.
+        let fact = Event {
+            predicate: "write".to_string(),
+            agent: Some(entity("teacher")),
+            patient: Some(entity("report")),
+            tense: Tense::Present,
+            negated: false,
+        };
+        let derived = closure(&[fact]);
+        let has = |s: Term, c: &str| derived.contains(&isa(s, c, false));
+        assert!(has(entity("teacher"), "teacher"));
+        assert!(has(entity("teacher"), "person"));
+        assert!(has(entity("teacher"), "agent"));
+        assert!(has(entity("report"), "document"));
+        assert!(has(entity("report"), "thing"));
+        // Soundness: closure emits no negatives and no cross-branch claims.
+        assert!(!derived.iter().any(|m| matches!(
+            m,
+            Meaning::IsA { negated: true, .. }
+        )));
+        // Termination/idempotence: a duplicated fact yields the same derived set.
+        let fact2 = Event {
+            predicate: "write".to_string(),
+            agent: Some(entity("teacher")),
+            patient: Some(entity("report")),
+            tense: Tense::Present,
+            negated: false,
+        };
+        let derived2 = closure(&[fact2.clone(), fact2]);
+        assert_eq!(derived.len(), derived2.len());
     }
 }

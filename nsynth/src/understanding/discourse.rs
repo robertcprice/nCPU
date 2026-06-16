@@ -184,6 +184,22 @@ impl Discourse {
                 slot: *slot,
                 body: self.resolve_event(body),
             },
+            // TODO(skeleton): resolution for the new meanings. Quantified bodies
+            // have a bound agent (nothing to resolve yet); Or recurses; the
+            // HasProperty subject is resolved against discourse history.
+            Meaning::Quantified { quant, var_category, body } => Meaning::Quantified {
+                quant: *quant,
+                var_category: var_category.clone(),
+                body: self.resolve_event(body),
+            },
+            Meaning::Or(disjuncts) => Meaning::Or(
+                disjuncts.iter().map(|d| self.resolve_meaning(d)).collect(),
+            ),
+            Meaning::HasProperty { subject, property, negated } => Meaning::HasProperty {
+                subject: self.resolve(subject),
+                property: property.clone(),
+                negated: *negated,
+            },
             Meaning::Unknown(s) => Meaning::Unknown(s.clone()),
         }
     }
@@ -215,6 +231,21 @@ impl Discourse {
             Meaning::WhQuestion { body, .. } => {
                 self.note_term_animacy(engine, body.agent.as_ref());
                 self.note_term_animacy(engine, body.patient.as_ref());
+            }
+            // TODO(skeleton): observe entities in the new meanings. Quantified
+            // bodies carry a bound (None/Indefinite) agent and a concrete
+            // patient; Or recurses into disjuncts; HasProperty notes its subject.
+            Meaning::Quantified { body, .. } => {
+                self.note_term_animacy(engine, body.agent.as_ref());
+                self.note_term_animacy(engine, body.patient.as_ref());
+            }
+            Meaning::Or(disjuncts) => {
+                for d in disjuncts {
+                    self.observe_entities(engine, d);
+                }
+            }
+            Meaning::HasProperty { subject, .. } => {
+                self.note_term_animacy(engine, Some(subject));
             }
             Meaning::Unknown(_) => {}
         }
@@ -253,6 +284,15 @@ impl Discourse {
             // inside a question still uses the existing history. We do not push
             // their (typically already-known) entities again to avoid skewing
             // recency for subsequent declaratives.
+            // TODO(skeleton): register discourse referents from the new meanings.
+            // A HasProperty subject IS a concrete referent later anaphora can
+            // pick up, so register it; Quantified introduces a bound variable
+            // (no stable referent) and Or is a query, so neither pushes mentions.
+            Meaning::HasProperty { subject, .. } => {
+                self.set_subject(subject);
+                self.push_mention(engine, Some(subject));
+            }
+            Meaning::Quantified { .. } | Meaning::Or(_) => {}
             Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => {}
         }
     }
