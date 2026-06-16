@@ -200,6 +200,29 @@ impl Discourse {
                 property: property.clone(),
                 negated: *negated,
             },
+            // Resolve pronouns inside the new meanings against discourse history.
+            Meaning::Comparison { subject, scale, more, than, negated } => Meaning::Comparison {
+                subject: self.resolve(subject),
+                scale: scale.clone(),
+                more: *more,
+                than: self.resolve(than),
+                negated: *negated,
+            },
+            Meaning::Attitude { holder, verb, content, negated } => Meaning::Attitude {
+                holder: self.resolve(holder),
+                verb: verb.clone(),
+                content: Box::new(self.resolve_meaning(content)),
+                negated: *negated,
+            },
+            Meaning::Cardinal { at_least, var_category, body } => Meaning::Cardinal {
+                at_least: *at_least,
+                var_category: var_category.clone(),
+                body: self.resolve_event(body),
+            },
+            Meaning::CountQuestion { var_category, body } => Meaning::CountQuestion {
+                var_category: var_category.clone(),
+                body: self.resolve_event(body),
+            },
             Meaning::Unknown(s) => Meaning::Unknown(s.clone()),
         }
     }
@@ -210,6 +233,7 @@ impl Discourse {
             predicate: ev.predicate.clone(),
             agent: ev.agent.as_ref().map(|t| self.resolve(t)),
             patient: ev.patient.as_ref().map(|t| self.resolve(t)),
+            recipient: ev.recipient.as_ref().map(|t| self.resolve(t)),
             tense: ev.tense,
             negated: ev.negated,
         }
@@ -246,6 +270,21 @@ impl Discourse {
             }
             Meaning::HasProperty { subject, .. } => {
                 self.note_term_animacy(engine, Some(subject));
+            }
+            // Observe the concrete entities mentioned in the new meanings so they
+            // are available as antecedents and get animacy on record.
+            Meaning::Comparison { subject, than, .. } => {
+                self.note_term_animacy(engine, Some(subject));
+                self.note_term_animacy(engine, Some(than));
+            }
+            Meaning::Attitude { holder, content, .. } => {
+                self.note_term_animacy(engine, Some(holder));
+                self.observe_entities(engine, content);
+            }
+            Meaning::Cardinal { body, .. } | Meaning::CountQuestion { body, .. } => {
+                self.note_term_animacy(engine, body.agent.as_ref());
+                self.note_term_animacy(engine, body.patient.as_ref());
+                self.note_term_animacy(engine, body.recipient.as_ref());
             }
             Meaning::Unknown(_) => {}
         }
@@ -292,7 +331,23 @@ impl Discourse {
                 self.set_subject(subject);
                 self.push_mention(engine, Some(subject));
             }
-            Meaning::Quantified { .. } | Meaning::Or(_) => {}
+            // A Comparison's subject (and the standard it is compared against) and
+            // an Attitude's holder are concrete referents later anaphora can pick
+            // up. Cardinal/CountQuestion introduce a bound variable / are queries,
+            // so they push no stable mention.
+            Meaning::Comparison { subject, than, .. } => {
+                self.set_subject(subject);
+                self.push_mention(engine, Some(subject));
+                self.push_mention(engine, Some(than));
+            }
+            Meaning::Attitude { holder, .. } => {
+                self.set_subject(holder);
+                self.push_mention(engine, Some(holder));
+            }
+            Meaning::Quantified { .. }
+            | Meaning::Or(_)
+            | Meaning::Cardinal { .. }
+            | Meaning::CountQuestion { .. } => {}
             Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => {}
         }
     }

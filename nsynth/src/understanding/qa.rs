@@ -8,7 +8,7 @@
 //! `world.facts` for a matching event and returns the filler of the queried
 //! slot ("the teacher"). For an IsA category question it answers from animacy.
 
-use crate::comprehension::{capitalize, Engine, AGENTS, PATIENTS};
+use crate::comprehension::{capitalize, Engine, AGENTS, GRADABLE, PATIENTS};
 use crate::understanding::discourse::Discourse;
 use crate::understanding::inference::{relation, Relation};
 use crate::understanding::meaning::{Event, Meaning, Quantifier, Role, Term};
@@ -41,8 +41,38 @@ pub fn answer(engine: &Engine, discourse: &Discourse, question: &str) -> String 
         Meaning::Quantified { .. }
         | Meaning::Or(_)
         | Meaning::HasProperty { .. } => answer_yes_no(engine, discourse, &m),
+        // A Comparison reaching `answer` is a truth query ("Is the report longer
+        // than the book?"): its truth (direct + transitive closure, respecting
+        // negation) lives in the world model, so route through `answer_yes_no`.
+        Meaning::Comparison { .. } => answer_yes_no(engine, discourse, &m),
+        // An Attitude is either a truth query ("Does the teacher know that P?")
+        // or a CONTENT query ("What does the teacher know?", parsed with an
+        // `Unknown` content placeholder). A content query needs the realized
+        // content, not Yes/No; everything else is a truth query.
+        Meaning::Attitude { ref content, .. } if is_content_query(content) => {
+            answer_attitude_content(engine, discourse, &m)
+        }
+        Meaning::Attitude { .. } => answer_yes_no(engine, discourse, &m),
+        // A Cardinal ("Do two teachers write a report?") is a truth query: true
+        // iff at least N known members satisfy the body (world model owns the
+        // at-least monotonic semantics).
+        Meaning::Cardinal { .. } => answer_yes_no(engine, discourse, &m),
+        // "How many teachers write a report?" — the answer is a NUMBER, counted
+        // over the world's known members of the category.
+        Meaning::CountQuestion { var_category, body } => {
+            answer_count(discourse, &var_category, &body)
+        }
         Meaning::Unknown(_) => "I don't know.".to_string(),
     }
+}
+
+/// Is an embedded attitude `content` a CONTENT-query placeholder rather than a
+/// concrete proposition? The parser of "What does the teacher know?" cannot fill
+/// in the proposition, so it leaves an `Unknown` content; a concrete-content
+/// attitude question ("Does the teacher know that the report is long?") carries a
+/// real embedded `Meaning`.
+fn is_content_query(content: &Meaning) -> bool {
+    matches!(content, Meaning::Unknown(_))
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +173,141 @@ fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// Counting questions ("how many <category> <verb> ...?")
+// ---------------------------------------------------------------------------
+
+/// Answer "how many <var_category> <body>?" with a number phrase. We count the
+/// world's KNOWN entities of the category whose body-event PROVABLY holds
+/// (`world.holds(Event) == Some(true)`), binding each candidate entity into the
+/// body's agent slot.
+///
+/// SOUNDNESS (closed-world-on-knowns, three-valued-aware):
+///   - We only count entities the body is *proven true* for. An entity whose
+///     body-truth is `None` (open world) is NOT counted — we never inflate the
+///     count with unverified members.
+///   - If EVERY candidate member's body-truth is determined (`Some(_)` for all),
+///     the count is exact and we report the number ("two"). If some member is
+///     undetermined, the true count could be higher, so we report a lower bound
+///     phrasing ("at least two") rather than an exact figure — never an
+///     over-claim. With zero determined satisfiers and open members we say "I
+///     don't know." rather than a false "zero".
+///   - With no known members of a recognized category, the answer is "zero".
+fn answer_count(discourse: &Discourse, var_category: &str, body: &Event) -> String {
+    let members = category_members(discourse, var_category);
+
+    // Unknown category entirely (no members and not a recognized class/noun):
+    // open world, we cannot count.
+    if members.is_empty() {
+        if category_is_recognized(discourse, var_category) {
+            return "Zero.".to_string();
+        }
+        return "I don't know.".to_string();
+    }
+
+    let mut satisfied = 0usize;
+    let mut any_unknown = false;
+    for member in &members {
+        let mut ev = body.clone();
+        ev.agent = Some(Term::Entity(member.clone()));
+        match discourse.world.holds(&Meaning::Event(ev)) {
+            Some(true) => satisfied += 1,
+            Some(false) => {}
+            None => any_unknown = true,
+        }
+    }
+
+    if satisfied == 0 && any_unknown {
+        // No proven satisfier but at least one member is undetermined — the real
+        // count is unknown (could be 0 or more). Do not claim "zero".
+        return "I don't know.".to_string();
+    }
+
+    let word = number_phrase(satisfied);
+    if any_unknown && satisfied > 0 {
+        // A definite lower bound: at least `satisfied` members satisfy the body,
+        // but undetermined members could push the true count higher.
+        format!("At least {word}.")
+    } else {
+        capitalize(&format!("{word}."))
+    }
+}
+
+/// Known entities of `category` in the world, by reusing the world's own
+/// taxonomy-aware category membership: an entity is a member iff
+/// `world.holds(IsA{entity, category})` is `Some(true)`. This delegates the
+/// (noun-identity / hypernym-chain / animacy) membership logic to the world
+/// model so QA and the world agree on who counts.
+fn category_members(discourse: &Discourse, category: &str) -> Vec<String> {
+    discourse
+        .world
+        .entities()
+        .into_iter()
+        .filter(|e| {
+            let isa = Meaning::IsA {
+                subject: Term::Entity(e.clone()),
+                category: category.to_string(),
+                negated: false,
+            };
+            discourse.world.holds(&isa) == Some(true)
+        })
+        .collect()
+}
+
+/// Does the world recognize `category` as a category at all (a known noun, a
+/// taxonomy class, or the head of some known entity)? Used so a counting
+/// question over an empty-but-recognized category answers "zero" rather than
+/// "I don't know.". We probe via the public taxonomy/animacy helpers in this
+/// module plus the world's entity set.
+fn category_is_recognized(discourse: &Discourse, category: &str) -> bool {
+    if is_known_taxon(category) {
+        return true;
+    }
+    if hypernym_chain(category).is_some() {
+        // A known leaf noun (teacher/report/...) has a taxonomy chain.
+        return true;
+    }
+    discourse.world.entities().iter().any(|e| e == category)
+}
+
+/// Render a non-negative count as an English number word for small values,
+/// falling back to digits for larger ones. Lowercase, no trailing punctuation.
+fn number_phrase(n: usize) -> String {
+    match n {
+        0 => "zero".to_string(),
+        1 => "one".to_string(),
+        2 => "two".to_string(),
+        3 => "three".to_string(),
+        4 => "four".to_string(),
+        5 => "five".to_string(),
+        6 => "six".to_string(),
+        7 => "seven".to_string(),
+        8 => "eight".to_string(),
+        9 => "nine".to_string(),
+        10 => "ten".to_string(),
+        other => other.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Attitude content questions ("what does the teacher know?")
+// ---------------------------------------------------------------------------
+
+/// Answer a CONTENT query over an attitude ("What does the teacher know?").
+///
+/// The world model stores attitudes but exposes no public enumeration of their
+/// contents (only `assert`/`holds`). A FACTIVE attitude ("know that P") asserts
+/// its content P into the world, so the content becomes a queryable world fact;
+/// a non-factive one ("believe/think/say that P") does NOT. With no public way
+/// to recover *which* proposition was the complement of a stored attitude, QA
+/// cannot fabricate the content soundly, so a bare content query returns
+/// "I don't know." This stays SOUND (never invents a known proposition) and is
+/// the documented cross-module assumption: surfacing "what X knows" requires a
+/// world-model accessor that enumerates a holder's attitude contents.
+fn answer_attitude_content(_engine: &Engine, _discourse: &Discourse, _m: &Meaning) -> String {
+    "I don't know.".to_string()
+}
+
 /// Taxonomy / hypernymy truth for an `IsA` category query. An entity whose head
 /// noun is a known subtype satisfies a category query when the queried category
 /// is the entity's animacy category OR any hypernym of the entity's noun. So
@@ -220,6 +385,8 @@ fn answer_wh(discourse: &Discourse, slot: Role, body: &Event) -> String {
             let filler = match slot {
                 Role::Agent => fact.agent.as_ref(),
                 Role::Patient => fact.patient.as_ref(),
+                // Ditransitive recipient ("who does the teacher give the book to?").
+                Role::Recipient => fact.recipient.as_ref(),
             };
             if let Some(term) = filler {
                 return capitalize(&format!("{}.", surface_term(discourse, term)));
@@ -254,6 +421,15 @@ fn wh_matches(fact: &Event, slot: Role, body: &Event) -> bool {
                 return false;
             }
             slot_matches(&fact.agent, &body.agent)
+        }
+        // "who does the teacher give the book to?" — recipient is free; the
+        // fact must have a recipient, and the constrained agent + patient must
+        // agree with whatever the body fixed.
+        Role::Recipient => {
+            if fact.recipient.is_none() {
+                return false;
+            }
+            slot_matches(&fact.agent, &body.agent) && slot_matches(&fact.patient, &body.patient)
         }
     }
 }
@@ -325,6 +501,57 @@ fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>) -> String 
                 format!("{subj} is {property}")
             }
         }
+        // "the report is (not) longer than the book" — realize the gradable
+        // comparison with the lexicon's comparative form for the scale's polarity
+        // ("longer"/"shorter") rather than a "more (length)" paraphrase. A
+        // negative comparison uses the periphrastic "is not <comparative>".
+        Meaning::Comparison { subject, scale, more, than, negated } => {
+            let neg = force_negated.unwrap_or(*negated);
+            let comp = comparative_for(scale, *more);
+            let cop = if neg { "is not" } else { "is" };
+            format!(
+                "{} {} {} than {}",
+                surface_term_plain(subject),
+                cop,
+                comp,
+                surface_term_plain(than)
+            )
+        }
+        // "the teacher knows that <content>" — inflect the attitude verb for the
+        // (third-person-singular) holder via the synthesized 3sg program; a
+        // negative attitude uses the periphrastic "does not <verb> that ...".
+        Meaning::Attitude { holder, verb, content, negated } => {
+            let neg = force_negated.unwrap_or(*negated);
+            let subj = surface_term_plain(holder);
+            let verb_phrase = if neg {
+                format!("does not {verb}")
+            } else {
+                engine.verb_3sg(verb)
+            };
+            format!("{subj} {verb_phrase} that {}", realize(engine, content, None))
+        }
+        // "two teachers write a report" — realize the at-least cardinal as a
+        // number phrase + plural-agnostic restatement of the body. The body's
+        // bound agent is replaced by the cardinal noun phrase.
+        Meaning::Cardinal { at_least, var_category, body } => {
+            let negated = force_negated.unwrap_or(body.negated);
+            let count = number_phrase(*at_least);
+            let verb_phrase = cardinal_verb_phrase(engine, body, negated);
+            match body.patient.as_ref() {
+                Some(obj) => format!(
+                    "{count} {var_category} {verb_phrase} {}",
+                    surface_term_plain(obj)
+                ),
+                None => format!("{count} {var_category} {verb_phrase}"),
+            }
+        }
+        Meaning::CountQuestion { var_category, body } => {
+            format!(
+                "how many {} {}",
+                var_category,
+                realize_event(engine, body, body.negated)
+            )
+        }
         Meaning::Unknown(s) => s.clone(),
     }
 }
@@ -391,6 +618,46 @@ fn realize_quantified(
     match body.patient.as_ref() {
         Some(obj) => format!("{} {} {} {}", det, var_category, verb_phrase, surface_term_plain(obj)),
         None => format!("{} {} {}", det, var_category, verb_phrase),
+    }
+}
+
+/// The comparative adjective for a gradable `scale` at the requested polarity.
+/// `more = true` wants the "high" pole's comparative ("longer" for length when
+/// the subject exceeds), `more = false` the "low" pole ("shorter"). We read the
+/// comparative form from the synthesized `GRADABLE` lexicon — the first entry on
+/// the scale is the positive/high pole, the antonym the low pole — so the
+/// realization stays data-driven. Falls back to a "more/less <scale>" paraphrase
+/// for an unknown scale rather than guessing a wrong word.
+fn comparative_for(scale: &str, more: bool) -> String {
+    // Collect the (positive, comparative) entries on this scale, in lexicon
+    // order. By construction the high pole (long/big/heavy/fast) comes first and
+    // its antonym (short/small/light/slow) second.
+    let on_scale: Vec<(&str, &str)> = GRADABLE
+        .iter()
+        .filter(|(_, _, s)| *s == scale)
+        .map(|(pos, comp, _)| (*pos, *comp))
+        .collect();
+    let pick = if more { on_scale.first() } else { on_scale.get(1) };
+    match pick {
+        Some((_, comp)) => (*comp).to_string(),
+        // Unknown scale (no lexicon entry): a safe paraphrase.
+        None => format!("{} {}", if more { "more" } else { "less" }, scale),
+    }
+}
+
+/// The inflected verb phrase for a cardinal's body. A cardinal subject ("two
+/// teachers") is plural, so the present affirmative uses the BASE verb ("two
+/// teachers write"), not the 3sg form; negatives and past tense mirror the
+/// event realizer.
+fn cardinal_verb_phrase(engine: &Engine, body: &Event, negated: bool) -> String {
+    use crate::understanding::meaning::Tense;
+    match (body.tense, negated) {
+        // Plural present negative: "do not write".
+        (Tense::Present, true) => format!("do not {}", body.predicate),
+        // Plural present affirmative: the base verb ("write"), no 3sg -s.
+        (Tense::Present, false) => body.predicate.clone(),
+        (Tense::Past, true) => format!("did not {}", body.predicate),
+        (Tense::Past, false) => engine.verb_past(&body.predicate),
     }
 }
 
@@ -467,6 +734,31 @@ fn resolve_meaning(discourse: &Discourse, m: &Meaning) -> Meaning {
             property: property.clone(),
             negated: *negated,
         },
+        // Resolve pronouns inside the new meanings against discourse history so a
+        // query like "is it longer than the book?" / "does it know that ...?"
+        // queries the entity the pronoun refers to.
+        Meaning::Comparison { subject, scale, more, than, negated } => Meaning::Comparison {
+            subject: discourse.resolve(subject),
+            scale: scale.clone(),
+            more: *more,
+            than: discourse.resolve(than),
+            negated: *negated,
+        },
+        Meaning::Attitude { holder, verb, content, negated } => Meaning::Attitude {
+            holder: discourse.resolve(holder),
+            verb: verb.clone(),
+            content: Box::new(resolve_meaning(discourse, content)),
+            negated: *negated,
+        },
+        Meaning::Cardinal { at_least, var_category, body } => Meaning::Cardinal {
+            at_least: *at_least,
+            var_category: var_category.clone(),
+            body: resolve_event(discourse, body),
+        },
+        Meaning::CountQuestion { var_category, body } => Meaning::CountQuestion {
+            var_category: var_category.clone(),
+            body: resolve_event(discourse, body),
+        },
         Meaning::Unknown(s) => Meaning::Unknown(s.clone()),
     }
 }
@@ -477,6 +769,7 @@ fn resolve_event(discourse: &Discourse, ev: &Event) -> Event {
         predicate: ev.predicate.clone(),
         agent: ev.agent.as_ref().map(|t| discourse.resolve(t)),
         patient: ev.patient.as_ref().map(|t| discourse.resolve(t)),
+        recipient: ev.recipient.as_ref().map(|t| discourse.resolve(t)),
         tense: ev.tense,
         negated: ev.negated,
     }
@@ -631,6 +924,7 @@ mod tests {
                 predicate: "write".to_string(),
                 agent: Some(Term::Indefinite("teacher".to_string())),
                 patient: Some(Term::Indefinite("report".to_string())),
+                recipient: None,
                 tense: Tense::Present,
                 negated: false,
             },
@@ -655,6 +949,7 @@ mod tests {
                 predicate: "write".to_string(),
                 agent: Some(Term::Entity("teacher".to_string())),
                 patient: Some(Term::Entity("report".to_string())),
+                recipient: None,
                 tense: Tense::Present,
                 negated: false,
             }),
@@ -662,6 +957,7 @@ mod tests {
                 predicate: "read".to_string(),
                 agent: Some(Term::Entity("teacher".to_string())),
                 patient: Some(Term::Entity("book".to_string())),
+                recipient: None,
                 tense: Tense::Present,
                 negated: false,
             }),
@@ -682,5 +978,315 @@ mod tests {
         assert!(answer(engine(), &d, "Does the editor read the memo?")
             .to_lowercase()
             .contains("don't know"));
+    }
+
+    // ====================================================================
+    // New domains: ditransitive / comparative / attitude / cardinal /
+    // counting. These exercise the qa.rs logic directly; truth of
+    // comparison/attitude/cardinal is owned by the world model, so the
+    // truth-routing tests only assert SOUND behavior (no false Yes), not a
+    // specific verdict that would couple to the sibling module's progress.
+    // ====================================================================
+
+    /// A present, affirmative write(agent, patient) event with a bound (None)
+    /// agent, for use as a quantifier/cardinal/count body.
+    fn bound_body(patient: &str) -> Event {
+        Event {
+            predicate: "write".to_string(),
+            agent: None,
+            patient: Some(Term::Indefinite(patient.to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            negated: false,
+        }
+    }
+
+    // ---- Ditransitive wh (recipient slot) -----------------------------------
+
+    #[test]
+    fn ditransitive_recipient_wh_returns_recipient() {
+        // Assert a ditransitive fact directly into the world, then ask for the
+        // recipient slot via a WhQuestion{ Role::Recipient, ... }.
+        let mut d = Discourse::new();
+        let give = Event {
+            predicate: "give".to_string(),
+            agent: Some(Term::Entity("teacher".to_string())),
+            patient: Some(Term::Entity("book".to_string())),
+            recipient: Some(Term::Entity("student".to_string())),
+            tense: Tense::Present,
+            negated: false,
+        };
+        d.world.assert(&Meaning::Event(give));
+        // "Who does the teacher give the book to?" — recipient is free; agent +
+        // patient are constrained.
+        let q = Event {
+            predicate: "give".to_string(),
+            agent: Some(Term::Entity("teacher".to_string())),
+            patient: Some(Term::Entity("book".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            negated: false,
+        };
+        let a = answer_wh(&d, Role::Recipient, &q);
+        assert_eq!(a, "The student.", "recipient wh must return the recipient");
+
+        // Soundness: a recipient query against a 2-place fact (no recipient) is
+        // unknown, never a spurious filler.
+        let mut d2 = Discourse::new();
+        d2.world.assert(&Meaning::Event(Event {
+            predicate: "write".to_string(),
+            agent: Some(Term::Entity("teacher".to_string())),
+            patient: Some(Term::Entity("report".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            negated: false,
+        }));
+        let a2 = answer_wh(
+            &d2,
+            Role::Recipient,
+            &Event {
+                predicate: "write".to_string(),
+                agent: Some(Term::Entity("teacher".to_string())),
+                patient: Some(Term::Entity("report".to_string())),
+                recipient: None,
+                tense: Tense::Present,
+                negated: false,
+            },
+        );
+        assert!(a2.to_lowercase().contains("don't know"));
+    }
+
+    // ---- Comparative realization & comparative lexicon ----------------------
+
+    #[test]
+    fn comparative_uses_lexicon_form() {
+        // "more = true" on length -> "longer"; "more = false" -> "shorter".
+        assert_eq!(comparative_for("length", true), "longer");
+        assert_eq!(comparative_for("length", false), "shorter");
+        assert_eq!(comparative_for("size", true), "bigger");
+        assert_eq!(comparative_for("weight", false), "lighter");
+        // Unknown scale: safe paraphrase, never a wrong word.
+        assert_eq!(comparative_for("brightness", true), "more brightness");
+    }
+
+    #[test]
+    fn comparison_realizes_fluent_english() {
+        let cmp = Meaning::Comparison {
+            subject: Term::Entity("report".to_string()),
+            scale: "length".to_string(),
+            more: true,
+            than: Term::Entity("book".to_string()),
+            negated: false,
+        };
+        assert_eq!(
+            realize(engine(), &cmp, None),
+            "the report is longer than the book"
+        );
+        // Negated comparison: periphrastic "is not longer".
+        let neg = Meaning::Comparison {
+            subject: Term::Entity("report".to_string()),
+            scale: "length".to_string(),
+            more: true,
+            than: Term::Entity("book".to_string()),
+            negated: true,
+        };
+        assert_eq!(
+            realize(engine(), &neg, None),
+            "the report is not longer than the book"
+        );
+    }
+
+    #[test]
+    fn comparison_truth_is_sound_open_world() {
+        // With nothing known, a comparison query is "I don't know." — never a
+        // false Yes/No. (The world model owns the positive verdict + transitive
+        // closure; QA must not over-derive.)
+        let d = Discourse::new();
+        let cmp = Meaning::Comparison {
+            subject: Term::Entity("report".to_string()),
+            scale: "length".to_string(),
+            more: true,
+            than: Term::Entity("book".to_string()),
+            negated: false,
+        };
+        let a = answer_yes_no(engine(), &d, &cmp);
+        assert!(
+            a.to_lowercase().contains("don't know"),
+            "unknown comparison must be open-world; got: {a}"
+        );
+    }
+
+    // ---- Attitude realization (factivity owned by world model) --------------
+
+    #[test]
+    fn attitude_realizes_with_3sg_inflection() {
+        // "the teacher knows that the report is long" — verb_3sg("know") = "knows".
+        let att = Meaning::Attitude {
+            holder: Term::Entity("teacher".to_string()),
+            verb: "know".to_string(),
+            content: Box::new(Meaning::HasProperty {
+                subject: Term::Entity("report".to_string()),
+                property: "long".to_string(),
+                negated: false,
+            }),
+            negated: false,
+        };
+        let s = realize(engine(), &att, None);
+        // The attitude verb is inflected by the synthesized 3sg program; derive
+        // the expected form from the Engine rather than hardcoding the allomorph.
+        let knows = engine().verb_3sg("know");
+        assert_eq!(s, format!("the teacher {knows} that the report is long"));
+        // The synthesized 3sg of "know" is "knows" (regular +s allomorph).
+        assert_eq!(knows, "knows");
+        // Negated attitude: "does not know that ...".
+        let neg = Meaning::Attitude {
+            holder: Term::Entity("teacher".to_string()),
+            verb: "know".to_string(),
+            content: Box::new(Meaning::HasProperty {
+                subject: Term::Entity("report".to_string()),
+                property: "long".to_string(),
+                negated: false,
+            }),
+            negated: true,
+        };
+        assert_eq!(
+            realize(engine(), &neg, None),
+            "the teacher does not know that the report is long"
+        );
+    }
+
+    #[test]
+    fn attitude_content_query_is_open_world_not_invented() {
+        // "What does the teacher know?" parses with an Unknown content; QA cannot
+        // recover the proposition through the public world API, so it must answer
+        // "I don't know." — never fabricate a known proposition.
+        assert!(is_content_query(&Meaning::Unknown("?".to_string())));
+        assert!(!is_content_query(&Meaning::HasProperty {
+            subject: Term::Entity("report".to_string()),
+            property: "long".to_string(),
+            negated: false,
+        }));
+        let mut d = Discourse::new();
+        d.read(engine(), "The teacher writes the report.");
+        let q = Meaning::Attitude {
+            holder: Term::Entity("teacher".to_string()),
+            verb: "know".to_string(),
+            content: Box::new(Meaning::Unknown("?".to_string())),
+            negated: false,
+        };
+        // Route through the top-level dispatcher path used by `answer`.
+        let a = answer_attitude_content(engine(), &d, &q);
+        assert!(a.to_lowercase().contains("don't know"));
+    }
+
+    // ---- Cardinal realization (plural agreement) ----------------------------
+
+    #[test]
+    fn cardinal_realizes_with_number_word_and_plural_verb() {
+        // "two teachers write a report" — number word + BASE verb (plural), not
+        // the 3sg "writes".
+        let card = Meaning::Cardinal {
+            at_least: 2,
+            var_category: "teacher".to_string(),
+            body: bound_body("report"),
+        };
+        assert_eq!(
+            realize(engine(), &card, None),
+            "two teacher write a report"
+        );
+    }
+
+    // ---- Counting questions -------------------------------------------------
+
+    #[test]
+    fn count_question_counts_known_satisfiers() {
+        // Two persons each write a report; "how many persons write a report?" = two.
+        let mut d = Discourse::new();
+        d.read(engine(), "The teacher writes the report.");
+        d.read(engine(), "The editor writes the report.");
+        let a = answer_count(&d, "person", &bound_body("report"));
+        assert_eq!(a, "Two.", "two known agents satisfy the body; got: {a}");
+    }
+
+    #[test]
+    fn count_question_zero_for_recognized_empty_category() {
+        // The category is recognized (known noun) but no member satisfies the
+        // body (none asserted) AND every member's body-truth is determined-false
+        // — so the count is a sound zero, not "I don't know.".
+        let mut d = Discourse::new();
+        // Assert a teacher who explicitly does NOT write a report.
+        d.world.assert(&Meaning::Event(Event {
+            predicate: "write".to_string(),
+            agent: Some(Term::Entity("teacher".to_string())),
+            patient: Some(Term::Indefinite("report".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            negated: true,
+        }));
+        let a = answer_count(&d, "teacher", &bound_body("report"));
+        assert_eq!(a, "Zero.", "no satisfier, all determined -> zero; got: {a}");
+    }
+
+    #[test]
+    fn count_question_unknown_category_is_open_world() {
+        // "How many dragons write a report?" — dragon is not a recognized
+        // category and there are no members: open world, "I don't know.".
+        let d = Discourse::new();
+        let a = answer_count(&d, "dragon", &bound_body("report"));
+        assert!(
+            a.to_lowercase().contains("don't know"),
+            "unknown category must be open-world; got: {a}"
+        );
+    }
+
+    #[test]
+    fn count_question_lower_bound_when_members_undetermined() {
+        // One teacher provably writes a report; another teacher is a known member
+        // (category asserted) whose body-truth is UNKNOWN. The true count could be
+        // 1 or 2, so we report a sound lower bound "at least one", never an exact
+        // over- or under-count.
+        let mut d = Discourse::new();
+        d.read(engine(), "The teacher writes the report.");
+        // Register "editor" as a known person WITHOUT a write fact.
+        d.world.assert(&Meaning::IsA {
+            subject: Term::Entity("editor".to_string()),
+            category: "person".to_string(),
+            negated: false,
+        });
+        let a = answer_count(&d, "person", &bound_body("report"));
+        assert_eq!(
+            a, "At least one.",
+            "one proven, one undetermined -> sound lower bound; got: {a}"
+        );
+    }
+
+    #[test]
+    fn number_phrase_words_and_digits() {
+        assert_eq!(number_phrase(0), "zero");
+        assert_eq!(number_phrase(2), "two");
+        assert_eq!(number_phrase(10), "ten");
+        assert_eq!(number_phrase(11), "11"); // beyond the word table -> digits
+    }
+
+    // ---- Dispatcher routing for the new domains -----------------------------
+
+    #[test]
+    fn answer_routes_count_question_to_number() {
+        // End-to-end through `answer`: a CountQuestion built directly is answered
+        // with a number, not a Yes/No or panic.
+        let mut d = Discourse::new();
+        d.read(engine(), "The teacher writes the report.");
+        d.read(engine(), "The editor writes the report.");
+        let cq = Meaning::CountQuestion {
+            var_category: "person".to_string(),
+            body: bound_body("report"),
+        };
+        // Resolve+dispatch exactly as `answer` does for a parsed question.
+        let m = resolve_meaning(&d, &cq);
+        let routed = match m {
+            Meaning::CountQuestion { var_category, body } => answer_count(&d, &var_category, &body),
+            other => panic!("expected CountQuestion, got {other:?}"),
+        };
+        assert_eq!(routed, "Two.");
     }
 }

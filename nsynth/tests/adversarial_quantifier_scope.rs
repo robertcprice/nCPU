@@ -18,6 +18,7 @@ fn write_event(agent: &str, patient: &str, negated: bool) -> Event {
         predicate: "write".to_string(),
         agent: Some(Term::Entity(agent.to_string())),
         patient: Some(Term::Entity(patient.to_string())),
+        recipient: None,
         tense: Tense::Present,
         negated,
     }
@@ -29,6 +30,7 @@ fn quant_body(predicate: &str, patient: &str) -> Event {
         predicate: predicate.to_string(),
         agent: None,
         patient: Some(Term::Indefinite(patient.to_string())),
+        recipient: None,
         tense: Tense::Present,
         negated: false,
     }
@@ -146,6 +148,7 @@ fn universal_verdict_tracks_the_body_not_just_the_category() {
         predicate: "read".to_string(),
         agent: Some(Term::Entity("teacher".to_string())),
         patient: Some(Term::Entity("book".to_string())),
+        recipient: None,
         tense: Tense::Present,
         negated: true,
     }));
@@ -153,6 +156,7 @@ fn universal_verdict_tracks_the_body_not_just_the_category() {
         predicate: "read".to_string(),
         agent: Some(Term::Entity("editor".to_string())),
         patient: Some(Term::Entity("book".to_string())),
+        recipient: None,
         tense: Tense::Present,
         negated: true,
     }));

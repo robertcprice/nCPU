@@ -32,6 +32,23 @@ pub const MODIFIERS: &[&str] = &[
     "thoughtful",
 ];
 
+/// Gradable adjectives as (positive, comparative, scale). The comparative
+/// surface form ("longer") and the scale name ("length") let the semantic parser
+/// detect a comparative clause ("the report is longer than the book") and the
+/// world model store the ordering on the right scale. Both polarities of each
+/// scale point at the SAME scale name so transitive reasoning composes across
+/// "longer"/"shorter" on one dimension.
+pub const GRADABLE: &[(&str, &str, &str)] = &[
+    ("long", "longer", "length"),
+    ("short", "shorter", "length"),
+    ("big", "bigger", "size"),
+    ("small", "smaller", "size"),
+    ("heavy", "heavier", "weight"),
+    ("light", "lighter", "weight"),
+    ("fast", "faster", "speed"),
+    ("slow", "slower", "speed"),
+];
+
 /// Regular verbs as (base, third-singular) covering all three regular 3sg
 /// allomorphs: `+s` (walk→walks), `+es` after a sibilant (watch→watches), and
 /// `y→ies` after a consonant (carry→carries). Bases never end in -s, so the -s
@@ -42,9 +59,14 @@ pub const REG_VERBS: &[(&str, &str)] = &[
     ("answer", "answers"), ("describe", "describes"), ("explain", "explains"),
     ("help", "helps"), ("open", "opens"), ("need", "needs"), ("call", "calls"),
     ("move", "moves"), ("turn", "turns"), ("pour", "pours"), ("kick", "kicks"),
+    // ditransitive (+s) — give/send/show/offer/hand take a recipient
+    ("give", "gives"), ("send", "sends"), ("show", "shows"),
+    ("offer", "offers"), ("hand", "hands"),
     // +es after a sibilant
     ("watch", "watches"), ("wash", "washes"), ("fix", "fixes"),
     ("push", "pushes"), ("pass", "passes"), ("toss", "tosses"),
+    // ditransitive (+es after sibilant ch) — teach takes a recipient
+    ("teach", "teaches"),
     // y → ies after a consonant
     ("carry", "carries"), ("study", "studies"), ("copy", "copies"),
     ("try", "tries"), ("reply", "replies"), ("bury", "buries"),
@@ -69,9 +91,16 @@ pub const REG_VERBS_PAST: &[(&str, &str)] = &[
 ];
 
 /// Irregular past — unpredictable forms no rule recovers (stored as a lexicon).
+/// The ditransitive verbs carry their pasts here too: give→gave, send→sent,
+/// tell→told, teach→taught are suppletive; show→showed is regular but kept in
+/// the lexicon so `verb_past("show")` resolves without needing a REG_VERBS_PAST
+/// entry.
 pub const IRREGULAR_PAST: &[(&str, &str)] = &[
     ("write", "wrote"), ("read", "read"), ("go", "went"), ("do", "did"),
     ("have", "had"), ("be", "was"),
+    // ditransitive pasts
+    ("give", "gave"), ("send", "sent"), ("show", "showed"),
+    ("tell", "told"), ("teach", "taught"),
 ];
 
 /// Sentinel returned by the irregular lexicon for a regular verb ("not
@@ -503,5 +532,78 @@ pub fn capitalize(s: &str) -> String {
     match chars.next() {
         Some(c) => c.to_uppercase().chain(chars).collect(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod vocab_tests {
+    use super::*;
+
+    /// The ditransitive verbs are present in REG_VERBS with their 3sg forms, and
+    /// each 3sg form is exactly the base plus a regular suffix (so the synthesized
+    /// regular_3sg rule covers them without a new allomorph).
+    #[test]
+    fn ditransitive_verbs_in_reg_verbs() {
+        for (base, f3) in [
+            ("give", "gives"),
+            ("send", "sends"),
+            ("show", "shows"),
+            ("offer", "offers"),
+            ("hand", "hands"),
+            ("teach", "teaches"),
+        ] {
+            assert!(
+                REG_VERBS.contains(&(base, f3)),
+                "{base} -> {f3} missing from REG_VERBS"
+            );
+            // The 3sg is base+"s" (give->gives) or base+"es" after a sibilant
+            // (teach->teaches) — both covered by the existing regular rule.
+            assert!(
+                f3 == format!("{base}s") || f3 == format!("{base}es"),
+                "{base} -> {f3} is not a regular 3sg suffix"
+            );
+        }
+    }
+
+    /// Ditransitive irregular pasts are stored in the lexicon.
+    #[test]
+    fn ditransitive_pasts_in_irregular_past() {
+        for (base, past) in [
+            ("give", "gave"),
+            ("send", "sent"),
+            ("show", "showed"),
+            ("tell", "told"),
+            ("teach", "taught"),
+        ] {
+            assert!(
+                IRREGULAR_PAST.contains(&(base, past)),
+                "{base} -> {past} missing from IRREGULAR_PAST"
+            );
+        }
+    }
+
+    /// "student" is an animate AGENT (a valid ditransitive recipient).
+    #[test]
+    fn student_is_an_agent() {
+        assert!(AGENTS.contains(&"student"), "student must be an AGENT");
+    }
+
+    /// GRADABLE pairs the positive adjective with its comparative and scale, and
+    /// both polarities of a scale share the same scale name so transitive
+    /// reasoning composes ("longer"/"shorter" on length).
+    #[test]
+    fn gradable_table_well_formed() {
+        let find = |pos: &str| GRADABLE.iter().find(|(p, _, _)| *p == pos).copied();
+        assert_eq!(find("long"), Some(("long", "longer", "length")));
+        assert_eq!(find("short"), Some(("short", "shorter", "length")));
+        assert_eq!(find("big"), Some(("big", "bigger", "size")));
+        assert_eq!(find("heavy"), Some(("heavy", "heavier", "weight")));
+        assert_eq!(find("fast"), Some(("fast", "faster", "speed")));
+        // The comparative form is distinct from the positive, and every scale
+        // name is reused by at least the antonym so orderings compose.
+        for (pos, comp, scale) in GRADABLE {
+            assert_ne!(pos, comp, "{pos} comparative must differ from positive");
+            assert!(!scale.is_empty());
+        }
     }
 }

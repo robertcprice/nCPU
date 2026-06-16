@@ -258,8 +258,13 @@ fn show_meaning(m: &Meaning) -> String {
     match m {
         Meaning::Event(ev) => {
             let neg = if ev.negated { "¬" } else { "" };
+            // Show the recipient only for ditransitive events (when present).
+            let recip = match &ev.recipient {
+                Some(_) => format!(", recipient={}", show_opt_term(&ev.recipient)),
+                None => String::new(),
+            };
             format!(
-                "{neg}Event{{ {}({}, agent={}, patient={}) }}",
+                "{neg}Event{{ {}({}, agent={}, patient={}{recip}) }}",
                 ev.predicate,
                 show_tense(ev.tense),
                 show_opt_term(&ev.agent),
@@ -287,6 +292,31 @@ fn show_meaning(m: &Meaning) -> String {
             let neg = if *negated { "¬" } else { "" };
             format!("{neg}HasProperty{{ subject={}, property={property} }}", show_term(subject))
         }
+        Meaning::Comparison { subject, scale, more, than, negated } => {
+            let neg = if *negated { "¬" } else { "" };
+            let rel = if *more { ">" } else { "<" };
+            format!(
+                "{neg}Comparison{{ {} {rel}[{scale}] {} }}",
+                show_term(subject),
+                show_term(than)
+            )
+        }
+        Meaning::Attitude { holder, verb, content, negated } => {
+            let neg = if *negated { "¬" } else { "" };
+            format!(
+                "{neg}Attitude{{ {} {verb} that {} }}",
+                show_term(holder),
+                show_meaning(content)
+            )
+        }
+        Meaning::Cardinal { at_least, var_category, body } => format!(
+            "Cardinal{{ >={at_least} {var_category}: {} }}",
+            show_meaning(&Meaning::Event(body.clone()))
+        ),
+        Meaning::CountQuestion { var_category, body } => format!(
+            "Count?{{ {var_category}: {} }}",
+            show_meaning(&Meaning::Event(body.clone()))
+        ),
         Meaning::Unknown(s) => format!("Unknown({s:?})"),
     }
 }
@@ -407,6 +437,7 @@ fn demo_understand(engine: &Engine) {
             predicate: "write".to_string(),
             agent: None,
             patient: Some(Term::Indefinite("report".to_string())),
+            recipient: None,
             tense: Tense::Present,
             negated: false,
         },
@@ -427,6 +458,7 @@ fn demo_understand(engine: &Engine) {
             predicate: "read".to_string(),
             agent: None,
             patient: Some(Term::Indefinite("book".to_string())),
+            recipient: None,
             tense: Tense::Present,
             negated: false,
         },
@@ -484,6 +516,125 @@ fn demo_understand(engine: &Engine) {
     println!(
         "        => {}   (neither disjunct is established)",
         verdict_str(deep.world.holds(&disj_false))
+    );
+
+    // -----------------------------------------------------------------------
+    // (g) SEMANTIC FRONTIER — five new semantic domains, each parsed from
+    // surface English and grounded in qa::answer / world.holds. A fresh
+    // discourse so each domain's world is built only from its own reads.
+    // -----------------------------------------------------------------------
+    println!("\n  {}", "=".repeat(68));
+    println!("  SEMANTIC FRONTIER — ditransitives, comparatives, attitudes, counting");
+    println!("  {}", "=".repeat(68));
+
+    // (g.a) DITRANSITIVE / 3-place predicates. Reading fills a `recipient` slot;
+    // the wh-question over the recipient retrieves the right filler.
+    println!("\n  [ditransitive — 3-place give(agent, patient, recipient)]");
+    let mut dt = Discourse::new();
+    let dt_read = "The teacher gives the book to the student.";
+    let dt_m = dt.read(engine, dt_read);
+    println!("     read: {dt_read}");
+    println!("        => {}", show_meaning(&dt_m));
+    let dt_q = "Who does the teacher give the book to?";
+    println!("     Q: {dt_q}");
+    println!("     A: {}   (the recipient slot)", qa::answer(engine, &dt, dt_q));
+
+    // (g.b) COMPARATIVE + TRANSITIVITY. Two orderings on the `length` scale are
+    // read; the transitive consequence is answered from world.holds closure.
+    println!("\n  [comparative — gradable scale + transitive inference]");
+    let mut cmp = Discourse::new();
+    for s in [
+        "The report is longer than the book.",
+        "The book is longer than the letter.",
+    ] {
+        let m = cmp.read(engine, s);
+        println!("     read: {s}");
+        println!("        => {}", show_meaning(&m));
+    }
+    let cmp_q = "Is the report longer than the letter?";
+    println!("     Q: {cmp_q}");
+    println!(
+        "     A: {}   (report>book>letter ⊢ report>letter, transitive)",
+        qa::answer(engine, &cmp, cmp_q)
+    );
+
+    // (g.c) EPISTEMIC + FACTIVITY. Factive `know` makes its content derivable;
+    // non-factive `believe` does NOT.
+    println!("\n  [epistemic — clausal complements with factivity]");
+    let mut ep = Discourse::new();
+    let ep_read = "The teacher knows that the report is long.";
+    let ep_m = ep.read(engine, ep_read);
+    println!("     read: {ep_read}");
+    println!("        => {}", show_meaning(&ep_m));
+    let ep_q = "Does the teacher know that the report is long?";
+    println!("     Q: {ep_q}");
+    println!("     A: {}", qa::answer(engine, &ep, ep_q));
+    // Factive 'know that P' entails P — the embedded content is now true in the world.
+    let factive_content = semantics::understand(engine, "the report is long");
+    println!(
+        "     factive entailment: \"the report is long\" => {}",
+        verdict_str(ep.world.holds(&factive_content))
+    );
+    // Contrast: a NON-factive 'believe' does NOT make its content derivable.
+    let mut ep2 = Discourse::new();
+    let ep2_read = "The editor believes that the letter is long.";
+    ep2.read(engine, ep2_read);
+    println!("     read: {ep2_read}");
+    let nonfactive_content = semantics::understand(engine, "the letter is long");
+    println!(
+        "     non-factive: \"the letter is long\" => {}   (believe ⊬ content — sound)",
+        verdict_str(ep2.world.holds(&nonfactive_content))
+    );
+
+    // (g.d) CARDINALITY. Establish two distinct writers, then count + truth-check.
+    println!("\n  [cardinality — number words + counting questions]");
+    let mut card = Discourse::new();
+    for s in [
+        "The teacher writes the report.",
+        "The author writes the report.",
+    ] {
+        card.read(engine, s);
+        println!("     read: {s}");
+    }
+    let count_q = "How many agents write a report?";
+    println!("     Q: {count_q}");
+    println!(
+        "     A: {}   (counts known agents whose body provably holds)",
+        qa::answer(engine, &card, count_q)
+    );
+    // "Two agents write a report" — a cardinal truth query (at least 2).
+    let card_truth = semantics::understand(engine, "two agents write a report");
+    println!("     {}", show_meaning(&card_truth));
+    println!(
+        "        => {}   (>=2 agents satisfy the body)",
+        verdict_str(card.world.holds(&card_truth))
+    );
+    // A FALSE cardinal: at least three agents would require a third writer.
+    let card_false = semantics::understand(engine, "three agents write a report");
+    println!("     {}", show_meaning(&card_false));
+    println!(
+        "        => {}   (only 2 known agents write a report — ceiling below 3)",
+        verdict_str(card.world.holds(&card_false))
+    );
+
+    // (g.e) QUANTIFIER-PARSER DEPTH. "every agent" parses through the PARSER with
+    // a taxonomy class as the category; the question is answered over the class.
+    println!("\n  [quantifier depth — taxonomy class category parsed from surface]");
+    let mut qd = Discourse::new();
+    for s in [
+        "The teacher writes the report.",
+        "The editor writes the report.",
+    ] {
+        qd.read(engine, s);
+        println!("     read: {s}");
+    }
+    let qd_parsed = semantics::understand(engine, "does every agent write a report");
+    println!("     parsed: {}", show_meaning(&qd_parsed));
+    let qd_q = "Does every agent write a report?";
+    println!("     Q: {qd_q}");
+    println!(
+        "     A: {}   (teacher + editor are both agents and both write a report)",
+        qa::answer(engine, &qd, qd_q)
     );
 
     println!("\nEvery lexical fact (animacy, verb inflection, agreement) under this layer is a");

@@ -13,6 +13,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::comprehension::{AGENTS, PATIENTS};
 use crate::understanding::meaning::{Event, Meaning, Quantifier, Term};
 
+/// The set of FACTIVE attitude verbs: "know that P" entails P. Everything else
+/// (believe/think/say/...) is non-factive — asserting the attitude says nothing
+/// about the truth of its content. Kept as a tiny, explicit allow-list so the
+/// factive/non-factive split is auditable and never accidentally widens.
+const FACTIVE_VERBS: &[&str] = &["know"];
+
+/// Is `verb` a factive attitude verb (its complement is entailed)?
+fn is_factive(verb: &str) -> bool {
+    FACTIVE_VERBS.iter().any(|v| *v == verb)
+}
+
 /// One asserted adjectival attribute of an entity: "the teacher is careful" is
 /// stored as `Attribute { entity: "teacher", property: "careful", negated:false }`.
 /// A negated assertion ("the teacher is not careful") is stored with
@@ -22,6 +33,34 @@ use crate::understanding::meaning::{Event, Meaning, Quantifier, Term};
 struct Attribute {
     entity: String,
     property: String,
+    negated: bool,
+}
+
+/// One asserted comparative ordering on a gradable scale, stored CANONICALLY as
+/// `greater > lesser` so transitive reasoning is uniform regardless of the
+/// surface polarity. "the report is longer than the book" and "the book is
+/// shorter than the report" both store `Order { scale:"length", greater:"report",
+/// lesser:"book" }`. A NEGATED comparison ("the report is NOT longer than the
+/// book") is stored with `negated = true` and consulted by `holds` to report the
+/// directed pair is explicitly denied.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Order {
+    scale: String,
+    greater: String,
+    lesser: String,
+    negated: bool,
+}
+
+/// One asserted propositional attitude: "the teacher knows/believes/... that
+/// <content>". Stored verbatim (holder head, attitude verb, embedded meaning,
+/// polarity). FACTIVITY is NOT baked into this record — it is decided by the
+/// verb at assert/query time (a factive `know` additionally asserts its content
+/// as a fact in its own right; this record only attests the attitude itself).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AttitudeFact {
+    holder: String,
+    verb: String,
+    content: Meaning,
     negated: bool,
 }
 
@@ -38,6 +77,10 @@ pub struct World {
     entities: BTreeSet<String>,
     /// asserted adjectival attributes ("the teacher is careful").
     attributes: Vec<Attribute>,
+    /// asserted comparative orderings ("the report is longer than the book").
+    orderings: Vec<Order>,
+    /// asserted propositional attitudes ("the teacher knows that ...").
+    attitudes: Vec<AttitudeFact>,
 }
 
 impl World {
@@ -47,6 +90,8 @@ impl World {
             category: BTreeMap::new(),
             entities: BTreeSet::new(),
             attributes: Vec::new(),
+            orderings: Vec::new(),
+            attitudes: Vec::new(),
         }
     }
 
@@ -83,6 +128,36 @@ impl World {
                     self.assert_universal(var_category, body);
                 }
             }
+            // A comparison records a directed ordering on a gradable scale. We
+            // store it canonically (greater > lesser) so transitive closure is
+            // uniform; the surface polarity (`more`) only decides which argument
+            // is the greater one.
+            Meaning::Comparison {
+                subject,
+                scale,
+                more,
+                than,
+                negated,
+            } => self.assert_comparison(subject, scale, *more, than, *negated),
+            // A propositional attitude records the attitude itself; a FACTIVE,
+            // non-negated "know that P" ALSO asserts its content P (factivity:
+            // knowing entails truth). Non-factive believe/think/say record ONLY
+            // the attitude — never the content — so "the teacher believes that
+            // the report is long" leaves the report's length open.
+            Meaning::Attitude {
+                holder,
+                verb,
+                content,
+                negated,
+            } => self.assert_attitude(holder, verb, content, *negated),
+            // A cardinal "two teachers write a report" is a CLAIM about how many
+            // entities satisfy the body — like an existential, it is checked, not
+            // stored, so it no-ops on assert (materializing fresh entities would
+            // be unsound: we never invent agents the world has not seen). Its
+            // truth is evaluated against known members by `holds`.
+            Meaning::Cardinal { .. } => {}
+            // CountQuestion is a query (answered numerically by `count_satisfying`).
+            Meaning::CountQuestion { .. } => {}
             // Questions and unparseable meanings carry no assertable content.
             // Disjunctions are queries, not assertions, so they no-op too.
             Meaning::Or(_)
@@ -121,6 +196,33 @@ impl World {
                 property,
                 negated,
             } => self.holds_property(subject, property, *negated),
+            // Comparative truth: does the queried ordering follow from the known
+            // orderings on that scale (directly or by transitive closure)?
+            Meaning::Comparison {
+                subject,
+                scale,
+                more,
+                than,
+                negated,
+            } => self.holds_comparison(subject, scale, *more, than, *negated),
+            // Attitude truth: was this exact attitude (holder verb content
+            // polarity) asserted? (A factive `know` ALSO asserted its content as
+            // a fact, so the content itself is queryable separately.)
+            Meaning::Attitude {
+                holder,
+                verb,
+                content,
+                negated,
+            } => self.holds_attitude(holder, verb, content, *negated),
+            // Cardinal at-least-N truth over the world's known members.
+            Meaning::Cardinal {
+                at_least,
+                var_category,
+                body,
+            } => self.holds_cardinal(*at_least, var_category, body),
+            // A counting question is a query whose answer is a NUMBER, not a
+            // truth value — it is answered via `count_satisfying`, never here.
+            Meaning::CountQuestion { .. } => None,
             Meaning::Unknown(_) => None,
         }
     }
@@ -133,6 +235,48 @@ impl World {
     /// All asserted event facts.
     pub fn facts(&self) -> &[Event] {
         &self.facts
+    }
+
+    /// How many KNOWN entities of `category` provably satisfy `body` (the body
+    /// evaluated with the member bound to its agent slot, `holds_event` =
+    /// `Some(true)`). This is the model-theoretic count behind a CountQuestion
+    /// ("how many teachers write a report?") and the at-least check behind a
+    /// Cardinal. It counts only entities whose body-truth is DETERMINED TRUE, so
+    /// the number is a sound lower bound under the open-world assumption: more
+    /// entities might satisfy the body once asserted, but never fewer than this.
+    ///
+    /// Termination: `category_members` is a finite set and each member is
+    /// evaluated once against the finite fact base.
+    pub fn count_satisfying(&self, category: &str, body: &Event) -> usize {
+        self.category_members(category)
+            .iter()
+            .filter(|member| {
+                let mut ev = body.clone();
+                ev.agent = Some(Term::Entity((*member).clone()));
+                self.holds_event(&ev) == Some(true)
+            })
+            .count()
+    }
+
+    /// Total number of KNOWN entities of `category`, whether or not they satisfy
+    /// any particular body. Lets a CountQuestion answer distinguish "I know of N
+    /// members and 0 satisfy" from "I know of no members at all".
+    pub fn category_member_count(&self, category: &str) -> usize {
+        self.category_members(category).len()
+    }
+
+    /// The embedded contents of every POSITIVELY-asserted attitude held by
+    /// `holder` under attitude verb `verb`, in assertion order. This backs the
+    /// wh-attitude question "What does the teacher know?" -> realize each known
+    /// content. Negated attitudes ("does not know that P") are excluded — the
+    /// holder does not hold that content. `verb` matching is exact on the lemma,
+    /// so "know" returns only knowledge, not beliefs.
+    pub fn known_attitude_contents(&self, holder: &str, verb: &str) -> Vec<Meaning> {
+        self.attitudes
+            .iter()
+            .filter(|a| a.holder == holder && a.verb == verb && !a.negated)
+            .map(|a| a.content.clone())
+            .collect()
     }
 
     /// FORWARD-CHAINING CLOSURE: the extra `Meaning`s soundly derivable from the
@@ -283,6 +427,68 @@ impl World {
             let mut ev = body.clone();
             ev.agent = Some(Term::Entity(member));
             self.assert_event(&ev);
+        }
+    }
+
+    /// Record a comparative ordering on a gradable scale. We canonicalize to
+    /// `greater > lesser`: with `more` (longer/bigger/...) the subject is the
+    /// greater one; with `!more` (shorter/smaller/...) the subject is the lesser
+    /// one (equivalently `than > subject`). Both arguments are registered as
+    /// entities. The stored `negated` flag carries an explicit denial ("X is NOT
+    /// longer than Y") so `holds` can report `Some(false)` for the positive query
+    /// without inventing the reverse ordering (X<Y is NOT implied by ¬(X>Y)).
+    fn assert_comparison(
+        &mut self,
+        subject: &Term,
+        scale: &str,
+        more: bool,
+        than: &Term,
+        negated: bool,
+    ) {
+        self.register_term(subject);
+        self.register_term(than);
+        let (greater, lesser) = if more {
+            (subject.head().to_string(), than.head().to_string())
+        } else {
+            (than.head().to_string(), subject.head().to_string())
+        };
+        // A self-comparison ("X is longer than X") is degenerate; never store an
+        // ordering of an entity with itself (it would create a length-1 cycle and
+        // is semantically false anyway).
+        if greater == lesser {
+            return;
+        }
+        let order = Order {
+            scale: scale.to_string(),
+            greater,
+            lesser,
+            negated,
+        };
+        if !self.orderings.iter().any(|o| *o == order) {
+            self.orderings.push(order);
+        }
+    }
+
+    /// Record a propositional attitude. Always stores the attitude fact itself.
+    /// FACTIVITY: a non-negated, factive attitude ("the teacher KNOWS that P")
+    /// additionally asserts its content P as a fact in its own right, so a later
+    /// query of P answers Yes. Non-factive verbs (believe/think/say) and any
+    /// negated attitude ("does NOT know that P") assert ONLY the attitude — never
+    /// the content — because believing/doubting P says nothing about P's truth.
+    fn assert_attitude(&mut self, holder: &Term, verb: &str, content: &Meaning, negated: bool) {
+        self.register_term(holder);
+        let fact = AttitudeFact {
+            holder: holder.head().to_string(),
+            verb: verb.to_string(),
+            content: content.clone(),
+            negated,
+        };
+        if !self.attitudes.iter().any(|a| *a == fact) {
+            self.attitudes.push(fact);
+        }
+        // Factive entailment: knowing P (positively) makes P true in the world.
+        if !negated && is_factive(verb) {
+            self.assert(content);
         }
     }
 
@@ -460,6 +666,182 @@ impl World {
     }
 
     // ----------------------------------------------------------------------
+    // truth-evaluation helpers for comparisons / attitudes / cardinals
+    // ----------------------------------------------------------------------
+
+    /// Comparative truth on a gradable scale. The query asks whether `greater >
+    /// lesser` holds, where the (greater, lesser) pair is read off `more` exactly
+    /// as in assertion. We answer:
+    ///   - `Some(true)`  if the directed ordering is reachable (directly or by
+    ///     TRANSITIVE closure) over the positively-asserted orderings on the scale;
+    ///   - `Some(false)` if the EXACT directed ordering was explicitly denied
+    ///     (a stored `negated` ordering), OR if the REVERSE ordering is known to
+    ///     hold (an asymmetric scale: `Y > X` ⊢ `¬(X > Y)`);
+    ///   - `None` otherwise (open world: no path proves it and nothing denies it).
+    ///
+    /// The query's own `negated` flag flips a definite verdict at the end.
+    ///
+    /// SOUNDNESS: we never infer symmetry (`X>Y` does not yield `Y>X`); the only
+    /// negative we derive is from the proven reverse ordering (genuine asymmetry)
+    /// or an explicit denial. Transitive closure is computed over a finite graph
+    /// with a visited-set, so it always terminates even on a (malformed) cycle.
+    fn holds_comparison(
+        &self,
+        subject: &Term,
+        scale: &str,
+        more: bool,
+        than: &Term,
+        negated: bool,
+    ) -> Option<bool> {
+        let (greater, lesser) = if more {
+            (subject.head().to_string(), than.head().to_string())
+        } else {
+            (than.head().to_string(), subject.head().to_string())
+        };
+
+        // A self-comparison is never true (nothing exceeds itself).
+        if greater == lesser {
+            return Some(negated);
+        }
+
+        let base = self.ordering_truth(scale, &greater, &lesser);
+        // Apply the query's outer negation to a determined verdict.
+        base.map(|v| v != negated)
+    }
+
+    /// Three-valued truth of the bare directed ordering `greater > lesser` on
+    /// `scale` (ignoring any outer query negation). Factored out so both
+    /// `holds_comparison` and the inference-facing tests share one sound engine.
+    fn ordering_truth(&self, scale: &str, greater: &str, lesser: &str) -> Option<bool> {
+        // 1) Explicit denial of this exact directed pair -> false.
+        if self
+            .orderings
+            .iter()
+            .any(|o| o.negated && o.scale == scale && o.greater == greater && o.lesser == lesser)
+        {
+            return Some(false);
+        }
+        // 2) Provable by (transitive) closure of the positive orderings -> true.
+        if self.ordering_reachable(scale, greater, lesser) {
+            return Some(true);
+        }
+        // 3) The REVERSE ordering provably holds -> the forward one is false
+        //    (a gradable scale is a strict order: asymmetric).
+        if self.ordering_reachable(scale, lesser, greater) {
+            return Some(false);
+        }
+        // 4) Nothing proves or denies it.
+        None
+    }
+
+    /// Is `greater > lesser` reachable on `scale` from the POSITIVE asserted
+    /// orderings via transitive closure? A depth-first reachability search over
+    /// the directed graph whose edges are `g -> l` for each positive `Order`.
+    ///
+    /// Termination: a `visited` set bounds each node to one expansion, so even a
+    /// (semantically impossible but defensively handled) cycle cannot loop.
+    fn ordering_reachable(&self, scale: &str, greater: &str, lesser: &str) -> bool {
+        let mut stack: Vec<&str> = vec![greater];
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        visited.insert(greater);
+        while let Some(node) = stack.pop() {
+            for o in &self.orderings {
+                if o.negated || o.scale != scale || o.greater != node {
+                    continue;
+                }
+                if o.lesser == lesser {
+                    return true;
+                }
+                if visited.insert(o.lesser.as_str()) {
+                    stack.push(o.lesser.as_str());
+                }
+            }
+        }
+        false
+    }
+
+    /// Attitude truth: was an attitude with this (holder, verb, content)
+    /// asserted, and with what polarity? Matching is by holder head, verb lemma,
+    /// and STRUCTURAL equality of the embedded content meaning. The stored
+    /// attitude asserts polarity `!fact.negated`; the query asks for polarity
+    /// `!negated`. The most recent matching assertion decides. `None` if no
+    /// attitude fact mentions this (holder, verb, content) triple — the open
+    /// world says nothing about whether the holder holds that attitude.
+    ///
+    /// NOTE: this reports truth of the ATTITUDE ("does the teacher know that P?"),
+    /// not of the content P. Factive entailment of P is handled at assert time
+    /// (a factive `know` records P as its own fact), so a query of P proper is an
+    /// ordinary content query, evaluated by `holds` on that content meaning.
+    fn holds_attitude(
+        &self,
+        holder: &Term,
+        verb: &str,
+        content: &Meaning,
+        negated: bool,
+    ) -> Option<bool> {
+        let head = holder.head();
+        let mut verdict: Option<bool> = None;
+        for a in &self.attitudes {
+            if a.holder == head && a.verb == verb && &a.content == content {
+                verdict = Some(a.negated == negated);
+            }
+        }
+        verdict
+    }
+
+    /// Cardinal at-least-N truth over the world's known members of the category.
+    ///
+    /// Let `sat` = number of known members whose body is DETERMINED TRUE and
+    /// `total` = number of known members of the category. Three-valued, sound,
+    /// open-world:
+    ///   - `Some(true)`  iff `sat >= at_least` — we already have witnesses enough.
+    ///   - `Some(false)` iff even in the most generous case fewer than `at_least`
+    ///     can satisfy: that is, the count of members NOT determined-false is
+    ///     below `at_least` AND the category is a known, CLOSED-enough domain.
+    ///     To stay sound under the open world we only report `false` when the
+    ///     optimistic ceiling (`total` minus members that are determined-FALSE)
+    ///     is below `at_least`; otherwise unknowns might still push us over N.
+    ///   - `None` otherwise (undetermined: not enough proven yet, but the
+    ///     optimistic ceiling still admits reaching N).
+    ///
+    /// `at_least == 0` is vacuously true. An unknown category yields `None`.
+    fn holds_cardinal(&self, at_least: usize, var_category: &str, body: &Event) -> Option<bool> {
+        if at_least == 0 {
+            return Some(true);
+        }
+        if !self.category_is_known(var_category) {
+            return None;
+        }
+        let members = self.category_members(var_category);
+
+        let mut sat = 0usize; // determined-true members
+        let mut det_false = 0usize; // determined-false members
+        for member in &members {
+            let mut ev = body.clone();
+            ev.agent = Some(Term::Entity(member.clone()));
+            match self.holds_event(&ev) {
+                Some(true) => sat += 1,
+                Some(false) => det_false += 1,
+                None => {}
+            }
+        }
+
+        // Enough witnesses already -> true.
+        if sat >= at_least {
+            return Some(true);
+        }
+        // Optimistic ceiling: every member that is NOT determined-false could
+        // (under the open world) end up satisfying the body. If even that ceiling
+        // falls short, the cardinal is determinately false.
+        let ceiling = members.len().saturating_sub(det_false);
+        if ceiling < at_least {
+            return Some(false);
+        }
+        // Otherwise unknowns leave room to reach N — undetermined.
+        None
+    }
+
+    // ----------------------------------------------------------------------
     // taxonomy / category membership
     // ----------------------------------------------------------------------
 
@@ -633,6 +1015,7 @@ mod tests {
             predicate: "write".to_string(),
             agent: Some(Term::Entity(agent.to_string())),
             patient: Some(Term::Entity(patient.to_string())),
+            recipient: None,
             tense: Tense::Present,
             negated,
         }
@@ -672,6 +1055,7 @@ mod tests {
             predicate: "write".to_string(),
             agent: Some(Term::Entity("teacher".to_string())),
             patient: Some(Term::Indefinite("report".to_string())),
+            recipient: None,
             tense: Tense::Present,
             negated: false,
         });
@@ -786,6 +1170,7 @@ mod tests {
             predicate: "write".to_string(),
             agent: None,
             patient: Some(Term::Indefinite(patient.to_string())),
+            recipient: None,
             tense: Tense::Present,
             negated: false,
         }
@@ -879,6 +1264,7 @@ mod tests {
             predicate: "write".to_string(),
             agent: Some(Term::Entity("teacher".to_string())),
             patient: Some(Term::Indefinite("report".to_string())),
+            recipient: None,
             tense: Tense::Present,
             negated: false,
         });
@@ -994,6 +1380,243 @@ mod tests {
         for m in &derived {
             assert_eq!(w.holds(m), Some(true), "closure emitted a non-holding fact: {m:?}");
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Comparatives (Comparison) + transitivity
+    // -------------------------------------------------------------------
+
+    /// Build "subject is <more?longer:shorter> (scale) than `than`".
+    fn cmp(subject: &str, scale: &str, more: bool, than: &str, negated: bool) -> Meaning {
+        Meaning::Comparison {
+            subject: Term::Entity(subject.to_string()),
+            scale: scale.to_string(),
+            more,
+            than: Term::Entity(than.to_string()),
+            negated,
+        }
+    }
+
+    #[test]
+    fn comparison_direct_truth_and_asymmetry() {
+        let mut w = World::new();
+        // "the report is longer than the book".
+        w.assert(&cmp("report", "length", true, "book", false));
+        // The exact query holds.
+        assert_eq!(w.holds(&cmp("report", "length", true, "book", false)), Some(true));
+        // ASYMMETRY: the reverse "the book is longer than the report" is FALSE,
+        // never silently true (we must not infer symmetry).
+        assert_eq!(w.holds(&cmp("book", "length", true, "report", false)), Some(false));
+        // "the book is SHORTER than the report" is the same ordering -> true.
+        assert_eq!(w.holds(&cmp("book", "length", false, "report", false)), Some(true));
+        // An unrelated scale is open-world unknown.
+        assert_eq!(w.holds(&cmp("report", "weight", true, "book", false)), None);
+    }
+
+    #[test]
+    fn comparison_transitive_closure() {
+        let mut w = World::new();
+        // A > B and B > C on length.
+        w.assert(&cmp("report", "length", true, "essay", false));
+        w.assert(&cmp("essay", "length", true, "book", false));
+        // Transitivity: A > C.
+        assert_eq!(w.holds(&cmp("report", "length", true, "book", false)), Some(true));
+        // ... and the reverse C > A is false by asymmetry of the proven order.
+        assert_eq!(w.holds(&cmp("book", "length", true, "report", false)), Some(false));
+        // A pair with no path on the scale stays unknown.
+        assert_eq!(w.holds(&cmp("book", "length", true, "essay", false)), Some(false)); // essay>book known, so book>essay false
+        assert_eq!(w.holds(&cmp("memo", "length", true, "note", false)), None);
+    }
+
+    #[test]
+    fn comparison_negation_and_explicit_denial() {
+        let mut w = World::new();
+        w.assert(&cmp("report", "length", true, "book", false));
+        // Query "is the report NOT longer than the book?" -> No (it IS longer).
+        assert_eq!(w.holds(&cmp("report", "length", true, "book", true)), Some(false));
+        // An explicit denial makes the positive query false without inventing the
+        // reverse ordering.
+        let mut w2 = World::new();
+        w2.assert(&cmp("memo", "length", true, "note", true)); // "memo is NOT longer than note"
+        assert_eq!(w2.holds(&cmp("memo", "length", true, "note", false)), Some(false));
+        // But the reverse is NOT thereby asserted true (¬(X>Y) does not give Y>X).
+        assert_eq!(w2.holds(&cmp("note", "length", true, "memo", false)), None);
+    }
+
+    #[test]
+    fn comparison_cycle_does_not_loop() {
+        // Defensive: a (semantically impossible) cycle must still terminate.
+        let mut w = World::new();
+        w.assert(&cmp("report", "length", true, "book", false));
+        w.assert(&cmp("book", "length", true, "report", false));
+        // Both directions are "reachable", so each query is provable-true; the
+        // search must not hang. We only assert it RETURNS (terminates).
+        let _ = w.holds(&cmp("report", "length", true, "book", false));
+        let _ = w.holds(&cmp("book", "length", true, "report", false));
+    }
+
+    // -------------------------------------------------------------------
+    // Epistemic attitudes (Attitude) + factivity
+    // -------------------------------------------------------------------
+
+    fn long_report() -> Meaning {
+        Meaning::HasProperty {
+            subject: Term::Entity("report".to_string()),
+            property: "long".to_string(),
+            negated: false,
+        }
+    }
+
+    fn attitude(verb: &str, negated: bool) -> Meaning {
+        Meaning::Attitude {
+            holder: Term::Entity("teacher".to_string()),
+            verb: verb.to_string(),
+            content: Box::new(long_report()),
+            negated,
+        }
+    }
+
+    #[test]
+    fn factive_know_entails_content() {
+        let mut w = World::new();
+        // "the teacher knows that the report is long".
+        w.assert(&attitude("know", false));
+        // The attitude itself holds.
+        assert_eq!(w.holds(&attitude("know", false)), Some(true));
+        // FACTIVITY: the content is now true in the world.
+        assert_eq!(w.holds(&long_report()), Some(true));
+    }
+
+    #[test]
+    fn nonfactive_believe_does_not_entail_content() {
+        let mut w = World::new();
+        // "the teacher believes that the report is long".
+        w.assert(&attitude("believe", false));
+        // The attitude holds...
+        assert_eq!(w.holds(&attitude("believe", false)), Some(true));
+        // ... but the content is NOT asserted: believing P says nothing about P.
+        assert_eq!(w.holds(&long_report()), None);
+        // think/say are likewise non-factive.
+        let mut w2 = World::new();
+        w2.assert(&attitude("think", false));
+        assert_eq!(w2.holds(&long_report()), None);
+    }
+
+    #[test]
+    fn negated_know_does_not_entail_content() {
+        // "the teacher does NOT know that the report is long" must not assert P.
+        let mut w = World::new();
+        w.assert(&attitude("know", true));
+        assert_eq!(w.holds(&attitude("know", true)), Some(true)); // the negated attitude holds
+        assert_eq!(w.holds(&attitude("know", false)), Some(false)); // positive attitude is false
+        assert_eq!(w.holds(&long_report()), None); // content stays open
+    }
+
+    #[test]
+    fn attitude_unknown_is_open_world() {
+        let w = World::new();
+        assert_eq!(w.holds(&attitude("know", false)), None);
+    }
+
+    #[test]
+    fn known_attitude_contents_backs_wh_question() {
+        // "What does the teacher know?" -> the contents of positive knowledge.
+        let mut w = World::new();
+        w.assert(&attitude("know", false)); // knows that the report is long
+        w.assert(&attitude("believe", false)); // believes that the report is long
+        // Only knowledge is returned for verb "know" (beliefs excluded).
+        let known = w.known_attitude_contents("teacher", "know");
+        assert_eq!(known.len(), 1);
+        assert_eq!(known[0], long_report());
+        // A negated "know" is excluded (the holder does NOT know that content).
+        let mut w2 = World::new();
+        w2.assert(&attitude("know", true));
+        assert!(w2.known_attitude_contents("teacher", "know").is_empty());
+    }
+
+    // -------------------------------------------------------------------
+    // Cardinality (Cardinal) + at-least monotonicity
+    // -------------------------------------------------------------------
+
+    /// "at least N <category> write a report", body agent bound by the cardinal.
+    fn cardinal(at_least: usize, category: &str) -> Meaning {
+        Meaning::Cardinal {
+            at_least,
+            var_category: category.to_string(),
+            body: quant_body("report"),
+        }
+    }
+
+    #[test]
+    fn cardinal_at_least_counts_known_satisfiers() {
+        let mut w = World::new();
+        // Two distinct agents write a report.
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        w.assert(&Meaning::Event(write_event("editor", "report", false)));
+        // count_satisfying over the "person" category sees both.
+        assert_eq!(w.count_satisfying("person", &quant_body("report")), 2);
+        // "at least 2 persons write a report" -> true.
+        assert_eq!(w.holds(&cardinal(2, "person")), Some(true));
+        // MONOTONICITY: at-least-1 also true (witnesses ≥ 1).
+        assert_eq!(w.holds(&cardinal(1, "person")), Some(true));
+        // at-least-0 vacuously true.
+        assert_eq!(w.holds(&cardinal(0, "person")), Some(true));
+    }
+
+    #[test]
+    fn cardinal_false_when_ceiling_below_n() {
+        let mut w = World::new();
+        // Exactly one known person writes; the other known person explicitly does
+        // NOT (a determined-false member, so it can never count).
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        w.assert(&Meaning::Event(write_event("editor", "report", true))); // negated
+        // sat = 1, det_false = 1, total = 2, ceiling = 1.
+        // "at least 2 persons write a report" -> false (ceiling 1 < 2).
+        assert_eq!(w.holds(&cardinal(2, "person")), Some(false));
+        // "at least 1" is already witnessed true.
+        assert_eq!(w.holds(&cardinal(1, "person")), Some(true));
+    }
+
+    #[test]
+    fn cardinal_undetermined_when_unknowns_could_reach_n() {
+        let mut w = World::new();
+        // One person writes (witness); a second known person's body is UNKNOWN.
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        // Introduce "editor" without saying whether they write a report.
+        w.assert(&Meaning::IsA {
+            subject: Term::Entity("editor".to_string()),
+            category: "person".to_string(),
+            negated: false,
+        });
+        // sat = 1, det_false = 0, total = 2, ceiling = 2 >= 2 -> undetermined.
+        assert_eq!(w.holds(&cardinal(2, "person")), None);
+    }
+
+    #[test]
+    fn cardinal_unknown_category_is_none() {
+        let w = World::new();
+        assert_eq!(w.holds(&cardinal(2, "dragon")), None);
+        // count over an unknown/empty category is 0.
+        assert_eq!(w.count_satisfying("dragon", &quant_body("report")), 0);
+    }
+
+    #[test]
+    fn count_satisfying_backs_count_question() {
+        // The CountQuestion answer derives from count_satisfying.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        w.assert(&Meaning::Event(write_event("editor", "report", false)));
+        w.assert(&Meaning::Event(write_event("author", "book", false))); // wrong patient
+        // Only teacher and editor write a *report*.
+        assert_eq!(w.count_satisfying("person", &quant_body("report")), 2);
+        // A CountQuestion is never truth-evaluated.
+        let cq = Meaning::CountQuestion {
+            var_category: "person".to_string(),
+            body: quant_body("report"),
+        };
+        assert_eq!(w.holds(&cq), None);
+        // We do know of 3 persons total (teacher, editor, author).
+        assert_eq!(w.category_member_count("person"), 3);
     }
 }
 

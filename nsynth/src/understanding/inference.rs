@@ -29,6 +29,15 @@
 use crate::comprehension::{AGENTS, PATIENTS};
 use crate::understanding::meaning::{Event, Meaning, Quantifier, Term};
 
+/// The set of FACTIVE attitude verbs: "know that P" entails P. Non-factive
+/// attitudes (believe/think/say) carry no commitment to the truth of their
+/// complement, so they are deliberately absent here. This is the single source
+/// of truth for factivity in inference — keeping it sound means NEVER deriving
+/// the content of a non-factive attitude.
+fn is_factive(verb: &str) -> bool {
+    matches!(verb, "know" | "knows" | "knew")
+}
+
 /// How a hypothesis relates to a premise under natural-language inference.
 pub enum Relation {
     Entails,
@@ -212,6 +221,133 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
         // `HasProperty` entails itself; reflexivity is covered by `entails`'s
         // equality check, so there is no extra consequence to derive.
         Meaning::HasProperty { .. } => {}
+        // COMPARISON. A single comparison meaning does NOT, on its own, license
+        // transitive inference — that needs a SECOND fact (A>B together with
+        // B>C), which is a multi-fact derivation handled by the world model's
+        // transitive closure, not by the consequences of one meaning. What IS
+        // sound from one affirmative comparison is the CONVERSE PHRASING under the
+        // antisymmetry of a strict order on a single scale: "A is longer than B"
+        // (more on `length`) is logically equivalent to "B is shorter than A"
+        // (less on `length`). So we emit the polarity-swapped, argument-swapped
+        // restatement. We do NOT emit `B more A` (that is the FALSE symmetric
+        // claim) and we emit nothing under negation (the negation of a strict
+        // comparison is the non-strict converse-or-equal, which we cannot pin
+        // down as a single comparison meaning).
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } => {
+            if !negated {
+                // (1) CONVERSE restatement: "A is longer than B" <=> "B is
+                //     shorter than A" (swap args, flip `more`). Equivalent, sound.
+                push_unique(
+                    &mut out,
+                    Meaning::Comparison {
+                        subject: than.clone(),
+                        scale: scale.clone(),
+                        more: !more,
+                        than: subject.clone(),
+                        negated: false,
+                    },
+                );
+                // (2) INCOMPATIBILITY 1: a strict order is asymmetric, so
+                //     "A more B" entails "NOT (B more A)" — the reverse-direction
+                //     comparison is false. Emitting it as a negated consequence
+                //     lets `relation` report Contradicts against "B more A".
+                push_unique(
+                    &mut out,
+                    Meaning::Comparison {
+                        subject: than.clone(),
+                        scale: scale.clone(),
+                        more: *more,
+                        than: subject.clone(),
+                        negated: true,
+                    },
+                );
+                // (3) INCOMPATIBILITY 2: the two directions on the same pair are
+                //     mutually exclusive, so "A more B" entails "NOT (A less B)"
+                //     (same args, opposite `more`, negated). This yields the
+                //     "longer-than" vs "shorter-than" contradiction.
+                push_unique(
+                    &mut out,
+                    Meaning::Comparison {
+                        subject: subject.clone(),
+                        scale: scale.clone(),
+                        more: !more,
+                        than: than.clone(),
+                        negated: true,
+                    },
+                );
+            }
+        }
+        // ATTITUDE. FACTIVITY is the only sound single-meaning entailment here:
+        // an affirmative "X knows that P" entails its content P (and, by
+        // composition, every sound consequence OF P). Non-factive
+        // believe/think/say entail NOTHING about P — that is the load-bearing
+        // soundness constraint. A NEGATED factive ("X does not know that P")
+        // entails nothing about P either: failing to know P leaves P's truth
+        // open. (Reflexivity of the attitude itself is covered by `entails`.)
+        Meaning::Attitude {
+            verb,
+            content,
+            negated,
+            ..
+        } => {
+            if !negated && is_factive(verb) {
+                // The content is true...
+                push_unique(&mut out, (**content).clone());
+                // ...and so is everything the content soundly entails. This lets
+                // "X knows that the teacher writes the report" answer
+                // "does the teacher write something?" -> Yes.
+                for c in consequences(content) {
+                    push_unique(&mut out, c);
+                }
+            }
+        }
+        // CARDINAL at-least monotonicity. "At least N teachers write a report"
+        // entails "at least M teachers write a report" for every 1 <= M < N
+        // (a stronger count entails every weaker count), and in particular
+        // entails the existential "some teacher writes a report" (the M=1 floor,
+        // which we also surface as a `Some` Quantified so existential queries
+        // phrased that way are answered). We emit the weaker cardinals and the
+        // existential generalization; we never emit a STRONGER count (that would
+        // be unsound) nor a universal (at-least says nothing about all members).
+        Meaning::Cardinal {
+            at_least,
+            var_category,
+            body,
+        } => {
+            // Weaker at-least counts: M = at_least-1 down to 1.
+            let mut m = at_least.saturating_sub(1);
+            while m >= 1 {
+                push_unique(
+                    &mut out,
+                    Meaning::Cardinal {
+                        at_least: m,
+                        var_category: var_category.clone(),
+                        body: body.clone(),
+                    },
+                );
+                m -= 1;
+            }
+            // Existential generalization: at-least-1 (implied by any N>=1) means
+            // "some <category> <body>".
+            if *at_least >= 1 {
+                push_unique(
+                    &mut out,
+                    Meaning::Quantified {
+                        quant: Quantifier::Some,
+                        var_category: var_category.clone(),
+                        body: body.clone(),
+                    },
+                );
+            }
+        }
+        // A counting question asserts nothing, so it entails nothing.
+        Meaning::CountQuestion { .. } => {}
         // Questions / Unknowns assert nothing, so they entail nothing.
         Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => {}
     }
@@ -227,7 +363,11 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
 fn is_non_assertoric(m: &Meaning) -> bool {
     matches!(
         m,
-        Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_)
+        Meaning::YesNoQuestion(_)
+            | Meaning::WhQuestion { .. }
+            // A counting question is interrogative, not assertoric.
+            | Meaning::CountQuestion { .. }
+            | Meaning::Unknown(_)
     )
 }
 
@@ -311,6 +451,54 @@ fn polarity_flip(m: &Meaning) -> Option<Meaning> {
         // conjunction of negated disjuncts, not representable as one `Meaning`),
         // so we report no flip and let it read as Neutral under contradiction.
         Meaning::Or(_) => None,
+        // COMPARISON. The contradictory of an affirmative strict comparison is
+        // its own negation (same subject/scale/than/more, flipped `negated`):
+        // "A is longer than B" guarantees "A is NOT longer than B" is false, and
+        // vice versa. We flip ONLY the `negated` flag and keep `more`/arguments
+        // fixed. Crucially we do NOT map `A more B` to `B more A` (that symmetric
+        // claim is also false under a strict order, but treating it as the
+        // polarity flip would let `relation` over-fire on unrelated phrasings; the
+        // genuine A-vs-B-on-B-vs-A contradiction is reached instead through the
+        // CONVERSE consequence `B less A` plus this same-shape flip, all soundly).
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } => Some(Meaning::Comparison {
+            subject: subject.clone(),
+            scale: scale.clone(),
+            more: *more,
+            than: than.clone(),
+            negated: !negated,
+        }),
+        // ATTITUDE. The contradictory is the same attitude with flipped polarity:
+        // "X knows that P" contradicts "X does not know that P". This is sound for
+        // BOTH factive and non-factive verbs because it is a claim about the
+        // ATTITUDE itself (whether the holder holds it), independent of P's truth.
+        // We keep `verb` and `content` fixed — we do NOT flip the embedded P, and
+        // we do NOT cross factivity (knowing P does not contradict believing P).
+        Meaning::Attitude {
+            holder,
+            verb,
+            content,
+            negated,
+        } => Some(Meaning::Attitude {
+            holder: holder.clone(),
+            verb: verb.clone(),
+            content: content.clone(),
+            negated: !negated,
+        }),
+        // CARDINAL has no single-meaning contradictory in our vocabulary. The
+        // negation of "at least N <cat> <body>" is "at most N-1 <cat> <body>",
+        // which we cannot express as another `Cardinal` (which is always
+        // at-LEAST). Reporting a same-shape flip would be UNSOUND (two at-least
+        // claims never contradict — the larger entails the smaller). So we report
+        // no flip and let cardinal pairs read as Neutral under contradiction.
+        Meaning::Cardinal { .. } => None,
+        // A counting question is non-assertoric — no polarity to flip.
+        Meaning::CountQuestion { .. } => None,
         Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => None,
     }
 }
@@ -489,6 +677,7 @@ mod tests {
             predicate: "write".to_string(),
             agent: Some(agent),
             patient,
+            recipient: None,
             tense: Tense::Present,
             negated,
         })
@@ -556,6 +745,7 @@ mod tests {
             predicate: "write".to_string(),
             agent: Some(entity("teacher")),
             patient: Some(entity("report")),
+            recipient: None,
             tense: Tense::Present,
             negated: true,
         };
@@ -583,6 +773,7 @@ mod tests {
                 predicate: "write".to_string(),
                 agent: None,
                 patient: Some(Term::Indefinite("report".to_string())),
+                recipient: None,
                 tense: Tense::Present,
                 negated: false,
             },
@@ -702,6 +893,7 @@ mod tests {
             predicate: "write".to_string(),
             agent: Some(entity("teacher")),
             patient: Some(entity("report")),
+            recipient: None,
             tense: Tense::Present,
             negated: false,
         };
@@ -722,10 +914,269 @@ mod tests {
             predicate: "write".to_string(),
             agent: Some(entity("teacher")),
             patient: Some(entity("report")),
+            recipient: None,
             tense: Tense::Present,
             negated: false,
         };
         let derived2 = closure(&[fact2.clone(), fact2]);
         assert_eq!(derived.len(), derived2.len());
+    }
+
+    // ------------------------------------------------------------------
+    // New domains: comparison / attitude / cardinal
+    // ------------------------------------------------------------------
+
+    fn comp(subject: &str, more: bool, than: &str, negated: bool) -> Meaning {
+        Meaning::Comparison {
+            subject: entity(subject),
+            scale: "length".to_string(),
+            more,
+            than: entity(than),
+            negated,
+        }
+    }
+
+    fn cardinal(n: usize, cat: &str) -> Meaning {
+        Meaning::Cardinal {
+            at_least: n,
+            var_category: cat.to_string(),
+            body: Event {
+                predicate: "write".to_string(),
+                agent: None,
+                patient: Some(Term::Indefinite("report".to_string())),
+                recipient: None,
+                tense: Tense::Present,
+                negated: false,
+            },
+        }
+    }
+
+    #[test]
+    fn comparison_reflexive_and_converse() {
+        // "report longer than book" entails itself (reflexive)...
+        let p = comp("report", true, "book", false);
+        assert!(matches!(relation(&p, &p), Relation::Entails));
+        // ...and entails the converse "book shorter than report".
+        let converse = comp("book", false, "report", false);
+        assert!(matches!(relation(&p, &converse), Relation::Entails));
+    }
+
+    #[test]
+    fn comparison_asymmetry_is_not_entailment() {
+        // SOUNDNESS: "A longer than B" must NOT entail "B longer than A".
+        let p = comp("report", true, "book", false);
+        let symmetric = comp("book", true, "report", false);
+        assert!(!matches!(relation(&p, &symmetric), Relation::Entails));
+    }
+
+    #[test]
+    fn comparison_contradictions() {
+        let p = comp("report", true, "book", false);
+        // "A longer than B" contradicts "B longer than A" (asymmetry).
+        assert!(matches!(
+            relation(&p, &comp("book", true, "report", false)),
+            Relation::Contradicts
+        ));
+        // ...contradicts "A shorter than B" (opposite direction, same pair).
+        assert!(matches!(
+            relation(&p, &comp("report", false, "book", false)),
+            Relation::Contradicts
+        ));
+        // ...contradicts its own negation "A NOT longer than B".
+        assert!(matches!(
+            relation(&p, &comp("report", true, "book", true)),
+            Relation::Contradicts
+        ));
+    }
+
+    #[test]
+    fn comparison_unrelated_pair_is_neutral() {
+        // A comparison on an unrelated pair neither entails nor contradicts.
+        let p = comp("report", true, "book", false);
+        assert!(matches!(
+            relation(&p, &comp("letter", true, "memo", false)),
+            Relation::Neutral
+        ));
+    }
+
+    #[test]
+    fn factive_know_entails_content_nonfactive_does_not() {
+        let content = Meaning::HasProperty {
+            subject: entity("report"),
+            property: "long".to_string(),
+            negated: false,
+        };
+        // FACTIVE: "the teacher knows that the report is long" entails "the
+        // report is long".
+        let know = Meaning::Attitude {
+            holder: entity("teacher"),
+            verb: "know".to_string(),
+            content: Box::new(content.clone()),
+            negated: false,
+        };
+        assert!(matches!(relation(&know, &content), Relation::Entails));
+
+        // NON-FACTIVE: "the teacher believes that the report is long" does NOT
+        // entail the report is long.
+        let believe = Meaning::Attitude {
+            holder: entity("teacher"),
+            verb: "believe".to_string(),
+            content: Box::new(content.clone()),
+            negated: false,
+        };
+        assert!(!matches!(relation(&believe, &content), Relation::Entails));
+        // ...and likewise think/say.
+        for v in ["think", "say"] {
+            let att = Meaning::Attitude {
+                holder: entity("teacher"),
+                verb: v.to_string(),
+                content: Box::new(content.clone()),
+                negated: false,
+            };
+            assert!(!matches!(relation(&att, &content), Relation::Entails));
+        }
+    }
+
+    #[test]
+    fn negated_factive_does_not_entail_content() {
+        // "the teacher does NOT know that the report is long" leaves the report's
+        // length open — it must NOT entail the content.
+        let content = Meaning::HasProperty {
+            subject: entity("report"),
+            property: "long".to_string(),
+            negated: false,
+        };
+        let not_know = Meaning::Attitude {
+            holder: entity("teacher"),
+            verb: "know".to_string(),
+            content: Box::new(content.clone()),
+            negated: true,
+        };
+        assert!(!matches!(relation(&not_know, &content), Relation::Entails));
+    }
+
+    #[test]
+    fn factive_know_entails_content_consequences() {
+        // "X knows that the teacher writes the report" entails (via factivity +
+        // event generalization) "the teacher writes [something]".
+        let event = ev(entity("teacher"), Some(entity("report")), false);
+        let know = Meaning::Attitude {
+            holder: entity("student"),
+            verb: "knows".to_string(),
+            content: Box::new(event),
+            negated: false,
+        };
+        let dropped_patient = ev(entity("teacher"), None, false);
+        assert!(matches!(
+            relation(&know, &dropped_patient),
+            Relation::Entails
+        ));
+    }
+
+    #[test]
+    fn attitude_contradiction_is_about_the_attitude() {
+        let content = Meaning::HasProperty {
+            subject: entity("report"),
+            property: "long".to_string(),
+            negated: false,
+        };
+        let know = Meaning::Attitude {
+            holder: entity("teacher"),
+            verb: "know".to_string(),
+            content: Box::new(content.clone()),
+            negated: false,
+        };
+        let not_know = Meaning::Attitude {
+            holder: entity("teacher"),
+            verb: "know".to_string(),
+            content: Box::new(content.clone()),
+            negated: true,
+        };
+        // "knows that P" contradicts "does not know that P".
+        assert!(matches!(relation(&know, &not_know), Relation::Contradicts));
+        // SOUNDNESS: knowing P does NOT contradict BELIEVING P (different verbs,
+        // both can hold).
+        let believe = Meaning::Attitude {
+            holder: entity("teacher"),
+            verb: "believe".to_string(),
+            content: Box::new(content),
+            negated: false,
+        };
+        assert!(matches!(relation(&know, &believe), Relation::Neutral));
+    }
+
+    #[test]
+    fn cardinal_at_least_monotonicity() {
+        // "at least 3 teachers write a report" entails "at least 2" and "at least 1".
+        let three = cardinal(3, "teacher");
+        assert!(matches!(
+            relation(&three, &cardinal(2, "teacher")),
+            Relation::Entails
+        ));
+        assert!(matches!(
+            relation(&three, &cardinal(1, "teacher")),
+            Relation::Entails
+        ));
+        // ...and entails the existential "some teacher writes a report".
+        let some = Meaning::Quantified {
+            quant: Quantifier::Some,
+            var_category: "teacher".to_string(),
+            body: Event {
+                predicate: "write".to_string(),
+                agent: None,
+                patient: Some(Term::Indefinite("report".to_string())),
+                recipient: None,
+                tense: Tense::Present,
+                negated: false,
+            },
+        };
+        assert!(matches!(relation(&three, &some), Relation::Entails));
+    }
+
+    #[test]
+    fn cardinal_does_not_entail_stronger_count() {
+        // SOUNDNESS: "at least 2" must NOT entail "at least 3".
+        let two = cardinal(2, "teacher");
+        assert!(matches!(
+            relation(&two, &cardinal(3, "teacher")),
+            Relation::Neutral
+        ));
+    }
+
+    #[test]
+    fn cardinal_pairs_do_not_contradict() {
+        // SOUNDNESS: two at-least claims never contradict (the larger entails the
+        // smaller); a weaker count is Entailed, not contradicted, and an
+        // unrelated count is Neutral — never Contradicts.
+        let three = cardinal(3, "teacher");
+        assert!(!matches!(
+            relation(&three, &cardinal(5, "teacher")),
+            Relation::Contradicts
+        ));
+        assert!(!matches!(
+            relation(&three, &cardinal(2, "teacher")),
+            Relation::Contradicts
+        ));
+    }
+
+    #[test]
+    fn count_question_is_non_assertoric() {
+        // A counting question carries no assertion: it neither entails nor
+        // contradicts, and yields no consequences.
+        let cq = Meaning::CountQuestion {
+            var_category: "teacher".to_string(),
+            body: Event {
+                predicate: "write".to_string(),
+                agent: None,
+                patient: Some(Term::Indefinite("report".to_string())),
+                recipient: None,
+                tense: Tense::Present,
+                negated: false,
+            },
+        };
+        assert!(consequences(&cq).is_empty());
+        let p = ev(entity("teacher"), Some(entity("report")), false);
+        assert!(matches!(relation(&p, &cq), Relation::Neutral));
+        assert!(matches!(relation(&cq, &p), Relation::Neutral));
     }
 }

@@ -21,7 +21,7 @@ impl Term {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Role { Agent, Patient }
+pub enum Role { Agent, Patient, Recipient }
 
 /// A natural-language quantifier scoping over a category variable.
 /// `Every` is universal ("every teacher"), `Some` existential ("some teacher"),
@@ -33,11 +33,15 @@ pub enum Quantifier { Every, Some, No }   // universal, existential, negative
 pub enum Tense { Past, Present }
 
 /// An event/action predication: write(agent: teacher, patient: report), present, not negated.
+/// A ditransitive event also fills the `recipient` slot:
+/// give(agent: teacher, patient: book, recipient: student).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Event {
     pub predicate: String,        // verb lemma: "write"
     pub agent: Option<Term>,
     pub patient: Option<Term>,
+    /// ditransitive recipient ("... to the student"): `None` for 2-place verbs.
+    pub recipient: Option<Term>,
     pub tense: Tense,
     pub negated: bool,
 }
@@ -63,6 +67,103 @@ pub enum Meaning {
     Or(Vec<Meaning>),
     /// "the teacher is careful" — an adjectival property of an entity.
     HasProperty { subject: Term, property: String, negated: bool },
+    /// "the report is longer than the book" — gradable comparison.
+    /// `scale` is the gradable dimension ("length"/"size"/...); `more` is the
+    /// polarity of the comparative (longer/bigger -> `true`); `subject` is
+    /// asserted to exceed `than` on that scale when `more` (or fall below when
+    /// `!more`). `negated` flips the whole assertion.
+    Comparison { subject: Term, scale: String, more: bool, than: Term, negated: bool },
+    /// "the teacher knows that <S>" — a propositional attitude over an embedded
+    /// meaning. `verb` is the attitude lemma (know/believe/think/say); `content`
+    /// is the embedded clause's Meaning. FACTIVITY is decided downstream by the
+    /// verb: "know that P" entails P, "believe/think/say that P" does not.
+    Attitude { holder: Term, verb: String, content: Box<Meaning>, negated: bool },
+    /// "two teachers write a report" — cardinal (at-least) quantification.
+    /// True iff at least `at_least` known entities of `var_category` satisfy
+    /// `body`.
+    Cardinal { at_least: usize, var_category: String, body: Event },
+    /// "how many teachers write a report?" — a counting question whose answer is
+    /// the number of entities of `var_category` that satisfy `body`.
+    CountQuestion { var_category: String, body: Event },
     /// unparseable into a meaning
     Unknown(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ent(s: &str) -> Term {
+        Term::Entity(s.to_string())
+    }
+
+    /// A ditransitive event fills the new `recipient` slot, and `Role::Recipient`
+    /// is a distinct thematic role.
+    #[test]
+    fn ditransitive_event_has_recipient_and_role() {
+        let give = Event {
+            predicate: "give".to_string(),
+            agent: Some(ent("teacher")),
+            patient: Some(ent("book")),
+            recipient: Some(ent("student")),
+            tense: Tense::Present,
+            negated: false,
+        };
+        assert_eq!(give.recipient, Some(ent("student")));
+        // The three roles are distinct.
+        assert_ne!(Role::Recipient, Role::Agent);
+        assert_ne!(Role::Recipient, Role::Patient);
+    }
+
+    /// The four new Meaning variants construct with the contract-specified shapes
+    /// and the factive/non-factive distinction lives in the `verb` field.
+    #[test]
+    fn new_meaning_variants_construct() {
+        let comparison = Meaning::Comparison {
+            subject: ent("report"),
+            scale: "length".to_string(),
+            more: true,
+            than: ent("book"),
+            negated: false,
+        };
+        assert!(matches!(comparison, Meaning::Comparison { more: true, .. }));
+
+        // "the teacher knows that the report is long" — factive attitude.
+        let attitude = Meaning::Attitude {
+            holder: ent("teacher"),
+            verb: "know".to_string(),
+            content: Box::new(Meaning::HasProperty {
+                subject: ent("report"),
+                property: "long".to_string(),
+                negated: false,
+            }),
+            negated: false,
+        };
+        let Meaning::Attitude { verb, content, .. } = &attitude else {
+            panic!("expected Attitude");
+        };
+        assert_eq!(verb, "know"); // factivity decided downstream by the verb
+        assert!(matches!(**content, Meaning::HasProperty { .. }));
+
+        let body = Event {
+            predicate: "write".to_string(),
+            agent: None,
+            patient: Some(Term::Indefinite("report".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            negated: false,
+        };
+        let cardinal = Meaning::Cardinal {
+            at_least: 2,
+            var_category: "teacher".to_string(),
+            body: body.clone(),
+        };
+        assert!(matches!(cardinal, Meaning::Cardinal { at_least: 2, .. }));
+
+        let count = Meaning::CountQuestion {
+            var_category: "teacher".to_string(),
+            body,
+        };
+        assert!(matches!(count, Meaning::CountQuestion { .. }));
+    }
 }
