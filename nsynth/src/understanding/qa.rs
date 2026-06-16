@@ -179,9 +179,8 @@ fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>) -> String 
 }
 
 /// Realize an Event clause with explicit polarity, inflecting the verb for the
-/// agent. Present + non-negated 3sg uses the synthesized `verb_3sg`; negated or
-/// past uses the periphrastic/base form so we never invent inflection rules
-/// here.
+/// agent. Both 3sg and past use synthesized inflection programs (verb_3sg /
+/// verb_past); negatives use the periphrastic auxiliary with the base verb.
 fn realize_event(engine: &Engine, ev: &Event, negated: bool) -> String {
     use crate::understanding::meaning::Tense;
 
@@ -198,9 +197,8 @@ fn realize_event(engine: &Engine, ev: &Event, negated: bool) -> String {
         (Tense::Present, false) => engine.verb_3sg(&ev.predicate),
         // Past negative: "did not write".
         (Tense::Past, true) => format!("did not {}", ev.predicate),
-        // Past affirmative: keep the lemma — the world stores lemmas and we do
-        // not synthesize past tense here; the agreement/aux carries the rest.
-        (Tense::Past, false) => ev.predicate.clone(),
+        // Past affirmative: synthesized past inflection ("wrote").
+        (Tense::Past, false) => engine.verb_past(&ev.predicate),
     };
 
     match ev.patient.as_ref() {

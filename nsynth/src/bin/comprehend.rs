@@ -218,6 +218,11 @@ fn demo_inflect(engine: &Engine) {
     }
     println!("\n  The irregular lexicon keys on whole words, so \"be\"->\"is\" never leaks");
     println!("  into \"scribe\"; regular verbs stay on the rule.");
+
+    println!("\n  past tense (regular +ed rule + irregular lexicon):");
+    for v in ["walk", "carry", "describe", "write", "go", "read", "have"] {
+        println!("     {v:<10} -> {}", engine.verb_past(v));
+    }
 }
 
 // ===========================================================================

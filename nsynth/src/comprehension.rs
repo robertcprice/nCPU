@@ -56,6 +56,24 @@ pub const IRREGULAR_VERBS: &[(&str, &str)] = &[
     ("have", "has"), ("be", "is"), ("do", "does"), ("go", "goes"),
 ];
 
+/// Regular past tense as (base, past): +ed / +d (after e) / y->ied. Excludes
+/// verbs with an irregular past (write, read), which live in IRREGULAR_PAST.
+pub const REG_VERBS_PAST: &[(&str, &str)] = &[
+    ("walk", "walked"), ("answer", "answered"), ("describe", "described"),
+    ("explain", "explained"), ("help", "helped"), ("open", "opened"),
+    ("need", "needed"), ("call", "called"), ("move", "moved"), ("turn", "turned"),
+    ("pour", "poured"), ("kick", "kicked"), ("watch", "watched"), ("wash", "washed"),
+    ("fix", "fixed"), ("push", "pushed"), ("pass", "passed"), ("toss", "tossed"),
+    ("carry", "carried"), ("study", "studied"), ("copy", "copied"), ("try", "tried"),
+    ("reply", "replied"), ("bury", "buried"),
+];
+
+/// Irregular past — unpredictable forms no rule recovers (stored as a lexicon).
+pub const IRREGULAR_PAST: &[(&str, &str)] = &[
+    ("write", "wrote"), ("read", "read"), ("go", "went"), ("do", "did"),
+    ("have", "had"), ("be", "was"),
+];
+
 /// Sentinel returned by the irregular lexicon for a regular verb ("not
 /// irregular — apply the rule"). Picked so no real 3sg form collides with it.
 const REGULAR_SENTINEL: &str = "-";
@@ -234,6 +252,22 @@ fn irregular_3sg_program() -> (String, String) {
     synth("irregular_3sg", "fn irregular_3sg(s: string) -> string", ex)
 }
 
+/// Regular past as a suffix-transduction rule (+ed / +d / y->ied).
+fn regular_past_program() -> (String, String) {
+    let ex = REG_VERBS_PAST.iter().map(|(b, t)| ex_str_str(b, t)).collect();
+    synth("regular_past", "fn regular_past(s: string) -> string", ex)
+}
+
+/// Irregular past as a whole-word lexicon (write->wrote, read->read, go->went...);
+/// regular verbs map to the sentinel so the rule handles them.
+fn irregular_past_program() -> (String, String) {
+    let mut ex: Vec<Example> = IRREGULAR_PAST.iter().map(|(b, t)| ex_str_str(b, t)).collect();
+    for (b, _) in REG_VERBS_PAST {
+        ex.push(ex_str_str(b, REGULAR_SENTINEL));
+    }
+    synth("irregular_past", "fn irregular_past(s: string) -> string", ex)
+}
+
 fn prop_id_program() -> (String, String) {
     let mut clauses = BTreeSet::new();
     for (a, b) in PROP_PAIRS {
@@ -336,23 +370,30 @@ impl Engine {
         let (ag, ag_m) = valid_agreement_program();
         let (reg, reg_m) = regular_3sg_program();
         let (irr, irr_m) = irregular_3sg_program();
+        let (rpast, rpast_m) = regular_past_program();
+        let (ipast, ipast_m) = irregular_past_program();
         let (pid, pid_m) = prop_id_program();
         let (neg, neg_m) = has_negation_program();
         let (arg, arg_m) = valid_argument_program();
-        // Compose 3sg inflection: irregular lexicon first, regular rule otherwise.
+        // Compose 3sg + past inflection: irregular lexicon first, regular rule otherwise.
         let verb_3sg_wrapper = format!(
             "fn verb_3sg(s: string) -> string {{\n    irr := irregular_3sg(s);\n    \
              if irr == \"{REGULAR_SENTINEL}\" {{ return regular_3sg(s); }}\n    return irr;\n}}\n"
         );
+        let verb_past_wrapper = format!(
+            "fn verb_past(s: string) -> string {{\n    irr := irregular_past(s);\n    \
+             if irr == \"{REGULAR_SENTINEL}\" {{ return regular_past(s); }}\n    return irr;\n}}\n"
+        );
         let program = format!(
-            "{na}\n{vr}\n{es}\n{ag}\n{reg}\n{irr}\n{pid}\n{neg}\n{arg}\n{WRAPPERS}\n{verb_3sg_wrapper}"
+            "{na}\n{vr}\n{es}\n{ag}\n{reg}\n{irr}\n{rpast}\n{ipast}\n{pid}\n{neg}\n{arg}\n{WRAPPERS}\n{verb_3sg_wrapper}\n{verb_past_wrapper}"
         );
         Engine {
             program,
             methods: vec![
                 ("noun_animacy", na_m), ("valid_roles", vr_m), ("ends_s", es_m),
                 ("valid_agreement", ag_m), ("regular_3sg", reg_m),
-                ("irregular_3sg", irr_m), ("prop_id", pid_m),
+                ("irregular_3sg", irr_m), ("regular_past", rpast_m),
+                ("irregular_past", ipast_m), ("prop_id", pid_m),
                 ("has_negation", neg_m), ("valid_argument", arg_m),
             ],
         }
@@ -398,6 +439,12 @@ impl Engine {
     /// Third-person-singular form of a verb base.
     pub fn verb_3sg(&self, base: &str) -> String {
         let v = self.call_str(&format!("verb_3sg({})", esc(base)));
+        if v.is_empty() { base.to_string() } else { v }
+    }
+
+    /// Past-tense form of a verb base (regular rule + irregular lexicon).
+    pub fn verb_past(&self, base: &str) -> String {
+        let v = self.call_str(&format!("verb_past({})", esc(base)));
         if v.is_empty() { base.to_string() } else { v }
     }
 
