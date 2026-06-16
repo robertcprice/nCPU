@@ -148,8 +148,14 @@ default-to-fail probe):
 - factive `know P ⊨ P`, non-factive `believe P ⊭ P`
 - negation scope: `not every X P` (wide) ≠ `every X does not P` (narrow)
 - comparison transitive **and** asymmetric; cardinal "at least N" monotone
-- *(Phase D, in progress)* modus ponens/tollens over stated `if P then Q`, with the
-  classic fallacies (affirming the consequent, denying the antecedent) **refused**
+- **modus ponens / tollens** over a stated `if P then Q` (with a named proof chain),
+  and the classic fallacies — affirming the consequent, denying the antecedent —
+  are **refused** (both answer "I don't know", never yes/no)
+- **belief revision**: on an F-vs-¬F clash the world resolves to *one* coherent
+  belief (a direct assertion outranks a derived one; two direct → most-recent-wins;
+  the superseded belief is retracted and recorded). The store never holds F and ¬F
+  both true; revision only ever moves from incoherent to coherent. See
+  `mind.revisions()`.
 
 ---
 
@@ -251,26 +257,27 @@ on acceptance.
 | `store.rs` | persistent learned components; reload **+ re-gate** on boot; `members` field carries the verified domain so cross-run answers stay sound. |
 | `extend.rs` | `self_extend` — the synthesize→gate→journal→persist funnel; `detect_gap`/`propose_curriculum`/`study` types. |
 
-Plus `tests/soundness_fuzz.rs`: a deterministic seeded fuzzer over random small
-worlds asserting three properties — asserted-fact recall, negation-consistency,
-no-spurious-entailment — **0 violations** over 240 iterations. *(Phase D adds a
-metamorphic paraphrase-invariance fuzzer: active⟺passive and comparative-converse
-phrasings must agree.)*
+Plus two property-based fuzzers (deterministic, seeded LCG, no `rand`):
+- `tests/soundness_fuzz.rs` — 240 random small worlds asserting asserted-fact
+  recall, negation-consistency, no-spurious-entailment. **0 violations.**
+- `tests/metamorphic_fuzz.rs` — 180 worlds asserting **paraphrase invariance**:
+  active⟺passive and comparative-converse phrasings get the *same* verdict.
+  **0 disagreements.**
 
 ---
 
 ## 7. How it performs (verified)
 
-Measured at **f8bdcd6** (Phase C; `cargo test --release`, store disabled):
+Measured at **3b83ad4** (Phase D; `cargo test --release`, store disabled):
 
 | Suite | Result | What it covers |
 |---|---|---|
-| `understanding` lib | **283 / 0** | parser, world model, inference, qa, discourse, mind, proofs, reflection |
+| `understanding` lib | **296 / 0** | parser, world model, inference, qa, discourse, mind, proofs, reflection, conditionals, belief revision |
 | `self_improve` lib | **21 / 0** | gate (incl. discrimination + shadow-rejection), journal, store reload/poison, extend |
 | `comprehension` lib | **6 / 0** | engine + curriculum + learned-classifier |
 | `eval` (FraCaS-style) | **7 / 0** | the entailment benchmark + feedback loop |
 | `adversarial_*` | **57 / 0** (11 suites) | soundness traps: quantifier scope, comparatives, factivity, cardinality, ditransitive, attributes, change-your-mind, explain-self, hypothetical isolation, journal, semantics |
-| `soundness_fuzz` | **240 iters / 0 violations** | property-based soundness |
+| `soundness_fuzz` / `metamorphic_fuzz` | **240 + 180 iters / 0 violations** | property-based soundness + paraphrase invariance |
 
 **Entailment benchmark** (`comprehend bench`) — 40 in-vocabulary cases across 9
 FraCaS phenomena (quantifiers, comparatives, attitudes, negation, temporal,
@@ -297,8 +304,9 @@ measurably improve.*
 | `c1cc09a` | **autonomy spine** — persistence (reload + re-gate), auto gap detection, self-curriculum, `study` loop, provenance |
 | `0cbd296` | **external validation** — FraCaS-style benchmark + dashboard + bench→study feedback |
 | `f8bdcd6` | **functional integration + breadth** — learned classifiers drive parsing/answering (domain-bounded), relative-clause questions, possessives, PPs; the loop bites |
-| *(in progress)* | **D** — conditional/syllogistic reasoning + belief revision + metamorphic fuzzer |
-| *(planned)* | **E** — the grammar frontier: parse rules themselves as learned, verified programs |
+| `3b83ad4` | **D** — conditional/syllogistic reasoning (modus ponens/tollens, fallacies refused) + actionable belief revision + metamorphic paraphrase fuzzer |
+| *(in progress)* | **E** — the grammar frontier: parse rules themselves as learned, verified programs (object-fronting demonstrated) |
+| *(greenlit)* | **F** hybrid LLM verifier · **G** open-vocabulary at scale · **H** generation |
 
 ---
 
@@ -306,9 +314,11 @@ measurably improve.*
 
 - **Self-extension is bounded to specifiable families** (lexicons / membership
   classifiers). The system can teach itself a new *concept classifier* from
-  examples; it cannot yet teach itself a new *grammatical construction* — the
-  parser (`semantics.rs`) is hand-written Rust. Making grammar rules themselves
-  synthesizable is the **Phase E frontier**.
+  examples; teaching itself a new *grammatical construction* — parse rules as
+  synthesized, verified programs — is the **Phase E frontier, now in progress**
+  (object-fronting / OSV is the first demonstrated learned construction). The base
+  parser (`semantics.rs`) remains hand-written; learned constructions are consulted
+  as a fallback when it returns Unknown, so they only ever *fill gaps*.
 - **Learned classifiers answer within their verified domain.** This is a soundness
   choice, not a bug: beyond the proven examples the answer is honestly `idk`.
 - **The benchmark is in-vocabulary.** It measures *sound coverage* of the 9
