@@ -21,6 +21,8 @@ use crate::benchmark::Example;
 use crate::comprehension::Engine;
 use crate::self_improve::gate::regression_gate;
 use crate::self_improve::journal::{self, JournalEntry};
+use crate::self_improve::store::{self, StoredComponent};
+use crate::solved_cache::examples_fingerprint;
 
 /// A request to close an observed gap by learning a new component.
 ///
@@ -54,6 +56,58 @@ pub struct LearnReport {
     pub regression_passed: bool,
     pub accepted: bool,
     pub message: String,
+}
+
+/// What KIND of gap the mind detected — what sort of thing it could not handle.
+///
+/// This classification drives which curriculum a later phase will propose to
+/// close the gap (e.g. a [`Lexical`](GapKind::Lexical) gap mines a string→class
+/// lexicon; a [`Structural`](GapKind::Structural) gap mines a parsing/transduction
+/// rule; an [`Inferential`](GapKind::Inferential) gap mines a reasoning rule). The
+/// scaffold defines the taxonomy; the detection + routing logic lands next phase.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GapKind {
+    /// An unknown WORD: the lexicons carry no class/animacy/etc. for a surface
+    /// token (e.g. a noun or verb the engine has never been taught).
+    Lexical,
+    /// An unparseable STRUCTURE: the surface form is understood word-by-word but
+    /// the construction (a clause shape, an inflection pattern) is not recovered.
+    Structural,
+    /// A missing INFERENCE: every word/structure parses, but the mind cannot
+    /// derive the answer because a reasoning rule it would need is absent.
+    Inferential,
+}
+
+/// One observed gap — something the mind read but could not fully handle.
+///
+/// * `kind` — the [`GapKind`] classifying what sort of capability is missing.
+/// * `surface` — the specific surface fragment that triggered the gap (the
+///   unknown word, the unparsed clause, the underivable proposition).
+/// * `context` — the surrounding input the gap was observed in, kept so a later
+///   phase can mine characterizing examples from real usage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gap {
+    pub kind: GapKind,
+    pub surface: String,
+    pub context: String,
+}
+
+/// The outcome of a [`study`](crate::understanding::mind::Mind::study) session —
+/// a self-directed loop that reads a corpus, detects gaps, proposes curricula,
+/// and folds in every verified + gated component.
+///
+/// * `rounds` — how many study rounds were run.
+/// * `learned` — the names of the components actually adopted (synthesized AND
+///   gated AND accepted), in adoption order.
+/// * `attempted` — how many self-extension attempts were made across all rounds.
+/// * `rejected` — how many attempts were rejected (synthesis failed, or the gate
+///   went red). `attempted == learned.len() + rejected` holds by construction.
+#[derive(Clone, Debug)]
+pub struct StudyReport {
+    pub rounds: usize,
+    pub learned: Vec<String>,
+    pub attempted: usize,
+    pub rejected: usize,
 }
 
 /// Attempt to extend `engine` to close the gap described by `req`.
@@ -173,8 +227,34 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
         note: message,
     });
 
-    // --- 4. RETURN --------------------------------------------------------
+    // --- 4. PERSIST (accepted only) + RETURN ------------------------------
     if passed_gate {
+        // Durably record the accepted component so a later run can re-graft it
+        // (gated again) into a fresh engine — cross-run compounding memory. The
+        // grafted source is exactly the suffix `try_extend` appended to the base
+        // program (`"\n" + result.code`), recovered by slicing the candidate's
+        // program after the original engine's program. Slicing the suffix (rather
+        // than brace-matching the function out) reproduces the synthesized bytes
+        // verbatim. Persistence is best-effort: `store::save_one` swallows I/O
+        // errors and is a no-op when the store is disabled, so a store failure
+        // never blocks adoption (the component is already live on `candidate`).
+        let base_len = engine.program().len();
+        let code = candidate
+            .program()
+            .get(base_len..)
+            .map(|s| s.trim_start_matches('\n').to_string())
+            .unwrap_or_default();
+        if !code.is_empty() {
+            store::save_one(&StoredComponent {
+                name: req.name.clone(),
+                signature: req.signature.to_string(),
+                code,
+                // `method` was moved into the JournalEntry above; the report holds
+                // an equivalent clone, so read the provenance back from there.
+                method: report.method.clone(),
+                examples_fingerprint: examples_fingerprint(&req.examples),
+            });
+        }
         (Some(candidate), report)
     } else {
         // The candidate is discarded; `engine` stays the live engine.

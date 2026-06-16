@@ -33,3 +33,4 @@
 pub mod extend;
 pub mod gate;
 pub mod journal;
+pub mod store;

@@ -42,9 +42,20 @@ fn str_ex(s: &str, v: i64) -> Example {
 /// the duration of `f`, then restore the env and remove the file. The lock is
 /// held for the WHOLE closure so no sibling test can interleave its own env
 /// mutation while this one is recording/reading.
+///
+/// It ALSO disables the sibling learned-component store (empty
+/// `NCPU_COMPONENTS_PATH`) for the closure's duration: `self_extend` now PERSISTS
+/// every ACCEPTED component, so without this an accepted `creature_class` here
+/// would leak into the developer's real `$HOME` store — and a later
+/// `Engine::new()` (in this binary OR another adversarial binary cargo runs after
+/// it) would reload it, breaking unrelated "component is genuinely absent" /
+/// "explain_self refuses for an unknown topic" preconditions. The prior
+/// `NCPU_COMPONENTS_PATH` value is restored on exit. This test only exercises the
+/// JOURNAL, so disabling the store entirely is exactly the right fence.
 fn with_temp_journal<R>(f: impl FnOnce(&std::path::Path) -> R) -> R {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev = std::env::var("NCPU_JOURNAL_PATH").ok();
+    let prev_components = std::env::var("NCPU_COMPONENTS_PATH").ok();
     let path = std::env::temp_dir().join(format!(
         "ncpu_journal_adv_{}_{:?}.jsonl",
         std::process::id(),
@@ -52,11 +63,18 @@ fn with_temp_journal<R>(f: impl FnOnce(&std::path::Path) -> R) -> R {
     ));
     let _ = std::fs::remove_file(&path);
     std::env::set_var("NCPU_JOURNAL_PATH", &path);
+    // Disable the learned-component store so an accepted extension never writes
+    // to the real $HOME store (this test asserts only on the journal).
+    std::env::set_var("NCPU_COMPONENTS_PATH", "");
     let out = f(&path);
     let _ = std::fs::remove_file(&path);
     match prev {
         Some(v) => std::env::set_var("NCPU_JOURNAL_PATH", v),
         None => std::env::remove_var("NCPU_JOURNAL_PATH"),
+    }
+    match prev_components {
+        Some(v) => std::env::set_var("NCPU_COMPONENTS_PATH", v),
+        None => std::env::remove_var("NCPU_COMPONENTS_PATH"),
     }
     out
 }
@@ -71,6 +89,18 @@ fn find_by_gap<'a>(entries: &'a [JournalEntry], gap: &str) -> &'a JournalEntry {
 #[test]
 fn every_attempt_accepted_and_rejected_is_journaled() {
     with_temp_journal(|path| {
+        // GUARD (do-not-pollute-the-real-store): the components store MUST be
+        // disabled for this test, because the accepted extension below persists.
+        // If a future edit drops the `NCPU_COMPONENTS_PATH=""` fence in
+        // `with_temp_journal`, this fails loudly instead of silently writing
+        // `creature_class` into the developer's real `$HOME` store (which used to
+        // cause a flaky cross-binary failure in `adversarial_explain_self`).
+        assert_eq!(
+            std::env::var("NCPU_COMPONENTS_PATH").as_deref(),
+            Ok(""),
+            "the learned-component store MUST be disabled (empty NCPU_COMPONENTS_PATH) \
+             so this journal test never persists a component to the real $HOME store"
+        );
         // Precondition: nothing journaled yet — the file does not exist.
         assert!(!path.exists(), "temp journal must start absent");
         assert!(
@@ -231,7 +261,13 @@ fn empty_env_disables_the_loop_journal() {
     // Hold the same lock so this never races the main test's env mutation.
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev = std::env::var("NCPU_JOURNAL_PATH").ok();
+    let prev_components = std::env::var("NCPU_COMPONENTS_PATH").ok();
     std::env::set_var("NCPU_JOURNAL_PATH", "");
+    // ALSO disable the learned-component store: the control extension below is
+    // ACCEPTED (it synthesizes + gates), and `self_extend` persists accepted
+    // components — without this fence the control would leak `creature_class` into
+    // the real $HOME store, the very thing CI must never do.
+    std::env::set_var("NCPU_COMPONENTS_PATH", "");
     let engine = Engine::new();
     let req = LearnRequest {
         gap: "control: should never be journaled".to_string(),
@@ -248,5 +284,9 @@ fn empty_env_disables_the_loop_journal() {
     match prev {
         Some(v) => std::env::set_var("NCPU_JOURNAL_PATH", v),
         None => std::env::remove_var("NCPU_JOURNAL_PATH"),
+    }
+    match prev_components {
+        Some(v) => std::env::set_var("NCPU_COMPONENTS_PATH", v),
+        None => std::env::remove_var("NCPU_COMPONENTS_PATH"),
     }
 }

@@ -4,7 +4,7 @@
 //! verified Mog programs and executes them in-process. No Python, no subprocess.
 //! The same engine is exposed to C via `mog_synth::ffi`.
 //!
-//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|all]
+//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|study|all]
 //! (the solver logs to stderr; pipe 2>/dev/null for clean output)
 //!
 //! The `grow` subcommand showcases the self-improvement loop: a
@@ -13,6 +13,15 @@
 //! from curriculum-mined examples, runs it through its own regression gate, and
 //! adopts it only on a green gate — then shows a rejected attempt safely declined
 //! with the base engine intact, and reads back the append-only journal.
+//!
+//! The `study` subcommand showcases CUMULATIVE, RESTART-SURVIVING autonomy on top
+//! of `grow`: Mind #1 studies a corpus, autonomously detects + synthesizes +
+//! gates + KEEPS the missing component and PERSISTS it to a durable store; a
+//! brand-new Mind #2 (a fresh `Engine::new`, the "restart") then BOOTS WITH that
+//! learned component already present (re-gated green) WITHOUT re-studying; a
+//! corrupted store row is rejected on boot; and `explain_self` marks the reloaded
+//! component as self-learned. It points `NCPU_COMPONENTS_PATH` / `NCPU_JOURNAL_PATH`
+//! at fresh temp files (cleared first) so it never touches the developer's store.
 //!
 //! The `reflect` subcommand showcases the metacognition layer: a stateful
 //! [`Mind`](mog_synth::understanding::mind::Mind) reads a short passage, then
@@ -928,13 +937,17 @@ fn demo_grow() {
 
     // Make the demo SELF-CONTAINED: point the reflection journal at a fresh temp
     // file so we can read our own attempts back without touching the developer's
-    // $HOME journal. Cleaned up at the end.
+    // $HOME journal, and DISABLE the learned-component store entirely (empty
+    // NCPU_COMPONENTS_PATH) so the in-process growth this demo shows never writes
+    // to the real $HOME store. (Cross-run PERSISTENCE is the `study` demo's job;
+    // `grow` only shows a single mind growing in-process.) Cleaned up at the end.
     let journal_path = std::env::temp_dir().join(format!("ncpu_grow_demo_{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&journal_path);
     // SAFETY: this binary is single-threaded; we set the env once at the top of
     // the demo and restore/clear it at the end.
     unsafe {
         std::env::set_var("NCPU_JOURNAL_PATH", &journal_path);
+        std::env::set_var("NCPU_COMPONENTS_PATH", "");
     }
 
     println!("nCPU growing — a Mind notices a gap in what it can classify, SYNTHESIZES the");
@@ -1068,11 +1081,255 @@ fn demo_grow() {
     let _ = std::fs::remove_file(&journal_path);
     unsafe {
         std::env::remove_var("NCPU_JOURNAL_PATH");
+        std::env::remove_var("NCPU_COMPONENTS_PATH");
     }
+}
+
+// ===========================================================================
+// study: CUMULATIVE, RESTART-SURVIVING autonomy — the whole point of the
+// learned-component store. Where `grow` shows ONE mind growing in-process,
+// `study` proves the growth PERSISTS across a process restart and COMPOUNDS:
+//
+//   (a) Mind #1 STUDIES a small corpus containing sentences it cannot handle
+//       (mythical creatures), autonomously detecting the gap -> synthesizing the
+//       missing component -> gating it -> KEEPING it (gate green) -> PERSISTING
+//       it to a durable store. We print the StudyReport, which component it
+//       learned, and that its self_check stayed green (monotone growth).
+//
+//   (b) A BRAND-NEW Mind #2 (a fresh Engine::new, the "restart") is pointed at
+//       the SAME store and BOOTS WITH the learned component already present —
+//       has_component is true and the component evaluates correctly — WITHOUT
+//       studying anything. This is cross-run cumulative growth: the discovery
+//       survived the "restart".
+//
+//   (c) A CORRUPTED store entry (a poisoned override that would regress a golden
+//       case) is REJECTED on boot — a third fresh mind re-gates every reloaded
+//       row and declines the bad one, staying sound.
+//
+//   (d) explain_self marks the reloaded component as SELF-LEARNED (not part of
+//       the base curriculum), quoting the actual synthesized Mog source.
+//
+// SELF-CONTAINED: we point NCPU_COMPONENTS_PATH and NCPU_JOURNAL_PATH at fresh
+// temp files and CLEAR them first, so the demo never reads or writes the
+// developer's real $HOME store/journal, and cleans both up at the end.
+// ===========================================================================
+fn demo_study() {
+    use mog_synth::self_improve::store::{self, StoredComponent};
+    use mog_synth::understanding::mind::Mind;
+
+    // --- SELF-CONTAINED ENV: fresh temp store + journal, cleared first. --------
+    let pid = std::process::id();
+    let store_path = std::env::temp_dir().join(format!("ncpu_study_demo_components_{pid}.jsonl"));
+    let journal_path = std::env::temp_dir().join(format!("ncpu_study_demo_journal_{pid}.jsonl"));
+    let _ = std::fs::remove_file(&store_path);
+    let _ = std::fs::remove_file(&journal_path);
+    // SAFETY: this binary is single-threaded; we set the env once at the top of
+    // the demo and restore/clear it at the end.
+    unsafe {
+        std::env::set_var("NCPU_COMPONENTS_PATH", &store_path);
+        std::env::set_var("NCPU_JOURNAL_PATH", &journal_path);
+    }
+    // Belt-and-suspenders: clear the (just-pointed-at) store so Mind #1 starts
+    // from genuinely zero learned memory even if a stale temp file lingered.
+    store::clear();
+
+    println!("nCPU studying — CUMULATIVE, RESTART-SURVIVING autonomy. A mind reads a corpus");
+    println!("with creatures it cannot classify, autonomously detects the gap, synthesizes +");
+    println!("gates + KEEPS the missing component, and PERSISTS it. A brand-new mind (a fresh");
+    println!("restart) then BOOTS WITH that learned component already present — no re-study —");
+    println!("proving the discovery compounds across runs. A corrupted store row is rejected on");
+    println!("boot, and the reloaded component is marked self-learned.\n");
+    println!("     store   : {}", store_path.display());
+    println!("     journal : {}\n", journal_path.display());
+
+    // -----------------------------------------------------------------------
+    // (a) MIND #1 STUDIES — detect the gap, synthesize, gate, keep, persist.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (a) Mind #1 studies a corpus with creatures it cannot classify");
+    println!("  {}", "=".repeat(72));
+
+    // A corpus mixing sentences the base curriculum handles with sentences that
+    // mention mythical creatures the lexicon has never been taught. The unknown
+    // creature words are the LEXICAL gaps `study` will autonomously close.
+    let corpus = [
+        "the teacher writes the report",
+        "the dragon guards the report",
+        "the griffin carries the letter",
+        "the phoenix burns the book",
+    ];
+    println!("     corpus:");
+    for s in corpus {
+        println!("       - \"{s}\"");
+    }
+
+    let mut mind1 = Mind::new();
+    // Before studying: the creature words are unknown and the component is absent.
+    println!(
+        "\n     before study: knows_word(\"dragon\") = {}, has_component(\"creature_class\") = {}",
+        mind1.knows_word("dragon"),
+        mind1.engine().has_component("creature_class")
+    );
+    println!(
+        "     before study: self_check().ok() = {}\n",
+        mind1.self_check().ok()
+    );
+
+    let report = mind1.study(&corpus, /*max_rounds=*/ 4);
+    println!("     StudyReport:");
+    println!("       rounds   : {}", report.rounds);
+    println!("       attempted: {}", report.attempted);
+    println!("       rejected : {}", report.rejected);
+    println!("       learned  : {:?}", report.learned);
+    println!(
+        "       invariant: attempted == learned + rejected -> {}",
+        report.attempted == report.learned.len() + report.rejected
+    );
+    println!(
+        "\n     after study: learned_components = {:?}",
+        mind1.learned_components()
+    );
+    println!(
+        "     after study: has_component(\"creature_class\") = {}",
+        mind1.engine().has_component("creature_class")
+    );
+    let probes = ["dragon", "griffin", "phoenix", "report", "teacher"];
+    for w in probes {
+        let v = mind1.engine().eval_int(&format!("creature_class(\"{w}\")"));
+        let tag = if v == 1 { "creature   " } else { "not creature" };
+        println!("       creature_class({w:<8}) = {v}  ({tag})");
+    }
+    println!(
+        "     after study: self_check().ok() = {}   (stayed GREEN — growth was monotone)",
+        mind1.self_check().ok()
+    );
+
+    // The accepted component is now durably on disk (self_extend persisted it).
+    let persisted = store::load();
+    println!(
+        "\n     PERSISTED to the store: {} component(s) -> {:?}",
+        persisted.len(),
+        persisted.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+    );
+
+    // -----------------------------------------------------------------------
+    // (b) MIND #2 — a fresh restart BOOTS WITH the learned component, no study.
+    // -----------------------------------------------------------------------
+    println!("\n  {}", "=".repeat(72));
+    println!("  (b) Mind #2 — a brand-new Engine::new() on the SAME store (a \"restart\")");
+    println!("  {}", "=".repeat(72));
+    println!("     Building a fresh Mind (Engine::new reloads + RE-GATES the store)...");
+    let mind2 = Mind::new(); // fresh Engine::new() — the "restart"
+    println!(
+        "     Mind #2 has_component(\"creature_class\") = {}   (reloaded from the store!)",
+        mind2.engine().has_component("creature_class")
+    );
+    for w in ["dragon", "wyvern", "report"] {
+        let v = mind2.engine().eval_int(&format!("creature_class(\"{w}\")"));
+        let tag = if v == 1 { "creature   " } else { "not creature" };
+        println!("       creature_class({w:<8}) = {v}  ({tag})");
+    }
+    println!(
+        "     Mind #2 learned_components = {:?}   (knew it WITHOUT studying)",
+        mind2.learned_components()
+    );
+    println!(
+        "     Mind #2 self_check().ok() = {}   (the reloaded component re-gated green)",
+        mind2.self_check().ok()
+    );
+    println!("     => CUMULATIVE: the discovery SURVIVED the restart and compounds across runs.");
+
+    // -----------------------------------------------------------------------
+    // (c) A CORRUPTED store entry is REJECTED on boot — the engine stays sound.
+    // -----------------------------------------------------------------------
+    println!("\n  {}", "=".repeat(72));
+    println!("  (c) a corrupted store row is rejected on boot — soundness preserved");
+    println!("  {}", "=".repeat(72));
+    // Inject a POISONED override of the animacy lexicon: it misclassifies the
+    // taxonomy agents as inanimate, which would break "Is the teacher a person?".
+    // Grafted naively it shadows the real lexicon (later def wins), so a fresh
+    // boot MUST re-gate it, find the golden-case regression, and decline it.
+    let poison_code = "\
+fn noun_animacy(s: string) -> i64 {\n\
+    if s == \"teacher\" { return 2; }\n\
+    if s == \"editor\" { return 2; }\n\
+    if s == \"author\" { return 2; }\n\
+    if s == \"student\" { return 2; }\n\
+    return 0;\n\
+}\n";
+    store::save_one(&StoredComponent {
+        name: "noun_animacy".to_string(),
+        signature: "fn noun_animacy(s: string) -> i64".to_string(),
+        code: poison_code.to_string(),
+        method: "poisoned".to_string(),
+        examples_fingerprint: "fp-poison".to_string(),
+    });
+    println!(
+        "     Injected a poisoned `noun_animacy` override into the store ({} rows now).",
+        store::load().len()
+    );
+    println!("     (Watch for a `[components-store] reject ...` line on stderr below.)");
+    let mind3 = Mind::new(); // fresh boot over the now-poisoned store
+    println!(
+        "     Mind #3 noun_class(\"teacher\") = {}   (1 = animate — base intact, NOT poisoned to 2)",
+        mind3.engine().noun_class("teacher")
+    );
+    println!(
+        "     Mind #3 is_person(\"teacher\") = {}   (still answers the taxonomy correctly)",
+        mind3.engine().is_person("teacher")
+    );
+    println!(
+        "     Mind #3 self_check().ok() = {}   (poisoned row REJECTED — engine stays sound)",
+        mind3.self_check().ok()
+    );
+    println!(
+        "     Mind #3 still has the GOOD component: has_component(\"creature_class\") = {}",
+        mind3.engine().has_component("creature_class")
+    );
+
+    // -----------------------------------------------------------------------
+    // (d) explain_self marks the reloaded component as SELF-LEARNED.
+    // -----------------------------------------------------------------------
+    println!("\n  {}", "=".repeat(72));
+    println!("  (d) explain_self — the reloaded component is marked self-learned");
+    println!("  {}", "=".repeat(72));
+    println!("{}", indent(&mind2.explain_self("creature_class"), "     "));
+
+    println!("\nThe mind's self-taught knowledge COMPOUNDED across a restart: Mind #1 detected a");
+    println!("gap, synthesized + gated + persisted `creature_class`, and a brand-new Mind #2");
+    println!("booted WITH it already present and re-gated green — no re-study. A corrupted store");
+    println!("row was rejected on boot, and the component is correctly marked self-learned.");
+
+    // Clean up the temp store + journal + restore env so the demo leaves no trace.
+    let _ = std::fs::remove_file(&store_path);
+    let _ = std::fs::remove_file(&journal_path);
+    unsafe {
+        std::env::remove_var("NCPU_COMPONENTS_PATH");
+        std::env::remove_var("NCPU_JOURNAL_PATH");
+    }
+}
+
+/// Indent every line of `text` with `prefix` — for embedding multi-line
+/// `explain_self` output under a demo section header.
+fn indent(text: &str, prefix: &str) -> String {
+    text.lines()
+        .map(|l| if l.is_empty() { String::new() } else { format!("{prefix}{l}") })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
+    // The autonomy demos (`reflect`, `grow`, `study`) build their OWN minds under
+    // their own fenced env, so they don't need — and `study` must not be slowed or
+    // perturbed by — the shared top-level engine. Build it only for the modes that
+    // actually use it.
+    match mode.as_str() {
+        "reflect" => return demo_reflect(),
+        "grow" => return demo_grow(),
+        "study" => return demo_study(),
+        _ => {}
+    }
     eprintln!("[building comprehension engine — synthesizing verified programs...]");
     let engine = Engine::new();
     match mode.as_str() {
@@ -1081,8 +1338,6 @@ fn main() {
         "reason" => demo_reason(&engine),
         "inflect" => demo_inflect(&engine),
         "understand" => demo_understand(&engine),
-        "reflect" => demo_reflect(),
-        "grow" => demo_grow(),
         _ => {
             demo_comprehend(&engine);
             println!("\n{}\n", "=".repeat(72));
@@ -1097,6 +1352,8 @@ fn main() {
             demo_reflect();
             println!("\n{}\n", "=".repeat(72));
             demo_grow();
+            println!("\n{}\n", "=".repeat(72));
+            demo_study();
         }
     }
 }

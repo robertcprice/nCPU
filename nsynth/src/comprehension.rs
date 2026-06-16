@@ -483,8 +483,33 @@ impl Default for Engine {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reload reentrancy guard.
+//
+// `Engine::new()` reloads persisted components and RE-GATES each one. The gate
+// (`crate::self_improve::gate::regression_gate`) builds fresh `Discourse`s but
+// runs them against the candidate engine it is HANDED — it never calls
+// `Engine::new()`. So the production path does not recurse. This thread-local is
+// a belt-and-suspenders guard: if any future change ever caused the reload path
+// (directly or via the gate) to re-enter `Engine::new()`, the inner call would
+// observe `RELOADING == true` and skip the reload entirely, building only the
+// base engine. That guarantees termination no matter how the call graph evolves
+// — the worst case degrades to "no reload", never an infinite loop or stack
+// overflow.
+// ---------------------------------------------------------------------------
+thread_local! {
+    static RELOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl Engine {
-    pub fn new() -> Self {
+    /// Build the BASE engine: synthesize + compose the 11 built-in components and
+    /// the wrappers, with **no** reload of any persisted learned component.
+    ///
+    /// This is the recursion-safe core of construction. The gate path and the
+    /// reload path both need a base engine to graft onto WITHOUT triggering
+    /// another reload (which would recurse), so the base build is factored out
+    /// here and [`new`](Self::new) layers the reload on top.
+    pub fn new_base() -> Self {
         let (na, na_m) = noun_animacy_program();
         let (vr, vr_m) = valid_roles_program();
         let (es, es_m) = ends_s_program();
@@ -518,6 +543,74 @@ impl Engine {
                 ("has_negation", neg_m), ("valid_argument", arg_m),
             ],
         }
+    }
+
+    /// Build the engine and **reload every persisted learned component, safely**.
+    ///
+    /// After composing the base engine ([`new_base`](Self::new_base)), this
+    /// re-grafts each [`StoredComponent`](crate::self_improve::store::StoredComponent)
+    /// the system has previously taught itself — but only after RE-GATING it
+    /// against the *current* golden battery + soundness oracle. The reload is the
+    /// cross-run memory that closes the gap left by rebuilding from scratch every
+    /// process start; the re-gate is what keeps that memory from poisoning a fresh
+    /// boot.
+    ///
+    /// For each stored component, in load order:
+    ///   1. Graft it onto a candidate clone (append `code`, push `(name, method)`)
+    ///      via [`graft_raw`](Self::graft_raw). The grafted source is the verbatim
+    ///      synthesized program that was accepted on a prior run.
+    ///   2. Run the candidate through
+    ///      [`regression_gate`](crate::self_improve::gate::regression_gate). Accept
+    ///      the component into the live engine **only** if the gate is green —
+    ///      exactly the `self_extend` acceptance rule. A stale, poisoned, or
+    ///      now-incompatible store entry (e.g. one synthesized against an older base
+    ///      that has since changed) regresses a golden case or breaks soundness and
+    ///      is REJECTED, leaving the engine sound.
+    ///   3. Skipped (rejected) entries are logged via `eprintln!` — never fatal.
+    ///      A bad store row degrades to "that one component is not reloaded", not a
+    ///      construction failure.
+    ///
+    /// RECURSION SAFETY. The gate builds fresh `Discourse`s but runs them against
+    /// the candidate engine it is handed — it does **not** call `Engine::new()`, so
+    /// the reload does not recurse through the gate. As an extra guard, the reload
+    /// is fenced by the [`RELOADING`] thread-local: a re-entrant `Engine::new()`
+    /// (should any future change introduce one) observes the flag set and falls
+    /// through to the base engine, guaranteeing termination. The accepted-so-far
+    /// engine is always the gate's input, so the gate only ever sees base +
+    /// already-accepted components — never a fresh `new()`.
+    pub fn new() -> Self {
+        let mut engine = Self::new_base();
+
+        // Reentrancy guard: if we are already inside a reload on this thread, do
+        // NOT reload again — return the base engine. This makes re-entry a no-op
+        // rather than unbounded recursion.
+        let already_reloading = RELOADING.with(|r| r.get());
+        if already_reloading {
+            return engine;
+        }
+        RELOADING.with(|r| r.set(true));
+
+        let stored = crate::self_improve::store::load();
+        for component in &stored {
+            // Graft the stored code onto a candidate clone and re-gate it.
+            let candidate = engine.graft_raw(component.name.as_str(), &component.code, &component.method);
+            let gate = crate::self_improve::gate::regression_gate(&candidate);
+            if gate.ok() {
+                // Accept: this becomes the new accepted-so-far engine. The NEXT
+                // stored component is grafted onto this, so the gate sees
+                // base + everything accepted so far (never a fresh new()).
+                engine = candidate;
+            } else {
+                eprintln!(
+                    "[components-store] reject reloaded component `{}` (method {}): \
+                     regression gate red ({}/{} golden cases, sound={}); skipping",
+                    component.name, component.method, gate.passed, gate.total, gate.sound
+                );
+            }
+        }
+
+        RELOADING.with(|r| r.set(false));
+        engine
     }
 
     fn call_int(&self, call: &str) -> i64 {
@@ -632,6 +725,36 @@ impl Engine {
     /// to add it again.
     pub fn has_component(&self, fn_name: &str) -> bool {
         self.program.contains(&format!("fn {fn_name}("))
+    }
+
+    /// Graft an ALREADY-synthesized component's raw Mog source onto a **clone**
+    /// of this engine — no synthesis, no verification of `code` against examples.
+    ///
+    /// This is the reload-path counterpart to [`try_extend`](Self::try_extend):
+    /// `try_extend` synthesizes a component from examples (and verifies it before
+    /// returning), whereas `graft_raw` splices in a component's *previously*
+    /// synthesized source verbatim — the bytes of a `StoredComponent.code` recorded
+    /// by [`crate::self_improve::store::save_one`] on a prior run. Because the
+    /// reloaded code is untrusted (it may have been synthesized against an older
+    /// base, or hand-tampered in the store file), the caller MUST run the returned
+    /// candidate through [`regression_gate`](crate::self_improve::gate::regression_gate)
+    /// and accept it only on a green gate — exactly what
+    /// [`new`](Self::new)'s reload step does.
+    ///
+    /// `self` is never mutated. The returned candidate is a cheap clone (String +
+    /// Vec memcpy) with `code` appended to its program and `(name, method)` pushed
+    /// onto its methods provenance. Like `try_extend`, the borrowed `name` is
+    /// leaked to `'static` so it can live in the `&'static str`-keyed `methods`
+    /// tuple for the engine's lifetime (grafted-component names are bounded by the
+    /// number of stored components, so this is a negligible, intentional leak).
+    pub fn graft_raw(&self, name: &str, code: &str, method: &str) -> Engine {
+        let mut candidate = self.clone();
+        candidate.program.push('\n');
+        candidate.program.push_str(code);
+        candidate
+            .methods
+            .push((Box::leak(name.to_string().into_boxed_str()), method.to_string()));
+        candidate
     }
 
     /// Attempt to graft a new verified component onto a **clone** of this engine.

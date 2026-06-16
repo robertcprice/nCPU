@@ -182,17 +182,36 @@ pub(crate) mod test_support {
     /// resolution). The prior env value is restored on exit. Returns `f`'s
     /// result. The lock is held for the WHOLE closure so no other env-mutating
     /// test can interleave.
+    ///
+    /// It ALSO neutralizes the sibling learned-component store by setting
+    /// `NCPU_COMPONENTS_PATH` empty (disabled) for the closure's duration —
+    /// otherwise a test that exercises `self_extend` (which now PERSISTS every
+    /// accepted component) would leak a learned component into the developer's
+    /// real `$HOME` store, and a later `Engine::new()` would reload it and break an
+    /// unrelated test's "component is genuinely absent" precondition. A caller that
+    /// needs a real component path (e.g. the study tests) simply re-sets
+    /// `NCPU_COMPONENTS_PATH` inside `f`; that override is honored and restored
+    /// here. The prior `NCPU_COMPONENTS_PATH` value is restored on exit too.
     pub(crate) fn with_journal_env<R>(value: &str, f: impl FnOnce() -> R) -> R {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var("NCPU_JOURNAL_PATH").ok();
+        let prev_components = std::env::var("NCPU_COMPONENTS_PATH").ok();
         // SAFETY: ENV_LOCK guarantees single-threaded access for the duration.
         unsafe {
             std::env::set_var("NCPU_JOURNAL_PATH", value);
+            // Disable the learned-component store by default so no test leaks a
+            // persisted component into the real `$HOME` store (callers needing a
+            // store re-set this inside `f`).
+            std::env::set_var("NCPU_COMPONENTS_PATH", "");
         }
         let result = f();
         match prev {
             Some(v) => unsafe { std::env::set_var("NCPU_JOURNAL_PATH", v) },
             None => unsafe { std::env::remove_var("NCPU_JOURNAL_PATH") },
+        }
+        match prev_components {
+            Some(v) => unsafe { std::env::set_var("NCPU_COMPONENTS_PATH", v) },
+            None => unsafe { std::env::remove_var("NCPU_COMPONENTS_PATH") },
         }
         result
     }

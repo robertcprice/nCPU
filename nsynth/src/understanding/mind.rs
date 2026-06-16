@@ -44,6 +44,27 @@ pub struct Mind {
     discourse: Discourse,
 }
 
+/// The eleven components every freshly-built [`Engine`] synthesizes in
+/// [`Engine::new`](crate::comprehension::Engine::new) — the base curriculum. Any
+/// component on the engine's `methods` list NOT in this set was learned AFTER
+/// construction by a self-extension (the autonomy spine grafting a new program
+/// onto itself). [`Mind::learned_components`] is exactly the set difference, and
+/// [`Mind::explain_self`] uses it to mark a component as self-learned vs. part of
+/// the base curriculum. Kept in lock-step with `Engine::new`'s `methods` vec.
+const BASE_METHODS: &[&str] = &[
+    "noun_animacy",
+    "valid_roles",
+    "ends_s",
+    "valid_agreement",
+    "regular_3sg",
+    "irregular_3sg",
+    "regular_past",
+    "irregular_past",
+    "prop_id",
+    "has_negation",
+    "valid_argument",
+];
+
 impl Default for Mind {
     fn default() -> Self {
         Self::new()
@@ -140,6 +161,26 @@ impl Mind {
         self.engine.noun_class(word) > 0
     }
 
+    /// Does the mind recognize `word` at all — either as a base-lexicon noun
+    /// ([`knows_word`](Self::knows_word)) OR as a positive member of some
+    /// SELF-LEARNED classifier (a `<x>_class` component the autonomy loop
+    /// synthesized and adopted)? This is the minimal gap-closure the study loop
+    /// needs to CONVERGE: once `study` learns `creature_class`, "dragon" is
+    /// recognized here, so [`detect_gap`](Self::detect_gap) stops flagging it and
+    /// a subsequent round goes dry. (Folding a learned class back into
+    /// `noun_animacy` itself — so it parses in every role — is a later
+    /// functional-integration phase; this is the sound, bounded version that makes
+    /// autonomous study terminate.)
+    pub fn recognizes_word(&self, word: &str) -> bool {
+        if self.knows_word(word) {
+            return true;
+        }
+        self.learned_components()
+            .iter()
+            .filter(|c| c.ends_with("_class"))
+            .any(|c| self.engine.eval_int(&format!("{c}(\"{word}\")")) == 1)
+    }
+
     /// The self-improvement LOOP, wired onto the mind: try to close the gap
     /// described by `req`, and on a *clean* acceptance REPLACE this mind's engine
     /// with the freshly grafted candidate.
@@ -165,9 +206,33 @@ impl Mind {
         // `report.accepted` — but taking the engine the substrate vetted keeps the
         // accept decision in one place.
         if let Some(new_engine) = candidate {
+            // `self_extend` has already JOURNALED the attempt AND PERSISTED the
+            // accepted component to the durable cross-run learned-component store
+            // (so the mind's self-taught knowledge compounds across runs, gated
+            // identically to the in-process graft). Here we only adopt the vetted
+            // engine, so the new component is live for every subsequent query.
             self.engine = new_engine;
         }
         report
+    }
+
+    /// The components this mind learned for ITSELF — every component on the
+    /// engine's `methods` list that is NOT one of the eleven [`BASE_METHODS`] the
+    /// base curriculum synthesizes in [`Engine::new`](crate::comprehension::Engine::new).
+    ///
+    /// This is the running PROVENANCE of the autonomy spine: each name here was
+    /// grafted on by an accepted, gate-passing self-extension (so it is verified
+    /// and monotone by construction). The base curriculum is excluded, so the
+    /// result is exactly what the mind taught itself beyond what it was born
+    /// knowing — in adoption order (the order `self_extend` pushed them onto
+    /// `methods`). Purely a read accessor; it never mutates anything.
+    pub fn learned_components(&self) -> Vec<String> {
+        self.engine
+            .methods
+            .iter()
+            .filter(|(name, _)| !BASE_METHODS.contains(name))
+            .map(|(name, _)| name.to_string())
+            .collect()
     }
 
     // ===================================================================
@@ -208,6 +273,28 @@ impl Mind {
         // runnable wrapper `fn verb_3sg` / `fn verb_past` that composes the rule
         // with the irregular lexicon.
         let t = topic.to_lowercase();
+
+        // FIRST: does the topic name a SELF-LEARNED component (one acquired by the
+        // autonomy spine, not part of the base curriculum)? If so, explain THAT —
+        // and mark it as something the mind taught itself, distinct from the base
+        // curriculum. A learned component's `name` IS its Mog `fn` name, and its
+        // teacher is recorded the same way as the base components.
+        let learned = self.learned_components();
+        if let Some(component) =
+            learned.iter().find(|name| t.contains(name.as_str()) || name.contains(&t))
+        {
+            let teacher = self.engine.method_for(component).unwrap_or("(unknown teacher)");
+            let source = slice_fn_source(self.engine.program(), component)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "(source unavailable)".to_string());
+            return format!(
+                "I LEARNED the component `{component}` for myself — it is NOT part of my \
+                 base curriculum; I synthesized it to close a gap I detected. It was \
+                 recovered by the teacher: {teacher}. Here is the actual Mog source I \
+                 synthesized:\n\n{source}"
+            );
+        }
+
         let mapped: Option<(&str, &str)> =
             if t.contains("3sg") || t.contains("inflect") || t.contains("verb") {
                 // 3sg inflection. Provenance: regular_3sg teacher; source: verb_3sg fn.
@@ -223,7 +310,19 @@ impl Mind {
             };
 
         let Some((component, fn_name)) = mapped else {
-            return format!("I don't have a learned program for {topic}.");
+            // Not a base topic. If the mind HAS learned components, name them as the
+            // self-acquired provenance the caller can ask about by name — so an
+            // unmapped topic still surfaces what was self-learned, distinct from the
+            // base curriculum.
+            if learned.is_empty() {
+                return format!("I don't have a learned program for {topic}.");
+            }
+            return format!(
+                "I don't have a base program for {topic}. Beyond my base curriculum I \
+                 have taught MYSELF these components: {}. Ask me about one by name to \
+                 see the Mog source I synthesized for it.",
+                learned.join(", ")
+            );
         };
 
         let teacher = self.engine.method_for(component).unwrap_or("(unknown teacher)");
@@ -243,9 +342,9 @@ impl Mind {
             if source.is_empty() { "(source unavailable)".to_string() } else { source };
 
         format!(
-            "I learned the component `{component}` (the {fn_name} program). \
-             It was recovered by the teacher: {teacher}. Here is the actual Mog \
-             source I synthesized:\n\n{source}"
+            "I learned the component `{component}` (the {fn_name} program) as part of \
+             my BASE curriculum. It was recovered by the teacher: {teacher}. Here is \
+             the actual Mog source I synthesized:\n\n{source}"
         )
     }
 
@@ -819,6 +918,319 @@ impl Mind {
         }
         Self::verdict_against(&facts, goal) != current
     }
+
+    // ===================================================================
+    // Autonomy spine (next-phase logic).
+    //
+    // The three methods below are STUBS — their real logic lands in the
+    // next phase. They are the entry points for the SELF-DIRECTED study
+    // loop: detect a gap in what was read, propose a curriculum that would
+    // close it, and study a corpus end-to-end by folding in every verified
+    // + gated component. Each is documented with the behavior it will
+    // implement so the API surface is stable for callers now. They are
+    // purely additive and do not touch any existing code path.
+    // ===================================================================
+
+    /// Track the autonomy spine (gap detection): inspect a single `input` the
+    /// mind read and report the FIRST capability it could not fully handle, if
+    /// any.
+    ///
+    /// The next-phase logic will parse `input` through the same understanding
+    /// path the mind uses for [`read`](Self::read) / [`ask`](Self::ask) and
+    /// classify the first unhandled fragment into a
+    /// [`Gap`](crate::self_improve::extend::Gap):
+    ///   * an unknown WORD the lexicons carry no class for →
+    ///     [`GapKind::Lexical`](crate::self_improve::extend::GapKind::Lexical),
+    ///   * a construction that parses word-by-word but whose STRUCTURE is not
+    ///     recovered →
+    ///     [`GapKind::Structural`](crate::self_improve::extend::GapKind::Structural),
+    ///   * a proposition that parses fully but cannot be DERIVED →
+    ///     [`GapKind::Inferential`](crate::self_improve::extend::GapKind::Inferential).
+    ///
+    /// `None` means the mind handled the input completely — there is no gap to
+    /// close. This method is read-only; it never mutates the engine or the
+    /// discourse.
+    ///
+    /// DETECTION (implemented):
+    ///
+    /// We parse `input` through the SAME path the mind uses for [`ask`](Self::ask)
+    /// / [`read`](Self::read) ([`semantics::understand`]) and report the FIRST
+    /// thing it could not fully handle, in priority order:
+    ///
+    /// 1. **LEXICAL gap** — an unknown CONTENT WORD the parser NEEDED in a
+    ///    noun-phrase slot. We scan for a word the lexicon classifies as
+    ///    `noun_class == 0` that nonetheless sits in a NOUN POSITION: immediately
+    ///    after a determiner (`the` / `a` / `an`). A determiner-headed NP REQUIRES
+    ///    a noun head, so an unknown word there is one the parser genuinely needed
+    ///    and could not classify. We additionally exclude any word the curriculum
+    ///    DOES account for in another role (a known verb form — base / 3sg / past /
+    ///    gerund / participle — a modifier, a gradable adjective, a taxonomy class,
+    ///    or a function word), so a known word that happens to follow a determiner
+    ///    can never trip a spurious gap. The result is
+    ///    [`GapKind::Lexical`](crate::self_improve::extend::GapKind::Lexical) with
+    ///    `surface` = the unknown word and `context` = the full `input`, so
+    ///    [`propose_curriculum`](Self::propose_curriculum) can mine a spec from it.
+    /// 2. **STRUCTURAL gap** — the input did NOT parse into a usable meaning
+    ///    ([`Meaning::Unknown`]) and no specific unknown noun explains it. The
+    ///    CONSTRUCTION itself is beyond the current grammar. The result is
+    ///    [`GapKind::Structural`](crate::self_improve::extend::GapKind::Structural)
+    ///    with `surface` = the whole sentence (a grammar-level gap, out of scope for
+    ///    the lexical teacher — see [`propose_curriculum`](Self::propose_curriculum)).
+    ///
+    /// `None` (NO false gap) when the input parses into a non-`Unknown` meaning AND
+    /// every determiner-headed slot is a known noun. A LEXICAL gap takes precedence
+    /// over a STRUCTURAL one when both could apply (an unknown noun is the more
+    /// specific, more actionable diagnosis). Purely read-only: it never mutates the
+    /// engine or the discourse.
+    pub fn detect_gap(&self, input: &str) -> Option<crate::self_improve::extend::Gap> {
+        use crate::self_improve::extend::{Gap, GapKind};
+
+        let parsed = semantics::understand(&self.engine, input);
+
+        // 1) LEXICAL: an unknown content word the parser needed in a noun slot.
+        if let Some(word) = self.first_unknown_noun(input) {
+            return Some(Gap {
+                kind: GapKind::Lexical,
+                surface: word,
+                context: input.to_string(),
+            });
+        }
+
+        // 2) STRUCTURAL: parsed to nothing usable, and no unknown noun explains it.
+        if matches!(parsed, Meaning::Unknown(_)) {
+            return Some(Gap {
+                kind: GapKind::Structural,
+                surface: input.to_string(),
+                context: input.to_string(),
+            });
+        }
+
+        // The input parsed and every needed noun is known — NO gap.
+        None
+    }
+
+    /// The first content word in `input` the lexicon could not classify as a noun
+    /// yet which the grammar clearly NEEDED as a noun-phrase head: a word
+    /// immediately following a determiner (`the` / `a` / `an`) whose `noun_class`
+    /// is `0` and which is recognized in NO other lexical role. Returns the surface
+    /// word (lowercased + tokenized exactly as the parser sees it), or `None` when
+    /// every determiner-headed slot is a known noun.
+    ///
+    /// SOUNDNESS (no false gaps): the determiner test is load-bearing. A
+    /// determiner-headed NP requires a noun head, so the only way an unknown word
+    /// lands here is as a noun the parser truly needed and the lexicon truly lacks.
+    /// We still defensively exclude every other role the curriculum accounts for
+    /// ([`is_known_non_noun`]) so that — even for a hypothetical future
+    /// construction that placed a KNOWN non-noun after a determiner — a word the
+    /// engine genuinely understands can never be misreported as a gap.
+    fn first_unknown_noun(&self, input: &str) -> Option<String> {
+        let toks = crate::comprehension::words_of(input);
+        for i in 1..toks.len() {
+            // Must sit in an NP-head slot: immediately after a determiner.
+            if !matches!(toks[i - 1].as_str(), "the" | "a" | "an") {
+                continue;
+            }
+            let w = toks[i].as_str();
+            // Recognized as a base noun OR by a self-learned classifier -> the slot
+            // is filled; not a gap. The learned-classifier arm is what lets the
+            // study loop converge: once `creature_class` is learned, "dragon" is
+            // recognized and stops re-surfacing as a gap.
+            if self.recognizes_word(w) {
+                continue;
+            }
+            // Recognized in some OTHER role -> the parser handles it; not a gap.
+            if is_known_non_noun(&self.engine, w) {
+                continue;
+            }
+            return Some(toks[i].clone());
+        }
+        None
+    }
+
+    /// Track the autonomy spine (curriculum proposal): given a detected
+    /// [`Gap`](crate::self_improve::extend::Gap), propose a
+    /// [`LearnRequest`](crate::self_improve::extend::LearnRequest) — the
+    /// component name, signature, and characterizing examples — that, if
+    /// synthesized and gated, would close it.
+    ///
+    /// The next-phase logic will mine examples from the gap's `context` (and the
+    /// curriculum the engine was originally built from) keyed on the gap's
+    /// [`GapKind`](crate::self_improve::extend::GapKind): a lexical gap proposes a
+    /// string→class lexicon, a structural gap a transduction/parse rule, an
+    /// inferential gap a reasoning rule. `None` means no well-posed curriculum
+    /// could be assembled for the gap (so it stays open rather than feeding
+    /// synthesis a spec it cannot satisfy). This method is read-only.
+    ///
+    /// IMPLEMENTED (lexical curriculum mining): given a detected
+    /// [`Gap`](crate::self_improve::extend::Gap), assemble a well-posed
+    /// [`LearnRequest`](crate::self_improve::extend::LearnRequest) whose examples
+    /// synthesis can VERIFY — or `None` when no such curriculum can be mined for
+    /// the gap (so it stays open rather than feeding the solver a spec it cannot
+    /// satisfy).
+    ///
+    /// For a [`Lexical`](crate::self_improve::extend::GapKind::Lexical) gap we mine
+    /// a binary string-membership lexicon from in-repo curriculum data, keyed on
+    /// the unknown surface word:
+    ///   * a known mythical creature ([`CREATURES`](crate::comprehension::CREATURES))
+    ///     → the `creature_class` lexicon ("is this a creature?"), via
+    ///     [`creature_class_examples`](crate::comprehension::creature_class_examples) —
+    ///     creatures map to 1, a spread of known non-creatures to 0.
+    ///
+    /// The mined examples are disjoint positives/negatives (a well-posed
+    /// string-equality map), so the string-membership teacher recovers them as a
+    /// verified Mog program. A gap whose word matches no mineable class returns
+    /// `None`: with no curriculum to characterize it, the mind has no honest spec
+    /// to synthesize, and the gap stays open. Purely read-only.
+    pub fn propose_curriculum(
+        &self,
+        gap: &crate::self_improve::extend::Gap,
+    ) -> Option<crate::self_improve::extend::LearnRequest> {
+        use crate::comprehension::{creature_class_examples, CREATURES};
+        use crate::self_improve::extend::{GapKind, LearnRequest};
+
+        match gap.kind {
+            GapKind::Lexical => {
+                let word = gap.surface.to_lowercase();
+                // A mythical creature → the creature-membership lexicon.
+                if CREATURES.contains(&word.as_str()) {
+                    return Some(LearnRequest {
+                        gap: format!(
+                            "cannot classify mythical creatures (unknown word: {word})"
+                        ),
+                        name: "creature_class".to_string(),
+                        signature: "fn creature_class(s: string) -> i64",
+                        examples: creature_class_examples(),
+                    });
+                }
+                // No mineable membership class for this word — stay honest, leave
+                // the gap open rather than synthesize against a spec we can't pose.
+                None
+            }
+            // Structural / inferential curriculum mining is not yet implemented;
+            // those gaps stay open (no fabricated spec).
+            GapKind::Structural | GapKind::Inferential => None,
+        }
+    }
+
+    /// Track the autonomy spine (self-directed study): the top-level autonomous
+    /// loop — read a `corpus`, detect gaps, propose curricula, and fold in every
+    /// component that synthesizes AND passes the regression gate, for up to
+    /// `max_rounds` rounds.
+    ///
+    /// The next-phase logic will, each round: [`read`](Self::read) the corpus,
+    /// [`detect_gap`](Self::detect_gap) on each entry,
+    /// [`propose_curriculum`](Self::propose_curriculum) for each detected gap,
+    /// and [`self_improve`](Self::self_improve) each proposal — adopting the
+    /// candidate engine ONLY on a green gate (monotone growth), persisting each
+    /// accepted component via [`crate::self_improve::store`], and journaling every
+    /// attempt. The loop stops early once a round closes no new gaps (fixpoint).
+    /// The returned [`StudyReport`](crate::self_improve::extend::StudyReport)
+    /// tallies the rounds run, the components learned, and the attempts /
+    /// rejections — a full audit of the session.
+    ///
+    /// IMPLEMENTED (the continuous study loop): read a `corpus`, detect gaps,
+    /// propose curricula, and fold in every component that synthesizes AND passes
+    /// the regression gate, for up to `max_rounds` rounds — stopping early once a
+    /// full round closes NOTHING new (loop-until-dry).
+    ///
+    /// Each round:
+    ///   1. [`read`](Self::read) every sentence into the world model (building the
+    ///      context the gap detector and curriculum miner work over).
+    ///   2. [`detect_gap`](Self::detect_gap) on each sentence; for each detected
+    ///      gap, [`propose_curriculum`](Self::propose_curriculum) a closing
+    ///      [`LearnRequest`](crate::self_improve::extend::LearnRequest). When a
+    ///      curriculum is proposed AND its target component is not already learned,
+    ///      [`self_improve`](Self::self_improve) it — which synthesizes, gates,
+    ///      journals, persists, and (on a green gate ONLY) swaps the engine in.
+    ///   3. A round that ACCEPTS at least one new component may have unlocked
+    ///      follow-on gaps (a creature now classified might license a new
+    ///      construction), so we loop again; a round that accepts NOTHING is a
+    ///      fixpoint and we stop.
+    ///
+    /// MONOTONE GROWTH: only gate-accepted components are ever kept (every accept
+    /// is mediated by [`self_improve`] → [`self_extend`](crate::self_improve::extend::self_extend),
+    /// which adopts the candidate engine only on a green gate). A non-`ok`
+    /// candidate is never accepted by the substrate, so the mind's
+    /// [`self_check`](Self::self_check) stays green throughout — we assert that
+    /// invariant internally after every accepted graft (debug builds), and it
+    /// holds by the substrate's construction regardless. The same `(name)`
+    /// curriculum is attempted at most once per session (we skip a target already
+    /// in [`learned_components`](Self::learned_components) and de-dupe within a
+    /// round), so a dry round genuinely means "nothing left to learn here".
+    ///
+    /// The returned [`StudyReport`](crate::self_improve::extend::StudyReport)
+    /// tallies the rounds run, the components learned (adoption order), and the
+    /// attempts / rejections — a full audit of the session
+    /// (`attempted == learned.len() + rejected`).
+    pub fn study(
+        &mut self,
+        corpus: &[&str],
+        max_rounds: usize,
+    ) -> crate::self_improve::extend::StudyReport {
+        let mut learned: Vec<String> = Vec::new();
+        let mut attempted = 0usize;
+        let mut rejected = 0usize;
+        let mut rounds = 0usize;
+
+        for _ in 0..max_rounds {
+            rounds += 1;
+            let mut learned_this_round = false;
+            // Curricula attempted in THIS round, by target component name, so two
+            // sentences raising the same gap do not double-attempt within a round.
+            let mut attempted_this_round: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+
+            for sentence in corpus {
+                // 1) READ into the world model (also surfaces context for mining).
+                self.read(sentence);
+
+                // 2) DETECT the first gap in this sentence and try to close it.
+                let Some(gap) = self.detect_gap(sentence) else {
+                    continue;
+                };
+                let Some(req) = self.propose_curriculum(&gap) else {
+                    continue;
+                };
+
+                // Skip a target we already learned (this session or earlier) and a
+                // target already attempted this round — a dry round must mean there
+                // is genuinely nothing new to fold in, not that we re-tried a known
+                // component.
+                if self.learned_components().contains(&req.name)
+                    || !attempted_this_round.insert(req.name.clone())
+                {
+                    continue;
+                }
+
+                // 3) SYNTHESIZE → GATE → JOURNAL → PERSIST → (accept only on green).
+                attempted += 1;
+                let name = req.name.clone();
+                let report = self.self_improve(req);
+                if report.accepted {
+                    learned.push(name);
+                    learned_this_round = true;
+                    // MONOTONE-GROWTH invariant (asserted in debug builds): every
+                    // accepted graft leaves the mind's own gate green. `self_improve`
+                    // already guarantees this (it adopts only a gate-passing engine),
+                    // so this is a redundant in-loop proof, never a control path.
+                    debug_assert!(
+                        self.self_check().ok(),
+                        "study must keep the mind sound after every accepted graft \
+                         (monotone growth)"
+                    );
+                } else {
+                    rejected += 1;
+                }
+            }
+
+            // STOP early once a full round adds NOTHING new (fixpoint / dry).
+            if !learned_this_round {
+                break;
+            }
+        }
+
+        crate::self_improve::extend::StudyReport { rounds, learned, attempted, rejected }
+    }
 }
 
 /// Uppercase the first character of a string (for "Because ..." answers).
@@ -941,6 +1353,82 @@ fn meaning_mentions(m: &Meaning, entity: &str) -> bool {
         Meaning::Or(parts) => parts.iter().any(|p| meaning_mentions(p, entity)),
         _ => false,
     }
+}
+
+/// Does the curriculum account for `word` in some NON-noun lexical role — so that
+/// a `noun_class == 0` classification reflects "not a noun", NOT "unknown word"?
+/// True for any recognized function/auxiliary/question word, modifier (plain or
+/// gradable adjective, in either polarity / comparative form), taxonomy class
+/// name, pronoun, or known verb form (base, 3sg, past, gerund, or past
+/// participle — verified against the synthesized inflectors so allomorphs like
+/// "writes" / "writing" / "written" all resolve). Used by
+/// [`Mind::first_unknown_noun`] to ensure a word the engine DOES understand can
+/// never be misreported as a lexical gap, even when it lands (unexpectedly) in a
+/// determiner-headed slot.
+fn is_known_non_noun(engine: &Engine, word: &str) -> bool {
+    use crate::comprehension::{
+        FUNCTION_WORDS, GRADABLE, IRREGULAR_PAST, IRREGULAR_VERBS, MODIFIERS,
+        PAST_PARTICIPLE, REG_VERBS, REG_VERBS_PAST,
+    };
+
+    // Function/auxiliary/question words and pronouns.
+    if FUNCTION_WORDS.contains(&word) {
+        return true;
+    }
+    if matches!(word, "it" | "they" | "he" | "she" | "them" | "him" | "her") {
+        return true;
+    }
+    // Adjectives: plain modifiers + gradable positives/comparatives.
+    if MODIFIERS.contains(&word)
+        || GRADABLE.iter().any(|(pos, comp, _)| *pos == word || *comp == word)
+    {
+        return true;
+    }
+    // Taxonomy class names (singular or regular plural).
+    if matches!(word, "agent" | "person" | "thing" | "document")
+        || matches!(word, "agents" | "persons" | "things" | "documents")
+    {
+        return true;
+    }
+    // Verb bases + stored inflected forms (3sg / past / participle).
+    let in_table = |t: &[(&str, &str)]| t.iter().any(|(b, f)| *b == word || *f == word);
+    if in_table(REG_VERBS)
+        || in_table(REG_VERBS_PAST)
+        || in_table(IRREGULAR_VERBS)
+        || in_table(IRREGULAR_PAST)
+        || in_table(PAST_PARTICIPLE)
+    {
+        return true;
+    }
+    // Rule-derived regular forms not stored as literal tuples: a regular verb's
+    // synthesized 3sg ("writes"), gerund ("writing"), or past ("walked") via the
+    // engine's inflectors. This catches allomorphs the static tables omit.
+    for (base, _f3) in REG_VERBS.iter() {
+        if engine.verb_3sg(base) == word
+            || engine.verb_past(base) == word
+            || regular_gerund(base) == word
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// The regular `-ing` (gerund) form of a verb `base`, mirroring the curriculum's
+/// regular gerund allomorphs well enough to recognize a known verb's progressive
+/// form in [`is_known_non_noun`]: drop a silent final "e" ("describe" ->
+/// "describing"), keep a final "y" ("carry" -> "carrying"), and otherwise append
+/// "ing" ("walk" -> "walking"). This is a RECOGNIZER only (it never has to
+/// generate a novel form), so the common allomorphs suffice; anything it misses
+/// simply means the word is not matched here and is judged by the other checks.
+fn regular_gerund(base: &str) -> String {
+    if let Some(stem) = base.strip_suffix('e') {
+        // Keep "ee" verbs intact (none in-curriculum); only drop a single silent e.
+        if !base.ends_with("ee") {
+            return format!("{stem}ing");
+        }
+    }
+    format!("{base}ing")
 }
 
 /// Bring the meaning argument types into local scope for the mention helpers
@@ -1799,5 +2287,650 @@ mod tests {
         );
         assert!(regression_gate(&engine).ok(), "base engine still green after rejection");
         });
+    }
+
+    // ===================================================================
+    // study: the CONTINUOUS STUDY LOOP + PROVENANCE.
+    //
+    // study(corpus, max_rounds) reads a corpus, detects gaps, proposes
+    // curricula, and folds in every verified + gated component, stopping
+    // early once a round adds nothing new. Growth is monotone — only
+    // gate-accepted components are kept and self_check stays green.
+    // explain_self / learned_components surface what was self-learned,
+    // distinct from the base curriculum.
+    // ===================================================================
+
+    /// Point BOTH self-modification stores (the journal and the learned-component
+    /// store) at process-unique temp files for the duration of `f`, holding the
+    /// crate-wide env lock so no other env-mutating test interleaves. Mirrors
+    /// `with_journal_env` but ALSO sets `NCPU_COMPONENTS_PATH` (per the task's
+    /// study-test contract). The temp files are removed afterward.
+    fn with_study_env<R>(label: &str, f: impl FnOnce() -> R) -> R {
+        let journal = std::env::temp_dir()
+            .join(format!("ncpu_study_journal_{}_{label}.jsonl", std::process::id()));
+        let components = std::env::temp_dir()
+            .join(format!("ncpu_study_components_{}_{label}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&journal);
+        let _ = std::fs::remove_file(&components);
+        let components_path = components.to_string_lossy().to_string();
+        // `with_journal_env` holds the crate-wide ENV_LOCK for the whole closure
+        // (so setting env inside is race-free) AND saves/restores
+        // NCPU_COMPONENTS_PATH around the closure — so we just OVERRIDE it to our
+        // temp store inside `f`; the helper restores the prior value on exit.
+        let out = crate::self_improve::journal::test_support::with_journal_env(
+            &journal.to_string_lossy(),
+            || {
+                // SAFETY: ENV_LOCK (held by with_journal_env) serializes env access.
+                unsafe { std::env::set_var("NCPU_COMPONENTS_PATH", &components_path) };
+                f()
+            },
+        );
+        let _ = std::fs::remove_file(&journal);
+        let _ = std::fs::remove_file(&components);
+        out
+    }
+
+    #[test]
+    fn study_over_unknown_creature_corpus_learns_a_component() {
+        with_study_env("learns", || {
+            let mut mind = Mind::new();
+
+            // PRECONDITION: the mind cannot yet classify creatures, and "dragon" is
+            // a genuine lexical gap (not a known noun). The test is not vacuous.
+            assert!(
+                !mind.engine().has_component("creature_class"),
+                "creature_class must be genuinely absent before study"
+            );
+            assert!(!mind.knows_word("dragon"), "'dragon' must be unknown pre-study");
+
+            // The corpus mixes a KNOWN sentence with one naming an unknown creature.
+            let corpus = [
+                "The teacher writes the report.",
+                "The dragon guards the gold.",
+            ];
+
+            let report = mind.study(&corpus, 3);
+
+            // It LEARNED at least one component, and creature_class specifically.
+            assert!(
+                !report.learned.is_empty(),
+                "study must learn >=1 component from the unknown-creature corpus: {report:?}"
+            );
+            assert!(
+                report.learned.contains(&"creature_class".to_string()),
+                "study must learn creature_class to close the dragon gap: {report:?}"
+            );
+            // Audit accounting holds by construction.
+            assert_eq!(
+                report.attempted,
+                report.learned.len() + report.rejected,
+                "attempted == learned + rejected: {report:?}"
+            );
+            assert!(report.rounds >= 1, "at least one round ran: {report:?}");
+
+            // The learned program is LIVE and CORRECT on the post-study engine.
+            assert!(
+                mind.engine().has_component("creature_class"),
+                "the learned component must be live on the engine"
+            );
+            assert_eq!(mind.engine().eval_int("creature_class(\"dragon\")"), 1);
+            assert_eq!(mind.engine().eval_int("creature_class(\"report\")"), 0);
+
+            // SOUNDNESS: the mind's own gate is STILL green after study — growth was
+            // monotone, nothing regressed.
+            assert!(
+                mind.self_check().ok(),
+                "self_check must stay ok after study (monotone growth)"
+            );
+        });
+    }
+
+    #[test]
+    fn study_over_only_known_sentences_learns_nothing_and_converges() {
+        with_study_env("nothing", || {
+            let mut mind = Mind::new();
+            let baseline_learned = mind.learned_components();
+            assert!(baseline_learned.is_empty(), "a fresh mind has learned nothing yet");
+
+            // Every word here is in the base curriculum — no lexical gap anywhere.
+            let corpus = [
+                "The teacher writes the report.",
+                "The author reads the book.",
+                "The editor explains the lesson.",
+            ];
+
+            let report = mind.study(&corpus, 5);
+
+            // Nothing was learned; the loop converged WITHOUT exhausting max_rounds
+            // (a dry first round is a fixpoint, so it stops after round 1).
+            assert!(
+                report.learned.is_empty(),
+                "a wholly-known corpus must teach the mind nothing: {report:?}"
+            );
+            assert_eq!(report.attempted, 0, "no self-extension attempt on a known corpus: {report:?}");
+            assert_eq!(report.rejected, 0, "nothing to reject: {report:?}");
+            assert_eq!(
+                report.rounds, 1,
+                "a dry first round is a fixpoint — converges immediately: {report:?}"
+            );
+
+            // The mind learned no new components, and stays green.
+            assert!(
+                mind.learned_components().is_empty(),
+                "no components learned from a known corpus"
+            );
+            assert!(mind.self_check().ok(), "the mind stays sound after a no-op study");
+        });
+    }
+
+    /// ADVERSARIAL — "autonomous study is monotone." Drive a step-faithful
+    /// re-implementation of the `study` loop over a corpus mixing KNOWN sentences,
+    /// an UNKNOWN-CREATURE sentence (a gap that mines a verifiable + gateable
+    /// curriculum), and an UNKNOWN-NON-CREATURE sentence (a lexical gap that
+    /// proposes NO curriculum — nothing synthesis could verify, nothing the gate
+    /// could pass). We assert the monotone-growth invariant the production
+    /// `debug_assert!` only checks in debug builds, but here UNCONDITIONALLY (a
+    /// hard `assert!`, so it holds in release too):
+    ///
+    ///   * `self_check().ok()` is true BEFORE the loop,
+    ///   * `self_check().ok()` is true DURING — re-checked after EVERY accepted
+    ///     graft, before moving on,
+    ///   * `self_check().ok()` is true AFTER the whole loop,
+    ///   * EVERY component that ended up on the engine beyond the base curriculum
+    ///     was synthesized AND passed the gate (acceptance is the ONLY way in),
+    ///   * the unmineable unknown word (`blorptangle`) is NEVER learned — a gap
+    ///     with no verifiable curriculum stays open; nothing study could not
+    ///     verify+gate got in,
+    ///   * the loop accounting is honest (`attempted == accepted + rejected`).
+    ///
+    /// This is the loop's own logic, transcribed, so the assertions sit at the
+    /// exact program points the property names — there is no way for an accepted-
+    /// but-regressing component to slip past an AFTER-only check, and no way for an
+    /// unverifiable gap to be silently grafted.
+    #[test]
+    fn study_is_monotone_self_check_holds_before_during_and_after() {
+        with_study_env("monotone", || {
+            let mut mind = Mind::new();
+
+            // BEFORE: the spine starts sound, and the corpus's gaps are GENUINE.
+            assert!(
+                mind.self_check().ok(),
+                "self_check must be green BEFORE study (the spine starts sound)"
+            );
+            assert!(!mind.knows_word("dragon"), "'dragon' must be a real gap pre-study");
+            assert!(
+                !mind.knows_word("blorptangle"),
+                "'blorptangle' must be a real (but unmineable) gap pre-study"
+            );
+            assert!(
+                !mind.engine().has_component("creature_class"),
+                "creature_class must be genuinely absent before study"
+            );
+            let base_learned = mind.learned_components();
+            assert!(base_learned.is_empty(), "a fresh mind has learned nothing yet");
+
+            // The corpus MIXES: a fully-known sentence, an unknown-CREATURE
+            // sentence (mineable → verifiable + gateable), and an unknown-
+            // NON-creature sentence (a lexical gap that proposes NO curriculum).
+            let corpus = [
+                "The teacher writes the report.",   // wholly known — no gap
+                "The dragon guards the gold.",      // mineable creature gap
+                "The blorptangle eats the report.", // lexical gap, NO curriculum
+            ];
+
+            // Re-implement the study loop FAITHFULLY so the DURING check is a hard
+            // assert at the exact point `study`'s debug_assert sits.
+            let max_rounds = 3usize;
+            let mut accepted: Vec<String> = Vec::new();
+            let mut attempted = 0usize;
+            let mut rejected = 0usize;
+            // Proof that the unmineable gap was actually DETECTED and then DROPPED at
+            // the proposal boundary (it has no verifiable+gateable curriculum), so
+            // our "it never got learned" claim is non-vacuous.
+            let mut blorptangle_detected_but_unmineable = false;
+
+            for _round in 0..max_rounds {
+                let mut learned_this_round = false;
+                let mut attempted_this_round: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
+
+                for sentence in &corpus {
+                    mind.read(sentence);
+
+                    let Some(gap) = mind.detect_gap(sentence) else {
+                        continue;
+                    };
+                    // An unmineable gap (blorptangle) yields NO curriculum: it can
+                    // never be synthesized, verified, or gated, so it must never be
+                    // learned. The None branch is EXACTLY where the unmineable gap is
+                    // dropped — record that the blorptangle gap reached it.
+                    let Some(req) = mind.propose_curriculum(&gap) else {
+                        if gap.surface.to_lowercase() == "blorptangle" {
+                            blorptangle_detected_but_unmineable = true;
+                        }
+                        continue;
+                    };
+                    // A gap whose word is the unmineable one must NEVER reach a
+                    // curriculum — if it did, the honesty guarantee is broken.
+                    assert_ne!(
+                        req.name, "blorptangle",
+                        "an unmineable word must not produce a learn request"
+                    );
+
+                    if mind.learned_components().contains(&req.name)
+                        || !attempted_this_round.insert(req.name.clone())
+                    {
+                        continue;
+                    }
+
+                    attempted += 1;
+                    let name = req.name.clone();
+                    let report = mind.self_improve(req);
+                    if report.accepted {
+                        // ACCEPTANCE is the ONLY way a component enters the engine,
+                        // and it implies synthesis succeeded AND the gate stayed
+                        // green for THIS candidate.
+                        assert!(
+                            report.synthesized,
+                            "an accepted component must have synthesized: {}",
+                            report.message
+                        );
+                        assert!(
+                            report.regression_passed,
+                            "an accepted component must have passed the gate: {}",
+                            report.message
+                        );
+                        accepted.push(name.clone());
+                        learned_this_round = true;
+                        // DURING: the mind's OWN gate must still be green right now,
+                        // after this graft, before we touch the next sentence. A
+                        // HARD assert (holds in release, unlike study's debug_assert).
+                        assert!(
+                            mind.self_check().ok(),
+                            "self_check must be green DURING study, immediately after \
+                             accepting `{name}` (monotone growth, every acceptance)"
+                        );
+                        // And the freshly accepted component is LIVE on the engine.
+                        assert!(
+                            mind.engine().has_component(&name),
+                            "an accepted component must be live on the engine: {name}"
+                        );
+                    } else {
+                        rejected += 1;
+                    }
+                }
+
+                if !learned_this_round {
+                    break;
+                }
+            }
+
+            // AFTER: still green.
+            assert!(
+                mind.self_check().ok(),
+                "self_check must be green AFTER study (monotone growth held throughout)"
+            );
+
+            // NON-VACUITY: the unmineable gap was genuinely detected and then
+            // dropped for want of a verifiable curriculum — it didn't simply go
+            // unnoticed. This is what makes "it never got learned" meaningful.
+            assert!(
+                blorptangle_detected_but_unmineable,
+                "the blorptangle gap must have been DETECTED yet yielded no curriculum \
+                 (so 'never learned' is non-vacuous)"
+            );
+
+            // The mineable creature gap WAS closed.
+            assert!(
+                accepted.contains(&"creature_class".to_string()),
+                "study must have learned creature_class from the dragon sentence: {accepted:?}"
+            );
+            // ONLY gate-accepted components are kept: everything the engine carries
+            // beyond the base curriculum is exactly what we ACCEPTED in-loop.
+            let learned_now = mind.learned_components();
+            assert_eq!(
+                learned_now, accepted,
+                "the engine's learned components must be EXACTLY the in-loop accepted set \
+                 (no component entered except by acceptance): live={learned_now:?} accepted={accepted:?}"
+            );
+            // The unmineable gap NEVER became a component — nothing study could not
+            // verify+gate got in.
+            assert!(
+                !mind.engine().has_component("blorptangle"),
+                "the unmineable unknown word must never be grafted as a component"
+            );
+            assert!(
+                !mind.knows_word("blorptangle"),
+                "'blorptangle' stays unknown — its gap stayed open (no fabricated learning)"
+            );
+            // Accounting is honest.
+            assert_eq!(
+                attempted,
+                accepted.len() + rejected,
+                "attempted == accepted + rejected (honest loop accounting)"
+            );
+            // The blorptangle gap was real but produced ZERO attempts (no curriculum
+            // ever fed synthesis), so attempts came only from the mineable gap.
+            assert_eq!(
+                attempted, 1,
+                "exactly one self-extension attempt (the mineable creature gap); the \
+                 unmineable gap produced no attempt: attempted={attempted}"
+            );
+            assert_eq!(rejected, 0, "the one mineable attempt was accepted, not rejected");
+        });
+    }
+
+    /// ADVERSARIAL — the public `study` API agrees with the monotone invariant: a
+    /// study over a corpus whose ONLY gap is unmineable learns NOTHING, attempts
+    /// NOTHING, stays sound, and converges immediately (a dry first round is a
+    /// fixpoint). This proves an undetectable / unmineable gap can never sneak a
+    /// component in through the real entry point, not just the transcribed loop.
+    #[test]
+    fn study_over_unmineable_gap_learns_nothing_and_stays_sound() {
+        with_study_env("unmineable", || {
+            let mut mind = Mind::new();
+            assert!(mind.self_check().ok(), "green before study");
+            assert!(!mind.knows_word("blorptangle"), "'blorptangle' is a genuine gap");
+
+            // The ONLY gap here is the unmineable unknown word. detect_gap fires,
+            // propose_curriculum returns None, so study can never verify or gate
+            // anything — it must learn nothing.
+            let corpus = ["The blorptangle eats the report."];
+            let report = mind.study(&corpus, 5);
+
+            assert!(
+                report.learned.is_empty(),
+                "an unmineable-only corpus must teach the mind nothing: {report:?}"
+            );
+            assert_eq!(
+                report.attempted, 0,
+                "no curriculum can be posed → no self-extension attempt: {report:?}"
+            );
+            assert_eq!(report.rejected, 0, "nothing was even attempted to reject: {report:?}");
+            assert_eq!(
+                report.rounds, 1,
+                "a dry first round is a fixpoint — converges immediately: {report:?}"
+            );
+            assert!(
+                mind.learned_components().is_empty(),
+                "no component entered the engine from an unmineable gap"
+            );
+            assert!(
+                !mind.engine().has_component("blorptangle"),
+                "the unmineable word never became a live component"
+            );
+            assert!(mind.self_check().ok(), "the mind stays sound after a no-op study");
+        });
+    }
+
+    #[test]
+    fn learned_components_and_explain_self_mark_the_acquired_component() {
+        with_study_env("provenance", || {
+            let mut mind = Mind::new();
+
+            // PROVENANCE baseline: before study, learned_components is empty and
+            // explain_self has NO self-learned creature program.
+            assert!(mind.learned_components().is_empty(), "nothing learned yet");
+
+            let corpus = ["The dragon guards the gold."];
+            let report = mind.study(&corpus, 2);
+            assert!(
+                report.learned.contains(&"creature_class".to_string()),
+                "study must learn creature_class: {report:?}"
+            );
+
+            // learned_components LISTS exactly the acquired component, and NONE of
+            // the eleven base components leak in.
+            let learned = mind.learned_components();
+            assert_eq!(
+                learned,
+                vec!["creature_class".to_string()],
+                "learned_components must list exactly the self-acquired component"
+            );
+            for base in BASE_METHODS {
+                assert!(
+                    !learned.contains(&base.to_string()),
+                    "a base-curriculum component must never appear as self-learned: {base}"
+                );
+            }
+
+            // explain_self MARKS it as self-learned — distinct from the base
+            // curriculum — and quotes the actual synthesized Mog source.
+            let explained = mind.explain_self("creature_class");
+            let le = explained.to_lowercase();
+            assert!(
+                le.contains("learned") && le.contains("not part of my base curriculum"),
+                "explain_self must mark creature_class as self-learned, not base: {explained}"
+            );
+            assert!(
+                explained.contains("creature_class"),
+                "explain_self must name the component: {explained}"
+            );
+            assert!(
+                explained.contains("fn creature_class("),
+                "explain_self must quote the actual synthesized Mog source: {explained}"
+            );
+
+            // A BASE component, by contrast, is explained as base curriculum — the
+            // two provenances are kept distinct.
+            let base_expl = mind.explain_self("animacy").to_lowercase();
+            assert!(
+                base_expl.contains("base curriculum"),
+                "a base component must be marked as base curriculum: {base_expl}"
+            );
+        });
+    }
+
+    // ===================================================================
+    // detect_gap + propose_curriculum: AUTOMATIC GAP DETECTION and
+    // SELF-CURRICULUM GENERATION.
+    //
+    // Contract:
+    //   * detect_gap on a sentence naming an UNKNOWN creature word returns a
+    //     LEXICAL gap whose surface IS that word.
+    //   * detect_gap on a FULLY-KNOWN sentence returns None — NO false gap.
+    //   * propose_curriculum on a lexical gap returns a LearnRequest whose
+    //     examples solve_problem can actually satisfy (verified by construction).
+    // ===================================================================
+
+    #[test]
+    fn detect_gap_flags_an_unknown_creature_word_as_lexical() {
+        use crate::self_improve::extend::GapKind;
+        let mind = Mind::new();
+
+        // PRECONDITION (test is not vacuous): "dragon" is genuinely unknown — the
+        // lexicon carries no class for it.
+        assert!(!mind.knows_word("dragon"), "'dragon' must be unknown for this test");
+
+        // A grammatical sentence whose SUBJECT is an unknown creature in a
+        // determiner-headed noun slot ("the dragon").
+        let gap = mind
+            .detect_gap("The dragon guards the gold.")
+            .expect("an unknown noun in a determiner slot must surface a gap");
+
+        // It is a LEXICAL gap (an unknown WORD, not a grammar gap).
+        assert_eq!(gap.kind, GapKind::Lexical, "an unknown noun is a lexical gap: {gap:?}");
+        // Its surface is the FIRST unknown noun the parser needed — "dragon".
+        assert_eq!(gap.surface, "dragon", "the gap names the unknown content word: {gap:?}");
+        // The context preserves the full input so the curriculum miner can use it.
+        assert_eq!(gap.context, "The dragon guards the gold.");
+    }
+
+    #[test]
+    fn detect_gap_returns_none_on_a_fully_known_sentence() {
+        let mind = Mind::new();
+
+        // Every content word here is in the base curriculum (teacher/report are
+        // nouns; "writes" is a known 3sg verb form). The sentence parses cleanly,
+        // so there is NO gap — the detector must NOT fabricate one.
+        assert!(
+            mind.detect_gap("The teacher writes the report.").is_none(),
+            "a fully-known declarative must raise no gap"
+        );
+
+        // A second, structurally different known sentence — a known verb's present
+        // form and a definite object — also raises nothing. This guards the
+        // no-false-gap contract across inflected verb forms that classify as 0
+        // ("not a noun") yet are perfectly known.
+        assert!(
+            mind.detect_gap("The author reads the book.").is_none(),
+            "a known sentence with an inflected verb must raise no gap"
+        );
+
+        // A copular known sentence — the determiner "a" precedes the taxonomy
+        // class "person", which is KNOWN, so no gap.
+        assert!(
+            mind.detect_gap("The teacher is a person.").is_none(),
+            "a copular sentence over a known taxonomy class must raise no gap"
+        );
+    }
+
+    // ADVERSARIAL VERIFICATION (gap-detection-is-honest): a single test that
+    // exercises all three honesty obligations together:
+    //   (A) a GENUINE gap (unknown creature) -> Some(Lexical, surface=word)
+    //   (B) a FULLY-KNOWN sentence -> None (no false gap)
+    //   (C) an ALREADY-LEARNED word, post-study -> None (the gap actually CLOSED).
+    // Case (C) is the load-bearing probe: study() must not merely add a
+    // creature_class COMPONENT while detect_gap keeps firing on the same word —
+    // that would be a MISSED CLOSE (the detector lying that a handled input is
+    // still a gap). If detect_gap still fires post-study, this test FAILS.
+    #[test]
+    fn detect_gap_is_honest_genuine_known_and_post_study() {
+        use crate::self_improve::extend::GapKind;
+
+        with_study_env("honest_gap", || {
+            // ---- (A) GENUINE GAP: unknown creature in a determiner-headed slot.
+            let mut mind = Mind::new();
+            assert!(
+                !mind.knows_word("dragon"),
+                "precondition: 'dragon' unknown so (A) is not vacuous"
+            );
+            let gap = mind
+                .detect_gap("The dragon guards the gold.")
+                .expect("(A) a genuine unknown noun MUST surface a gap");
+            assert_eq!(gap.kind, GapKind::Lexical, "(A) unknown noun => lexical: {gap:?}");
+            assert_eq!(gap.surface, "dragon", "(A) gap names the unknown word: {gap:?}");
+
+            // ---- (B) FULLY-KNOWN SENTENCE: every content word is in the base
+            // curriculum (teacher/report nouns, writes a known 3sg form). NO gap.
+            assert!(
+                mind.detect_gap("The teacher writes the report.").is_none(),
+                "(B) a fully-known sentence MUST raise no gap (no false positive)"
+            );
+
+            // ---- (C) POST-STUDY: after the mind STUDIES the dragon corpus and
+            // closes the gap, detect_gap on the SAME sentence must return None.
+            // This proves the close is REAL, not just a component bolted on while
+            // the detector keeps reporting the input as unhandled.
+            let report = mind.study(&["The dragon guards the gold."], 3);
+            assert!(
+                report.learned.contains(&"creature_class".to_string()),
+                "(C) study must actually learn creature_class to close the gap: {report:?}"
+            );
+            assert!(
+                mind.recognizes_word("dragon"),
+                "(C) post-study 'dragon' must read as recognized via the learned \
+                 classifier (gap genuinely closed; base noun_animacy is untouched — \
+                 folding the learned class into it is a later integration phase)"
+            );
+            // The DRAGON lexical gap is closed: detect_gap no longer names "dragon".
+            // The sentence's OTHER unknown, "gold", is not a creature, so it honestly
+            // remains a gap — that is correct, not a miss. (Full parser-level closure
+            // of a recognized word is the later functional-integration phase; Phase A
+            // guarantees the lexical gap on the LEARNED word closes.)
+            match mind.detect_gap("The dragon guards the gold.") {
+                None => {}
+                Some(g) => assert_ne!(
+                    g.surface, "dragon",
+                    "(C) the dragon gap must be CLOSED post-study; any remaining gap \
+                     must be the still-unknown 'gold', never 'dragon': {g:?}"
+                ),
+            }
+
+            // (B') re-confirm no false gap survived the engine swap.
+            assert!(
+                mind.detect_gap("The teacher writes the report.").is_none(),
+                "(B') a known sentence stays gap-free after study"
+            );
+        });
+    }
+
+    #[test]
+    fn propose_curriculum_for_a_lexical_gap_yields_a_solvable_learn_request() {
+        use crate::self_improve::extend::{Gap, GapKind};
+
+        let mind = Mind::new();
+
+        // Detect a real lexical gap, then ask for a curriculum that would close it.
+        let gap = mind
+            .detect_gap("The dragon guards the gold.")
+            .expect("unknown-creature sentence yields a gap");
+        let req = mind
+            .propose_curriculum(&gap)
+            .expect("a lexical creature gap must mine a well-posed curriculum");
+
+        // The request targets a string->int classifier and names the surface word.
+        assert_eq!(req.name, "creature_class", "targets the creature membership map");
+        assert!(
+            req.signature.contains("-> i64"),
+            "a membership classifier returns an int label: {}",
+            req.signature
+        );
+        assert!(!req.examples.is_empty(), "the mined spec must carry examples");
+
+        // The gap word must be a POSITIVE (the unknown creature -> 1); the spec is
+        // well-posed (no string mapped to two labels — guaranteed by lexicon_examples).
+        let labeled = |w: &str| {
+            req.examples
+                .iter()
+                .find(|e| e.inputs == vec![crate::benchmark::Value::Str(w.to_string())])
+                .map(|e| e.expected.clone())
+        };
+        assert_eq!(
+            labeled("dragon"),
+            Some(crate::benchmark::Value::Int(1)),
+            "the unknown creature word must be a positive in the mined spec"
+        );
+
+        // The headline guarantee: the mined examples are SOLVABLE — solve_problem
+        // (the same solver self_improve relies on) certifies a program that
+        // reproduces every example. We never fabricate a spec the solver can't meet.
+        let probe = crate::benchmark::Problem {
+            name: req.name.clone(),
+            category: "comprehension",
+            description: "",
+            signature: req.signature,
+            examples: req.examples.clone(),
+            holdouts: Vec::new(),
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+        };
+        let solved = crate::solver::solve_problem(&probe);
+        assert!(
+            solved.success,
+            "propose_curriculum must yield a SOLVABLE spec: {:?}",
+            solved.error
+        );
+        // Independently re-verify the certified program over every example, so the
+        // "solvable" claim is not taken on trust.
+        crate::runtime::verify_problem_code_strict(&probe, &solved.code)
+            .expect("the certified program must pass strict re-verification");
+
+        // HONESTY: a STRUCTURAL gap (a grammar gap, out of scope for the lexical
+        // teacher) mines NO curriculum — the mind never fabricates a spec it has
+        // no honest way to characterize.
+        let structural = Gap {
+            kind: GapKind::Structural,
+            surface: "qwx zzt plonk".to_string(),
+            context: "qwx zzt plonk".to_string(),
+        };
+        assert!(
+            mind.propose_curriculum(&structural).is_none(),
+            "a structural gap is out of scope for the lexical teacher — honest None"
+        );
     }
 }
