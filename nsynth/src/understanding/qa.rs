@@ -89,6 +89,11 @@ pub fn answer(engine: &Engine, discourse: &Discourse, question: &str) -> String 
         // truth query whose truth is the three-valued negation of the inner
         // meaning's truth; distinct from the narrow-scope "every ... does not ...".
         Meaning::Not(_) => answer_yes_no(engine, discourse, &m),
+        // "If the rain falls then the street floods?" — a conditional truth query.
+        // Its sound three-valued material-implication truth is owned by the world
+        // model (`holds_conditional`) and surfaced through `answer_yes_no`,
+        // exactly like the Modal/Temporal/Causal truth-query arms.
+        Meaning::Conditional { .. } => answer_yes_no(engine, discourse, &m),
         Meaning::Unknown(_) => "I don't know.".to_string(),
     }
 }
@@ -141,6 +146,9 @@ pub fn answer_explained(
             (answer_degree(engine, discourse, &subject, &scale), None)
         }
         Meaning::Not(_) => answer_yes_no_explained(engine, discourse, &m),
+        // A conditional truth query, routed exactly as `answer` does — through the
+        // explained yes/no path so any modus-ponens proof rides along.
+        Meaning::Conditional { .. } => answer_yes_no_explained(engine, discourse, &m),
         Meaning::Unknown(_) => ("I don't know.".to_string(), None),
     }
 }
@@ -230,6 +238,10 @@ fn answer_yes_no_explained(
                 | Meaning::Modal { .. }
                 | Meaning::Temporal { .. }
                 | Meaning::Causal { .. }
+                // A Conditional's negation is NOT a simple leaf-flip (the denial
+                // of "if P then Q" is the whole `negated` conditional), so restate
+                // it verbatim and let the leading "No," carry the polarity.
+                | Meaning::Conditional { .. }
                 | Meaning::Not(_)
                 | Meaning::Cardinal { .. } => realize(engine, body, /*force_negated=*/ None),
                 _ => realize(engine, body, /*force_negated=*/ Some(true)),
@@ -322,6 +334,38 @@ pub fn world_truth_traced(
                 let cmp_facts = discourse.world.comparison_facts();
                 if let Some(p) = crate::understanding::inference::prove(&cmp_facts, body) {
                     return (Some(true), Some(p));
+                }
+            }
+        }
+        // EXCEPTION — an EVENT verdict that rests on a stored conditional rule. The
+        // world model owns the forward-chaining verdict (it materialized the
+        // derived consequent / negated antecedent as a fact), but exposes no
+        // derivation. We rebuild the MODUS-PONENS / MODUS-TOLLENS certificate by
+        // running `prove` over the asserted event facts PLUS the conditional rules,
+        // so "why does the guard wake?" shows its work. We only ATTACH a proof
+        // whose conclusion names the SAME verdict — a `Some(true)` event proves the
+        // event itself (modus ponens); a `Some(false)` event proves its
+        // polarity-flip (modus tollens derived "NOT P"). The verdict stays the
+        // world's; soundness is unchanged.
+        if let Meaning::Event(_) = body {
+            let facts = facts_and_rules(discourse);
+            let goal = if v {
+                body.clone()
+            } else {
+                // The false verdict is certified by proving the event's negation.
+                match polarity_flip_query(body) {
+                    Some(flip) => flip,
+                    None => return (Some(v), None),
+                }
+            };
+            if let Some(p) = crate::understanding::inference::prove(&facts, &goal) {
+                // Only surface a CONDITIONAL-derived proof (a plain asserted leaf
+                // already returns `(Some(v), None)` like every other world verdict;
+                // attaching its trivial "you told me ..." leaf here would change the
+                // long-standing contract for directly-asserted events). A derivation
+                // is one whose top step is a real rule, not an `"asserted"` leaf.
+                if p.rule != "asserted" {
+                    return (Some(v), Some(p));
                 }
             }
         }
@@ -439,6 +483,24 @@ fn facts_as_meanings(discourse: &Discourse) -> Vec<Meaning> {
         .iter()
         .map(|f| Meaning::Event(f.clone()))
         .collect()
+}
+
+/// The world's DIRECTLY-ASSERTED event facts PLUS its stored conditional RULES —
+/// the genuine PREMISES a CONDITIONAL derivation ([`prove`]'s modus-ponens /
+/// modus-tollens steps) reasons over. DERIVED facts are deliberately EXCLUDED: a
+/// modus-ponens conclusion is materialized as a fact, and including it would let
+/// `prove` short-circuit to that materialized fact as an `"asserted"` leaf instead
+/// of rebuilding the inference chain. The asserted events ground antecedents /
+/// consequents; the conditional rules supply the implications.
+fn facts_and_rules(discourse: &Discourse) -> Vec<Meaning> {
+    let mut facts: Vec<Meaning> = discourse
+        .world
+        .asserted_event_facts()
+        .into_iter()
+        .map(Meaning::Event)
+        .collect();
+    facts.extend(discourse.world.conditional_facts());
+    facts
 }
 
 /// The polarity-flip (sound CONTRADICTORY) of an assertoric leaf query, used to
@@ -1086,6 +1148,25 @@ pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>)
             realize(engine, effect, None),
             realize(engine, cause, None)
         ),
+        // "if <antecedent> then <consequent>" — each sub-meaning realizes with its
+        // own polarity, mirroring the Causal arm. A `negated` conditional prefixes
+        // the denial ("it is not the case that if ... then ...").
+        Meaning::Conditional {
+            antecedent,
+            consequent,
+            negated,
+        } => {
+            let core = format!(
+                "if {} then {}",
+                realize(engine, antecedent, None),
+                realize(engine, consequent, None)
+            );
+            if *negated {
+                format!("it is not the case that {core}")
+            } else {
+                core
+            }
+        }
         // "how <scale-adjective> is the <subject>?" — surface the degree question
         // with the scale's positive adjective ("how long is the report").
         Meaning::DegreeQuestion { subject, scale } => {
@@ -1492,6 +1573,13 @@ fn resolve_meaning(discourse: &Discourse, m: &Meaning) -> Meaning {
         Meaning::Causal { cause, effect } => Meaning::Causal {
             cause: Box::new(resolve_meaning(discourse, cause)),
             effect: Box::new(resolve_meaning(discourse, effect)),
+        },
+        // Resolve pronouns inside both clauses of a conditional, mirroring Causal,
+        // so "if it floods then it closes?" queries the resolved referents.
+        Meaning::Conditional { antecedent, consequent, negated } => Meaning::Conditional {
+            antecedent: Box::new(resolve_meaning(discourse, antecedent)),
+            consequent: Box::new(resolve_meaning(discourse, consequent)),
+            negated: *negated,
         },
         Meaning::DegreeQuestion { subject, scale } => Meaning::DegreeQuestion {
             subject: resolve_term(discourse, subject),

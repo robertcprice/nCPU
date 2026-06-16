@@ -61,6 +61,18 @@ pub fn understand(engine: &Engine, sentence: &str) -> Meaning {
         return build_disjunction(engine, &toks, &disjuncts, sentence);
     }
 
+    // --- Conditional "if <antecedent> then <consequent>" ----------------------
+    // A subordinating "if ... then ..." (or inverted "<consequent> if
+    // <antecedent>") states a directed implication. Split on the function words
+    // BEFORE clause-level parsing so each side is understood as its own Meaning.
+    // Checked before the causal split: a conditional is a STRICTLY WEAKER claim
+    // (it presupposes nothing) and uses its own connectives, so it must not be
+    // mistaken for a "because" reason adjunct. The clause governed by "if" is
+    // always the antecedent; modus ponens / tollens live downstream, not here.
+    if let Some(m) = parse_conditional(engine, &toks) {
+        return m;
+    }
+
     // --- Causal "<effect-clause> because/since <cause-clause>" -----------------
     // A subordinating causal connective joins two full clauses. Split on it
     // BEFORE clause-level parsing so each side is understood as its own Meaning.
@@ -516,6 +528,64 @@ fn build_disjunction(
 /// lexicon change is needed.
 fn causal_connective(word: &str) -> bool {
     matches!(word, "because" | "since")
+}
+
+/// Parse a CONDITIONAL "if <antecedent> then <consequent>" (or the inverted
+/// "<consequent> if <antecedent>") into a `Meaning::Conditional`.
+///
+/// Two surface shapes, both handled by locating the function words:
+///   - "if P then Q"  -> antecedent = P (between "if" and "then"),
+///                       consequent = Q (after "then").
+///   - "Q if P"       -> consequent = Q (before "if"),
+///                       antecedent = P (after "if"), with NO "then".
+///
+/// Each clause is understood RECURSIVELY as its own Meaning (exactly like the
+/// causal split), so a conditional can relate events, properties, categories,
+/// or any clause type. If either side is unparseable we return `None` so the
+/// sentence falls back to ordinary parsing rather than fabricating an empty
+/// rule. A leading "if" with NO "then" and no pre-"if" clause is also rejected.
+///
+/// SOUNDNESS: the antecedent/consequent slots are fixed by surface position
+/// (the clause governed by "if" is ALWAYS the antecedent), so the directed
+/// implication P->Q is preserved structurally and never silently reversed. The
+/// parser only BUILDS the rule; modus ponens / modus tollens live downstream in
+/// the world model and inference layers, never here.
+fn parse_conditional(engine: &Engine, toks: &[String]) -> Option<Meaning> {
+    let if_idx = toks.iter().position(|w| w == "if")?;
+    let then_idx = toks.iter().position(|w| w == "then");
+
+    let (ant_str, cons_str) = if if_idx == 0 {
+        // "if P then Q" — antecedent between "if" and "then"; consequent after.
+        let then_idx = then_idx?;
+        if then_idx <= if_idx + 1 || then_idx + 1 >= toks.len() {
+            return None; // empty antecedent or empty consequent
+        }
+        let ant = toks[if_idx + 1..then_idx].join(" ");
+        let cons = toks[then_idx + 1..].join(" ");
+        (ant, cons)
+    } else {
+        // "Q if P" — consequent before "if"; antecedent after. There must be a
+        // real clause on each side and (in this form) no "then".
+        if then_idx.is_some() || if_idx + 1 >= toks.len() {
+            return None;
+        }
+        let cons = toks[..if_idx].join(" ");
+        let ant = toks[if_idx + 1..].join(" ");
+        (ant, cons)
+    };
+
+    let antecedent = understand(engine, &ant_str);
+    let consequent = understand(engine, &cons_str);
+    // Never fabricate a rule over an unparseable clause — fall back instead.
+    if matches!(antecedent, Meaning::Unknown(_)) || matches!(consequent, Meaning::Unknown(_)) {
+        return None;
+    }
+
+    Some(Meaning::Conditional {
+        antecedent: Box::new(antecedent),
+        consequent: Box::new(consequent),
+        negated: false,
+    })
 }
 
 /// Split "<effect-clause> because/since <cause-clause>" into a `Causal`.
@@ -3591,6 +3661,40 @@ mod tests {
         // "since" is a synonym of the causal "because" in this curriculum.
         let m = understand(engine(), "The street floods since the rain falls.");
         assert!(matches!(m, Meaning::Causal { .. }), "got {m:?}");
+    }
+
+    // ---- (7b) CONDITIONAL --------------------------------------------------
+
+    #[test]
+    fn conditional_if_then_splits_antecedent_and_consequent() {
+        // "if the alarm rings then the guard wakes" -> Conditional{antecedent:
+        // alarm rings, consequent: guard wakes}. The clause governed by "if" is
+        // the antecedent; the clause after "then" is the consequent.
+        let m = understand(engine(), "If the alarm rings then the guard wakes.");
+        let Meaning::Conditional { antecedent, consequent, negated } = m else {
+            panic!("expected a Conditional, got {m:?}");
+        };
+        assert!(!negated, "a plain conditional is not negated");
+        let Meaning::Event(ae) = *antecedent else { panic!("antecedent not an Event") };
+        let Meaning::Event(ce) = *consequent else { panic!("consequent not an Event") };
+        assert_eq!(ae.predicate, "ring");
+        assert_eq!(ae.agent, Some(Term::Entity("alarm".to_string())));
+        assert_eq!(ce.predicate, "wake");
+        assert_eq!(ce.agent, Some(Term::Entity("guard".to_string())));
+    }
+
+    #[test]
+    fn conditional_inverted_form_keeps_antecedent_governed_by_if() {
+        // "the guard wakes if the alarm rings" -> the SAME directed rule: the "if"
+        // clause is still the antecedent, regardless of surface order.
+        let m = understand(engine(), "The guard wakes if the alarm rings.");
+        let Meaning::Conditional { antecedent, consequent, .. } = m else {
+            panic!("expected a Conditional, got {m:?}");
+        };
+        let Meaning::Event(ae) = *antecedent else { panic!("antecedent not an Event") };
+        let Meaning::Event(ce) = *consequent else { panic!("consequent not an Event") };
+        assert_eq!(ae.predicate, "ring", "the 'if' clause is the antecedent");
+        assert_eq!(ce.predicate, "wake", "the main clause is the consequent");
     }
 
     #[test]

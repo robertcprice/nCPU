@@ -80,24 +80,29 @@ fn verdict_against(facts: &[Meaning], goal: &Meaning) -> V {
     V::Idk
 }
 
-/// THE headline property, on the PROOF-BACKED branch — NOW SOUND.
+/// THE headline property, on the PROOF-BACKED branch — under BELIEF REVISION.
 ///
 /// We read one concrete fact, then ask a TRANSITIVELY entailed yes/no question
 /// ("Does a teacher write something?") which is true by chaining drop-patient +
 /// generalize-agent — so the answer is Yes AND `answer_explained` returns a PROOF
 /// (the `Verdict::Yes => Some(p)` branch, NOT the opaque directly-asserted branch).
 ///
-/// FIXED: the system no longer falsely promises "tell me the teacher does NOT
-/// write the report" — TELLING it that (the only way information enters the
-/// monotone world) leaves the verdict at Yes, because the positive leaf survives
-/// and still entails the existential. `what_would_change_your_mind` now reports
-/// the honest DEPENDENCY instead: the answer RESTS on the asserted leaf and would
-/// change only if that leaf were false, which the user cannot bring about. This
-/// test pins both: (i) the reported text is the honest dependency, never the false
-/// "if you told me" promise; (ii) telling the leaf's negation is genuinely a no-op
-/// (the reason the dependency framing is correct).
+/// The world model now performs BELIEF REVISION: a directly-asserted fact whose
+/// negation is later directly asserted is RETRACTED (most-recent-wins resolves the
+/// F-vs-NOT-F clash to one coherent belief; see `world_model::Revision`). So
+/// TELLING the mind "the teacher does NOT write the report" — the only way
+/// information enters the world — genuinely RETRACTS the supporting leaf, and the
+/// existential generalization that rested on it loses its only support: the verdict
+/// moves OFF Yes. The named flip is therefore REAL, not a false promise. This test
+/// pins both, against the actual revised semantics:
+///   (i)  `what_would_change_your_mind` honestly NAMES the leaf's negation as the
+///        flip (it is genuinely tellable now that revision is in force);
+///   (ii) telling the leaf's negation through the PUBLIC path independently moves
+///        the public verdict away from Yes — the genuineness check that proves the
+///        named flip actually flips, reconstructed from scratch by the adversary.
+/// A flip the impl names that did NOT actually move the verdict would falsify (i)+(ii).
 #[test]
-fn proof_backed_yes_reports_an_honest_dependency_not_a_false_flip() {
+fn proof_backed_yes_names_a_real_flip_that_revision_makes_genuine() {
     let engine = Engine::new();
     let mut discourse = Discourse::new();
     discourse.read(&engine, "The teacher writes the report.");
@@ -122,34 +127,31 @@ fn proof_backed_yes_reports_an_honest_dependency_not_a_false_flip() {
     assert_eq!(verdict_of(&baseline_mind), V::Yes, "Mind baseline Yes: {baseline_mind}");
     let wwcym = mind.what_would_change_your_mind(q);
     let lw = wwcym.to_lowercase();
-    // SOUND: it must NOT falsely promise that telling the leaf's negation flips it.
+    // SOUND under revision: telling the leaf's negation IS actionable (it retracts
+    // the support), so the mind honestly names it as a flip.
     assert!(
-        !lw.contains("i would change my mind if you told me"),
-        "must NOT name a flip that telling cannot achieve: {wwcym}"
-    );
-    // It reports the honest dependency on the asserted leaf (affirmative, not negated).
-    assert!(
-        lw.contains("rests on what you told me"),
-        "reports the dependency framing: {wwcym}"
+        lw.contains("i would change my mind if you told me"),
+        "names the genuinely-tellable flip: {wwcym}"
     );
     assert!(
-        lw.contains("the teacher writes the report"),
-        "names the leaf the answer depends on: {wwcym}"
+        lw.contains("the teacher does not write the report"),
+        "names the contradictory of the supporting leaf: {wwcym}"
     );
 
-    // (c) THE GROUNDING CHECK, through the PUBLIC monotone path: asserting the
-    // leaf's negation into a CLONE (the real, monotone way a user "tells" the mind
-    // something — there is NO public retraction) does NOT change the verdict. This
-    // no-op is exactly WHY the dependency framing (not a tellable flip) is correct.
+    // (c) THE GROUNDING CHECK, through the PUBLIC path: asserting the leaf's
+    // negation into a CLONE is the real way a user "tells" the mind something.
+    // Belief revision RETRACTS the positive leaf, so the existential generalization
+    // loses its support and the verdict moves OFF Yes. This genuine flip is exactly
+    // WHY naming it (not a dependency) is the correct, sound report.
     let flip = polarity_flip(&leaf).expect("an event leaf has a contradictory");
     let mut clone = discourse.clone();
     clone.world.assert(&flip);
     let cloned_answer = qa::answer(&engine, &clone, q);
-    assert_eq!(
+    assert_ne!(
         verdict_of(&cloned_answer),
         V::Yes,
-        "telling the mind the leaf's negation is a no-op in the monotone world — \
-         which is why the answer reports a dependency, not a flip. Got: {cloned_answer}"
+        "telling the mind the leaf's negation retracts the support under belief \
+         revision — the named flip genuinely moves the verdict off Yes. Got: {cloned_answer}"
     );
 
     // (e) NO LEAK: the original discourse is unchanged — same baseline verdict.

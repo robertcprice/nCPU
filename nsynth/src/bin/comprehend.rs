@@ -382,6 +382,14 @@ fn show_meaning(m: &Meaning) -> String {
             show_meaning(effect),
             show_meaning(cause)
         ),
+        Meaning::Conditional { antecedent, consequent, negated } => {
+            let neg = if *negated { "¬" } else { "" };
+            format!(
+                "{neg}Conditional{{ if {} then {} }}",
+                show_meaning(antecedent),
+                show_meaning(consequent)
+            )
+        }
         Meaning::DegreeQuestion { subject, scale } => {
             format!("Degree?{{ {}: {scale} }}", show_term(subject))
         }
@@ -903,10 +911,80 @@ fn demo_reflect() {
         reflect_line("explain_cause", q, &mind.explain_cause(q));
     }
 
-    println!("Every reflection above was grounded ONLY in the four sentences read at the top.");
-    println!("The mind explained its synthesized programs, showed its proofs, reasoned about");
-    println!("hypotheticals and counterfactuals against a private clone of its world, and was");
-    println!("honest about what it does not know — metacognition over learned understanding.");
+    // -----------------------------------------------------------------------
+    // (9) MODUS PONENS — conditional reasoning with a proof. A SECOND mind reads
+    // a rule ("if P then Q") and its antecedent ("P"), then DERIVES the
+    // consequent. `why` renders the modus-ponens chain bottoming out in the two
+    // premises it was told. The classic FALLACIES (affirming the consequent /
+    // denying the antecedent) are REFUSED — the mind answers "I don't know".
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (9) modus ponens — derive a consequent from a rule + its antecedent");
+    println!("  {}", "=".repeat(70));
+    let mut syllog = Mind::new();
+    for s in ["If the alarm rings then the guard wakes.", "The alarm rings."] {
+        let m = syllog.read(s);
+        println!("     read: {s}");
+        println!("        => {}", show_meaning(&m));
+    }
+    reflect_line("why", "Does the guard wake?", &syllog.why("Does the guard wake?"));
+    // The fallacy is refused: from "if P then Q" and Q, P does NOT follow.
+    let mut fallacy = Mind::new();
+    fallacy.read("If the alarm rings then the guard wakes.");
+    fallacy.read("The guard wakes.");
+    reflect_line(
+        "refuses fallacy",
+        "Does the alarm ring? (affirming the consequent — must stay open)",
+        &fallacy.ask("Does the alarm ring?"),
+    );
+    // Modus tollens: from "if P then Q" and NOT Q, derive NOT P — with a proof.
+    let mut tollens = Mind::new();
+    tollens.read("If the alarm rings then the guard wakes.");
+    tollens.read("The guard does not wake.");
+    reflect_line("why", "Does the alarm ring? (modus tollens)", &tollens.why("Does the alarm ring?"));
+
+    // -----------------------------------------------------------------------
+    // (10) BELIEF REVISION — the mind RESOLVES a contradiction it is told, then
+    // reports HOW it resolved it. A THIRD mind asserts a fact, then is told its
+    // negation. Most-recent-wins retracts the superseded belief; the surviving
+    // belief is coherent; `revisions()` surfaces the auditable record.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(70));
+    println!("  (10) belief revision — resolve a contradiction, then report HOW");
+    println!("  {}", "=".repeat(70));
+    let mut reviser = Mind::new();
+    reviser.read("The doctor signs the form.");
+    println!("     read: The doctor signs the form.");
+    println!(
+        "        before: \"Does the doctor sign the form?\" -> {}",
+        reviser.ask("Does the doctor sign the form?")
+    );
+    reviser.read("The doctor does not sign the form.");
+    println!("     read: The doctor does not sign the form.  (a direct contradiction)");
+    println!(
+        "        after:  \"Does the doctor sign the form?\" -> {}",
+        reviser.ask("Does the doctor sign the form?")
+    );
+    let revs = reviser.revisions();
+    println!("     revisions recorded: {}", revs.len());
+    for r in revs {
+        println!(
+            "        - superseded \"{}\", now holds \"{}\"  (reason: {})",
+            show_meaning(&Meaning::Event(r.superseded.clone())),
+            show_meaning(&Meaning::Event(r.surviving.clone())),
+            r.reason
+        );
+    }
+    println!(
+        "     (the world never holds both F and NOT F — it converges on one coherent belief.)\n"
+    );
+
+    println!("Every reflection above was grounded ONLY in the sentences each mind read.");
+    println!("The mind explained its synthesized programs, showed its proofs (including");
+    println!("modus-ponens / modus-tollens chains), reasoned about hypotheticals and");
+    println!("counterfactuals against a private clone of its world, RESOLVED a contradiction");
+    println!("by belief revision, and was honest about what it does not know — metacognition");
+    println!("over learned understanding.");
 }
 
 /// Trim a multi-line reflective answer for the transcript: keep at most

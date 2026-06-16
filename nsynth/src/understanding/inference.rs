@@ -154,7 +154,7 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
 /// `"cardinal-monotonicity"`, `"cardinal-existential-floor"`,
 /// `"modal-monotonicity"`, `"temporal-converse"`, `"temporal-asymmetry"`,
 /// `"causal-presupposition"`, `"double-negation-elimination"`,
-/// `"wide-to-narrow-negation"`.
+/// `"wide-to-narrow-negation"`, `"contrapositive"`, `"modus-ponens"`.
 pub fn consequences_traced(m: &Meaning) -> Vec<(Meaning, String)> {
     let mut out: Vec<(Meaning, String)> = Vec::new();
 
@@ -560,6 +560,32 @@ pub fn consequences_traced(m: &Meaning) -> Vec<(Meaning, String)> {
         }
         // A degree question asserts nothing, so it entails nothing.
         Meaning::DegreeQuestion { .. } => {}
+        // A CONDITIONAL "if P then Q". From the rule ALONE (no known antecedent)
+        // the one sound single-meaning consequence is the CONTRAPOSITIVE
+        // "if not-Q then not-P" — logically equivalent to the original. MODUS
+        // PONENS ("P known true => Q") needs a SECOND fact (the antecedent), so
+        // it is NOT derivable here from one meaning; it lives in `prove`/
+        // `prove_bounded` instead. We only emit the contrapositive when BOTH
+        // sides have a bivalent complement (`polarity_flip`); otherwise nothing
+        // (staying sound). A NEGATED conditional entails nothing here.
+        Meaning::Conditional {
+            antecedent,
+            consequent,
+            negated,
+        } => {
+            if !*negated {
+                if let (Some(not_ant), Some(not_cons)) =
+                    (polarity_flip(antecedent), polarity_flip(consequent))
+                {
+                    let contrapositive = Meaning::Conditional {
+                        antecedent: Box::new(not_cons),
+                        consequent: Box::new(not_ant),
+                        negated: false,
+                    };
+                    push_unique_traced(&mut out, contrapositive, "contrapositive");
+                }
+            }
+        }
     }
 
     out
@@ -781,6 +807,20 @@ pub fn polarity_flip(m: &Meaning) -> Option<Meaning> {
         // would be UNSOUND, so we stay open (Neutral). A degree question is
         // non-assertoric — no polarity to flip.
         Meaning::Causal { .. } | Meaning::DegreeQuestion { .. } => None,
+        // CONDITIONAL contradictory: the SAME conditional with the `negated` flag
+        // flipped. "if P then Q" guarantees "it is not the case that if P then Q"
+        // is false (and vice versa) — a conditional and its denial are genuine
+        // contradictories. We keep `antecedent`/`consequent` fixed and flip only
+        // `negated`, exactly mirroring the Modal/Comparison/Attitude flips above.
+        Meaning::Conditional {
+            antecedent,
+            consequent,
+            negated,
+        } => Some(Meaning::Conditional {
+            antecedent: antecedent.clone(),
+            consequent: consequent.clone(),
+            negated: !negated,
+        }),
     }
 }
 
@@ -1070,6 +1110,77 @@ fn prove_bounded(facts: &[Meaning], goal: &Meaning, depth: usize) -> Option<Proo
                     rule: "double-negation-introduction".to_string(),
                     premises: vec![xp],
                 });
+            }
+        }
+    }
+
+    // MODUS PONENS (two-fact, sound): to prove `goal`, look for a non-negated
+    // conditional fact `Conditional{ant, cons}` whose `cons` equals `goal` and
+    // whose `ant` is itself provable from the facts. Then `[proof_of_conditional,
+    // proof_of_antecedent] ⊢ goal` by modus ponens. Both premises must be
+    // genuinely provable (asserted or derived) — the conditional is matched among
+    // the `facts` (so it is asserted), and the antecedent is proved recursively —
+    // which keeps the step a real certificate, never a fabrication.
+    for f in facts {
+        if let Meaning::Conditional {
+            antecedent,
+            consequent,
+            negated: false,
+        } = f
+        {
+            if consequent.as_ref() == goal {
+                if let Some(ant_proof) = prove_bounded(facts, antecedent, depth - 1) {
+                    return Some(Proof {
+                        conclusion: goal.clone(),
+                        rule: "modus-ponens".to_string(),
+                        premises: vec![
+                            Proof {
+                                conclusion: f.clone(),
+                                rule: "asserted".to_string(),
+                                premises: vec![],
+                            },
+                            ant_proof,
+                        ],
+                    });
+                }
+            }
+        }
+    }
+
+    // MODUS TOLLENS (two-fact, sound): to prove a NEGATED `goal` (= ¬P), look for a
+    // non-negated conditional fact `Conditional{ant: P, cons: Q}` whose `ant`'s
+    // polarity-flip equals `goal` (so the goal IS ¬antecedent) and whose CONSEQUENT
+    // is FALSE — i.e. `¬Q` is itself provable from the facts. Then
+    // `[proof_of_conditional, proof_of_not_consequent] ⊢ ¬P` by modus tollens. We
+    // NEVER deny the antecedent (a false `P` is not used here) and NEVER affirm the
+    // consequent (a true `Q` is not used) — only the valid `¬Q, P->Q ⊢ ¬P` shape
+    // fires, so the two classic fallacies are structurally unreachable.
+    for f in facts {
+        if let Meaning::Conditional {
+            antecedent,
+            consequent,
+            negated: false,
+        } = f
+        {
+            // The goal must be exactly the negation of this rule's antecedent.
+            if polarity_flip(antecedent).as_ref() == Some(goal) {
+                // Prove the consequent is FALSE: its polarity-flip must be provable.
+                if let Some(not_cons) = polarity_flip(consequent) {
+                    if let Some(not_cons_proof) = prove_bounded(facts, &not_cons, depth - 1) {
+                        return Some(Proof {
+                            conclusion: goal.clone(),
+                            rule: "modus-tollens".to_string(),
+                            premises: vec![
+                                Proof {
+                                    conclusion: f.clone(),
+                                    rule: "asserted".to_string(),
+                                    premises: vec![],
+                                },
+                                not_cons_proof,
+                            ],
+                        });
+                    }
+                }
             }
         }
     }

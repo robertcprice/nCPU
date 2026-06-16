@@ -231,6 +231,10 @@ impl Discourse {
             Meaning::Modal { .. }
             | Meaning::Temporal { .. }
             | Meaning::Causal { .. }
+            // PLACEHOLDER (skeleton): a Conditional passes through unchanged, like
+            // Causal. Pronoun resolution for its antecedent/consequent sub-meanings
+            // lands when conditional anaphora is wired (mirror the Causal owner).
+            | Meaning::Conditional { .. }
             | Meaning::DegreeQuestion { .. }
             | Meaning::Not(_) => m.clone(),
             Meaning::Unknown(s) => Meaning::Unknown(s.clone()),
@@ -304,6 +308,10 @@ impl Discourse {
             Meaning::Modal { .. }
             | Meaning::Temporal { .. }
             | Meaning::Causal { .. }
+            // PLACEHOLDER (skeleton): observe no entities yet for a Conditional,
+            // like Causal. The owner notes animacy inside antecedent/consequent
+            // when conditional entity tracking lands.
+            | Meaning::Conditional { .. }
             | Meaning::DegreeQuestion { .. }
             | Meaning::Not(_) => {}
             Meaning::Unknown(_) => {}
@@ -375,6 +383,10 @@ impl Discourse {
             Meaning::Modal { .. }
             | Meaning::Temporal { .. }
             | Meaning::Causal { .. }
+            // PLACEHOLDER (skeleton): register no new referents for a Conditional
+            // yet, like Causal. The owner registers concrete referents inside its
+            // antecedent/consequent when conditional anaphora is wired.
+            | Meaning::Conditional { .. }
             | Meaning::DegreeQuestion { .. }
             | Meaning::Not(_) => {}
             Meaning::YesNoQuestion(_) | Meaning::WhQuestion { .. } | Meaning::Unknown(_) => {}

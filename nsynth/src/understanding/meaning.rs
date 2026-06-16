@@ -121,6 +121,14 @@ pub enum Meaning {
     /// "the street floods because the rain falls" — a causal link. Asserting it
     /// presupposes both `cause` and `effect` happened. NOT symmetric.
     Causal { cause: Box<Meaning>, effect: Box<Meaning> },
+    /// "if the rain falls then the street floods" — a stated material/defeasible
+    /// implication. STRICTLY WEAKER than `Causal`: asserting it does NOT
+    /// presuppose either `antecedent` or `consequent` happened — it only states
+    /// the rule. Sound truth: vacuously true when the antecedent is false; the
+    /// consequent must hold when the antecedent holds. `negated` flips the whole
+    /// conditional (its sound contradictory). Modus ponens (antecedent known
+    /// true → derive consequent) lives in inference/world_model, not here.
+    Conditional { antecedent: Box<Meaning>, consequent: Box<Meaning>, negated: bool },
     /// "how long is the report?" — a degree question over a gradable `scale`,
     /// answered from known comparison facts (or honestly "I don't know").
     DegreeQuestion { subject: Term, scale: String },

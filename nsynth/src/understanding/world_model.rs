@@ -100,15 +100,70 @@ struct CausalFact {
     effect: Meaning,
 }
 
+/// One asserted conditional rule: "if the rain falls THEN the street floods"
+/// stores `ConditionalFact { antecedent: rain-falls, consequent: street-floods }`.
+/// STRICTLY WEAKER than a `CausalFact`: asserting the rule does NOT presuppose
+/// either side happened (no `assert(antecedent)`/`assert(consequent)`), so unlike
+/// `assert_causal` we only record the implication. Modus-ponens forward chaining
+/// reads these rules; the link is directed (P->Q is not Q->P). `negated` records
+/// an asserted denial of the conditional ("it is not the case that if P then Q").
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConditionalFact {
+    antecedent: Meaning,
+    consequent: Meaning,
+    negated: bool,
+}
+
+/// PROVENANCE of a stored fact: was it directly `Asserted` by an input sentence,
+/// or `Derived` by an inference rule (e.g. modus ponens forward chaining)?
+/// Default is `Asserted`, matching the pre-existing assert path so behavior is
+/// unchanged. Tracked in a parallel ledger (`fact_provenance`) keyed by insertion
+/// order, so adding it does not alter the `Event` type or any existing query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Provenance {
+    /// stated directly by an input sentence (the only kind produced today)
+    #[default]
+    Asserted,
+    /// produced by a sound inference rule over existing facts (reserved for
+    /// modus-ponens forward chaining; no fact carries this tag yet)
+    Derived,
+}
+
 /// A logged INCONSISTENCY: an incoming assertoric meaning whose claim the world
-/// already entails the opposite of. We RECORD the conflict observationally (the
-/// fact log is append-only) but never auto-retract — belief revision is out of
-/// scope; this is a flag, not a fix. `incoming` is the meaning that conflicts;
-/// `note` is a short human-readable description of the clash.
+/// already entails the opposite of. We RECORD the conflict observationally and
+/// — for Event facts — RESOLVE it by [`World::revise_event`] (see [`Revision`]),
+/// so the fact store never simultaneously holds F and NOT F. `incoming` is the
+/// meaning that conflicts; `note` is a short human-readable description of the
+/// clash (and, when a resolution was applied, of how it was resolved).
 #[derive(Clone, Debug)]
 pub struct Contradiction {
     pub incoming: Meaning,
     pub note: String,
+}
+
+/// A logged BELIEF REVISION: when an incoming Event assertion conflicts (same
+/// content, opposite polarity) with a belief the world already holds, we resolve
+/// the clash to ONE coherent belief and record what changed and why.
+///
+/// `superseded` is the Event fact that LOST and was retracted from the live
+/// store; `surviving` is the Event fact that REMAINS true afterward. `reason`
+/// is the principled justification (provenance-weighting or most-recent-wins).
+/// The two events always share content and differ ONLY in polarity, so the world
+/// is coherent after revision: exactly one of {F, NOT F} survives.
+///
+/// SOUNDNESS: revision only ever resolves an inconsistency to one of the two
+/// directly-involved beliefs — it never fabricates a third belief and never
+/// changes any UNRELATED fact, so it can only move the world from incoherent
+/// (both F and NOT F stored) to coherent; it can never turn a correct answer
+/// into a wrong one.
+#[derive(Clone, Debug)]
+pub struct Revision {
+    /// the belief that lost and was retracted from the live store
+    pub superseded: Event,
+    /// the belief that survives (the live, coherent belief afterward)
+    pub surviving: Event,
+    /// principled justification for the resolution
+    pub reason: String,
 }
 
 /// A small model: asserted event facts, entity categories, and known entities.
@@ -136,9 +191,21 @@ pub struct World {
     temporals: Vec<TemporalFact>,
     /// asserted causal links ("the street floods because the rain falls").
     causals: Vec<CausalFact>,
+    /// asserted conditional rules ("if the rain falls then the street floods").
+    /// Stored WITHOUT presupposing either side; read by modus-ponens chaining.
+    conditionals: Vec<ConditionalFact>,
+    /// PARALLEL provenance ledger for `facts`: `fact_provenance[i]` records how
+    /// `facts[i]` entered the world (`Asserted` by default). Additive and
+    /// append-only — kept in lockstep with `facts` in `assert_event`, never
+    /// consulted by existing queries, so behavior is unchanged.
+    fact_provenance: Vec<Provenance>,
     /// observed inconsistencies: an incoming assertion the world already entails
-    /// the opposite of. FLAGGED, never auto-retracted (the log stays append-only).
+    /// the opposite of. FLAGGED, and (for Event facts) RESOLVED by `revise_event`.
     contradictions: Vec<Contradiction>,
+    /// belief revisions applied while asserting Event facts: each records the
+    /// superseded belief, the surviving belief, and the principled reason. Kept
+    /// in detection order; surfaced via [`World::revisions`].
+    revisions: Vec<Revision>,
 }
 
 impl World {
@@ -153,7 +220,10 @@ impl World {
             modals: Vec::new(),
             temporals: Vec::new(),
             causals: Vec::new(),
+            conditionals: Vec::new(),
+            fact_provenance: Vec::new(),
             contradictions: Vec::new(),
+            revisions: Vec::new(),
         }
     }
 
@@ -251,6 +321,16 @@ impl World {
             // and ALSO asserts both the cause and the effect: asserting the link
             // presupposes both happened.
             Meaning::Causal { cause, effect } => self.assert_causal(cause, effect),
+            // A conditional rule ("if P then Q") is recorded WITHOUT asserting
+            // either side — unlike Causal, it presupposes nothing. We only store
+            // the implication so modus-ponens chaining can fire later. (Forward
+            // chaining over already-known antecedents will hook into `revise` /
+            // the assert path; for now this is a pure, sound store.)
+            Meaning::Conditional {
+                antecedent,
+                consequent,
+                negated,
+            } => self.assert_conditional(antecedent, consequent, *negated),
             // Outer negation: assert the three-valued negation of the inner
             // meaning. "X does not write the report" wrapped as Not(Event) records
             // the event with flipped polarity; a Not over a quantifier records
@@ -260,6 +340,16 @@ impl World {
             // A degree question ("how long is the report?") is a query, not an
             // assertion — it carries no storable content.
             Meaning::DegreeQuestion { .. } => {}
+        }
+        // FORWARD-CHAINING RE-FIRE: a newly-asserted fact may make a previously
+        // stored conditional's antecedent true (modus ponens) or its consequent
+        // false (modus tollens). Re-run the bounded fixpoint so rules fire
+        // regardless of whether the rule or the triggering fact was read first.
+        // A `Conditional` already fired chaining inside `assert_conditional`, so
+        // skip the redundant pass for it; everything else re-fires. Cheap no-op
+        // when no rules are stored.
+        if !self.conditionals.is_empty() && !matches!(m, Meaning::Conditional { .. }) {
+            self.derive_modus_ponens();
         }
     }
 
@@ -332,6 +422,16 @@ impl World {
             Meaning::Temporal { rel, first, second } => self.holds_temporal(*rel, first, second),
             // Causal-link truth: is the directed cause->effect link known?
             Meaning::Causal { cause, effect } => self.holds_causal(cause, effect),
+            // Conditional truth (sound, three-valued material implication):
+            //   - vacuously TRUE when the antecedent is `Some(false)`;
+            //   - TRUE when the consequent is `Some(true)`;
+            //   - FALSE when antecedent `Some(true)` AND consequent `Some(false)`;
+            //   - otherwise `None` (open world). `negated` flips the verdict.
+            Meaning::Conditional {
+                antecedent,
+                consequent,
+                negated,
+            } => self.holds_conditional(antecedent, consequent, *negated),
             // Three-valued negation of the inner meaning's truth.
             Meaning::Not(inner) => negate3(self.holds(inner)),
             // A degree question is a query whose answer is a comparison phrase, not
@@ -352,10 +452,20 @@ impl World {
 
     /// All inconsistencies the world has flagged so far, in detection order. Each
     /// is an incoming assertion the world ALREADY entailed the opposite of at the
-    /// moment it was asserted. The conflicting fact is still in the log (we flag,
-    /// never retract); this is the observational record of the clash.
+    /// moment it was asserted. For Event facts the clash is also RESOLVED (see
+    /// [`World::revisions`]); the observational record of the clash is kept here.
     pub fn contradictions(&self) -> &[Contradiction] {
         &self.contradictions
+    }
+
+    /// All belief revisions applied so far, in the order they were resolved. Each
+    /// records the SUPERSEDED belief, the SURVIVING belief, and the principled
+    /// reason it was resolved that way (provenance-weighting, or most-recent-wins
+    /// when both were directly asserted). After every revision the world holds
+    /// exactly one of {F, NOT F} as true — never both — so this is the auditable
+    /// history of how the world stayed coherent.
+    pub fn revisions(&self) -> &[Revision] {
+        &self.revisions
     }
 
     /// How many KNOWN entities of `category` provably satisfy `body` (the body
@@ -418,6 +528,40 @@ impl World {
                 more: true,
                 than: Term::Entity(o.lesser.clone()),
                 negated: false,
+            })
+            .collect()
+    }
+
+    /// The world's DIRECTLY-ASSERTED event facts (provenance `Asserted`), the
+    /// genuine PREMISES a derivation reasons from — DERIVED facts are excluded
+    /// because they are conclusions, not premises. Used to reconstruct a
+    /// modus-ponens / modus-tollens proof: feeding `prove` the materialized derived
+    /// consequent would let it short-circuit to that fact as an `"asserted"` leaf
+    /// instead of rebuilding the inference chain. Returns each as an `Event`.
+    pub fn asserted_event_facts(&self) -> Vec<Event> {
+        self.facts
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.fact_provenance.get(*i).copied() == Some(Provenance::Asserted))
+            .map(|(_, f)| f.clone())
+            .collect()
+    }
+
+    /// The world's asserted CONDITIONAL rules as `Meaning::Conditional`s, so the
+    /// proof layer can build a modus-ponens / modus-tollens DERIVATION ("the guard
+    /// wakes because the alarm rings and if the alarm rings then the guard wakes").
+    /// The world model owns the forward-chaining VERDICT (it materializes the
+    /// derived consequent as a fact), but exposes no proof; `inference::prove`
+    /// rebuilds the certificate over these rule edges + the asserted event facts.
+    /// Both polarities are emitted (the rule's own `negated` flag is preserved) so
+    /// `prove` can apply the correct inference and never fire a denied rule.
+    pub fn conditional_facts(&self) -> Vec<Meaning> {
+        self.conditionals
+            .iter()
+            .map(|c| Meaning::Conditional {
+                antecedent: Box::new(c.antecedent.clone()),
+                consequent: Box::new(c.consequent.clone()),
+                negated: c.negated,
             })
             .collect()
     }
@@ -519,6 +663,27 @@ impl World {
     /// "the teacher who writes the report reads the book" makes both the read and
     /// (already-known) write available.
     fn assert_event(&mut self, ev: &Event) {
+        self.assert_event_with_provenance(ev, Provenance::Asserted);
+    }
+
+    /// Record an event predication with an explicit PROVENANCE, applying
+    /// ACTIONABLE BELIEF REVISION when the incoming fact conflicts (same content,
+    /// opposite polarity) with one the world already holds.
+    ///
+    /// Resolution policy (sound, provenance-weighted, most-recent-wins fallback):
+    ///   * A directly ASSERTED fact OUTRANKS a DERIVED one. If the incoming fact
+    ///     is `Asserted` and the conflicting stored belief is `Derived`, the
+    ///     incoming wins and the derived belief is RETRACTED.
+    ///   * If the incoming fact is `Derived` and the conflicting stored belief is
+    ///     `Asserted`, the asserted belief WINS — the incoming derived fact is
+    ///     NOT installed (a derivation never overturns a direct assertion).
+    ///   * If BOTH are directly asserted (or both derived), the MOST RECENT wins
+    ///     (the incoming) and the prior belief is RETRACTED and recorded as
+    ///     superseded.
+    /// In every branch the world ends holding exactly one of {F, NOT F}, never
+    /// both, and a [`Revision`] is logged. Non-conflicting facts are appended
+    /// exactly as before (deduplicating exact repeats).
+    fn assert_event_with_provenance(&mut self, ev: &Event, prov: Provenance) {
         // Register and resolve the arguments. We register the relative clause's
         // participants so the head entity is known, then resolve the Restricted
         // term to its referent for storage.
@@ -536,9 +701,88 @@ impl World {
             stored.recipient = Some(self.resolve_restricted(t));
         }
         // Deduplicate exact-equal facts so repeated reads don't bloat the model.
-        if !self.facts.iter().any(|f| f == &stored) {
-            self.facts.push(stored);
+        if self.facts.iter().any(|f| f == &stored) {
+            return;
         }
+        // BELIEF REVISION: find a stored fact of the SAME content but OPPOSITE
+        // polarity. Such a fact is a genuine F vs NOT-F clash that must be
+        // resolved so the world never holds both at once.
+        if let Some(idx) = self.conflicting_fact_index(&stored) {
+            self.revise_event(idx, stored, prov);
+            return;
+        }
+        // No conflict: append normally.
+        self.push_fact(stored, prov);
+    }
+
+    /// Index of a stored fact that shares CONTENT + aspect with `incoming` but has
+    /// the OPPOSITE polarity (a direct F-vs-NOT-F clash) — if any. We scan in
+    /// reverse so the most-recently asserted conflicting belief is the one we
+    /// resolve against, matching the "most-recent-wins" reading the rest of the
+    /// model already uses. Same-polarity facts are NOT conflicts (and exact
+    /// duplicates were already filtered by the caller).
+    fn conflicting_fact_index(&self, incoming: &Event) -> Option<usize> {
+        self.facts.iter().enumerate().rev().find_map(|(i, f)| {
+            let same = same_event_content(f, incoming)
+                && f.aspect == incoming.aspect
+                && f.negated != incoming.negated;
+            if same {
+                Some(i)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Resolve a detected conflict between the `incoming` fact (provenance
+    /// `incoming_prov`) and the stored fact at `idx` (opposite polarity, same
+    /// content). Applies the provenance-weighted, most-recent-wins policy and logs
+    /// a [`Revision`]. INVARIANT on return: the world holds exactly one of the two
+    /// beliefs — never both.
+    fn revise_event(&mut self, idx: usize, incoming: Event, incoming_prov: Provenance) {
+        let existing = self.facts[idx].clone();
+        let existing_prov = self.fact_provenance[idx];
+
+        // Decide who wins. A directly ASSERTED fact outranks a DERIVED one;
+        // otherwise the most recent (the incoming) wins.
+        let incoming_wins = match (incoming_prov, existing_prov) {
+            // Direct assertion beats a derived belief.
+            (Provenance::Asserted, Provenance::Derived) => true,
+            // A derivation never overturns a direct assertion.
+            (Provenance::Derived, Provenance::Asserted) => false,
+            // Same provenance class on both sides: most-recent (incoming) wins.
+            _ => true,
+        };
+
+        let reason = revision_reason(incoming_prov, existing_prov, incoming_wins);
+
+        if incoming_wins {
+            // Retract the stored (now superseded) belief and install the incoming.
+            self.facts.remove(idx);
+            self.fact_provenance.remove(idx);
+            self.revisions.push(Revision {
+                superseded: existing,
+                surviving: incoming.clone(),
+                reason,
+            });
+            self.push_fact(incoming, incoming_prov);
+        } else {
+            // The stored belief wins; the incoming (derived) fact is NOT installed.
+            self.revisions.push(Revision {
+                superseded: incoming,
+                surviving: existing,
+                reason,
+            });
+        }
+    }
+
+    /// Append an event fact AND its provenance tag, keeping the parallel
+    /// `fact_provenance` ledger in lockstep with `facts`. The only caller today
+    /// passes `Provenance::Asserted` (preserving existing behavior); a future
+    /// modus-ponens forward chainer will pass `Provenance::Derived`.
+    fn push_fact(&mut self, ev: Event, prov: Provenance) {
+        self.facts.push(ev);
+        self.fact_provenance.push(prov);
     }
 
     /// Record a category statement ("X is a person"). A negated category
@@ -1179,6 +1423,193 @@ impl World {
         }
     }
 
+    /// Record a conditional rule ("if P then Q"). UNLIKE `assert_causal`, this
+    /// presupposes NOTHING: we do NOT assert the antecedent or the consequent —
+    /// only the implication is stored (deduplicated). This keeps a conditional a
+    /// strictly weaker statement than a causal link.
+    ///
+    /// MODUS-PONENS HOOK (where forward chaining will live): after storing the
+    /// rule, a sound bounded forward chainer would scan whether the antecedent
+    /// `holds() == Some(true)` and, if so, `assert` the consequent tagged
+    /// `Provenance::Derived`. That step is intentionally a NO-OP for now (see
+    /// `derive_modus_ponens` / `revise`) so this scaffold changes no behavior.
+    fn assert_conditional(&mut self, antecedent: &Meaning, consequent: &Meaning, negated: bool) {
+        let fact = ConditionalFact {
+            antecedent: antecedent.clone(),
+            consequent: consequent.clone(),
+            negated,
+        };
+        if !self.conditionals.iter().any(|c| *c == fact) {
+            self.conditionals.push(fact);
+        }
+        // Fire sound forward chaining: a freshly-stored rule whose antecedent is
+        // already known true derives its consequent (modus ponens), and one whose
+        // consequent is already known false derives the negated antecedent (modus
+        // tollens). Runs to a bounded fixpoint so chained rules cascade.
+        self.derive_modus_ponens();
+    }
+
+    /// Sound three-valued truth of a conditional "if P then Q" (material/
+    /// defeasible implication), with `negated` flipping the final verdict:
+    ///   - `Some(true)`  if the consequent holds, OR the antecedent is `Some(false)`
+    ///                   (vacuously true);
+    ///   - `Some(false)` if the antecedent is `Some(true)` AND the consequent is
+    ///                   `Some(false)`;
+    ///   - `None`        otherwise (open world — not enough information).
+    fn holds_conditional(
+        &self,
+        antecedent: &Meaning,
+        consequent: &Meaning,
+        negated: bool,
+    ) -> Option<bool> {
+        let ant = self.holds(antecedent);
+        let cons = self.holds(consequent);
+        let base = if cons == Some(true) || ant == Some(false) {
+            Some(true)
+        } else if ant == Some(true) && cons == Some(false) {
+            Some(false)
+        } else {
+            None
+        };
+        if negated {
+            negate3(base)
+        } else {
+            base
+        }
+    }
+
+    /// SOUND FORWARD CHAINING over the stored conditional rules — modus ponens AND
+    /// modus tollens, run to a bounded fixpoint.
+    ///
+    /// For every non-negated `ConditionalFact { antecedent: P, consequent: Q }`:
+    ///   * MODUS PONENS — if `holds(P) == Some(true)`, the consequent must hold,
+    ///     so we assert `Q` as a `Provenance::Derived` fact. (P, P->Q ⊢ Q.)
+    ///   * MODUS TOLLENS — if `holds(Q) == Some(false)`, the antecedent must NOT
+    ///     hold, so we assert `NOT P` (the polarity-flip of P) as `Derived`.
+    ///     (¬Q, P->Q ⊢ ¬P.)
+    ///
+    /// SOUNDNESS — the two fallacies are STRUCTURALLY impossible here because we
+    /// only ever read the two valid premise shapes:
+    ///   * We NEVER affirm the consequent: a true `Q` (consequent) is not used to
+    ///     derive `P` — only a true ANTECEDENT fires ponens.
+    ///   * We NEVER deny the antecedent: a false `P` (antecedent) is not used to
+    ///     derive `¬Q` — only a false CONSEQUENT fires tollens.
+    /// A NEGATED conditional ("it is not the case that if P then Q") licenses no
+    /// chaining at all and is skipped.
+    ///
+    /// TERMINATION: each pass derives only NEW facts (the typed assert helpers
+    /// deduplicate), and the derivable universe — events/categories/attributes over
+    /// a finite entity/predicate vocabulary — is finite, so the fixpoint loop is
+    /// bounded. A small hard iteration cap is a belt-and-suspenders guard against
+    /// any unexpected non-monotonicity from belief revision.
+    fn derive_modus_ponens(&mut self) {
+        const MAX_PASSES: usize = 64;
+        for _ in 0..MAX_PASSES {
+            // Snapshot the rules: chaining mutates `facts`, not `conditionals`, so a
+            // clone keeps the borrow checker happy without changing the rule set.
+            let rules = self.conditionals.clone();
+            let mut derived_any = false;
+            for rule in &rules {
+                if rule.negated {
+                    continue; // a denied rule licenses no inference
+                }
+                // MODUS PONENS: antecedent true => derive the consequent.
+                if self.holds(&rule.antecedent) == Some(true) {
+                    derived_any |= self.assert_derived(&rule.consequent);
+                }
+                // MODUS TOLLENS: consequent false => derive the negated antecedent.
+                if self.holds(&rule.consequent) == Some(false) {
+                    if let Some(not_ant) = meaning_polarity_flip(&rule.antecedent) {
+                        derived_any |= self.assert_derived(&not_ant);
+                    }
+                }
+            }
+            if !derived_any {
+                break; // fixpoint reached
+            }
+        }
+    }
+
+    /// Assert `m` as a `Provenance::Derived` fact (the conclusion of a sound
+    /// inference step), returning `true` iff this introduced genuinely NEW
+    /// information (so the forward-chaining fixpoint can detect quiescence).
+    ///
+    /// Only the leaf assertoric shapes the curriculum's conditional clauses
+    /// actually take are materialized — Events (and their negations), categories,
+    /// and adjectival properties. Each is routed through the existing typed
+    /// `assert_*` paths with `Derived` provenance where the path supports it, so
+    /// belief revision still applies (a derived fact never overturns a direct
+    /// assertion). Shapes we do not materialize (quantifiers, nested conditionals,
+    /// questions, …) return `false` — soundly deriving nothing rather than guessing.
+    fn assert_derived(&mut self, m: &Meaning) -> bool {
+        // `holds` short-circuit: if the world already determines `m` with the
+        // same verdict, there is nothing new to add (keeps the fixpoint finite and
+        // avoids re-logging revisions for an already-settled belief).
+        match m {
+            Meaning::Event(ev) => {
+                if self.holds_event(ev) == Some(!ev.negated) {
+                    return false;
+                }
+                // `assert_derived_event` runs the same contradiction-detection +
+                // provenance-weighted revision as a direct assert, but tags the new
+                // belief `Derived` so a later direct assertion can outrank it.
+                self.assert_derived_event(ev);
+                true
+            }
+            Meaning::IsA { .. } | Meaning::HasProperty { .. } | Meaning::Comparison { .. } => {
+                if self.holds(m) == Some(true) {
+                    return false;
+                }
+                // These typed paths do not yet carry provenance; asserting through
+                // the ordinary path is sound (the conclusion is genuinely true) and
+                // keeps the verdict available to `holds`.
+                self.assert(m);
+                true
+            }
+            // The polarity-flip of a leaf (used by modus tollens) is itself one of
+            // the shapes above wrapped in their `negated` flag, so it is handled by
+            // the arms above. Anything else: derive nothing (stay sound).
+            _ => false,
+        }
+    }
+
+    /// Provenance of `facts[i]`, or `None` if out of range. Additive accessor;
+    /// not consulted by any existing query path.
+    #[allow(dead_code)]
+    pub fn provenance_of(&self, i: usize) -> Option<Provenance> {
+        self.fact_provenance.get(i).copied()
+    }
+
+    /// Assert an event meaning as a DERIVED belief (provenance `Derived`) rather
+    /// than a direct assertion. This is the entry point a sound modus-ponens
+    /// forward chainer uses for facts it INFERS, and is the counterpart of the
+    /// public `assert` for the derived case. Goes through the same revision
+    /// policy, so a derived belief that contradicts a directly asserted one is
+    /// rejected (the assertion wins) — see [`World::revise_event`].
+    pub fn assert_derived_event(&mut self, ev: &Event) {
+        self.detect_contradiction(&Meaning::Event(ev.clone()));
+        self.assert_event_with_provenance(ev, Provenance::Derived);
+    }
+
+    /// BELIEF-REVISION RESOLUTION for the REMAINING fact kinds (no-op for now).
+    ///
+    /// EVENT facts now resolve eagerly and soundly at assert time (see
+    /// [`World::assert_event_with_provenance`] / [`World::revise_event`] /
+    /// [`World::revisions`]): a directly asserted fact supersedes a derived one,
+    /// most-recent wins between two assertions, the superseded belief is
+    /// retracted, and a [`Revision`] is logged — so the world never simultaneously
+    /// holds F and NOT F as Event facts.
+    ///
+    /// This hook is reserved for extending the SAME provenance-weighted policy to
+    /// the accumulating Comparison `orderings` (removing a stale edge rather than
+    /// appending its negation) and to attributes/modals. Until then it changes
+    /// nothing: those kinds keep their soft most-recent-wins reading in `holds`.
+    #[allow(dead_code)]
+    pub fn revise(&mut self) {
+        // no-op: Event revision is wired at assert time; the remaining kinds
+        // (orderings/attributes/modals) keep their most-recent-wins reading.
+    }
+
     /// Assert an outer-negated meaning `Not(inner)`. Where `inner` has a storable
     /// polarity we record its NEGATION as a fact so a later positive query of
     /// `inner` returns `Some(false)`:
@@ -1225,6 +1656,14 @@ impl World {
             // double negation Not(Not(m)) is asserted as m, restoring the inner
             // assertion.)
             Meaning::Not(double) => self.assert(double),
+            // `Not(Conditional{..})` — a denial of the rule. We re-assert the
+            // conditional with its `negated` flag flipped through the normal
+            // path, mirroring how Not(IsA/HasProperty/...) flips polarity.
+            Meaning::Conditional {
+                antecedent,
+                consequent,
+                negated,
+            } => self.assert_conditional(antecedent, consequent, !*negated),
             Meaning::Quantified { .. }
             | Meaning::Or(_)
             | Meaning::Cardinal { .. }
@@ -1635,11 +2074,72 @@ fn is_possibility(modality: Modality) -> bool {
     matches!(modality, Modality::Can | Modality::Might)
 }
 
+/// Human-readable justification for a belief revision, given the provenance of
+/// the incoming and existing beliefs and which one won. Keeps the policy
+/// auditable: the reason text NAMES the principle that decided the resolution.
+fn revision_reason(
+    incoming_prov: Provenance,
+    existing_prov: Provenance,
+    incoming_wins: bool,
+) -> String {
+    match (incoming_prov, existing_prov) {
+        (Provenance::Asserted, Provenance::Derived) => {
+            "directly asserted fact supersedes a derived belief it contradicts".to_string()
+        }
+        (Provenance::Derived, Provenance::Asserted) => {
+            "derived belief is rejected: it contradicts a directly asserted fact".to_string()
+        }
+        _ if incoming_wins => {
+            "most-recent assertion supersedes the prior contradictory assertion".to_string()
+        }
+        _ => "prior belief retained over the contradictory incoming belief".to_string(),
+    }
+}
+
 /// Three-valued (Kleene) negation of a truth value: `Some(true)` <-> `Some(false)`,
 /// and `None` (undetermined) negates to `None`. This is the truth function behind
 /// the outer-scope `Not(m)` meaning — distinct from a leaf's own `negated` flag.
 fn negate3(v: Option<bool>) -> Option<bool> {
     v.map(|b| !b)
+}
+
+/// The sound CONTRADICTORY of a leaf assertoric meaning: its same content with
+/// the `negated` flag flipped. Used by MODUS TOLLENS to materialize "NOT P" once
+/// the consequent of "if P then Q" is known false. Defined only for the leaf
+/// shapes a conditional clause actually takes in this curriculum (Event, IsA,
+/// HasProperty, Comparison); a wide-scope `Not(inner)` flips by unwrapping to its
+/// inner meaning. Returns `None` for everything else, so modus tollens derives a
+/// negation only when it can name a genuine single-meaning contradictory — never
+/// fabricating one.
+fn meaning_polarity_flip(m: &Meaning) -> Option<Meaning> {
+    match m {
+        Meaning::Event(ev) => {
+            let mut e = ev.clone();
+            e.negated = !e.negated;
+            Some(Meaning::Event(e))
+        }
+        Meaning::IsA { subject, category, negated } => Some(Meaning::IsA {
+            subject: subject.clone(),
+            category: category.clone(),
+            negated: !negated,
+        }),
+        Meaning::HasProperty { subject, property, negated } => Some(Meaning::HasProperty {
+            subject: subject.clone(),
+            property: property.clone(),
+            negated: !negated,
+        }),
+        Meaning::Comparison { subject, scale, more, than, negated } => Some(Meaning::Comparison {
+            subject: subject.clone(),
+            scale: scale.clone(),
+            more: *more,
+            than: than.clone(),
+            negated: !negated,
+        }),
+        // A wide-scope negation flips to its inner meaning (¬¬P ≡ P).
+        Meaning::Not(inner) => Some((**inner).clone()),
+        // No single-meaning contradictory for the rest: derive nothing.
+        _ => None,
+    }
 }
 
 /// For an assertoric meaning (Event / IsA / HasProperty / Comparison), return
@@ -3075,6 +3575,159 @@ mod tests {
             1,
             "querying does not mutate the contradiction ledger"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Actionable belief revision (sound, provenance-weighted)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn revision_two_direct_assertions_most_recent_wins() {
+        // F asserted, then NOT F asserted (both DIRECT). Most-recent-wins: the
+        // world ends holding NOT F, exactly ONE revision is recorded, and the
+        // world NEVER simultaneously holds F and NOT F.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false))); // F
+        assert_eq!(w.revisions().len(), 0, "no revision before any conflict");
+        w.assert(&Meaning::Event(write_event("teacher", "report", true))); // NOT F
+
+        let positive = Meaning::Event(write_event("teacher", "report", false));
+        let negative = Meaning::Event(write_event("teacher", "report", true));
+        // The SURVIVING live belief is NOT F (the most recent direct assertion).
+        assert_eq!(w.holds(&positive), Some(false), "world holds NOT F after revision");
+        assert_eq!(w.holds(&negative), Some(true), "the negation is the live belief");
+
+        // Exactly one revision, and it supersedes F in favor of NOT F.
+        assert_eq!(w.revisions().len(), 1, "exactly one revision recorded");
+        let r = &w.revisions()[0];
+        assert_eq!(r.superseded.negated, false, "the superseded belief was F");
+        assert_eq!(r.surviving.negated, true, "the surviving belief is NOT F");
+        assert!(
+            r.reason.contains("most-recent"),
+            "most-recent-wins reason: {}",
+            r.reason
+        );
+
+        // COHERENCE INVARIANT: the live store holds exactly ONE polarity for this
+        // content — never both F and NOT F at once.
+        let pos_facts = w
+            .facts()
+            .iter()
+            .filter(|f| same_event_content(f, &write_event("teacher", "report", false)) && !f.negated)
+            .count();
+        let neg_facts = w
+            .facts()
+            .iter()
+            .filter(|f| same_event_content(f, &write_event("teacher", "report", false)) && f.negated)
+            .count();
+        assert_eq!(pos_facts, 0, "F was retracted: no positive fact remains");
+        assert_eq!(neg_facts, 1, "exactly the surviving NOT F remains");
+    }
+
+    #[test]
+    fn revision_derived_belief_yields_to_later_direct_assertion() {
+        // A DERIVED belief F, then a DIRECT assertion of NOT F. Provenance-weighted
+        // policy: the direct assertion outranks the derived belief, so the world
+        // ends holding NOT F (the direct one), with exactly one revision.
+        let mut w = World::new();
+        w.assert_derived_event(&write_event("teacher", "report", false)); // derived F
+        let positive = Meaning::Event(write_event("teacher", "report", false));
+        assert_eq!(w.holds(&positive), Some(true), "derived F holds initially");
+        assert_eq!(w.revisions().len(), 0);
+
+        // Direct assertion of NOT F supersedes the derived F.
+        w.assert(&Meaning::Event(write_event("teacher", "report", true)));
+        assert_eq!(w.holds(&positive), Some(false), "direct NOT F supersedes derived F");
+        assert_eq!(w.revisions().len(), 1, "exactly one revision");
+        let r = &w.revisions()[0];
+        assert_eq!(r.superseded.negated, false, "the derived F was superseded");
+        assert_eq!(r.surviving.negated, true, "the direct NOT F survives");
+        assert!(
+            r.reason.contains("directly asserted"),
+            "provenance-weighted reason names the asserted-beats-derived rule: {}",
+            r.reason
+        );
+    }
+
+    #[test]
+    fn revision_direct_assertion_beats_later_derived_belief() {
+        // The DUAL case: a DIRECT assertion of F, then a DERIVED belief of NOT F.
+        // A derivation must NEVER overturn a direct assertion, so the world keeps
+        // F; the derived NOT F is rejected (not installed), recorded as superseded.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false))); // direct F
+        let positive = Meaning::Event(write_event("teacher", "report", false));
+        assert_eq!(w.holds(&positive), Some(true));
+
+        // A derived NOT F arrives — it must NOT overturn the direct F.
+        w.assert_derived_event(&write_event("teacher", "report", true));
+        assert_eq!(
+            w.holds(&positive),
+            Some(true),
+            "the direct assertion is retained over a contradicting derived belief"
+        );
+        assert_eq!(w.revisions().len(), 1, "the rejection is recorded as a revision");
+        let r = &w.revisions()[0];
+        assert_eq!(r.surviving.negated, false, "the direct F survives");
+        assert_eq!(r.superseded.negated, true, "the derived NOT F is superseded");
+        assert!(
+            r.reason.contains("rejected"),
+            "reason names the derived-belief-rejected rule: {}",
+            r.reason
+        );
+
+        // COHERENCE: only the single direct F remains in the live store.
+        let neg_facts = w.facts().iter().filter(|f| f.negated).count();
+        assert_eq!(neg_facts, 0, "the rejected derived NOT F was never installed");
+    }
+
+    #[test]
+    fn revision_consistent_assertions_record_no_revision() {
+        // Consistent assertions (re-assert F, then an UNRELATED fact) must record
+        // NO revision and NO contradiction — revision only ever fires on a genuine
+        // F vs NOT F clash.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        w.assert(&Meaning::Event(write_event("teacher", "report", false))); // idempotent
+        w.assert(&Meaning::Event(write_event("editor", "memo", false))); // unrelated
+        assert_eq!(w.revisions().len(), 0, "no revision for consistent assertions");
+        assert_eq!(w.contradictions().len(), 0, "no contradiction either");
+        // Both live facts are still answerable and TRUE.
+        assert_eq!(
+            w.holds(&Meaning::Event(write_event("teacher", "report", false))),
+            Some(true)
+        );
+        assert_eq!(
+            w.holds(&Meaning::Event(write_event("editor", "memo", false))),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn revision_never_holds_both_polarities_after_oscillation() {
+        // SOUNDNESS under oscillation: F, NOT F, F again. After each step the world
+        // holds exactly ONE coherent belief, and the FINAL live belief is the most
+        // recent (F). Revisions are logged on each genuine flip.
+        let mut w = World::new();
+        let positive = Meaning::Event(write_event("teacher", "report", false));
+        let negative = Meaning::Event(write_event("teacher", "report", true));
+
+        w.assert(&positive); // F
+        w.assert(&negative); // NOT F  (revision #1: F -> NOT F)
+        assert_eq!(w.holds(&positive), Some(false));
+        w.assert(&positive); // F again (revision #2: NOT F -> F)
+        assert_eq!(w.holds(&positive), Some(true), "final live belief is the most recent F");
+
+        assert_eq!(w.revisions().len(), 2, "one revision per genuine polarity flip");
+        // The live store never holds both polarities: exactly one fact of this
+        // content remains, and it is positive.
+        let matching: Vec<bool> = w
+            .facts()
+            .iter()
+            .filter(|f| same_event_content(f, &write_event("teacher", "report", false)))
+            .map(|f| f.negated)
+            .collect();
+        assert_eq!(matching, vec![false], "exactly one coherent belief (F) survives");
     }
 }
 

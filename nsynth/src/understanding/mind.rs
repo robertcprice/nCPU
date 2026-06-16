@@ -135,6 +135,19 @@ impl Mind {
         self.discourse.world.contradictions()
     }
 
+    /// The belief revisions the world model has applied so far — metacognition
+    /// over how the mind RESOLVED inconsistencies, not merely flagged them. When
+    /// [`read`](Self::read) asserts a meaning that contradicts an Event belief the
+    /// world already holds, the world resolves the clash to ONE coherent belief
+    /// (a directly asserted fact supersedes a derived one; otherwise most-recent
+    /// wins) and records the superseded belief, the surviving belief, and the
+    /// reason. This surfaces that running ledger. An empty slice means nothing has
+    /// had to be revised — everything read so far was mutually coherent. Delegates
+    /// to the discourse's accumulated [`World`](crate::understanding::world_model::World).
+    pub fn revisions(&self) -> &[crate::understanding::world_model::Revision] {
+        self.discourse.world.revisions()
+    }
+
     /// Replay the fixed regression corpus against this mind's engine and return
     /// the resulting [`GateReport`](crate::self_improve::gate::GateReport) —
     /// metacognition over the mind's own competence. This is the self-check the
@@ -813,7 +826,11 @@ impl Mind {
             | Meaning::Attitude { .. }
             | Meaning::Modal { .. }
             | Meaning::Temporal { .. }
-            | Meaning::Causal { .. } => {
+            | Meaning::Causal { .. }
+            // A Conditional is a yes/no-evaluable proposition (the world has a
+            // three-valued verdict via `holds_conditional`), so it is a leaf
+            // atom like Causal.
+            | Meaning::Conditional { .. } => {
                 let resolved = self.resolve_meaning_terms(m);
                 if !out.contains(&resolved) {
                     out.push(resolved);
@@ -1575,6 +1592,130 @@ mod tests {
         assert!(
             low.contains("comparison-transitivity"),
             "chain must be labeled with the transitivity rule: {cmp}"
+        );
+    }
+
+    // ===================================================================
+    // CONDITIONAL / SYLLOGISTIC REASONING. Modus ponens and modus tollens
+    // are sound; affirming the consequent and denying the antecedent are the
+    // classic FALLACIES the reasoner must REFUSE (answer "I don't know.",
+    // never "yes"/"no"). Soundness is paramount.
+    // ===================================================================
+
+    #[test]
+    fn conditional_modus_ponens_derives_consequent_with_proof() {
+        // Read a rule, then assert its antecedent. The consequent must follow by
+        // MODUS PONENS, and `why` must render the named chain bottoming out in the
+        // two premises (the asserted antecedent and the conditional rule).
+        let mut mind = Mind::new();
+        mind.read("If the alarm rings then the guard wakes.");
+        mind.read("The alarm rings.");
+
+        // Verdict: "yes" — the guard wakes (derived, not directly asserted).
+        let a = mind.ask("Does the guard wake?");
+        assert!(a.to_lowercase().starts_with("yes"), "modus ponens => yes: {a}");
+
+        // Proof: a modus-ponens chain naming both premises.
+        let w = mind.why("Does the guard wake?");
+        let lw = w.to_lowercase();
+        assert!(lw.starts_with("yes"), "why agrees with ask: {w}");
+        assert!(lw.contains("(by modus-ponens)"), "names the modus-ponens rule: {w}");
+        assert!(lw.contains("because"), "renders a derivation chain: {w}");
+        // The asserted antecedent is the grounding leaf...
+        assert!(
+            lw.contains("you told me the alarm rings"),
+            "leaf restates the asserted antecedent: {w}"
+        );
+        // ...and the conditional rule appears as the other premise.
+        assert!(
+            lw.contains("if the alarm rings then the guard wakes"),
+            "the conditional rule is cited as a premise: {w}"
+        );
+    }
+
+    #[test]
+    fn conditional_inverted_surface_form_also_chains() {
+        // The inverted "<consequent> if <antecedent>" surface form must parse to the
+        // SAME directed rule (antecedent governed by "if"), so modus ponens still
+        // fires when the antecedent is asserted.
+        let mut mind = Mind::new();
+        mind.read("The guard wakes if the alarm rings.");
+        mind.read("The alarm rings.");
+        let a = mind.ask("Does the guard wake?");
+        assert!(a.to_lowercase().starts_with("yes"), "inverted-form ponens => yes: {a}");
+    }
+
+    #[test]
+    fn conditional_refuses_to_affirm_the_consequent() {
+        // FALLACY: from "if P then Q" and Q, one may NOT conclude P. Reading the
+        // rule and the CONSEQUENT must leave the antecedent OPEN ("I don't know."),
+        // never "yes".
+        let mut mind = Mind::new();
+        mind.read("If the alarm rings then the guard wakes.");
+        mind.read("The guard wakes.");
+        let a = mind.ask("Does the alarm ring?");
+        let la = a.to_lowercase();
+        assert!(
+            la.contains("don't know"),
+            "affirming the consequent is refused: {a}"
+        );
+        assert!(!la.starts_with("yes"), "must NOT affirm the consequent: {a}");
+    }
+
+    #[test]
+    fn conditional_refuses_to_deny_the_antecedent() {
+        // FALLACY: from "if P then Q" and NOT P, one may NOT conclude NOT Q. Reading
+        // the rule and the NEGATED ANTECEDENT must leave the consequent OPEN, never
+        // "no".
+        let mut mind = Mind::new();
+        mind.read("If the alarm rings then the guard wakes.");
+        mind.read("The alarm does not ring.");
+        let a = mind.ask("Does the guard wake?");
+        let la = a.to_lowercase();
+        assert!(la.contains("don't know"), "denying the antecedent is refused: {a}");
+        assert!(!la.starts_with("no"), "must NOT deny the antecedent: {a}");
+    }
+
+    #[test]
+    fn conditional_modus_tollens_derives_negated_antecedent_with_proof() {
+        // MODUS TOLLENS: from "if P then Q" and NOT Q, conclude NOT P. Reading the
+        // rule and the negated CONSEQUENT must make "does P?" answer "no", with a
+        // modus-tollens proof chain.
+        let mut mind = Mind::new();
+        mind.read("If the alarm rings then the guard wakes.");
+        mind.read("The guard does not wake.");
+
+        let a = mind.ask("Does the alarm ring?");
+        assert!(a.to_lowercase().starts_with("no"), "modus tollens => no: {a}");
+
+        let w = mind.why("Does the alarm ring?");
+        let lw = w.to_lowercase();
+        assert!(lw.starts_with("no"), "why agrees with ask: {w}");
+        assert!(lw.contains("(by modus-tollens)"), "names the modus-tollens rule: {w}");
+        assert!(
+            lw.contains("you told me the guard does not wake"),
+            "leaf restates the asserted negated consequent: {w}"
+        );
+        assert!(
+            lw.contains("if the alarm rings then the guard wakes"),
+            "the conditional rule is cited as a premise: {w}"
+        );
+    }
+
+    #[test]
+    fn conditional_alone_derives_nothing_about_either_side() {
+        // SOUNDNESS: a conditional presupposes NOTHING. Reading only the rule must
+        // leave BOTH the antecedent and the consequent open (no presupposition, no
+        // premature chaining).
+        let mut mind = Mind::new();
+        mind.read("If the alarm rings then the guard wakes.");
+        assert!(
+            mind.ask("Does the alarm ring?").to_lowercase().contains("don't know"),
+            "rule alone says nothing about the antecedent"
+        );
+        assert!(
+            mind.ask("Does the guard wake?").to_lowercase().contains("don't know"),
+            "rule alone says nothing about the consequent"
         );
     }
 
