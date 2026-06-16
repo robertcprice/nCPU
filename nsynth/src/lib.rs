@@ -14,6 +14,7 @@ pub mod program_trace;
 pub mod rejected_cache;
 pub mod runtime;
 pub mod search_family_router;
+pub mod self_improve;
 pub mod solved_cache;
 pub mod solver;
 pub mod strategy;

@@ -100,6 +100,17 @@ struct CausalFact {
     effect: Meaning,
 }
 
+/// A logged INCONSISTENCY: an incoming assertoric meaning whose claim the world
+/// already entails the opposite of. We RECORD the conflict observationally (the
+/// fact log is append-only) but never auto-retract — belief revision is out of
+/// scope; this is a flag, not a fix. `incoming` is the meaning that conflicts;
+/// `note` is a short human-readable description of the clash.
+#[derive(Clone, Debug)]
+pub struct Contradiction {
+    pub incoming: Meaning,
+    pub note: String,
+}
+
 /// A small model: asserted event facts, entity categories, and known entities.
 pub struct World {
     /// asserted event facts. Each carries its own `negated` polarity, so a
@@ -124,6 +135,9 @@ pub struct World {
     temporals: Vec<TemporalFact>,
     /// asserted causal links ("the street floods because the rain falls").
     causals: Vec<CausalFact>,
+    /// observed inconsistencies: an incoming assertion the world already entails
+    /// the opposite of. FLAGGED, never auto-retracted (the log stays append-only).
+    contradictions: Vec<Contradiction>,
 }
 
 impl World {
@@ -138,11 +152,18 @@ impl World {
             modals: Vec::new(),
             temporals: Vec::new(),
             causals: Vec::new(),
+            contradictions: Vec::new(),
         }
     }
 
     /// Add a declarative's content to the world. Questions are ignored.
     pub fn assert(&mut self, m: &Meaning) {
+        // CONTRADICTION DETECTION (observational, non-destructive): before
+        // recording an assertoric fact, check whether the world ALREADY entails
+        // the opposite of what this assertion claims. If so, log the conflict.
+        // We still record the fact below exactly as before — the log is purely
+        // observational and belief revision is intentionally out of scope.
+        self.detect_contradiction(m);
         match m {
             Meaning::Event(ev) => self.assert_event(ev),
             Meaning::IsA {
@@ -328,6 +349,14 @@ impl World {
         &self.facts
     }
 
+    /// All inconsistencies the world has flagged so far, in detection order. Each
+    /// is an incoming assertion the world ALREADY entailed the opposite of at the
+    /// moment it was asserted. The conflicting fact is still in the log (we flag,
+    /// never retract); this is the observational record of the clash.
+    pub fn contradictions(&self) -> &[Contradiction] {
+        &self.contradictions
+    }
+
     /// How many KNOWN entities of `category` provably satisfy `body` (the body
     /// evaluated with the member bound to its agent slot, `holds_event` =
     /// `Some(true)`). This is the model-theoretic count behind a CountQuestion
@@ -445,6 +474,38 @@ impl World {
     // ----------------------------------------------------------------------
     // assertion helpers
     // ----------------------------------------------------------------------
+
+    /// CONTRADICTION DETECTION. If `m` is an assertoric meaning (Event / IsA /
+    /// HasProperty / Comparison) and the world ALREADY entails the OPPOSITE of
+    /// what `m` claims, log a `Contradiction`. We compare on the POSITIVE form:
+    /// `m` claims that positive form is true (when `m` is affirmative) or false
+    /// (when `m` is negated); a contradiction is a definite prior verdict equal
+    /// to the opposite of that claim.
+    ///
+    /// SOUNDNESS / SCOPE: only DEFINITE prior verdicts (`Some(true)`/`Some(false)`)
+    /// can clash — an open-world `None` is never a contradiction. We never
+    /// retract: the conflicting fact is still recorded by `assert`. Non-assertoric
+    /// meanings (quantifiers, modals, attitudes, questions, ...) are skipped — the
+    /// contract limits flagging to the four ground assertoric kinds.
+    fn detect_contradiction(&mut self, m: &Meaning) {
+        let Some((positive_form, claims_true)) = assertoric_positive_form(m) else {
+            return;
+        };
+        // What does the world ALREADY entail about the positive proposition?
+        let prior = self.holds(&positive_form);
+        // A contradiction is a DEFINITE prior verdict opposite to the claim.
+        if prior == Some(!claims_true) {
+            let note = format!(
+                "incoming assertion claims the proposition is {}, but the world already entails it is {}",
+                if claims_true { "true" } else { "false" },
+                if claims_true { "false" } else { "true" },
+            );
+            self.contradictions.push(Contradiction {
+                incoming: m.clone(),
+                note,
+            });
+        }
+    }
 
     /// Record an event predication. Registers its arguments as entities,
     /// derives their animacy categories, and stores the fact (deduplicated).
@@ -1580,6 +1641,73 @@ fn negate3(v: Option<bool>) -> Option<bool> {
     v.map(|b| !b)
 }
 
+/// For an assertoric meaning (Event / IsA / HasProperty / Comparison), return
+/// its POSITIVE (un-negated) form together with whether the original meaning
+/// CLAIMS that positive form is true. An affirmative assertion claims `true`; a
+/// negated one ("does not write" / "is not careful" / "is not longer than")
+/// claims `false`. A wide-scope `Not(...)` wrapper over one of these four kinds
+/// is unwrapped and flips the claimed polarity (so `Not(Event{neg:false})` and
+/// `Event{neg:true}` agree). Returns `None` for every NON-assertoric meaning
+/// (quantifiers, disjunctions, modals, attitudes, temporals, causals,
+/// questions, unknowns) — contradiction flagging is limited to ground
+/// assertoric facts by contract.
+fn assertoric_positive_form(m: &Meaning) -> Option<(Meaning, bool)> {
+    match m {
+        Meaning::Event(ev) => {
+            let mut positive = ev.clone();
+            let claims_true = !positive.negated;
+            positive.negated = false;
+            Some((Meaning::Event(positive), claims_true))
+        }
+        Meaning::IsA {
+            subject,
+            category,
+            negated,
+        } => Some((
+            Meaning::IsA {
+                subject: subject.clone(),
+                category: category.clone(),
+                negated: false,
+            },
+            !*negated,
+        )),
+        Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } => Some((
+            Meaning::HasProperty {
+                subject: subject.clone(),
+                property: property.clone(),
+                negated: false,
+            },
+            !*negated,
+        )),
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } => Some((
+            Meaning::Comparison {
+                subject: subject.clone(),
+                scale: scale.clone(),
+                more: *more,
+                than: than.clone(),
+                negated: false,
+            },
+            !*negated,
+        )),
+        // A wide-scope negation over an assertoric kind: unwrap and FLIP the
+        // claimed polarity. We descend at most one level into the four assertoric
+        // kinds; a `Not` over anything else (quantifier/modal/...) is not an
+        // assertoric claim we flag.
+        Meaning::Not(inner) => assertoric_positive_form(inner).map(|(p, claims)| (p, !claims)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2705,6 +2833,247 @@ mod tests {
         let p = Meaning::Event(write_event("teacher", "report", false));
         w.assert(&Meaning::Not(Box::new(p.clone())));
         assert_eq!(w.holds(&p), Some(false));
+    }
+
+    // -------------------------------------------------------------------
+    // Contradiction detection
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn contradiction_flagged_on_event_negation_clash() {
+        // "the teacher writes the report." then "the teacher does not write the
+        // report." — the negation contradicts the prior positive fact.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        // No conflict yet (first assertion is over an empty world).
+        assert_eq!(w.contradictions().len(), 0);
+        // The negation conflicts with the entailed-true positive fact.
+        w.assert(&Meaning::Event(write_event("teacher", "report", true)));
+        assert_eq!(w.contradictions().len(), 1);
+        // The logged conflict carries the incoming (negated) meaning.
+        let c = &w.contradictions()[0];
+        assert_eq!(c.incoming, Meaning::Event(write_event("teacher", "report", true)));
+        assert!(!c.note.is_empty());
+        // We FLAG but never RETRACT: the negated fact is still recorded, so the
+        // most-recent assertion now makes the positive query Some(false).
+        let positive = Meaning::Event(write_event("teacher", "report", false));
+        assert_eq!(w.holds(&positive), Some(false));
+    }
+
+    #[test]
+    fn consistent_pair_adds_no_contradiction() {
+        // Re-asserting the SAME positive fact is not a contradiction.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        assert_eq!(w.contradictions().len(), 0);
+        // An unrelated, independent fact is also no contradiction.
+        w.assert(&Meaning::Event(write_event("editor", "memo", false)));
+        assert_eq!(w.contradictions().len(), 0);
+    }
+
+    #[test]
+    fn contradiction_flagged_when_positive_clashes_with_prior_negation() {
+        // Reverse order: assert the negation first, then the positive. The world
+        // already entails the positive is FALSE, so the positive assertion clashes
+        // (this is the literal `holds(positive_form) == Some(false)` trigger).
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", true)));
+        assert_eq!(w.contradictions().len(), 0);
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        assert_eq!(w.contradictions().len(), 1);
+    }
+
+    #[test]
+    fn contradiction_flagged_on_isa_clash() {
+        // "the report is a thing" is entailed (animacy/taxonomy); asserting "the
+        // report is not a thing" contradicts it.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        let report_not_thing = Meaning::IsA {
+            subject: Term::Entity("report".to_string()),
+            category: "thing".to_string(),
+            negated: true,
+        };
+        w.assert(&report_not_thing);
+        assert_eq!(w.contradictions().len(), 1);
+    }
+
+    #[test]
+    fn contradiction_flagged_on_property_clash() {
+        // "the teacher is careful." then "the teacher is not careful." clash.
+        let mut w = World::new();
+        let careful = Meaning::HasProperty {
+            subject: Term::Entity("teacher".to_string()),
+            property: "careful".to_string(),
+            negated: false,
+        };
+        let not_careful = Meaning::HasProperty {
+            subject: Term::Entity("teacher".to_string()),
+            property: "careful".to_string(),
+            negated: true,
+        };
+        w.assert(&careful);
+        assert_eq!(w.contradictions().len(), 0);
+        w.assert(&not_careful);
+        assert_eq!(w.contradictions().len(), 1);
+    }
+
+    #[test]
+    fn contradiction_flagged_via_not_wrapper() {
+        // A wide-scope Not(Event) over an entailed-true positive is also flagged
+        // (the Not wrapper is unwrapped to the assertoric positive form).
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        let p = Meaning::Event(write_event("teacher", "report", false));
+        w.assert(&Meaning::Not(Box::new(p)));
+        assert_eq!(w.contradictions().len(), 1);
+    }
+
+    #[test]
+    fn open_world_unknown_is_not_a_contradiction() {
+        // With no prior information, a negated assertion is just a new fact, not a
+        // clash (holds(positive) is None, not a definite opposite).
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", true)));
+        assert_eq!(w.contradictions().len(), 0);
+    }
+
+    #[test]
+    fn non_assertoric_meanings_never_flagged() {
+        // A quantifier whose body is even determined-false is a CHECKED claim, not
+        // an assertoric ground fact, so it is never flagged as a contradiction.
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", true)));
+        w.assert(&Meaning::Quantified {
+            quant: Quantifier::Every,
+            var_category: "person".to_string(),
+            body: quant_body("report"),
+        });
+        assert_eq!(w.contradictions().len(), 0);
+    }
+
+    #[test]
+    fn discrimination_probe_detector_is_not_trivial() {
+        // ANTI-TRIVIALITY: prove detect_contradiction actually DISCRIMINATES and
+        // is neither an always-0 stub (would miss the clash) nor an always-1 stub
+        // (would false-positive on the consistent case).
+
+        // (1) Consistent second fact after the first => still 0 (not always-1).
+        let mut consistent = World::new();
+        consistent.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        consistent.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        assert_eq!(consistent.contradictions().len(), 0);
+
+        // (2) Genuine clash => >=1 (not always-0). Independent injected clash.
+        let mut clash = World::new();
+        clash.assert(&Meaning::HasProperty {
+            subject: Term::Entity("editor".to_string()),
+            property: "tired".to_string(),
+            negated: false,
+        });
+        clash.assert(&Meaning::HasProperty {
+            subject: Term::Entity("editor".to_string()),
+            property: "tired".to_string(),
+            negated: true,
+        });
+        assert_eq!(clash.contradictions().len(), 1);
+
+        // (3) Asserting the SAME negation twice over a held-true fact flags TWICE
+        // (each assertion is checked against the then-current world). Documents the
+        // append-only, per-assertion semantics — it is not deduplicated.
+        let mut twice = World::new();
+        twice.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        twice.assert(&Meaning::Event(write_event("teacher", "report", true)));
+        twice.assert(&Meaning::Event(write_event("teacher", "report", true)));
+        // After the first negation the world holds Some(false) for the positive;
+        // the SECOND negation claims the positive is false too -> NO new clash with
+        // the (now-negative) state, so the count stays at 1. This pins the exact
+        // semantics under repetition.
+        assert_eq!(twice.contradictions().len(), 1);
+    }
+
+    #[test]
+    fn adversarial_contradiction_substrate_exact_counts() {
+        // ADVERSARIAL VERIFICATION of the contradiction-detection substrate.
+        // Contract: asserting a fact then its negation must report EXACTLY ONE
+        // inconsistency; a wholly consistent world reports ZERO; and a large
+        // battery of independent consistent assertions must NOT produce a single
+        // false positive.
+
+        // ---- Part A: fact then its negation -> EXACTLY 1 inconsistency. ----
+        let mut w = World::new();
+        w.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        assert_eq!(
+            w.contradictions().len(),
+            0,
+            "a lone fact over an empty world is consistent"
+        );
+        // The direct negation of the just-asserted fact.
+        w.assert(&Meaning::Event(write_event("teacher", "report", true)));
+        assert_eq!(
+            w.contradictions().len(),
+            1,
+            "a fact and its negation must report EXACTLY one inconsistency"
+        );
+        // The single logged conflict names the incoming (negated) meaning and a
+        // non-empty human-readable note.
+        let c = &w.contradictions()[0];
+        assert_eq!(
+            c.incoming,
+            Meaning::Event(write_event("teacher", "report", true)),
+            "the logged contradiction carries the conflicting incoming meaning"
+        );
+        assert!(!c.note.is_empty(), "the contradiction carries a description");
+
+        // ---- Part B: a wholly consistent world reports ZERO. ----
+        // A SEPARATE world built only from mutually compatible assertions: distinct
+        // events, an IsA on its animacy-consistent category, a property, and a
+        // benign re-assertion of an identical fact (idempotent, not a clash).
+        let mut consistent = World::new();
+        // Distinct, non-overlapping events (different agents/patients/predicates).
+        consistent.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        consistent.assert(&Meaning::Event(read_event("editor", "book")));
+        consistent.assert(&Meaning::Event(write_event("author", "memo", false)));
+        // An IsA consistent with animacy ("report" is inanimate => a thing).
+        consistent.assert(&Meaning::IsA {
+            subject: Term::Entity("report".to_string()),
+            category: "thing".to_string(),
+            negated: false,
+        });
+        // A property with no opposing assertion.
+        consistent.assert(&Meaning::HasProperty {
+            subject: Term::Entity("teacher".to_string()),
+            property: "careful".to_string(),
+            negated: false,
+        });
+        // Idempotent re-assertion of an already-held fact (NOT a contradiction).
+        consistent.assert(&Meaning::Event(write_event("teacher", "report", false)));
+        // A negated assertion about a SEPARATE, previously-unmentioned fact: the
+        // world holds None for it, so under the open-world assumption this is new
+        // information, not a clash.
+        consistent.assert(&Meaning::Event(write_event("clerk", "ledger", true)));
+        assert_eq!(
+            consistent.contradictions().len(),
+            0,
+            "no false positives: a fully consistent world flags nothing"
+        );
+
+        // ---- Part C: the substrate stays sound under repeated probing. ----
+        // The flag is observational and append-only: re-running holds on the
+        // first world's positive fact still reflects the (non-retracted) negation,
+        // and the contradiction count never spontaneously grows.
+        let positive = Meaning::Event(write_event("teacher", "report", false));
+        assert_eq!(
+            w.holds(&positive),
+            Some(false),
+            "flagged-but-not-retracted: the negation is still recorded"
+        );
+        assert_eq!(
+            w.contradictions().len(),
+            1,
+            "querying does not mutate the contradiction ledger"
+        );
     }
 }
 

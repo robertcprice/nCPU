@@ -72,6 +72,32 @@ impl Mind {
     pub fn engine(&self) -> &Engine {
         &self.engine
     }
+
+    /// The contradictions the world model has detected so far — metacognition
+    /// over consistency. As [`read`](Self::read) asserts each resolved meaning,
+    /// the world records any clash with what it already holds (e.g. a fact and
+    /// its negation, or incompatible comparison edges). This surfaces that
+    /// running ledger without re-deriving it, delegating straight to the
+    /// discourse's accumulated [`World`](crate::understanding::world_model::World).
+    /// An empty slice means everything read so far is mutually consistent.
+    pub fn contradictions(&self) -> &[crate::understanding::world_model::Contradiction] {
+        self.discourse.world.contradictions()
+    }
+
+    /// Replay the fixed regression corpus against this mind's engine and return
+    /// the resulting [`GateReport`](crate::self_improve::gate::GateReport) —
+    /// metacognition over the mind's own competence. This is the self-check the
+    /// self-improvement substrate uses as its guard: every golden case (setup
+    /// sentences, a question, an expected answer) is replayed through a fresh
+    /// discourse and a battery of soundness invariants is probed, all against
+    /// THIS mind's engine. The report's `ok()` is true only when every
+    /// behavioral case passed and every soundness invariant held. Purely a
+    /// consumer of the engine — it never mutates it — so a mind can audit itself
+    /// at any time. Delegates to
+    /// [`regression_gate`](crate::self_improve::gate::regression_gate).
+    pub fn self_check(&self) -> crate::self_improve::gate::GateReport {
+        crate::self_improve::gate::regression_gate(&self.engine)
+    }
 }
 
 #[cfg(test)]
