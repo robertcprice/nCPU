@@ -57,6 +57,24 @@ int main(void) {
     }
 
     ncpu_engine_free(e);
+
+    printf("\n  understanding mind — read a passage, then ask (answers from the world model):\n");
+    NcpuMind *mind = ncpu_mind_new();
+    ncpu_read(mind, "The teacher writes the report.");
+    ncpu_read(mind, "The author reads the book.");
+    const char *questions[] = {
+        "Who writes the report?",
+        "What does the author read?",
+        "Is the report a person?",
+    };
+    for (int i = 0; i < 3; i++) {
+        char ans[128];
+        if (ncpu_ask(mind, questions[i], ans, sizeof ans) >= 0) {
+            printf("    Q: %-26s A: %s\n", questions[i], ans);
+        }
+    }
+    ncpu_mind_free(mind);
+
     printf("\nevery answer above was decided by a synthesized Mog program, called from C.\n");
     return 0;
 }

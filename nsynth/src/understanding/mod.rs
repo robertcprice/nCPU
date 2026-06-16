@@ -12,3 +12,4 @@ pub mod world_model;
 pub mod inference;
 pub mod discourse;
 pub mod qa;
+pub mod mind;

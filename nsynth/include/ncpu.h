@@ -41,6 +41,29 @@ int ncpu_judge_argument(const NcpuEngine *engine, const char *sentence);
  * -2 if the buffer is too small. Regulars via rule, irregulars via lexicon. */
 int ncpu_verb_3sg(const NcpuEngine *engine, const char *base, char *out, size_t cap);
 
+/* ----------------------------------------------------------------------------
+ * Understanding mind: read sentences to build a world model, then ask questions
+ * answered from what was read (logical form + truth + coreference + inference).
+ * -------------------------------------------------------------------------- */
+
+/* Opaque stateful understanding mind. */
+typedef struct NcpuMind NcpuMind;
+
+/* Build a mind (synthesizes the lexicon/rules once; takes a few seconds). */
+NcpuMind *ncpu_mind_new(void);
+
+/* Release a mind. NULL is a no-op. */
+void ncpu_mind_free(NcpuMind *mind);
+
+/* Read a sentence into the world model (coreference + fact assertion).
+ * Returns 0 on success, -1 on invalid input. */
+int ncpu_read(NcpuMind *mind, const char *sentence);
+
+/* Answer a question from what the mind has read; writes the answer
+ * NUL-terminated into `out` (capacity `cap`). Returns bytes written (excl NUL),
+ * -1 on invalid input, -2 if the buffer is too small. */
+int ncpu_ask(const NcpuMind *mind, const char *question, char *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

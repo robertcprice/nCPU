@@ -14,6 +14,74 @@
 use std::ffi::{c_char, CStr};
 
 use crate::comprehension::Engine;
+use crate::understanding::mind::Mind;
+
+/// Opaque handle to a stateful understanding "mind" (an engine + a discourse it
+/// reads into). Create with [`ncpu_mind_new`], release with [`ncpu_mind_free`].
+pub struct NcpuMind(Mind);
+
+/// Build a mind (synthesizes the lexicon/rules once; takes a few seconds).
+///
+/// # Safety
+/// The returned pointer must be released exactly once with [`ncpu_mind_free`].
+#[no_mangle]
+pub extern "C" fn ncpu_mind_new() -> *mut NcpuMind {
+    Box::into_raw(Box::new(NcpuMind(Mind::new())))
+}
+
+/// Release a mind created by [`ncpu_mind_new`]. Null is a no-op.
+///
+/// # Safety
+/// `mind` must be a pointer from [`ncpu_mind_new`], not used afterwards.
+#[no_mangle]
+pub unsafe extern "C" fn ncpu_mind_free(mind: *mut NcpuMind) {
+    if !mind.is_null() {
+        drop(Box::from_raw(mind));
+    }
+}
+
+/// Read a sentence into the world model (resolving coreference, asserting facts).
+/// Returns 0 on success, -1 on null/invalid input.
+///
+/// # Safety
+/// `mind` must be a valid handle; `sentence` a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn ncpu_read(mind: *mut NcpuMind, sentence: *const c_char) -> i32 {
+    if mind.is_null() || sentence.is_null() {
+        return -1;
+    }
+    let Ok(s) = CStr::from_ptr(sentence).to_str() else { return -1 };
+    (*mind).0.read(s);
+    0
+}
+
+/// Answer a question from what the mind has read, writing the answer
+/// NUL-terminated into `out` (capacity `cap`). Returns bytes written (excl NUL),
+/// -1 on null/invalid input, -2 if the buffer is too small.
+///
+/// # Safety
+/// `mind` must be a valid handle; `question` a valid NUL-terminated UTF-8 string;
+/// `out` must point to at least `cap` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn ncpu_ask(
+    mind: *const NcpuMind,
+    question: *const c_char,
+    out: *mut c_char,
+    cap: usize,
+) -> i32 {
+    if mind.is_null() || question.is_null() || out.is_null() || cap == 0 {
+        return -1;
+    }
+    let Ok(q) = CStr::from_ptr(question).to_str() else { return -1 };
+    let answer = (*mind).0.ask(q);
+    let bytes = answer.as_bytes();
+    if bytes.len() + 1 > cap {
+        return -2;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, bytes.len());
+    *out.add(bytes.len()) = 0;
+    bytes.len() as i32
+}
 
 /// Third-person-singular form of a verb base, written NUL-terminated into `out`
 /// (capacity `cap` bytes). Regular verbs go through the synthesized rule;
