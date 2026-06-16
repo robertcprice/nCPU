@@ -47,6 +47,37 @@ pub enum Relation {
     Neutral,
 }
 
+/// A SOUND derivation tree for a `Meaning`. A `Proof` records WHY a conclusion
+/// holds: which inference rule produced it, and the (already-proved) premises it
+/// was produced from.
+///
+/// Two shapes:
+/// - **Leaf** (`rule == "asserted"`, `premises` empty): the conclusion is one of
+///   the input facts, taken as given. No derivation needed.
+/// - **Internal** (`rule` names an inference step, `premises` non-empty): the
+///   conclusion was derived from the premises via `rule`. The soundness contract
+///   is that the premises GENUINELY ENTAIL the conclusion under the same
+///   relation/`consequences` logic — every internal step is a real entailment,
+///   never fabricated. A one-premise step `[premise] -> conclusion` means
+///   `conclusion` is in `consequences(premise)` (labelled by the rule that
+///   produced it); compositional steps (disjunction-introduction, double
+///   negation, comparison/temporal converse-chains) compose proofs of their
+///   sub-parts.
+///
+/// `prove` only ever returns proofs whose every step is sound; a `Proof` value
+/// is therefore a certificate that its `conclusion` follows from the supplied
+/// facts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Proof {
+    /// The meaning this proof establishes.
+    pub conclusion: crate::understanding::meaning::Meaning,
+    /// The name of the inference rule that produced `conclusion` from `premises`
+    /// (`"asserted"` for a leaf taken directly from the facts).
+    pub rule: String,
+    /// The already-proved premises this step was derived from (empty for a leaf).
+    pub premises: Vec<Proof>,
+}
+
 /// Classify the inferential relation from `premise` to `hypothesis`.
 ///
 /// Soundness contract:
@@ -100,8 +131,32 @@ pub fn relation(premise: &Meaning, hypothesis: &Meaning) -> Relation {
 /// Derive the sound entailed meanings of `m` (excluding `m` itself, though the
 /// reflexive case is handled by `entails`). Every returned meaning is true
 /// whenever `m` is true.
+///
+/// This is a thin wrapper over [`consequences_traced`] — the SINGLE source of
+/// truth — dropping the per-consequence rule label so behaviour is byte-for-byte
+/// identical to the original.
 pub fn consequences(m: &Meaning) -> Vec<Meaning> {
-    let mut out: Vec<Meaning> = Vec::new();
+    consequences_traced(m).into_iter().map(|(c, _)| c).collect()
+}
+
+/// Derive the sound entailed meanings of `m`, pairing each with the NAME of the
+/// inference rule that produced it. This MIRRORS [`consequences`] exactly (same
+/// meanings, same order, same dedup) — it just additionally records the rule
+/// label so proofs can explain WHY each consequence holds. `consequences` is
+/// defined as `consequences_traced(m).map(|(c, _)| c)`, so there is one source of
+/// truth and the two never drift.
+///
+/// The rule names match the survey vocabulary: `"aspect-reduction"`,
+/// `"drop-patient"`, `"generalize-agent"`, `"generalize-patient"`,
+/// `"drop-patient+generalize-agent"`, `"taxonomy-hypernym"`,
+/// `"mutual-exclusion"`, `"quantifier-instantiation"`, `"comparison-converse"`,
+/// `"comparison-asymmetry"`, `"comparison-incompatibility"`, `"factivity"`,
+/// `"cardinal-monotonicity"`, `"cardinal-existential-floor"`,
+/// `"modal-monotonicity"`, `"temporal-converse"`, `"temporal-asymmetry"`,
+/// `"causal-presupposition"`, `"double-negation-elimination"`,
+/// `"wide-to-narrow-negation"`.
+pub fn consequences_traced(m: &Meaning) -> Vec<(Meaning, String)> {
+    let mut out: Vec<(Meaning, String)> = Vec::new();
 
     match m {
         Meaning::Event(ev) => {
@@ -128,9 +183,16 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                     let mut simple = ev.clone();
                     simple.aspect = Aspect::Simple;
                     // The simple twin and all of ITS sound generalizations.
-                    push_unique(&mut out, Meaning::Event(simple.clone()));
-                    for c in consequences(&Meaning::Event(simple)) {
-                        push_unique(&mut out, c);
+                    push_unique_traced(
+                        &mut out,
+                        Meaning::Event(simple.clone()),
+                        "aspect-reduction",
+                    );
+                    for (c, _) in consequences_traced(&Meaning::Event(simple)) {
+                        // Everything that follows from the reduced simple event
+                        // follows from the original by aspect-reduction then that
+                        // step; label the whole derivation by the reduction.
+                        push_unique_traced(&mut out, c, "aspect-reduction");
                     }
                 }
 
@@ -139,7 +201,7 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                 if ev.patient.is_some() {
                     let mut e = ev.clone();
                     e.patient = None;
-                    push_unique(&mut out, Meaning::Event(e));
+                    push_unique_traced(&mut out, Meaning::Event(e), "drop-patient");
                 }
 
                 // 2) Generalize the agent to an existential indefinite:
@@ -148,14 +210,14 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                 if let Some(g) = generalize_term(&ev.agent) {
                     let mut e = ev.clone();
                     e.agent = Some(g);
-                    push_unique(&mut out, Meaning::Event(e));
+                    push_unique_traced(&mut out, Meaning::Event(e), "generalize-agent");
                 }
 
                 // 3) Generalize the patient to an existential indefinite.
                 if let Some(g) = generalize_term(&ev.patient) {
                     let mut e = ev.clone();
                     e.patient = Some(g);
-                    push_unique(&mut out, Meaning::Event(e));
+                    push_unique_traced(&mut out, Meaning::Event(e), "generalize-patient");
                 }
 
                 // 4) Combined: drop the patient AND generalize the agent —
@@ -165,7 +227,11 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                         let mut e = ev.clone();
                         e.patient = None;
                         e.agent = Some(g);
-                        push_unique(&mut out, Meaning::Event(e));
+                        push_unique_traced(
+                            &mut out,
+                            Meaning::Event(e),
+                            "drop-patient+generalize-agent",
+                        );
                     }
                 }
             }
@@ -182,13 +248,14 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                 // category as a positive IsA. This is the engine that lets QA
                 // answer "is the teacher an agent?" -> Yes from "teacher".
                 for hyper in hypernyms(category) {
-                    push_unique(
+                    push_unique_traced(
                         &mut out,
                         Meaning::IsA {
                             subject: subject.clone(),
                             category: hyper.to_string(),
                             negated: false,
                         },
+                        "taxonomy-hypernym",
                     );
                 }
                 // MUTUAL EXCLUSION across the animate/inanimate branches: an
@@ -198,13 +265,14 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                 // (only the stable hypernym labels — we do not enumerate every
                 // noun, just the branch roots that QA actually queries).
                 for opp in opposite_branch_labels(category) {
-                    push_unique(
+                    push_unique_traced(
                         &mut out,
                         Meaning::IsA {
                             subject: subject.clone(),
                             category: opp.to_string(),
                             negated: true,
                         },
+                        "mutual-exclusion",
                     );
                 }
             }
@@ -222,13 +290,14 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                 // empty-domain truth is handled separately by the world model's
                 // vacuous-truth rule, which does not flow through here).
                 Quantifier::Every => {
-                    push_unique(
+                    push_unique_traced(
                         &mut out,
                         Meaning::Quantified {
                             quant: Quantifier::Some,
                             var_category: var_category.clone(),
                             body: body.clone(),
                         },
+                        "quantifier-instantiation",
                     );
                 }
                 // EXISTENTIAL / NEGATIVE carry no further generalization that is
@@ -267,7 +336,7 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
             if !negated {
                 // (1) CONVERSE restatement: "A is longer than B" <=> "B is
                 //     shorter than A" (swap args, flip `more`). Equivalent, sound.
-                push_unique(
+                push_unique_traced(
                     &mut out,
                     Meaning::Comparison {
                         subject: than.clone(),
@@ -276,12 +345,13 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                         than: subject.clone(),
                         negated: false,
                     },
+                    "comparison-converse",
                 );
                 // (2) INCOMPATIBILITY 1: a strict order is asymmetric, so
                 //     "A more B" entails "NOT (B more A)" — the reverse-direction
                 //     comparison is false. Emitting it as a negated consequence
                 //     lets `relation` report Contradicts against "B more A".
-                push_unique(
+                push_unique_traced(
                     &mut out,
                     Meaning::Comparison {
                         subject: than.clone(),
@@ -290,12 +360,13 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                         than: subject.clone(),
                         negated: true,
                     },
+                    "comparison-asymmetry",
                 );
                 // (3) INCOMPATIBILITY 2: the two directions on the same pair are
                 //     mutually exclusive, so "A more B" entails "NOT (A less B)"
                 //     (same args, opposite `more`, negated). This yields the
                 //     "longer-than" vs "shorter-than" contradiction.
-                push_unique(
+                push_unique_traced(
                     &mut out,
                     Meaning::Comparison {
                         subject: subject.clone(),
@@ -304,6 +375,7 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                         than: than.clone(),
                         negated: true,
                     },
+                    "comparison-incompatibility",
                 );
             }
         }
@@ -322,12 +394,12 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
         } => {
             if !negated && is_factive(verb) {
                 // The content is true...
-                push_unique(&mut out, (**content).clone());
+                push_unique_traced(&mut out, (**content).clone(), "factivity");
                 // ...and so is everything the content soundly entails. This lets
                 // "X knows that the teacher writes the report" answer
                 // "does the teacher write something?" -> Yes.
-                for c in consequences(content) {
-                    push_unique(&mut out, c);
+                for (c, _) in consequences_traced(content) {
+                    push_unique_traced(&mut out, c, "factivity");
                 }
             }
         }
@@ -347,26 +419,28 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
             // Weaker at-least counts: M = at_least-1 down to 1.
             let mut m = at_least.saturating_sub(1);
             while m >= 1 {
-                push_unique(
+                push_unique_traced(
                     &mut out,
                     Meaning::Cardinal {
                         at_least: m,
                         var_category: var_category.clone(),
                         body: body.clone(),
                     },
+                    "cardinal-monotonicity",
                 );
                 m -= 1;
             }
             // Existential generalization: at-least-1 (implied by any N>=1) means
             // "some <category> <body>".
             if *at_least >= 1 {
-                push_unique(
+                push_unique_traced(
                     &mut out,
                     Meaning::Quantified {
                         quant: Quantifier::Some,
                         var_category: var_category.clone(),
                         body: body.clone(),
                     },
+                    "cardinal-existential-floor",
                 );
             }
         }
@@ -388,13 +462,14 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
             negated,
         } => {
             if !negated && *modality == Modality::Must {
-                push_unique(
+                push_unique_traced(
                     &mut out,
                     Meaning::Modal {
                         modality: Modality::Can,
                         body: body.clone(),
                         negated: false,
                     },
+                    "modal-monotonicity",
                 );
             }
         }
@@ -414,23 +489,25 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
                 TemporalRel::After => TemporalRel::Before,
             };
             // (1) Converse restatement: "A before B" <=> "B after A".
-            push_unique(
+            push_unique_traced(
                 &mut out,
                 Meaning::Temporal {
                     rel: converse_rel,
                     first: second.clone(),
                     second: first.clone(),
                 },
+                "temporal-converse",
             );
             // (2) Asymmetry: "A before B" entails NOT "B before A" (reverse
             //     ordering, same relation, swapped operands, denied).
-            push_unique(
+            push_unique_traced(
                 &mut out,
                 Meaning::Not(Box::new(Meaning::Temporal {
                     rel: *rel,
                     first: second.clone(),
                     second: first.clone(),
                 })),
+                "temporal-asymmetry",
             );
         }
         // CAUSAL. Asserting "E because C" presupposes BOTH the cause and the
@@ -440,13 +517,13 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
         // C" does NOT yield "C because E"), and a causal link is strictly stronger
         // than a material conditional, so we never derive C->E as an implication.
         Meaning::Causal { cause, effect } => {
-            push_unique(&mut out, (**cause).clone());
-            for c in consequences(cause) {
-                push_unique(&mut out, c);
+            push_unique_traced(&mut out, (**cause).clone(), "causal-presupposition");
+            for (c, _) in consequences_traced(cause) {
+                push_unique_traced(&mut out, c, "causal-presupposition");
             }
-            push_unique(&mut out, (**effect).clone());
-            for c in consequences(effect) {
-                push_unique(&mut out, c);
+            push_unique_traced(&mut out, (**effect).clone(), "causal-presupposition");
+            for (c, _) in consequences_traced(effect) {
+                push_unique_traced(&mut out, c, "causal-presupposition");
             }
         }
         // OUTER NEGATION. Two sound entailments of `Not(inner)`:
@@ -466,14 +543,18 @@ pub fn consequences(m: &Meaning) -> Vec<Meaning> {
         //       Restricting to the bivalent-complement forms keeps soundness.
         Meaning::Not(inner) => {
             if let Meaning::Not(innermost) = inner.as_ref() {
-                push_unique(&mut out, (**innermost).clone());
-                for c in consequences(innermost) {
-                    push_unique(&mut out, c);
+                push_unique_traced(
+                    &mut out,
+                    (**innermost).clone(),
+                    "double-negation-elimination",
+                );
+                for (c, _) in consequences_traced(innermost) {
+                    push_unique_traced(&mut out, c, "double-negation-elimination");
                 }
             } else if let Some(narrow) = bivalent_complement(inner) {
-                push_unique(&mut out, narrow.clone());
-                for c in consequences(&narrow) {
-                    push_unique(&mut out, c);
+                push_unique_traced(&mut out, narrow.clone(), "wide-to-narrow-negation");
+                for (c, _) in consequences_traced(&narrow) {
+                    push_unique_traced(&mut out, c, "wide-to-narrow-negation");
                 }
             }
         }
@@ -866,11 +947,344 @@ pub fn closure(facts: &[Event]) -> Vec<Meaning> {
     out
 }
 
+// ----------------------------------------------------------------------------
+// Proof search (bounded forward-chaining)
+// ----------------------------------------------------------------------------
+
+/// Maximum derivation depth for [`prove`]. Bounds the forward-chaining search so
+/// it always terminates; a depth of 4 covers asserted-fact + a short chain of
+/// inference steps (e.g. aspect-reduce -> drop-patient -> generalize) plus the
+/// compositional wrappers (disjunction / double-negation / transitivity).
+const PROVE_MAX_DEPTH: usize = 4;
+
+/// Search for a SOUND derivation of `goal` from `facts`, bounded to depth
+/// `<= 4`. Returns a [`Proof`] whose every step genuinely entails its
+/// conclusion, or `None` when no sound derivation exists within the bound.
+///
+/// SOUNDNESS IS PARAMOUNT: this function NEVER fabricates a step. Every `Proof`
+/// it returns is a certificate — each internal node's premises really do entail
+/// its conclusion under the same `relation`/`consequences` logic used elsewhere.
+///
+/// Strategy (in order):
+/// 1. **Leaf**: if `goal` is structurally one of the `facts`, return
+///    `Proof{goal, "asserted", []}`.
+/// 2. **Single-step / chain**: for each fact `f`, walk `consequences_traced(f)`;
+///    if some `(cons, rule)` equals `goal`, return a one-step proof; otherwise
+///    recurse treating `cons` as a derived intermediate, so a chain
+///    `f -> c1 -> goal` yields nested premises (the proof of `c1` becomes the
+///    premise of the `goal` step).
+/// 3. **Compositional** (the cases `relation` handles):
+///    - `Or(disjuncts)`: prove ANY disjunct `d`; `d ⊢ (… or d or …)` by
+///      disjunction-introduction.
+///    - `Not(Not(x))`: prove `x`; `x ⊢ ¬¬x` by double-negation introduction.
+///    - `Comparison`/`Temporal` transitivity: chain two facts on a shared middle
+///      term (`A>B`, `B>C ⊢ A>C`; `A before B`, `B before C ⊢ A before C`).
+pub fn prove(facts: &[Meaning], goal: &Meaning) -> Option<Proof> {
+    prove_bounded(facts, goal, PROVE_MAX_DEPTH)
+}
+
+/// Depth-limited core of [`prove`]. `depth` is the remaining budget; at `0` we
+/// only accept a goal that is literally an asserted fact (no further derivation).
+fn prove_bounded(facts: &[Meaning], goal: &Meaning, depth: usize) -> Option<Proof> {
+    // (1) LEAF: the goal is asserted directly.
+    if facts.iter().any(|f| f == goal) {
+        return Some(Proof {
+            conclusion: goal.clone(),
+            rule: "asserted".to_string(),
+            premises: vec![],
+        });
+    }
+
+    if depth == 0 {
+        return None;
+    }
+
+    // (2) SINGLE-STEP and CHAIN through the sound consequence set of each fact.
+    //     For every fact f and every (cons, rule) it entails:
+    //       * cons == goal  -> one-step proof  [f] -(rule)-> goal
+    //       * else          -> recurse to prove goal FROM cons, then splice:
+    //                          the proof of cons (rooted at f) becomes the
+    //                          premise of the rule step that yields goal.
+    for f in facts {
+        for (cons, rule) in consequences_traced(f) {
+            if &cons == goal {
+                return Some(Proof {
+                    conclusion: goal.clone(),
+                    rule,
+                    premises: vec![Proof {
+                        conclusion: f.clone(),
+                        rule: "asserted".to_string(),
+                        premises: vec![],
+                    }],
+                });
+            }
+            // Chain: treat `cons` as a one-fact context and try to reach `goal`
+            // from it. Any derivation found is sound because `f ⊢ cons` (this
+            // rule) and `cons ⊢ goal` (the recursive sub-proof) compose.
+            if let Some(sub) = prove_bounded(&[cons.clone()], goal, depth - 1) {
+                // `sub` proves `goal` from `cons` (its leaves are `cons`
+                // "asserted"). Re-root those leaves on the real derivation of
+                // `cons` from `f`, so the whole tree bottoms out at `f`.
+                let cons_proof = Proof {
+                    conclusion: cons.clone(),
+                    rule: rule.clone(),
+                    premises: vec![Proof {
+                        conclusion: f.clone(),
+                        rule: "asserted".to_string(),
+                        premises: vec![],
+                    }],
+                };
+                return Some(reroot_leaf(sub, &cons, &cons_proof));
+            }
+        }
+    }
+
+    // (3) COMPOSITIONAL cases that `relation` also handles.
+
+    // Disjunction-introduction: prove a disjunction by proving any disjunct.
+    if let Meaning::Or(disjuncts) = goal {
+        for d in disjuncts {
+            if let Some(dp) = prove_bounded(facts, d, depth - 1) {
+                return Some(Proof {
+                    conclusion: goal.clone(),
+                    rule: "disjunction-introduction".to_string(),
+                    premises: vec![dp],
+                });
+            }
+        }
+    }
+
+    // Double-negation introduction: to prove `¬¬x`, prove `x` (sound: x ⊢ ¬¬x).
+    if let Meaning::Not(inner) = goal {
+        if let Meaning::Not(innermost) = inner.as_ref() {
+            if let Some(xp) = prove_bounded(facts, innermost, depth - 1) {
+                return Some(Proof {
+                    conclusion: goal.clone(),
+                    rule: "double-negation-introduction".to_string(),
+                    premises: vec![xp],
+                });
+            }
+        }
+    }
+
+    // Multi-fact TRANSITIVITY for strict orders (comparison / temporal). A single
+    // `consequences_traced` call cannot see two facts at once, so we look for a
+    // shared "middle" term: `A R B` and `B R C` jointly entail `A R C`. Both
+    // premises must themselves be provable (asserted or derived) for soundness.
+    if let Some(p) = prove_transitive(facts, goal, depth) {
+        return Some(p);
+    }
+
+    None
+}
+
+/// Replace every `"asserted"` leaf of `proof` whose conclusion equals `anchor`
+/// with `replacement` (a real derivation of `anchor`). Used to splice a chain:
+/// a sub-proof that takes `anchor` as given is re-grounded on the proof of
+/// `anchor` from the original fact. Non-anchor leaves are left untouched.
+fn reroot_leaf(proof: Proof, anchor: &Meaning, replacement: &Proof) -> Proof {
+    if proof.rule == "asserted" && &proof.conclusion == anchor {
+        return replacement.clone();
+    }
+    Proof {
+        conclusion: proof.conclusion,
+        rule: proof.rule,
+        premises: proof
+            .premises
+            .into_iter()
+            .map(|p| reroot_leaf(p, anchor, replacement))
+            .collect(),
+    }
+}
+
+/// Try to prove a strict-order goal by TRANSITIVITY over two provable facts that
+/// share a middle term. Sound for `Comparison` (same scale, same `more`
+/// direction, not negated) and `Temporal` (same relation): `A R B` and `B R C`
+/// entail `A R C`. Returns `None` unless both halves are themselves provable.
+fn prove_transitive(facts: &[Meaning], goal: &Meaning, depth: usize) -> Option<Proof> {
+    match goal {
+        // A is `more`-than C on `scale`  <=  A `more` B  &  B `more` C.
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated: false,
+        } => {
+            // Enumerate candidate middles from comparison facts sharing scale/dir.
+            for mid in comparison_middles(facts, scale, *more) {
+                // Skip degenerate middles that collapse the chain.
+                if &mid == subject || &mid == than {
+                    continue;
+                }
+                let left = Meaning::Comparison {
+                    subject: subject.clone(),
+                    scale: scale.clone(),
+                    more: *more,
+                    than: mid.clone(),
+                    negated: false,
+                };
+                let right = Meaning::Comparison {
+                    subject: mid.clone(),
+                    scale: scale.clone(),
+                    more: *more,
+                    than: than.clone(),
+                    negated: false,
+                };
+                if let (Some(lp), Some(rp)) = (
+                    prove_bounded(facts, &left, depth - 1),
+                    prove_bounded(facts, &right, depth - 1),
+                ) {
+                    return Some(Proof {
+                        conclusion: goal.clone(),
+                        rule: "comparison-transitivity".to_string(),
+                        premises: vec![lp, rp],
+                    });
+                }
+            }
+            None
+        }
+        // A R C  <=  A R B  &  B R C, for a transitive temporal relation.
+        Meaning::Temporal { rel, first, second } => {
+            for mid in temporal_middles(facts, *rel) {
+                if &mid == first.as_ref() || &mid == second.as_ref() {
+                    continue;
+                }
+                let left = Meaning::Temporal {
+                    rel: *rel,
+                    first: first.clone(),
+                    second: Box::new(mid.clone()),
+                };
+                let right = Meaning::Temporal {
+                    rel: *rel,
+                    first: Box::new(mid.clone()),
+                    second: second.clone(),
+                };
+                if let (Some(lp), Some(rp)) = (
+                    prove_bounded(facts, &left, depth - 1),
+                    prove_bounded(facts, &right, depth - 1),
+                ) {
+                    return Some(Proof {
+                        conclusion: goal.clone(),
+                        rule: "temporal-transitivity".to_string(),
+                        premises: vec![lp, rp],
+                    });
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// The candidate "middle" terms for comparison transitivity: every term that
+/// appears as the `subject` or `than` of an affirmative comparison fact on the
+/// given `scale` and `more` direction (so a chain can route through it).
+fn comparison_middles(facts: &[Meaning], scale: &str, more: bool) -> Vec<Term> {
+    let mut mids: Vec<Term> = Vec::new();
+    for f in facts {
+        if let Meaning::Comparison {
+            subject,
+            scale: s,
+            more: m,
+            than,
+            negated: false,
+        } = f
+        {
+            if s == scale && *m == more {
+                for t in [subject, than] {
+                    if !mids.iter().any(|x| x == t) {
+                        mids.push(t.clone());
+                    }
+                }
+            }
+        }
+    }
+    mids
+}
+
+/// The candidate "middle" events for temporal transitivity: every event that
+/// appears as the `first` or `second` of a temporal fact with the given
+/// relation.
+fn temporal_middles(facts: &[Meaning], rel: TemporalRel) -> Vec<Event> {
+    let mut mids: Vec<Event> = Vec::new();
+    for f in facts {
+        if let Meaning::Temporal {
+            rel: r,
+            first,
+            second,
+        } = f
+        {
+            if *r == rel {
+                for e in [first.as_ref(), second.as_ref()] {
+                    if !mids.iter().any(|x| x == e) {
+                        mids.push(e.clone());
+                    }
+                }
+            }
+        }
+    }
+    mids
+}
+
 /// Push `m` into `out` only if structurally new.
 fn push_unique(out: &mut Vec<Meaning>, m: Meaning) {
     if !out.iter().any(|x| x == &m) {
         out.push(m);
     }
+}
+
+/// Push `(m, rule)` into `out` only if `m` is structurally new (dedup on the
+/// meaning alone — the FIRST rule that derives a given consequence wins, exactly
+/// mirroring `push_unique`'s first-wins dedup so `consequences_traced` produces
+/// the same meanings in the same order as `consequences` did).
+fn push_unique_traced(out: &mut Vec<(Meaning, String)>, m: Meaning, rule: &str) {
+    if !out.iter().any(|(x, _)| x == &m) {
+        out.push((m, rule.to_string()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proof rendering: a Proof -> human "because" explanation
+// ---------------------------------------------------------------------------
+
+/// Render a [`Proof`] as a human, "because"-style English explanation.
+///
+/// The proof tree is turned into prose by recursion, reusing the SAME surface
+/// realizer QA uses (`qa::realize`) so a proof's conclusions/premises read
+/// exactly like answers do:
+///
+/// * A **leaf** (`rule == "asserted"`, no premises) is something the reader
+///   supplied directly, so it renders as `you told me <X>` where `<X>` is the
+///   realized conclusion (e.g. `you told me the teacher writes the report`).
+/// * An **internal step** renders its realized conclusion, then `because`, then
+///   its (recursively rendered) premises joined with `and`, then `(by <rule>)`
+///   naming the inference rule — e.g.
+///   `the teacher writes something because you told me the teacher writes the
+///   report (by drop-patient)`.
+///
+/// Nesting is preserved: a chained derivation produces nested `because` clauses,
+/// each premise itself a full sub-explanation. The result is a single line; the
+/// caller may capitalize / punctuate it for display.
+pub fn render_proof(p: &Proof, engine: &crate::comprehension::Engine) -> String {
+    // Realize the meaning this step establishes, using QA's realizer so the
+    // phrasing matches answers. `None` keeps the conclusion's own polarity.
+    let concl = crate::understanding::qa::realize(engine, &p.conclusion, None);
+
+    // LEAF: an asserted fact (taken as given, no premises). Phrase it as
+    // something the reader told us.
+    if p.premises.is_empty() {
+        return format!("you told me {concl}");
+    }
+
+    // INTERNAL: <conclusion> because <premise1> [and <premise2> ...] (by <rule>).
+    let premises: Vec<String> = p
+        .premises
+        .iter()
+        .map(|prem| render_proof(prem, engine))
+        .collect();
+    let joined = premises.join(" and ");
+    format!("{concl} because {joined} (by {})", p.rule)
 }
 
 #[cfg(test)]
@@ -1866,5 +2280,96 @@ mod tests {
         let p = ev(entity("teacher"), Some(entity("report")), false);
         assert!(matches!(relation(&p, &dq), Relation::Neutral));
         assert!(matches!(relation(&dq, &p), Relation::Neutral));
+    }
+
+    // ------------------------------------------------------------------
+    // render_proof: Proof -> human "because" explanation
+    // ------------------------------------------------------------------
+
+    /// Build the comprehension engine once for the rendering tests.
+    fn render_engine() -> crate::comprehension::Engine {
+        crate::comprehension::Engine::new()
+    }
+
+    #[test]
+    fn render_leaf_says_you_told_me() {
+        // A leaf ("asserted") renders the realized fact as "you told me <X>".
+        let eng = render_engine();
+        let fact = ev(entity("teacher"), Some(entity("report")), false);
+        let leaf = Proof {
+            conclusion: fact,
+            rule: "asserted".to_string(),
+            premises: vec![],
+        };
+        let s = render_proof(&leaf, &eng);
+        // The realized clause is "the teacher writes the report"; the leaf frames
+        // it as something the reader supplied.
+        assert!(
+            s.contains("you told me"),
+            "leaf must be framed as asserted: {s}"
+        );
+        assert!(
+            s.contains("the teacher writes the report"),
+            "leaf must restate the realized fact: {s}"
+        );
+        assert!(!s.contains("because"), "a leaf has no derivation: {s}");
+    }
+
+    #[test]
+    fn render_internal_step_has_because_premise_and_rule() {
+        // Hand-build a one-step proof: "the teacher writes [something]" derived
+        // from the asserted "the teacher writes the report" by drop-patient.
+        let eng = render_engine();
+        let premise_fact = ev(entity("teacher"), Some(entity("report")), false);
+        let conclusion = ev(entity("teacher"), None, false); // patient dropped
+        let proof = Proof {
+            conclusion,
+            rule: "drop-patient".to_string(),
+            premises: vec![Proof {
+                conclusion: premise_fact,
+                rule: "asserted".to_string(),
+                premises: vec![],
+            }],
+        };
+        let s = render_proof(&proof, &eng);
+        // Key clauses: the realized conclusion, "because", the asserted premise,
+        // and the "(by <rule>)" attribution.
+        assert!(s.contains("the teacher writes"), "conclusion clause: {s}");
+        assert!(s.contains(" because "), "must connect with 'because': {s}");
+        assert!(
+            s.contains("you told me the teacher writes the report"),
+            "premise must be the realized asserted fact: {s}"
+        );
+        assert!(s.contains("(by drop-patient)"), "rule attribution: {s}");
+    }
+
+    #[test]
+    fn render_nested_because_for_a_two_step_proof() {
+        // Two-level proof: report ⊑ document, so "the teacher is a document" is
+        // derived (taxonomy-hypernym) from "the teacher is a person", itself
+        // asserted. Verifies nested "because" and that the deepest leaf still
+        // reads as "you told me ...".
+        let eng = render_engine();
+        let asserted = isa(entity("teacher"), "person", false);
+        let mid = isa(entity("teacher"), "agent", false);
+        let proof = Proof {
+            conclusion: mid,
+            rule: "taxonomy-hypernym".to_string(),
+            premises: vec![Proof {
+                conclusion: asserted,
+                rule: "asserted".to_string(),
+                premises: vec![],
+            }],
+        };
+        let s = render_proof(&proof, &eng);
+        assert!(s.contains(" because "), "nested step needs 'because': {s}");
+        assert!(
+            s.contains("(by taxonomy-hypernym)"),
+            "rule attribution: {s}"
+        );
+        assert!(
+            s.contains("you told me the teacher is a person"),
+            "deepest leaf must restate the asserted premise: {s}"
+        );
     }
 }

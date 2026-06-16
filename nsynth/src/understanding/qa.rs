@@ -10,7 +10,7 @@
 
 use crate::comprehension::{capitalize, Engine, AGENTS, GRADABLE, PATIENTS};
 use crate::understanding::discourse::Discourse;
-use crate::understanding::inference::{relation, Relation};
+use crate::understanding::inference::{prove, relation, Proof, Relation};
 use crate::understanding::meaning::{
     Aspect, Event, Meaning, Modality, Quantifier, Role, Tense, TemporalRel, Term,
 };
@@ -93,6 +93,58 @@ pub fn answer(engine: &Engine, discourse: &Discourse, question: &str) -> String 
     }
 }
 
+/// Answer an already-parsed query Meaning AND return the SOUND [`Proof`] backing
+/// it, when one exists. The returned `String` (`.0`) is IDENTICAL to what
+/// [`answer`] produces for the same query: this mirrors `answer`'s dispatch
+/// exactly (including the same `resolve_meaning` pronoun/relative-clause
+/// resolution), routing every truth query through the explained yes/no path so
+/// the proof rides along.
+///
+/// A `Proof` is returned for the `Yes`/`No` (truth-query) and entailment answers
+/// — those that bottom out in [`world_truth_traced`]. The non-truth answers
+/// (wh-fillers, counts, why-causes, degree phrases, attitude-content,
+/// "I don't know.") have no propositional proof, so they carry `None`. As with
+/// the yes/no path, a world-owned/opaque or open-world verdict also yields `None`.
+pub fn answer_explained(
+    engine: &Engine,
+    discourse: &Discourse,
+    m: &Meaning,
+) -> (String, Option<Proof>) {
+    // Resolve pronouns / relative-clause subjects exactly as `answer` does for its
+    // parsed question, so the explained answer queries the same entities.
+    let m = resolve_meaning(discourse, m);
+
+    match m {
+        Meaning::YesNoQuestion(body) => answer_yes_no_explained(engine, discourse, &body),
+        Meaning::WhQuestion { slot, body } => (answer_wh(discourse, slot, &body), None),
+        Meaning::IsA { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Event(_) => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Quantified { .. }
+        | Meaning::Or(_)
+        | Meaning::HasProperty { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Comparison { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Attitude { ref content, .. } if is_content_query(content) => {
+            (answer_attitude_content(engine, discourse, &m), None)
+        }
+        Meaning::Attitude { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Cardinal { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::CountQuestion { var_category, body } => {
+            (answer_count(discourse, &var_category, &body), None)
+        }
+        Meaning::Modal { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Temporal { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Causal { ref cause, .. } if is_content_query(cause) => {
+            (answer_why(engine, discourse, &m), None)
+        }
+        Meaning::Causal { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::DegreeQuestion { subject, scale } => {
+            (answer_degree(engine, discourse, &subject, &scale), None)
+        }
+        Meaning::Not(_) => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Unknown(_) => ("I don't know.".to_string(), None),
+    }
+}
+
 /// Is an embedded attitude `content` a CONTENT-query placeholder rather than a
 /// concrete proposition? The parser of "What does the teacher know?" cannot fill
 /// in the proposition, so it leaves an `Unknown` content; a concrete-content
@@ -109,9 +161,27 @@ fn is_content_query(content: &Meaning) -> bool {
 /// Answer a yes/no query: "Yes, <restated affirmation>." / "No, <restated
 /// negation>." / "I don't know." when the open world has no information.
 fn answer_yes_no(engine: &Engine, discourse: &Discourse, body: &Meaning) -> String {
-    let truth = world_truth(discourse, body);
+    // SINGLE SOURCE OF TRUTH: the explained variant computes the identical string
+    // (the proof is dropped here), so behaviour is byte-for-byte unchanged.
+    answer_yes_no_explained(engine, discourse, body).0
+}
+
+/// Like [`answer_yes_no`], but also returns the SOUND [`Proof`] that backs a
+/// `Yes`/`No` verdict (from [`world_truth_traced`]). The string (`.0`) is
+/// computed exactly as `answer_yes_no` does — `answer_yes_no` is defined as this
+/// function's `.0` — so they never drift. The proof is `None` whenever the verdict
+/// was world-owned/opaque or the answer is "I don't know." (open world).
+fn answer_yes_no_explained(
+    engine: &Engine,
+    discourse: &Discourse,
+    body: &Meaning,
+) -> (String, Option<Proof>) {
+    let (truth, proof) = world_truth_traced(discourse, body);
     match truth {
-        Some(true) => format!("Yes, {}.", realize(engine, body, /*force_negated=*/ None)),
+        Some(true) => (
+            format!("Yes, {}.", realize(engine, body, /*force_negated=*/ None)),
+            proof,
+        ),
         Some(false) => {
             // Restate the falsity of what was asked. For a simple predication
             // ("does X write Y?", "is X careful?", "is X a person?") the clean
@@ -138,9 +208,9 @@ fn answer_yes_no(engine: &Engine, discourse: &Discourse, body: &Meaning) -> Stri
                 | Meaning::Cardinal { .. } => realize(engine, body, /*force_negated=*/ None),
                 _ => realize(engine, body, /*force_negated=*/ Some(true)),
             };
-            format!("No, {restated}.")
+            (format!("No, {restated}."), proof)
         }
-        None => "I don't know.".to_string(),
+        None => ("I don't know.".to_string(), None),
     }
 }
 
@@ -159,6 +229,43 @@ fn answer_yes_no(engine: &Engine, discourse: &Discourse, body: &Meaning) -> Stri
 ///      contradicts it answers No. This closes QA under existential
 ///      generalization, patient-dropping, etc.
 fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
+    // SINGLE SOURCE OF TRUTH: the verdict is exactly the `.0` of the traced
+    // variant, which mirrors this cascade step-for-step. Dropping the proof here
+    // leaves behaviour byte-for-byte identical to the original `world_truth`.
+    world_truth_traced(discourse, body).0
+}
+
+/// Like [`world_truth`], but additionally returns a SOUND [`Proof`] for the
+/// determined cases when one is available. The truth value (`.0`) is computed by
+/// the EXACT same cascade as `world_truth` — indeed `world_truth` is defined as
+/// `world_truth_traced(..).0`, so the two never drift.
+///
+/// Proof availability by cascade step (every emitted proof is a real
+/// certificate; we NEVER fabricate a step):
+///   - **aspect-normalize**: recurse on the Simple twin; the recovered proof
+///     (of the simple eventuality the world actually records) carries through.
+///   - **`world.holds`**: the world model is an opaque verdict oracle with no
+///     public derivation, so a verdict it owns has `None` proof.
+///   - **`Or` (true)**: the winning disjunct's proof, wrapped in a
+///     `disjunction-introduction` step (`d ⊢ (… or d or …)`); `None` if that
+///     disjunct's truth was itself proofless (e.g. world-owned).
+///   - **`Not`**: three-valued flip of the inner truth; no single-meaning
+///     certificate, so `None` proof.
+///   - **modal actuality→possibility**: the bare event's proof carries through
+///     (what is proven to happen is proven possible).
+///   - **taxonomy**: a hypernym-chain verdict with no `prove`-style derivation
+///     here, so `None` proof.
+///   - **fact-loop Entails**: `inference::prove(facts, body)` — the genuine
+///     derivation of `body` from the asserted facts.
+///   - **fact-loop Contradicts (`Some(false)`)**: `inference::prove(facts,
+///     polarity_flip(body))` — a derivation whose CONCLUSION is the polarity-flip
+///     of the query (we proved the negation, hence the query is false).
+///
+/// `None` (open-world) truth always carries a `None` proof.
+pub fn world_truth_traced(
+    discourse: &Discourse,
+    body: &Meaning,
+) -> (Option<bool>, Option<Proof>) {
     // ASPECT is non-truth-conditional for fact-matching in this curriculum: a
     // Present/Past Progressive ("is writing") or Perfect ("has written") query is
     // true exactly when the underlying SIMPLE eventuality holds. Normalize a
@@ -171,12 +278,28 @@ fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
         if ev.aspect != Aspect::Simple && ev.tense != Tense::Future {
             let mut simple = ev.clone();
             simple.aspect = Aspect::Simple;
-            return world_truth(discourse, &Meaning::Event(simple));
+            return world_truth_traced(discourse, &Meaning::Event(simple));
         }
     }
 
     if let Some(v) = discourse.world.holds(body) {
-        return Some(v);
+        // The world model owns this verdict but generally exposes no derivation.
+        // EXCEPTION — a TRUE comparison: the world owns the transitive-closure
+        // verdict, but we can reconstruct the actual derivation chain by running
+        // `prove` over the asserted comparison edges, so "is the report longer
+        // than the letter?" shows its work ("... because report>book and
+        // book>letter"). The verdict stays the world's; we only ATTACH a proof
+        // when one is genuinely derivable (a direct edge proves as an asserted
+        // leaf; a transitive one as a named chain). Soundness is unchanged.
+        if v {
+            if let Meaning::Comparison { .. } = body {
+                let cmp_facts = discourse.world.comparison_facts();
+                if let Some(p) = crate::understanding::inference::prove(&cmp_facts, body) {
+                    return (Some(true), Some(p));
+                }
+            }
+        }
+        return (Some(v), None);
     }
 
     // Disjunction: evaluate it compositionally in QA so the verdict does not
@@ -190,14 +313,25 @@ fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
     if let Meaning::Or(disjuncts) = body {
         let mut all_false = true;
         for d in disjuncts {
-            match world_truth(discourse, d) {
-                Some(true) => return Some(true),
+            let (dt, dp) = world_truth_traced(discourse, d);
+            match dt {
+                Some(true) => {
+                    // The disjunction follows from this true disjunct by
+                    // disjunction-introduction. Only certificate it when the
+                    // disjunct itself carried a proof (else None proof).
+                    let proof = dp.map(|inner| Proof {
+                        conclusion: body.clone(),
+                        rule: "disjunction-introduction".to_string(),
+                        premises: vec![inner],
+                    });
+                    return (Some(true), proof);
+                }
                 Some(false) => {}
                 None => all_false = false,
             }
         }
         // Empty disjunction is vacuously false; otherwise false iff all false.
-        return if all_false { Some(false) } else { None };
+        return (if all_false { Some(false) } else { None }, None);
     }
 
     // Outer negation (wide-scope): the truth of `Not(m)` is the THREE-VALUED
@@ -209,7 +343,8 @@ fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
     // (= Not(Quantified Every)) get a DIFFERENT value than the narrow-scope
     // "every teacher does not write a report" (a Quantified with a negated body).
     if let Meaning::Not(inner) = body {
-        return three_valued_not(world_truth(discourse, inner));
+        // The flipped truth has no single-meaning certificate here: None proof.
+        return (three_valued_not(world_truth_traced(discourse, inner).0), None);
     }
 
     // Modal monotonicity, computed compositionally in QA as a belt-and-suspenders
@@ -224,8 +359,10 @@ fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
     if let Meaning::Modal { modality, body: ev, negated: false } = body {
         if matches!(modality, Modality::Can | Modality::Might) {
             // The actual occurrence of the event makes it possible.
-            if world_truth(discourse, &Meaning::Event((**ev).clone())) == Some(true) {
-                return Some(true);
+            let (et, ep) = world_truth_traced(discourse, &Meaning::Event((**ev).clone()));
+            if et == Some(true) {
+                // The bare event's derivation (if any) certifies its possibility.
+                return (Some(true), ep);
             }
         }
     }
@@ -233,7 +370,8 @@ fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
     // Taxonomy fallback for category queries: derive "teacher is an agent" from
     // the hypernym chain even when only the subtype ("teacher") is known.
     if let Some(v) = taxonomy_truth(body) {
-        return Some(v);
+        // Taxonomy verdict has no `prove`-style certificate here: None proof.
+        return (Some(v), None);
     }
 
     // Inference fallback: does any asserted fact — or a sound consequence of it —
@@ -246,15 +384,76 @@ fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
     for fact in discourse.world.facts() {
         let premise = Meaning::Event(fact.clone());
         match relation(&premise, body) {
-            Relation::Entails => return Some(true),
+            Relation::Entails => {
+                // Recover the actual derivation of `body` from the asserted facts.
+                let facts_as_meanings = facts_as_meanings(discourse);
+                let proof = prove(&facts_as_meanings, body);
+                return (Some(true), proof);
+            }
             Relation::Contradicts => saw_contradiction = true,
             Relation::Neutral => {}
         }
     }
     if saw_contradiction {
-        return Some(false);
+        // `body` is false BECAUSE the facts prove its polarity-flip. Build a proof
+        // whose CONCLUSION is that flip (we derived the negation of the query).
+        let proof = polarity_flip_query(body)
+            .and_then(|flipped| prove(&facts_as_meanings(discourse), &flipped));
+        return (Some(false), proof);
     }
-    None
+    (None, None)
+}
+
+/// The world's asserted facts as `Meaning`s, the form [`prove`] consumes. Mirrors
+/// the premise construction in the fact-loop above (`Meaning::Event(fact)`).
+fn facts_as_meanings(discourse: &Discourse) -> Vec<Meaning> {
+    discourse
+        .world
+        .facts()
+        .iter()
+        .map(|f| Meaning::Event(f.clone()))
+        .collect()
+}
+
+/// The polarity-flip (sound CONTRADICTORY) of an assertoric leaf query, used to
+/// name the conclusion of a `Some(false)`-via-contradiction proof. This mirrors
+/// `inference::polarity_flip` for exactly the leaf shapes that reach the
+/// fact-loop's contradiction branch (events, categories, attributes,
+/// comparisons, modals); other shapes have no single-meaning contradictory, so we
+/// return `None` (the proof is then left `None`, never fabricated).
+fn polarity_flip_query(m: &Meaning) -> Option<Meaning> {
+    match m {
+        Meaning::Event(ev) => {
+            let mut e = ev.clone();
+            e.negated = !e.negated;
+            Some(Meaning::Event(e))
+        }
+        Meaning::IsA { subject, category, negated } => Some(Meaning::IsA {
+            subject: subject.clone(),
+            category: category.clone(),
+            negated: !negated,
+        }),
+        Meaning::HasProperty { subject, property, negated } => Some(Meaning::HasProperty {
+            subject: subject.clone(),
+            property: property.clone(),
+            negated: !negated,
+        }),
+        Meaning::Comparison { subject, scale, more, than, negated } => Some(Meaning::Comparison {
+            subject: subject.clone(),
+            scale: scale.clone(),
+            more: *more,
+            than: than.clone(),
+            negated: !negated,
+        }),
+        Meaning::Modal { modality, body, negated } => Some(Meaning::Modal {
+            modality: *modality,
+            body: body.clone(),
+            negated: !negated,
+        }),
+        // No single-meaning contradictory for the rest (Or/Quantified-Some/
+        // Cardinal/Temporal/Causal/questions/Unknown): leave the proof None.
+        _ => None,
+    }
 }
 
 /// Three-valued negation of a truth value: the outer-negation truth of `Not(m)`
@@ -673,7 +872,12 @@ fn slot_matches(fact_slot: &Option<Term>, body_slot: &Option<Term>) -> bool {
 /// Realize a Meaning back into an English clause for an answer. `force_negated`
 /// overrides the body's own polarity (used so a false yes/no query becomes an
 /// explicit negative restatement); `None` keeps the body's polarity.
-fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>) -> String {
+///
+/// Exposed `pub(crate)` so the proof renderer in `inference` can restate a
+/// `Proof`'s conclusions/premises using the SAME surface realization QA uses —
+/// keeping explanations and answers phrased identically. Still module-internal
+/// to the crate; QA's own use is unchanged.
+pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>) -> String {
     match m {
         Meaning::Event(ev) => {
             let negated = force_negated.unwrap_or(ev.negated);

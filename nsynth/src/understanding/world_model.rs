@@ -370,6 +370,28 @@ impl World {
             .collect()
     }
 
+    /// The positively-asserted comparison orderings, each reconstructed as a
+    /// `Meaning::Comparison{subject: Entity(greater), more: true, than: Entity(lesser)}`.
+    /// This exposes the world's comparison fact-base so the proof layer can
+    /// reconstruct a TRANSITIVE derivation ("report > book", "book > letter" =>
+    /// "report > letter") with the intermediate named — the world model owns the
+    /// transitive-closure VERDICT but no derivation, so `inference::prove` rebuilds
+    /// the chain over these edges. Negated orderings are excluded (only positive
+    /// "greater than" edges chain transitively).
+    pub fn comparison_facts(&self) -> Vec<Meaning> {
+        self.orderings
+            .iter()
+            .filter(|o| !o.negated)
+            .map(|o| Meaning::Comparison {
+                subject: Term::Entity(o.greater.clone()),
+                scale: o.scale.clone(),
+                more: true,
+                than: Term::Entity(o.lesser.clone()),
+                negated: false,
+            })
+            .collect()
+    }
+
     /// FORWARD-CHAINING CLOSURE: the extra `Meaning`s soundly derivable from the
     /// world's asserted facts + the taxonomy, that are NOT themselves directly
     /// asserted. Currently this materializes, for every known entity, the
