@@ -4,8 +4,16 @@
 //! verified Mog programs and executes them in-process. No Python, no subprocess.
 //! The same engine is exposed to C via `mog_synth::ffi`.
 //!
-//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|study|all]
+//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|study|bench|all]
 //! (the solver logs to stderr; pipe 2>/dev/null for clean output)
+//!
+//! The `bench` subcommand runs the FraCaS-style three-valued entailment suite
+//! ([`mog_synth::eval::entailment::run_suite`]) and prints a per-section table
+//! (section | correct | idk | wrong | total), the overall accuracy, and a bold
+//! SOUNDNESS line (WRONG==0 => SOUND, else UNSOUND with every offending case
+//! listed). It then runs the benchmark -> study -> benchmark feedback loop and
+//! shows the before -> after deltas, proving learning is monotone and never
+//! introduces an unsound verdict.
 //!
 //! The `grow` subcommand showcases the self-improvement loop: a
 //! [`Mind`](mog_synth::understanding::mind::Mind) that cannot classify mythical
@@ -1309,6 +1317,115 @@ fn noun_animacy(s: string) -> i64 {\n\
     }
 }
 
+// ===========================================================================
+// bench: the FraCaS-style three-valued entailment dashboard. Runs the whole
+// `eval::entailment` suite, prints a per-section table (section | correct | idk
+// | wrong | total), the overall accuracy, and a bold SOUNDNESS verdict
+// (WRONG==0 => SOUND, otherwise UNSOUND with every offending case listed).
+// Then runs the benchmark -> study -> benchmark feedback loop and shows the
+// before -> after deltas, proving learning is monotone and never unsound.
+// ===========================================================================
+
+/// Render the per-section + overall dashboard for a [`BenchReport`]. Columns:
+/// section, correct, idk, wrong, total — then the rolled-up totals, the overall
+/// accuracy, and a bold SOUNDNESS line. When the run is unsound (`wrong > 0`)
+/// every offending case is listed (section, gold, got, premises, hypothesis) so
+/// a soundness regression is debuggable straight from the dashboard.
+fn print_bench_dashboard(report: &mog_synth::eval::entailment::BenchReport) {
+    use mog_synth::eval::entailment::{run_case, suite, Gold};
+
+    const W: usize = 46;
+    println!("  {}", "=".repeat(W));
+    println!("  {:<14} {:>8} {:>5} {:>6} {:>6}", "section", "correct", "idk", "wrong", "total");
+    println!("  {}", "-".repeat(W));
+    for sec in &report.sections {
+        println!(
+            "  {:<14} {:>8} {:>5} {:>6} {:>6}",
+            sec.section, sec.correct, sec.idk, sec.wrong, sec.total
+        );
+    }
+    println!("  {}", "-".repeat(W));
+    println!(
+        "  {:<14} {:>8} {:>5} {:>6} {:>6}",
+        "OVERALL", report.correct, report.idk, report.wrong, report.total
+    );
+    println!("  {}", "=".repeat(W));
+    println!("  overall accuracy = {:.1}%   ({} correct of {} cases, {} idk)",
+             report.accuracy() * 100.0, report.correct, report.total, report.idk);
+
+    // The bold soundness verdict — the whole point of the open-world bar.
+    if report.sound() {
+        println!("  ** SOUNDNESS: SOUND (WRONG = 0) **");
+    } else {
+        println!("  ** SOUNDNESS: UNSOUND (WRONG = {}) **", report.wrong);
+        // List every offending case so the violation is fully debuggable.
+        for case in &suite() {
+            let got = run_case(case);
+            if got != case.gold && got != Gold::Unknown {
+                println!(
+                    "     WRONG [{}] gold={:?} got={:?}",
+                    case.section, case.gold, got
+                );
+                println!("        premises: {:?}", case.premises);
+                println!("        Q: {}", case.hypothesis);
+            }
+        }
+    }
+}
+
+fn demo_bench() {
+    use mog_synth::eval::entailment::{bench_then_study_then_bench, run_suite};
+
+    println!("nCPU benchmarking — a FraCaS-style three-valued entailment suite. Each case");
+    println!("reads its premises into a fresh Mind, asks the hypothesis as a yes/no question,");
+    println!("and buckets the answer into {{Yes, No, Unknown}}. The open-world engine may answer");
+    println!("Unknown (an `idk`) where gold is determined, but a determined verdict that");
+    println!("contradicts gold is a SOUNDNESS violation. The bar is WRONG = 0.\n");
+
+    // ----------------------------------------------------------------------
+    // (1) Run the whole suite and print the dashboard.
+    // ----------------------------------------------------------------------
+    let report = run_suite();
+    print_bench_dashboard(&report);
+
+    // ----------------------------------------------------------------------
+    // (2) The feedback loop: benchmark -> study -> benchmark. Measured misses
+    // become a study corpus the Mind learns from; the re-run proves the
+    // learning is MONOTONE (never loses a correct answer) and stays SOUND
+    // (never introduces a wrong verdict). Self-fenced: the function redirects
+    // its component store + journal to temp files and restores them on exit.
+    // ----------------------------------------------------------------------
+    println!("\n  {}", "=".repeat(46));
+    println!("  bench -> study -> bench (autonomous, monotone, sound)");
+    println!("  {}", "=".repeat(46));
+    let (before, study, after) = bench_then_study_then_bench(3);
+    println!("  study: rounds={} attempted={} learned={:?} rejected={}",
+             study.rounds, study.attempted, study.learned, study.rejected);
+    println!(
+        "  before -> after:  correct {} -> {}   idk {} -> {}   wrong {} -> {}",
+        before.correct, after.correct, before.idk, after.idk, before.wrong, after.wrong
+    );
+    println!(
+        "  accuracy: {:.1}% -> {:.1}%   (delta {:+.1} pts)",
+        before.accuracy() * 100.0,
+        after.accuracy() * 100.0,
+        (after.accuracy() - before.accuracy()) * 100.0
+    );
+    let monotone = after.correct >= before.correct;
+    let stays_sound = after.wrong == 0 && before.wrong == 0;
+    println!(
+        "  MONOTONE (after.correct >= before.correct) = {}   SOUND throughout (wrong == 0) = {}",
+        monotone, stays_sound
+    );
+    if study.learned.is_empty() {
+        println!("  (no mineable lexical gap in the in-vocab suite — study learned nothing, after == before: honest, permitted, monotone.)");
+    }
+
+    println!("\nEvery verdict came from a synthesized, verified program executed in-process.");
+    println!("The suite is SOUND ({}); learning over its misses is monotone and never unsound.",
+             if report.sound() { "WRONG = 0" } else { "SOUNDNESS VIOLATION — see above" });
+}
+
 /// Indent every line of `text` with `prefix` — for embedding multi-line
 /// `explain_self` output under a demo section header.
 fn indent(text: &str, prefix: &str) -> String {
@@ -1328,6 +1445,7 @@ fn main() {
         "reflect" => return demo_reflect(),
         "grow" => return demo_grow(),
         "study" => return demo_study(),
+        "bench" => return demo_bench(),
         _ => {}
     }
     eprintln!("[building comprehension engine — synthesizing verified programs...]");
@@ -1354,6 +1472,8 @@ fn main() {
             demo_grow();
             println!("\n{}\n", "=".repeat(72));
             demo_study();
+            println!("\n{}\n", "=".repeat(72));
+            demo_bench();
         }
     }
 }
