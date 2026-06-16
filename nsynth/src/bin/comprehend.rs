@@ -4,8 +4,15 @@
 //! verified Mog programs and executes them in-process. No Python, no subprocess.
 //! The same engine is exposed to C via `mog_synth::ffi`.
 //!
-//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|all]
+//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|all]
 //! (the solver logs to stderr; pipe 2>/dev/null for clean output)
+//!
+//! The `grow` subcommand showcases the self-improvement loop: a
+//! [`Mind`](mog_synth::understanding::mind::Mind) that cannot classify mythical
+//! creatures notices the gap, synthesizes the missing `creature_class` component
+//! from curriculum-mined examples, runs it through its own regression gate, and
+//! adopts it only on a green gate — then shows a rejected attempt safely declined
+//! with the base engine intact, and reads back the append-only journal.
 //!
 //! The `reflect` subcommand showcases the metacognition layer: a stateful
 //! [`Mind`](mog_synth::understanding::mind::Mind) reads a short passage, then
@@ -904,6 +911,166 @@ fn verdict_str(v: Option<bool>) -> &'static str {
     }
 }
 
+// ===========================================================================
+// grow: the self-improvement loop, end-to-end and self-contained. A `Mind`
+// that CANNOT classify mythical creatures notices the gap, synthesizes the
+// missing component from curriculum-mined examples, runs it through its own
+// regression gate, and — only on a green gate — ADOPTS it. Afterward the mind
+// CAN classify creatures. We then show a REJECTED attempt (an unsatisfiable
+// spec) safely declined with the base engine intact, and finally read back the
+// append-only reflection journal so every attempt is auditable.
+// ===========================================================================
+fn demo_grow() {
+    use mog_synth::comprehension::creature_class_examples;
+    use mog_synth::self_improve::extend::LearnRequest;
+    use mog_synth::self_improve::journal;
+    use mog_synth::understanding::mind::Mind;
+
+    // Make the demo SELF-CONTAINED: point the reflection journal at a fresh temp
+    // file so we can read our own attempts back without touching the developer's
+    // $HOME journal. Cleaned up at the end.
+    let journal_path = std::env::temp_dir().join(format!("ncpu_grow_demo_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&journal_path);
+    // SAFETY: this binary is single-threaded; we set the env once at the top of
+    // the demo and restore/clear it at the end.
+    unsafe {
+        std::env::set_var("NCPU_JOURNAL_PATH", &journal_path);
+    }
+
+    println!("nCPU growing — a Mind notices a gap in what it can classify, SYNTHESIZES the");
+    println!("missing component from curriculum-mined examples, runs it through its OWN");
+    println!("regression gate, and adopts it only if nothing regresses. A rejected attempt");
+    println!("is safely declined with the base engine intact. Every attempt is journaled.\n");
+
+    let mut mind = Mind::new();
+
+    // -----------------------------------------------------------------------
+    // (1) THE GAP — the mind cannot classify mythical creatures yet.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (1) the gap — the mind cannot classify creatures (yet)");
+    println!("  {}", "=".repeat(72));
+    let creatures = ["dragon", "griffin", "phoenix"];
+    for w in creatures {
+        println!(
+            "     knows_word({w:<8}) = {}   (no lexicon entry — a creature is unknown)",
+            mind.knows_word(w)
+        );
+    }
+    println!(
+        "     has_component(\"creature_class\") = {}   (the component is absent)\n",
+        mind.engine().has_component("creature_class")
+    );
+
+    // -----------------------------------------------------------------------
+    // (2) SELF-IMPROVE — synthesize, gate, and (on green) adopt the component.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (2) self_improve — synthesize creature_class, gate it, adopt it");
+    println!("  {}", "=".repeat(72));
+    let good = LearnRequest {
+        gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
+        name: "creature_class".to_string(),
+        signature: "fn creature_class(s: string) -> i64",
+        examples: creature_class_examples(),
+    };
+    let report = mind.self_improve(good);
+    println!("     gap        : {}", report.gap);
+    println!("     synthesized: {}", report.synthesized);
+    println!("     via teacher: {}", report.method);
+    println!("     gate passed: {}", report.regression_passed);
+    println!("     ACCEPTED   : {}", report.accepted);
+    println!("     message    : {}\n", report.message);
+
+    // -----------------------------------------------------------------------
+    // (3) IT CAN NOW — the grafted component is live on the mind's engine.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (3) it can now — the synthesized program classifies creatures");
+    println!("  {}", "=".repeat(72));
+    println!(
+        "     has_component(\"creature_class\") = {}   (now grafted in)",
+        mind.engine().has_component("creature_class")
+    );
+    let probes = ["dragon", "griffin", "phoenix", "unicorn", "report", "teacher", "book"];
+    for w in probes {
+        let v = mind.engine().eval_int(&format!("creature_class(\"{w}\")"));
+        let verdict = if v == 1 { "creature   " } else { "not creature" };
+        println!("     creature_class({w:<8}) = {v}  ({verdict})");
+    }
+    println!(
+        "     self_check().ok() = {}   (mind still green — growth was MONOTONE)\n",
+        mind.self_check().ok()
+    );
+
+    // -----------------------------------------------------------------------
+    // (4) A REJECTED ATTEMPT — an unsatisfiable spec is declined; engine intact.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (4) a rejected attempt — synthesis cannot satisfy a contradictory spec");
+    println!("  {}", "=".repeat(72));
+    let bad = LearnRequest {
+        gap: "impossible contradictory lexicon (dragon -> 1 AND dragon -> 0)".to_string(),
+        name: "contradictory_class".to_string(),
+        signature: "fn contradictory_class(s: string) -> i64",
+        examples: vec![
+            mog_synth::benchmark::Example {
+                inputs: vec![mog_synth::benchmark::Value::Str("dragon".to_string())],
+                expected: mog_synth::benchmark::Value::Int(1),
+            },
+            mog_synth::benchmark::Example {
+                inputs: vec![mog_synth::benchmark::Value::Str("dragon".to_string())],
+                expected: mog_synth::benchmark::Value::Int(0),
+            },
+        ],
+    };
+    let rej = mind.self_improve(bad);
+    println!("     gap        : {}", rej.gap);
+    println!("     synthesized: {}   (no program reproduces a contradictory spec)", rej.synthesized);
+    println!("     ACCEPTED   : {}", rej.accepted);
+    println!("     message    : {}", rej.message);
+    println!(
+        "     has_component(\"contradictory_class\") = {}   (engine UNTOUCHED)",
+        mind.engine().has_component("contradictory_class")
+    );
+    println!(
+        "     self_check().ok() = {}   (still green — a rejection changes nothing)\n",
+        mind.self_check().ok()
+    );
+
+    // -----------------------------------------------------------------------
+    // (5) THE JOURNAL — read back every attempt (accepted and rejected). The
+    // append-only reflection journal makes the self-modification history
+    // auditable after the fact.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (5) the journal — every attempt recorded, accepted or rejected");
+    println!("  {}", "=".repeat(72));
+    let entries = journal::entries();
+    if entries.is_empty() {
+        println!("     (journal empty)");
+    } else {
+        for (i, e) in entries.iter().enumerate() {
+            println!("     #{}  action={}  via={}", i + 1, e.action, if e.method.is_empty() { "(none)" } else { &e.method });
+            println!(
+                "         verified={}  gate_passed={}  accepted={}",
+                e.verified, e.regression_passed, e.accepted
+            );
+            println!("         note: {}", e.note);
+        }
+    }
+
+    println!("\nThe mind GREW: it noticed a gap, synthesized + gated the missing program, and");
+    println!("adopted it only because nothing regressed — while a contradictory request was");
+    println!("safely declined with the base engine intact. Every step is in the journal above.");
+
+    // Clean up the temp journal + restore the env so the demo leaves no trace.
+    let _ = std::fs::remove_file(&journal_path);
+    unsafe {
+        std::env::remove_var("NCPU_JOURNAL_PATH");
+    }
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
     eprintln!("[building comprehension engine — synthesizing verified programs...]");
@@ -915,6 +1082,7 @@ fn main() {
         "inflect" => demo_inflect(&engine),
         "understand" => demo_understand(&engine),
         "reflect" => demo_reflect(),
+        "grow" => demo_grow(),
         _ => {
             demo_comprehend(&engine);
             println!("\n{}\n", "=".repeat(72));
@@ -927,6 +1095,8 @@ fn main() {
             demo_understand(&engine);
             println!("\n{}\n", "=".repeat(72));
             demo_reflect();
+            println!("\n{}\n", "=".repeat(72));
+            demo_grow();
         }
     }
 }

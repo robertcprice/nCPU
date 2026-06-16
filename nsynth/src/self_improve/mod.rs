@@ -30,5 +30,6 @@
 //! holds the type scaffold and stubbed entry points; the real gating and
 //! journaling logic lands in the next phase.
 
+pub mod extend;
 pub mod gate;
 pub mod journal;

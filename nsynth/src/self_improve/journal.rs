@@ -160,18 +160,53 @@ pub fn entries() -> Vec<JournalEntry> {
     out
 }
 
+/// Test-only support shared across the whole crate's tests.
+///
+/// `NCPU_JOURNAL_PATH` is process-GLOBAL state, so EVERY test that mutates it —
+/// the journal tests here, the `self_improve::extend` tests, and the
+/// `understanding::mind` self-improvement tests — must serialize on a SINGLE
+/// lock or they race (one test clearing the var disables the journal another is
+/// mid-write to). This module exposes that one lock (`ENV_LOCK`) and a guard
+/// helper (`with_journal_env`) `pub(crate)` so all of them share it.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_support {
     use std::sync::Mutex;
 
-    /// Serializes journal tests against each other. They mutate the shared
-    /// `NCPU_JOURNAL_PATH` process environment variable, so they must not run
-    /// concurrently even though Rust runs `#[test]`s on multiple threads.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    /// The ONE lock serializing all `NCPU_JOURNAL_PATH` mutation across the
+    /// crate's tests. Anything that sets/clears the var must hold this for the
+    /// duration of the mutation.
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Run `f` while holding [`ENV_LOCK`] and with `NCPU_JOURNAL_PATH` set to
+    /// `value` (an empty string disables the journal, mirroring the production
+    /// resolution). The prior env value is restored on exit. Returns `f`'s
+    /// result. The lock is held for the WHOLE closure so no other env-mutating
+    /// test can interleave.
+    pub(crate) fn with_journal_env<R>(value: &str, f: impl FnOnce() -> R) -> R {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var("NCPU_JOURNAL_PATH").ok();
+        // SAFETY: ENV_LOCK guarantees single-threaded access for the duration.
+        unsafe {
+            std::env::set_var("NCPU_JOURNAL_PATH", value);
+        }
+        let result = f();
+        match prev {
+            Some(v) => unsafe { std::env::set_var("NCPU_JOURNAL_PATH", v) },
+            None => unsafe { std::env::remove_var("NCPU_JOURNAL_PATH") },
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::ENV_LOCK;
+    use super::*;
 
     /// Run `f` with `NCPU_JOURNAL_PATH` pointed at a fresh, unique temp file
     /// that is removed before and after. Restores the prior env value on exit.
+    /// Serializes on the crate-wide [`ENV_LOCK`] so it never races another
+    /// env-mutating test.
     fn with_temp_journal<R>(f: impl FnOnce(&std::path::Path) -> R) -> R {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var("NCPU_JOURNAL_PATH").ok();

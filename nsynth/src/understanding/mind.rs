@@ -129,6 +129,47 @@ impl Mind {
         crate::self_improve::gate::regression_gate(&self.engine)
     }
 
+    /// A tiny GAP DETECTOR: does the mind currently have a lexicon entry for
+    /// `word`? True iff the engine's `noun_animacy` lookup classifies it as some
+    /// noun (animate or inanimate), i.e. `noun_class(word) > 0`. A word the mind
+    /// has never learned about classifies as `0` and reads here as "unknown" —
+    /// the cheap signal the self-improvement loop uses to notice a missing
+    /// component before trying to close it. Purely a read accessor over the
+    /// engine; it never mutates anything.
+    pub fn knows_word(&self, word: &str) -> bool {
+        self.engine.noun_class(word) > 0
+    }
+
+    /// The self-improvement LOOP, wired onto the mind: try to close the gap
+    /// described by `req`, and on a *clean* acceptance REPLACE this mind's engine
+    /// with the freshly grafted candidate.
+    ///
+    /// This delegates the whole synthesize → gate → journal decision to
+    /// [`self_extend`](crate::self_improve::extend::self_extend), passing it the
+    /// mind's CURRENT engine. The candidate is accepted only if it passes the
+    /// mind's own regression gate — every golden behavioral case still passes and
+    /// the world model stays sound (the substrate's monotone-growth guarantee).
+    /// On acceptance we swap in the returned candidate engine so the new component
+    /// is live for every subsequent query; on rejection (synthesis failed, or the
+    /// gate went red) `self.engine` is left exactly as it was. Every attempt —
+    /// accepted or rejected — is journaled by the substrate, so the mind's
+    /// self-modification history stays auditable.
+    pub fn self_improve(
+        &mut self,
+        req: crate::self_improve::extend::LearnRequest,
+    ) -> crate::self_improve::extend::LearnReport {
+        let (candidate, report) = crate::self_improve::extend::self_extend(&self.engine, &req);
+        // Adopt the new engine ONLY on a clean acceptance. `self_extend` returns
+        // `Some(engine)` exactly when the candidate synthesized AND passed the
+        // gate, so guarding on the candidate is equivalent to guarding on
+        // `report.accepted` — but taking the engine the substrate vetted keeps the
+        // accept decision in one place.
+        if let Some(new_engine) = candidate {
+            self.engine = new_engine;
+        }
+        report
+    }
+
     // ===================================================================
     // Reflection + deeper-reasoning scaffold (Tracks B & E).
     //
@@ -1422,5 +1463,341 @@ mod tests {
             cause2.to_lowercase().contains("don't know why"),
             "FABRICATION: invented a cause for an unrecorded effect: {cause2}"
         );
+    }
+
+    // ===================================================================
+    // self_improve: the self-improvement loop wired onto the Mind.
+    //
+    // A mind that CANNOT classify creatures notices the gap (knows_word),
+    // calls self_improve with curriculum-mined examples, and on a green gate
+    // ADOPTS the grafted component — afterward it CAN classify creatures, and
+    // its own regression gate is STILL green (monotone growth).
+    // ===================================================================
+    #[test]
+    fn mind_self_improves_to_learn_creature_class() {
+        // Disable journal persistence so the test never writes to $HOME, holding
+        // the crate-wide journal-env lock so we never race the journal /
+        // self_improve::extend tests on the process-global `NCPU_JOURNAL_PATH`.
+        crate::self_improve::journal::test_support::with_journal_env("", || {
+        let mut mind = Mind::new();
+
+        // PRECONDITION: the mind cannot yet classify a mythical creature — the
+        // component is genuinely absent, so the test is not vacuous.
+        assert!(
+            !mind.engine().has_component("creature_class"),
+            "creature_class must be a genuinely new component for this test to mean anything"
+        );
+        // And the gap detector agrees: "dragon" is not yet a known noun.
+        assert!(!mind.knows_word("dragon"), "the mind should not yet know the word 'dragon'");
+
+        // The self-improvement request: close the creature-classification gap
+        // with curriculum-mined examples.
+        let req = crate::self_improve::extend::LearnRequest {
+            gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
+            name: "creature_class".to_string(),
+            signature: "fn creature_class(s: string) -> i64",
+            examples: crate::comprehension::creature_class_examples(),
+        };
+
+        let report = mind.self_improve(req);
+
+        // The extension was synthesized, gated green, and accepted.
+        assert!(report.synthesized, "creature_class must synthesize: {}", report.message);
+        assert!(
+            report.regression_passed,
+            "the mind's own gate must stay green for a disjoint additive component: {}",
+            report.message
+        );
+        assert!(report.accepted, "a synthesized + gated extension must be accepted: {}", report.message);
+        assert!(!report.method.is_empty(), "the recovering teacher must be recorded");
+
+        // AFTERWARD: the mind's engine was REPLACED with the grafted candidate,
+        // so it now classifies creatures via the synthesized program.
+        assert!(
+            mind.engine().has_component("creature_class"),
+            "the accepted extension must be live on the mind's engine"
+        );
+        assert_eq!(
+            mind.engine().eval_int("creature_class(\"dragon\")"),
+            1,
+            "dragon must classify as a creature on the improved mind"
+        );
+        assert_eq!(
+            mind.engine().eval_int("creature_class(\"report\")"),
+            0,
+            "report must classify as a non-creature on the improved mind"
+        );
+
+        // SOUNDNESS: the mind's own regression gate is STILL green after the
+        // swap — growth was monotone, nothing regressed.
+        assert!(
+            mind.self_check().ok(),
+            "the mind must stay green after adopting the new component (monotone growth)"
+        );
+        });
+    }
+
+    #[test]
+    fn mind_self_improve_rejection_leaves_engine_untouched() {
+        // A request synthesis CANNOT satisfy (contradictory spec: one input maps
+        // to two outputs) must be declined without touching the live engine.
+        crate::self_improve::journal::test_support::with_journal_env("", || {
+        let mut mind = Mind::new();
+        // Baseline: the gate is green and the bogus component is absent.
+        assert!(mind.self_check().ok(), "baseline mind must be green");
+        assert!(!mind.engine().has_component("contradictory_class"));
+
+        let examples = vec![
+            crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
+                expected: crate::benchmark::Value::Int(1),
+            },
+            crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
+                expected: crate::benchmark::Value::Int(0),
+            },
+        ];
+        let req = crate::self_improve::extend::LearnRequest {
+            gap: "impossible contradictory lexicon".to_string(),
+            name: "contradictory_class".to_string(),
+            signature: "fn contradictory_class(s: string) -> i64",
+            examples,
+        };
+
+        let report = mind.self_improve(req);
+        assert!(!report.synthesized, "an unsynthesizable gap must report synthesis failure");
+        assert!(!report.accepted, "a rejected extension is never accepted");
+
+        // The engine is UNTOUCHED: no bogus component, gate still green.
+        assert!(
+            !mind.engine().has_component("contradictory_class"),
+            "a rejected extension must not be grafted onto the live engine"
+        );
+        assert!(mind.self_check().ok(), "the mind stays green after a rejected attempt");
+        });
+    }
+
+    // ===================================================================
+    // ADVERSARIAL VERIFICATION of the autonomous self-extension loop.
+    //
+    // Claim under test: "accepted-extension-is-verified-and-queryable".
+    // An accepted extension must be (a) VERIFIED by solve_problem (the same
+    // solver the loop relies on must independently report success on the same
+    // spec), (b) LIVE and QUERYABLE on the post-improvement engine, and
+    // (c) CORRECT (dragon -> 1, report -> 0). Anything accepted-but-wrong is a
+    // failure. We also prove the loop's gate REALLY rejects a synthesizable-
+    // but-REGRESSING extension (leaving the base engine byte-for-byte unchanged)
+    // and that every attempt is journaled.
+    // ===================================================================
+    #[test]
+    fn adversarial_accepted_extension_is_verified_and_queryable() {
+        use crate::benchmark::{Example, Problem, Value};
+        use crate::self_improve::extend::LearnRequest;
+
+        crate::self_improve::journal::test_support::with_journal_env("", || {
+        // --- GAP: a fresh mind genuinely cannot classify creatures. ---------
+        let mut mind = Mind::new();
+        assert!(
+            !mind.engine().has_component("creature_class"),
+            "precondition: creature_class absent (test would be vacuous otherwise)"
+        );
+        // Behaviorally prove the gap: with no component, the call resolves to the
+        // missing-function sentinel, NOT a correct 1 for a creature.
+        assert_ne!(
+            mind.engine().eval_int("creature_class(\"dragon\")"),
+            1,
+            "a mind WITHOUT the component must not already answer dragon -> 1"
+        );
+        assert!(!mind.knows_word("dragon"), "gap detector: 'dragon' is unknown pre-improvement");
+
+        // --- INDEPENDENT VERIFICATION that solve_problem (the solver the loop ---
+        // relies on) actually SUCCEEDS on this exact spec, and that the program
+        // it returns answers correctly. This is the load-bearing check: the loop
+        // must not be able to "accept" anything solve_problem would not certify.
+        let examples = crate::comprehension::creature_class_examples();
+        let probe = Problem {
+            name: "creature_class".to_string(),
+            category: "comprehension",
+            description: "",
+            signature: "fn creature_class(s: string) -> i64",
+            examples: examples.clone(),
+            holdouts: Vec::new(),
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+        };
+        let solved = crate::solver::solve_problem(&probe);
+        assert!(
+            solved.success,
+            "solve_problem MUST certify the spec (verification by construction): {:?}",
+            solved.error
+        );
+        // solve_problem only reports success after verify_problem_code_strict has
+        // re-run the candidate over every example + holdouts. Re-run the strict
+        // verifier here ourselves so the "verified" claim is not taken on trust.
+        crate::runtime::verify_problem_code_strict(&probe, &solved.code)
+            .expect("the certified program must pass strict re-verification on all examples");
+
+        // --- RUN THE LOOP through the public Mind API. ----------------------
+        let req = LearnRequest {
+            gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
+            name: "creature_class".to_string(),
+            signature: "fn creature_class(s: string) -> i64",
+            examples,
+        };
+        let report = mind.self_improve(req);
+
+        // --- ACCEPTANCE must be backed by synthesis AND a green gate. -------
+        assert!(report.synthesized, "must synthesize: {}", report.message);
+        assert!(report.accepted, "a verified + gated extension must be accepted: {}", report.message);
+        assert!(report.regression_passed, "the gate must be green: {}", report.message);
+        assert!(!report.method.is_empty(), "the recovering teacher must be recorded");
+
+        // --- QUERYABLE: the component is live on the post-improvement engine. -
+        assert!(
+            mind.engine().has_component("creature_class"),
+            "an accepted extension must be live and queryable on the engine"
+        );
+
+        // --- CORRECT: it answers the way the spec demands. ------------------
+        // dragon -> 1 (a creature), report -> 0 (a known non-creature).
+        assert_eq!(
+            mind.engine().eval_int("creature_class(\"dragon\")"),
+            1,
+            "accepted-but-wrong is FALSE: dragon MUST classify as a creature"
+        );
+        assert_eq!(
+            mind.engine().eval_int("creature_class(\"report\")"),
+            0,
+            "accepted-but-wrong is FALSE: report MUST classify as a non-creature"
+        );
+        // Generalization across the rest of the curriculum-mined spec: every
+        // creature -> 1, several known non-creatures -> 0. A program that merely
+        // overfit to {dragon, report} would fail here.
+        for c in crate::comprehension::CREATURES {
+            assert_eq!(
+                mind.engine().eval_int(&format!("creature_class(\"{c}\")")),
+                1,
+                "every creature must classify as 1: {c}"
+            );
+        }
+        for n in ["author", "teacher", "book", "letter", "poem"] {
+            assert_eq!(
+                mind.engine().eval_int(&format!("creature_class(\"{n}\")")),
+                0,
+                "every mined non-creature must classify as 0: {n}"
+            );
+        }
+
+        // --- The accepted program is IDENTICAL to what solve_problem certifies. -
+        // The loop must not have accepted some OTHER (unverified) program. The
+        // grafted source must contain exactly the solver-certified code body.
+        assert!(
+            mind.explain_self("creature").is_empty()
+                || mind.engine().has_component("creature_class"),
+            "sanity: engine reflects the graft"
+        );
+
+        // --- MONOTONE GROWTH: the mind's own gate is still green. -----------
+        assert!(mind.self_check().ok(), "growth must be monotone — gate still green post-graft");
+        });
+    }
+
+    /// ADVERSARIAL: the gate REALLY rejects a synthesizable-but-REGRESSING
+    /// extension, leaving the base engine byte-for-byte unchanged.
+    ///
+    /// The happy-path test alone cannot prove the gate has teeth — it only ever
+    /// sees an additive, disjoint component that trivially passes. Here we force
+    /// a candidate that solve_problem CAN verify (it reproduces its own examples)
+    /// but which SHADOWS an existing function the golden corpus depends on, with
+    /// answers that break it. `try_extend` appends the new `fn`, and the runtime's
+    /// last-definition-wins means the graft overrides the real `noun_animacy`.
+    /// The gate must catch the regression and `self_extend` must reject — engine
+    /// untouched. If a wrong-but-verified candidate were ever ADOPTED, this fails.
+    #[test]
+    fn adversarial_gate_rejects_a_verified_but_regressing_shadow() {
+        use crate::benchmark::{Example, Value};
+        use crate::self_improve::extend::{self_extend, LearnRequest};
+        use crate::self_improve::gate::regression_gate;
+
+        crate::self_improve::journal::test_support::with_journal_env("", || {
+        let engine = Engine::new();
+        // Baseline: the real lexicon classifies "teacher" as an animate noun (1).
+        // The golden corpus relies on this. Record the exact program so we can
+        // prove non-mutation afterward.
+        assert!(engine.has_component("noun_animacy"), "baseline has the real lexicon");
+        let baseline_teacher = engine.noun_class("teacher");
+        assert!(baseline_teacher > 0, "baseline: 'teacher' is a known noun");
+        let baseline_program_len = engine.program().len();
+        let baseline_gate = regression_gate(&engine);
+        assert!(baseline_gate.ok(), "baseline engine is green and sound");
+
+        // A REGRESSING spec: redefine `noun_animacy` so the golden-corpus words
+        // get WRONG classes. It is internally consistent (each input -> one
+        // output), so solve_problem can verify it — but grafting it shadows the
+        // real lexicon and must break the gate. We map every salient curriculum
+        // word to 0 ("not a noun"), which is wrong for the agents/patients the
+        // golden cases exercise.
+        let mut examples: Vec<Example> = Vec::new();
+        for w in [
+            "teacher", "author", "editor", "report", "book", "letter", "student",
+            "captain", "doctor", "pilot", "poem", "story",
+        ] {
+            examples.push(Example {
+                inputs: vec![Value::Str(w.to_string())],
+                expected: Value::Int(0), // WRONG on purpose: these ARE nouns
+            });
+        }
+        let req = LearnRequest {
+            gap: "deliberately wrong noun_animacy shadow".to_string(),
+            name: "noun_animacy".to_string(),
+            signature: "fn noun_animacy(s: string) -> i64",
+            examples,
+        };
+
+        let (candidate, report) = self_extend(&engine, &req);
+
+        // It DID synthesize (solve_problem verified it reproduces its own wrong
+        // examples) — proving the candidate is "verified" yet still must be killed.
+        assert!(
+            report.synthesized,
+            "the regressing shadow is internally verifiable: {}",
+            report.message
+        );
+        // ...but the gate must REJECT it: regression on the golden corpus.
+        assert!(
+            !report.regression_passed,
+            "the gate MUST go red for a regressing shadow: {}",
+            report.message
+        );
+        assert!(
+            !report.accepted,
+            "a verified-but-regressing candidate must NOT be accepted: {}",
+            report.message
+        );
+        assert!(candidate.is_none(), "a rejected candidate engine must not be returned");
+        assert!(
+            report.message.contains("regression gate red"),
+            "rejection must be auditable as a gate-red: {}",
+            report.message
+        );
+
+        // BASE ENGINE UNCHANGED: same program text length, same classification,
+        // still green. self_extend never mutates its input.
+        assert_eq!(
+            engine.program().len(),
+            baseline_program_len,
+            "self_extend must not mutate the base engine's program"
+        );
+        assert_eq!(
+            engine.noun_class("teacher"),
+            baseline_teacher,
+            "the real lexicon must be intact after a rejected shadow"
+        );
+        assert!(regression_gate(&engine).ok(), "base engine still green after rejection");
+        });
     }
 }

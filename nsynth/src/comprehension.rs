@@ -32,6 +32,15 @@ pub const MODIFIERS: &[&str] = &[
     "thoughtful",
 ];
 
+/// Mythical creatures — a curriculum-mined membership class. Disjoint from
+/// every other in-repo lexicon (AGENTS / PATIENTS / MODIFIERS / FUNCTION_WORDS),
+/// so a string-equality membership map "is this a creature?" is well-posed: the
+/// positives (creatures -> 1) and negatives (known non-creatures -> 0) never
+/// collide. Used by [`creature_class_examples`] to turn a detected lexical gap
+/// into a verified-synthesizable spec the existing string-equality teacher
+/// recovers.
+pub const CREATURES: &[&str] = &["dragon", "griffin", "phoenix", "unicorn", "wyvern"];
+
 /// Gradable adjectives as (positive, comparative, scale). The comparative
 /// surface form ("longer") and the scale name ("length") let the semantic parser
 /// detect a comparative clause ("the report is longer than the book") and the
@@ -168,6 +177,55 @@ fn ex_str_str(a: &str, b: &str) -> Example {
 }
 fn ex_arr_int(a: &[i64], n: i64) -> Example {
     Example { inputs: vec![Value::Array(a.to_vec())], expected: Value::Int(n) }
+}
+
+/// Build a binary string-membership spec from in-repo curriculum data: every
+/// `member` maps to 1 and every `nonmember` maps to 0, deduplicating by surface
+/// string so a word that appears in both lists (or twice in one) contributes a
+/// single, consistent example. The result is a well-posed string->int lookup
+/// (a string-equality map) that the existing `noun_animacy`-style teacher
+/// recovers exactly: the positive set and negative set are disjoint by
+/// construction (a duplicate keeps its first-seen label), so the synthesized
+/// program has no contradictory examples.
+///
+/// Reusable for ANY membership gap mined from the curriculum (creatures here,
+/// but equally agents-vs-rest, sibilant verbs, etc.) — pass the positive and
+/// negative word lists and get back a verified-synthesizable example set.
+pub fn lexicon_examples(members: &[&str], nonmembers: &[&str]) -> Vec<Example> {
+    let mut seen = BTreeSet::new();
+    let mut ex = Vec::new();
+    for w in members {
+        if seen.insert(w.to_string()) {
+            ex.push(ex_str_int(w, 1));
+        }
+    }
+    for w in nonmembers {
+        // Skip any word already claimed by the positive set so the map stays
+        // well-posed (no string maps to both 1 and 0).
+        if seen.insert(w.to_string()) {
+            ex.push(ex_str_int(w, 0));
+        }
+    }
+    ex
+}
+
+/// Curriculum-mined spec for "is this word a mythical creature?": each
+/// [`CREATURES`] member -> 1, plus a spread of known NON-creatures (several
+/// [`AGENTS`] and [`PATIENTS`]) -> 0. Drawing the negatives from the existing
+/// in-repo lexicons keeps the spec self-contained (no external source) and gives
+/// the string-equality teacher enough disjoint counter-examples to recover the
+/// lookup as a verified Mog program rather than overfit to a trivial rule.
+pub fn creature_class_examples() -> Vec<Example> {
+    // A representative slice of known non-creatures from the curriculum's animate
+    // agents and inanimate patients. Mixing both noun classes makes "creature"
+    // depend on the actual word, not on any incidental animacy/length feature.
+    let nonmembers: &[&str] = &[
+        // agents (animate, but not creatures)
+        "author", "captain", "doctor", "teacher", "student", "pilot",
+        // patients (inanimate, not creatures)
+        "book", "report", "letter", "poem", "story", "question",
+    ];
+    lexicon_examples(CREATURES, nonmembers)
 }
 
 fn make_problem(name: &str, signature: &'static str, examples: Vec<Example>) -> Problem {
@@ -404,6 +462,15 @@ fn same_prop(a: string, b: string) -> i64 {
 /// A built comprehension engine: all programs synthesized + composed into one
 /// runnable Mog source. Construct once (synthesis takes a few seconds); query
 /// many times.
+///
+/// `Clone` is derived and is **cheap**: `Engine` holds only owned heap data
+/// (`program: String` + `methods: Vec`). Cloning is a `String::clone` +
+/// `Vec::clone` — a byte/element memcpy — and does **not** call
+/// [`Engine::new`](Self::new) or re-run any synthesis. This lets a self-extension
+/// candidate be built by cloning an existing engine and splicing in one freshly
+/// synthesized (and already verified) component, without re-synthesizing the 11
+/// base programs.
+#[derive(Clone)]
 pub struct Engine {
     program: String,
     /// (component, teacher) for reporting which teacher recovered each program.
@@ -536,6 +603,77 @@ impl Engine {
         let lit = format!("[{}]", toks.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "));
         self.call_int(&format!("valid_argument({lit})"))
     }
+
+    // -----------------------------------------------------------------------
+    // Self-extension substrate: public accessors + additive component grafting.
+    // -----------------------------------------------------------------------
+
+    /// Evaluate an arbitrary `i64`-returning Mog call against this engine's
+    /// composed program. Public wrapper over the private
+    /// [`call_int`](Self::call_int) so callers can invoke an **added** component
+    /// (e.g. `eval_int("creature_class(\"dragon\")")`) without going through one
+    /// of the hard-coded query methods. The call string is spliced verbatim into
+    /// a generated `main()`; the caller is responsible for escaping string args
+    /// (see [`esc`]).
+    pub fn eval_int(&self, call: &str) -> i64 {
+        self.call_int(call)
+    }
+
+    /// Evaluate an arbitrary `string`-returning Mog call against this engine's
+    /// composed program. Public wrapper over the private
+    /// [`call_str`](Self::call_str) for invoking added string-valued components.
+    pub fn eval_str(&self, call: &str) -> String {
+        self.call_str(call)
+    }
+
+    /// True if this engine's composed program text defines a function named
+    /// `fn_name` (i.e. the source contains `"fn <fn_name>("`). Lets a caller
+    /// check whether a component has already been grafted in before attempting
+    /// to add it again.
+    pub fn has_component(&self, fn_name: &str) -> bool {
+        self.program.contains(&format!("fn {fn_name}("))
+    }
+
+    /// Attempt to graft a new verified component onto a **clone** of this engine.
+    ///
+    /// Builds a `Problem` from `(name, signature, examples)` (reusing
+    /// [`make_problem`]), runs it through [`solve_problem`], and **only on
+    /// `result.success`** clones `self`, appends the synthesized `result.code` to
+    /// the clone's `program`, pushes `(name, result.method)` onto the clone's
+    /// `methods`, and returns the candidate `Engine`. The synthesized code is
+    /// already verified against the examples by `solve_problem` before it reports
+    /// success. On synthesis failure returns `Err` with the solver's explanation.
+    ///
+    /// This method does **not** mutate `self`: the existing engine is untouched
+    /// whether synthesis succeeds or fails. The returned candidate must still be
+    /// run through the regression gate before being adopted.
+    pub fn try_extend(
+        &self,
+        name: &str,
+        signature: &'static str,
+        examples: Vec<crate::benchmark::Example>,
+    ) -> Result<Engine, String> {
+        let problem = make_problem(name, signature, examples);
+        let result = solve_problem(&problem);
+        if !result.success {
+            return Err(result
+                .error
+                .unwrap_or_else(|| format!("synthesis failed for {name}: no candidate found")));
+        }
+        // Cheap clone (String + Vec memcpy; no re-synthesis), then splice in the
+        // freshly synthesized + verified component.
+        let mut candidate = self.clone();
+        candidate.program.push('\n');
+        candidate.program.push_str(&result.code);
+        candidate
+            .methods
+            // `name` is borrowed; leak a 'static copy so the methods provenance
+            // tuple (which is keyed by &'static str) can hold it for the engine's
+            // lifetime. Grafted-component names are few and bounded by the number
+            // of self-extension attempts, so this is a negligible, intentional leak.
+            .push((Box::leak(name.to_string().into_boxed_str()), result.method));
+        Ok(candidate)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +771,60 @@ mod vocab_tests {
     #[test]
     fn student_is_an_agent() {
         assert!(AGENTS.contains(&"student"), "student must be an AGENT");
+    }
+
+    /// The curriculum-mined creature spec is well-posed and synthesizable, and the
+    /// recovered program classifies a held member (dragon) as 1 and a known
+    /// non-creature drawn from the negatives (report) as 0.
+    #[test]
+    fn creature_class_synthesizes_and_classifies() {
+        let ex = creature_class_examples();
+        // Spec sanity: every CREATURE is a positive (1) and the chosen negatives
+        // are all labeled 0, with no string mapped to both labels.
+        let positives = ex.iter().filter(|e| e.expected == Value::Int(1)).count();
+        let negatives = ex.iter().filter(|e| e.expected == Value::Int(0)).count();
+        assert_eq!(
+            positives,
+            CREATURES.len(),
+            "every creature must be a positive example"
+        );
+        assert!(negatives >= 6, "need several non-creature negatives, got {negatives}");
+
+        // Synthesize the lookup through the real solver and confirm success.
+        let (code, _method) =
+            synth("creature_class", "fn creature_class(s: string) -> i64", ex);
+
+        // Run the synthesized program: dragon -> 1 (a creature), report -> 0
+        // (a known non-creature from PATIENTS).
+        let run = |word: &str| -> i64 {
+            let full = format!(
+                "{code}\nfn main() -> i64 {{\n  println_i64(creature_class({}));\n  return 0;\n}}\n",
+                esc(word)
+            );
+            let out = execute_program(&full).map(|r| r.output).unwrap_or_default();
+            out.lines().next().and_then(|l| l.trim().parse().ok()).unwrap_or(-1)
+        };
+        assert_eq!(run("dragon"), 1, "dragon must classify as a creature");
+        assert_eq!(run("report"), 0, "report must classify as a non-creature");
+    }
+
+    /// `lexicon_examples` keeps the membership map well-posed when a word appears
+    /// in both lists: the positive label wins and the word is not duplicated.
+    #[test]
+    fn lexicon_examples_dedup_is_well_posed() {
+        let ex = lexicon_examples(&["dragon", "dragon"], &["dragon", "book"]);
+        // "dragon" collapses to a single positive; "book" is the only negative.
+        assert_eq!(ex.len(), 2);
+        assert_eq!(
+            ex.iter().filter(|e| e.inputs == vec![Value::Str("dragon".into())]).count(),
+            1,
+            "dragon must appear exactly once"
+        );
+        let dragon = ex
+            .iter()
+            .find(|e| e.inputs == vec![Value::Str("dragon".into())])
+            .unwrap();
+        assert_eq!(dragon.expected, Value::Int(1), "positive label wins on collision");
     }
 
     /// GRADABLE pairs the positive adjective with its comparative and scale, and
