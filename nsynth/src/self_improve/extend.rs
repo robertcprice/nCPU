@@ -245,6 +245,22 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
             .map(|s| s.trim_start_matches('\n').to_string())
             .unwrap_or_default();
         if !code.is_empty() {
+            // For an `<x>_class` component, persist its VERIFIED example domain
+            // (word, is_member) so a reload answers within exactly the proven
+            // evidence — its unverified generalization stays UNKNOWN across runs.
+            let members: Vec<(String, bool)> = if req.name.ends_with("_class") {
+                req.examples
+                    .iter()
+                    .filter_map(|ex| match (ex.inputs.first(), &ex.expected) {
+                        (Some(crate::benchmark::Value::Str(w)), crate::benchmark::Value::Int(l)) => {
+                            Some((w.clone(), *l == 1))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             store::save_one(&StoredComponent {
                 name: req.name.clone(),
                 signature: req.signature.to_string(),
@@ -253,6 +269,7 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
                 // an equivalent clone, so read the provenance back from there.
                 method: report.method.clone(),
                 examples_fingerprint: examples_fingerprint(&req.examples),
+                members,
             });
         }
         (Some(candidate), report)

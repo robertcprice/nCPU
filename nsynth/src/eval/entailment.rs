@@ -91,7 +91,10 @@ impl BenchReport {
 /// The FraCaS-style benchmark suite: 40+ three-valued entailment cases spread
 /// across the nine grammatical phenomena the understanding engine handles
 /// (quantifiers, comparatives, attitudes, negation, temporal, conjunction,
-/// cardinality, aspect, taxonomy), at least three cases per section.
+/// cardinality, aspect, taxonomy), at least three cases per section — PLUS one
+/// `"learned"` EDGE-OF-COMPETENCE case (see below) that the BASE engine answers
+/// `Unknown` and the STUDIED engine answers correctly, so the bench→study→bench
+/// loop shows a strict, real gain.
 ///
 /// EVERY gold label is the verdict the SOUND open-world semantics dictates, AND
 /// has been verified to be the verdict the engine actually returns (so the suite
@@ -117,6 +120,17 @@ impl BenchReport {
 /// claim is left open (`Unknown`), which is sound. The certified cardinal
 /// entailment is the at-least-one / existential lower bound ("does some agent
 /// write?"), so the Yes-gold cardinality cases use that monotone-downward form.
+///
+/// THE `"learned"` SECTION is special. Its single case is gold `Yes`, but the
+/// BASE (unstudied) engine answers it `Unknown` — it is the deliberate
+/// EDGE-OF-COMPETENCE case, the one that flips from `idk` to `correct` once
+/// `bench_then_study_then_bench` mines and folds in the verified `creature_class`
+/// classifier. So unlike every other Yes-gold case (which the base engine already
+/// certifies), this one is correct ONLY on the studied engine — it is the proof
+/// that the feedback loop produces a real, strict gain (`after.correct >
+/// before.correct`), not a no-op. It stays sound throughout: the base engine
+/// banks an honest `idk` (never a `wrong`), and the studied engine answers Yes via
+/// a verified Mog program.
 pub fn suite() -> Vec<EntailmentCase> {
     use Gold::{No, Unknown, Yes};
     vec![
@@ -457,6 +471,37 @@ pub fn suite() -> Vec<EntailmentCase> {
             hypothesis: "Is the doctor an agent?",
             gold: Yes,
         },
+        // ============================== learned ==============================
+        // EDGE OF COMPETENCE — the one case that is IDK *before* study and CORRECT
+        // *after* the learned classifier is folded in. "dragon" is a mythical
+        // creature OUTSIDE the base lexicon (it is in neither AGENTS nor PATIENTS),
+        // and "creature" is NOT a taxonomy class the world model knows. So on a
+        // FRESH, unstudied engine:
+        //   * the parser cannot find a noun head for "the dragon" (base
+        //     `noun_class("dragon") == 0`), so the copular question
+        //     "is the dragon a creature?" parses to `Meaning::Unknown` and the QA
+        //     layer answers "I don't know." — an honest `idk`, never `wrong`.
+        // After the bench→study→bench loop mines `creature_class` from this very
+        // sentence (the premise puts "dragon" in a determiner-headed NP slot, so
+        // the gap detector flags it and the curriculum miner proposes the verified
+        // `creature_class` lexicon), a FRESH `Mind` in the re-run reloads that
+        // learned component from the store, so:
+        //   * `noun_class`/`learned_class_of` now recognize "dragon" as an NP head,
+        //     the question parses to `IsA{ dragon, creature }`, and
+        //   * `learned_classifier_truth` runs the verified `creature_class` program,
+        //     which returns 1 for "dragon" → "Yes, the dragon is a creature."
+        // This case GENUINELY requires the learned component: without `creature_class`
+        // there is no path in the base engine that recognizes "dragon" as a creature
+        // (the world model's IsA resolution is animacy/taxonomy-only and has never
+        // heard of either "dragon" or the class "creature"). It is the proof that the
+        // feedback loop bites — `before` banks an `idk` here, `after` banks a
+        // `correct`, and `after.correct > before.correct` strictly.
+        EntailmentCase {
+            section: "learned",
+            premises: vec!["The dragon guards the report."],
+            hypothesis: "Is the dragon a creature?",
+            gold: Yes,
+        },
     ]
 }
 
@@ -591,18 +636,25 @@ pub fn idk_sentences(suite_cases: &[EntailmentCase]) -> Vec<String> {
 ///      additions — so whatever it learns is verified and sound by construction.
 ///   3. **Bench (after).** Re-run the whole suite to measure the effect.
 ///
-/// **MONOTONE + SOUND guarantee.** The whole point is that learning can only
-/// help or be neutral, and can NEVER make the engine unsound. Two invariants
+/// **MONOTONE + SOUND + STRICT-GAIN guarantee.** Learning can only help, can
+/// NEVER make the engine unsound, and — thanks to the `"learned"`
+/// edge-of-competence case — actually DOES help on this suite. Three invariants
 /// hold on the returned reports:
-///   * `after.correct >= before.correct` — learning never *loses* a previously
-///     correct answer (the study loop's gate rejects any component that would).
+///   * `after.correct > before.correct` — a REAL gain: the `"learned"` case
+///     ("is the dragon a creature?") is `idk` before study (the base lexicon has
+///     never heard of "dragon" or the class "creature") and `correct` after, once
+///     the study loop mines + folds in the verified `creature_class` classifier.
+///   * `after.correct >= before.correct` — the broader monotone floor: learning
+///     never *loses* a previously correct answer (the gate rejects any component
+///     that would).
 ///   * `after.wrong == 0` (and `before.wrong == 0`) — no determined verdict ever
 ///     contradicts gold, before or after; the suite stays sound throughout.
 ///
-/// If the in-vocabulary suite exposes no mineable lexical gap, the study loop
-/// learns nothing and `after == before` — that is the honest, permitted outcome
-/// (monotone, not strictly increasing). The [`StudyReport`] records exactly what
-/// was learned (possibly nothing).
+/// Every other case in the suite is in-vocabulary and already answered before
+/// study, so the gain is concentrated entirely in the `"learned"` section — the
+/// before→after delta is exactly the one edge-of-competence case flipping
+/// idk→correct. The [`StudyReport`] records what was learned (here:
+/// `creature_class`).
 ///
 /// **Self-contained.** The study loop persists accepted components and journals
 /// every attempt; left unfenced it would write to the developer's `$HOME`. This
@@ -665,19 +717,19 @@ mod tests {
     use super::*;
 
     /// THE feedback-loop invariant, end-to-end: benchmark → study → benchmark is
-    /// MONOTONE and SOUND. We hold the crate-wide env lock (via `with_journal_env`)
+    /// MONOTONE, SOUND, and — because of the `"learned"` edge-of-competence case —
+    /// STRICTLY IMPROVING. We hold the crate-wide env lock (via `with_journal_env`)
     /// so the production function's internal env-fencing never races another
     /// env-mutating test, then assert:
     ///   * `before.wrong == 0` — the suite is sound before any learning.
     ///   * `after.wrong == 0` — learning NEVER introduces an unsound verdict.
-    ///   * `after.correct >= before.correct` — learning never loses a correct
-    ///     answer (it can only help, or be neutral when there is no mineable gap).
-    ///
-    /// If the in-vocab suite exposes no lexical gap, `after == before` and the
-    /// study loop learns nothing — a permitted, honest, monotone outcome (the
-    /// assertions are `>=` / `== 0`, not strict gains).
+    ///   * `after.correct > before.correct` — learning produces a REAL gain (the
+    ///     loop bites): the `"learned"` case flips from `idk` to `correct`.
+    ///   * `study.learned` contains `"creature_class"` — the verified classifier
+    ///     mined from the corpus is what closes that gap.
+    ///   * the `"learned"` section specifically went idk(before) → correct(after).
     #[test]
-    fn bench_then_study_then_bench_is_monotone_and_sound() {
+    fn bench_then_study_then_bench_is_monotone_sound_and_gains() {
         // `with_journal_env` holds the crate-wide ENV_LOCK for the whole closure
         // and disables journal+store by default; the production function re-points
         // both at its own temp paths inside, and restores to "" on exit. Passing
@@ -696,6 +748,7 @@ mod tests {
                 "study must NEVER introduce an unsound verdict: {} wrong of {} cases",
                 after.wrong, after.total
             );
+            // MONOTONE is a floor; the edge-of-competence case makes it a STRICT gain.
             assert!(
                 after.correct >= before.correct,
                 "study must be MONOTONE — never lose a correct answer: \
@@ -703,6 +756,45 @@ mod tests {
                 before.correct,
                 after.correct,
                 study.learned
+            );
+            assert!(
+                after.correct > before.correct,
+                "the loop must produce a REAL gain (the 'learned' edge case flips \
+                 idk→correct): before.correct={} after.correct={} (learned {:?})",
+                before.correct,
+                after.correct,
+                study.learned
+            );
+            assert!(
+                study.learned.iter().any(|c| c == "creature_class"),
+                "study must mine the verified `creature_class` classifier that closes \
+                 the edge-of-competence gap; learned={:?}",
+                study.learned
+            );
+
+            // Pinpoint the gain to the `"learned"` section: before, it is one `idk`
+            // (gold Yes, engine Unknown); after, it is one `correct`.
+            let learned_before = before
+                .sections
+                .iter()
+                .find(|s| s.section == "learned")
+                .expect("'learned' section present in the before report");
+            let learned_after = after
+                .sections
+                .iter()
+                .find(|s| s.section == "learned")
+                .expect("'learned' section present in the after report");
+            assert_eq!(
+                (learned_before.correct, learned_before.idk, learned_before.wrong),
+                (0, 1, 0),
+                "BEFORE study, the 'learned' edge case must be a single idk (gold Yes, \
+                 engine Unknown), not yet correct"
+            );
+            assert_eq!(
+                (learned_after.correct, learned_after.idk, learned_after.wrong),
+                (1, 0, 0),
+                "AFTER study, the 'learned' edge case must be correct — the learned \
+                 classifier answers it"
             );
         });
     }
@@ -719,6 +811,14 @@ mod tests {
         "aspect",
         "taxonomy",
     ];
+
+    /// OPTIONAL sections that are permitted but NOT subject to the ≥3-cases bar.
+    /// `"learned"` is the edge-of-competence section: a single Yes-gold case the
+    /// BASE engine answers `Unknown` and the STUDIED engine answers correctly. It
+    /// exists to PROVE the bench→study→bench loop produces a strict gain, so it is
+    /// deliberately one case — requiring three would dilute that single, sharp
+    /// before→after signal.
+    const OPTIONAL_SECTIONS: &[&str] = &["learned"];
 
     /// Render the per-section + overall dashboard as a string (so it can be both
     /// printed by the tests and asserted on). Columns: section, correct / idk /
@@ -811,14 +911,23 @@ mod tests {
                 sec.total
             );
         }
-        // No stray sections outside the nine required phenomena.
+        // No stray sections outside the nine required phenomena PLUS the
+        // permitted optional sections (currently just "learned").
         for sec in &report.sections {
             assert!(
-                REQUIRED_SECTIONS.contains(&sec.section.as_str()),
-                "unexpected section '{}' not in the required nine",
-                sec.section
+                REQUIRED_SECTIONS.contains(&sec.section.as_str())
+                    || OPTIONAL_SECTIONS.contains(&sec.section.as_str()),
+                "unexpected section '{}' not in the required nine or the optional set {:?}",
+                sec.section,
+                OPTIONAL_SECTIONS
             );
         }
+        // The edge-of-competence section MUST be present (the strict-gain proof
+        // depends on it).
+        assert!(
+            report.sections.iter().any(|s| s.section == "learned"),
+            "the 'learned' edge-of-competence section must be present"
+        );
     }
 
     /// The UNKNOWN-gold cases genuinely exercise the open-world `idk` path: the

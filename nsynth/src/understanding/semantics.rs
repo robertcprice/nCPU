@@ -27,6 +27,24 @@ pub fn understand(engine: &Engine, sentence: &str) -> Meaning {
     if toks.is_empty() {
         return Meaning::Unknown(sentence.to_string());
     }
+    // POSSESSIVE genitive normalization: the tokenizer splits "editor's" into the
+    // possessor noun "editor" and a bare "s". Rewrite the possessive NP
+    // "[det] <possessor> s <possessed>" to "[det] <possessed>" so the HEAD of the
+    // NP is the possessed noun ("report"), exactly the slot filler a non-genitive
+    // NP would produce. The possessor is dropped from the truth-conditions —
+    // SOUND, because we never assert any possession fact, and the core
+    // predicate-argument structure ("writes the report") is preserved unchanged.
+    let toks = normalize_possessives(engine, toks);
+
+    // --- Prepositional-phrase adjunct stripping -------------------------------
+    // A trailing locative/instrument PP ("... with a pen", "... in the room") is
+    // an OPTIONAL adjunct that modifies the event but is NOT one of its core
+    // arguments. Drop it before clause parsing so the agent/patient structure is
+    // unchanged and the PP-bearing sentence parses to the SAME core Event as the
+    // sentence without it. SOUND: dropping an adjunct only DISCARDS information
+    // (under-specifies) — it can never create a truth-condition the sentence did
+    // not assert, so no false entailment is introduced.
+    let toks = strip_pp_adjunct(engine, toks);
 
     // --- Disjunction "<clause> or <clause> [or <clause>]" ---------------------
     // Split on a top-level "or" connective (not a noun/argument) FIRST, so that a
@@ -1173,13 +1191,43 @@ fn parse_yes_no(engine: &Engine, toks: &[String], original: &str) -> Meaning {
     let Some(subj_idx) = first_noun_idx(engine, toks, 1) else {
         return Meaning::Unknown(original.to_string());
     };
-    let subject = term_from(toks, subj_idx);
 
     // Tense from the auxiliary.
     let aux_tense = match head {
         "did" => Tense::Past,
         _ => Tense::Present,
     };
+
+    // RELATIVE-CLAUSE SUBJECT in a yes/no question: "does the teacher who writes
+    // the report read the book?". The subject NP carries a restrictive relative
+    // clause exactly as in the declarative; we build the SAME Restricted subject
+    // and run the MAIN predication (past the relative clause) as the queried
+    // event. The fronted auxiliary supplies the main tense. This makes the
+    // question parse to the SAME Restricted-subject Event a declarative would,
+    // so the world model answers it correctly instead of "I don't know".
+    if let Some((restricted_subject, main_vidx)) =
+        build_restricted_subject(engine, toks, subj_idx)
+    {
+        // Read the main verb (de-inflected; aux-fronted questions have a bare
+        // verb) and any objects, with the tense taken from the fronted aux.
+        let (rc_negated, _t, rc_main_vidx) = scan_aux_negation(toks, main_vidx);
+        if let Some(mvidx) = rc_main_vidx {
+            let (predicate, _) = lemma_and_tense(engine, &toks[mvidx]);
+            let (patient, recipient) = extract_objects(engine, toks, &predicate, mvidx + 1);
+            return Meaning::YesNoQuestion(Box::new(Meaning::Event(Event {
+                predicate,
+                agent: Some(restricted_subject),
+                patient,
+                recipient,
+                tense: aux_tense,
+                aspect: Aspect::Simple,
+                negated: rc_negated,
+            })));
+        }
+        return Meaning::Unknown(original.to_string());
+    }
+
+    let subject = term_from(toks, subj_idx);
 
     let after = subj_idx + 1;
     let (negated, _t, verb_idx) = scan_aux_negation(toks, after);
@@ -1386,11 +1434,134 @@ fn parse_what(engine: &Engine, toks: &[String], original: &str) -> Meaning {
 // Shared helpers
 // ===========================================================================
 
-/// Is this token a noun-phrase head — either a lexicon noun (noun_class > 0) or
-/// a pronoun (it/they/he/she/...)? Pronouns are valid argument heads whose
-/// referent discourse coreference resolves later.
+/// Is this token a noun-phrase head — either a lexicon noun (noun_class > 0), a
+/// pronoun (it/they/he/she/...), or a word a SELF-LEARNED classifier positively
+/// recognizes (e.g. after `study` learns `creature_class`, "dragon")? Pronouns
+/// are valid argument heads whose referent discourse coreference resolves later.
+///
+/// FUNCTIONAL INTEGRATION of self-learned classifiers: a word the base lexicon
+/// scores `noun_class == 0` ("not a noun / unknown") but that some learned
+/// `<x>_class` component classifies positively ([`Engine::learned_class_of`])
+/// becomes a valid NP head here, so "the dragon flies" parses to an `Event` with
+/// agent dragon instead of `Meaning::Unknown`. SOUNDNESS: `learned_class_of`
+/// consults ONLY self-acquired classifiers — on a FRESH engine (no learning) it
+/// always returns `None`, so this disjunct is inert and behaviour is byte-for-byte
+/// unchanged. A learned-classifier noun keeps base `noun_class == 0`, so every
+/// animacy / selectional check (`animacy_category` -> "thing", `is_person` ->
+/// false) treats it as an INANIMATE thing — it never spuriously satisfies an
+/// agent-only restriction.
 fn is_np_head(engine: &Engine, word: &str) -> bool {
-    engine.noun_class(word) > 0 || is_pronoun(word)
+    engine.noun_class(word) > 0
+        || is_pronoun(word)
+        || engine.learned_class_of(word).is_some()
+}
+
+/// Normalize apostrophe-s genitives in the token stream. The tokenizer strips the
+/// apostrophe, so "editor's" arrives as two tokens — the possessor noun and a
+/// bare "s". Detect the possessive NP `<possessor-noun> "s" <possessed-noun>` and
+/// rewrite it to just `<possessed-noun>`, dropping the possessor and the "s".
+///
+/// The possessed noun becomes the head of the NP — exactly the slot filler the
+/// non-genitive NP "the report" would produce. The determiner before the
+/// possessor (e.g. the "the" in "the editor's report") is left in place, so it
+/// still attaches to the (now head) possessed noun and `term_from` reads it as a
+/// definite `Entity`. We only collapse when BOTH flanking tokens are recognized
+/// noun-phrase heads and the middle token is exactly "s" — so a stray "s" that is
+/// not a genitive (none occur in this curriculum) cannot trigger a rewrite.
+///
+/// SOUNDNESS: this DISCARDS the possessor (we note nothing about possession), so
+/// it can only under-specify, never assert a possession fact that was not stated.
+/// The verb's predicate-argument structure is untouched: "writes the editor's
+/// report" and "writes the report" yield the identical core Event.
+fn normalize_possessives(engine: &Engine, toks: Vec<String>) -> Vec<String> {
+    if toks.len() < 3 {
+        return toks;
+    }
+    let mut out: Vec<String> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        // Possessive NP: <possessor-noun> "s" <possessed-noun>.
+        if i + 2 < toks.len()
+            && toks[i + 1] == "s"
+            && is_np_head(engine, &toks[i])
+            && is_np_head(engine, &toks[i + 2])
+        {
+            // Drop the possessor (toks[i]) and the "s" (toks[i+1]); the possessed
+            // noun (toks[i+2]) becomes the NP head, inheriting any determiner that
+            // was already emitted before the possessor.
+            i += 2; // advance past possessor + "s"; the possessed noun is emitted
+                    // on the next loop iteration as an ordinary noun.
+            continue;
+        }
+        out.push(toks[i].clone());
+        i += 1;
+    }
+    out
+}
+
+/// Prepositions that introduce a droppable locative/instrument adjunct PP.
+/// Restricted to the curriculum's locative/instrument frames; deliberately
+/// EXCLUDES "to" (the ditransitive dative marker, a CORE argument) and "by" (the
+/// passive agent marker, also core) so neither is mistaken for an adjunct.
+const ADJUNCT_PREPS: &[&str] = &["with", "in", "on", "at", "into", "near", "inside"];
+
+/// Strip a trailing locative/instrument prepositional-phrase adjunct from the
+/// token stream: "... writes the report with a pen" / "... in the room" loses the
+/// PP, leaving "... writes the report".
+///
+/// We only strip a PP that begins at or after the first verb (so a sentence-
+/// initial "in" cannot be eaten) and runs to the end of the sentence (a trailing
+/// adjunct). The preposition must be one of [`ADJUNCT_PREPS`] — never "to"/"by",
+/// which are core-argument markers. Returns the tokens unchanged when no such PP
+/// is present.
+///
+/// SOUNDNESS: an adjunct only ADDS circumstance to an event; removing it yields a
+/// strictly WEAKER (less specific) reading. Since the parser then asserts only
+/// the core event (which the full sentence also asserts), no entailment the
+/// sentence licensed is lost in a way that could become FALSE — and we never
+/// invent a circumstance. Dropping an adjunct cannot manufacture a false
+/// entailment.
+fn strip_pp_adjunct(engine: &Engine, toks: Vec<String>) -> Vec<String> {
+    // Find the first verb so a leading preposition (none in this curriculum) is
+    // never treated as an adjunct head. The verb anchors "trailing".
+    let first_verb = (0..toks.len()).find(|&i| {
+        // A lexical verb: de-inflects to a known verb base and is not a noun.
+        !is_np_head(engine, &toks[i]) && is_verbish(engine, &toks[i])
+    });
+    let Some(vidx) = first_verb else {
+        return toks;
+    };
+
+    // The PP must START strictly after the verb (so the verb + its object remain).
+    // Scan for the FIRST adjunct preposition after the verb; everything from there
+    // to the end is the adjunct and is dropped.
+    if let Some(pp_idx) = (vidx + 1..toks.len()).find(|&i| ADJUNCT_PREPS.contains(&toks[i].as_str()))
+    {
+        // Require at least one core object token between the verb and the PP, so a
+        // verb immediately followed by a preposition (an unusual frame) is left
+        // intact rather than truncated to a bare verb.
+        if pp_idx > vidx + 1 {
+            return toks[..pp_idx].to_vec();
+        }
+    }
+    toks
+}
+
+/// Is the surface token a lexical verb (de-inflects to a known verb base)? Used
+/// only to anchor PP-adjunct stripping; reuses `lemma_and_tense`'s recognition.
+fn is_verbish(engine: &Engine, word: &str) -> bool {
+    // Auxiliaries / copulas count as verbal anchors too.
+    if matches!(
+        word,
+        "is" | "are" | "was" | "were" | "has" | "have" | "had" | "will" | "does" | "do" | "did"
+    ) {
+        return true;
+    }
+    let (lemma, _t) = lemma_and_tense(engine, word);
+    REG_VERBS
+        .iter()
+        .chain(IRREGULAR_VERBS.iter())
+        .any(|(base, _)| *base == lemma)
 }
 
 /// Index of the first noun-phrase head (lexicon noun or pronoun) at or after
@@ -2180,6 +2351,42 @@ fn parse_relative_subject(
     subj_idx: usize,
     original: &str,
 ) -> Option<Meaning> {
+    // Build the Restricted subject and locate the main verb after the clause.
+    let (subject, main_vidx) = build_restricted_subject(engine, toks, subj_idx)?;
+
+    // Build the main event over the restricted subject. The main predication runs
+    // from just before its verb; reuse the aspect-aware event builder anchored at
+    // the main verb's position (the subject is already chosen).
+    Some(build_event_from(
+        engine,
+        toks,
+        Some(subject),
+        main_vidx,
+        original,
+    ))
+}
+
+/// Build a `Term::Restricted` from a head noun at `subj_idx` carrying a
+/// restrictive relative clause ("the <noun> who/that <verb> <obj>"), returning
+/// the restricted term together with the index of the MAIN verb that begins the
+/// predication AFTER the relative clause.
+///
+/// Returns `None` when there is no relativizer right after the head noun, or no
+/// relative-clause verb, or no main verb after the clause — so an ordinary
+/// subject NP (and a malformed fragment) leaves the caller's plain-subject path
+/// untouched.
+///
+/// SOUNDNESS: the restriction is the clause's own Event with the head noun bound
+/// into its agent slot, so the referent is exactly "the <head> that satisfies
+/// <clause>" — identical to the declarative relative-clause representation. Both
+/// the declarative and the interrogative caller therefore produce the SAME
+/// Restricted subject for the same words, and the world model resolves it the
+/// same way (no false entailment introduced by the question form).
+fn build_restricted_subject(
+    engine: &Engine,
+    toks: &[String],
+    subj_idx: usize,
+) -> Option<(Term, usize)> {
     // The relativizer must immediately follow the head noun.
     let rel_idx = subj_idx + 1;
     if !toks.get(rel_idx).map(|w| relativizer(w)).unwrap_or(false) {
@@ -2226,16 +2433,7 @@ fn parse_relative_subject(
     let (_neg, _t, main_verb_idx) = scan_aux_negation(toks, main_scan_from);
     let main_vidx = main_verb_idx?;
 
-    // Build the main event over the restricted subject. The main predication runs
-    // from just before its verb; reuse the aspect-aware event builder anchored at
-    // the main verb's position (the subject is already chosen).
-    Some(build_event_from(
-        engine,
-        toks,
-        Some(subject),
-        main_vidx,
-        original,
-    ))
+    Some((subject, main_vidx))
 }
 
 // ===========================================================================
@@ -3089,6 +3287,140 @@ mod tests {
         let m = understand(engine(), "The teacher writes the report.");
         let Meaning::Event(ev) = m else { panic!("expected Event") };
         assert_eq!(ev.agent, Some(Term::Entity("teacher".to_string())));
+    }
+
+    #[test]
+    fn interrogative_relative_clause_subject() {
+        // "does the teacher who writes the report read the book?" parses to the
+        // SAME Restricted-subject Event a declarative would, wrapped in a yes/no.
+        let m = understand(
+            engine(),
+            "Does the teacher who writes the report read the book?",
+        );
+        let Meaning::YesNoQuestion(inner) = m else {
+            panic!("expected a YesNoQuestion, got {m:?}");
+        };
+        let Meaning::Event(ev) = *inner else {
+            panic!("expected an Event inside the question, got it wrapped wrong");
+        };
+        // Main predication: read(book).
+        assert_eq!(ev.predicate, "read");
+        assert_eq!(ev.patient, Some(Term::Entity("book".to_string())));
+        assert_eq!(ev.tense, Tense::Present);
+        // Subject is the restricted teacher (the one who writes the report) —
+        // identical to the declarative relative-clause subject.
+        let Some(Term::Restricted { head, clause }) = ev.agent else {
+            panic!("expected a Restricted subject, got {:?}", ev.agent);
+        };
+        assert_eq!(head, "teacher");
+        assert_eq!(clause.predicate, "write");
+        assert_eq!(clause.agent, Some(Term::Entity("teacher".to_string())));
+        assert_eq!(clause.patient, Some(Term::Entity("report".to_string())));
+    }
+
+    #[test]
+    fn interrogative_relative_clause_matches_declarative_subject() {
+        // The interrogative form's Restricted subject must be byte-identical to the
+        // declarative's, so the world model answers it the same way (no "I don't
+        // know" divergence between question and statement).
+        let q = understand(
+            engine(),
+            "Does the teacher who writes the report read the book?",
+        );
+        let d = understand(
+            engine(),
+            "The teacher who writes the report reads the book.",
+        );
+        let Meaning::YesNoQuestion(qi) = q else { panic!("expected YesNo") };
+        let (Meaning::Event(qe), Meaning::Event(de)) = (*qi, d) else {
+            panic!("expected Events");
+        };
+        assert_eq!(qe.agent, de.agent, "question subject must equal declarative subject");
+        assert_eq!(qe.predicate, de.predicate);
+        assert_eq!(qe.patient, de.patient);
+    }
+
+    // ---- (3b) POSSESSIVES --------------------------------------------------
+
+    #[test]
+    fn possessive_object_parses_to_possessed_noun() {
+        // "the teacher writes the editor's report" — the genitive object's HEAD is
+        // the possessed noun "report"; the core event is write(teacher, report),
+        // exactly as if the possessor had not been written.
+        let m = understand(engine(), "The teacher writes the editor's report.");
+        let Meaning::Event(ev) = m else {
+            panic!("expected an Event, got {m:?}");
+        };
+        assert_eq!(ev.predicate, "write");
+        assert_eq!(ev.agent, Some(Term::Entity("teacher".to_string())));
+        assert_eq!(
+            ev.patient,
+            Some(Term::Entity("report".to_string())),
+            "possessed noun is the patient"
+        );
+    }
+
+    #[test]
+    fn possessive_object_core_event_matches_plain() {
+        // The possessive sentence's core Event is identical to the same sentence
+        // without the genitive — SOUND: we drop the possessor, never invent a fact.
+        let with_poss = understand(engine(), "The teacher writes the editor's report.");
+        let plain = understand(engine(), "The teacher writes the report.");
+        assert_eq!(with_poss, plain, "genitive object must not change the core Event");
+    }
+
+    #[test]
+    fn possessive_subject_parses_to_possessed_noun() {
+        // "the teacher's report is long" — the possessed noun "report" is the
+        // subject of the predication; the possessor is dropped.
+        let m = understand(engine(), "The teacher's report is long.");
+        let Meaning::HasProperty { subject, property, .. } = m else {
+            panic!("expected a HasProperty, got {m:?}");
+        };
+        assert_eq!(subject, Term::Entity("report".to_string()));
+        assert_eq!(property, "long");
+    }
+
+    // ---- (3c) PREPOSITIONAL-PHRASE ADJUNCTS --------------------------------
+
+    #[test]
+    fn pp_adjunct_does_not_change_core_event() {
+        // A trailing instrument PP ("with a pen") and a locative PP ("in the room")
+        // are dropped; the PP-bearing sentence parses to the SAME core Event as the
+        // sentence without the PP.
+        let base = understand(engine(), "The teacher writes the report.");
+        let with_instr = understand(engine(), "The teacher writes the report with a pen.");
+        let with_loc = understand(engine(), "The teacher writes the report in the room.");
+        assert_eq!(with_instr, base, "instrument PP must be a droppable adjunct");
+        assert_eq!(with_loc, base, "locative PP must be a droppable adjunct");
+    }
+
+    #[test]
+    fn pp_adjunct_preserves_agent_and_patient() {
+        // Explicitly: agent/patient are unchanged by the adjunct.
+        let m = understand(engine(), "The teacher writes the report with a pen.");
+        let Meaning::Event(ev) = m else {
+            panic!("expected an Event, got {m:?}");
+        };
+        assert_eq!(ev.predicate, "write");
+        assert_eq!(ev.agent, Some(Term::Entity("teacher".to_string())));
+        assert_eq!(ev.patient, Some(Term::Entity("report".to_string())));
+    }
+
+    #[test]
+    fn pp_adjunct_does_not_eat_dative_to_or_passive_by() {
+        // SOUNDNESS: "to" (dative) and "by" (passive agent) are CORE markers, never
+        // adjunct prepositions — they must survive PP stripping.
+        // Ditransitive "to": recipient preserved.
+        let dat = understand(engine(), "The teacher gives the book to the student.");
+        let Meaning::Event(de) = dat else { panic!("expected Event for dative") };
+        assert_eq!(de.predicate, "give");
+        assert_eq!(de.recipient, Some(Term::Entity("student".to_string())));
+        // Passive "by": agent preserved.
+        let pass = understand(engine(), "The report was written by the teacher.");
+        let Meaning::Event(pe) = pass else { panic!("expected Event for passive") };
+        assert_eq!(pe.agent, Some(Term::Entity("teacher".to_string())));
+        assert_eq!(pe.patient, Some(Term::Entity("report".to_string())));
     }
 
     // ---- (4) PASSIVE -------------------------------------------------------

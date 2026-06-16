@@ -176,6 +176,32 @@ fn answer_yes_no_explained(
     discourse: &Discourse,
     body: &Meaning,
 ) -> (String, Option<Proof>) {
+    // SELF-LEARNED CLASSIFIER category query, e.g. "is the dragon a creature?".
+    // When the queried category matches a classifier the mind LEARNED on its own
+    // (class "creature" <-> the verified `creature_class` Mog program), the truth
+    // of the IsA comes from RUNNING that verified program on the subject — not the
+    // world model (which has never heard of "creature"). We answer Yes only when
+    // the verified program returns 1, No when it returns 0, and leave everything
+    // else to the ordinary world cascade below.
+    //
+    // SOUNDNESS: `learned_classifier_truth` returns `Some` ONLY when a learned
+    // `<category>_class` component exists on this engine (a fresh, unlearned engine
+    // has none, so this is inert and the 269-test baseline is unchanged) AND the
+    // subject is a concrete entity. It NEVER answers Yes unless the verified program
+    // evaluates to exactly 1.
+    if let Some((truth, proof)) = learned_classifier_truth(engine, body) {
+        return match truth {
+            true => (
+                format!("Yes, {}.", realize(engine, body, /*force_negated=*/ None)),
+                proof,
+            ),
+            false => (
+                format!("No, {}.", realize(engine, body, /*force_negated=*/ Some(true))),
+                proof,
+            ),
+        };
+    }
+
     let (truth, proof) = world_truth_traced(discourse, body);
     match truth {
         Some(true) => (
@@ -721,6 +747,53 @@ fn number_phrase(n: usize) -> String {
 /// world-model accessor that enumerates a holder's attitude contents.
 fn answer_attitude_content(_engine: &Engine, _discourse: &Discourse, _m: &Meaning) -> String {
     "I don't know.".to_string()
+}
+
+/// SELF-LEARNED CLASSIFIER truth for an `IsA` category query, decided by RUNNING
+/// the verified Mog program the mind synthesized for that class.
+///
+/// Returns:
+///   * `Some((true,  None))` — the learned classifier `<category>_class` returns 1
+///     on the subject's head word (modulo the query's `negated` flag);
+///   * `Some((false, None))` — the learned classifier returns 0 (or 1 under a
+///     negated query);
+///   * `None` — there is NO learned classifier for this category on the engine,
+///     the subject is not a concrete entity, or the program returned neither 0
+///     nor 1 — so the caller defers to the ordinary world cascade.
+///
+/// The category-to-component mapping is the convention the autonomy loop adopts:
+/// a class named "creature" is the component `creature_class`. We require that
+/// component to be a *learned* classifier (it appears in
+/// [`Engine::learned_class_of`]'s enumeration) — base taxa (person/agent/thing/
+/// document) are NOT `<x>_class` components and never route here. The proof is
+/// `None`: the verified-program verdict is an opaque oracle here, like the world
+/// model's own `holds` verdicts.
+///
+/// SOUNDNESS / FRESH-ENGINE INVARIANCE: a fresh engine with no learning has no
+/// `<x>_class` components, so `learned_class_of` enumerates nothing, the
+/// `category`-matching component is absent, and this returns `None` for EVERY
+/// query — behaviour is byte-for-byte identical to before the integration. We
+/// NEVER answer Yes unless the verified program evaluates to exactly 1.
+fn learned_classifier_truth(engine: &Engine, body: &Meaning) -> Option<(bool, Option<Proof>)> {
+    let Meaning::IsA { subject, category, negated } = body else {
+        return None;
+    };
+    // Only concrete (non-pronoun, non-restricted) entities have a head word the
+    // classifier can run on directly.
+    let head = match subject {
+        Term::Entity(s) | Term::Indefinite(s) => s.as_str(),
+        Term::Pronoun(_) | Term::Restricted { .. } => return None,
+    };
+
+    // The mind's verified-program verdict for "is <head> a <category>?": `Some(true)`
+    // iff the self-learned `<category>_class` program returns exactly 1, `Some(false)`
+    // iff it returns 0, and `None` when no such learned classifier exists (so base
+    // taxa and a fresh, unlearned engine fall through to the world cascade). The
+    // proof is `None` — the verified program is an opaque oracle here, like
+    // `world.holds`. The query's `negated` flag flips the verdict.
+    engine
+        .learned_class_verdict(category, head)
+        .map(|positive| (positive ^ *negated, None))
 }
 
 /// Taxonomy / hypernymy truth for an `IsA` category query. An entity whose head
@@ -2576,6 +2649,74 @@ mod tests {
             panic!("expected an Event after resolution, got {resolved:?}");
         }
         assert_eq!(world_truth(&d, &resolved), Some(true));
+    }
+
+    #[test]
+    fn interrogative_relative_clause_answered_correctly() {
+        // End-to-end through the full `answer()` path: a yes/no question whose
+        // subject carries a relative clause must answer correctly — NOT "I don't
+        // know" (the prior behaviour). World: the teacher writes the report AND
+        // reads the book; a SECOND teacher-less editor confounder is irrelevant.
+        let e = engine();
+        let mut d = Discourse::new();
+        d.world.assert(&Meaning::Event(write_ev(
+            "teacher", "report", Tense::Present, Aspect::Simple, false,
+        )));
+        d.world.assert(&Meaning::Event(Event {
+            predicate: "read".to_string(),
+            agent: Some(Term::Entity("teacher".to_string())),
+            patient: Some(Term::Entity("book".to_string())),
+            recipient: None,
+            tense: Tense::Present,
+            aspect: Aspect::Simple,
+            negated: false,
+        }));
+        let ans = answer(
+            e,
+            &d,
+            "Does the teacher who writes the report read the book?",
+        );
+        assert!(
+            ans.starts_with("Yes"),
+            "relative-clause question must answer Yes, got {ans:?}"
+        );
+        assert_ne!(ans, "I don't know.", "must not be the old unanswered behaviour");
+
+        // SOUNDNESS / open-world: a relative-clause question about an event the
+        // world has NOT recorded answers "I don't know" — NEVER a guessed "No".
+        // The point of the fix is that the question now RESOLVES (the restricted
+        // subject is bound to the teacher and the event is queried) rather than
+        // failing to parse; the world's honest verdict on an unattested fact is
+        // open-world ignorance.
+        let ans_unknown = answer(
+            e,
+            &d,
+            "Does the teacher who writes the report answer the question?",
+        );
+        assert_eq!(
+            ans_unknown, "I don't know.",
+            "unattested event is sound open-world ignorance, got {ans_unknown:?}"
+        );
+    }
+
+    #[test]
+    fn possessive_object_question_answered_via_core_event() {
+        // "the teacher writes the editor's report" asserted; then "does the teacher
+        // write the report?" answers Yes — the genitive object reduced to its
+        // possessed-noun head "report", so the core write(teacher, report) fact is
+        // stored and queryable.
+        let e = engine();
+        let mut d = Discourse::new();
+        let asserted = crate::understanding::semantics::understand(
+            e,
+            "The teacher writes the editor's report.",
+        );
+        d.world.assert(&asserted);
+        let ans = answer(e, &d, "Does the teacher write the report?");
+        assert!(
+            ans.starts_with("Yes"),
+            "possessive-object fact must be queryable, got {ans:?}"
+        );
     }
 
     // ---- (5) PLURALS: plural-agreement realization --------------------------

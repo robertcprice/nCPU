@@ -6,7 +6,7 @@
 //! the composed programs through the runtime. The `bin/comprehend` demo and the
 //! C FFI in [`crate::ffi`] are both thin wrappers over this.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::benchmark::{Example, Problem, Value};
 use crate::runtime::execute_program;
@@ -475,6 +475,17 @@ pub struct Engine {
     program: String,
     /// (component, teacher) for reporting which teacher recovered each program.
     pub methods: Vec<(&'static str, String)>,
+    /// The VERIFIED example domain of each self-learned `<x>_class` component:
+    /// component name -> (word -> was it labeled a member). A learned classifier's
+    /// behavior is only PROVEN on the examples it was synthesized from — its
+    /// generalization to unseen words is NOT verified (the synthesizer may have
+    /// recovered an overfitting shortcut that satisfies the examples but is wrong
+    /// in general). So membership verdicts and parser recognition read THIS domain,
+    /// never the program's extrapolation: a word is a member iff it was verified
+    /// positive, a non-member iff verified negative, and UNKNOWN otherwise. This is
+    /// the open-world soundness discipline applied to self-acquired knowledge — the
+    /// system never claims a membership it did not prove.
+    learned_members: BTreeMap<String, BTreeMap<String, bool>>,
 }
 
 impl Default for Engine {
@@ -542,7 +553,22 @@ impl Engine {
                 ("irregular_past", ipast_m), ("prop_id", pid_m),
                 ("has_negation", neg_m), ("valid_argument", arg_m),
             ],
+            learned_members: BTreeMap::new(),
         }
+    }
+
+    /// The verified (word -> is_member) domain of a learned `<x>_class` example
+    /// set: the single-string inputs paired with whether they were labeled 1.
+    /// Used to record what a freshly-synthesized or reloaded classifier was
+    /// actually PROVEN on, so membership stays bounded to verified evidence.
+    fn examples_domain(examples: &[crate::benchmark::Example]) -> BTreeMap<String, bool> {
+        let mut dom = BTreeMap::new();
+        for ex in examples {
+            if let (Some(Value::Str(w)), Value::Int(label)) = (ex.inputs.first(), &ex.expected) {
+                dom.insert(w.clone(), *label == 1);
+            }
+        }
+        dom
     }
 
     /// Build the engine and **reload every persisted learned component, safely**.
@@ -592,8 +618,15 @@ impl Engine {
 
         let stored = crate::self_improve::store::load();
         for component in &stored {
-            // Graft the stored code onto a candidate clone and re-gate it.
-            let candidate = engine.graft_raw(component.name.as_str(), &component.code, &component.method);
+            // Graft the stored code onto a candidate clone (restoring its VERIFIED
+            // membership domain for an `<x>_class` component) and re-gate it.
+            let domain: BTreeMap<String, bool> = component.members.iter().cloned().collect();
+            let candidate = engine.graft_raw_with_domain(
+                component.name.as_str(),
+                &component.code,
+                &component.method,
+                domain,
+            );
             let gate = crate::self_improve::gate::regression_gate(&candidate);
             if gate.ok() {
                 // Accept: this becomes the new accepted-so-far engine. The NEXT
@@ -652,6 +685,104 @@ impl Engine {
     /// Animacy class of a single word: 1 animate noun, 2 inanimate noun, 0 not a noun.
     pub fn noun_class(&self, word: &str) -> i64 {
         self.call_int(&format!("noun_animacy({})", esc(word)))
+    }
+
+    /// The 11 base-curriculum component names this engine is born knowing. Kept in
+    /// lock-step with [`new_base`](Self::new_base)'s `methods` vec (and mirrored by
+    /// `mind::BASE_METHODS`). Used to fence the base set OUT of the learned-classifier
+    /// enumeration ([`learned_class_components`](Self::learned_class_components)) so
+    /// only SELF-acquired `<x>_class` components are consulted.
+    const BASE_COMPONENT_NAMES: &'static [&'static str] = &[
+        "noun_animacy",
+        "valid_roles",
+        "ends_s",
+        "valid_agreement",
+        "regular_3sg",
+        "irregular_3sg",
+        "regular_past",
+        "irregular_past",
+        "prop_id",
+        "has_negation",
+        "valid_argument",
+    ];
+
+    /// Enumerate the names of SELF-LEARNED membership classifiers grafted onto this
+    /// engine: every component on [`methods`](Self::methods) whose name ends in
+    /// `_class` and that is NOT one of the [`BASE_COMPONENT_NAMES`](Self::BASE_COMPONENT_NAMES)
+    /// base-curriculum components. (None of the base components end in `_class`, so
+    /// the base fence is belt-and-suspenders — but it keeps the contract explicit:
+    /// "learned" means acquired beyond birth.)
+    ///
+    /// This is the Engine-side mirror of `Mind::learned_components().filter(ends_with("_class"))`
+    /// — lifted onto `Engine` (which has no `Mind` handle) by iterating `self.methods`
+    /// directly. Returns names in adoption order; usually EMPTY on a fresh engine, so
+    /// the parse-time consult that uses it stays cheap (zero iterations).
+    fn learned_class_components(&self) -> Vec<&str> {
+        self.methods
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| {
+                name.ends_with("_class") && !Self::BASE_COMPONENT_NAMES.contains(name)
+            })
+            .collect()
+    }
+
+    /// The name of a SELF-LEARNED `<x>_class` component that POSITIVELY classifies
+    /// `word` (i.e. `eval_int(comp("<word>")) == 1`), or `None` if no learned
+    /// classifier claims it. Cheap: iterates only the learned classifiers
+    /// ([`learned_class_components`](Self::learned_class_components)) — usually zero —
+    /// and short-circuits on the first positive.
+    ///
+    /// This is the parse-time recognition hook the functional-integration phase
+    /// (Thrust C "Implement") wires into [`noun_class`](Self::noun_class): when base
+    /// `noun_animacy` returns 0 ("unknown"), `noun_class` will consult this so a
+    /// word a learned classifier recognizes (e.g. `creature_class("dragon")`) parses
+    /// as an NP head in every role. SOUNDNESS: this NEVER overrides the curriculum —
+    /// it is only consulted on the base-0 ("unknown") case. On a fresh engine there
+    /// are no learned classifiers, so this always returns `None` and behavior is
+    /// unchanged.
+    pub fn learned_class_of(&self, word: &str) -> Option<String> {
+        // SOUND: a word is recognized by a learned classifier ONLY if it was
+        // VERIFIED a positive member of it. The synthesized program's extrapolation
+        // to UNSEEN words is not proven (it may have recovered an overfitting
+        // shortcut), so a word the classifier was never trained on is NOT
+        // recognized here — preventing a spurious noun-head / false membership.
+        self.learned_members
+            .iter()
+            .find(|(_, domain)| domain.get(word) == Some(&true))
+            .map(|(comp, _)| comp.clone())
+    }
+
+    /// The mind's verdict for "is `word` a `class`?" (the autonomy loop's
+    /// convention: the class "creature" is implemented by the component
+    /// `creature_class`), decided from the component's VERIFIED EXAMPLE DOMAIN —
+    /// the words it was actually proven on — NOT by extrapolating the synthesized
+    /// program to unseen words.
+    ///
+    /// Returns:
+    ///   * `Some(true)`  — `word` was VERIFIED a positive member of `<class>_class`;
+    ///   * `Some(false)` — `word` was VERIFIED a negative (proven non-member);
+    ///   * `None`        — `word` was never in this classifier's examples (open-world
+    ///     UNKNOWN), OR there is no self-learned `<class>_class` on this engine.
+    ///
+    /// This is the answering-side counterpart to [`learned_class_of`](Self::learned_class_of).
+    /// A base category (person/agent/thing/document) and a FRESH engine with no
+    /// learning both yield `None`, so the caller defers to its ordinary truth
+    /// cascade — behaviour is unchanged absent learning. SOUNDNESS: a learned
+    /// classifier's GENERALIZATION is unproven (the synthesizer may have recovered
+    /// an overfitting shortcut that satisfies the examples but is wrong in general),
+    /// so we answer only within proven evidence — a false `Some(true)` is impossible.
+    pub fn learned_class_verdict(&self, class: &str, word: &str) -> Option<bool> {
+        let component = format!("{class}_class");
+        // Answer ONLY from the component's VERIFIED example domain: Yes for a proven
+        // member, No for a proven non-member, UNKNOWN (None) for any word the
+        // classifier was never trained on (the open-world honest answer) and for a
+        // base category / fresh engine (no such learned component). This makes a
+        // false Yes IMPOSSIBLE — the synthesized program's guess on an unseen word
+        // is never consulted, only the evidence it was proven on.
+        self.learned_members
+            .get(&component)
+            .and_then(|domain| domain.get(word).copied())
     }
 
     /// Is the word an animate noun (a "person")?
@@ -748,12 +879,29 @@ impl Engine {
     /// tuple for the engine's lifetime (grafted-component names are bounded by the
     /// number of stored components, so this is a negligible, intentional leak).
     pub fn graft_raw(&self, name: &str, code: &str, method: &str) -> Engine {
+        self.graft_raw_with_domain(name, code, method, BTreeMap::new())
+    }
+
+    /// As [`graft_raw`](Self::graft_raw), but also restores the component's VERIFIED
+    /// membership domain (word -> is_member). Reload uses this so a `<x>_class`
+    /// component recovered from the store answers within the exact evidence it was
+    /// proven on across runs — generalization beyond it stays UNKNOWN, soundly.
+    pub fn graft_raw_with_domain(
+        &self,
+        name: &str,
+        code: &str,
+        method: &str,
+        domain: BTreeMap<String, bool>,
+    ) -> Engine {
         let mut candidate = self.clone();
         candidate.program.push('\n');
         candidate.program.push_str(code);
         candidate
             .methods
             .push((Box::leak(name.to_string().into_boxed_str()), method.to_string()));
+        if name.ends_with("_class") && !domain.is_empty() {
+            candidate.learned_members.insert(name.to_string(), domain);
+        }
         candidate
     }
 
@@ -776,6 +924,9 @@ impl Engine {
         signature: &'static str,
         examples: Vec<crate::benchmark::Example>,
     ) -> Result<Engine, String> {
+        // The VERIFIED example domain for this component (used for sound, bounded
+        // membership verdicts). Captured before `examples` is moved into the problem.
+        let domain = Self::examples_domain(&examples);
         let problem = make_problem(name, signature, examples);
         let result = solve_problem(&problem);
         if !result.success {
@@ -795,6 +946,11 @@ impl Engine {
             // lifetime. Grafted-component names are few and bounded by the number
             // of self-extension attempts, so this is a negligible, intentional leak.
             .push((Box::leak(name.to_string().into_boxed_str()), result.method));
+        // Record the verified domain for `<x>_class` components so membership stays
+        // bounded to proven evidence (never the program's unverified extrapolation).
+        if name.ends_with("_class") {
+            candidate.learned_members.insert(name.to_string(), domain);
+        }
         Ok(candidate)
     }
 }

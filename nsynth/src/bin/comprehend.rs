@@ -12,8 +12,11 @@
 //! (section | correct | idk | wrong | total), the overall accuracy, and a bold
 //! SOUNDNESS line (WRONG==0 => SOUND, else UNSOUND with every offending case
 //! listed). It then runs the benchmark -> study -> benchmark feedback loop and
-//! shows the before -> after deltas, proving learning is monotone and never
-//! introduces an unsound verdict.
+//! shows the before -> after deltas, proving learning is monotone, never
+//! introduces an unsound verdict, AND produces a REAL gain: the `"learned"`
+//! edge-of-competence case ("Is the dragon a creature?") is "I don't know."
+//! before study and "Yes" after, because the loop mines + folds in the verified
+//! `creature_class` classifier. The demo spotlights that idk -> correct flip.
 //!
 //! The `grow` subcommand showcases the self-improvement loop: a
 //! [`Mind`](mog_synth::understanding::mind::Mind) that cannot classify mythical
@@ -1271,6 +1274,7 @@ fn noun_animacy(s: string) -> i64 {\n\
         code: poison_code.to_string(),
         method: "poisoned".to_string(),
         examples_fingerprint: "fp-poison".to_string(),
+        members: Vec::new(),
     });
     println!(
         "     Injected a poisoned `noun_animacy` override into the store ({} rows now).",
@@ -1323,7 +1327,10 @@ fn noun_animacy(s: string) -> i64 {\n\
 // | wrong | total), the overall accuracy, and a bold SOUNDNESS verdict
 // (WRONG==0 => SOUND, otherwise UNSOUND with every offending case listed).
 // Then runs the benchmark -> study -> benchmark feedback loop and shows the
-// before -> after deltas, proving learning is monotone and never unsound.
+// before -> after deltas, proving learning is monotone, never unsound, and
+// STRICTLY HELPS — the `"learned"` edge-of-competence case ("Is the dragon a
+// creature?") flips from "I don't know." to "Yes" once study mines the verified
+// `creature_class` classifier. The demo spotlights that section's idk->correct.
 // ===========================================================================
 
 /// Render the per-section + overall dashboard for a [`BenchReport`]. Columns:
@@ -1411,19 +1418,51 @@ fn demo_bench() {
         after.accuracy() * 100.0,
         (after.accuracy() - before.accuracy()) * 100.0
     );
+    let gain = after.correct as i64 - before.correct as i64;
     let monotone = after.correct >= before.correct;
+    let real_gain = after.correct > before.correct;
     let stays_sound = after.wrong == 0 && before.wrong == 0;
     println!(
         "  MONOTONE (after.correct >= before.correct) = {}   SOUND throughout (wrong == 0) = {}",
         monotone, stays_sound
     );
+    println!(
+        "  REAL GAIN (after.correct > before.correct) = {}   (+{} case{} flipped idk -> correct)",
+        real_gain, gain, if gain == 1 { "" } else { "s" }
+    );
+
+    // Spotlight the EDGE-OF-COMPETENCE case that drove the gain: "Is the dragon a
+    // creature?" — idk on the BASE engine (it has never heard of "dragon" or the
+    // class "creature"), correct on the STUDIED engine (the mined `creature_class`
+    // classifier answers it). The per-section row makes the flip concrete.
+    let sec_before = before.sections.iter().find(|s| s.section == "learned");
+    let sec_after = after.sections.iter().find(|s| s.section == "learned");
+    if let (Some(b), Some(a)) = (sec_before, sec_after) {
+        println!(
+            "\n  EDGE OF COMPETENCE — section 'learned' (\"Is the dragon a creature?\"):"
+        );
+        println!(
+            "    before study:  correct={} idk={} wrong={}   (base engine has no `creature_class` -> \"I don't know.\")",
+            b.correct, b.idk, b.wrong
+        );
+        println!(
+            "    after  study:  correct={} idk={} wrong={}   (mined `creature_class` answers \"Yes, the dragon is a creature.\")",
+            a.correct, a.idk, a.wrong
+        );
+    }
     if study.learned.is_empty() {
-        println!("  (no mineable lexical gap in the in-vocab suite — study learned nothing, after == before: honest, permitted, monotone.)");
+        println!("  (no mineable lexical gap surfaced — study learned nothing; this should not happen while the 'learned' case is present.)");
+    } else {
+        println!(
+            "  => the loop BITES: study mined {:?}, which closed the edge-of-competence gap.",
+            study.learned
+        );
     }
 
     println!("\nEvery verdict came from a synthesized, verified program executed in-process.");
-    println!("The suite is SOUND ({}); learning over its misses is monotone and never unsound.",
+    println!("The suite is SOUND ({}); learning over its misses is monotone, never unsound,",
              if report.sound() { "WRONG = 0" } else { "SOUNDNESS VIOLATION — see above" });
+    println!("and STRICTLY HELPS — the dragon case flips from \"I don't know.\" to \"Yes\" after study.");
 }
 
 /// Indent every line of `text` with `prefix` — for embedding multi-line

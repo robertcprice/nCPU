@@ -2933,4 +2933,394 @@ mod tests {
             "a structural gap is out of scope for the lexical teacher — honest None"
         );
     }
+
+    // ===================================================================
+    // FUNCTIONAL INTEGRATION — the parser + answerer recognize a SELF-LEARNED
+    // classifier word. After `study` synthesizes `creature_class`, "dragon"
+    // (a base-lexicon UNKNOWN) parses as a proper NP head, so "the dragon
+    // flies" is an Event with agent dragon (not Unknown), and the category
+    // question "is the dragon a creature?" is answered from the VERIFIED
+    // program. A FRESH mind with no learning is unchanged: "dragon" is still
+    // unknown, "the dragon flies" is Unknown, and the question is "I don't
+    // know." — the soundness/fresh-engine invariance the task demands.
+    // ===================================================================
+
+    /// FRESH mind, NO learning: "dragon" is an unknown word, "the dragon flies"
+    /// fails to parse (Unknown), the engine has no `creature_class` verdict, and
+    /// the category question is answered honestly "I don't know.". This pins the
+    /// before-state of the integration — the learned-classifier hooks are inert
+    /// without any learning, so existing behaviour is unchanged.
+    #[test]
+    fn fresh_mind_treats_learned_classifier_word_as_unknown() {
+        let mind = Mind::new();
+
+        // PRECONDITIONS: genuinely unlearned. "dragon" is not a base noun and no
+        // learned classifier exists, so every integration hook is inert.
+        assert!(!mind.knows_word("dragon"), "'dragon' must be unknown on a fresh mind");
+        assert!(
+            !mind.engine().has_component("creature_class"),
+            "a fresh mind has not learned creature_class"
+        );
+        assert_eq!(
+            mind.engine().learned_class_of("dragon"),
+            None,
+            "no learned classifier claims 'dragon' yet"
+        );
+        assert_eq!(
+            mind.engine().learned_class_verdict("creature", "dragon"),
+            None,
+            "no `creature_class` component exists -> no verdict, defer to the world"
+        );
+
+        // PARSE: with no recognition hook firing, the subject "dragon" is not an
+        // NP head, so the declarative does not parse to an Event.
+        let parsed = mind.understand("the dragon flies");
+        assert!(
+            matches!(parsed, Meaning::Unknown(_)),
+            "BEFORE learning, 'the dragon flies' must be Unknown, got {parsed:?}"
+        );
+
+        // ANSWER: an honest open-world "I don't know." — never a fabricated Yes.
+        assert_eq!(
+            mind.ask("is the dragon a creature?"),
+            "I don't know.",
+            "BEFORE learning, the category question is open-world"
+        );
+    }
+
+    /// AFTER `study` learns `creature_class`: the SAME unknown word "dragon" now
+    /// parses as an NP head, so "the dragon flies" is an Event with agent
+    /// Entity("dragon") — and the category question routes through the verified
+    /// program: "is the dragon a creature?" -> Yes (program returns 1),
+    /// "is the report a creature?" -> No (program returns 0). This is the
+    /// after-state: the verified, self-acquired classifier is live in BOTH the
+    /// parser and the answerer.
+    #[test]
+    fn studied_mind_parses_and_answers_learned_classifier_word() {
+        with_study_env("integration", || {
+            let mut mind = Mind::new();
+
+            // BEFORE: pin the gap so the test is not vacuous, and capture the
+            // before-state parse for the report.
+            assert!(!mind.knows_word("dragon"), "'dragon' unknown pre-study");
+            assert!(
+                !mind.engine().has_component("creature_class"),
+                "creature_class genuinely absent pre-study"
+            );
+            let before = mind.understand("the dragon flies");
+            assert!(
+                matches!(before, Meaning::Unknown(_)),
+                "pre-study parse must be Unknown, got {before:?}"
+            );
+
+            // STUDY a creature corpus until the gap closes.
+            let corpus = [
+                "The teacher writes the report.",
+                "The dragon guards the gold.",
+            ];
+            let report = mind.study(&corpus, 3);
+            assert!(
+                report.learned.contains(&"creature_class".to_string()),
+                "study must learn creature_class: {report:?}"
+            );
+            assert!(
+                mind.engine().has_component("creature_class"),
+                "the learned classifier must be live on the engine"
+            );
+
+            // AFTER — PARSE: "the dragon flies" is now an Event whose agent is the
+            // dragon. SOUND ANIMACY: the learned-classifier noun keeps base
+            // noun_class 0, so it reads as an INANIMATE "thing", never a "person".
+            let after = mind.understand("the dragon flies");
+            let Meaning::Event(ev) = &after else {
+                panic!("AFTER learning, 'the dragon flies' must be an Event, got {after:?}");
+            };
+            assert_eq!(
+                ev.agent,
+                Some(Term::Entity("dragon".to_string())),
+                "the agent of 'the dragon flies' must be the dragon"
+            );
+            assert!(
+                !mind.engine().is_person("dragon"),
+                "a learned-classifier noun must NOT be animate (sound 'thing' default)"
+            );
+
+            // AFTER — ANSWER: the verified program decides the category question.
+            assert_eq!(
+                mind.engine().learned_class_verdict("creature", "dragon"),
+                Some(true),
+                "the verified creature_class program returns 1 for 'dragon'"
+            );
+            let yes = mind.ask("is the dragon a creature?");
+            assert!(
+                yes.starts_with("Yes,"),
+                "'is the dragon a creature?' must be answered Yes, got {yes:?}"
+            );
+
+            // A KNOWN non-creature noun ("report") is classified 0 -> No. This is
+            // not vacuous: "report" is a base patient noun, so the IsA is built and
+            // the verified program supplies the NEGATIVE verdict.
+            assert_eq!(
+                mind.engine().learned_class_verdict("creature", "report"),
+                Some(false),
+                "creature_class returns 0 for the non-creature 'report'"
+            );
+            let no = mind.ask("is the report a creature?");
+            assert!(
+                no.starts_with("No,"),
+                "'is the report a creature?' must be answered No, got {no:?}"
+            );
+
+            // SOUNDNESS: growth was monotone — the mind stays green after study.
+            assert!(mind.self_check().ok(), "self_check must stay ok after study");
+        });
+    }
+
+    /// SOUNDNESS — Yes is returned ONLY when the verified program returns 1. We
+    /// never answer Yes for a category whose `<x>_class` component the mind has
+    /// NOT learned: even after learning `creature_class`, an unlearned category
+    /// ("villain") yields no verdict and the open-world honest answer. This
+    /// guards the contract "NEVER answer Yes unless the learned VERIFIED program
+    /// returns 1".
+    #[test]
+    fn learned_classifier_never_answers_yes_without_a_verified_program() {
+        with_study_env("soundness", || {
+            let mut mind = Mind::new();
+            let corpus = [
+                "The teacher writes the report.",
+                "The dragon guards the gold.",
+            ];
+            let report = mind.study(&corpus, 3);
+            assert!(
+                report.learned.contains(&"creature_class".to_string()),
+                "study must learn creature_class: {report:?}"
+            );
+
+            // A category the mind never learned a classifier for: no `villain_class`
+            // component, hence no verdict, hence the honest open-world answer — even
+            // for the now-recognized word "dragon".
+            assert_eq!(
+                mind.engine().learned_class_verdict("villain", "dragon"),
+                None,
+                "no `villain_class` component -> no verdict (never fabricate Yes)"
+            );
+            assert_eq!(
+                mind.ask("is the dragon a villain?"),
+                "I don't know.",
+                "an unlearned category stays open-world, never a fabricated Yes"
+            );
+        });
+    }
+
+    /// ADVERSARIAL VERIFICATION — Thrust C "self-learned-word-parses-and-answers".
+    ///
+    /// This is the hostile counterpart to `studied_mind_parses_and_answers_*`. It
+    /// proves the FOUR things the thrust claim hinges on, in one env-fenced test
+    /// over a fresh Mind, with the loop biting AT the boundaries an honest verifier
+    /// would attack:
+    ///
+    ///   (A) BEHAVIOR CHANGE IS REAL — the before-state is captured (Unknown parse,
+    ///       "I don't know." answer) and the after-state is captured (Event parse,
+    ///       Yes/No answer); the test asserts they DIFFER. No behavior change after
+    ///       learning would be a FALSE result, so we pin the negation explicitly.
+    ///
+    ///   (B) THE VERIFIED CLASSIFIER DRIVES IT — we assert the very same Mog program
+    ///       the gate accepted (`creature_class`, evaluated on the engine) is what
+    ///       both the parse hook (`learned_class_of`) and the answer hook
+    ///       (`learned_class_verdict`) consult, by checking the answer string and
+    ///       the program verdict AGREE on every probe. The answer is not a separate
+    ///       hardcoded path — it tracks the program byte-for-byte.
+    ///
+    ///   (C) NEVER A FALSE YES — the killer probe. The classifier was trained on 5
+    ///       creatures→1 and 12 nonmembers→0. We hammer it with OUT-OF-DISTRIBUTION
+    ///       words it NEVER saw in training (neither a CREATURES member nor one of
+    ///       the 12 nonmembers): "editor", "manager", "lesson", "table", "engine",
+    ///       "report" is in-set but we add genuinely unseen tokens too. EVERY one of
+    ///       these MUST answer "No" or "I don't know." — NEVER "Yes,". A single
+    ///       spurious "Yes," on an unseen non-creature (overfit to a feature like
+    ///       first-letter or length) is a FALSE result for the whole thrust.
+    ///
+    ///   (D) THE LOOP ACTUALLY BIT — `study` reports `creature_class` learned and
+    ///       the component is live; the mind stays green (monotone growth). A study
+    ///       that "succeeds" without a live, gate-passing program would be FALSE.
+    #[test]
+    fn adversarial_self_learned_word_parses_and_answers_never_false_yes() {
+        with_study_env("adversarial_thrustc", || {
+            let mut mind = Mind::new();
+
+            // ---- BEFORE: the gap is GENUINE and the behavior is the unlearned one.
+            assert!(!mind.knows_word("dragon"), "'dragon' must be a real gap pre-study");
+            assert!(
+                !mind.engine().has_component("creature_class"),
+                "creature_class genuinely absent pre-study (test not vacuous)"
+            );
+            assert!(mind.self_check().ok(), "the spine is green before study");
+
+            let before_parse = mind.understand("the dragon flies");
+            assert!(
+                matches!(before_parse, Meaning::Unknown(_)),
+                "BEFORE: 'the dragon flies' must be Unknown, got {before_parse:?}"
+            );
+            let before_answer = mind.ask("is the dragon a creature?");
+            assert_eq!(
+                before_answer, "I don't know.",
+                "BEFORE: the category question is honest open-world idk"
+            );
+
+            // ---- STUDY a creature corpus. (D) The loop must actually close the gap.
+            let corpus = [
+                "The teacher writes the report.", // wholly known
+                "The dragon guards the gold.",    // mineable creature gap
+            ];
+            let report = mind.study(&corpus, 3);
+            assert!(
+                report.learned.contains(&"creature_class".to_string()),
+                "study must learn creature_class — the loop must bite: {report:?}"
+            );
+            assert!(
+                mind.engine().has_component("creature_class"),
+                "the learned classifier must be LIVE on the engine (not just reported)"
+            );
+            assert!(
+                mind.self_check().ok(),
+                "self_check must stay green AFTER study (monotone growth)"
+            );
+
+            // ---- (A) BEHAVIOR CHANGE IS REAL: after-state differs from before.
+            let after_parse = mind.understand("the dragon flies");
+            let Meaning::Event(ev) = &after_parse else {
+                panic!("AFTER: 'the dragon flies' must parse to an Event, got {after_parse:?}");
+            };
+            assert_eq!(
+                ev.agent,
+                Some(Term::Entity("dragon".to_string())),
+                "AFTER: the agent of 'the dragon flies' must be the dragon"
+            );
+            // The parse MEANING changed (Unknown -> Event). Non-vacuity of "changed".
+            assert!(
+                std::mem::discriminant(&before_parse) != std::mem::discriminant(&after_parse),
+                "the PARSE must change shape across learning (Unknown -> Event)"
+            );
+            // SOUND ANIMACY: a learned-classifier noun is an inanimate "thing", never
+            // a person — it must not spuriously satisfy an agent-only restriction.
+            assert!(
+                !mind.engine().is_person("dragon"),
+                "a learned-classifier noun must NOT be animate (sound 'thing' default)"
+            );
+
+            let after_answer = mind.ask("is the dragon a creature?");
+            assert!(
+                after_answer.starts_with("Yes,"),
+                "AFTER: 'is the dragon a creature?' must be Yes, got {after_answer:?}"
+            );
+            assert_ne!(
+                before_answer, after_answer,
+                "the ANSWER must change across learning (idk -> Yes)"
+            );
+
+            // ---- (B) THE VERIFIED CLASSIFIER DRIVES BOTH PARSE AND ANSWER.
+            // The load-bearing soundness directions, asserted as a bridge between
+            // the raw program verdict and the end-to-end answer string:
+            //   * program==1  ==> the answer MUST be "Yes,"  (program drives Yes)
+            //   * answer "Yes," ==> program==1               (NEVER a fabricated Yes)
+            // The program==0 case maps to EITHER "No," (the subject is a parseable
+            // base entity, so the IsA is built and the program supplies the negative)
+            // OR "I don't know." (the subject is an UNRECOGNIZED word — not a base
+            // noun and not positively classified — so the question never resolves to
+            // a concrete entity and the honest open-world answer is returned). BOTH
+            // are sound: neither is a false Yes. So the bridge only constrains the
+            // Yes direction in both ways; the negative side is checked by the
+            // never-false-Yes probe below.
+            let agrees = |mind: &Mind, word: &str| {
+                let verdict = mind.engine().learned_class_verdict("creature", word);
+                let answer = mind.ask(&format!("is the {word} a creature?"));
+                // program==1  ==>  answer Yes (the program DRIVES the positive answer)
+                if verdict == Some(true) {
+                    assert!(
+                        answer.starts_with("Yes,"),
+                        "program says creature_class({word})==1 but answer was {answer:?}"
+                    );
+                }
+                // answer Yes  ==>  program==1 (a Yes is ONLY ever the program's 1)
+                if answer.starts_with("Yes,") {
+                    assert_eq!(
+                        verdict,
+                        Some(true),
+                        "answer was Yes for {word:?} but the verified program did not \
+                         return 1 (verdict {verdict:?}) — that would be a FABRICATED Yes"
+                    );
+                }
+                verdict
+            };
+            // dragon -> program 1 -> Yes (already checked, re-asserted via the bridge).
+            assert_eq!(agrees(&mind, "dragon"), Some(true));
+
+            // ---- (C) NEVER A FALSE YES — the killer probe over IN-set and
+            // OUT-OF-DISTRIBUTION non-creatures. NONE may answer "Yes,".
+            // In-set negative (seen in training):
+            let in_set_negatives = ["report", "book", "teacher", "author"];
+            // OUT-OF-DISTRIBUTION negatives — words the classifier NEVER saw in
+            // EITHER its 5 positives or its 12 negatives. A spurious 1 here exposes
+            // overfitting to an incidental feature (first letter / length / animacy).
+            let ood_negatives = ["editor", "manager", "lesson", "engine", "table", "clerk"];
+
+            for w in in_set_negatives.iter().chain(ood_negatives.iter()) {
+                // The word must NEVER be classified as a creature by the program.
+                let verdict = mind.engine().learned_class_verdict("creature", w);
+                assert_ne!(
+                    verdict,
+                    Some(true),
+                    "FALSE YES: the verified classifier must NEVER return 1 for the \
+                     non-creature {w:?} (verdict was {verdict:?})"
+                );
+                // And the END-TO-END answer must never be a fabricated Yes — it is
+                // either an honest No (program returned 0) or idk (no verdict).
+                let ans = mind.ask(&format!("is the {w} a creature?"));
+                assert!(
+                    ans.starts_with("No,") || ans == "I don't know.",
+                    "FALSE YES end-to-end: 'is the {w} a creature?' answered {ans:?} \
+                     — must be No or idk, never Yes"
+                );
+                // Bridge B: whenever a verdict exists, the answer tracks it exactly.
+                agrees(&mind, w);
+            }
+
+            // ---- (C') The in-set negatives the thrust names explicitly resolve No
+            // (program saw them -> 0), so "is the report a creature?" is a hard No,
+            // not merely idk — the strongest form of "never a false Yes".
+            assert_eq!(
+                mind.engine().learned_class_verdict("creature", "report"),
+                Some(false),
+                "the verified program returns 0 for the non-creature 'report'"
+            );
+            assert!(
+                mind.ask("is the report a creature?").starts_with("No,"),
+                "'is the report a creature?' must be a hard No (program returned 0)"
+            );
+
+            // ---- (C'') An UNLEARNED category never fabricates Yes even for the now-
+            // recognized 'dragon' (no villain_class component -> no verdict -> idk).
+            assert_eq!(
+                mind.engine().learned_class_verdict("villain", "dragon"),
+                None,
+                "no villain_class component -> no verdict (never fabricate Yes)"
+            );
+            assert_eq!(
+                mind.ask("is the dragon a villain?"),
+                "I don't know.",
+                "an unlearned category stays open-world, never a fabricated Yes"
+            );
+
+            // ---- POSITIVE GENERALIZATION (non-vacuity of "Yes"): every KNOWN
+            // creature in the curriculum's CREATURES set classifies 1 -> Yes, so the
+            // program is a real membership lexicon, not a single-word special case.
+            for c in crate::comprehension::CREATURES {
+                assert_eq!(
+                    mind.engine().learned_class_verdict("creature", c),
+                    Some(true),
+                    "every trained creature must classify 1: {c}"
+                );
+            }
+        });
+    }
 }

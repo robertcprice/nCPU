@@ -65,6 +65,12 @@ pub struct StoredComponent {
     /// Deterministic fingerprint of the characterizing examples.
     #[serde(default)]
     pub examples_fingerprint: String,
+    /// The VERIFIED example domain (word, is_member) for an `<x>_class` component,
+    /// so a reloaded classifier answers within exactly the evidence it was proven
+    /// on — its generalization to unseen words stays UNKNOWN, soundly, across runs.
+    /// `#[serde(default)]` keeps older store rows (without this field) loadable.
+    #[serde(default)]
+    pub members: Vec<(String, bool)>,
 }
 
 /// On-disk location of the learned-component store.
@@ -246,6 +252,7 @@ mod tests {
             code: code.to_string(),
             method: "search_string_equality_map".to_string(),
             examples_fingerprint: "fp-test".to_string(),
+            members: Vec::new(),
         }
     }
 
@@ -388,6 +395,7 @@ mod tests {
                 code,
                 method,
                 examples_fingerprint: fp,
+                members: Vec::new(),
             });
 
             // A FRESH engine must reload it (the comprehension reload step runs
@@ -442,6 +450,7 @@ fn noun_animacy(s: string) -> i64 {\n\
                 code: poison_code.to_string(),
                 method: "poisoned".to_string(),
                 examples_fingerprint: "fp-poison".to_string(),
+                members: Vec::new(),
             });
 
             // A fresh engine must REJECT the poisoned entry on reload and stay
