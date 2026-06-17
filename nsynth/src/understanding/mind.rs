@@ -229,6 +229,65 @@ impl Mind {
         report
     }
 
+    /// GRAMMAR INDUCTION, wired onto the mind: learn a word-order CONSTRUCTION
+    /// from labeled examples, and on a *clean* acceptance REPLACE this mind's
+    /// engine with the freshly grafted candidate. The grammar-acquisition analogue
+    /// of [`self_improve`](Self::self_improve).
+    ///
+    /// `name` tags the construction (e.g. `"object_fronting"`); each example is a
+    /// `(sentence, agent_word, patient_word, predicate_lemma)` tuple — the learner
+    /// is told the ROLES and INDUCES the position-to-role mapping, then SYNTHESIZES
+    /// + VERIFIES it as `[i64] -> i64` slot programs over the class skeletons. The
+    /// whole synthesize → gate → journal → persist decision is delegated to
+    /// [`self_learn_construction`](crate::self_improve::extend::self_learn_construction),
+    /// which registers the construction onto a CLONE of this mind's current engine
+    /// and runs the full regression gate against it. The construction is adopted
+    /// ONLY if the gate is green — every golden behavioral case still passes and the
+    /// world model stays sound (the substrate's monotone-growth guarantee). The
+    /// parser consults a registered construction ONLY on an otherwise-Unknown parse,
+    /// so a sound addition can ADD coverage but never override a correct hand-parse.
+    ///
+    /// Returns `true` iff the construction was synthesized, gated green, and
+    /// adopted. On acceptance the candidate engine is swapped in (the construction
+    /// is live for every subsequent `read`/`understand`/`ask`) AND persisted to the
+    /// durable cross-run construction store so a later boot re-registers it (gated
+    /// again). On rejection (induction failed, an ill-formed skeleton→role mapping,
+    /// or the gate went red) `self.engine` is left exactly as it was. Every attempt
+    /// — accepted or rejected — is journaled by the substrate.
+    pub fn learn_construction(
+        &mut self,
+        name: &str,
+        examples: &[crate::understanding::grammar::ConstructionExample],
+    ) -> bool {
+        let req = crate::self_improve::extend::ConstructionRequest {
+            gap: format!("cannot parse the `{name}` word-order construction"),
+            name: name.to_string(),
+            examples: examples.to_vec(),
+        };
+        let (candidate, report) =
+            crate::self_improve::extend::self_learn_construction(&self.engine, &req);
+        // Adopt ONLY on a clean acceptance. `self_learn_construction` returns
+        // `Some(engine)` exactly when induction verified AND the gate passed, and it
+        // has already JOURNALED the attempt and (on accept) PERSISTED the
+        // construction to the durable store. Here we only swap in the vetted engine.
+        if let Some(new_engine) = candidate {
+            self.engine = new_engine;
+        }
+        report.accepted
+    }
+
+    /// The word-order CONSTRUCTIONS this mind has acquired — the verified
+    /// [`LearnedConstruction`](crate::understanding::grammar::LearnedConstruction)s
+    /// registered on its engine, in adoption order. Empty on a fresh mind that has
+    /// learned no constructions. Purely a read accessor over the engine; it never
+    /// mutates anything. Mirrors [`learned_components`](Self::learned_components),
+    /// but for grammar acquisition rather than lexical/inferential components.
+    pub fn learned_constructions(
+        &self,
+    ) -> &[crate::understanding::grammar::LearnedConstruction] {
+        self.engine.learned_constructions()
+    }
+
     /// The components this mind learned for ITSELF — every component on the
     /// engine's `methods` list that is NOT one of the eleven [`BASE_METHODS`] the
     /// base curriculum synthesizes in [`Engine::new`](crate::comprehension::Engine::new).
@@ -2203,6 +2262,142 @@ mod tests {
             "a rejected extension must not be grafted onto the live engine"
         );
         assert!(mind.self_check().ok(), "the mind stays green after a rejected attempt");
+        });
+    }
+
+    // ===================================================================
+    // learn_construction: GRAMMAR INDUCTION wired onto the Mind — the
+    // syntactic analogue of self_improve. A mind that CANNOT parse an
+    // object-fronted clause learns the OSV construction from labeled
+    // examples (induce role-to-position mapping -> synthesize + verify slot
+    // programs -> gate -> adopt), and afterward PARSES the fronted clause —
+    // even with UNSEEN words — while staying green and leaving SVO untouched.
+    // ===================================================================
+
+    /// The labeled OSV training set used by the construction tests: same
+    /// word-order SHAPE, different words; each tagged with the agent / patient
+    /// surface word and the predicate lemma.
+    fn osv_training() -> Vec<crate::understanding::grammar::ConstructionExample<'static>> {
+        vec![
+            ("the report the teacher writes", "teacher", "report", "write"),
+            ("the book the student reads", "student", "book", "read"),
+            ("the memo the doctor fixes", "doctor", "memo", "fix"),
+        ]
+    }
+
+    /// Run `f` with BOTH self-modification stores disabled — the journal
+    /// (`with_journal_env("")`, which also empties `NCPU_COMPONENTS_PATH`) AND the
+    /// construction store (`NCPU_CONSTRUCTIONS_PATH=""`). This keeps a
+    /// construction test from reading or writing the developer's real $HOME stores,
+    /// and holds the crate-wide ENV_LOCK (via `with_journal_env`) so it never races
+    /// another env-mutating test. The prior `NCPU_CONSTRUCTIONS_PATH` is restored.
+    fn with_constructions_disabled<R>(f: impl FnOnce() -> R) -> R {
+        crate::self_improve::journal::test_support::with_journal_env("", || {
+            let prev = std::env::var("NCPU_CONSTRUCTIONS_PATH").ok();
+            // SAFETY: ENV_LOCK (held by with_journal_env) serializes env access.
+            unsafe { std::env::set_var("NCPU_CONSTRUCTIONS_PATH", "") };
+            let out = f();
+            match prev {
+                Some(v) => unsafe { std::env::set_var("NCPU_CONSTRUCTIONS_PATH", v) },
+                None => unsafe { std::env::remove_var("NCPU_CONSTRUCTIONS_PATH") },
+            }
+            out
+        })
+    }
+
+    #[test]
+    fn mind_learns_osv_construction_and_parses_unseen() {
+        with_constructions_disabled(|| {
+            let mut mind = Mind::new();
+
+            // PRECONDITION: the base parser CANNOT read an object-fronted clause —
+            // it returns Unknown, and no construction is acquired yet. Not vacuous.
+            let fronted = "the report the teacher writes";
+            assert!(
+                matches!(mind.understand(fronted), Meaning::Unknown(_)),
+                "the base parser must fail (Unknown) on object-fronting before learning"
+            );
+            assert!(
+                mind.learned_constructions().is_empty(),
+                "no construction acquired before learn_construction"
+            );
+
+            // LEARN: induce + synthesize + verify + gate + adopt the OSV construction.
+            let accepted = mind.learn_construction("object_fronting", &osv_training());
+            assert!(accepted, "a verified, non-regressing construction must be accepted");
+
+            // It is now registered on the mind's engine, with the recovered indices.
+            let cons = mind.learned_constructions();
+            assert_eq!(cons.len(), 1, "exactly one construction adopted");
+            assert_eq!(cons[0].name, "object_fronting");
+            assert_eq!(cons[0].patient_idx, 1, "the fronted object is the patient (index 1)");
+            assert_eq!(cons[0].agent_idx, 3, "the embedded subject is the agent (index 3)");
+            assert_eq!(cons[0].predicate_idx, 4, "the final verb is the predicate (index 4)");
+
+            // AFTER: the fronted clause now parses to the correct Event.
+            let Meaning::Event(e) = mind.understand(fronted) else {
+                panic!("the learned construction must parse the trained fronted clause");
+            };
+            assert_eq!(e.predicate, "write");
+            assert_eq!(e.agent, Some(Term::Entity("teacher".to_string())));
+            assert_eq!(e.patient, Some(Term::Entity("report".to_string())));
+
+            // GENERALIZATION: an UNSEEN-word OSV sentence parses too — the
+            // construction keys on the class skeleton, not the specific words.
+            let Meaning::Event(u) = mind.understand("the letter the editor reads") else {
+                panic!("the learned construction must generalize to unseen-word OSV");
+            };
+            assert_eq!(u.predicate, "read");
+            assert_eq!(u.agent, Some(Term::Entity("editor".to_string())));
+            assert_eq!(u.patient, Some(Term::Entity("letter".to_string())));
+
+            // Q&A: reading a fronted clause and asking about it answers correctly.
+            let mut qa_mind = Mind::new();
+            assert!(qa_mind.learn_construction("object_fronting", &osv_training()));
+            qa_mind.read("the report the teacher writes");
+            let answer = qa_mind.ask("does the teacher write the report");
+            assert!(
+                answer.to_lowercase().starts_with("yes"),
+                "a question about the OSV-parsed Event must answer Yes, got: {answer}"
+            );
+
+            // SOUNDNESS: the gate is STILL green (monotone), and an ordinary SVO
+            // clause is parsed EXACTLY as a mind that never learned the construction.
+            assert!(mind.self_check().ok(), "the mind must stay green after acquiring grammar");
+            let svo = "the teacher writes the report";
+            let plain = Mind::new();
+            assert!(plain.learned_constructions().is_empty());
+            assert_eq!(
+                mind.understand(svo),
+                plain.understand(svo),
+                "the OSV fallback must NEVER perturb a base-parseable SVO clause"
+            );
+        });
+    }
+
+    #[test]
+    fn mind_rejects_ill_formed_construction_and_stays_untouched() {
+        with_constructions_disabled(|| {
+            let mut mind = Mind::new();
+            assert!(mind.self_check().ok(), "baseline mind must be green");
+
+            // An ILL-FORMED construction: two examples share the SAME skeleton
+            // [0,1,0,1,2] but label the agent at DIFFERENT positions (index 3 vs
+            // index 1) — the role-to-position mapping is not a function of the
+            // skeleton, so induction must fail and the construction must be rejected.
+            let bad: Vec<crate::understanding::grammar::ConstructionExample> = vec![
+                ("the report the teacher writes", "teacher", "report", "write"),
+                ("the editor the letter reads", "editor", "letter", "read"),
+            ];
+            let accepted = mind.learn_construction("bad", &bad);
+            assert!(!accepted, "a contradictory role-to-position mapping must be rejected");
+
+            // The engine is UNTOUCHED: no construction registered, gate still green.
+            assert!(
+                mind.learned_constructions().is_empty(),
+                "a rejected construction must not be registered on the live engine"
+            );
+            assert!(mind.self_check().ok(), "the mind stays green after a rejected construction");
         });
     }
 

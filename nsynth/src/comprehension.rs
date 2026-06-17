@@ -486,6 +486,15 @@ pub struct Engine {
     /// the open-world soundness discipline applied to self-acquired knowledge — the
     /// system never claims a membership it did not prove.
     learned_members: BTreeMap<String, BTreeMap<String, bool>>,
+    /// VERIFIED word-order constructions the engine has ACQUIRED (grammar
+    /// induction). Each [`LearnedConstruction`](crate::understanding::grammar::LearnedConstruction)
+    /// records, for one or more class skeletons, which token indices fill the
+    /// agent / patient / predicate slots — a role assignment synthesized and
+    /// proven from labeled examples. The parser consults this side-table ONLY as
+    /// a fallback, after its hand-written rules return `Meaning::Unknown`, so a
+    /// learned construction can never override a correct hand-parse. A fresh
+    /// engine has an empty grammar and behaves byte-for-byte as before.
+    learned_grammar: crate::understanding::grammar::LearnedGrammar,
 }
 
 impl Default for Engine {
@@ -554,6 +563,7 @@ impl Engine {
                 ("has_negation", neg_m), ("valid_argument", arg_m),
             ],
             learned_members: BTreeMap::new(),
+            learned_grammar: crate::understanding::grammar::LearnedGrammar::new(),
         }
     }
 
@@ -638,6 +648,40 @@ impl Engine {
                     "[components-store] reject reloaded component `{}` (method {}): \
                      regression gate red ({}/{} golden cases, sound={}); skipping",
                     component.name, component.method, gate.passed, gate.total, gate.sound
+                );
+            }
+        }
+
+        // --- Reload persisted word-order CONSTRUCTIONS, gated --------------------
+        // The grammar-induction analogue of the component reload above: each
+        // [`StoredConstruction`](crate::self_improve::store::StoredConstruction) is
+        // re-registered onto a candidate clone and RE-GATED against the *current*
+        // golden battery + soundness oracle. A sound construction (e.g. an
+        // object-fronting rule whose skeleton appears in NO base-parseable golden
+        // case) leaves the gate green and is adopted; a construction whose skeleton
+        // COLLIDES with a base-parseable pattern would change a golden answer, redden
+        // the gate, and be REJECTED — so a stale / poisoned / now-incompatible store
+        // row can never poison a fresh boot. Acceptance is monotone: the NEXT
+        // construction is gated on the engine that already accepted the prior ones.
+        let stored_constructions = crate::self_improve::store::load_constructions();
+        for sc in &stored_constructions {
+            let construction = crate::understanding::grammar::LearnedConstruction {
+                name: sc.name.clone(),
+                skeletons: sc.skeletons.clone(),
+                agent_idx: sc.agent_idx,
+                patient_idx: sc.patient_idx,
+                predicate_idx: sc.predicate_idx,
+            };
+            let mut candidate = engine.clone();
+            candidate.register_construction(construction);
+            let gate = crate::self_improve::gate::regression_gate(&candidate);
+            if gate.ok() {
+                engine = candidate;
+            } else {
+                eprintln!(
+                    "[constructions-store] reject reloaded construction `{}`: \
+                     regression gate red ({}/{} golden cases, sound={}); skipping",
+                    sc.name, gate.passed, gate.total, gate.sound
                 );
             }
         }
@@ -788,6 +832,46 @@ impl Engine {
     /// Is the word an animate noun (a "person")?
     pub fn is_person(&self, word: &str) -> bool {
         self.call_int(&format!("is_person({})", esc(word))) == 1
+    }
+
+    /// The ACQUIRED word-order grammar — the side-table of verified
+    /// [`LearnedConstruction`](crate::understanding::grammar::LearnedConstruction)s
+    /// the parser consults as a fallback. Empty on a fresh engine. Read by
+    /// `semantics::understand` only after the hand-written rules yield
+    /// `Meaning::Unknown`, so consulting it can never override a correct parse.
+    pub fn learned_grammar(&self) -> &crate::understanding::grammar::LearnedGrammar {
+        &self.learned_grammar
+    }
+
+    /// The REGISTERED word-order constructions, in adoption order — the flat slice
+    /// of verified [`LearnedConstruction`](crate::understanding::grammar::LearnedConstruction)s
+    /// this engine carries.
+    ///
+    /// This is the direct-slice view of [`learned_grammar`](Self::learned_grammar):
+    /// `learned_grammar()` returns the holder (whose `apply_first` runs the
+    /// parser-fallback dispatch), whereas this returns its underlying `Vec` for
+    /// callers that want to inspect or iterate the constructions themselves (the
+    /// demo prints them; the gate's collision-soundness invariant walks them). The
+    /// `Vec` is owned heap data, so this is a cheap borrow — and `Engine`'s derived
+    /// `Clone` copies it byte-for-byte, which is exactly why a reload restores every
+    /// registered construction. Empty on a fresh engine.
+    pub fn learned_constructions(
+        &self,
+    ) -> &[crate::understanding::grammar::LearnedConstruction] {
+        self.learned_grammar.constructions()
+    }
+
+    /// Graft a verified construction onto this engine's learned grammar. The
+    /// caller is responsible for having SYNTHESIZED + VERIFIED the construction
+    /// (e.g. via
+    /// [`learn_construction_from_examples`](crate::understanding::grammar::learn_construction_from_examples)),
+    /// so this is the raw registration point that extends parser coverage on the
+    /// proven skeletons.
+    pub fn register_construction(
+        &mut self,
+        construction: crate::understanding::grammar::LearnedConstruction,
+    ) {
+        self.learned_grammar.add(construction);
     }
 
     /// Is the action in the sentence semantically licensed (animate subject acting

@@ -21,8 +21,11 @@ use crate::benchmark::Example;
 use crate::comprehension::Engine;
 use crate::self_improve::gate::regression_gate;
 use crate::self_improve::journal::{self, JournalEntry};
-use crate::self_improve::store::{self, StoredComponent};
+use crate::self_improve::store::{self, StoredComponent, StoredConstruction};
 use crate::solved_cache::examples_fingerprint;
+use crate::understanding::grammar::{
+    learn_construction_from_examples, ConstructionExample, LearnedConstruction,
+};
 
 /// A request to close an observed gap by learning a new component.
 ///
@@ -277,6 +280,149 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
         // The candidate is discarded; `engine` stays the live engine.
         (None, report)
     }
+}
+
+/// A request to acquire a word-order CONSTRUCTION (grammar induction) by learning
+/// the role-to-position mapping for one family of class skeletons.
+///
+/// * `gap` — a human-readable description of what the parser could not handle
+///   (e.g. "object-fronted declaratives parse to Unknown").
+/// * `name` — the construction's tag (e.g. `"object_fronting"`).
+/// * `examples` — labeled `(sentence, agent_word, patient_word, predicate_lemma)`
+///   tuples (see [`ConstructionExample`]); the learner is told the ROLES and
+///   induces the position mapping, then SYNTHESIZES + VERIFIES it as a program over
+///   the class skeletons.
+pub struct ConstructionRequest<'a> {
+    pub gap: String,
+    pub name: String,
+    pub examples: Vec<ConstructionExample<'a>>,
+}
+
+/// Acquire a word-order construction, fully gated — the grammar-induction analogue
+/// of [`self_extend`].
+///
+/// Enforces the SAME substrate contract end-to-end:
+///
+/// 1. **Synthesize + verify.** Call
+///    [`learn_construction_from_examples`] to induce the role-to-position mapping
+///    and PROVE it as `[i64] -> i64` slot programs over the class skeletons. A
+///    failure (no recoverable rule, or an ill-formed skeleton→role mapping) is
+///    journaled and the engine is untouched.
+/// 2. **Gate.** Register the construction onto a CLONE of `engine` and run the
+///    whole golden corpus + soundness oracle against it. A sound construction
+///    (whose skeleton appears in no base-parseable golden case) leaves the gate
+///    green; one whose skeleton COLLIDES with a base-parseable pattern would change
+///    a golden answer and redden the gate. The parser fallback consults the
+///    construction ONLY on an otherwise-Unknown parse, so the gate is the enforced
+///    proof that the addition broke nothing.
+/// 3. **Journal.** Record a [`JournalEntry`] for the attempt (accepted or not).
+/// 4. **Persist (accepted only).** Durably record the construction as a
+///    [`StoredConstruction`] so a later `Engine::new` can re-register it (gated
+///    again) — cross-run compounding grammar.
+///
+/// Returns `(Some(engine_with_construction), report)` on accept, else
+/// `(None, report)` with `engine` untouched. Guarantees monotone growth: a
+/// construction that breaks anything is rejected.
+pub fn self_learn_construction(
+    engine: &Engine,
+    req: &ConstructionRequest,
+) -> (Option<Engine>, LearnReport) {
+    // --- 1. SYNTHESIZE + VERIFY ------------------------------------------
+    let construction = match learn_construction_from_examples(engine, &req.name, &req.examples) {
+        Ok(c) => c,
+        Err(err) => {
+            let message = format!(
+                "no verified construction for gap {:?}: induction of `{}` failed ({})",
+                req.gap, req.name, err
+            );
+            let report = LearnReport {
+                gap: req.gap.clone(),
+                synthesized: false,
+                method: String::new(),
+                regression_passed: false,
+                accepted: false,
+                message: message.clone(),
+            };
+            journal::record(&JournalEntry {
+                when_unix: 0,
+                gap: req.gap.clone(),
+                action: format!("induce construction {}", req.name),
+                method: "grammar_induction".to_string(),
+                verified: false,
+                regression_passed: false,
+                accepted: false,
+                note: message,
+            });
+            return (None, report);
+        }
+    };
+
+    // --- 2. GATE ----------------------------------------------------------
+    let mut candidate = engine.clone();
+    candidate.register_construction(construction.clone());
+    let gate = regression_gate(&candidate);
+    let passed_gate = gate.ok();
+
+    let message = if passed_gate {
+        format!(
+            "accepted construction `{}` (gate green: {}/{} golden cases passed, sound)",
+            req.name, gate.passed, gate.total
+        )
+    } else {
+        let failures = if gate.failures.is_empty() {
+            "(no behavioral failures)".to_string()
+        } else {
+            gate.failures.join("; ")
+        };
+        format!(
+            "rejected construction `{}`: regression gate red ({}/{} golden cases passed, \
+             sound={}); failing cases: {}",
+            req.name, gate.passed, gate.total, gate.sound, failures
+        )
+    };
+
+    let report = LearnReport {
+        gap: req.gap.clone(),
+        synthesized: true,
+        method: "grammar_induction".to_string(),
+        regression_passed: passed_gate,
+        accepted: passed_gate,
+        message: message.clone(),
+    };
+
+    // --- 3. JOURNAL -------------------------------------------------------
+    journal::record(&JournalEntry {
+        when_unix: 0,
+        gap: req.gap.clone(),
+        action: format!("induce construction {}", req.name),
+        method: "grammar_induction".to_string(),
+        verified: true,
+        regression_passed: passed_gate,
+        accepted: passed_gate,
+        note: message,
+    });
+
+    // --- 4. PERSIST (accepted only) + RETURN ------------------------------
+    if passed_gate {
+        persist_construction(&construction);
+        (Some(candidate), report)
+    } else {
+        (None, report)
+    }
+}
+
+/// Persist an accepted construction to the durable construction store (best-effort;
+/// `save_one_construction` swallows I/O errors and is a no-op when the store is
+/// disabled, so a store failure never blocks adoption — the construction is already
+/// live on the returned engine).
+fn persist_construction(c: &LearnedConstruction) {
+    store::save_one_construction(&StoredConstruction {
+        name: c.name.clone(),
+        skeletons: c.skeletons.clone(),
+        agent_idx: c.agent_idx,
+        patient_idx: c.patient_idx,
+        predicate_idx: c.predicate_idx,
+    });
 }
 
 #[cfg(test)]
@@ -570,6 +716,106 @@ mod tests {
             "the report must explain the gap stayed open: {}",
             report.message
         );
+        });
+    }
+
+    /// The labeled OSV training set (mirrors `understanding::grammar`'s
+    /// `osv_examples`): three sentences, same word-order shape, different words,
+    /// each tagged with its agent / patient surface word and predicate lemma.
+    fn osv_examples() -> Vec<ConstructionExample<'static>> {
+        vec![
+            ("the report the teacher writes", "teacher", "report", "write"),
+            ("the book the student reads", "student", "book", "read"),
+            ("the memo the doctor fixes", "doctor", "memo", "fix"),
+        ]
+    }
+
+    /// END-TO-END learn-accept for a CONSTRUCTION: `self_learn_construction` induces
+    /// the OSV role mapping from labeled examples, SYNTHESIZES + VERIFIES the slot
+    /// programs, runs the candidate through the regression gate (green — the OSV
+    /// skeleton appears in no base-parseable golden case), accepts it, REGISTERS it
+    /// on the returned engine (which now parses OSV), and PERSISTS it to the
+    /// construction store so a later boot can re-register it.
+    #[test]
+    fn good_construction_is_induced_gated_accepted_and_persisted() {
+        // Fence the journal + component store (disabled) and point the CONSTRUCTION
+        // store at a fresh temp file so the accept-time persist is observable but
+        // never touches $HOME. The journal-env helper holds the crate-wide ENV_LOCK,
+        // so setting NCPU_CONSTRUCTIONS_PATH inside the closure is race-free.
+        crate::self_improve::journal::test_support::with_journal_env("", || {
+            let path = std::env::temp_dir().join(format!(
+                "ncpu_construction_accept_{}_{:?}.jsonl",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_file(&path);
+            let prev = std::env::var("NCPU_CONSTRUCTIONS_PATH").ok();
+            // SAFETY: with_journal_env holds ENV_LOCK for this whole closure.
+            unsafe { std::env::set_var("NCPU_CONSTRUCTIONS_PATH", &path) }
+
+            let engine = Engine::new();
+            assert!(
+                engine.learned_grammar().is_empty(),
+                "fresh engine has no acquired constructions"
+            );
+
+            let req = ConstructionRequest {
+                gap: "object-fronted declaratives parse to Unknown".to_string(),
+                name: "object_fronting".to_string(),
+                examples: osv_examples(),
+            };
+            let (candidate, report) = self_learn_construction(&engine, &req);
+
+            // Induced, gated green, accepted.
+            assert!(report.synthesized, "OSV must induce + verify: {}", report.message);
+            assert!(
+                report.regression_passed,
+                "an additive OSV construction must pass the gate (its skeleton is not \
+                 base-parseable): {}",
+                report.message
+            );
+            assert!(report.accepted, "a verified + gated construction must be accepted");
+
+            // The returned engine registered it AND now parses OSV correctly.
+            let learned = candidate.expect("an accepted construction returns Some(engine)");
+            assert_eq!(learned.learned_grammar().len(), 1);
+            let m = crate::understanding::semantics::understand(
+                &learned,
+                "the letter the editor reads",
+            );
+            let crate::understanding::meaning::Meaning::Event(e) = m else {
+                panic!("the learned construction must parse unseen OSV to an Event, got {m:?}");
+            };
+            assert_eq!(e.predicate, "read");
+            assert_eq!(
+                e.agent,
+                Some(crate::understanding::meaning::Term::Entity("editor".to_string()))
+            );
+            assert_eq!(
+                e.patient,
+                Some(crate::understanding::meaning::Term::Entity("letter".to_string()))
+            );
+
+            // PERSISTED: the accepted construction is durably in the store.
+            let stored = store::load_constructions();
+            assert_eq!(stored.len(), 1, "the accepted construction must be persisted");
+            assert_eq!(stored[0].name, "object_fronting");
+            assert_eq!(stored[0].skeletons, vec![vec![0, 1, 0, 1, 2]]);
+            assert_eq!(stored[0].agent_idx, 3);
+            assert_eq!(stored[0].patient_idx, 1);
+            assert_eq!(stored[0].predicate_idx, 4);
+
+            // The INPUT engine is untouched (self_learn_construction grafts onto a clone).
+            assert!(
+                engine.learned_grammar().is_empty(),
+                "self_learn_construction must not mutate the input engine"
+            );
+
+            let _ = std::fs::remove_file(&path);
+            match prev {
+                Some(v) => unsafe { std::env::set_var("NCPU_CONSTRUCTIONS_PATH", v) },
+                None => unsafe { std::env::remove_var("NCPU_CONSTRUCTIONS_PATH") },
+            }
         });
     }
 }

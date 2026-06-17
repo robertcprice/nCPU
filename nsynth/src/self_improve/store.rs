@@ -73,6 +73,139 @@ pub struct StoredComponent {
     pub members: Vec<(String, bool)>,
 }
 
+/// One learned GRAMMAR CONSTRUCTION, durably recorded so it can be re-registered
+/// onto a fresh engine on a later run — the word-order analogue of
+/// [`StoredComponent`].
+///
+/// A [`StoredComponent`] persists a synthesized *lexical* program (a function the
+/// engine grafts into its Mog source); a `StoredConstruction` persists a
+/// *grammatical* role assignment — the [`LearnedConstruction`] the parser's
+/// object-fronting fallback consults. Every field is a plain owned value so the
+/// record serializes to a single JSONL line with no references into the engine,
+/// and every field is `#[serde(default)]` for forward/back-compat (an older store
+/// row missing a field still loads, defaulting it).
+///
+/// Together the fields carry everything a reload step needs to reconstruct the
+/// construction and re-gate it:
+///
+/// * `name` — human-readable tag, e.g. `"object_fronting"`.
+/// * `skeletons` — the exact class-code arrays (from
+///   [`token_classes`](crate::understanding::semantics::token_classes)) this
+///   construction was VERIFIED on; it fires ONLY on a byte-for-byte match.
+/// * `agent_idx` / `patient_idx` / `predicate_idx` — the token indices (constant
+///   within any recorded skeleton) that fill the agent / patient / predicate slot.
+///
+/// SOUNDNESS across runs mirrors `StoredComponent`: the reload step re-gates the
+/// construction against the *current* golden battery, so a stale / poisoned /
+/// now-incompatible row (e.g. a skeleton that COLLIDES with a base-parseable
+/// pattern and would change a golden answer) is REJECTED on load and never
+/// poisons a fresh boot.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredConstruction {
+    /// Human-readable tag of the construction (e.g. `"object_fronting"`).
+    #[serde(default)]
+    pub name: String,
+    /// The class skeletons this role assignment is VERIFIED for.
+    #[serde(default)]
+    pub skeletons: Vec<Vec<i64>>,
+    /// Token index filling the AGENT slot.
+    #[serde(default)]
+    pub agent_idx: usize,
+    /// Token index filling the PATIENT slot.
+    #[serde(default)]
+    pub patient_idx: usize,
+    /// Token index of the PREDICATE (lexical verb).
+    #[serde(default)]
+    pub predicate_idx: usize,
+}
+
+/// On-disk location of the learned-CONSTRUCTION store.
+///
+/// Resolution mirrors [`store_path`] but keys off `NCPU_CONSTRUCTIONS_PATH` so
+/// constructions live in their OWN file, distinct from the component store:
+///   * `NCPU_CONSTRUCTIONS_PATH` set to a non-empty value → use it verbatim.
+///   * `NCPU_CONSTRUCTIONS_PATH` set to an *empty* value → `None`, which disables
+///     the construction store entirely (a no-op). This is what tests / CI set so a
+///     run never reads or writes a real store.
+///   * Unset → `$HOME/.ncpu_learned_constructions.jsonl` (falling back to the
+///     current directory when `HOME` is unavailable).
+fn construction_store_path() -> Option<PathBuf> {
+    if let Ok(val) = std::env::var("NCPU_CONSTRUCTIONS_PATH") {
+        if val.is_empty() {
+            return None;
+        }
+        return Some(PathBuf::from(val));
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    Some(PathBuf::from(home).join(".ncpu_learned_constructions.jsonl"))
+}
+
+/// Read back every stored construction, oldest-first.
+///
+/// Same JSONL contract as [`load`]: blank and malformed lines are skipped
+/// silently, a missing file yields an empty vector, and a disabled store
+/// (empty `NCPU_CONSTRUCTIONS_PATH`) is also empty.
+pub fn load_constructions() -> Vec<StoredConstruction> {
+    let Some(path) = construction_store_path() else {
+        return Vec::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(construction) = serde_json::from_str::<StoredConstruction>(line) {
+            out.push(construction);
+        }
+    }
+    out
+}
+
+/// Persist one learned construction, merging by `name`.
+///
+/// Mirrors [`save_one`]: a re-learned construction with the same `name` REPLACES
+/// its prior row (no duplicates), the fresh row lands last (load is oldest-first),
+/// the file is rewritten atomically, and all I/O errors are swallowed. A disabled
+/// store (empty `NCPU_CONSTRUCTIONS_PATH`) is a no-op.
+pub fn save_one_construction(c: &StoredConstruction) {
+    let Some(path) = construction_store_path() else {
+        return;
+    };
+
+    let mut rows: Vec<StoredConstruction> = load_constructions();
+    rows.retain(|existing| existing.name != c.name);
+    rows.push(c.clone());
+
+    let mut out = String::new();
+    for row in &rows {
+        let Ok(line) = serde_json::to_string(row) else {
+            continue;
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    let _ = atomic_write(&path, &out);
+}
+
+/// Clear the construction store — remove the on-disk file so a later
+/// [`load_constructions`] reads empty. Test support / clean-slate primitive; a
+/// missing file or a disabled store is a no-op.
+pub fn clear_constructions() {
+    let Some(path) = construction_store_path() else {
+        return;
+    };
+    let _ = std::fs::remove_file(&path);
+}
+
 /// On-disk location of the learned-component store.
 ///
 /// Resolution mirrors `crate::solved_cache::cache_path`,
@@ -469,6 +602,211 @@ fn noun_animacy(s: string) -> i64 {\n\
             assert!(
                 regression_gate(&reloaded).ok(),
                 "a fresh engine must stay sound after rejecting a poisoned stored component"
+            );
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // CONSTRUCTION store: persist + gated reload of a word-order construction.
+    // -----------------------------------------------------------------------
+
+    /// Run `f` with `NCPU_CONSTRUCTIONS_PATH` (and the component store + journal)
+    /// pointed at fresh temp state, holding the crate-wide env lock. Mirrors
+    /// [`with_temp_store`] but for the construction store; the component store and
+    /// journal are DISABLED (empty) so a reload-through-gate never writes $HOME and
+    /// no leftover component row perturbs the fresh engine.
+    fn with_temp_construction_store<R>(f: impl FnOnce(&std::path::Path) -> R) -> R {
+        use crate::self_improve::journal::test_support::ENV_LOCK;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev_c = std::env::var("NCPU_CONSTRUCTIONS_PATH").ok();
+        let prev_comp = std::env::var("NCPU_COMPONENTS_PATH").ok();
+        let prev_journal = std::env::var("NCPU_JOURNAL_PATH").ok();
+        let path = std::env::temp_dir().join(format!(
+            "ncpu_constructions_test_{}_{:?}.jsonl",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        // SAFETY: ENV_LOCK guarantees single-threaded access for the duration.
+        unsafe {
+            std::env::set_var("NCPU_CONSTRUCTIONS_PATH", &path);
+            std::env::set_var("NCPU_COMPONENTS_PATH", "");
+            std::env::set_var("NCPU_JOURNAL_PATH", "");
+        }
+        let result = f(&path);
+        match prev_c {
+            Some(v) => unsafe { std::env::set_var("NCPU_CONSTRUCTIONS_PATH", v) },
+            None => unsafe { std::env::remove_var("NCPU_CONSTRUCTIONS_PATH") },
+        }
+        match prev_comp {
+            Some(v) => unsafe { std::env::set_var("NCPU_COMPONENTS_PATH", v) },
+            None => unsafe { std::env::remove_var("NCPU_COMPONENTS_PATH") },
+        }
+        match prev_journal {
+            Some(v) => unsafe { std::env::set_var("NCPU_JOURNAL_PATH", v) },
+            None => unsafe { std::env::remove_var("NCPU_JOURNAL_PATH") },
+        }
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+
+    /// The verified object-fronting construction: skeleton `[0,1,0,1,2]`
+    /// (det noun det noun verb) with agent at index 3, patient at index 1, verb at
+    /// index 4 — the role assignment proven in `understanding::grammar`'s tests.
+    fn osv_construction() -> StoredConstruction {
+        StoredConstruction {
+            name: "object_fronting".to_string(),
+            skeletons: vec![vec![0, 1, 0, 1, 2]],
+            agent_idx: 3,
+            patient_idx: 1,
+            predicate_idx: 4,
+        }
+    }
+
+    #[test]
+    fn construction_store_round_trips_and_merges_by_name() {
+        with_temp_construction_store(|_path| {
+            assert!(load_constructions().is_empty(), "no file → empty");
+            save_one_construction(&osv_construction());
+            let got = load_constructions();
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0], osv_construction());
+
+            // Re-learning the same name REPLACES (merge-by-name), never duplicates.
+            let mut updated = osv_construction();
+            updated.predicate_idx = 4;
+            updated.skeletons = vec![vec![0, 1, 0, 1, 2], vec![0, 1, 0, 1, 2, 0, 1]];
+            save_one_construction(&updated);
+            let got = load_constructions();
+            assert_eq!(got.len(), 1, "merge-by-name must not duplicate");
+            assert_eq!(got[0].skeletons.len(), 2, "refreshed row must win");
+        });
+    }
+
+    /// END-TO-END (good construction): persist the object-fronting construction,
+    /// then build a FRESH `Engine::new()` and prove the gated reload registered it —
+    /// the engine now PARSES the OSV sentence (which the base parser left Unknown)
+    /// to the correct Event, and the regression gate stays green.
+    #[test]
+    fn fresh_engine_reloads_a_good_construction() {
+        with_temp_construction_store(|_path| {
+            // A bare base engine MIS-handles object fronting (returns Unknown).
+            let base = Engine::new();
+            assert!(
+                base.learned_grammar().is_empty(),
+                "no construction persisted yet → empty grammar on the base engine"
+            );
+            let sentence = "The report the teacher writes.";
+            assert!(
+                matches!(
+                    crate::understanding::semantics::understand(&base, sentence),
+                    crate::understanding::meaning::Meaning::Unknown(_)
+                ),
+                "the base parser must leave the object-fronted clause Unknown"
+            );
+
+            // Persist the verified construction, then reload into a fresh engine.
+            save_one_construction(&osv_construction());
+            let reloaded = Engine::new();
+            assert_eq!(
+                reloaded.learned_grammar().len(),
+                1,
+                "the persisted construction must be re-registered onto a fresh engine"
+            );
+
+            // The reloaded engine PARSES the OSV sentence correctly via the fallback.
+            let m = crate::understanding::semantics::understand(&reloaded, sentence);
+            let crate::understanding::meaning::Meaning::Event(e) = m else {
+                panic!("expected an Event from the reloaded construction, got {m:?}");
+            };
+            assert_eq!(e.predicate, "write");
+            assert_eq!(
+                e.agent,
+                Some(crate::understanding::meaning::Term::Entity("teacher".to_string()))
+            );
+            assert_eq!(
+                e.patient,
+                Some(crate::understanding::meaning::Term::Entity("report".to_string()))
+            );
+
+            // The reloaded engine is still SOUND (a sound OSV rule leaves the gate
+            // green: its skeleton appears in no base-parseable golden case).
+            assert!(
+                regression_gate(&reloaded).ok(),
+                "a fresh engine with a good reloaded construction must stay green"
+            );
+        });
+    }
+
+    /// A construction whose skeleton COLLIDES with a base-parseable pattern: the
+    /// SVO declarative skeleton `[0,1,2,0,1]` of "The teacher writes the report."
+    /// (a golden SETUP) with agent/patient SWAPPED (agent at index 4 = "report",
+    /// patient at index 1 = "teacher"). The base parser handles SVO correctly, so
+    /// registering this rule would, if the fallback were ever reached for that
+    /// shape, assert the REVERSE event — a collision the gate's
+    /// collision-soundness invariant must catch.
+    fn colliding_svo_construction() -> StoredConstruction {
+        StoredConstruction {
+            name: "collide_svo".to_string(),
+            skeletons: vec![vec![0, 1, 2, 0, 1]],
+            agent_idx: 4,   // SWAP: "report" as agent (base says "teacher")
+            patient_idx: 1, // SWAP: "teacher" as patient
+            predicate_idx: 2,
+        }
+    }
+
+    /// END-TO-END (regressing construction): persist a construction whose skeleton
+    /// COLLIDES with a base-parseable golden pattern (SVO) and assigns swapped
+    /// roles. The gated reload must RE-GATE it, find the collision-soundness
+    /// invariant violated, REJECT it, and leave the fresh engine sound with the
+    /// construction NOT registered. This is the load-time mirror of the accept-time
+    /// gate: a stale / poisoned / now-incompatible construction row cannot poison a
+    /// fresh boot.
+    #[test]
+    fn fresh_engine_rejects_a_regressing_construction() {
+        with_temp_construction_store(|_path| {
+            // Sanity: a hand-built engine with the colliding rule registered fails the
+            // gate (the collision-soundness invariant fires).
+            let mut hand = Engine::new_base();
+            hand.register_construction(crate::understanding::grammar::LearnedConstruction {
+                name: "collide_svo".to_string(),
+                skeletons: vec![vec![0, 1, 2, 0, 1]],
+                agent_idx: 4,
+                patient_idx: 1,
+                predicate_idx: 2,
+            });
+            assert!(
+                !regression_gate(&hand).ok(),
+                "a colliding construction must redden the gate (collision-soundness)"
+            );
+
+            // Now persist it and confirm the RELOAD path makes the same decision: the
+            // fresh engine REJECTS it (never registers it) and stays sound.
+            save_one_construction(&colliding_svo_construction());
+            let reloaded = Engine::new();
+            assert!(
+                reloaded.learned_grammar().is_empty(),
+                "the regressing construction must be rejected on load (not registered)"
+            );
+            assert!(
+                regression_gate(&reloaded).ok(),
+                "a fresh engine must stay sound after rejecting a regressing construction"
+            );
+
+            // The base SVO parse is unchanged — the colliding rule never registered,
+            // and the fallback is Unknown-only so an SVO sentence is base-parsed.
+            let svo = crate::understanding::semantics::understand(
+                &reloaded,
+                "The teacher writes the report.",
+            );
+            let crate::understanding::meaning::Meaning::Event(e) = svo else {
+                panic!("SVO must parse to an Event");
+            };
+            assert_eq!(e.predicate, "write");
+            assert_eq!(
+                e.agent,
+                Some(crate::understanding::meaning::Term::Entity("teacher".to_string())),
+                "the base SVO agent must remain `teacher` — the colliding rule was rejected"
             );
         });
     }

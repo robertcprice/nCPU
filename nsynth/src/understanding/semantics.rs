@@ -23,6 +23,48 @@ use crate::understanding::meaning::{
 /// pronoun handling produce the right `Term` variant; the verb is de-inflected
 /// to its lemma by reusing the Engine's synthesized inflection program.
 pub fn understand(engine: &Engine, sentence: &str) -> Meaning {
+    // Run the hand-written parser first. It is fully in charge of every clause
+    // type it knows; only when it gives up (`Meaning::Unknown`) do we consult the
+    // ACQUIRED grammar as a fallback.
+    let m = understand_handwritten(engine, sentence);
+    if !matches!(m, Meaning::Unknown(_)) {
+        return m;
+    }
+
+    // PARSER FALLBACK — learned-construction consultation. The hand rules returned
+    // Unknown, so consult each verified `LearnedConstruction` registered on the
+    // engine ([`Engine::learned_constructions`]). We try them in adoption order and
+    // take the FIRST that fires on this sentence's class skeleton; a construction
+    // whose skeleton does not match returns `None` and we fall through. Because this
+    // runs ONLY on an otherwise-Unknown parse, a learned construction can ADD
+    // coverage but can NEVER override a correct hand-parse. On a fresh engine there
+    // are no constructions and this loop is empty, so the parser's behavior is
+    // byte-for-byte unchanged.
+    let constructions = engine.learned_constructions();
+    if !constructions.is_empty() {
+        let toks = words_of(sentence);
+        let classes = token_classes(engine, sentence);
+        if let Some(learned) = constructions
+            .iter()
+            .find_map(|c| c.apply(engine, &toks, &classes))
+        {
+            return learned;
+        }
+    }
+
+    m
+}
+
+/// The hand-written semantic parser (the original `understand` body). Returns
+/// `Meaning::Unknown` for any clause shape it does not recognize, which is the
+/// signal [`understand`] uses to consult the learned-grammar fallback.
+///
+/// `pub(crate)` so the regression gate can compare the BASE (handwritten) parse of
+/// a sentence against what a registered construction would produce — the
+/// collision-soundness invariant: a construction whose skeleton matches a
+/// base-parseable sentence yet yields a different meaning is a hazard the gate
+/// rejects.
+pub(crate) fn understand_handwritten(engine: &Engine, sentence: &str) -> Meaning {
     let toks = words_of(sentence);
     if toks.is_empty() {
         return Meaning::Unknown(sentence.to_string());
@@ -177,6 +219,58 @@ pub fn understand(engine: &Engine, sentence: &str) -> Meaning {
 
     // --- Declarative ----------------------------------------------------------
     parse_declarative(engine, &toks, sentence)
+}
+
+// ===========================================================================
+// Token-class encoding (grammar-induction skeleton)
+// ===========================================================================
+
+/// Encode each token of `sentence` into a small CLASS CODE — the part-of-speech
+/// skeleton a learned word-order rule operates over. This is the array
+/// representation that a synthesized `[i64] -> role-index` program would
+/// classify (mirroring the existing in-language `comprehend_roles` /
+/// `check_agreement` precedent, which already build class-code arrays from
+/// `noun_animacy`/`ends_s` and hand them to an array->int program).
+///
+/// Class codes:
+///   * `0` = determiner / function word (the/a/is/does/not/that/by/to/...),
+///   * `1` = noun (`noun_class > 0` OR recognized by a self-learned classifier),
+///   * `2` = verb (de-inflects to a known base via `lemma_and_tense`, or is an
+///           auxiliary/copula),
+///   * `3` = other (anything unclassified).
+///
+/// The ordering is deliberate and SOUND: a function word is decided first (so
+/// "that"/"by" never count as nouns even if they could otherwise be mistaken),
+/// then nouns, then verbs, with `3` as the residual. The skeleton abstracts AWAY
+/// the specific words, leaving only the grammatical shape — which is exactly what
+/// makes a per-skeleton role assignment generalize across the lexicon: any
+/// sentence with the same class skeleton shares the same argument structure.
+pub fn token_classes(engine: &Engine, sentence: &str) -> Vec<i64> {
+    let toks = words_of(sentence);
+    toks.iter()
+        .map(|w| classify_token(engine, w))
+        .collect()
+}
+
+/// Class code for a single surface token (see [`token_classes`]).
+fn classify_token(engine: &Engine, word: &str) -> i64 {
+    // 1) Determiner / function word — decided FIRST so relativizers,
+    //    prepositions, and auxiliaries are never misread as content words.
+    if crate::comprehension::FUNCTION_WORDS.contains(&word) {
+        return 0;
+    }
+    // 2) Noun: a lexicon noun (animate/inanimate) or a self-learned NP head.
+    //    (Pronouns are NP heads too, but they live in FUNCTION_WORDS and are
+    //    intentionally classed as `0`/function for the skeleton.)
+    if engine.noun_class(word) > 0 || engine.learned_class_of(word).is_some() {
+        return 1;
+    }
+    // 3) Verb: an auxiliary/copula OR a token that de-inflects to a known base.
+    if is_verbish(engine, word) {
+        return 2;
+    }
+    // 4) Residual.
+    3
 }
 
 // ===========================================================================
@@ -898,6 +992,19 @@ fn build_event_from(
 ) -> Meaning {
     let parsed = scan_aspect_tense(engine, toks, after);
     let Some(vp) = parsed else {
+        // LEARNED-GRAMMAR FALLBACK POINT.
+        //
+        // This is the genuine clean Unknown fallback for a declarative whose VP
+        // could not be located (e.g. object-fronting "The report the teacher
+        // writes." — the default "first noun = subject" assumption took "report"
+        // as the subject, so the VP scan starts on "teacher" and finds no verb).
+        // Next phase this is where the engine's acquired
+        // `LearnedGrammar::apply_first` (see `understanding::grammar`) is
+        // consulted: if a VERIFIED construction's class skeleton
+        // (`token_classes`) matches, it returns the correct role-assigned Event
+        // and we return THAT instead of Unknown. The holder is not yet wired onto
+        // the Engine, so for now the original fall-through is unchanged and
+        // behavior is byte-for-byte identical.
         return Meaning::Unknown(original.to_string());
     };
 
@@ -1036,6 +1143,31 @@ fn scan_aspect_tense(engine: &Engine, toks: &[String], after: usize) -> Option<V
     // SIMPLE aspect: reuse the existing auxiliary/negation scan + lemma decode.
     let (neg2, tense_hint, verb_idx) = scan_aux_negation(toks, after);
     let vidx = verb_idx?;
+    // OBJECT-FRONTING GUARD. `scan_aux_negation` returns the first non-auxiliary
+    // token after the subject, which in a well-formed SVO declarative is the
+    // lexical verb — even an UNKNOWN one ("the street floods"), which we must keep
+    // accepting. But in an object-fronted clause ("the letter the editor reads")
+    // the "first noun = subject" assumption took the patient as the subject, so
+    // this token is the EMBEDDED SUBJECT NOUN ("editor"), and the REAL verb
+    // ("reads") sits further on. Refuse to read that noun as the verb ONLY when
+    // all three hold:
+    //   (a) no aux gave a tense hint (a "does/do/did" already promises a verb),
+    //   (b) the located token is a LEXICON NOUN that does NOT de-inflect to any
+    //       known verb (so it cannot itself be the predicate), and
+    //   (c) some genuinely verbish token appears LATER in the clause (the actual
+    //       fronted-construction verb).
+    // Returning None here yields Unknown, handing the clause to the learned-grammar
+    // fallback. SOUND: an ordinary SVO clause — including one with an out-of-lexicon
+    // verb — fails (b) (its located token is the verb, not a known noun) or (c)
+    // (no further verb), so this never costs a correct Event; it only declines to
+    // fabricate one whose "predicate" is plainly a noun with a real verb downstream.
+    if tense_hint.is_none()
+        && !is_verbish(engine, &toks[vidx])
+        && is_lexicon_noun(engine, &toks[vidx])
+        && (vidx + 1..toks.len()).any(|i| is_verbish(engine, &toks[i]))
+    {
+        return None;
+    }
     let (predicate, surface_tense) = lemma_and_tense(engine, &toks[vidx]);
     let tense = tense_hint.unwrap_or(surface_tense);
     Some(VerbPhrase {
@@ -1526,6 +1658,15 @@ fn is_np_head(engine: &Engine, word: &str) -> bool {
         || engine.learned_class_of(word).is_some()
 }
 
+/// Is `word` a LEXICON noun — a known content noun (base animacy lexicon) or a
+/// positive member of a self-learned classifier? Unlike [`is_np_head`] this
+/// EXCLUDES pronouns: it is used only by the object-fronting guard, which must
+/// distinguish a genuine embedded-subject NOUN ("editor") that was mistaken for a
+/// verb from a real (possibly out-of-lexicon) verb token.
+fn is_lexicon_noun(engine: &Engine, word: &str) -> bool {
+    engine.noun_class(word) > 0 || engine.learned_class_of(word).is_some()
+}
+
 /// Normalize apostrophe-s genitives in the token stream. The tokenizer strips the
 /// apostrophe, so "editor's" arrives as two tokens — the possessor noun and a
 /// bare "s". Detect the possessive NP `<possessor-noun> "s" <possessed-noun>` and
@@ -1649,7 +1790,7 @@ fn last_noun_idx(engine: &Engine, toks: &[String], from: usize) -> Option<usize>
 /// Build a `Term` from a noun token, consulting the determiner immediately
 /// before it. "the" -> Entity; "a"/"an" -> Indefinite; a pronoun token itself
 /// -> Pronoun. A bare noun with no article defaults to Entity.
-fn term_from(toks: &[String], idx: usize) -> Term {
+pub(crate) fn term_from(toks: &[String], idx: usize) -> Term {
     let word = &toks[idx];
 
     // Pronouns are their own terms (unresolved at parse time).
@@ -1724,7 +1865,7 @@ fn scan_aux_negation(toks: &[String], from: usize) -> (bool, Option<Tense>, Opti
 /// matches that lemma's base or its synthesized 3sg/past/gerund form. If no
 /// known verb matches, we fall back to a conservative morphological strip so
 /// the predicate is still a reasonable lemma.
-fn lemma_and_tense(engine: &Engine, surface: &str) -> (String, Tense) {
+pub(crate) fn lemma_and_tense(engine: &Engine, surface: &str) -> (String, Tense) {
     // 1) Exact base match (present, bare form). Includes irregular bases.
     for (base, _f3) in REG_VERBS.iter().chain(IRREGULAR_VERBS.iter()) {
         if surface == *base {

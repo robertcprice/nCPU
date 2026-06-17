@@ -4,7 +4,7 @@
 //! verified Mog programs and executes them in-process. No Python, no subprocess.
 //! The same engine is exposed to C via `mog_synth::ffi`.
 //!
-//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|study|bench|all]
+//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|study|grammar|bench|all]
 //! (the solver logs to stderr; pipe 2>/dev/null for clean output)
 //!
 //! The `bench` subcommand runs the FraCaS-style three-valued entailment suite
@@ -33,6 +33,18 @@
 //! corrupted store row is rejected on boot; and `explain_self` marks the reloaded
 //! component as self-learned. It points `NCPU_COMPONENTS_PATH` / `NCPU_JOURNAL_PATH`
 //! at fresh temp files (cleared first) so it never touches the developer's store.
+//!
+//! The `grammar` subcommand showcases LEARNED GRAMMAR: where `grow`/`study` grow
+//! the LEXICON, `grammar` grows SYNTAX. The base parser FAILS (Unknown) on an
+//! object-fronted clause ("the report the teacher writes"); the mind LEARNS the
+//! object-subject-verb construction from a few labeled examples via
+//! [`Mind::learn_construction`](mog_synth::understanding::mind::Mind::learn_construction)
+//! (induce role-to-position mapping → synthesize + verify slot programs → gate →
+//! adopt), then PARSES the clause — even with UNSEEN words — and answers a question
+//! about it. A fresh restart reboots WITH the construction (re-gated green on boot),
+//! self_check stays green, and ordinary SVO parsing is byte-for-byte unaffected. It
+//! points `NCPU_CONSTRUCTIONS_PATH` / `NCPU_JOURNAL_PATH` at fresh temp files
+//! (cleared first) so it never touches the developer's store.
 //!
 //! The `reflect` subcommand showcases the metacognition layer: a stateful
 //! [`Mind`](mog_synth::understanding::mind::Mind) reads a short passage, then
@@ -1543,6 +1555,211 @@ fn demo_bench() {
     println!("and STRICTLY HELPS — the dragon case flips from \"I don't know.\" to \"Yes\" after study.");
 }
 
+// ===========================================================================
+// grammar: LEARNED GRAMMAR — the parser ACQUIRES a new word-order construction.
+//
+// Where `grow`/`study` show the mind learning a LEXICAL classifier, `grammar`
+// shows it learning a SYNTACTIC construction: object-subject-verb ("the OBJECT
+// the SUBJECT VERBs"), a clause shape the hand-written parser cannot read.
+//
+//   (1) BEFORE — the base parser FAILS on object-fronting "the report the
+//       teacher writes" (it returns Meaning::Unknown — it cannot tell which noun
+//       is the agent in a fronted clause).
+//   (2) LEARN — `Mind::learn_construction` induces the OSV role-to-position
+//       mapping from a few LABELED examples, SYNTHESIZES + VERIFIES it as slot
+//       programs over class skeletons, gates it, and (gate green) adopts it.
+//   (3) AFTER — the same sentence now PARSES to the correct Event, INCLUDING an
+//       UNSEEN-word OSV sentence (generalization across the lexicon, because the
+//       construction keys on the class skeleton, not the specific words); and a
+//       question about a read OSV sentence is answered correctly.
+//   (4) RESTART — a brand-new Mind boots from the durable construction store with
+//       the construction already re-registered (re-gated green) — WITHOUT learning.
+//   (5) SOUNDNESS — self_check stays green and an ordinary SVO sentence is parsed
+//       EXACTLY as before (the learned fallback never touches a base-parseable clause).
+//
+// SELF-CONTAINED: points NCPU_CONSTRUCTIONS_PATH + NCPU_JOURNAL_PATH at fresh temp
+// files (cleared first) and DISABLES the component store, so it never touches the
+// developer's real $HOME store/journal; cleans both up at the end.
+// ===========================================================================
+fn demo_grammar() {
+    use mog_synth::understanding::grammar::ConstructionExample;
+    use mog_synth::understanding::meaning::Meaning;
+    use mog_synth::understanding::mind::Mind;
+
+    // --- SELF-CONTAINED ENV: fresh temp construction store + journal, cleared. ---
+    let pid = std::process::id();
+    let constructions_path =
+        std::env::temp_dir().join(format!("ncpu_grammar_demo_constructions_{pid}.jsonl"));
+    let journal_path =
+        std::env::temp_dir().join(format!("ncpu_grammar_demo_journal_{pid}.jsonl"));
+    let _ = std::fs::remove_file(&constructions_path);
+    let _ = std::fs::remove_file(&journal_path);
+    // SAFETY: this binary is single-threaded; we set the env once at the top of the
+    // demo and restore/clear it at the end.
+    unsafe {
+        std::env::set_var("NCPU_CONSTRUCTIONS_PATH", &constructions_path);
+        std::env::set_var("NCPU_JOURNAL_PATH", &journal_path);
+        // Disable the lexical-component store: this demo grows GRAMMAR, not lexicon.
+        std::env::set_var("NCPU_COMPONENTS_PATH", "");
+    }
+
+    println!("nCPU acquiring GRAMMAR — the hand-written parser cannot read an object-fronted");
+    println!("clause (\"the report the teacher writes\"). The mind LEARNS the object-subject-verb");
+    println!("construction from a few LABELED examples — inducing the role-to-position mapping,");
+    println!("SYNTHESIZING + VERIFYING it as slot programs, gating it, and adopting it only if");
+    println!("nothing regresses — then PARSES the fronted clause (even with UNSEEN words) and");
+    println!("answers a question about it. A fresh restart reboots WITH the construction.\n");
+
+    // The labeled OSV training set: same word-order SHAPE, different words. Each
+    // tuple is (sentence, agent_word, patient_word, predicate_lemma) — the learner
+    // is told the ROLES, never the positions.
+    let osv_examples: Vec<ConstructionExample> = vec![
+        ("the report the teacher writes", "teacher", "report", "write"),
+        ("the book the student reads", "student", "book", "read"),
+        ("the memo the doctor fixes", "doctor", "memo", "fix"),
+    ];
+
+    let mut mind = Mind::new();
+
+    // -----------------------------------------------------------------------
+    // (1) BEFORE — the base parser FAILS (Unknown) on object-fronting.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (1) BEFORE — the base parser fails on object-fronting (returns Unknown)");
+    println!("  {}", "=".repeat(72));
+    let fronted = "the report the teacher writes";
+    let before = mind.understand(fronted);
+    println!("     understand(\"{fronted}\")");
+    println!("        => {}", show_meaning(&before));
+    println!(
+        "        is Unknown = {}   (the hand parser cannot read a fronted object)",
+        matches!(before, Meaning::Unknown(_))
+    );
+    println!(
+        "     learned_constructions() = {}   (none acquired yet)\n",
+        mind.learned_constructions().len()
+    );
+
+    // -----------------------------------------------------------------------
+    // (2) LEARN — induce + verify + gate + adopt the OSV construction.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (2) learn_construction — induce OSV from labeled examples, gate it, adopt it");
+    println!("  {}", "=".repeat(72));
+    for (sent, agent, patient, lemma) in &osv_examples {
+        println!("     labeled: \"{sent}\"  (agent={agent}, patient={patient}, verb={lemma})");
+    }
+    let accepted = mind.learn_construction("object_fronting", &osv_examples);
+    println!("     ACCEPTED = {accepted}   (synthesized + verified + gate green)");
+    if let Some(c) = mind.learned_constructions().first() {
+        println!(
+            "     learned construction `{}`: skeletons={:?}, agent_idx={}, patient_idx={}, predicate_idx={}",
+            c.name, c.skeletons, c.agent_idx, c.patient_idx, c.predicate_idx
+        );
+        println!(
+            "        (recovered: the FRONTED object is patient@{}, the embedded subject is agent@{}, verb@{})\n",
+            c.patient_idx, c.agent_idx, c.predicate_idx
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // (3) AFTER — the same clause now PARSES; UNSEEN words generalize; Q&A works.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (3) AFTER — the fronted clause now parses, even with UNSEEN words");
+    println!("  {}", "=".repeat(72));
+    let after = mind.understand(fronted);
+    println!("     understand(\"{fronted}\")");
+    println!("        => {}   (teacher is the agent, report the patient)", show_meaning(&after));
+
+    // Generalization: "letter" / "editor" / "read" never appeared TOGETHER in the
+    // training set — only the SHAPE [det noun det noun verb] was learned.
+    let unseen = "the letter the editor reads";
+    let unseen_m = mind.understand(unseen);
+    println!("     understand(\"{unseen}\")   (UNSEEN words)");
+    println!("        => {}   (generalized across the lexicon via the class skeleton)", show_meaning(&unseen_m));
+
+    // Q&A: read a fronted clause into the world model, then ask about it.
+    let mut qa_mind = Mind::new();
+    qa_mind.learn_construction("object_fronting", &osv_examples);
+    let read_m = qa_mind.read("the report the teacher writes");
+    println!("     read(\"the report the teacher writes\")");
+    println!("        => {}", show_meaning(&read_m));
+    let q = "does the teacher write the report";
+    let a = qa_mind.ask(q);
+    println!("     ask(\"{q}?\")");
+    println!("        => \"{a}\"   (answered correctly from the OSV-parsed Event)\n");
+
+    // -----------------------------------------------------------------------
+    // (4) RESTART — a fresh Mind boots WITH the construction (re-gated green).
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (4) RESTART — a brand-new Mind reboots WITH the persisted construction");
+    println!("  {}", "=".repeat(72));
+    let restart = Mind::new();
+    println!(
+        "     restart.learned_constructions() = {:?}",
+        restart.learned_constructions().iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+    );
+    let restart_m = restart.understand(unseen);
+    println!("     understand(\"{unseen}\")  (on the FRESH mind, no learning this run)");
+    println!(
+        "        => {}   (the construction survived the restart, gated green on boot)\n",
+        show_meaning(&restart_m)
+    );
+
+    // -----------------------------------------------------------------------
+    // (5) SOUNDNESS — self_check green; an ordinary SVO sentence is UNAFFECTED.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (5) SOUNDNESS — the mind stays green and SVO parsing is untouched");
+    println!("  {}", "=".repeat(72));
+    println!(
+        "     self_check().ok() = {}   (acquiring grammar was MONOTONE)",
+        mind.self_check().ok()
+    );
+    let svo = "the teacher writes the report";
+    // Compare the SVO parse on a mind WITHOUT the OSV construction (built under a
+    // disabled construction store) against the live `mind` (which carries it). For
+    // a base-parseable clause the hand parser succeeds, so the fallback is never
+    // consulted — the two parses must be identical. Build the no-grammar mind with
+    // the construction store temporarily disabled so its reload registers nothing.
+    let svo_no_grammar = {
+        let prev = std::env::var("NCPU_CONSTRUCTIONS_PATH").ok();
+        unsafe { std::env::set_var("NCPU_CONSTRUCTIONS_PATH", "") };
+        let plain = Mind::new();
+        // Restore the demo's construction store for the rest of the run.
+        match prev {
+            Some(v) => unsafe { std::env::set_var("NCPU_CONSTRUCTIONS_PATH", v) },
+            None => unsafe { std::env::remove_var("NCPU_CONSTRUCTIONS_PATH") },
+        }
+        assert!(plain.learned_constructions().is_empty(), "no-grammar mind must have zero constructions");
+        plain.understand(svo)
+    };
+    let svo_learned = mind.understand(svo);
+    println!("     understand(\"{svo}\")  (SVO, base-parseable)");
+    println!("        no grammar  => {}", show_meaning(&svo_no_grammar));
+    println!("        with grammar => {}", show_meaning(&svo_learned));
+    println!(
+        "        identical = {}   (the OSV fallback NEVER fires on a base-parseable clause)\n",
+        svo_no_grammar == svo_learned
+    );
+
+    println!("The parser GREW a new construction: it could not read an object-fronted clause,");
+    println!("LEARNED the object-subject-verb shape from labeled examples (synthesized + verified");
+    println!("+ gated), and now parses it — even with unseen words — while leaving SVO untouched");
+    println!("and staying sound. The construction is durable: a fresh mind boots already knowing it.");
+
+    // Clean up + restore env so the demo leaves no trace.
+    let _ = std::fs::remove_file(&constructions_path);
+    let _ = std::fs::remove_file(&journal_path);
+    unsafe {
+        std::env::remove_var("NCPU_CONSTRUCTIONS_PATH");
+        std::env::remove_var("NCPU_JOURNAL_PATH");
+        std::env::remove_var("NCPU_COMPONENTS_PATH");
+    }
+}
+
 /// Indent every line of `text` with `prefix` — for embedding multi-line
 /// `explain_self` output under a demo section header.
 fn indent(text: &str, prefix: &str) -> String {
@@ -1562,6 +1779,7 @@ fn main() {
         "reflect" => return demo_reflect(),
         "grow" => return demo_grow(),
         "study" => return demo_study(),
+        "grammar" => return demo_grammar(),
         "bench" => return demo_bench(),
         _ => {}
     }
@@ -1589,6 +1807,8 @@ fn main() {
             demo_grow();
             println!("\n{}\n", "=".repeat(72));
             demo_study();
+            println!("\n{}\n", "=".repeat(72));
+            demo_grammar();
             println!("\n{}\n", "=".repeat(72));
             demo_bench();
         }

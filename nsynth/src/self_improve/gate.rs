@@ -353,6 +353,70 @@ fn soundness_holds(engine: &Engine) -> bool {
         && asserted_fact_and_negation(engine)
         && modal_monotonicity(engine)
         && causal_non_commutativity(engine)
+        && no_construction_collision(engine)
+}
+
+/// (5) No learned-construction collision with a base-parseable pattern.
+///
+/// A registered [`LearnedConstruction`](crate::understanding::grammar::LearnedConstruction)
+/// is SOUND only when it ADDS coverage on shapes the hand-written parser leaves
+/// `Unknown`. If a construction's class skeleton matches a sentence the base parser
+/// ALREADY handles (its handwritten parse is not `Unknown`) and applying the
+/// construction would yield a DIFFERENT meaning, the construction collides with a
+/// base-parseable pattern — a latent hazard that, were the fallback ever reached
+/// for that shape, would change a correct answer. The gate treats any such
+/// collision against a golden sentence (setup or question) as UNSOUND, so a
+/// construction whose skeleton overlaps the base grammar is rejected on accept AND
+/// on reload — leaving only purely-additive constructions live.
+///
+/// This is what makes "a sound OSV rule leaves the gate green; a colliding rule is
+/// rejected" an enforced invariant rather than an assumption: the OSV skeleton
+/// `[0,1,0,1,2]` appears in no base-parseable golden case, so an object-fronting
+/// rule never collides; a rule registered on the SVO skeleton `[0,1,2,0,1]` (which
+/// the base parses correctly) with swapped roles produces a different meaning and
+/// is caught here.
+fn no_construction_collision(engine: &Engine) -> bool {
+    use crate::comprehension::words_of;
+    use crate::understanding::semantics::{token_classes, understand_handwritten};
+
+    let constructions = engine.learned_grammar().constructions();
+    if constructions.is_empty() {
+        return true;
+    }
+
+    // Every distinct golden sentence the gate replays (setups + questions).
+    let mut sentences: Vec<&'static str> = Vec::new();
+    for case in golden_cases() {
+        for s in case.setup {
+            if !sentences.contains(&s) {
+                sentences.push(s);
+            }
+        }
+        if !sentences.contains(&case.question) {
+            sentences.push(case.question);
+        }
+    }
+
+    for sentence in &sentences {
+        let base = understand_handwritten(engine, sentence);
+        // Only base-PARSEABLE sentences can be collided with; an Unknown base parse
+        // is exactly where a construction is *allowed* to add coverage.
+        if matches!(base, Meaning::Unknown(_)) {
+            continue;
+        }
+        let toks = words_of(sentence);
+        let classes = token_classes(engine, sentence);
+        for c in constructions {
+            if let Some(produced) = c.apply(engine, &toks, &classes) {
+                // The construction fires on a base-parseable sentence. If it produces
+                // a different meaning than the base, it collides — reject.
+                if produced != base {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 /// (1) A query over unmentioned entities is open-world ("I don't know."), never a
