@@ -268,15 +268,16 @@ Plus two property-based fuzzers (deterministic, seeded LCG, no `rand`):
 
 ## 7. How it performs (verified)
 
-Measured at **3b83ad4** (Phase D; `cargo test --release`, store disabled):
+Measured at **40e8a70** (Phase E; `cargo test --release`, store disabled):
 
 | Suite | Result | What it covers |
 |---|---|---|
-| `understanding` lib | **296 / 0** | parser, world model, inference, qa, discourse, mind, proofs, reflection, conditionals, belief revision |
-| `self_improve` lib | **21 / 0** | gate (incl. discrimination + shadow-rejection), journal, store reload/poison, extend |
-| `comprehension` lib | **6 / 0** | engine + curriculum + learned-classifier |
+| `understanding` lib | **306 / 0** | parser, world model, inference, qa, discourse, mind, proofs, reflection, conditionals, belief revision |
+| `grammar` lib | **8 / 0** | learned constructions (induction + apply + skeleton match) |
+| `self_improve` lib | **25 / 0** | gate (discrimination, shadow-rejection, construction-collision), journal, store reload/poison, extend, construction persist+gate |
+| `comprehension` lib | **6 / 0** | engine + curriculum + learned-classifier + token_classes |
 | `eval` (FraCaS-style) | **7 / 0** | the entailment benchmark + feedback loop |
-| `adversarial_*` | **57 / 0** (11 suites) | soundness traps: quantifier scope, comparatives, factivity, cardinality, ditransitive, attributes, change-your-mind, explain-self, hypothetical isolation, journal, semantics |
+| `adversarial_*` | **60 / 0** (12 suites) | soundness traps incl. learned-construction-on-unseen |
 | `soundness_fuzz` / `metamorphic_fuzz` | **240 + 180 iters / 0 violations** | property-based soundness + paraphrase invariance |
 
 **Entailment benchmark** (`comprehend bench`) — 40 in-vocabulary cases across 9
@@ -305,20 +306,21 @@ measurably improve.*
 | `0cbd296` | **external validation** — FraCaS-style benchmark + dashboard + bench→study feedback |
 | `f8bdcd6` | **functional integration + breadth** — learned classifiers drive parsing/answering (domain-bounded), relative-clause questions, possessives, PPs; the loop bites |
 | `3b83ad4` | **D** — conditional/syllogistic reasoning (modus ponens/tollens, fallacies refused) + actionable belief revision + metamorphic paraphrase fuzzer |
-| *(in progress)* | **E** — the grammar frontier: parse rules themselves as learned, verified programs (object-fronting demonstrated) |
+| `40e8a70` | **E** — **grammar induction**: the parser learns a new construction (object-fronting / OSV) as a synthesized + gated verified rule; generalizes to unseen words; survives restart; never corrupts a base parse (`no_construction_collision` gate probe) |
 | *(greenlit)* | **F** hybrid LLM verifier · **G** open-vocabulary at scale · **H** generation |
 
 ---
 
 ## 9. Honest limits (what it cannot yet do)
 
-- **Self-extension is bounded to specifiable families** (lexicons / membership
-  classifiers). The system can teach itself a new *concept classifier* from
-  examples; teaching itself a new *grammatical construction* — parse rules as
-  synthesized, verified programs — is the **Phase E frontier, now in progress**
-  (object-fronting / OSV is the first demonstrated learned construction). The base
-  parser (`semantics.rs`) remains hand-written; learned constructions are consulted
-  as a fallback when it returns Unknown, so they only ever *fill gaps*.
+- **Self-extension now reaches both lexicon AND grammar.** The system teaches
+  itself concept classifiers *and* new grammatical constructions (parse rules as
+  synthesized, verified programs — object-fronting / OSV demonstrated, generalizing
+  across unseen words, gated by `no_construction_collision`, persisted across
+  restarts). The base parser (`semantics.rs`) is still hand-written; learned
+  constructions are consulted only as a fallback when it returns Unknown, so they
+  *fill gaps* and never override a correct parse. Open-ended grammar acquisition
+  (many constructions from raw text) is the next scale step (Thrust G).
 - **Learned classifiers answer within their verified domain.** This is a soundness
   choice, not a bug: beyond the proven examples the answer is honestly `idk`.
 - **The benchmark is in-vocabulary.** It measures *sound coverage* of the 9
