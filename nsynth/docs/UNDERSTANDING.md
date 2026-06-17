@@ -307,7 +307,8 @@ measurably improve.*
 | `f8bdcd6` | **functional integration + breadth** — learned classifiers drive parsing/answering (domain-bounded), relative-clause questions, possessives, PPs; the loop bites |
 | `3b83ad4` | **D** — conditional/syllogistic reasoning (modus ponens/tollens, fallacies refused) + actionable belief revision + metamorphic paraphrase fuzzer |
 | `40e8a70` | **E** — **grammar induction**: the parser learns a new construction (object-fronting / OSV) as a synthesized + gated verified rule; generalizes to unseen words; survives restart; never corrupts a base parse (`no_construction_collision` gate probe) |
-| *(greenlit)* | **F** hybrid LLM verifier · **G** open-vocabulary at scale · **H** generation |
+| `5ac574d` | **F** — **hybrid LLM verifier**: Claude (via OpenRouter) PROPOSES vocabulary as data; every proposal flows through the same verify + regression gate. A valid proposal is learned (live demo: "wizard" → LLM class `magic_user`, gated 31/31, accepted); a hallucinated one (poison "teacher is not a person") synthesizes but the gate rejects it, engine unchanged. The LLM gives breadth; it cannot make nCPU unsound. Tests hermetic (`MockProposer`). |
+| *(greenlit)* | **G** open-vocabulary at scale · **H** generation |
 
 ---
 
