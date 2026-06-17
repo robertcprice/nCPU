@@ -229,6 +229,78 @@ impl Mind {
         report
     }
 
+    /// THE HYBRID LEARNING PATH — learn a new classifier for a gap word from an
+    /// UNTRUSTED proposer (e.g. an LLM), routed through the EXACT same verified +
+    /// gated funnel as [`self_improve`](Self::self_improve).
+    ///
+    /// This is the crown of the autonomy spine: it lets nCPU acquire breadth from a
+    /// source it does NOT trust, **without spending any of its soundness**. The
+    /// proposer is asked for a [`MembershipProposal`](crate::hybrid::MembershipProposal)
+    /// — pure data, a class name plus member / non-member word lists — for
+    /// `gap_word`. That proposal is converted into a `<class>_class` classifier
+    /// [`LearnRequest`](crate::self_improve::extend::LearnRequest) by
+    /// [`proposal_to_learn_request`](crate::hybrid::proposal_to_learn_request) and
+    /// handed to [`self_improve`](Self::self_improve), which:
+    ///
+    /// 1. **synthesizes + VERIFIES** the classifier via `solve_problem` (a
+    ///    hallucinated / contradictory / unsynthesizable proposal fails here and the
+    ///    engine is untouched),
+    /// 2. runs the candidate engine through the **regression gate** (a proposal that
+    ///    verifies but regresses any frozen golden case or breaks a soundness probe
+    ///    is rejected here), and
+    /// 3. **journals + persists** the attempt and replaces this mind's engine ONLY
+    ///    on a green gate.
+    ///
+    /// THE PROPOSAL IS UNTRUSTED. It is adopted **only if it both verifies AND passes
+    /// the gate**. A hallucinated, unsound, or regressing proposal is rejected and
+    /// `self.engine` is left byte-for-byte unchanged — exactly as a synthesis failure
+    /// would leave it. The proposer never emits code, never mutates the engine, and
+    /// never decides adoption; it is a breadth source on the untrusted side of the
+    /// `self_extend` trust boundary, nothing more.
+    ///
+    /// Returns a [`LearnReport`](crate::self_improve::extend::LearnReport). If the
+    /// proposer returns `None` (unknown word, unavailable backend, missing
+    /// credentials, or a degenerate proposal that
+    /// [`proposal_to_learn_request`](crate::hybrid::proposal_to_learn_request)
+    /// declines), this returns a **not-synthesized** report (`synthesized=false`,
+    /// `accepted=false`) and the engine is untouched — the gap simply stays open.
+    pub fn learn_with_proposer(
+        &mut self,
+        gap_word: &str,
+        proposer: &dyn crate::hybrid::Proposer,
+    ) -> crate::self_improve::extend::LearnReport {
+        // Ask the UNTRUSTED proposer for breadth. No proposal (or a degenerate one
+        // the seam declines) ⇒ a clean not-synthesized report; the gap stays open,
+        // identical to a synthesis miss, and the engine is never touched.
+        let request = proposer
+            .propose_membership(gap_word)
+            .and_then(|proposal| crate::hybrid::proposal_to_learn_request(&proposal, gap_word));
+
+        let Some(req) = request else {
+            return crate::self_improve::extend::LearnReport {
+                gap: format!(
+                    "no usable proposal from `{}` for gap word `{gap_word}`",
+                    proposer.name()
+                ),
+                synthesized: false,
+                method: String::new(),
+                regression_passed: false,
+                accepted: false,
+                message: format!(
+                    "proposer `{}` returned no well-posed membership spec for `{gap_word}`; \
+                     gap left open (engine untouched)",
+                    proposer.name()
+                ),
+            };
+        };
+
+        // Route the untrusted data through the SAME verified + gated funnel as any
+        // self-improvement: synthesize + verify ⇒ regression gate ⇒ journal +
+        // persist ⇒ adopt ONLY on a green gate. `self_improve` swaps in the vetted
+        // engine on accept and leaves it untouched on reject.
+        self.self_improve(req)
+    }
+
     /// GRAMMAR INDUCTION, wired onto the mind: learn a word-order CONSTRUCTION
     /// from labeled examples, and on a *clean* acceptance REPLACE this mind's
     /// engine with the freshly grafted candidate. The grammar-acquisition analogue
@@ -3657,6 +3729,238 @@ mod tests {
                     "every trained creature must classify 1: {c}"
                 );
             }
+        });
+    }
+
+    // ===================================================================
+    // learn_with_proposer: THE HYBRID LEARNING PATH (the seam).
+    //
+    // An UNTRUSTED proposer's membership data flows through the EXACT same
+    // verify + gate funnel as any self-improvement. A GOOD proposal (disjoint
+    // vocab) is synthesized, gated green, accepted, and afterward live; a BAD
+    // proposal that would REGRESS a golden case is REJECTED by the gate, the
+    // engine left byte-for-byte unchanged. No network: a hermetic MockProposer
+    // supplies the proposal, so the test exercises the trust boundary, not an LLM.
+    // ===================================================================
+
+    use crate::hybrid::{MembershipProposal, MockProposer};
+
+    /// Build a one-entry `MockProposer`: querying `word` returns `proposal`.
+    fn mock_for(word: &str, proposal: MembershipProposal) -> MockProposer {
+        let mut canned = std::collections::BTreeMap::new();
+        canned.insert(word.to_string(), proposal);
+        MockProposer::new_with(canned)
+    }
+
+    /// A GOOD untrusted proposal flows through the funnel and is ACCEPTED: the mock
+    /// proposes that `wizard` is a "creature" over a vocabulary disjoint from every
+    /// base lexicon, so the synthesized `creature_class` adds coverage without
+    /// perturbing any golden case — the gate stays green and the classifier is
+    /// adopted. Afterward the mind RECOGNIZES `wizard` and the verified classifier
+    /// answers correctly (positive for trained members, hard-negative for trained
+    /// non-members, open-world idk off-domain).
+    #[test]
+    fn learn_with_proposer_accepts_a_good_disjoint_proposal() {
+        with_study_env("hybrid_good", || {
+            let mut mind = Mind::new();
+
+            // PRECONDITION: no creature classifier yet, and 'wizard' is unrecognized
+            // (not a base noun, no learned class) — the test is not vacuous.
+            assert!(
+                !mind.engine().has_component("creature_class"),
+                "creature_class must be genuinely absent before the proposal"
+            );
+            assert!(!mind.recognizes_word("wizard"), "'wizard' must be unknown pre-learning");
+            assert!(mind.self_check().ok(), "baseline mind must be green");
+
+            // The UNTRUSTED proposal: 'wizard' is a "creature", with disjoint
+            // members/non-members. The gap word 'wizard' is folded into the members.
+            let proposal = MembershipProposal {
+                class_name: "creature".to_string(),
+                members: vec![
+                    "griffin".to_string(),
+                    "phoenix".to_string(),
+                    "sorcerer".to_string(),
+                ],
+                // Non-creatures drawn from base lexicons — disjoint from creatures, so
+                // the new classifier never collides with a base taxonomy answer.
+                nonmembers: vec![
+                    "report".to_string(),
+                    "book".to_string(),
+                    "letter".to_string(),
+                ],
+            };
+            let proposer = mock_for("wizard", proposal);
+
+            let report = mind.learn_with_proposer("wizard", &proposer);
+
+            // Synthesized + gated green + accepted — the seam carried the untrusted
+            // data all the way through the verified funnel.
+            assert!(report.synthesized, "the proposal must synthesize: {}", report.message);
+            assert!(
+                report.regression_passed,
+                "a disjoint additive classifier must pass the gate: {}",
+                report.message
+            );
+            assert!(report.accepted, "a synthesized + gated proposal must be accepted: {}", report.message);
+
+            // AFTERWARD the classifier is LIVE on the mind's engine and answers right.
+            assert!(
+                mind.engine().has_component("creature_class"),
+                "the accepted classifier must be grafted onto the mind's engine"
+            );
+            // recognizes_word(gap) is now true via the learned classifier.
+            assert!(
+                mind.recognizes_word("wizard"),
+                "the gap word must be recognized after the proposal is adopted"
+            );
+            // The verified classifier answers correctly within its proven domain:
+            // gap word + members -> 1, non-members -> 0, off-domain -> open-world.
+            assert_eq!(mind.engine().learned_class_verdict("creature", "wizard"), Some(true));
+            assert_eq!(mind.engine().learned_class_verdict("creature", "griffin"), Some(true));
+            assert_eq!(mind.engine().learned_class_verdict("creature", "report"), Some(false));
+            assert_eq!(
+                mind.engine().learned_class_verdict("creature", "submarine"),
+                None,
+                "an off-domain word stays open-world UNKNOWN (no fabricated verdict)"
+            );
+
+            // Growth was monotone — the gate is still green after the swap.
+            assert!(mind.self_check().ok(), "the mind stays green after adopting the proposal");
+        });
+    }
+
+    /// A BAD untrusted proposal that would REGRESS a golden case is REJECTED by the
+    /// gate, and the mind's engine is left BYTE-FOR-BYTE unchanged.
+    ///
+    /// THE ATTACK. The QA cascade consults a learned `<category>_class` classifier
+    /// FIRST for an `IsA{entity, category}` query (so it can answer "is X a
+    /// creature?"). A golden case asks "Is the teacher a person?" and expects Yes.
+    /// The poison proposal claims class "person" while listing `teacher` as a
+    /// NON-member — a well-posed, synthesizable string->int map (so it VERIFIES).
+    /// But once adopted, `person_class` has `teacher -> 0` in its verified domain, so
+    /// "Is the teacher a person?" routes through the learned classifier and answers
+    /// "No" — regressing the golden case. The gate catches it and the proposal is
+    /// declined. The proposer being untrusted bought it nothing: it could not slip an
+    /// unsound belief past the gate.
+    #[test]
+    fn learn_with_proposer_rejects_a_regressing_proposal() {
+        // Point the journal at a temp file (not "" which disables it) and fence the
+        // component store so we can prove the REJECTED attempt is journaled while
+        // never touching $HOME.
+        with_study_env("hybrid_bad", || {
+            let mut mind = Mind::new();
+
+            // PRECONDITION: the gate is green and the attacked golden behavior is
+            // currently correct — "the teacher is a person" answers Yes.
+            assert!(mind.self_check().ok(), "baseline mind must be green");
+            assert!(
+                mind.ask("Is the teacher a person?").to_lowercase().starts_with("yes"),
+                "precondition: the honest mind answers 'teacher is a person' = Yes"
+            );
+            // Snapshot the engine's program bytes to prove non-mutation on reject.
+            let program_before = mind.engine().program().to_string();
+
+            // The POISON proposal: class "person", but `teacher` is claimed a
+            // NON-member (mislabel). Well-posed (each word one label) so it
+            // SYNTHESIZES — the rejection must therefore be the GATE's doing.
+            let proposal = MembershipProposal {
+                class_name: "person".to_string(),
+                members: vec!["author".to_string(), "doctor".to_string()],
+                // teacher mislabeled as NOT a person -> regresses the golden case.
+                nonmembers: vec![
+                    "teacher".to_string(),
+                    "report".to_string(),
+                    "book".to_string(),
+                ],
+            };
+            // The gap word is a genuine non-person here, kept off both poison lists.
+            let proposer = mock_for("griffin", proposal);
+
+            let report = mind.learn_with_proposer("griffin", &proposer);
+
+            // (1) Synthesis SUCCEEDED — the rejection is the GATE's doing, not a
+            // synthesis failure. This is the crux: the gate is load-bearing.
+            assert!(
+                report.synthesized,
+                "the poison classifier must synthesize (well-posed map), so the rejection \
+                 is attributable to the GATE, not synthesis failure: {}",
+                report.message
+            );
+            // (2) The gate went red and the proposal was declined.
+            assert!(
+                !report.regression_passed,
+                "the gate MUST go red for a classifier that regresses a golden case: {}",
+                report.message
+            );
+            assert!(
+                !report.accepted,
+                "a regressing untrusted proposal must NEVER be accepted: {}",
+                report.message
+            );
+
+            // (3) The mind's engine is BYTE-FOR-BYTE unchanged: no person_class
+            // grafted, the program is identical, the golden answer is still Yes, and
+            // the gate is still green.
+            assert!(
+                !mind.engine().has_component("person_class"),
+                "a rejected proposal must not graft its classifier onto the live engine"
+            );
+            assert_eq!(
+                mind.engine().program(),
+                program_before,
+                "the engine program must be byte-for-byte unchanged after a rejection"
+            );
+            assert!(
+                mind.ask("Is the teacher a person?").to_lowercase().starts_with("yes"),
+                "the live mind must still answer 'teacher is a person' = Yes"
+            );
+            assert!(mind.self_check().ok(), "self_check stays ok after the rejected proposal");
+
+            // (4) The rejection is auditable AND journaled: synthesize was attempted
+            // and verified, but it was NOT accepted and did NOT pass the gate.
+            assert!(
+                report.message.contains("rejected") && report.message.contains("regression gate red"),
+                "the report must explain the gate rejected the proposal: {}",
+                report.message
+            );
+            let entries = crate::self_improve::journal::entries();
+            let mine = entries
+                .iter()
+                .find(|e| e.action == "synthesize person_class")
+                .expect("the rejected proposal must be journaled");
+            assert!(mine.verified, "the journaled attempt synthesized+verified");
+            assert!(!mine.accepted, "the journaled attempt was rejected, not accepted");
+            assert!(!mine.regression_passed, "the journaled attempt failed the gate");
+        });
+    }
+
+    /// A proposer that returns `None` (or whose proposal the seam declines as
+    /// degenerate) yields a NOT-SYNTHESIZED report and leaves the engine untouched —
+    /// the gap simply stays open, exactly as a synthesis miss would leave it.
+    #[test]
+    fn learn_with_proposer_no_proposal_is_a_clean_no_op() {
+        crate::self_improve::journal::test_support::with_journal_env("", || {
+            let mut mind = Mind::new();
+            let program_before = mind.engine().program().to_string();
+
+            // Empty mock: no canned proposal for 'wizard' -> propose_membership None.
+            let proposer = MockProposer::new_with(std::collections::BTreeMap::new());
+            let report = mind.learn_with_proposer("wizard", &proposer);
+
+            assert!(!report.synthesized, "no proposal -> nothing synthesized");
+            assert!(!report.accepted, "no proposal -> nothing accepted");
+            assert!(
+                report.message.contains("no well-posed membership spec"),
+                "the report must explain the gap stayed open: {}",
+                report.message
+            );
+            assert_eq!(
+                mind.engine().program(),
+                program_before,
+                "a no-proposal call must leave the engine byte-for-byte unchanged"
+            );
+            assert!(mind.self_check().ok(), "self_check stays ok after a no-op proposal");
         });
     }
 }

@@ -4,6 +4,7 @@ pub mod differentiable;
 pub mod enumerative;
 pub mod eval;
 pub mod ffi;
+pub mod hybrid;
 pub mod interactive;
 pub mod learned_biases;
 pub mod meta_learner;

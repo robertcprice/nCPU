@@ -4,7 +4,7 @@
 //! verified Mog programs and executes them in-process. No Python, no subprocess.
 //! The same engine is exposed to C via `mog_synth::ffi`.
 //!
-//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|study|grammar|bench|all]
+//! Run:  cargo run --release --bin comprehend [comprehend|converse|reason|inflect|understand|reflect|grow|study|hybrid|grammar|bench|all]
 //! (the solver logs to stderr; pipe 2>/dev/null for clean output)
 //!
 //! The `bench` subcommand runs the FraCaS-style three-valued entailment suite
@@ -33,6 +33,20 @@
 //! corrupted store row is rejected on boot; and `explain_self` marks the reloaded
 //! component as self-learned. It points `NCPU_COMPONENTS_PATH` / `NCPU_JOURNAL_PATH`
 //! at fresh temp files (cleared first) so it never touches the developer's store.
+//!
+//! The `hybrid` subcommand showcases UNTRUSTED BREADTH feeding the VERIFIED funnel:
+//! an LLM (Claude via OpenRouter when `OPENROUTER_API_KEY` is set, otherwise a
+//! hermetic [`MockProposer`](mog_synth::hybrid::MockProposer)) proposes a
+//! classification for an unknown word ("wizard"). The proposal — pure DATA, never
+//! code — is routed through the SAME synthesize → verify → regression-gate → adopt
+//! funnel as `grow`/`study` via
+//! [`Mind::learn_with_proposer`](mog_synth::understanding::mind::Mind::learn_with_proposer),
+//! so the mind LEARNS to classify "wizard". A second, deliberately UNSOUND proposal
+//! (one that would regress a frozen golden case) is then fed in and REJECTED by the
+//! gate, leaving the engine byte-for-byte unchanged and `self_check` green — proving
+//! the LLM can add breadth but can NEVER make nCPU unsound. It points
+//! `NCPU_COMPONENTS_PATH` / `NCPU_JOURNAL_PATH` at fresh temp files (cleared first)
+//! so it never touches the developer's store.
 //!
 //! The `grammar` subcommand showcases LEARNED GRAMMAR: where `grow`/`study` grow
 //! the LEXICON, `grammar` grows SYNTAX. The base parser FAILS (Unknown) on an
@@ -1187,6 +1201,280 @@ fn demo_grow() {
 }
 
 // ===========================================================================
+// hybrid: UNTRUSTED BREADTH (an LLM) feeding the VERIFIED, GATED funnel.
+//
+// This is the marriage of an LLM's vast breadth with nCPU's soundness: an
+// untrusted proposer (Claude via OpenRouter, or a hermetic mock) supplies pure
+// DATA — a class name plus member / non-member word lists — for a word the mind
+// cannot classify. That data is converted into I/O examples and routed through
+// the SAME synthesize → verify → regression-gate → adopt funnel as every
+// self-improvement. The proposer never emits code, never touches the engine,
+// and never decides adoption. Three acts:
+//
+//   (a) THE GAP — "wizard" is unknown: not recognized, and "is the wizard a
+//       person?" answers "I don't know."
+//   (b) LEARN FROM CLAUDE — if OPENROUTER_API_KEY is set, Claude (opus-4.8)
+//       proposes the classification; otherwise a hermetic MockProposer stands
+//       in (with a note). The proposal is synthesized + verified + gated +
+//       adopted, and the engine can NOW classify "wizard".
+//   (c) HALLUCINATION REJECTED — a deliberately UNSOUND proposal (one that
+//       would regress a frozen golden case) is fed in and REJECTED by the gate;
+//       the engine is byte-for-byte unchanged and self_check stays green —
+//       proving the LLM cannot corrupt nCPU.
+//
+// SELF-CONTAINED: points NCPU_COMPONENTS_PATH + NCPU_JOURNAL_PATH at fresh temp
+// files (cleared first) so it never touches the developer's real store/journal,
+// and cleans both up at the end. The MockProposer path is fully hermetic (no
+// network) so this demo — and the test that mirrors it — run identically in CI.
+// ===========================================================================
+fn demo_hybrid() {
+    use mog_synth::hybrid::{MembershipProposal, MockProposer, OpenRouterProposer, Proposer};
+    use mog_synth::self_improve::journal;
+    use mog_synth::understanding::mind::Mind;
+
+    // --- SELF-CONTAINED ENV: fresh temp store + journal, cleared first. --------
+    let pid = std::process::id();
+    let store_path = std::env::temp_dir().join(format!("ncpu_hybrid_demo_components_{pid}.jsonl"));
+    let journal_path = std::env::temp_dir().join(format!("ncpu_hybrid_demo_journal_{pid}.jsonl"));
+    let _ = std::fs::remove_file(&store_path);
+    let _ = std::fs::remove_file(&journal_path);
+    // SAFETY: this binary is single-threaded; we set the env once at the top of
+    // the demo and restore/clear it at the end.
+    unsafe {
+        std::env::set_var("NCPU_COMPONENTS_PATH", &store_path);
+        std::env::set_var("NCPU_JOURNAL_PATH", &journal_path);
+    }
+
+    println!("nCPU hybrid — an UNTRUSTED breadth source (an LLM) feeds the VERIFIED, GATED");
+    println!("funnel. The proposer supplies only DATA (a class + member/non-member word lists);");
+    println!("everything it says is synthesized, verified, and re-gated before nCPU believes a");
+    println!("word of it. The LLM never emits code, never touches the engine, never decides");
+    println!("adoption — so it can ADD breadth but can NEVER make nCPU unsound.\n");
+
+    let gap_word = "wizard";
+    let mut mind = Mind::new();
+
+    // -----------------------------------------------------------------------
+    // (a) THE GAP — "wizard" is unknown to the mind.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (a) the gap — \"{gap_word}\" is unknown");
+    println!("  {}", "=".repeat(72));
+    println!(
+        "     recognizes_word({gap_word:?}) = {}   (no base lexicon entry, no learned class)",
+        mind.recognizes_word(gap_word)
+    );
+    println!(
+        "     Q: \"Is the {gap_word} a person?\"  A: {}",
+        mind.ask(&format!("Is the {gap_word} a person?"))
+    );
+    println!(
+        "     has_component(\"person_class\") = {}   (no learned classifier yet)\n",
+        mind.engine().has_component("person_class")
+    );
+
+    // -----------------------------------------------------------------------
+    // (b) LEARN FROM CLAUDE (or a hermetic mock) — proposer → verified funnel.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (b) learn — an untrusted proposer classifies \"{gap_word}\", routed through");
+    println!("      the SAME synthesize → verify → gate → adopt funnel as self-improvement");
+    println!("  {}", "=".repeat(72));
+
+    // The proposer is chosen by environment: a real key wires Claude via
+    // OpenRouter; otherwise a hermetic MockProposer stands in with a clearly
+    // labeled note. Either way the proposer is UNTRUSTED — only its data flows on.
+    let have_key = std::env::var("OPENROUTER_API_KEY")
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+
+    // The mock proposal: "wizard" is a CREATURE, over a vocabulary disjoint from
+    // every base lexicon, so the synthesized creature_class adds coverage without
+    // colliding with any base taxonomy answer. (The gap word is folded in as a
+    // member by the seam.) Used when no key is configured.
+    let mock = {
+        let mut canned = std::collections::BTreeMap::new();
+        canned.insert(
+            gap_word.to_string(),
+            MembershipProposal {
+                class_name: "creature".to_string(),
+                members: vec![
+                    "griffin".to_string(),
+                    "phoenix".to_string(),
+                    "sorcerer".to_string(),
+                ],
+                nonmembers: vec![
+                    "report".to_string(),
+                    "book".to_string(),
+                    "letter".to_string(),
+                ],
+            },
+        );
+        MockProposer::new_named("mock(claude-stand-in)", canned)
+    };
+    let openrouter = OpenRouterProposer::new();
+
+    // Pick the proposer and report which one (and why). Both implement `Proposer`,
+    // so the call site is identical — the trust boundary doesn't care which.
+    let proposer: &dyn Proposer = if have_key {
+        println!("     proposer   : Claude via OpenRouter ({})", openrouter.name());
+        println!("                  (OPENROUTER_API_KEY is set — asking the live model)");
+        &openrouter
+    } else {
+        println!("     proposer   : {} (MockProposer)", mock.name());
+        println!("                  NOTE: OPENROUTER_API_KEY is unset, so this falls back to a");
+        println!("                  built-in hermetic MockProposer (no network). Set the key to");
+        println!("                  have Claude (anthropic/claude-opus-4.8) propose instead.");
+        &mock
+    };
+
+    let report = mind.learn_with_proposer(gap_word, proposer);
+    println!("     gap        : {}", report.gap);
+    println!(
+        "     proposed-by: {}   (UNTRUSTED breadth source — data only, no code)",
+        proposer.name()
+    );
+    println!("     synthesized: {}   (a verified Mog program reproduces every example)", report.synthesized);
+    println!("     via teacher: {}", if report.method.is_empty() { "(none)" } else { &report.method });
+    println!("     gate passed: {}", report.regression_passed);
+    println!("     ACCEPTED   : {}", report.accepted);
+    println!("     message    : {}\n", report.message);
+
+    // The engine can NOW classify the gap word — IF the proposal was accepted.
+    println!("     after learning:");
+    println!(
+        "       recognizes_word({gap_word:?}) = {}   (now recognized via the learned class)",
+        mind.recognizes_word(gap_word)
+    );
+    // Report against the ACTUAL learned class (the LLM picks the name, e.g.
+    // "magic_user"), not a hardcoded one — so the verdicts are honest whatever
+    // Claude proposed this run.
+    let learned = mind.learned_components();
+    match learned.last().map(|c| c.trim_end_matches("_class").to_string()) {
+        Some(cls) => {
+            println!("       learned class: `{cls}`   (the LLM proposed it; verified + gated)");
+            println!(
+                "       learned_class_verdict({cls:?}, {gap_word:?}) = {:?}   (the word it just learned — a verified member)",
+                mind.engine().learned_class_verdict(&cls, gap_word)
+            );
+            println!(
+                "       learned_class_verdict({cls:?}, \"qzzx_offdomain\") = {:?}   (never proposed → open-world idk, sound)",
+                mind.engine().learned_class_verdict(&cls, "qzzx_offdomain")
+            );
+        }
+        None => println!("       (no class learned this run — the proposal was declined or gated out)"),
+    }
+    println!(
+        "       self_check().ok() = {}   (mind still green — growth was MONOTONE)\n",
+        mind.self_check().ok()
+    );
+
+    // -----------------------------------------------------------------------
+    // (c) HALLUCINATION REJECTED — an unsound proposal cannot corrupt nCPU.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  (c) hallucination rejected — an UNSOUND proposal is caught by the gate");
+    println!("  {}", "=".repeat(72));
+
+    // A frozen golden case: "the teacher is a person" must stay Yes. Snapshot the
+    // engine bytes so we can prove the poison proposal changes NOTHING.
+    let golden_q = "Is the teacher a person?";
+    println!(
+        "     golden case   Q: \"{golden_q}\"  A: {}   (must stay Yes)",
+        mind.ask(golden_q)
+    );
+    let program_before = mind.engine().program().to_string();
+    let check_before = mind.self_check().ok();
+
+    // THE ATTACK: the LLM (mock here) hallucinates that "teacher" is NOT a person.
+    // The proposal is WELL-POSED (each word one label) so it SYNTHESIZES — proving
+    // the rejection is the GATE's doing, not a synthesis failure. The QA cascade
+    // would consult a learned `person_class` first, so adopting it would flip the
+    // golden answer to "No" — exactly what the gate refuses to allow.
+    let poison = {
+        let mut canned = std::collections::BTreeMap::new();
+        canned.insert(
+            "griffin".to_string(),
+            MembershipProposal {
+                class_name: "person".to_string(),
+                members: vec!["author".to_string(), "doctor".to_string()],
+                // teacher MISLABELED as not-a-person -> would regress the golden case.
+                nonmembers: vec![
+                    "teacher".to_string(),
+                    "report".to_string(),
+                    "book".to_string(),
+                ],
+            },
+        );
+        MockProposer::new_named("mock(hallucinating-llm)", canned)
+    };
+    println!("     poison spec   : an UNSOUND proposal claims class \"person\" but lists");
+    println!("                     \"teacher\" as a NON-member (a hallucination).");
+    let rej = mind.learn_with_proposer("griffin", &poison);
+    println!(
+        "     synthesized   : {}   (well-posed map ⇒ it VERIFIES — so the rejection is the GATE's)",
+        rej.synthesized
+    );
+    println!("     gate passed   : {}   (the gate goes RED: it would regress a golden case)", rej.regression_passed);
+    println!("     ACCEPTED      : {}   (an unsound proposal is NEVER adopted)", rej.accepted);
+    println!("     message       : {}", rej.message);
+    println!(
+        "     has_component(\"person_class\") = {}   (the hallucinated classifier was NOT grafted)",
+        mind.engine().has_component("person_class")
+    );
+    println!(
+        "     engine unchanged           = {}   (program is byte-for-byte identical)",
+        mind.engine().program() == program_before
+    );
+    println!(
+        "     golden case still   Q: \"{golden_q}\"  A: {}   (unchanged)",
+        mind.ask(golden_q)
+    );
+    println!(
+        "     self_check().ok() = {} (was {check_before})   (STILL GREEN — the LLM could not corrupt nCPU)\n",
+        mind.self_check().ok()
+    );
+
+    // -----------------------------------------------------------------------
+    // THE JOURNAL — both attempts (the accepted one and the rejected
+    // hallucination) are auditable after the fact.
+    // -----------------------------------------------------------------------
+    println!("  {}", "=".repeat(72));
+    println!("  the journal — every attempt recorded, accepted or rejected");
+    println!("  {}", "=".repeat(72));
+    let entries = journal::entries();
+    if entries.is_empty() {
+        println!("     (journal empty)");
+    } else {
+        for (i, e) in entries.iter().enumerate() {
+            println!(
+                "     #{}  action={}  via={}",
+                i + 1,
+                e.action,
+                if e.method.is_empty() { "(none)" } else { &e.method }
+            );
+            println!(
+                "         verified={}  gate_passed={}  accepted={}",
+                e.verified, e.regression_passed, e.accepted
+            );
+        }
+    }
+
+    println!("\nThe LLM gave nCPU BREADTH (it learned to classify \"wizard\") yet could not give it");
+    println!("a single false belief: the hallucinated \"teacher is not a person\" proposal verified");
+    println!("but was caught by the gate and discarded, the engine left byte-for-byte unchanged.");
+    println!("Breadth from an untrusted source, soundness never spent — that is the hybrid.");
+
+    // Clean up the temp store + journal + restore the env so the demo leaves no trace.
+    let _ = std::fs::remove_file(&store_path);
+    let _ = std::fs::remove_file(&journal_path);
+    unsafe {
+        std::env::remove_var("NCPU_COMPONENTS_PATH");
+        std::env::remove_var("NCPU_JOURNAL_PATH");
+    }
+}
+
+// ===========================================================================
 // study: CUMULATIVE, RESTART-SURVIVING autonomy — the whole point of the
 // learned-component store. Where `grow` shows ONE mind growing in-process,
 // `study` proves the growth PERSISTS across a process restart and COMPOUNDS:
@@ -1779,6 +2067,7 @@ fn main() {
         "reflect" => return demo_reflect(),
         "grow" => return demo_grow(),
         "study" => return demo_study(),
+        "hybrid" => return demo_hybrid(),
         "grammar" => return demo_grammar(),
         "bench" => return demo_bench(),
         _ => {}
@@ -1807,6 +2096,8 @@ fn main() {
             demo_grow();
             println!("\n{}\n", "=".repeat(72));
             demo_study();
+            println!("\n{}\n", "=".repeat(72));
+            demo_hybrid();
             println!("\n{}\n", "=".repeat(72));
             demo_grammar();
             println!("\n{}\n", "=".repeat(72));
