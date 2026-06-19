@@ -305,6 +305,22 @@ fn try_post_enumerative_route(
         return None;
     }
 
+    // Analogy universal re-fit guards. A re-fit re-solves a teacher-augmented
+    // (possibly contradictory) problem, so two bounds apply — both are no-ops
+    // outside a re-fit, leaving top-level solves untouched:
+    //   1. Once the re-fit's wall-clock budget is spent, stop trying routes.
+    //      A re-fit overshoots by at most the one route already in flight.
+    //   2. Skip the gradient stages outright: they have no global time budget
+    //      and spin for minutes on data that never converges. The cheap routes
+    //      (enumerative already ran; the budgeted teachers/templates below)
+    //      carry any genuine transfer.
+    if super::analogy::refit_budget_exhausted() {
+        return None;
+    }
+    if super::analogy::in_refit() && matches!(route, ROUTE_SCALAR_GRADIENT | ROUTE_ARRAY_GRADIENT) {
+        return None;
+    }
+
     match route {
         ROUTE_SCALAR_GRADIENT => {
             let t_grad = Instant::now();

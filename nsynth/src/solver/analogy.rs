@@ -25,18 +25,39 @@
 use super::SolveResult;
 use crate::benchmark::{Example, Problem, Value};
 use std::cell::Cell;
+use std::time::Instant;
+
+/// Hard wall-clock budget for a single universal re-fit re-solve. A re-fit feeds
+/// teacher-augmented examples (possibly contradictory, for a wrong donor) back
+/// through `solve_problem`; several post-enumerative routes are individually
+/// expensive (e.g. `register_machine` can run ~100s, gradient stages are
+/// effectively unbounded on non-converging data). Summed, a re-fit could stall
+/// for minutes. The route dispatch checks this budget at each route entry and
+/// bails, so a re-fit can overshoot by at most one already-started route. A
+/// genuine transfer almost always lands via the cheap routes (direct rename,
+/// enumerative, early teachers) well inside this window.
+const REFIT_BUDGET_SECS: f32 = 15.0;
 
 thread_local! {
     /// Set while the universal re-fitter is re-entering `solve_problem` on a
     /// teacher-augmented problem, so the pipeline's analogy stage skips itself
     /// (prevents unbounded recursion: analogy → re-fit → solve → analogy → …).
     static IN_ANALOGY_REFIT: Cell<bool> = const { Cell::new(false) };
+    /// Start instant of the in-flight re-fit re-solve, used to enforce
+    /// [`REFIT_BUDGET_SECS`]. `None` outside a re-fit.
+    static REFIT_START: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 /// True while a universal re-fit re-solve is in progress. The pipeline gates the
 /// analogy stage on `!in_refit()`.
 pub(crate) fn in_refit() -> bool {
     IN_ANALOGY_REFIT.with(|c| c.get())
+}
+
+/// True when an in-flight re-fit re-solve has exceeded [`REFIT_BUDGET_SECS`].
+/// Always false outside a re-fit, so top-level solves are never time-capped here.
+pub(crate) fn refit_budget_exhausted() -> bool {
+    REFIT_START.with(|c| c.get()).is_some_and(|t| t.elapsed().as_secs_f32() > REFIT_BUDGET_SECS)
 }
 
 /// Rename the donor program's entry function (and all of its references, e.g.
@@ -385,16 +406,19 @@ fn runtime_to_bench(v: &crate::runtime::Value) -> Option<Value> {
 /// on drop (panic-safe, and nesting-safe regardless of caller).
 struct RefitGuard {
     prev: bool,
+    prev_start: Option<Instant>,
 }
 impl RefitGuard {
     fn enter() -> Self {
         let prev = IN_ANALOGY_REFIT.with(|c| c.replace(true));
-        RefitGuard { prev }
+        let prev_start = REFIT_START.with(|c| c.replace(Some(Instant::now())));
+        RefitGuard { prev, prev_start }
     }
 }
 impl Drop for RefitGuard {
     fn drop(&mut self) {
         IN_ANALOGY_REFIT.with(|c| c.set(self.prev));
+        REFIT_START.with(|c| c.set(self.prev_start));
     }
 }
 
