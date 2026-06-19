@@ -224,7 +224,7 @@ pub struct CachedTeachers;
 /// best without editing this constant.
 pub const DEFAULT_TEACHER_TOPK: usize = 48;
 
-fn teacher_topk() -> usize {
+pub(crate) fn teacher_topk() -> usize {
     // Resolution order, first hit wins:
     //   1. NSYNTH_TEACHER_TOPK env var (explicit override)
     //   2. tools/config/nsynth_autotune.tsv "topk" entry (measured winner)
@@ -270,7 +270,7 @@ fn teacher_topk_from_config() -> Option<usize> {
 /// longer than this budget.
 pub const DEFAULT_TEACHER_BUDGET_SEC: f32 = 15.0;
 
-fn teacher_budget_sec() -> f32 {
+pub(crate) fn teacher_budget_sec() -> f32 {
     match std::env::var("NSYNTH_TEACHER_BUDGET_SEC") {
         Ok(raw) => raw.parse::<f32>().unwrap_or(DEFAULT_TEACHER_BUDGET_SEC),
         Err(_) => DEFAULT_TEACHER_BUDGET_SEC,
@@ -508,16 +508,16 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         let strats = default_strategies();
         let result = run_strategies(&strats, &problem).expect("should solve add_two");
@@ -544,16 +544,16 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         assert!(!GradientOnly.applicable(&problem));
         assert!(!ScalarExprOnly.applicable(&problem));
@@ -580,16 +580,16 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         assert!(CachedTeachers.applicable(&scalar));
         assert_eq!(CachedTeachers.name(), "cached_teachers");
@@ -619,16 +619,16 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         assert!(PureEmergent.applicable(&scalar));
         assert_eq!(PureEmergent.name(), "pure_emergent");
@@ -645,16 +645,16 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         assert!(!PureEmergent.applicable(&array));
 
@@ -709,16 +709,16 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         assert!(!GradientOnly.applicable(&problem));
         assert!(!ScalarTemplates.applicable(&problem));

@@ -37,16 +37,16 @@ fn array_teacher_distillation_solves_count_positive() {
         ],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let teacher_code = "fn count_positive_teacher(arr: [i64]) -> i64 {\n    count: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] > 0 { count = count + 1; }\n        i = i + 1;\n    }\n    return count;\n}\n";
     let result = crate::synthesis::synthesize_array_from_teacher(&problem, teacher_code)

@@ -7,7 +7,6 @@
 /// 2. search_exponential_time - Recognizes exponential growth (2^t, 3^t, Fibonacci)
 /// 3. search_factorial_time - Recognizes factorial pattern (n!)
 /// 4. search_triangular_time - Recognizes triangular/cumsum pattern (t*(t+1)/2)
-
 use super::search_codegen::*;
 use super::*;
 use crate::time_codegen::*;
@@ -115,10 +114,7 @@ fn fit_polynomial(pts: &[(i64, i64)], degree: usize) -> Option<Vec<i64>> {
 }
 
 /// Simple Gaussian elimination over integers (with scaling).
-fn gaussian_elimination_i64(
-    a: &mut Vec<Vec<i64>>,
-    b: &mut Vec<i64>,
-) -> Result<Vec<i64>, String> {
+fn gaussian_elimination_i64(a: &mut Vec<Vec<i64>>, b: &mut Vec<i64>) -> Result<Vec<i64>, String> {
     let n = a.len();
     for col in 0..n {
         let mut pivot_row = col;
@@ -210,7 +206,10 @@ pub(super) fn search_polynomial_time(problem: &Problem, fn_name: &str) -> Option
 
     for degree in 1..=3 {
         if let Some(coeffs) = fit_polynomial(&pts, degree) {
-            if !pts.iter().all(|&(t, output)| verify_polynomial(t, output, &coeffs, degree)) {
+            if !pts
+                .iter()
+                .all(|&(t, output)| verify_polynomial(t, output, &coeffs, degree))
+            {
                 continue;
             }
 
@@ -220,11 +219,15 @@ pub(super) fn search_polynomial_time(problem: &Problem, fn_name: &str) -> Option
 
             let code = match degree {
                 1 if coeffs.len() == 2 => code_polynomial_linear(fn_name, coeffs[1], coeffs[0]),
-                2 if coeffs.len() == 3 => code_polynomial_quadratic(fn_name, coeffs[2], coeffs[1], coeffs[0]),
-                3 if coeffs.len() == 4 => code_polynomial_cubic(fn_name, coeffs[3], coeffs[2], coeffs[1], coeffs[0]),
+                2 if coeffs.len() == 3 => {
+                    code_polynomial_quadratic(fn_name, coeffs[2], coeffs[1], coeffs[0])
+                }
+                3 if coeffs.len() == 4 => {
+                    code_polynomial_cubic(fn_name, coeffs[3], coeffs[2], coeffs[1], coeffs[0])
+                }
                 _ => code_polynomial_generic(fn_name, &coeffs, degree),
             };
-            
+
             if let Some(result) = verified_result(problem, code, "search_polynomial_time") {
                 return Some(result);
             }
@@ -242,7 +245,9 @@ fn is_power_of_base(pts: &[(i64, i64)], base: i64) -> bool {
         if t < 0 || t > 62 {
             return false;
         }
-        pow_i64(base, t).map(|expected| expected == output).unwrap_or(false)
+        pow_i64(base, t)
+            .map(|expected| expected == output)
+            .unwrap_or(false)
     })
 }
 
@@ -331,9 +336,27 @@ pub(super) fn search_exponential_time(problem: &Problem, fn_name: &str) -> Optio
 // ============================================================================
 
 const FACTORIAL_TABLE: &[i64] = &[
-    1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800, 39916800, 479001600,
-    6227020800, 87178291200, 1307674368000, 20922789888000, 355687428096000,
-    6402373705728000, 121645100408832000, 2432902008176640000,
+    1,
+    1,
+    2,
+    6,
+    24,
+    120,
+    720,
+    5040,
+    40320,
+    362880,
+    3628800,
+    39916800,
+    479001600,
+    6227020800,
+    87178291200,
+    1307674368000,
+    20922789888000,
+    355687428096000,
+    6402373705728000,
+    121645100408832000,
+    2432902008176640000,
 ];
 
 fn is_factorial_pattern(pts: &[(i64, i64)]) -> bool {
@@ -370,11 +393,9 @@ pub(super) fn search_factorial_time(problem: &Problem, fn_name: &str) -> Option<
     pts.sort_unstable();
 
     if is_factorial_pattern(&pts) {
-        if let Some(result) = verified_result(
-            problem,
-            code_factorial(fn_name),
-            "search_factorial_time",
-        ) {
+        if let Some(result) =
+            verified_result(problem, code_factorial(fn_name), "search_factorial_time")
+        {
             return Some(result);
         }
     }
@@ -575,10 +596,7 @@ mod tests {
     fn test_gaussian_elimination_2x2() {
         // Solve: 2x + 1y = 5, 1x + 3y = 6
         // Solution: x=2, y=1
-        let mut a = vec![
-            vec![2, 1],
-            vec![1, 3],
-        ];
+        let mut a = vec![vec![2, 1], vec![1, 3]];
         let mut b = vec![5, 6];
         let result = gaussian_elimination_i64(&mut a, &mut b);
         assert!(result.is_ok());

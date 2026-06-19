@@ -189,6 +189,13 @@ fn array_teacher_examples_from_code(problem: &Problem, teacher_code: &str) -> Op
 }
 
 pub(super) fn synthesize_array_gradient_only(problem: &Problem) -> Option<SolveResult> {
+    // Exact bottom-up array->array transforms (identity/map/sort/reverse/scan/
+    // filter). Cheap and proof-carrying — runs first so the common `[i64] ->
+    // [i64]` cases resolve in ms instead of falling through to the gradient core
+    // (which has no array-output path and burns the full time budget).
+    if let Some(result) = super::array_transform::synthesize_array_transform(problem) {
+        return Some(result);
+    }
     if let Some(result) = super::two_array::synthesize_two_array(problem) {
         return Some(result);
     }

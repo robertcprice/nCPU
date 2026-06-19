@@ -1,12 +1,11 @@
+use mog_synth::benchmark::get_benchmark;
+use mog_synth::solver::solve_problem;
+use std::collections::HashMap;
 /// Stage 4 Time-Parameterized Synthesis Verification
 ///
 /// End-to-end verification for representative benchmarks (fibonacci, factorial, triangular, linear, poly).
 /// Reports: (pass_count / total, mean_solve_time, method_distribution, any_failures).
-
 use std::time::Instant;
-use std::collections::HashMap;
-use mog_synth::benchmark::get_benchmark;
-use mog_synth::solver::solve_problem;
 
 #[derive(Clone, Debug)]
 struct VerificationResult {
@@ -40,7 +39,13 @@ fn verify_stage4_benchmarks() {
 
     // Debug: Find and print matching problems
     eprintln!("Looking for target problems...");
-    for target in &["fibonacci", "factorial", "triangular", "polynomial", "collatz"] {
+    for target in &[
+        "fibonacci",
+        "factorial",
+        "triangular",
+        "polynomial",
+        "collatz",
+    ] {
         let matches: Vec<&str> = all_problems
             .iter()
             .filter(|p| p.name.contains(target))
@@ -68,14 +73,25 @@ fn verify_stage4_benchmarks() {
                 let code = solve_result.code.clone();
 
                 {
-                    let key = if success { method.clone() } else { "failed".to_string() };
+                    let key = if success {
+                        method.clone()
+                    } else {
+                        "failed".to_string()
+                    };
                     *method_counts.entry(key).or_insert(0) += 1;
                 }
 
-                let status = if success { "✓ Success" } else { "✗ Failed " };
+                let status = if success {
+                    "✓ Success"
+                } else {
+                    "✗ Failed "
+                };
                 println!(
                     "  {} | Time: {:.2}s | Method: {} | Code: {} bytes",
-                    status, elapsed, method, code.len()
+                    status,
+                    elapsed,
+                    method,
+                    code.len()
                 );
 
                 if let Some(ref err) = solve_result.error {
@@ -92,7 +108,10 @@ fn verify_stage4_benchmarks() {
                 }
             }
             None => {
-                method_counts.entry("not_found".to_string()).and_modify(|c| *c += 1).or_insert(1);
+                method_counts
+                    .entry("not_found".to_string())
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
                 println!("  ✗ Not Found in benchmark set");
 
                 VerificationResult {
@@ -101,7 +120,10 @@ fn verify_stage4_benchmarks() {
                     solve_time_secs: 0.0,
                     method: "not_found".to_string(),
                     code_length: 0,
-                    error: Some(format!("Problem '{}' not found in benchmark set", problem_name)),
+                    error: Some(format!(
+                        "Problem '{}' not found in benchmark set",
+                        problem_name
+                    )),
                 }
             }
         };
@@ -122,7 +144,12 @@ fn verify_stage4_benchmarks() {
     println!("SUMMARY");
     println!("============================================================");
     println!("\nResults:");
-    println!("  Pass Rate:       {}/{} ({:3}%)", passed, total, if total > 0 { 100 * passed / total } else { 0 });
+    println!(
+        "  Pass Rate:       {}/{} ({:3}%)",
+        passed,
+        total,
+        if total > 0 { 100 * passed / total } else { 0 }
+    );
     println!("  Mean Solve Time: {:.2}s", mean_time);
 
     println!("\nMethod Distribution:");

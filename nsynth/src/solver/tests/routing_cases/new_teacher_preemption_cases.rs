@@ -188,11 +188,11 @@ fn search_stateful_reducer_is_registered_and_preempts_gradient() {
 #[test]
 fn search_stateful_reducer_solves_state_plus_array_sum() {
     // End-to-end: `f(state, arr) = state + sum(arr)`.
-        let problem = Problem {
-            name: "stateful_reducer_v0".to_string(),
-            category: "test",
-            description: "test",
-            signature: "fn stateful_reducer_v0(state: i64, arr: [i64]) -> i64",
+    let problem = Problem {
+        name: "stateful_reducer_v0".to_string(),
+        category: "test",
+        description: "test",
+        signature: "fn stateful_reducer_v0(state: i64, arr: [i64]) -> i64",
         examples: vec![
             Example {
                 inputs: vec![BmValue::Int(0), BmValue::Array(vec![1, 2, 3])],
@@ -214,19 +214,23 @@ fn search_stateful_reducer_solves_state_plus_array_sum() {
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_search_only(&problem);
-    assert!(result.success, "stateful reducer failed: {:?}", result.error);
+    assert!(
+        result.success,
+        "stateful reducer failed: {:?}",
+        result.error
+    );
     assert_eq!(result.method, "search_stateful_reducer");
     verify_problem_code_strict(&problem, &result.code)
         .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));
@@ -357,16 +361,16 @@ fn search_stateful_reducer_dual_solves_delta_accumulator() {
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -424,16 +428,16 @@ fn search_stateful_replace_solves_flip_on_positive() {
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -492,11 +496,7 @@ fn search_stateful_reducer_event_solves_event_modulated_sum() {
             },
             // state=5, event=0, sum=4 -> 5 + 0*4 = 5  (event gates off)
             Example {
-                inputs: vec![
-                    BmValue::Int(5),
-                    BmValue::Int(0),
-                    BmValue::Array(vec![1, 3]),
-                ],
+                inputs: vec![BmValue::Int(5), BmValue::Int(0), BmValue::Array(vec![1, 3])],
                 expected: BmValue::Int(5),
             },
             // state=-3, event=-2, sum=4 -> -3 + -2*4 = -11
@@ -512,16 +512,16 @@ fn search_stateful_reducer_event_solves_event_modulated_sum() {
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -572,27 +572,23 @@ fn search_stateful_reducer_event_solves_gated_contribution() {
             },
             // event=5, sum=9 -> 4 + 9 = 13
             Example {
-                inputs: vec![
-                    BmValue::Int(4),
-                    BmValue::Int(5),
-                    BmValue::Array(vec![4, 5]),
-                ],
+                inputs: vec![BmValue::Int(4), BmValue::Int(5), BmValue::Array(vec![4, 5])],
                 expected: BmValue::Int(13),
             },
         ],
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -633,31 +629,43 @@ fn search_stateful_reducer_temporal_solves_aging_state() {
         signature: "fn aging_state_v0(state: i64, t: i64, arr: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![BmValue::Int(0), BmValue::Int(5), BmValue::Array(vec![1, 2, 3])],
+                inputs: vec![
+                    BmValue::Int(0),
+                    BmValue::Int(5),
+                    BmValue::Array(vec![1, 2, 3]),
+                ],
                 expected: BmValue::Int(5),
             },
             Example {
-                inputs: vec![BmValue::Int(10), BmValue::Int(3), BmValue::Array(vec![1, 1, 1])],
+                inputs: vec![
+                    BmValue::Int(10),
+                    BmValue::Int(3),
+                    BmValue::Array(vec![1, 1, 1]),
+                ],
                 expected: BmValue::Int(13),
             },
             Example {
-                inputs: vec![BmValue::Int(-5), BmValue::Int(7), BmValue::Array(vec![4, 4])],
+                inputs: vec![
+                    BmValue::Int(-5),
+                    BmValue::Int(7),
+                    BmValue::Array(vec![4, 4]),
+                ],
                 expected: BmValue::Int(2),
             },
         ],
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -683,31 +691,43 @@ fn search_stateful_reducer_temporal_solves_rate_accumulator() {
         signature: "fn rate_accumulator_v0(state: i64, t: i64, arr: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![BmValue::Int(0), BmValue::Int(2), BmValue::Array(vec![1, 2, 3])],
+                inputs: vec![
+                    BmValue::Int(0),
+                    BmValue::Int(2),
+                    BmValue::Array(vec![1, 2, 3]),
+                ],
                 expected: BmValue::Int(12),
             },
             Example {
-                inputs: vec![BmValue::Int(10), BmValue::Int(3), BmValue::Array(vec![1, 1, 1])],
+                inputs: vec![
+                    BmValue::Int(10),
+                    BmValue::Int(3),
+                    BmValue::Array(vec![1, 1, 1]),
+                ],
                 expected: BmValue::Int(19),
             },
             Example {
-                inputs: vec![BmValue::Int(-5), BmValue::Int(4), BmValue::Array(vec![4, 4])],
+                inputs: vec![
+                    BmValue::Int(-5),
+                    BmValue::Int(4),
+                    BmValue::Array(vec![4, 4]),
+                ],
                 expected: BmValue::Int(27),
             },
         ],
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_search_only(&problem);
     assert!(
@@ -737,38 +757,46 @@ fn search_stateful_reducer_temporal_solves_tick_every_2() {
         signature: "fn tick_every_2_v0(state: i64, t: i64, arr: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![BmValue::Int(0), BmValue::Int(2), BmValue::Array(vec![1, 2, 3])],
+                inputs: vec![
+                    BmValue::Int(0),
+                    BmValue::Int(2),
+                    BmValue::Array(vec![1, 2, 3]),
+                ],
                 expected: BmValue::Int(6),
             },
             Example {
-                inputs: vec![BmValue::Int(10), BmValue::Int(4), BmValue::Array(vec![1, 1, 1])],
+                inputs: vec![
+                    BmValue::Int(10),
+                    BmValue::Int(4),
+                    BmValue::Array(vec![1, 1, 1]),
+                ],
                 expected: BmValue::Int(13),
             },
             Example {
-                inputs: vec![BmValue::Int(-5), BmValue::Int(3), BmValue::Array(vec![4, 4])],
+                inputs: vec![
+                    BmValue::Int(-5),
+                    BmValue::Int(3),
+                    BmValue::Array(vec![4, 4]),
+                ],
                 expected: BmValue::Int(-5),
             },
         ],
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_search_only(&problem);
-    assert!(
-        result.success,
-        "tick every 2 failed: {:?}",
-        result.error
-    );
+    assert!(result.success, "tick every 2 failed: {:?}", result.error);
     assert_eq!(result.method, "search_stateful_reducer_temporal");
     verify_problem_code_strict(&problem, &result.code)
         .unwrap_or_else(|err| panic!("runtime verify failed: {err}"));

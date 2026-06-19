@@ -26,16 +26,16 @@ fn aliased_problem(
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     }
 }
 
@@ -199,16 +199,16 @@ fn str_class_problem(name: &'static str, signature: &'static str, rows: &[(&str,
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     }
 }
 
@@ -318,16 +318,16 @@ fn arr_class_problem(
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     }
 }
 
@@ -598,16 +598,16 @@ fn search_array_dnf_learns_inference_validity() {
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
 
     let result = solve_problem_search_only(&problem);
@@ -656,7 +656,11 @@ fn search_strictly_increasing_learns_strict_inequality() {
     );
 
     let result = solve_problem_search_only(&problem);
-    assert!(result.success, "strictly_increasing not learned: {:?}", result.error);
+    assert!(
+        result.success,
+        "strictly_increasing not learned: {:?}",
+        result.error
+    );
     assert_eq!(result.method, "search_strictly_increasing");
     assert!(result.code.contains("fn strictly_increasing"));
     assert!(
@@ -705,7 +709,11 @@ fn search_has_strictly_increasing_run_learns_run_length() {
         result.error
     );
     assert_eq!(result.method, "search_has_strictly_increasing_run");
-    assert!(result.code.contains("run >= 3"), "expected run >= 3 threshold; got: {}", result.code);
+    assert!(
+        result.code.contains("run >= 3"),
+        "expected run >= 3 threshold; got: {}",
+        result.code
+    );
 }
 
 /// `first_index_of(arr, target) -> first i where arr[i] == target, else -1`.
@@ -733,16 +741,16 @@ fn search_first_index_of_learns_target_value() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         }
     }
 
@@ -755,7 +763,7 @@ fn search_first_index_of_learns_target_value() {
             (&[5, 5, 5], 0),    // first occurrence at index 0
             (&[0, 0, 0, 5], 3), // first 5 at index 3
             (&[10, 20, 30], 4 - 1), // no 5; -1 = length-1
-            // wait that's 4-1=3 not -1. Let me use the actual -1.
+                                // wait that's 4-1=3 not -1. Let me use the actual -1.
         ],
     );
     // Fix: the last entry above is wrong. Build the problem correctly.
@@ -766,8 +774,8 @@ fn search_first_index_of_learns_target_value() {
             (&[1, 2, 5, 7], 2),
             (&[5, 5, 5], 0),
             (&[0, 0, 0, 5], 3),
-            (&[10, 20, 30], -1),  // -1: target not present
-            (&[5], 0),            // target at index 0
+            (&[10, 20, 30], -1),                  // -1: target not present
+            (&[5], 0),                            // target at index 0
             (&[1, 2, 3, 4, 6, 7, 5, 8, 9, 5], 6), // first 5 at index 6
             (&[1, 2, 3, 4], -1),
             (&[5, 1, 2, 3, 4, 5], 0),
@@ -822,16 +830,16 @@ fn search_last_index_of_learns_target_value() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         }
     }
 
@@ -947,16 +955,16 @@ fn search_is_anagram_learns_permutation_equivalence() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         }
     }
 
@@ -976,11 +984,7 @@ fn search_is_anagram_learns_permutation_equivalence() {
     );
 
     let result = solve_problem_search_only(&problem);
-    assert!(
-        result.success,
-        "is_anagram not learned: {:?}",
-        result.error
-    );
+    assert!(result.success, "is_anagram not learned: {:?}", result.error);
     assert_eq!(result.method, "search_is_anagram");
     assert!(
         result.code.contains("sa.sort()"),
@@ -1014,7 +1018,7 @@ fn search_longest_run_learns_target_run_length() {
         &[
             (&[5, 5, 5], 3),
             (&[1, 2, 5, 5, 5, 6, 7], 3),
-            (&[0, 0, 0, 0, 0], 0),  // no 5s
+            (&[0, 0, 0, 0, 0], 0), // no 5s
             (&[5], 1),
             (&[1, 5, 2, 5, 5, 3, 5], 2),
             (&[1, 2, 3, 4], 0),
@@ -1071,16 +1075,16 @@ fn search_intersects_learns_set_membership() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         }
     }
 
@@ -1101,11 +1105,7 @@ fn search_intersects_learns_set_membership() {
     );
 
     let result = solve_problem_search_only(&problem);
-    assert!(
-        result.success,
-        "intersects not learned: {:?}",
-        result.error
-    );
+    assert!(result.success, "intersects not learned: {:?}", result.error);
     assert_eq!(result.method, "search_intersects");
     assert!(
         result.code.contains("for x in a") && result.code.contains("for y in b"),
@@ -1117,13 +1117,13 @@ fn search_intersects_learns_set_membership() {
         problem,
         vec![
             (
-                vec![Value::Array(vec![10, 20, 30]), Value::Array(vec![40, 50, 30])],
+                vec![
+                    Value::Array(vec![10, 20, 30]),
+                    Value::Array(vec![40, 50, 30]),
+                ],
                 1,
             ),
-            (
-                vec![Value::Array(vec![1]), Value::Array(vec![2])],
-                0,
-            ),
+            (vec![Value::Array(vec![1]), Value::Array(vec![2])], 0),
         ],
     );
 }
@@ -1135,10 +1135,8 @@ fn search_intersects_learns_set_membership() {
 #[test]
 fn new_teacher_factories_are_in_benchmark_and_solve() {
     let problems = get_benchmark(1);
-    let by_name: std::collections::HashMap<String, &crate::benchmark::Problem> = problems
-        .iter()
-        .map(|p| (p.name.clone(), p))
-        .collect();
+    let by_name: std::collections::HashMap<String, &crate::benchmark::Problem> =
+        problems.iter().map(|p| (p.name.clone(), p)).collect();
 
     // (factory prefix as emitted in problem name, expected method).
     // The "v0" suffix below only matches the first variant; the
@@ -1148,10 +1146,26 @@ fn new_teacher_factories_are_in_benchmark_and_solve() {
     // parameter).
     let cases: &[(&str, usize, &str)] = &[
         ("strictly_increasing", 0, "search_strictly_increasing"),
-        ("has_strictly_increasing_run_2", 0, "search_has_strictly_increasing_run"),
-        ("has_strictly_increasing_run_3", 1, "search_has_strictly_increasing_run"),
-        ("has_strictly_increasing_run_4", 2, "search_has_strictly_increasing_run"),
-        ("has_strictly_increasing_run_5", 3, "search_has_strictly_increasing_run"),
+        (
+            "has_strictly_increasing_run_2",
+            0,
+            "search_has_strictly_increasing_run",
+        ),
+        (
+            "has_strictly_increasing_run_3",
+            1,
+            "search_has_strictly_increasing_run",
+        ),
+        (
+            "has_strictly_increasing_run_4",
+            2,
+            "search_has_strictly_increasing_run",
+        ),
+        (
+            "has_strictly_increasing_run_5",
+            3,
+            "search_has_strictly_increasing_run",
+        ),
         ("first_index_of_0", 0, "search_first_index_of"),
         ("first_index_of_1", 1, "search_first_index_of"),
         ("first_index_of_2", 2, "search_first_index_of"),
@@ -1206,7 +1220,7 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
         "strictly_increasing_edge",
         "fn strictly_increasing_edge(arr: [i64]) -> i64",
         &[
-            (&[42], 1),     // single
+            (&[42], 1), // single
             (&[1, 2, 3], 1),
             (&[1, 1], 0),
             (&[3, 2], 0),
@@ -1223,7 +1237,7 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
         problem,
         vec![
             (vec![Value::Array(vec![])], 1),  // holdout
-            (vec![Value::Array(vec![7])], 1),  // single
+            (vec![Value::Array(vec![7])], 1), // single
             (vec![Value::Array(vec![1, 1, 1, 1])], 0),
         ],
     );
@@ -1249,16 +1263,16 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         }
     }
 
@@ -1266,8 +1280,8 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
         "first_index_of_5_edge",
         "fn first_index_of_5_edge(arr: [i64]) -> i64",
         &[
-            (&[5], 0),       // single match
-            (&[7], -1),      // single miss
+            (&[5], 0),  // single match
+            (&[7], -1), // single miss
             (&[1, 2, 5, 7], 2),
             (&[1, 2, 3], -1),
         ],
@@ -1282,7 +1296,7 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![])], -1),  // holdout
+            (vec![Value::Array(vec![])], -1), // holdout
             (vec![Value::Array(vec![5, 5])], 0),
             (vec![Value::Array(vec![0, 0, 0])], -1),
         ],
@@ -1300,8 +1314,8 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
             (&[1, 2, 5, 7], 2),
             (&[1, 2, 3], -1),
             (&[5, 4, 3, 2, 1], 0),
-            (&[5, 5], 1),     // first=0, last=1
-            (&[1, 5, 2, 5, 3], 3),  // first=1, last=3
+            (&[5, 5], 1),          // first=0, last=1
+            (&[1, 5, 2, 5, 3], 3), // first=1, last=3
         ],
     );
     let result = solve_problem_search_only(&problem);
@@ -1314,7 +1328,7 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![])], -1),  // holdout
+            (vec![Value::Array(vec![])], -1), // holdout
             (vec![Value::Array(vec![5, 5, 5])], 2),
             (vec![Value::Array(vec![1, 5, 1])], 1),
         ],
@@ -1331,8 +1345,8 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
             (&[42], 1),
             (&[1, 2, 3], 3),
             (&[1, 1, 1], 1),
-            (&[1, 2, 1, 2, 1], 2),  // longest inc run is 2 but distinct is 2
-            (&[5, 4, 3, 2, 1], 5),  // longest inc run is 1 but distinct is 5
+            (&[1, 2, 1, 2, 1], 2), // longest inc run is 2 but distinct is 2
+            (&[5, 4, 3, 2, 1], 5), // longest inc run is 1 but distinct is 5
         ],
     );
     let result = solve_problem_search_only(&problem);
@@ -1345,7 +1359,7 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![])], 0),  // holdout
+            (vec![Value::Array(vec![])], 0), // holdout
             (vec![Value::Array(vec![1])], 1),
             (vec![Value::Array(vec![5, 5, 5])], 1),
         ],
@@ -1387,16 +1401,16 @@ fn solve_problem_handles_string_output() {
         holdouts: vec![str_ex("world", "dlrow"), str_ex("nsynth", "htnysn")],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem(&problem);
     assert!(

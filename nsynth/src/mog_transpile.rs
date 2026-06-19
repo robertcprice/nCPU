@@ -488,10 +488,7 @@ fn rewrite_while_to_for_go(line: &str) -> String {
         return line.to_string();
     }
     // Replace the first 5 characters ("while") with "for ".
-    let leading_ws: String = line
-        .chars()
-        .take_while(|c| c.is_whitespace())
-        .collect();
+    let leading_ws: String = line.chars().take_while(|c| c.is_whitespace()).collect();
     let rest_start = leading_ws.len() + "while".len();
     let rest = &line[rest_start..];
     format!("{leading_ws}for {rest}")
@@ -1243,10 +1240,7 @@ mod inline_if_tests {
             "got: {ja}"
         );
         assert!(ja.contains("long s = 0;"), "got: {ja}");
-        assert!(
-            ja.contains("for (long x : (long[]) arr) {"),
-            "got: {ja}"
-        );
+        assert!(ja.contains("for (long x : (long[]) arr) {"), "got: {ja}");
         assert!(ja.contains("return s;"), "got: {ja}");
     }
 }

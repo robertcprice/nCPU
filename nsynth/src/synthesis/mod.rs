@@ -5,6 +5,7 @@
 //! one file.
 
 mod array;
+mod array_transform;
 mod common;
 mod native_array;
 mod register_machine;

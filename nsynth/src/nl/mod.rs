@@ -1,0 +1,488 @@
+//! LLM Integration Module for nCPU/nSynth
+//!
+//! This module provides natural language processing capabilities through
+//! integration with Anthropic's Claude API for parsing problem requirements
+//! and generating synthesis specifications.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// API key for Anthropic Claude
+/// In production, this should come from environment variables
+const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
+
+/// Maximum number of cached examples to maintain
+const MAX_CACHE_SIZE: usize = 1000;
+
+/// Default model to use for parsing
+const DEFAULT_MODEL: &str = "claude-3-5-sonnet-20241022";
+
+/// Error types for natural language processing
+#[derive(Debug, thiserror::Error)]
+pub enum NLError {
+    /// API key not found or invalid
+    #[error("Anthropic API key not found. Set {0} environment variable.")]
+    MissingApiKey(String),
+
+    /// API request failed
+    #[error("Anthropic API request failed: {0}")]
+    ApiError(String),
+
+    /// Response parsing failed
+    #[error("Failed to parse API response: {0}")]
+    ParseError(String),
+
+    /// Invalid input format
+    #[error("Invalid input format: {0}")]
+    InvalidInput(String),
+
+    /// Cache error
+    #[error("Cache error: {0}")]
+    CacheError(String),
+
+    /// Not implemented
+    #[error("Feature not yet implemented")]
+    NotImplemented,
+}
+
+/// Parsed requirements from natural language input
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedRequirements {
+    /// Function name to synthesize
+    pub function_name: String,
+
+    /// Input parameter specifications
+    pub inputs: Vec<InputSpec>,
+
+    /// Output type specification
+    pub output: OutputSpec,
+
+    /// Natural language description of the function
+    pub description: String,
+
+    /// Extracted examples from the input
+    pub examples: Vec<Example>,
+
+    /// Any additional constraints or hints
+    pub constraints: Vec<String>,
+}
+
+/// Input parameter specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputSpec {
+    /// Parameter name
+    pub name: String,
+
+    /// Parameter type (for now: "int", "list", "string")
+    pub type_: String,
+
+    /// Optional description
+    pub description: Option<String>,
+}
+
+/// Output specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputSpec {
+    /// Output type (for now: "int")
+    pub type_: String,
+
+    /// Optional description
+    pub description: Option<String>,
+}
+
+/// Input/output example
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Example {
+    /// Input values
+    pub inputs: Vec<serde_json::Value>,
+
+    /// Expected output value
+    pub expected: serde_json::Value,
+
+    /// Optional explanation
+    pub explanation: Option<String>,
+}
+
+/// Cached parsing result
+#[derive(Debug, Clone)]
+struct CacheEntry {
+    requirements: ParsedRequirements,
+    timestamp: std::time::Instant,
+}
+
+/// Natural Language Processing Pipeline
+pub struct NLPipeline {
+    /// API key for Anthropic (stored when available)
+    api_key: Option<String>,
+
+    /// Model identifier to use
+    model: String,
+
+    /// Example cache for repeated queries
+    example_cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
+
+    /// Maximum cache size
+    max_cache_size: usize,
+
+    /// Whether to use the Anthropic API
+    use_api: bool,
+}
+
+impl NLPipeline {
+    /// Create a new NLP pipeline
+    pub fn new() -> Self {
+        let api_key = std::env::var(ANTHROPIC_API_KEY_ENV).ok();
+        let use_api = api_key.is_some();
+
+        Self {
+            api_key,
+            model: DEFAULT_MODEL.to_string(),
+            example_cache: Arc::new(RwLock::new(HashMap::new())),
+            max_cache_size: MAX_CACHE_SIZE,
+            use_api,
+        }
+    }
+
+    /// Create with custom model
+    pub fn with_model(model: String) -> Self {
+        let mut pipeline = Self::new();
+        pipeline.model = model;
+        pipeline
+    }
+
+    /// Create with API key
+    pub fn with_api_key(api_key: String) -> Self {
+        Self {
+            api_key: Some(api_key),
+            model: DEFAULT_MODEL.to_string(),
+            example_cache: Arc::new(RwLock::new(HashMap::new())),
+            max_cache_size: MAX_CACHE_SIZE,
+            use_api: true,
+        }
+    }
+
+    /// Check if the pipeline is ready (has API key)
+    pub fn is_ready(&self) -> bool {
+        self.api_key.is_some()
+    }
+
+    /// Parse natural language requirements into structured format
+    pub async fn parse_requirements(&self, input: &str) -> Result<ParsedRequirements, NLError> {
+        // Check cache first
+        let cache_key = Self::compute_cache_key(input);
+        {
+            let cache = self.example_cache.read().await;
+            if let Some(entry) = cache.get(&cache_key) {
+                // Cache hit - return cached result
+                return Ok(entry.requirements.clone());
+            }
+        }
+
+        // If API is not available, return error
+        if !self.use_api {
+            return Err(NLError::NotImplemented);
+        }
+
+        // TODO: Implement actual API call using reqwest directly
+        // For now, return a placeholder error
+        let _ = (input, &self.model, &self.api_key);
+        Err(NLError::NotImplemented)
+    }
+
+    /// Parse requirements from pre-extracted examples
+    pub fn parse_from_examples(&self, examples: Vec<Example>) -> ParsedRequirements {
+        // Simple extraction when examples are already provided
+        ParsedRequirements {
+            function_name: "synthesized_function".to_string(),
+            inputs: self.infer_input_specs(&examples),
+            output: OutputSpec {
+                type_: "int".to_string(),
+                description: None,
+            },
+            description: "Function synthesized from examples".to_string(),
+            examples,
+            constraints: vec![],
+        }
+    }
+
+    /// Infer input specifications from examples
+    fn infer_input_specs(&self, examples: &[Example]) -> Vec<InputSpec> {
+        if examples.is_empty() {
+            return vec![];
+        }
+
+        let first_example = &examples[0];
+        first_example
+            .inputs
+            .iter()
+            .enumerate()
+            .map(|(i, val)| InputSpec {
+                name: format!("arg_{}", i),
+                type_: self.infer_type(val),
+                description: None,
+            })
+            .collect()
+    }
+
+    /// Infer type from JSON value
+    fn infer_type(&self, value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::Number(_) => "int".to_string(),
+            serde_json::Value::Array(_) => "list".to_string(),
+            serde_json::Value::String(_) => "string".to_string(),
+            _ => "unknown".to_string(),
+        }
+    }
+
+    /// Compute cache key from input
+    fn compute_cache_key(input: &str) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        input.hash(&mut hasher);
+        format!("{:x}", hasher.finish())
+    }
+
+    /// Cache a parsing result
+    async fn cache_result(&self, key: String, requirements: ParsedRequirements) {
+        let mut cache = self.example_cache.write().await;
+
+        // Evict old entries if cache is too large
+        if cache.len() >= self.max_cache_size {
+            // Simple eviction: remove oldest entry by timestamp
+            if let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.timestamp)
+                .map(|(k, _)| k.clone())
+            {
+                cache.remove(&oldest_key);
+            }
+        }
+
+        cache.insert(
+            key,
+            CacheEntry {
+                requirements,
+                timestamp: std::time::Instant::now(),
+            },
+        );
+    }
+
+    /// Clear the example cache
+    pub async fn clear_cache(&self) {
+        let mut cache = self.example_cache.write().await;
+        cache.clear();
+    }
+
+    /// Get cache statistics
+    pub async fn cache_stats(&self) -> (usize, usize) {
+        let cache = self.example_cache.read().await;
+        (cache.len(), self.max_cache_size)
+    }
+}
+
+impl Default for NLPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub mod synthesizer;
+
+pub mod dialogue;
+
+/// Natural language synthesis result
+#[derive(Debug, Clone)]
+pub struct NLSynthesisResult {
+    /// Generated code
+    pub code: String,
+
+    /// Method used for synthesis
+    pub method: String,
+
+    /// Whether synthesis was successful
+    pub success: bool,
+
+    /// Error message if failed
+    pub error: Option<String>,
+}
+
+impl NLPipeline {
+    /// Get the model identifier
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Synthesize a program from natural language input
+    ///
+    /// This is the main entry point for the NL → code pipeline.
+    /// It takes natural language input, generates examples, and
+    /// synthesizes a program using the nCPU/nSynth solver.
+    pub fn synthesize_from_nl(&self, input: &str) -> NLSynthesisResult {
+        use crate::benchmark::{Example, Problem, Value};
+        use crate::solver;
+
+        // Step 1: Generate examples from the natural language description
+        let synthesizer = synthesizer::ExampleSynthesizer::new()
+            .with_edge_cases(true)
+            .with_diverse(true);
+
+        let synthesis_result = synthesizer.generate_examples(input);
+
+        if synthesis_result.examples.is_empty() {
+            return NLSynthesisResult {
+                code: String::new(),
+                method: "example_generation_failed".to_string(),
+                success: false,
+                error: Some("Failed to generate examples from input".to_string()),
+            };
+        }
+
+        // Step 2: Convert NL examples to nCPU/nSynth examples
+        let examples: Vec<Example> = synthesis_result
+            .examples
+            .into_iter()
+            .filter_map(|ex| {
+                let inputs: Vec<Value> = ex
+                    .inputs
+                    .into_iter()
+                    .filter_map(|v| self.json_to_value(v))
+                    .collect();
+
+                let expected = self.json_to_value(ex.expected)?;
+
+                if inputs.is_empty() {
+                    return None;
+                }
+
+                Some(Example { inputs, expected })
+            })
+            .collect();
+
+        if examples.is_empty() {
+            return NLSynthesisResult {
+                code: String::new(),
+                method: "example_conversion_failed".to_string(),
+                success: false,
+                error: Some("Failed to convert examples to nCPU format".to_string()),
+            };
+        }
+
+        // Step 3: Infer function signature from examples
+        let signature = self.infer_signature(&examples);
+
+        // Step 4: Create a Problem for the solver
+        // Note: We leak signature and description to get &'static str lifetime.
+        // This is acceptable for synthesis results which are short-lived.
+        let name = format!("nl_{}", self.function_name_from_input(input));
+        let signature = Box::leak(signature.into_boxed_str());
+        let description = Box::leak(input.to_string().into_boxed_str());
+
+        let problem = Problem {
+            name,
+            category: "nl",
+            description,
+            signature,
+            examples: examples.clone(),
+            holdouts: vec![],
+            reference_code: "",
+            synthetic_args: vec![],
+            synthetic_values: vec![],
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        };
+
+        // Step 5: Call the solver
+        let solve_result = solver::solve_problem(&problem);
+
+        NLSynthesisResult {
+            code: solve_result.code,
+            method: solve_result.method,
+            success: solve_result.success,
+            error: solve_result.error,
+        }
+    }
+
+    /// Convert JSON value to nCPU/nSynth Value
+    fn json_to_value(&self, json: serde_json::Value) -> Option<crate::benchmark::Value> {
+        use crate::benchmark::Value;
+        match json {
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Some(Value::Int(i))
+                } else if let Some(f) = n.as_f64() {
+                    Some(Value::Float(f64::to_bits(f)))
+                } else {
+                    None
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                let ints: Vec<i64> = arr.into_iter().filter_map(|v| v.as_i64()).collect();
+                Some(Value::Array(ints))
+            }
+            serde_json::Value::String(s) => Some(Value::Str(s)),
+            serde_json::Value::Bool(b) => Some(Value::Bool(b)),
+            _ => None,
+        }
+    }
+
+    /// Infer function signature from examples
+    fn infer_signature(&self, examples: &[crate::benchmark::Example]) -> String {
+        use crate::benchmark::Value;
+        if examples.is_empty() {
+            return "fn f() -> i64".to_string();
+        }
+
+        let first = &examples[0];
+
+        // Infer parameter types
+        let mut params = Vec::new();
+        for (i, input) in first.inputs.iter().enumerate() {
+            let param_type = match input {
+                Value::Int(_) => "i64",
+                Value::Float(_) => "f64",
+                Value::Str(_) => "string",
+                Value::Array(_) => "[i64]",
+                Value::Bool(_) => "bool",
+                Value::Pair(_, _) => "(i64, i64)",
+                Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}",
+                Value::Tree(_) => "Tree",
+            };
+            params.push(format!("x{}: {}", i, param_type));
+        }
+
+        // Infer return type
+        let return_type = match &first.expected {
+            Value::Int(_) => "i64",
+            Value::Float(_) => "f64",
+            Value::Str(_) => "string",
+            Value::Array(_) => "[i64]",
+            Value::Bool(_) => "bool",
+            Value::Pair(_, _) => "(i64, i64)",
+            Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}",
+            Value::Tree(_) => "Tree",
+        };
+
+        format!("fn f({}) -> {}", params.join(", "), return_type)
+    }
+
+    /// Generate a function name from input text
+    fn function_name_from_input(&self, input: &str) -> String {
+        input
+            .split_whitespace()
+            .filter(|w| !w.is_empty())
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("_")
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -29,13 +29,10 @@ fn is_tree_problem(problem: &Problem) -> bool {
 
 /// Extract the tree from a problem's first example (if it exists).
 fn extract_tree(problem: &Problem) -> Option<&[TreeNode]> {
-    problem.examples[0]
-        .inputs
-        .iter()
-        .find_map(|v| match v {
-            Value::Tree(nodes) => Some(nodes.as_slice()),
-            _ => None,
-        })
+    problem.examples[0].inputs.iter().find_map(|v| match v {
+        Value::Tree(nodes) => Some(nodes.as_slice()),
+        _ => None,
+    })
 }
 
 /// Verify that all examples have the same tree as input (structural consistency check).
@@ -45,13 +42,10 @@ fn tree_consistent_across_examples(problem: &Problem) -> bool {
     }
     let first_tree = extract_tree(problem);
     problem.examples.iter().all(|ex| {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes.as_slice()),
-                _ => None,
-            });
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes.as_slice()),
+            _ => None,
+        });
         tree == first_tree
     })
 }
@@ -67,10 +61,7 @@ fn compute_tree_height(tree: &[TreeNode]) -> i64 {
             return -1;
         }
         let node = &nodes[idx as usize];
-        1 + std::cmp::max(
-            recurse(node.left, nodes),
-            recurse(node.right, nodes),
-        )
+        1 + std::cmp::max(recurse(node.left, nodes), recurse(node.right, nodes))
     }
 
     recurse(0, tree)
@@ -128,10 +119,7 @@ fn count_leaves_recursive(idx: i32, tree: &[TreeNode]) -> i64 {
 }
 
 /// Teacher: Count nodes in tree.
-pub(super) fn search_tree_count_nodes(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_count_nodes(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     // Guard: Must be a tree problem with consistent examples
     if !is_tree_problem(problem) || !tree_consistent_across_examples(problem) {
         return None;
@@ -148,13 +136,10 @@ pub(super) fn search_tree_count_nodes(
 
     // Verify on all examples (all should have same tree)
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes),
+            _ => None,
+        })?;
 
         if ex.expected_int() != tree.len() as i64 {
             return None;
@@ -205,10 +190,7 @@ pub(super) fn search_tree_count_nodes(
 }
 
 /// Teacher: Sum values in tree.
-pub(super) fn search_tree_sum_values(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_sum_values(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     // Guard: Must be a tree problem
     if !is_tree_problem(problem) || !tree_consistent_across_examples(problem) {
         return None;
@@ -225,13 +207,10 @@ pub(super) fn search_tree_sum_values(
 
     // Verify on all examples
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes),
+            _ => None,
+        })?;
 
         let sum: i64 = tree.iter().map(|n| n.value).sum();
         if ex.expected_int() != sum {
@@ -283,10 +262,7 @@ pub(super) fn search_tree_sum_values(
 }
 
 /// Teacher: Find maximum value in tree.
-pub(super) fn search_tree_max_value(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_max_value(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     // Guard: Must be a tree problem
     if !is_tree_problem(problem) || !tree_consistent_across_examples(problem) {
         return None;
@@ -307,13 +283,10 @@ pub(super) fn search_tree_max_value(
 
     // Verify on all examples
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes),
+            _ => None,
+        })?;
 
         if tree.is_empty() {
             continue;
@@ -374,10 +347,7 @@ pub(super) fn search_tree_max_value(
 }
 
 /// Teacher: Compute height of tree.
-pub(super) fn search_tree_height(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_height(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     // Guard: Must be a tree problem
     if !is_tree_problem(problem) || !tree_consistent_across_examples(problem) {
         return None;
@@ -394,13 +364,10 @@ pub(super) fn search_tree_height(
 
     // Verify on all examples
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes),
+            _ => None,
+        })?;
 
         if compute_tree_height(tree) != ex.expected_int() {
             return None;
@@ -460,10 +427,7 @@ pub(super) fn search_tree_height(
 }
 
 /// Teacher: Count leaf nodes (nodes with no children).
-pub(super) fn search_tree_leaf_count(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_leaf_count(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     // Guard: Must be a tree problem
     if !is_tree_problem(problem) || !tree_consistent_across_examples(problem) {
         return None;
@@ -480,13 +444,10 @@ pub(super) fn search_tree_leaf_count(
 
     // Verify on all examples
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes),
+            _ => None,
+        })?;
 
         if count_leaves_recursive(0, tree) != ex.expected_int() {
             return None;

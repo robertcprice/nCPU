@@ -37,16 +37,16 @@ fn search_teacher_promotes_scalar_gradient_before_raw_search() {
         ],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_prefer_differentiable(&problem);
     assert!(result.success, "{:?}", result.error);
@@ -101,16 +101,16 @@ fn search_teacher_promotes_array_gradient_before_raw_search() {
         ],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_prefer_differentiable(&problem);
     assert!(result.success, "{:?}", result.error);

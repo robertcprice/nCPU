@@ -28,16 +28,16 @@ fn solve_problem_prefers_native_gradient_before_scalar_templates() {
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_after_enumeration(&problem, std::time::Instant::now(), None);
     assert!(result.success, "{:?}", result.error);
@@ -76,16 +76,16 @@ fn solve_problem_prefers_array_gradient_before_array_templates() {
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
     let arr_idx = stages
@@ -124,16 +124,17 @@ fn method_router_promotes_learned_search_teacher_to_front() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         };
 
         crate::method_router::record_win(&problem, ROUTE_SEARCH_TEACHER);
@@ -167,16 +168,17 @@ fn method_router_normalizes_legacy_array_method_names() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         };
 
         crate::method_router::record_win(&problem, "univ_arr_gradient");
@@ -242,16 +244,17 @@ fn method_router_can_skip_enumerative_after_repeated_late_stage_wins() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         };
 
         crate::method_router::record_win(&problem, ROUTE_SEARCH_TEACHER);
@@ -292,16 +295,17 @@ fn method_router_keeps_enumerative_when_top_route_is_slow_array_gradient() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         };
 
         // Many high-confidence array_gradient wins — would have crossed the
@@ -340,16 +344,17 @@ fn method_router_keeps_enumerative_when_enum_has_the_bucket() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         };
 
         crate::method_router::record_win(&problem, "enumerative-array");
@@ -384,16 +389,17 @@ fn cache_bypass_requires_a_stronger_general_route_than_cached_method() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         };
 
         for _ in 0..4 {
@@ -451,16 +457,17 @@ fn solve_problem_can_bypass_cache_and_upgrade_to_router_preferred_route() {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         };
 
         crate::solved_cache::record(
@@ -522,16 +529,16 @@ fn solve_problem_uses_array_gradient_for_simple_sum_fold() {
         holdouts: vec![],
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
-
+        explicit_stack: false,
+        functions: vec![],
     };
     let result = solve_problem_after_enumeration(&problem, std::time::Instant::now(), None);
     assert!(result.success, "{:?}", result.error);

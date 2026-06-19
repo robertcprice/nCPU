@@ -249,16 +249,17 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         }
     }
 
@@ -278,16 +279,17 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         }
     }
 

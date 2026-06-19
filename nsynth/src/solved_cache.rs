@@ -576,7 +576,9 @@ pub fn bootstrap_retrain_due() -> bool {
 /// distilled from; the original fingerprint is unrecoverable at this point.
 /// Matches the first cache entry whose (method, code) agrees.
 pub fn note_transfer_success(method: &str, code: &str) {
-    if cache_path().is_none() {
+    // Suppressed during a learning freeze (e.g. RSI evaluation) so measuring the
+    // solver cannot mutate cache success-counts mid-evaluation.
+    if crate::learning_freeze::is_frozen() || cache_path().is_none() {
         return;
     }
     with_cache(|c| {
@@ -713,16 +715,17 @@ mod tests {
             holdouts: vec![],
             reference_code: "fn test(a: i64) -> i64 { return a; }\n",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         }
     }
 

@@ -105,3 +105,17 @@ training/prior_net/prior_net_v1_rejected*.pt
 
 # egdc mog transpiler test binaries (compiled fixtures, ~1.5 MB each)
 egdc/mog/tests_data/
+
+# Serena MCP semantic cache (per-machine, 100+ MB, regenerated on demand)
+.serena/
+
+# Separate diverged crate tracked in its own git repo (~4 GB); never vendor it
+# into nCPU's tree.
+ncpu-learned-parser/
+
+# Stray Rust build artifacts emitted outside target/
+*.rlib
+
+# Scratch audit / probe outputs from capability sweeps
+nsynth/.audit_*.txt
+nsynth/.probe_*.txt

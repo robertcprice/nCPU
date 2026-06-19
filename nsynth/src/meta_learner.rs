@@ -149,7 +149,15 @@ impl MetaWeights {
             s.push_str(&format!("{v:.6}"));
         }
         s.push('\n');
-        std::fs::write(&path, s).map_err(|e| format!("write {}: {e}", path.display()))
+        // Atomic write: write to a unique temp sibling then rename, so a crash
+        // mid-write can never leave a torn weights file (the RSI loop relies on
+        // the on-disk vector being all-or-nothing).
+        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+        std::fs::write(&tmp, &s).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("rename {} -> {}: {e}", tmp.display(), path.display())
+        })
     }
 }
 
@@ -474,6 +482,13 @@ pub fn set_weights(new_weights: MetaWeights) -> Result<(), String> {
     guard.as_ref().expect("weights set").save()
 }
 
+/// Snapshot the current in-memory weight vector (owned clone). Lazily loads from
+/// the configured path on first access, like the rest of the weight API. Used by
+/// the bounded RSI loop to capture the incumbent before mutating.
+pub fn current_weights() -> MetaWeights {
+    with_weights(|w| w.clone())
+}
+
 /// Weighted L2 distance between two feature vectors under `weights`.
 fn weighted_distance(a: &[f64; FEATURE_DIM], b: &[f64; FEATURE_DIM], weights: &MetaWeights) -> f64 {
     let mut s = 0.0_f64;
@@ -682,6 +697,11 @@ pub fn rank_teachers_with_meta_topk(
 /// barely move; dimensions far from the prior move proportionally more.
 /// This gives new signal time to accumulate before reverting.
 pub fn record_transfer_success(problem: &Problem, teacher_code: &str) {
+    // Suppressed during a learning freeze (e.g. RSI evaluation) so measuring the
+    // solver cannot mutate the weight vector mid-evaluation.
+    if crate::learning_freeze::is_frozen() {
+        return;
+    }
     let pf = extract_problem_features(problem);
     let cf = extract_code_features(teacher_code);
     let tf = merge_features(&pf, &cf);
@@ -767,16 +787,17 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         }
     }
 
@@ -894,16 +915,17 @@ mod tests {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         };
         let pf = extract_problem_features(&p);
         assert!(pf[26] > 0.0, "slot 26 (n_args × monotone) must fire");
@@ -1096,16 +1118,17 @@ mod tests {
                     holdouts: vec![],
                     reference_code: "",
 
-                synthetic_args: Vec::new(),
+                    synthetic_args: Vec::new(),
 
-                synthetic_values: Vec::new(),
+                    synthetic_values: Vec::new(),
 
-                recursive_allowed: false,
+                    recursive_allowed: false,
 
-                tree_input: false,
+                    tree_input: false,
 
-                explicit_stack: false,
+                    explicit_stack: false,
 
+                    functions: vec![],
                 },
                 candidates,
                 3,

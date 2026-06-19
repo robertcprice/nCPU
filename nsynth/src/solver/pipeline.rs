@@ -17,7 +17,12 @@ fn has_non_scalar_input(problem: &Problem) -> bool {
 /// path: the fast morphology specialist, then the general enumerative string
 /// synthesizer. Returns None for non-string problems so the numeric pipeline runs.
 fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
-    if !problem.signature.replace(' ', "").contains("->string") {
+    if !problem
+        .signature
+        .replace(' ', "")
+        .to_ascii_lowercase()
+        .contains("->string")
+    {
         return None;
     }
     // Examples must be all-string-input, string-output.
@@ -109,16 +114,24 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
 }
 
 pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
+    // Suppress cache recording while the analogy universal re-fitter is
+    // re-solving a TEACHER-AUGMENTED problem: that problem's examples are
+    // synthetic (perturbed teacher samples) with a fingerprint no real query
+    // will ever match, so recording it only pollutes the donor pool. Only the
+    // verified-against-ORIGINAL emit from `analogy_solve` should be cached, and
+    // it is (under the real query's fingerprint, outside this guard).
+    let recordable = !super::analogy::in_refit() && !crate::learning_freeze::is_frozen();
+
     // String-output problems take the additive string-program path (the i64
     // gradient/search pipeline cannot express string outputs).
     if let Some(result) = solve_string_output(problem) {
-        if result.success {
+        if result.success && recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
         }
         return result;
     }
     let result = solve_problem_inner(problem);
-    if result.success {
+    if result.success && recordable {
         // Record every successful solve. De-duped inside the cache so reruns
         // don't re-write the same entry. Persisted via `solved_cache::flush`
         // which callers (bench runner, main) invoke at shutdown.
@@ -231,6 +244,49 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
                 t_teacher.elapsed().as_secs_f32()
             );
         }
+    }
+
+    // Stage 1.6: analogy-driven transfer (Phase 3.2), opt-in via NSYNTH_ANALOGY=1.
+    // Runs alongside CachedTeachers (does not replace it) so it can be A/B'd
+    // without regressing the proven path. Universal: transfers donors of ANY
+    // type (scalar/array/tree/string/…) via rename+verify, plus type-specific
+    // re-fit fallback. Not gated on scalar-only. Emits only verifier-accepted
+    // code.
+    if std::env::var("NSYNTH_ANALOGY").as_deref() == Ok("1")
+        && !super::analogy::in_refit()
+        && preemptive_search_result.is_none()
+        && crate::solved_cache::entry_count() > 0
+    {
+        let t_analogy = std::time::Instant::now();
+        if let Some(result) = super::analogy::analogy_solve(problem) {
+            if result.success {
+                eprintln!(
+                    "[solve] analogy OK ({}) in {:.1}s",
+                    result.method,
+                    t_analogy.elapsed().as_secs_f32()
+                );
+                return result;
+            }
+        }
+        eprintln!(
+            "[solve] analogy MISS in {:.1}s",
+            t_analogy.elapsed().as_secs_f32()
+        );
+    }
+
+    // Probabilistic synthesis: detect and synthesize probabilistic programs
+    // using MCMC inference for uncertainty/randomness. Runs after CachedTeachers
+    // (which are fast) but before enumerative (which is expensive). Only activates
+    // when examples suggest non-deterministic behavior (conflicting outputs,
+    // sampling patterns, uncertainty).
+    if super::probabilistic::is_probabilistic_problem(problem) {
+        eprintln!("[solve] trying probabilistic synthesis");
+        let prob_result = super::probabilistic::solve_probabilistic_problem(problem);
+        if prob_result.success {
+            eprintln!("[solve] probabilistic OK");
+            return prob_result;
+        }
+        eprintln!("[solve] probabilistic failed, continuing to normal pipeline");
     }
 
     // Stage 1: Classical bottom-up symbolic enumeration (no neural weights, no

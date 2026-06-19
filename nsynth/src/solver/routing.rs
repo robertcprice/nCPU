@@ -196,6 +196,20 @@ pub(super) fn normalized_router_stats(
         entry.1 += rec.misses;
     }
 
+    // Phase 4.1 learning loop: fold in experience-derived win boosts so routes
+    // that historically solved similar problems rank higher. No-op when no
+    // experience DB is loaded (the default under test), so live routing
+    // statistics are unaffected unless real experience exists.
+    for (method, boost) in super::experience_advisor::route_boosts(problem) {
+        let Some(route) = normalize_router_route(&method) else {
+            continue;
+        };
+        if route != ROUTE_ENUMERATIVE && !route_is_applicable(route, problem, ctx) {
+            continue;
+        }
+        totals.entry(route).or_insert((0, 0)).0 += boost;
+    }
+
     let mut ranked: Vec<NormalizedRouteStats> = totals
         .into_iter()
         .map(|(route, (wins, misses))| NormalizedRouteStats {
