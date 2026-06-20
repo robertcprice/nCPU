@@ -123,11 +123,7 @@ impl Pool {
     pub fn idle_count(&self) -> usize {
         self.connections
             .iter()
-            .filter(|c| {
-                c.in_use.lock()
-                    .map(|u| !*u)
-                    .unwrap_or(true)
-            })
+            .filter(|c| c.in_use.lock().map(|u| !*u).unwrap_or(true))
             .count()
     }
 
@@ -279,11 +275,7 @@ impl ConnectionManager {
     pub fn stats(&self) -> Vec<(String, PoolStats)> {
         self.pools
             .iter()
-            .filter_map(|(name, pool)| {
-                pool.lock()
-                    .ok()
-                    .map(|p| (name.clone(), p.stats()))
-            })
+            .filter_map(|(name, pool)| pool.lock().ok().map(|p| (name.clone(), p.stats())))
             .collect()
     }
 }

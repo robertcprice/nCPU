@@ -3,24 +3,23 @@
 //! Type-safe database operations with SQL query builders, connection pooling,
 //! and ORM patterns for synthesizing database programs from examples.
 
-pub mod sql;
-pub mod pool;
 pub mod orm;
+pub mod pool;
+pub mod sql;
 
 pub use sql::{
-    Query, Expr, Op, Value, ColumnDef, ColumnType,
-    SelectBuilder, InsertBuilder, UpdateBuilder, DeleteBuilder, to_sql,
+    to_sql, ColumnDef, ColumnType, DeleteBuilder, Expr, InsertBuilder, Op, Query, SelectBuilder,
+    UpdateBuilder, Value,
 };
 
 pub use pool::{
-    Pool, Connection, ConnectionOptions, PoolStats,
-    shared_pool, shared_pool_default, SharedPool,
-    PooledConnection, ConnectionManager,
+    shared_pool, shared_pool_default, Connection, ConnectionManager, ConnectionOptions, Pool,
+    PoolStats, PooledConnection, SharedPool,
 };
 
 pub use orm::{
-    Model, Repository, QueryBuilder, SelectQuery,
-    Schema, ColumnDef as OrmColumnDef, Migration, MigrationRunner,
+    ColumnDef as OrmColumnDef, Migration, MigrationRunner, Model, QueryBuilder, Repository, Schema,
+    SelectQuery,
 };
 
 /// Database configuration

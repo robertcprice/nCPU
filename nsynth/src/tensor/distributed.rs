@@ -3,7 +3,7 @@
 //! This module provides simulation layer for distributed training operations.
 //! Real distributed training would use NCCL/MPI backends.
 
-use crate::tensor::{Tensor, Shape};
+use crate::tensor::{Shape, Tensor};
 
 /// Reduction operation for all-reduce collective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,7 +123,10 @@ impl GradientBucket {
             if grad_size >= self.bucket_size {
                 // Flush current bucket if non-empty
                 if !current_bucket.is_empty() {
-                    let bucket_tensor = Tensor::new(current_bucket.clone(), Shape::new(vec![current_bucket.len()]));
+                    let bucket_tensor = Tensor::new(
+                        current_bucket.clone(),
+                        Shape::new(vec![current_bucket.len()]),
+                    );
                     self.buckets.push(bucket_tensor);
                     packed.push(self.buckets.last().unwrap().clone());
                     for &(idx, offset) in &current_indices {
@@ -141,9 +144,13 @@ impl GradientBucket {
                 self.bucket_indices.push((self.buckets.len() - 1, 0));
             } else {
                 // Check if adding this gradient would exceed bucket size
-                if !current_bucket.is_empty() && current_bucket.len() + grad_size > self.bucket_size {
+                if !current_bucket.is_empty() && current_bucket.len() + grad_size > self.bucket_size
+                {
                     // Flush current bucket
-                    let bucket_tensor = Tensor::new(current_bucket.clone(), Shape::new(vec![current_bucket.len()]));
+                    let bucket_tensor = Tensor::new(
+                        current_bucket.clone(),
+                        Shape::new(vec![current_bucket.len()]),
+                    );
                     self.buckets.push(bucket_tensor);
                     packed.push(self.buckets.last().unwrap().clone());
                     for &(idx, offset) in &current_indices {
@@ -163,7 +170,10 @@ impl GradientBucket {
 
         // Flush final bucket
         if !current_bucket.is_empty() {
-            let bucket_tensor = Tensor::new(current_bucket.clone(), Shape::new(vec![current_bucket.len()]));
+            let bucket_tensor = Tensor::new(
+                current_bucket.clone(),
+                Shape::new(vec![current_bucket.len()]),
+            );
             self.buckets.push(bucket_tensor);
             packed.push(self.buckets.last().unwrap().clone());
             for &(idx, offset) in &current_indices {
@@ -182,7 +192,11 @@ impl GradientBucket {
     ///
     /// # Returns
     /// Vector of unpacked gradient tensors
-    pub fn unpack_buckets(&self, buckets: &[Tensor], original_shapes: &[Vec<usize>]) -> Vec<Tensor> {
+    pub fn unpack_buckets(
+        &self,
+        buckets: &[Tensor],
+        original_shapes: &[Vec<usize>],
+    ) -> Vec<Tensor> {
         // Reconstruct the original gradient tensors from buckets
         // This would use the bucket_indices mapping
         let mut result = Vec::new();
@@ -192,7 +206,10 @@ impl GradientBucket {
 
         for shape in original_shapes {
             let size: usize = shape.iter().product();
-            let bucket_data = buckets.get(bucket_idx).map(|t| &t.data).unwrap_or(&empty_vec);
+            let bucket_data = buckets
+                .get(bucket_idx)
+                .map(|t| &t.data)
+                .unwrap_or(&empty_vec);
 
             if offset + size <= bucket_data.len() {
                 let grad_data = bucket_data[offset..offset + size].to_vec();
@@ -216,7 +233,7 @@ impl GradientBucket {
                     let take = available.min(remaining);
 
                     grad_data.extend_from_slice(
-                        &buckets[current_bucket].data[current_offset..current_offset + take]
+                        &buckets[current_bucket].data[current_offset..current_offset + take],
                     );
 
                     remaining -= take;
@@ -557,7 +574,8 @@ mod tests {
 
     #[test]
     fn test_ddp_forward() {
-        let model = |x: &Tensor| Tensor::new(x.data.iter().map(|v| v * 2.0).collect(), x.shape.clone());
+        let model =
+            |x: &Tensor| Tensor::new(x.data.iter().map(|v| v * 2.0).collect(), x.shape.clone());
         let ddp = DistributedDataParallel::new(model, 2, 0);
 
         let input = create_mock_tensor(vec![1.0, 2.0, 3.0]);

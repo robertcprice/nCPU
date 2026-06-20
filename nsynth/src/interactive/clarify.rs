@@ -9,8 +9,8 @@
 use crate::benchmark::{Problem, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A clarifying question presented to the user during synthesis
@@ -136,7 +136,10 @@ impl ClarificationState {
 
     /// Check if all questions are answered
     pub fn is_complete(&self) -> bool {
-        matches!(self, ClarificationState::Answered(_) | ClarificationState::NotNeeded)
+        matches!(
+            self,
+            ClarificationState::Answered(_) | ClarificationState::NotNeeded
+        )
     }
 }
 
@@ -277,8 +280,7 @@ impl Checkpoint {
     pub fn load(path: &Path) -> Result<Self, String> {
         let json = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read checkpoint from {}: {}", path.display(), e))?;
-        serde_json::from_str(&json)
-            .map_err(|e| format!("Failed to deserialize checkpoint: {}", e))
+        serde_json::from_str(&json).map_err(|e| format!("Failed to deserialize checkpoint: {}", e))
     }
 
     /// Update the synthesis phase
@@ -319,10 +321,13 @@ pub struct InteractiveSession {
 impl InteractiveSession {
     /// Create a new interactive session
     pub fn new(problem: Problem, checkpoint_dir: &Path) -> Result<Self, String> {
-        let id = format!("session_{}", SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs());
+        let id = format!(
+            "session_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
 
         fs::create_dir_all(checkpoint_dir)
             .map_err(|e| format!("Failed to create checkpoint directory: {}", e))?;
@@ -387,8 +392,7 @@ impl InteractiveSession {
             }
             ClarificationState::Answered(answers) => {
                 // Already answered - verify this answer matches
-                let existing = answers.iter()
-                    .find(|a| a.question_id == answer.question_id);
+                let existing = answers.iter().find(|a| a.question_id == answer.question_id);
                 if let Some(existing) = existing {
                     if existing.value != answer.value {
                         return Err(format!(
@@ -433,7 +437,10 @@ impl InteractiveSession {
         F: FnOnce(&Problem, &[Answer]) -> Result<PartialResults, String>,
     {
         let answers = self.checkpoint.clarification.answered().to_vec();
-        let problem = self.checkpoint.problem.as_ref()
+        let problem = self
+            .checkpoint
+            .problem
+            .as_ref()
             .ok_or_else(|| "Problem not available in checkpoint".to_string())?;
         let partial = step_fn(problem, &answers)?;
 
@@ -472,14 +479,11 @@ pub fn ask_clarification(problem: &Problem) -> Vec<Question> {
     // Check if the problem signature is ambiguous
     if problem.signature.contains("...") || problem.signature.contains("Generic") {
         questions.push(
-            Question::new(
-                "type_params",
-                "What type parameters should be used?"
-            )
-            .with_why("The problem signature uses generic types")
-            .with_option("Integer (i64)", "i64")
-            .with_option("Float (f64)", "f64")
-            .with_option_explained("String", "String", "For text processing problems")
+            Question::new("type_params", "What type parameters should be used?")
+                .with_why("The problem signature uses generic types")
+                .with_option("Integer (i64)", "i64")
+                .with_option("Float (f64)", "f64")
+                .with_option_explained("String", "String", "For text processing problems"),
         );
     }
 
@@ -489,7 +493,7 @@ pub fn ask_clarification(problem: &Problem) -> Vec<Question> {
             Question::new("more_examples", "Provide more example cases?")
                 .with_why("Only one example provided - more examples help verification")
                 .with_option("Yes, provide more", "yes")
-                .with_option("No, proceed with current", "no")
+                .with_option("No, proceed with current", "no"),
         );
     }
 
@@ -501,7 +505,7 @@ pub fn ask_clarification(problem: &Problem) -> Vec<Question> {
                 .with_option("Standard recursion", "standard")
                 .with_option_explained("Tail recursion", "tail", "Optimized for tail-call")
                 .with_option("Explicit stack", "explicit_stack")
-                .with_default(0)
+                .with_default(0),
         );
     }
 
@@ -517,7 +521,10 @@ pub fn execute_interactive(
     let mut session = InteractiveSession::new(problem, checkpoint_dir)?;
 
     // Determine if clarification is needed
-    let checkpoint_problem = session.checkpoint.problem.as_ref()
+    let checkpoint_problem = session
+        .checkpoint
+        .problem
+        .as_ref()
         .ok_or_else(|| "Problem not available in checkpoint".to_string())?;
     let questions = ask_clarification(checkpoint_problem);
 
@@ -639,11 +646,9 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let problem = make_test_problem();
 
-        let questions = vec![
-            Question::new("q1", "What?")
-                .with_option("A", "a")
-                .with_option("B", "b"),
-        ];
+        let questions = vec![Question::new("q1", "What?")
+            .with_option("A", "a")
+            .with_option("B", "b")];
 
         let mut checkpoint = Checkpoint::new("test", problem, SynthesisPhase::Analyzing);
         checkpoint.clarification = ClarificationState::Pending(questions);

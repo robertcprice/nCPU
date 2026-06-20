@@ -248,8 +248,16 @@ mod tests {
             result.error
         );
         // Both declared functions must appear in the composed output.
-        assert!(result.code.contains("add_two"), "missing add_two: {}", result.code);
-        assert!(result.code.contains("mul_two"), "missing mul_two: {}", result.code);
+        assert!(
+            result.code.contains("add_two"),
+            "missing add_two: {}",
+            result.code
+        );
+        assert!(
+            result.code.contains("mul_two"),
+            "missing mul_two: {}",
+            result.code
+        );
         // Method tag records the compositional path.
         assert!(result.method.starts_with("agentic_compositional"));
     }

@@ -189,6 +189,11 @@ fn array_teacher_examples_from_code(problem: &Problem, teacher_code: &str) -> Op
 }
 
 pub(super) fn synthesize_array_gradient_only(problem: &Problem) -> Option<SolveResult> {
+    // Experimental unified typed bottom-up core (UTBUS). No-op unless
+    // NSYNTH_UTBUS=1, so default behavior is byte-identical to the legacy path.
+    if let Some(result) = super::utbus::synthesize_utbus(problem) {
+        return Some(result);
+    }
     // Exact bottom-up array->array transforms (identity/map/sort/reverse/scan/
     // filter). Cheap and proof-carrying — runs first so the common `[i64] ->
     // [i64]` cases resolve in ms instead of falling through to the gradient core

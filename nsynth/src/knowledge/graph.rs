@@ -132,8 +132,14 @@ mod tests {
             description: "",
             signature: "fn square(n: i64) -> i64",
             examples: vec![
-                Example { inputs: vec![Value::Int(2)], expected: Value::Int(4) },
-                Example { inputs: vec![Value::Int(3)], expected: Value::Int(9) },
+                Example {
+                    inputs: vec![Value::Int(2)],
+                    expected: Value::Int(4),
+                },
+                Example {
+                    inputs: vec![Value::Int(3)],
+                    expected: Value::Int(9),
+                },
             ],
             holdouts: vec![],
             reference_code: "",
@@ -170,7 +176,11 @@ mod tests {
     fn build_caches_code_features() {
         with_scratch_cache(|| {
             let p = square_problem();
-            crate::solved_cache::record(&p, "search_scalar_expr", "fn square(n: i64) -> i64 { return (n * n); }");
+            crate::solved_cache::record(
+                &p,
+                "search_scalar_expr",
+                "fn square(n: i64) -> i64 { return (n * n); }",
+            );
             let kg = CodeKnowledgeGraph::build_from_cache();
             assert_eq!(kg.len(), 1, "one donor expected");
             let d = &kg.donors()[0];
@@ -187,7 +197,11 @@ mod tests {
             // Distinct fingerprints so all three coexist in the cache.
             let mut p2 = square_problem();
             p2.examples[0].inputs = vec![Value::Int(7)];
-            crate::solved_cache::record(&p2, "m_b", "fn f(a: i64, b: i64) -> i64 { return (a + b); }");
+            crate::solved_cache::record(
+                &p2,
+                "m_b",
+                "fn f(a: i64, b: i64) -> i64 { return (a + b); }",
+            );
             let mut p3 = square_problem();
             p3.examples[0].inputs = vec![Value::Int(11)];
             crate::solved_cache::record(&p3, "m_c", "fn g(n: i64) -> i64 { return (n - 1); }");

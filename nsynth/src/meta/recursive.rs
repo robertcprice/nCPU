@@ -282,7 +282,11 @@ impl Audit {
     fn log(&mut self, event: &str) {
         if let Some(p) = &self.path {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+            {
                 let _ = writeln!(f, "{event}");
             }
         }
@@ -319,15 +323,18 @@ pub fn run_with(
     problems: &[Problem],
 ) -> Result<RunReport, String> {
     let _lock = LockFile::acquire(&paths.lock)?;
-    let mut audit = Audit { path: audit_log.map(|p| p.to_path_buf()) };
+    let mut audit = Audit {
+        path: audit_log.map(|p| p.to_path_buf()),
+    };
 
     // Capture the incumbent (loaded from the current/production weights path).
     let incumbent = crate::meta_learner::current_weights();
 
     // Pre-run snapshot — an out-of-process rollback artifact.
-    std::fs::create_dir_all(&paths.snapshot_dir)
-        .map_err(|e| format!("snapshot dir: {e}"))?;
-    let snapshot = paths.snapshot_dir.join(format!("meta_weights_{}.tsv", unix_secs()));
+    std::fs::create_dir_all(&paths.snapshot_dir).map_err(|e| format!("snapshot dir: {e}"))?;
+    let snapshot = paths
+        .snapshot_dir
+        .join(format!("meta_weights_{}.tsv", unix_secs()));
     write_weights_tsv(&snapshot, &incumbent)?;
 
     // Repoint to scratch so nothing touches production until commit.
@@ -379,7 +386,11 @@ pub fn run_with(
     let _ = crate::meta_learner::set_weights(crate::meta_learner::MetaWeights::load());
     let _ = std::fs::remove_file(&paths.scratch);
 
-    Ok(RunReport { outcome, committed, snapshot })
+    Ok(RunReport {
+        outcome,
+        committed,
+        snapshot,
+    })
 }
 
 /// Persist a weight vector to `path` in the same `%.6` TSV format `save()` uses,
@@ -407,14 +418,21 @@ mod tests {
 
     fn fit(names: &[&str], total: usize) -> Fitness {
         let pass_set: BTreeSet<String> = names.iter().map(|s| s.to_string()).collect();
-        Fitness { solved: pass_set.len(), total, pass_set }
+        Fitness {
+            solved: pass_set.len(),
+            total,
+            pass_set,
+        }
     }
 
     #[test]
     fn gate_accepts_strict_superset_only() {
         let base = fit(&["a", "b"], 3);
         assert!(gate(&base, &fit(&["a", "b", "c"], 3)), "superset accepts");
-        assert!(!gate(&base, &fit(&["a", "c"], 3)), "swap rejects (regression)");
+        assert!(
+            !gate(&base, &fit(&["a", "c"], 3)),
+            "swap rejects (regression)"
+        );
         assert!(!gate(&base, &fit(&["a", "b"], 3)), "equal rejects");
         assert!(!gate(&base, &fit(&["a"], 3)), "subset rejects");
         // Equal count but extra-and-missing => not a superset => reject.
@@ -423,7 +441,9 @@ mod tests {
 
     #[test]
     fn propose_stays_in_bounds_and_is_deterministic() {
-        let incumbent = MetaWeights { w: [1.0; FEATURE_DIM] };
+        let incumbent = MetaWeights {
+            w: [1.0; FEATURE_DIM],
+        };
         let mut r1 = XorShift::new(42);
         let mut r2 = XorShift::new(42);
         let a = propose(&incumbent, &mut r1, 0.5, 0.2);
@@ -439,8 +459,14 @@ mod tests {
         // Stub evaluator: the FIRST proposed candidate improves (adds "c"),
         // every later candidate regresses (drops "a"). Verifies one accept then
         // restores; counts restore calls on rejects.
-        let cfg = Config { max_iters: 4, max_no_improve: 10, ..Config::default() };
-        let incumbent = MetaWeights { w: [1.0; FEATURE_DIM] };
+        let cfg = Config {
+            max_iters: 4,
+            max_no_improve: 10,
+            ..Config::default()
+        };
+        let incumbent = MetaWeights {
+            w: [1.0; FEATURE_DIM],
+        };
         let baseline = fit(&["a", "b"], 3);
         let mut calls = 0;
         let mut restores = 0;
@@ -478,7 +504,10 @@ mod tests {
             signature: sig,
             examples: ex
                 .into_iter()
-                .map(|(i, o)| Example { inputs: vec![Value::Int(i)], expected: Value::Int(o) })
+                .map(|(i, o)| Example {
+                    inputs: vec![Value::Int(i)],
+                    expected: Value::Int(o),
+                })
                 .collect(),
             holdouts: vec![],
             reference_code: "",
@@ -512,7 +541,10 @@ mod tests {
                 // Point the weights API at the temp production file and seed it.
                 std::env::set_var(WEIGHTS_ENV, &prod);
                 crate::meta_learner::reset_for_tests();
-                crate::meta_learner::set_weights(MetaWeights { w: [1.0; FEATURE_DIM] }).unwrap();
+                crate::meta_learner::set_weights(MetaWeights {
+                    w: [1.0; FEATURE_DIM],
+                })
+                .unwrap();
                 let prod_before = std::fs::read_to_string(&prod).unwrap();
 
                 let problems = vec![
@@ -532,7 +564,10 @@ mod tests {
                 assert_eq!(report.outcome.total, 2);
                 // Production weights unchanged by a dry run (scratch isolation).
                 let prod_after = std::fs::read_to_string(&prod).unwrap();
-                assert_eq!(prod_before, prod_after, "production weights must be untouched");
+                assert_eq!(
+                    prod_before, prod_after,
+                    "production weights must be untouched"
+                );
                 // Lock released; a snapshot was written.
                 assert!(!paths.lock.exists(), "lock released on drop");
                 assert!(report.snapshot.exists(), "pre-run snapshot written");
@@ -573,8 +608,14 @@ mod tests {
 
     #[test]
     fn hill_climb_respects_patience_budget() {
-        let cfg = Config { max_iters: 100, max_no_improve: 2, ..Config::default() };
-        let incumbent = MetaWeights { w: [1.0; FEATURE_DIM] };
+        let cfg = Config {
+            max_iters: 100,
+            max_no_improve: 2,
+            ..Config::default()
+        };
+        let incumbent = MetaWeights {
+            w: [1.0; FEATURE_DIM],
+        };
         let baseline = fit(&["a"], 2);
         let mut iters = 0;
         let outcome = hill_climb(

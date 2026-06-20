@@ -11,8 +11,8 @@ pub mod parallel;
 pub mod profiler;
 
 pub use algorithm::{AlgorithmChoice, AlgorithmSelector, Constraints, InputCharacteristics};
-pub use parallel::{Parallelizer, ParallelConfig, TargetLanguage, ParallelStrategy};
-pub use profiler::{profile_code, generate_optimizations, ProfiledCode, OptimizationType};
+pub use parallel::{ParallelConfig, ParallelStrategy, Parallelizer, TargetLanguage};
+pub use profiler::{generate_optimizations, profile_code, OptimizationType, ProfiledCode};
 
 #[cfg(test)]
 mod tests {
@@ -27,11 +27,8 @@ mod tests {
         };
         let constraints = Constraints::default();
 
-        let selection = selector.select_algorithm(
-            algorithm::OperationType::Search,
-            &input,
-            &constraints,
-        );
+        let selection =
+            selector.select_algorithm(algorithm::OperationType::Search, &input, &constraints);
 
         assert!(selection.confidence > 0.0);
     }
@@ -64,11 +61,7 @@ fn example() {
 }
 "#;
 
-        let profiled = profile_code(
-            code,
-            "rust",
-            &profiler::ProfilerConfig::default(),
-        ).await;
+        let profiled = profile_code(code, "rust", &profiler::ProfilerConfig::default()).await;
 
         assert!(profiled.is_ok());
         let profiled = profiled.unwrap();

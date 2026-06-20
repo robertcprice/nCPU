@@ -24,9 +24,7 @@ fn array_rows(problem: &Problem) -> Option<Vec<(Vec<i64>, Vec<i64>)>> {
         .examples
         .iter()
         .map(|ex| match (ex.inputs.as_slice(), &ex.expected) {
-            ([Value::Array(input)], Value::Array(output)) => {
-                Some((input.clone(), output.clone()))
-            }
+            ([Value::Array(input)], Value::Array(output)) => Some((input.clone(), output.clone())),
             _ => None,
         })
         .collect()
@@ -268,7 +266,12 @@ mod tests {
     #[test]
     fn solves_identity() {
         assert_eq!(
-            solve_method(&[(&[1, 2, 3], &[1, 2, 3]), (&[5], &[5]), (&[0, 9], &[0, 9]), (&[7, 8], &[7, 8])]),
+            solve_method(&[
+                (&[1, 2, 3], &[1, 2, 3]),
+                (&[5], &[5]),
+                (&[0, 9], &[0, 9]),
+                (&[7, 8], &[7, 8])
+            ]),
             "array_transform_identity"
         );
     }
@@ -276,7 +279,12 @@ mod tests {
     #[test]
     fn solves_elementwise_double() {
         assert_eq!(
-            solve_method(&[(&[1, 2, 3], &[2, 4, 6]), (&[5], &[10]), (&[0, 1], &[0, 2]), (&[7], &[14])]),
+            solve_method(&[
+                (&[1, 2, 3], &[2, 4, 6]),
+                (&[5], &[10]),
+                (&[0, 1], &[0, 2]),
+                (&[7], &[14])
+            ]),
             "array_transform_map_affine"
         );
     }
@@ -284,7 +292,12 @@ mod tests {
     #[test]
     fn solves_increment() {
         assert_eq!(
-            solve_method(&[(&[1, 2], &[2, 3]), (&[5], &[6]), (&[0, 9], &[1, 10]), (&[7], &[8])]),
+            solve_method(&[
+                (&[1, 2], &[2, 3]),
+                (&[5], &[6]),
+                (&[0, 9], &[1, 10]),
+                (&[7], &[8])
+            ]),
             "array_transform_map_affine"
         );
     }
@@ -292,7 +305,12 @@ mod tests {
     #[test]
     fn solves_abs() {
         assert_eq!(
-            solve_method(&[(&[-1, 2, -3], &[1, 2, 3]), (&[-5], &[5]), (&[-9, 0], &[9, 0]), (&[-2], &[2])]),
+            solve_method(&[
+                (&[-1, 2, -3], &[1, 2, 3]),
+                (&[-5], &[5]),
+                (&[-9, 0], &[9, 0]),
+                (&[-2], &[2])
+            ]),
             "array_transform_abs"
         );
     }
@@ -300,7 +318,12 @@ mod tests {
     #[test]
     fn solves_square() {
         assert_eq!(
-            solve_method(&[(&[1, 2, 3], &[1, 4, 9]), (&[5], &[25]), (&[0, 4], &[0, 16]), (&[6], &[36])]),
+            solve_method(&[
+                (&[1, 2, 3], &[1, 4, 9]),
+                (&[5], &[25]),
+                (&[0, 4], &[0, 16]),
+                (&[6], &[36])
+            ]),
             "array_transform_square"
         );
     }
@@ -308,7 +331,12 @@ mod tests {
     #[test]
     fn solves_sort() {
         assert_eq!(
-            solve_method(&[(&[3, 1, 2], &[1, 2, 3]), (&[5, 4], &[4, 5]), (&[9, 0, 1], &[0, 1, 9]), (&[7, 3], &[3, 7])]),
+            solve_method(&[
+                (&[3, 1, 2], &[1, 2, 3]),
+                (&[5, 4], &[4, 5]),
+                (&[9, 0, 1], &[0, 1, 9]),
+                (&[7, 3], &[3, 7])
+            ]),
             "array_transform_sort"
         );
     }
@@ -316,7 +344,12 @@ mod tests {
     #[test]
     fn solves_reverse() {
         assert_eq!(
-            solve_method(&[(&[1, 2, 3], &[3, 2, 1]), (&[5, 4], &[4, 5]), (&[9, 0, 1], &[1, 0, 9]), (&[8, 9], &[9, 8])]),
+            solve_method(&[
+                (&[1, 2, 3], &[3, 2, 1]),
+                (&[5, 4], &[4, 5]),
+                (&[9, 0, 1], &[1, 0, 9]),
+                (&[8, 9], &[9, 8])
+            ]),
             "array_transform_reverse"
         );
     }
@@ -324,7 +357,12 @@ mod tests {
     #[test]
     fn solves_prefix_sum() {
         assert_eq!(
-            solve_method(&[(&[1, 2, 3], &[1, 3, 6]), (&[5], &[5]), (&[1, 1, 1, 1], &[1, 2, 3, 4]), (&[4, 4], &[4, 8])]),
+            solve_method(&[
+                (&[1, 2, 3], &[1, 3, 6]),
+                (&[5], &[5]),
+                (&[1, 1, 1, 1], &[1, 2, 3, 4]),
+                (&[4, 4], &[4, 8])
+            ]),
             "array_transform_prefix_sum"
         );
     }
@@ -332,7 +370,12 @@ mod tests {
     #[test]
     fn solves_filter_even() {
         assert_eq!(
-            solve_method(&[(&[1, 2, 3, 4], &[2, 4]), (&[5, 6], &[6]), (&[1, 3, 5], &[]), (&[7, 8, 9, 10], &[8, 10])]),
+            solve_method(&[
+                (&[1, 2, 3, 4], &[2, 4]),
+                (&[5, 6], &[6]),
+                (&[1, 3, 5], &[]),
+                (&[7, 8, 9, 10], &[8, 10])
+            ]),
             "array_transform_filter_evens"
         );
     }
@@ -340,7 +383,12 @@ mod tests {
     #[test]
     fn solves_filter_positive() {
         assert_eq!(
-            solve_method(&[(&[-1, 2, -3, 4], &[2, 4]), (&[5, -6], &[5]), (&[-1, -2], &[]), (&[-7, 8], &[8])]),
+            solve_method(&[
+                (&[-1, 2, -3, 4], &[2, 4]),
+                (&[5, -6], &[5]),
+                (&[-1, -2], &[]),
+                (&[-7, 8], &[8])
+            ]),
             "array_transform_filter_pos"
         );
     }

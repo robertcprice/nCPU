@@ -3,10 +3,10 @@
 //! Complete OpenAPI 3.1 spec generation, JSON Schema builder,
 //! and client/server code generation for REST APIs.
 
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::fmt;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value as JsonValue};
 
 // Simple YAML serializer (to avoid serde_yaml dependency)
 fn to_yaml_simple(value: &serde_json::Value) -> Result<String, String> {
@@ -36,9 +36,7 @@ fn to_yaml_simple(value: &serde_json::Value) -> Result<String, String> {
                     result
                 } else {
                     // Inline array format
-                    let items: Vec<String> = arr.iter()
-                        .map(|v| value_to_yaml(v, 0))
-                        .collect();
+                    let items: Vec<String> = arr.iter().map(|v| value_to_yaml(v, 0)).collect();
                     format!("[{}]", items.join(", "))
                 }
             }
@@ -142,8 +140,7 @@ impl OpenAPISpec {
 
     /// Generate JSON spec
     pub fn to_json(&self) -> Result<String, String> {
-        serde_json::to_string_pretty(self)
-            .map_err(|e| format!("Failed to serialize spec: {}", e))
+        serde_json::to_string_pretty(self).map_err(|e| format!("Failed to serialize spec: {}", e))
     }
 
     /// Generate YAML spec
@@ -361,28 +358,60 @@ impl PathItem {
     /// Get all operations
     pub fn operations(&self) -> Vec<&Operation> {
         let mut ops = Vec::new();
-        if let Some(ref op) = self.get { ops.push(op); }
-        if let Some(ref op) = self.post { ops.push(op); }
-        if let Some(ref op) = self.put { ops.push(op); }
-        if let Some(ref op) = self.delete { ops.push(op); }
-        if let Some(ref op) = self.patch { ops.push(op); }
-        if let Some(ref op) = self.options { ops.push(op); }
-        if let Some(ref op) = self.head { ops.push(op); }
-        if let Some(ref op) = self.trace { ops.push(op); }
+        if let Some(ref op) = self.get {
+            ops.push(op);
+        }
+        if let Some(ref op) = self.post {
+            ops.push(op);
+        }
+        if let Some(ref op) = self.put {
+            ops.push(op);
+        }
+        if let Some(ref op) = self.delete {
+            ops.push(op);
+        }
+        if let Some(ref op) = self.patch {
+            ops.push(op);
+        }
+        if let Some(ref op) = self.options {
+            ops.push(op);
+        }
+        if let Some(ref op) = self.head {
+            ops.push(op);
+        }
+        if let Some(ref op) = self.trace {
+            ops.push(op);
+        }
         ops
     }
 
     /// Get all operations with method
     pub fn all_operations(&self) -> Vec<(HttpMethod, Operation)> {
         let mut ops = Vec::new();
-        if let Some(op) = &self.get { ops.push((HttpMethod::GET, op.clone())); }
-        if let Some(op) = &self.post { ops.push((HttpMethod::POST, op.clone())); }
-        if let Some(op) = &self.put { ops.push((HttpMethod::PUT, op.clone())); }
-        if let Some(op) = &self.delete { ops.push((HttpMethod::DELETE, op.clone())); }
-        if let Some(op) = &self.patch { ops.push((HttpMethod::PATCH, op.clone())); }
-        if let Some(op) = &self.options { ops.push((HttpMethod::OPTIONS, op.clone())); }
-        if let Some(op) = &self.head { ops.push((HttpMethod::HEAD, op.clone())); }
-        if let Some(op) = &self.trace { ops.push((HttpMethod::TRACE, op.clone())); }
+        if let Some(op) = &self.get {
+            ops.push((HttpMethod::GET, op.clone()));
+        }
+        if let Some(op) = &self.post {
+            ops.push((HttpMethod::POST, op.clone()));
+        }
+        if let Some(op) = &self.put {
+            ops.push((HttpMethod::PUT, op.clone()));
+        }
+        if let Some(op) = &self.delete {
+            ops.push((HttpMethod::DELETE, op.clone()));
+        }
+        if let Some(op) = &self.patch {
+            ops.push((HttpMethod::PATCH, op.clone()));
+        }
+        if let Some(op) = &self.options {
+            ops.push((HttpMethod::OPTIONS, op.clone()));
+        }
+        if let Some(op) = &self.head {
+            ops.push((HttpMethod::HEAD, op.clone()));
+        }
+        if let Some(op) = &self.trace {
+            ops.push((HttpMethod::TRACE, op.clone()));
+        }
         ops
     }
 }
@@ -477,7 +506,12 @@ impl Operation {
         self
     }
 
-    pub fn with_response(mut self, status: u16, description: impl Into<String>, schema: Schema) -> Self {
+    pub fn with_response(
+        mut self,
+        status: u16,
+        description: impl Into<String>,
+        schema: Schema,
+    ) -> Self {
         let response = Response::new(description)
             .with_content("application/json", MediaType::new().with_schema(schema));
         self.responses.insert(status.to_string(), response);
@@ -485,10 +519,8 @@ impl Operation {
     }
 
     pub fn with_query_param(mut self, name: impl Into<String>, schema: Schema) -> Self {
-        self.parameters.push(
-            Parameter::new(name, ParameterLocation::Query)
-                .with_schema(schema)
-        );
+        self.parameters
+            .push(Parameter::new(name, ParameterLocation::Query).with_schema(schema));
         self
     }
 
@@ -496,7 +528,7 @@ impl Operation {
         self.parameters.push(
             Parameter::new(name, ParameterLocation::Path)
                 .required()
-                .with_schema(schema)
+                .with_schema(schema),
         );
         self
     }
@@ -696,7 +728,9 @@ impl Components {
     }
 
     pub fn with_schema(mut self, name: impl Into<String>, schema: Schema) -> Self {
-        self.schemas.get_or_insert_with(HashMap::new).insert(name.into(), schema);
+        self.schemas
+            .get_or_insert_with(HashMap::new)
+            .insert(name.into(), schema);
         self
     }
 
@@ -900,9 +934,7 @@ impl Schema {
     }
 
     pub fn with_required_field(mut self, name: impl Into<String>) -> Self {
-        self.required
-            .get_or_insert_with(Vec::new)
-            .push(name.into());
+        self.required.get_or_insert_with(Vec::new).push(name.into());
         self
     }
 
@@ -1155,10 +1187,9 @@ impl ApiOperation {
     }
 
     pub fn with_query_param(mut self, name: impl Into<String>, schema: Schema) -> Self {
-        self.operation.parameters.push(
-            Parameter::new(name, ParameterLocation::Query)
-                .with_schema(schema)
-        );
+        self.operation
+            .parameters
+            .push(Parameter::new(name, ParameterLocation::Query).with_schema(schema));
         self
     }
 
@@ -1166,23 +1197,29 @@ impl ApiOperation {
         self.operation.parameters.push(
             Parameter::new(name, ParameterLocation::Path)
                 .required()
-                .with_schema(schema)
+                .with_schema(schema),
         );
         self
     }
 
     pub fn with_header_param(mut self, name: impl Into<String>, schema: Schema) -> Self {
-        self.operation.parameters.push(
-            Parameter::new(name, ParameterLocation::Header)
-                .with_schema(schema)
-        );
+        self.operation
+            .parameters
+            .push(Parameter::new(name, ParameterLocation::Header).with_schema(schema));
         self
     }
 
-    pub fn with_response(mut self, status: u16, description: impl Into<String>, schema: Schema) -> Self {
+    pub fn with_response(
+        mut self,
+        status: u16,
+        description: impl Into<String>,
+        schema: Schema,
+    ) -> Self {
         let response = Response::new(description)
             .with_content("application/json", MediaType::new().with_schema(schema));
-        self.operation.responses.insert(status.to_string(), response);
+        self.operation
+            .responses
+            .insert(status.to_string(), response);
         self
     }
 
@@ -1451,7 +1488,9 @@ impl ApiGenerator {
         let client_name = self.config.client_name.as_deref().unwrap_or("ApiClient");
         code.push_str(&format!("class {} {{\n", client_name));
         code.push_str(&format!("  private baseUrl: string;\n"));
-        code.push_str(&format!("  private defaultHeaders: Record<string, string>;\n\n"));
+        code.push_str(&format!(
+            "  private defaultHeaders: Record<string, string>;\n\n"
+        ));
 
         code.push_str(&format!("  constructor(baseUrl: string = '/', defaultHeaders: Record<string, string> = {{}}) {{\n"));
         code.push_str(&format!("    this.baseUrl = baseUrl;\n"));
@@ -1601,12 +1640,15 @@ impl ApiGenerator {
 
         if let Some(props) = &schema.properties {
             for (prop_name, prop_schema) in props {
-                let is_required = schema.required.as_ref()
+                let is_required = schema
+                    .required
+                    .as_ref()
                     .map(|r| r.contains(prop_name))
                     .unwrap_or(false);
 
                 let ts_type = self.schema_type_to_typescript(prop_schema)?;
-                code.push_str(&format!("  {}{}: {},\n",
+                code.push_str(&format!(
+                    "  {}{}: {},\n",
                     if is_required { "" } else { "?" },
                     prop_name,
                     ts_type
@@ -1632,17 +1674,24 @@ impl ApiGenerator {
 
         if let Some(props) = &schema.properties {
             for (prop_name, prop_schema) in props {
-                let is_required = schema.required.as_ref()
+                let is_required = schema
+                    .required
+                    .as_ref()
                     .map(|r| r.contains(prop_name))
                     .unwrap_or(false);
 
                 let rust_type = self.schema_type_to_rust(prop_schema)?;
                 let field_name = self.to_snake_case(prop_name);
 
-                code.push_str(&format!("  pub {}{}: {},\n",
+                code.push_str(&format!(
+                    "  pub {}{}: {},\n",
                     field_name,
                     if is_required { "" } else { ": Option" },
-                    if is_required { rust_type } else { format!("Option<{}>", rust_type) }
+                    if is_required {
+                        rust_type
+                    } else {
+                        format!("Option<{}>", rust_type)
+                    }
                 ));
             }
         }
@@ -1664,14 +1713,21 @@ impl ApiGenerator {
 
         if let Some(props) = &schema.properties {
             for (prop_name, prop_schema) in props {
-                let is_required = schema.required.as_ref()
+                let is_required = schema
+                    .required
+                    .as_ref()
                     .map(|r| r.contains(prop_name))
                     .unwrap_or(false);
 
                 let py_type = self.schema_type_to_python(prop_schema)?;
-                code.push_str(&format!("    {}: {} = None,\n",
+                code.push_str(&format!(
+                    "    {}: {} = None,\n",
                     prop_name,
-                    if is_required { py_type } else { format!("Optional[{}]", py_type) }
+                    if is_required {
+                        py_type
+                    } else {
+                        format!("Optional[{}]", py_type)
+                    }
                 ));
             }
         }
@@ -1701,7 +1757,8 @@ impl ApiGenerator {
         for param in &operation.parameters {
             if param.in_location == ParameterLocation::Path {
                 let param_type = self.param_type_to_typescript(param)?;
-                code.push_str(&format!("{}{}: {}",
+                code.push_str(&format!(
+                    "{}{}: {}",
                     if first_param { "" } else { ", " },
                     param.name,
                     param_type
@@ -1714,7 +1771,8 @@ impl ApiGenerator {
         for param in &operation.parameters {
             if param.in_location == ParameterLocation::Query {
                 let param_type = self.param_type_to_typescript(param)?;
-                code.push_str(&format!("{}{}?: {}",
+                code.push_str(&format!(
+                    "{}{}?: {}",
                     if first_param { "" } else { ", " },
                     param.name,
                     param_type
@@ -1728,7 +1786,8 @@ impl ApiGenerator {
             if let Some(media) = body.content.get("application/json") {
                 if let Some(schema) = &media.schema {
                     let type_name = self.schema_type_name(schema)?;
-                    code.push_str(&format!("{}body?: {}",
+                    code.push_str(&format!(
+                        "{}body?: {}",
                         if first_param { "" } else { ", " },
                         type_name
                     ));
@@ -1738,11 +1797,13 @@ impl ApiGenerator {
         }
 
         // Add options/config
-        code.push_str(&format!("{}config?: Partial<RequestConfig>",
+        code.push_str(&format!(
+            "{}config?: Partial<RequestConfig>",
             if first_param { "" } else { ", " }
         ));
 
-        code.push_str(&format!("): Promise<{}> {{\n",
+        code.push_str(&format!(
+            "): Promise<{}> {{\n",
             self.get_response_type(operation)?
         ));
 
@@ -1752,17 +1813,16 @@ impl ApiGenerator {
         code.push_str(&format!("      path: `{}`,\n", path_with_params));
 
         // Add query params
-        let has_query_params = operation.parameters.iter()
+        let has_query_params = operation
+            .parameters
+            .iter()
             .any(|p| p.in_location == ParameterLocation::Query);
         if has_query_params {
             code.push_str(&format!("      query: {{ "));
             let mut first = true;
             for param in &operation.parameters {
                 if param.in_location == ParameterLocation::Query {
-                    code.push_str(&format!("{}{}",
-                        if first { "" } else { ", " },
-                        param.name
-                    ));
+                    code.push_str(&format!("{}{}", if first { "" } else { ", " }, param.name));
                     first = false;
                 }
             }
@@ -1806,7 +1866,10 @@ impl ApiGenerator {
         for param in &operation.parameters {
             if param.in_location == ParameterLocation::Query {
                 let param_type = self.param_type_to_python(param)?;
-                code.push_str(&format!(", {}: Optional[{}] = None", param.name, param_type));
+                code.push_str(&format!(
+                    ", {}: Optional[{}] = None",
+                    param.name, param_type
+                ));
             }
         }
 
@@ -1824,10 +1887,15 @@ impl ApiGenerator {
 
         // Build URL
         let path_with_params = self.extract_path_params(path, operation);
-        code.push_str(&format!("        url = self.base_url + '{}'\n", path_with_params));
+        code.push_str(&format!(
+            "        url = self.base_url + '{}'\n",
+            path_with_params
+        ));
 
         // Add query params
-        let has_query_params = operation.parameters.iter()
+        let has_query_params = operation
+            .parameters
+            .iter()
             .any(|p| p.in_location == ParameterLocation::Query);
         if has_query_params {
             code.push_str(&format!("        params = {{\n"));
@@ -1840,7 +1908,8 @@ impl ApiGenerator {
         }
 
         // Make request
-        code.push_str(&format!("        response = requests.{}(\n",
+        code.push_str(&format!(
+            "        response = requests.{}(\n",
             self.to_snake_case(&format!("{:?}", method))
         ));
         code.push_str(&format!("            url,\n"));
@@ -1863,7 +1932,10 @@ impl ApiGenerator {
         let mut result = path.to_string();
         for param in &operation.parameters {
             if param.in_location == ParameterLocation::Path {
-                result = result.replace(&format!("{{{}}}", param.name), &format!("${{{}}}", param.name));
+                result = result.replace(
+                    &format!("{{{}}}", param.name),
+                    &format!("${{{}}}", param.name),
+                );
             }
         }
         result
@@ -2056,11 +2128,12 @@ impl JsonSchemaBuilder {
 
     /// Generate standalone JSON Schema
     pub fn generate_schema(&self, name: &str) -> Result<JsonValue, String> {
-        let schema = self.schemas.get(name)
+        let schema = self
+            .schemas
+            .get(name)
             .ok_or_else(|| format!("Schema not found: {}", name))?;
 
-        serde_json::to_value(schema)
-            .map_err(|e| format!("Failed to serialize schema: {}", e))
+        serde_json::to_value(schema).map_err(|e| format!("Failed to serialize schema: {}", e))
     }
 
     /// Generate JSON Schema Draft 2020-12
@@ -2069,8 +2142,10 @@ impl JsonSchemaBuilder {
 
         // Add draft-2020-12 schema identifier
         if let Some(obj) = schema.as_object_mut() {
-            obj.insert("$schema".to_string(),
-                JsonValue::String("https://json-schema.org/draft/2020-12/schema".to_string()));
+            obj.insert(
+                "$schema".to_string(),
+                JsonValue::String("https://json-schema.org/draft/2020-12/schema".to_string()),
+            );
         }
 
         Ok(schema)
@@ -2078,7 +2153,9 @@ impl JsonSchemaBuilder {
 
     /// Validate JSON value against schema
     pub fn validate(&self, name: &str, value: &JsonValue) -> Result<(), String> {
-        let schema = self.schemas.get(name)
+        let schema = self
+            .schemas
+            .get(name)
             .ok_or_else(|| format!("Schema not found: {}", name))?;
 
         self.validate_against_schema(schema, value)
@@ -2104,9 +2181,13 @@ impl JsonSchemaBuilder {
 
             if expected_type != "null" && expected_type != actual_type {
                 // Check for number/integer compatibility
-                if !((expected_type == "number" && actual_type == "integer") ||
-                      (expected_type == "integer" && actual_type == "number" && value.is_i64())) {
-                    return Err(format!("Type mismatch: expected {}, got {}", expected_type, actual_type));
+                if !((expected_type == "number" && actual_type == "integer")
+                    || (expected_type == "integer" && actual_type == "number" && value.is_i64()))
+                {
+                    return Err(format!(
+                        "Type mismatch: expected {}, got {}",
+                        expected_type, actual_type
+                    ));
                 }
             }
         }
@@ -2129,12 +2210,20 @@ impl JsonSchemaBuilder {
         if let Some(s) = value.as_str() {
             if let Some(min_len) = schema.min_length {
                 if s.len() < min_len as usize {
-                    return Err(format!("String length {} below minimum {}", s.len(), min_len));
+                    return Err(format!(
+                        "String length {} below minimum {}",
+                        s.len(),
+                        min_len
+                    ));
                 }
             }
             if let Some(max_len) = schema.max_length {
                 if s.len() > max_len as usize {
-                    return Err(format!("String length {} above maximum {}", s.len(), max_len));
+                    return Err(format!(
+                        "String length {} above maximum {}",
+                        s.len(),
+                        max_len
+                    ));
                 }
             }
             // Note: Pattern validation requires regex crate, returning basic error for now
@@ -2148,12 +2237,20 @@ impl JsonSchemaBuilder {
         if let Some(arr) = value.as_array() {
             if let Some(min_items) = schema.min_items {
                 if arr.len() < min_items as usize {
-                    return Err(format!("Array length {} below minimum {}", arr.len(), min_items));
+                    return Err(format!(
+                        "Array length {} below minimum {}",
+                        arr.len(),
+                        min_items
+                    ));
                 }
             }
             if let Some(max_items) = schema.max_items {
                 if arr.len() > max_items as usize {
-                    return Err(format!("Array length {} above maximum {}", arr.len(), max_items));
+                    return Err(format!(
+                        "Array length {} above maximum {}",
+                        arr.len(),
+                        max_items
+                    ));
                 }
             }
             if let Some(items_schema) = &schema.items {
@@ -2178,7 +2275,10 @@ impl JsonSchemaBuilder {
                 for (prop_name, prop_schema) in properties {
                     if let Some(prop_value) = obj.get(prop_name) {
                         if let Err(e) = self.validate_against_schema(prop_schema, prop_value) {
-                            return Err(format!("Property '{}' validation failed: {}", prop_name, e));
+                            return Err(format!(
+                                "Property '{}' validation failed: {}",
+                                prop_name, e
+                            ));
                         }
                     }
                 }
@@ -2221,11 +2321,18 @@ mod tests {
             .with_title("User")
             .with_description("A user object")
             .with_property("id", Schema::integer())
-            .with_property("name", Schema::string().with_min_length(1).with_max_length(100))
+            .with_property(
+                "name",
+                Schema::string().with_min_length(1).with_max_length(100),
+            )
             .with_property("email", Schema::string().with_format("email"))
             .with_property("active", Schema::boolean())
             .with_required_field("id")
-            .with_required_fields(vec!["id".to_string(), "name".to_string(), "email".to_string()])
+            .with_required_fields(vec![
+                "id".to_string(),
+                "name".to_string(),
+                "email".to_string(),
+            ])
             .build();
 
         assert_eq!(user_schema.schema_type, Some("object".to_string()));
@@ -2269,9 +2376,10 @@ mod tests {
 
     #[test]
     fn test_spec_to_json() {
-        let spec = OpenAPISpec::new("Test", "1.0")
-            .with_path("/test", PathItem::new()
-                .with_get(Operation::new().with_operation_id("testOp")));
+        let spec = OpenAPISpec::new("Test", "1.0").with_path(
+            "/test",
+            PathItem::new().with_get(Operation::new().with_operation_id("testOp")),
+        );
 
         let json = spec.to_json();
         assert!(json.is_ok());
@@ -2307,10 +2415,12 @@ mod tests {
 
     #[test]
     fn test_response_with_content() {
-        let response = Response::new("Success")
-            .with_content("application/json", MediaType::new()
+        let response = Response::new("Success").with_content(
+            "application/json",
+            MediaType::new()
                 .with_schema(Schema::object())
-                .with_example(json!({"message": "ok"})));
+                .with_example(json!({"message": "ok"})),
+        );
 
         assert!(response.content.contains_key("application/json"));
     }
@@ -2344,14 +2454,16 @@ mod tests {
 
     #[test]
     fn test_api_generator_typescript() {
-        let spec = OpenAPISpec::new("Test API", "1.0.0")
-            .with_path("/users", PathItem::new()
-                .with_get(Operation::new()
+        let spec = OpenAPISpec::new("Test API", "1.0.0").with_path(
+            "/users",
+            PathItem::new().with_get(
+                Operation::new()
                     .with_operation_id("getUsers")
-                    .with_response(200, "Success", Schema::array(Schema::object()))));
+                    .with_response(200, "Success", Schema::array(Schema::object())),
+            ),
+        );
 
-        let generator = ApiGenerator::new(spec)
-            .with_language(TargetLanguage::TypeScript);
+        let generator = ApiGenerator::new(spec).with_language(TargetLanguage::TypeScript);
 
         let result = generator.generate_typescript_client();
         assert!(result.is_ok());
@@ -2362,14 +2474,16 @@ mod tests {
 
     #[test]
     fn test_api_generator_rust() {
-        let spec = OpenAPISpec::new("Test API", "1.0.0")
-            .with_path("/users", PathItem::new()
-                .with_get(Operation::new()
+        let spec = OpenAPISpec::new("Test API", "1.0.0").with_path(
+            "/users",
+            PathItem::new().with_get(
+                Operation::new()
                     .with_operation_id("getUsers")
-                    .with_response(200, "Success", Schema::array(Schema::object()))));
+                    .with_response(200, "Success", Schema::array(Schema::object())),
+            ),
+        );
 
-        let generator = ApiGenerator::new(spec)
-            .with_language(TargetLanguage::TypeScript);
+        let generator = ApiGenerator::new(spec).with_language(TargetLanguage::TypeScript);
 
         let result = generator.generate_rust_server();
         assert!(result.is_ok());
@@ -2380,14 +2494,16 @@ mod tests {
 
     #[test]
     fn test_api_generator_python() {
-        let spec = OpenAPISpec::new("Test API", "1.0.0")
-            .with_path("/users", PathItem::new()
-                .with_get(Operation::new()
+        let spec = OpenAPISpec::new("Test API", "1.0.0").with_path(
+            "/users",
+            PathItem::new().with_get(
+                Operation::new()
                     .with_operation_id("getUsers")
-                    .with_response(200, "Success", Schema::array(Schema::object()))));
+                    .with_response(200, "Success", Schema::array(Schema::object())),
+            ),
+        );
 
-        let generator = ApiGenerator::new(spec)
-            .with_language(TargetLanguage::Python);
+        let generator = ApiGenerator::new(spec).with_language(TargetLanguage::Python);
 
         let result = generator.generate_python_client();
         assert!(result.is_ok());
@@ -2398,11 +2514,9 @@ mod tests {
 
     #[test]
     fn test_spec_merge() {
-        let mut spec1 = OpenAPISpec::new("API1", "1.0")
-            .with_path("/path1", PathItem::new());
+        let mut spec1 = OpenAPISpec::new("API1", "1.0").with_path("/path1", PathItem::new());
 
-        let spec2 = OpenAPISpec::new("API2", "1.0")
-            .with_path("/path2", PathItem::new());
+        let spec2 = OpenAPISpec::new("API2", "1.0").with_path("/path2", PathItem::new());
 
         spec1.merge(spec2);
 
@@ -2413,10 +2527,10 @@ mod tests {
 
     #[test]
     fn test_find_operation() {
-        let spec = OpenAPISpec::new("Test", "1.0")
-            .with_path("/users", PathItem::new()
-                .with_get(Operation::new()
-                    .with_operation_id("listUsers")));
+        let spec = OpenAPISpec::new("Test", "1.0").with_path(
+            "/users",
+            PathItem::new().with_get(Operation::new().with_operation_id("listUsers")),
+        );
 
         let result = spec.find_operation("listUsers");
         assert!(result.is_some());
@@ -2428,10 +2542,12 @@ mod tests {
 
     #[test]
     fn test_operation_ids() {
-        let spec = OpenAPISpec::new("Test", "1.0")
-            .with_path("/users", PathItem::new()
+        let spec = OpenAPISpec::new("Test", "1.0").with_path(
+            "/users",
+            PathItem::new()
                 .with_get(Operation::new().with_operation_id("list"))
-                .with_post(Operation::new().with_operation_id("create")));
+                .with_post(Operation::new().with_operation_id("create")),
+        );
 
         let ids = spec.operation_ids();
         assert_eq!(ids.len(), 2);
@@ -2441,11 +2557,7 @@ mod tests {
 
     #[test]
     fn test_schema_with_any_of() {
-        let schema = Schema::new()
-            .with_any_of(vec![
-                Schema::string(),
-                Schema::integer(),
-            ]);
+        let schema = Schema::new().with_any_of(vec![Schema::string(), Schema::integer()]);
 
         assert!(schema.any_of.is_some());
         assert_eq!(schema.any_of.unwrap().len(), 2);
@@ -2453,12 +2565,8 @@ mod tests {
 
     #[test]
     fn test_schema_with_enum() {
-        let schema = Schema::string()
-            .with_enum(vec![
-                json!("active"),
-                json!("inactive"),
-                json!("pending"),
-            ]);
+        let schema =
+            Schema::string().with_enum(vec![json!("active"), json!("inactive"), json!("pending")]);
 
         assert!(schema.enum_values.is_some());
         assert_eq!(schema.enum_values.unwrap().len(), 3);
@@ -2515,8 +2623,9 @@ mod tests {
 
     #[test]
     fn test_response_with_headers() {
-        let response = Response::new("OK")
-            .with_header("X-RateLimit", Header {
+        let response = Response::new("OK").with_header(
+            "X-RateLimit",
+            Header {
                 description: Some("Rate limit".to_string()),
                 schema: Some(Schema::integer()),
                 required: false,
@@ -2528,7 +2637,8 @@ mod tests {
                 example: None,
                 examples: HashMap::new(),
                 content: HashMap::new(),
-            });
+            },
+        );
 
         assert!(response.headers.contains_key("X-RateLimit"));
     }
@@ -2545,13 +2655,15 @@ mod tests {
 
     #[test]
     fn test_spec_with_components() {
-        let spec = OpenAPISpec::new("Test", "1.0")
-            .with_components(Components::new()
-                .with_schema("Error", Schema::object()
+        let spec = OpenAPISpec::new("Test", "1.0").with_components(
+            Components::new().with_schema(
+                "Error",
+                Schema::object()
                     .with_property("code", Schema::integer())
                     .with_property("message", Schema::string())
-                    .with_required_field("code")
-                ));
+                    .with_required_field("code"),
+            ),
+        );
 
         assert!(spec.components.is_some());
         assert!(spec.components.as_ref().unwrap().schemas.is_some());
@@ -2576,8 +2688,12 @@ mod tests {
             .with_property("id", Schema::integer().read_only())
             .with_property("password", Schema::string().write_only());
 
-        assert!(schema.properties.as_ref().unwrap()["id"].read_only.is_some());
-        assert!(schema.properties.as_ref().unwrap()["password"].write_only.is_some());
+        assert!(schema.properties.as_ref().unwrap()["id"]
+            .read_only
+            .is_some());
+        assert!(schema.properties.as_ref().unwrap()["password"]
+            .write_only
+            .is_some());
     }
 
     #[test]
@@ -2596,28 +2712,45 @@ mod tests {
             .with_server("http://localhost:8080", "Development")
             .with_tag(Tag::new("users").with_description("User operations"))
             .with_components(Components::new().with_schema("User", user_schema.clone()))
-            .with_path("/users", PathItem::new()
-                .with_get(Operation::new()
-                    .with_operation_id("listUsers")
-                    .with_summary("List all users")
-                    .with_tag("users")
-                    .with_query_param("limit", Schema::integer())
-                    .with_response(200, "List of users", Schema::array(Schema::reference("User"))))
-                .with_post(Operation::new()
-                    .with_operation_id("createUser")
-                    .with_summary("Create a new user")
-                    .with_tag("users")
-                    .with_request_body(RequestBody::new()
-                        .with_content("application/json", MediaType::new().with_schema(user_schema.clone())))
-                    .with_response(201, "User created", Schema::reference("User"))))
-            .with_path("/users/{id}", PathItem::new()
-                .with_get(Operation::new()
-                    .with_operation_id("getUser")
-                    .with_summary("Get user by ID")
-                    .with_tag("users")
-                    .with_path_param("id", Schema::integer())
-                    .with_response(200, "User found", Schema::reference("User"))
-                    .with_response(404, "User not found", Schema::object())))
+            .with_path(
+                "/users",
+                PathItem::new()
+                    .with_get(
+                        Operation::new()
+                            .with_operation_id("listUsers")
+                            .with_summary("List all users")
+                            .with_tag("users")
+                            .with_query_param("limit", Schema::integer())
+                            .with_response(
+                                200,
+                                "List of users",
+                                Schema::array(Schema::reference("User")),
+                            ),
+                    )
+                    .with_post(
+                        Operation::new()
+                            .with_operation_id("createUser")
+                            .with_summary("Create a new user")
+                            .with_tag("users")
+                            .with_request_body(RequestBody::new().with_content(
+                                "application/json",
+                                MediaType::new().with_schema(user_schema.clone()),
+                            ))
+                            .with_response(201, "User created", Schema::reference("User")),
+                    ),
+            )
+            .with_path(
+                "/users/{id}",
+                PathItem::new().with_get(
+                    Operation::new()
+                        .with_operation_id("getUser")
+                        .with_summary("Get user by ID")
+                        .with_tag("users")
+                        .with_path_param("id", Schema::integer())
+                        .with_response(200, "User found", Schema::reference("User"))
+                        .with_response(404, "User not found", Schema::object()),
+                ),
+            )
             .with_security({
                 let mut req = HashMap::new();
                 req.insert("bearerAuth".to_string(), vec![]);

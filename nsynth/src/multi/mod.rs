@@ -2,16 +2,16 @@
 //!
 //! Transpile Mog IR to JavaScript, Python, TypeScript, Go, and Java.
 
-pub mod lang;
-pub mod transpile;
 pub mod js;
+pub mod lang;
 pub mod py;
+pub mod transpile;
 pub mod ts;
 
-pub use lang::{TargetLang, LanguageTarget};
-pub use transpile::{transpile, TranspileError};
 pub use js::JavaScriptTarget;
+pub use lang::{LanguageTarget, TargetLang};
 pub use py::PythonTarget;
+pub use transpile::{transpile, TranspileError};
 pub use ts::TypeScriptTarget;
 
 /// Multi-language synthesis configuration

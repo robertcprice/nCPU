@@ -233,12 +233,8 @@ impl Reptile {
         let diff = avg_adapted
             .sub(&self.model)
             .unwrap_or_else(|_| avg_adapted.clone());
-        let scaled_diff = Tensor::vector(
-            diff.data.iter().map(|&d| d * self.meta_lr).collect()
-        );
-        self.model
-            .add(&scaled_diff)
-            .unwrap_or(self.model.clone())
+        let scaled_diff = Tensor::vector(diff.data.iter().map(|&d| d * self.meta_lr).collect());
+        self.model.add(&scaled_diff).unwrap_or(self.model.clone())
     }
 }
 

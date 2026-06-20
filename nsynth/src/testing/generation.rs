@@ -4,8 +4,8 @@
 //! including normal cases, edge cases, boundary values, and property-based tests.
 
 use crate::benchmark::{Problem, Value};
-use crate::testing::{TestCase, int, string, pair, array, TestSuite, Example, TestCategory};
-use crate::bidirectional::parser::{AST, Function};
+use crate::bidirectional::parser::{Function, AST};
+use crate::testing::{array, int, pair, string, Example, TestCase, TestCategory, TestSuite};
 use std::collections::{HashMap, HashSet};
 
 /// Test generation configuration
@@ -876,9 +876,10 @@ mod tests {
             category: "arithmetic",
             description: "Add two numbers",
             signature: "fn add_two(a: i64, b: i64) -> i64",
-            examples: vec![
-                Example { inputs: vec![int(2), int(3)], expected: int(5) },
-            ],
+            examples: vec![Example {
+                inputs: vec![int(2), int(3)],
+                expected: int(5),
+            }],
             holdouts: vec![],
             reference_code: "fn add_two(a: i64, b: i64) -> i64 { a + b }",
             synthetic_args: vec![],
@@ -922,7 +923,9 @@ mod tests {
         let edge_tests = gen.generate_edge_cases(&problem);
 
         assert!(!edge_tests.is_empty());
-        assert!(edge_tests.iter().any(|t| t.category == TestCategory::EdgeCase));
+        assert!(edge_tests
+            .iter()
+            .any(|t| t.category == TestCategory::EdgeCase));
     }
 
     #[test]

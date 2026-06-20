@@ -170,11 +170,12 @@ impl GraphQLValue {
             Self::List(items) => {
                 serde_json::Value::Array(items.iter().map(|v| v.to_json()).collect())
             }
-            Self::Object(fields) => {
-                serde_json::Value::Object(
-                    fields.iter().map(|(k, v)| (k.clone(), v.to_json())).collect(),
-                )
-            }
+            Self::Object(fields) => serde_json::Value::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_json()))
+                    .collect(),
+            ),
         }
     }
 
@@ -233,18 +234,17 @@ impl GraphQLValue {
                 }
             }
             serde_json::Value::String(s) => Self::String(s.clone()),
-            serde_json::Value::Array(items) => {
-                Self::List(
-                    items.iter().map(Self::from_json).collect::<GraphQLResult<Vec<_>>>()?
-                )
-            }
-            serde_json::Value::Object(obj) => {
-                Self::Object(
-                    obj.iter()
-                        .map(|(k, v)| Ok((k.clone(), Self::from_json(v)?)))
-                        .collect::<GraphQLResult<HashMap<_, _>>>()?
-                )
-            }
+            serde_json::Value::Array(items) => Self::List(
+                items
+                    .iter()
+                    .map(Self::from_json)
+                    .collect::<GraphQLResult<Vec<_>>>()?,
+            ),
+            serde_json::Value::Object(obj) => Self::Object(
+                obj.iter()
+                    .map(|(k, v)| Ok((k.clone(), Self::from_json(v)?)))
+                    .collect::<GraphQLResult<HashMap<_, _>>>()?,
+            ),
         })
     }
 }
@@ -305,10 +305,7 @@ pub enum GraphQLType {
     },
 
     /// Union type
-    Union {
-        name: String,
-        types: Vec<String>,
-    },
+    Union { name: String, types: Vec<String> },
 
     /// Input object type
     InputObject {
@@ -420,10 +417,7 @@ pub struct GraphQLField {
 
 impl GraphQLField {
     /// Create new field
-    pub fn new(
-        name: impl Into<String>,
-        field_type: GraphQLType,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, field_type: GraphQLType) -> Self {
         Self {
             name: name.into(),
             description: None,
@@ -465,10 +459,7 @@ pub struct GraphQLInputValue {
 
 impl GraphQLInputValue {
     /// Create new input value
-    pub fn new(
-        name: impl Into<String>,
-        value_type: GraphQLType,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, value_type: GraphQLType) -> Self {
         Self {
             name: name.into(),
             description: None,
@@ -562,18 +553,16 @@ impl GraphQLQuery {
         // Simple selection set parsing (field names only)
         let selection_set = Self::parse_selection_set(rest)?;
 
-        Ok(Self::new(
-            source,
-            operation_type,
-            selection_set,
-        ))
+        Ok(Self::new(source, operation_type, selection_set))
     }
 
     fn parse_selection_set(s: &str) -> GraphQLResult<SelectionSet> {
         let s = s.trim();
 
         // Find opening brace
-        let start = s.find('{').ok_or_else(|| GraphQLError::syntax("Expected '{'"))?;
+        let start = s
+            .find('{')
+            .ok_or_else(|| GraphQLError::syntax("Expected '{'"))?;
         let after_brace = &s[start + 1..];
 
         // Find matching closing brace
@@ -616,7 +605,9 @@ impl GraphQLQuery {
             // Check for nested fields
             if let Some(nested_start) = part.find('{') {
                 let field_name = &part[..nested_start].trim();
-                let nested_end = part.rfind('}').ok_or_else(|| GraphQLError::syntax("Unmatched braces"))?;
+                let nested_end = part
+                    .rfind('}')
+                    .ok_or_else(|| GraphQLError::syntax("Unmatched braces"))?;
                 let nested_inner = &part[nested_start + 1..nested_end];
 
                 selections.push(Selection::Field(Field {
@@ -722,7 +713,11 @@ impl ExecutionContext {
 }
 
 /// Resolver function type
-pub type ResolverFn = Arc<dyn Fn(&ExecutionContext, &HashMap<String, GraphQLValue>) -> GraphQLResult<GraphQLValue> + Send + Sync>;
+pub type ResolverFn = Arc<
+    dyn Fn(&ExecutionContext, &HashMap<String, GraphQLValue>) -> GraphQLResult<GraphQLValue>
+        + Send
+        + Sync,
+>;
 
 /// Field resolver
 #[derive(Clone)]
@@ -733,10 +728,7 @@ pub struct GraphQLResolver {
 
 impl GraphQLResolver {
     /// Create new resolver
-    pub fn new(
-        field_name: impl Into<String>,
-        resolver: ResolverFn,
-    ) -> Self {
+    pub fn new(field_name: impl Into<String>, resolver: ResolverFn) -> Self {
         Self {
             field_name: field_name.into(),
             resolver,
@@ -751,14 +743,18 @@ impl GraphQLResolver {
     /// Create resolver from function
     pub fn from_fn<F>(field_name: impl Into<String>, f: F) -> Self
     where
-        F: Fn(&ExecutionContext, &HashMap<String, GraphQLValue>) -> GraphQLResult<GraphQLValue> + Send + Sync + 'static,
+        F: Fn(&ExecutionContext, &HashMap<String, GraphQLValue>) -> GraphQLResult<GraphQLValue>
+            + Send
+            + Sync
+            + 'static,
     {
         Self::new(field_name, Arc::new(f))
     }
 }
 
 /// Subscription handler
-pub type SubscriptionHandler = Arc<dyn Fn(GraphQLValue) -> Box<dyn Iterator<Item = GraphQLValue> + Send> + Send + Sync>;
+pub type SubscriptionHandler =
+    Arc<dyn Fn(GraphQLValue) -> Box<dyn Iterator<Item = GraphQLValue> + Send> + Send + Sync>;
 
 /// Subscription definition
 #[derive(Clone)]
@@ -769,10 +765,7 @@ pub struct GraphQLSubscription {
 
 impl GraphQLSubscription {
     /// Create new subscription
-    pub fn new(
-        name: impl Into<String>,
-        handler: SubscriptionHandler,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, handler: SubscriptionHandler) -> Self {
         Self {
             name: name.into(),
             handler,
@@ -825,7 +818,11 @@ impl GraphQLSchema {
             mutation_type: None,
             subscription_type: None,
             types: Self::builtin_types(),
-            directives: vec!["skip".to_string(), "include".to_string(), "deprecated".to_string()],
+            directives: vec![
+                "skip".to_string(),
+                "include".to_string(),
+                "deprecated".to_string(),
+            ],
             resolvers: HashMap::new(),
             subscriptions: HashMap::new(),
         }
@@ -835,9 +832,18 @@ impl GraphQLSchema {
     fn builtin_types() -> HashMap<String, GraphQLType> {
         let mut types = HashMap::new();
         types.insert("Int".to_string(), GraphQLType::Scalar("Int".to_string()));
-        types.insert("Float".to_string(), GraphQLType::Scalar("Float".to_string()));
-        types.insert("String".to_string(), GraphQLType::Scalar("String".to_string()));
-        types.insert("Boolean".to_string(), GraphQLType::Scalar("Boolean".to_string()));
+        types.insert(
+            "Float".to_string(),
+            GraphQLType::Scalar("Float".to_string()),
+        );
+        types.insert(
+            "String".to_string(),
+            GraphQLType::Scalar("String".to_string()),
+        );
+        types.insert(
+            "Boolean".to_string(),
+            GraphQLType::Scalar("Boolean".to_string()),
+        );
         types.insert("ID".to_string(), GraphQLType::Scalar("ID".to_string()));
         types
     }
@@ -889,7 +895,8 @@ impl GraphQLSchema {
 
     /// Add subscription
     pub fn add_subscription(mut self, subscription: GraphQLSubscription) -> Self {
-        self.subscriptions.insert(subscription.name.clone(), subscription);
+        self.subscriptions
+            .insert(subscription.name.clone(), subscription);
         self
     }
 
@@ -954,15 +961,17 @@ impl GraphQLSchema {
 
         // Get root type based on operation
         let root_type_name = match query.operation_type {
-            OperationType::Query => self.query_type
+            OperationType::Query => self
+                .query_type
                 .as_ref()
                 .ok_or_else(|| GraphQLError::validation("No query type defined in schema"))?,
-            OperationType::Mutation => self.mutation_type
+            OperationType::Mutation => self
+                .mutation_type
                 .as_ref()
                 .ok_or_else(|| GraphQLError::validation("No mutation type defined in schema"))?,
-            OperationType::Subscription => self.subscription_type
-                .as_ref()
-                .ok_or_else(|| GraphQLError::validation("No subscription type defined in schema"))?,
+            OperationType::Subscription => self.subscription_type.as_ref().ok_or_else(|| {
+                GraphQLError::validation("No subscription type defined in schema")
+            })?,
         };
 
         // Execute selection set
@@ -991,7 +1000,9 @@ impl GraphQLSchema {
                 }
                 Selection::InlineFragment(_) => {
                     // Inline fragment handling would go here
-                    return Err(GraphQLError::validation("Inline fragments not yet implemented"));
+                    return Err(GraphQLError::validation(
+                        "Inline fragments not yet implemented",
+                    ));
                 }
             }
         }
@@ -1020,7 +1031,8 @@ impl GraphQLSchema {
                     let mut selected_fields = HashMap::new();
                     for selection in &selection_set.selections {
                         if let Selection::Field(subfield) = selection {
-                            let subfield_value = self.execute_field(&field.name, subfield, context)?;
+                            let subfield_value =
+                                self.execute_field(&field.name, subfield, context)?;
                             selected_fields.insert(subfield.name.clone(), subfield_value);
                         }
                     }
@@ -1047,11 +1059,12 @@ impl GraphQLSchema {
         subscription_name: &str,
         initial_value: GraphQLValue,
     ) -> GraphQLResult<Box<dyn Iterator<Item = GraphQLValue> + Send>> {
-        let subscription = self.get_subscription(subscription_name)
-            .ok_or_else(|| GraphQLError::SubscriptionError(format!(
+        let subscription = self.get_subscription(subscription_name).ok_or_else(|| {
+            GraphQLError::SubscriptionError(format!(
                 "Subscription '{}' not found",
                 subscription_name
-            )))?;
+            ))
+        })?;
 
         Ok((subscription.handler)(initial_value))
     }
@@ -1091,7 +1104,10 @@ impl GraphQLSchema {
             GraphQLType::Scalar(scalar_name) => {
                 format!("scalar {}", scalar_name)
             }
-            GraphQLType::Enum { name: enum_name, values } => {
+            GraphQLType::Enum {
+                name: enum_name,
+                values,
+            } => {
                 let mut sdl = format!("enum {} {{\n", enum_name);
                 for value in values {
                     sdl.push_str(&format!("  {}\n", value));
@@ -1099,10 +1115,17 @@ impl GraphQLSchema {
                 sdl.push_str("}\n");
                 sdl
             }
-            GraphQLType::Object { name: obj_name, fields } => {
+            GraphQLType::Object {
+                name: obj_name,
+                fields,
+            } => {
                 let mut sdl = format!("type {} {{\n", obj_name);
                 for field in fields {
-                    sdl.push_str(&format!("  {}: {}", field.name, self.type_ref_to_sdl(&field.field_type)));
+                    sdl.push_str(&format!(
+                        "  {}: {}",
+                        field.name,
+                        self.type_ref_to_sdl(&field.field_type)
+                    ));
                     if field.is_deprecated {
                         if let Some(reason) = &field.deprecation_reason {
                             sdl.push_str(&format!(" @deprecated(reason: \"{}\")", reason));
@@ -1115,21 +1138,38 @@ impl GraphQLSchema {
                 sdl.push_str("}\n");
                 sdl
             }
-            GraphQLType::Interface { name: iface_name, fields } => {
+            GraphQLType::Interface {
+                name: iface_name,
+                fields,
+            } => {
                 let mut sdl = format!("interface {} {{\n", iface_name);
                 for field in fields {
-                    sdl.push_str(&format!("  {}: {}\n", field.name, self.type_ref_to_sdl(&field.field_type)));
+                    sdl.push_str(&format!(
+                        "  {}: {}\n",
+                        field.name,
+                        self.type_ref_to_sdl(&field.field_type)
+                    ));
                 }
                 sdl.push_str("}\n");
                 sdl
             }
-            GraphQLType::Union { name: union_name, types } => {
+            GraphQLType::Union {
+                name: union_name,
+                types,
+            } => {
                 format!("union {} = {}\n", union_name, types.join(" | "))
             }
-            GraphQLType::InputObject { name: input_name, fields } => {
+            GraphQLType::InputObject {
+                name: input_name,
+                fields,
+            } => {
                 let mut sdl = format!("input {} {{\n", input_name);
                 for field in fields {
-                    sdl.push_str(&format!("  {}: {}", field.name, self.type_ref_to_sdl(&field.value_type)));
+                    sdl.push_str(&format!(
+                        "  {}: {}",
+                        field.name,
+                        self.type_ref_to_sdl(&field.value_type)
+                    ));
                     if let Some(default) = &field.default_value {
                         sdl.push_str(&format!(" = {}", default));
                     }
@@ -1257,28 +1297,29 @@ impl GraphQLSchema {
         }
 
         GraphQLValue::Object(
-            vec![
-                (
-                    "__schema".to_string(),
-                    GraphQLValue::Object(
-                        vec![
-                            (
-                                "types".to_string(),
-                                GraphQLValue::List(
-                                    types.values().cloned().collect()
-                                )
-                            ),
-                            (
-                                "queryType".to_string(),
-                                self.query_type.as_ref()
-                                    .and_then(|n| types.get(n))
-                                    .cloned()
-                                    .unwrap_or(GraphQLValue::null())
-                            ),
-                        ].into_iter().collect()
-                    )
+            vec![(
+                "__schema".to_string(),
+                GraphQLValue::Object(
+                    vec![
+                        (
+                            "types".to_string(),
+                            GraphQLValue::List(types.values().cloned().collect()),
+                        ),
+                        (
+                            "queryType".to_string(),
+                            self.query_type
+                                .as_ref()
+                                .and_then(|n| types.get(n))
+                                .cloned()
+                                .unwrap_or(GraphQLValue::null()),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
                 ),
-            ].into_iter().collect()
+            )]
+            .into_iter()
+            .collect(),
         )
     }
 
@@ -1299,7 +1340,9 @@ impl GraphQLSchema {
                 ("kind".to_string(), GraphQLValue::String(kind.to_string())),
                 ("name".to_string(), GraphQLValue::String(name)),
                 ("description".to_string(), GraphQLValue::null()),
-            ].into_iter().collect()
+            ]
+            .into_iter()
+            .collect(),
         )
     }
 }
@@ -1314,16 +1357,24 @@ mod tests {
         assert_eq!(GraphQLValue::boolean(true), GraphQLValue::Boolean(true));
         assert_eq!(GraphQLValue::int(42), GraphQLValue::Int(42));
         assert_eq!(GraphQLValue::float(3.14), GraphQLValue::Float(3.14));
-        assert_eq!(GraphQLValue::string("hello"), GraphQLValue::String("hello".to_string()));
+        assert_eq!(
+            GraphQLValue::string("hello"),
+            GraphQLValue::String("hello".to_string())
+        );
     }
 
     #[test]
     fn test_graphql_value_to_json() {
         let val = GraphQLValue::Object(
             vec![
-                ("name".to_string(), GraphQLValue::String("Alice".to_string())),
+                (
+                    "name".to_string(),
+                    GraphQLValue::String("Alice".to_string()),
+                ),
                 ("age".to_string(), GraphQLValue::Int(30)),
-            ].into_iter().collect()
+            ]
+            .into_iter()
+            .collect(),
         );
 
         let json = val.to_json();
@@ -1354,8 +1405,14 @@ mod tests {
     #[test]
     fn test_graphql_type_name() {
         assert_eq!(GraphQLType::scalar("Int").name(), "Int");
-        assert_eq!(GraphQLType::list(GraphQLType::scalar("String")).name(), "[String]");
-        assert_eq!(GraphQLType::non_null(GraphQLType::scalar("Int")).name(), "Int!");
+        assert_eq!(
+            GraphQLType::list(GraphQLType::scalar("String")).name(),
+            "[String]"
+        );
+        assert_eq!(
+            GraphQLType::non_null(GraphQLType::scalar("Int")).name(),
+            "Int!"
+        );
     }
 
     #[test]
@@ -1366,7 +1423,10 @@ mod tests {
 
         assert_eq!(field.name, "id");
         assert!(field.is_deprecated);
-        assert_eq!(field.deprecation_reason, Some("Use userId instead".to_string()));
+        assert_eq!(
+            field.deprecation_reason,
+            Some("Use userId instead".to_string())
+        );
     }
 
     #[test]
@@ -1400,10 +1460,12 @@ mod tests {
 
     #[test]
     fn test_execution_context() {
-        let ctx = ExecutionContext::new()
-            .with_variable("userId", GraphQLValue::string("123"));
+        let ctx = ExecutionContext::new().with_variable("userId", GraphQLValue::string("123"));
 
-        assert_eq!(ctx.get_variable("userId"), Some(&GraphQLValue::String("123".to_string())));
+        assert_eq!(
+            ctx.get_variable("userId"),
+            Some(&GraphQLValue::String("123".to_string()))
+        );
     }
 
     #[test]
@@ -1417,14 +1479,20 @@ mod tests {
     #[test]
     fn test_graphql_resolver_from_fn() {
         let resolver = GraphQLResolver::from_fn("add", |_ctx, args| {
-            let a = args.get("a").and_then(|v| match v {
-                GraphQLValue::Int(n) => Some(*n),
-                _ => None,
-            }).unwrap_or(0);
-            let b = args.get("b").and_then(|v| match v {
-                GraphQLValue::Int(n) => Some(*n),
-                _ => None,
-            }).unwrap_or(0);
+            let a = args
+                .get("a")
+                .and_then(|v| match v {
+                    GraphQLValue::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let b = args
+                .get("b")
+                .and_then(|v| match v {
+                    GraphQLValue::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .unwrap_or(0);
             Ok(GraphQLValue::int(a + b))
         });
 
@@ -1438,18 +1506,20 @@ mod tests {
 
     #[test]
     fn test_graphql_schema_creation() {
-        let schema = GraphQLSchema::new()
-            .with_query_type("Query");
+        let schema = GraphQLSchema::new().with_query_type("Query");
 
         assert_eq!(schema.query_type, Some("Query".to_string()));
     }
 
     #[test]
     fn test_graphql_schema_add_type() {
-        let user_type = GraphQLType::object("User", vec![
-            GraphQLField::new("id", GraphQLType::non_null(GraphQLType::scalar("ID"))),
-            GraphQLField::new("name", GraphQLType::scalar("String")),
-        ]);
+        let user_type = GraphQLType::object(
+            "User",
+            vec![
+                GraphQLField::new("id", GraphQLType::non_null(GraphQLType::scalar("ID"))),
+                GraphQLField::new("name", GraphQLType::scalar("String")),
+            ],
+        );
 
         let schema = GraphQLSchema::new().add_type(user_type);
         assert!(schema.get_type("User").is_some());
@@ -1480,9 +1550,10 @@ mod tests {
 
     #[test]
     fn test_graphql_schema_execute() {
-        let query_type = GraphQLType::object("Query", vec![
-            GraphQLField::new("hello", GraphQLType::scalar("String")),
-        ]);
+        let query_type = GraphQLType::object(
+            "Query",
+            vec![GraphQLField::new("hello", GraphQLType::scalar("String"))],
+        );
 
         let resolver = GraphQLResolver::constant("hello", GraphQLValue::string("Hello, World!"));
 
@@ -1497,7 +1568,10 @@ mod tests {
         let result = schema.execute(&query, &context).unwrap();
 
         if let GraphQLValue::Object(fields) = result {
-            assert_eq!(fields.get("hello"), Some(&GraphQLValue::String("Hello, World!".to_string())));
+            assert_eq!(
+                fields.get("hello"),
+                Some(&GraphQLValue::String("Hello, World!".to_string()))
+            );
         } else {
             panic!("Expected object result");
         }
@@ -1506,11 +1580,14 @@ mod tests {
     #[test]
     fn test_graphql_subscription() {
         let handler: SubscriptionHandler = Arc::new(|_initial| {
-            Box::new(vec![
-                GraphQLValue::int(1),
-                GraphQLValue::int(2),
-                GraphQLValue::int(3),
-            ].into_iter())
+            Box::new(
+                vec![
+                    GraphQLValue::int(1),
+                    GraphQLValue::int(2),
+                    GraphQLValue::int(3),
+                ]
+                .into_iter(),
+            )
         });
 
         let subscription = GraphQLSubscription::new("counter", handler);
@@ -1530,21 +1607,20 @@ mod tests {
         assert!(!response.has_errors());
         assert!(response.data.is_some());
 
-        let response = GraphQLResponse::error(vec![
-            GraphQLError::validation("Invalid input"),
-        ]);
+        let response = GraphQLResponse::error(vec![GraphQLError::validation("Invalid input")]);
         assert!(response.has_errors());
     }
 
     #[test]
     fn test_graphql_response_to_json() {
-        let response = GraphQLResponse::success(
-            GraphQLValue::Object(
-                vec![
-                    ("message".to_string(), GraphQLValue::String("Hello".to_string())),
-                ].into_iter().collect()
-            )
-        );
+        let response = GraphQLResponse::success(GraphQLValue::Object(
+            vec![(
+                "message".to_string(),
+                GraphQLValue::String("Hello".to_string()),
+            )]
+            .into_iter()
+            .collect(),
+        ));
 
         let json = response.to_json();
         assert!(json.is_object());
@@ -1565,10 +1641,13 @@ mod tests {
 
     #[test]
     fn test_schema_to_sdl() {
-        let user_type = GraphQLType::object("User", vec![
-            GraphQLField::new("id", GraphQLType::non_null(GraphQLType::scalar("ID"))),
-            GraphQLField::new("name", GraphQLType::scalar("String")),
-        ]);
+        let user_type = GraphQLType::object(
+            "User",
+            vec![
+                GraphQLField::new("id", GraphQLType::non_null(GraphQLType::scalar("ID"))),
+                GraphQLField::new("name", GraphQLType::scalar("String")),
+            ],
+        );
 
         let schema = GraphQLSchema::new()
             .with_query_type("Query")
@@ -1583,9 +1662,13 @@ mod tests {
 
     #[test]
     fn test_introspection() {
-        let query_type = GraphQLType::object("Query", vec![
-            GraphQLField::new("__typename", GraphQLType::non_null(GraphQLType::scalar("String"))),
-        ]);
+        let query_type = GraphQLType::object(
+            "Query",
+            vec![GraphQLField::new(
+                "__typename",
+                GraphQLType::non_null(GraphQLType::scalar("String")),
+            )],
+        );
 
         let schema = GraphQLSchema::new()
             .with_query_type("Query")
@@ -1602,7 +1685,8 @@ mod tests {
 
     #[test]
     fn test_mutation_operation() {
-        let query = GraphQLQuery::parse("mutation { createUser(name: \"Alice\") { id name } }").unwrap();
+        let query =
+            GraphQLQuery::parse("mutation { createUser(name: \"Alice\") { id name } }").unwrap();
         assert_eq!(query.operation_type, OperationType::Mutation);
     }
 
@@ -1614,11 +1698,14 @@ mod tests {
 
     #[test]
     fn test_enum_type() {
-        let status_enum = GraphQLType::enm("Status", vec![
-            "ACTIVE".to_string(),
-            "INACTIVE".to_string(),
-            "PENDING".to_string(),
-        ]);
+        let status_enum = GraphQLType::enm(
+            "Status",
+            vec![
+                "ACTIVE".to_string(),
+                "INACTIVE".to_string(),
+                "PENDING".to_string(),
+            ],
+        );
 
         let schema = GraphQLSchema::new().add_type(status_enum);
         assert!(schema.get_type("Status").is_some());
@@ -1633,11 +1720,14 @@ mod tests {
 
     #[test]
     fn test_union_type() {
-        let result_union = GraphQLType::union("SearchResult", vec![
-            "User".to_string(),
-            "Post".to_string(),
-            "Comment".to_string(),
-        ]);
+        let result_union = GraphQLType::union(
+            "SearchResult",
+            vec![
+                "User".to_string(),
+                "Post".to_string(),
+                "Comment".to_string(),
+            ],
+        );
 
         let schema = GraphQLSchema::new().add_type(result_union);
         assert!(schema.get_type("SearchResult").is_some());
@@ -1645,12 +1735,18 @@ mod tests {
 
     #[test]
     fn test_input_object() {
-        let user_input = GraphQLType::input_object("UserInput", vec![
-            GraphQLInputValue::new("name", GraphQLType::non_null(GraphQLType::scalar("String")))
+        let user_input = GraphQLType::input_object(
+            "UserInput",
+            vec![
+                GraphQLInputValue::new(
+                    "name",
+                    GraphQLType::non_null(GraphQLType::scalar("String")),
+                )
                 .with_description("User name"),
-            GraphQLInputValue::new("age", GraphQLType::scalar("Int"))
-                .with_default(GraphQLValue::int(18)),
-        ]);
+                GraphQLInputValue::new("age", GraphQLType::scalar("Int"))
+                    .with_default(GraphQLValue::int(18)),
+            ],
+        );
 
         let schema = GraphQLSchema::new().add_type(user_input);
         assert!(schema.get_type("UserInput").is_some());
@@ -1658,22 +1754,31 @@ mod tests {
 
     #[test]
     fn test_nested_field_execution() {
-        let user_type = GraphQLType::object("User", vec![
-            GraphQLField::new("name", GraphQLType::scalar("String")),
-        ]);
+        let user_type = GraphQLType::object(
+            "User",
+            vec![GraphQLField::new("name", GraphQLType::scalar("String"))],
+        );
 
-        let query_type = GraphQLType::object("Query", vec![
-            GraphQLField::new("user", GraphQLType::object("User", vec![
-                GraphQLField::new("name", GraphQLType::scalar("String")),
-            ])),
-        ]);
+        let query_type = GraphQLType::object(
+            "Query",
+            vec![GraphQLField::new(
+                "user",
+                GraphQLType::object(
+                    "User",
+                    vec![GraphQLField::new("name", GraphQLType::scalar("String"))],
+                ),
+            )],
+        );
 
         let user_resolver = GraphQLResolver::constant("name", GraphQLValue::string("Alice"));
         let user_resolver2 = GraphQLResolver::from_fn("user", |_ctx, _args| {
             Ok(GraphQLValue::Object(
-                vec![
-                    ("name".to_string(), GraphQLValue::String("Alice".to_string())),
-                ].into_iter().collect()
+                vec![(
+                    "name".to_string(),
+                    GraphQLValue::String("Alice".to_string()),
+                )]
+                .into_iter()
+                .collect(),
             ))
         });
 
@@ -1691,7 +1796,10 @@ mod tests {
 
         if let GraphQLValue::Object(fields) = result {
             if let Some(GraphQLValue::Object(user_fields)) = fields.get("user") {
-                assert_eq!(user_fields.get("name"), Some(&GraphQLValue::String("Alice".to_string())));
+                assert_eq!(
+                    user_fields.get("name"),
+                    Some(&GraphQLValue::String("Alice".to_string()))
+                );
             } else {
                 panic!("Expected user object");
             }
@@ -1702,12 +1810,19 @@ mod tests {
 
     #[test]
     fn test_error_propagation() {
-        let query_type = GraphQLType::object("Query", vec![
-            GraphQLField::new("failingField", GraphQLType::scalar("String")),
-        ]);
+        let query_type = GraphQLType::object(
+            "Query",
+            vec![GraphQLField::new(
+                "failingField",
+                GraphQLType::scalar("String"),
+            )],
+        );
 
         let resolver = GraphQLResolver::from_fn("failingField", |_ctx, _args| {
-            Err(GraphQLError::resolver("failingField", "Something went wrong"))
+            Err(GraphQLError::resolver(
+                "failingField",
+                "Something went wrong",
+            ))
         });
 
         let schema = GraphQLSchema::new()
@@ -1764,14 +1879,12 @@ mod tests {
     #[test]
     fn test_partial_response() {
         let data = GraphQLValue::Object(
-            vec![
-                ("success".to_string(), GraphQLValue::boolean(true)),
-            ].into_iter().collect()
+            vec![("success".to_string(), GraphQLValue::boolean(true))]
+                .into_iter()
+                .collect(),
         );
 
-        let errors = vec![
-            GraphQLError::validation("Partial failure"),
-        ];
+        let errors = vec![GraphQLError::validation("Partial failure")];
 
         let response = GraphQLResponse::partial(data, errors.clone());
 
@@ -1782,32 +1895,52 @@ mod tests {
 
     #[test]
     fn test_complex_query_execution() {
-        let post_type = GraphQLType::object("Post", vec![
-            GraphQLField::new("id", GraphQLType::non_null(GraphQLType::scalar("ID"))),
-            GraphQLField::new("title", GraphQLType::scalar("String")),
-            GraphQLField::new("content", GraphQLType::scalar("String")),
-        ]);
-
-        let query_type = GraphQLType::object("Query", vec![
-            GraphQLField::new("posts", GraphQLType::list(GraphQLType::object("Post", vec![
+        let post_type = GraphQLType::object(
+            "Post",
+            vec![
                 GraphQLField::new("id", GraphQLType::non_null(GraphQLType::scalar("ID"))),
                 GraphQLField::new("title", GraphQLType::scalar("String")),
-            ]))),
-        ]);
+                GraphQLField::new("content", GraphQLType::scalar("String")),
+            ],
+        );
+
+        let query_type = GraphQLType::object(
+            "Query",
+            vec![GraphQLField::new(
+                "posts",
+                GraphQLType::list(GraphQLType::object(
+                    "Post",
+                    vec![
+                        GraphQLField::new("id", GraphQLType::non_null(GraphQLType::scalar("ID"))),
+                        GraphQLField::new("title", GraphQLType::scalar("String")),
+                    ],
+                )),
+            )],
+        );
 
         let posts_resolver = GraphQLResolver::from_fn("posts", |_ctx, _args| {
             Ok(GraphQLValue::list(vec![
                 GraphQLValue::Object(
                     vec![
                         ("id".to_string(), GraphQLValue::String("1".to_string())),
-                        ("title".to_string(), GraphQLValue::String("First Post".to_string())),
-                    ].into_iter().collect()
+                        (
+                            "title".to_string(),
+                            GraphQLValue::String("First Post".to_string()),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
                 ),
                 GraphQLValue::Object(
                     vec![
                         ("id".to_string(), GraphQLValue::String("2".to_string())),
-                        ("title".to_string(), GraphQLValue::String("Second Post".to_string())),
-                    ].into_iter().collect()
+                        (
+                            "title".to_string(),
+                            GraphQLValue::String("Second Post".to_string()),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
                 ),
             ]))
         });

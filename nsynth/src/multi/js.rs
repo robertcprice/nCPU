@@ -1,8 +1,6 @@
 //! JavaScript Target for Multi-Language Code Generation
 
-use super::{
-    lang::{TargetLang, LanguageTarget, MogType, MogOp, common_type_map},
-};
+use super::lang::{common_type_map, LanguageTarget, MogOp, MogType, TargetLang};
 use std::collections::HashMap;
 
 /// JavaScript code generator
@@ -126,14 +124,18 @@ impl LanguageTarget for JavaScriptTarget {
         }
     }
 
-    fn format_function(&self, name: &str, params: &[(String, MogType)], ret: &MogType, body: &str) -> String {
+    fn format_function(
+        &self,
+        name: &str,
+        params: &[(String, MogType)],
+        ret: &MogType,
+        body: &str,
+    ) -> String {
         let mut output = String::new();
 
         self.add_jsdoc(&mut output, &format!("Function {}", name));
 
-        let param_list: Vec<String> = params.iter()
-            .map(|(n, _)| n.clone())
-            .collect();
+        let param_list: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
 
         output.push_str("function ");
         output.push_str(name);
@@ -227,7 +229,10 @@ mod tests {
         let target = JavaScriptTarget::new();
         let formatted = target.format_function(
             "add",
-            &[("a".to_string(), MogType::Int), ("b".to_string(), MogType::Int)],
+            &[
+                ("a".to_string(), MogType::Int),
+                ("b".to_string(), MogType::Int),
+            ],
             &MogType::Int,
             "    return a + b;\n",
         );

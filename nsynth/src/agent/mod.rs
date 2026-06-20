@@ -7,6 +7,7 @@ pub mod executor;
 pub mod hierarchy;
 pub mod orchestrator;
 pub mod planning;
+pub mod repo;
 pub mod synthesis;
 pub mod tools;
 
@@ -26,13 +27,19 @@ pub use executor::{
 };
 pub use hierarchy::{Goal, GoalId, GoalStatus, GoalTree, Priority};
 pub use orchestrator::{
-    Agent, AgentId, AgentMessage, CollaborativeResult, CommunicationChannel,
-    Orchestrator, OrchestratorConfig, SolutionProposal,
+    Agent, AgentId, AgentMessage, CollaborativeResult, CommunicationChannel, Orchestrator,
+    OrchestratorConfig, SolutionProposal,
 };
 pub use planning::{
-    DecompositionStrategy, DecomposerStats, Task as PlanningTask, TaskDecomposer,
+    DecomposerStats, DecompositionStrategy, Task as PlanningTask, TaskDecomposer,
     TaskId as PlanningTaskId, TaskMetadata, TaskOptimization, TaskPriority,
     TaskResult as PlanningTaskResult, TaskStatus as PlanningTaskStatus,
+};
+pub use repo::{
+    AgentStep, AgentTrace, BenchmarkValidation, CreditAssignment, CreditCategory, CreditLedger,
+    FailureAnalysis, FailureKind, FailureParser, GuardrailDecision, GuardrailPolicy, HardnessMiner,
+    HardnessProfile, HardnessTier, LocalBenchmarkTask, PatchGate, PatchGateResult, RepoAgent,
+    RepoBenchmark, RepoSignal, RepoTaskKind, RepoTaskSpec,
 };
 pub use synthesis::solve_compositional;
 pub use tools::{

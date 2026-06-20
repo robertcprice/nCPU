@@ -76,7 +76,8 @@ impl ProbContext {
 
     /// Get total log likelihood of all observations
     pub fn log_likelihood(&self) -> f64 {
-        self.observations.iter()
+        self.observations
+            .iter()
             .map(|obs| obs.log_likelihood())
             .sum()
     }
@@ -169,7 +170,10 @@ mod tests {
 
     #[test]
     fn test_sample() {
-        let dist = ProbDistribution::Uniform { low: 0.0, high: 1.0 };
+        let dist = ProbDistribution::Uniform {
+            low: 0.0,
+            high: 1.0,
+        };
         let val = sample(dist);
         if let Value::Float(f) = val {
             assert!(f >= 0.0 && f <= 1.0);
@@ -190,7 +194,7 @@ mod tests {
         let obs = Observation::new(
             "coin",
             Value::Bool(true),
-            ProbDistribution::Bernoulli { p: 0.7 }
+            ProbDistribution::Bernoulli { p: 0.7 },
         );
 
         assert_eq!(obs.variable, "coin");
@@ -204,7 +208,7 @@ mod tests {
         ctx.observe(Observation::new(
             "x",
             Value::Int(5),
-            ProbDistribution::Poisson { lambda: 5.0 }
+            ProbDistribution::Poisson { lambda: 5.0 },
         ));
 
         assert_eq!(ctx.observation_count(), 1);
@@ -218,6 +222,9 @@ mod tests {
         assert!(result.as_samples().is_none());
 
         let samples = QueryResult::Samples(vec![Value::Int(1), Value::Int(2)]);
-        assert_eq!(samples.as_samples(), Some(&vec![Value::Int(1), Value::Int(2)][..]));
+        assert_eq!(
+            samples.as_samples(),
+            Some(&vec![Value::Int(1), Value::Int(2)][..])
+        );
     }
 }

@@ -14,6 +14,7 @@ mod templates;
 mod two_array;
 mod universal;
 mod universal_array;
+mod utbus;
 
 // Shared primitives (constants, soft-op/soft-cmp, Adam, fd_grad, pseudo_rand,
 // train_program, analytical gradient structs). Re-exported so every sibling

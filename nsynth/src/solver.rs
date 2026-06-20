@@ -9,10 +9,12 @@ mod analogy;
 mod benchmarking;
 mod experience_advisor;
 mod helpers;
+mod hierarchical;
 mod legacy_fallback;
-mod probabilistic;
 mod pipeline;
 mod post_enumerative;
+mod probabilistic;
+mod recovery;
 mod routing;
 mod scalar_search;
 mod search;
@@ -33,8 +35,6 @@ mod search_scalar_families;
 mod search_text_families;
 mod search_time_families;
 mod search_tree_families;
-mod hierarchical;
-mod recovery;
 mod signature;
 
 use self::helpers::{
@@ -302,7 +302,8 @@ pub fn solve_from_nl(description: &str, fn_name: Option<&str>) -> Result<SolveRe
     let bridge = LinguigenesisBridge::new();
 
     // Parse NL into examples
-    let examples = bridge.nl_to_examples(description)
+    let examples = bridge
+        .nl_to_examples(description)
         .map_err(|e| format!("Failed to parse NL: {}", e))?;
 
     if examples.is_empty() {
@@ -317,7 +318,7 @@ pub fn solve_from_nl(description: &str, fn_name: Option<&str>) -> Result<SolveRe
         name,
         category: "nl",
         description: "", // Can't store non-static str, use name field
-        signature, // Inferred from examples
+        signature,       // Inferred from examples
         examples,
         holdouts: Vec::new(),
         reference_code: "",
@@ -335,11 +336,14 @@ pub fn solve_from_nl(description: &str, fn_name: Option<&str>) -> Result<SolveRe
 
 /// Get belief state from NL (for debugging/analysis)
 #[cfg(feature = "nl")]
-pub fn analyze_nl(description: &str) -> Result<crate::linguigenesis_bridge::BridgeBeliefState, String> {
+pub fn analyze_nl(
+    description: &str,
+) -> Result<crate::linguigenesis_bridge::BridgeBeliefState, String> {
     use crate::linguigenesis_bridge::LinguigenesisBridge;
 
     let bridge = LinguigenesisBridge::new();
-    let belief = bridge.get_belief_state(description)
+    let belief = bridge
+        .get_belief_state(description)
         .map_err(|e| format!("Failed to parse NL: {}", e))?;
 
     Ok(crate::linguigenesis_bridge::BridgeBeliefState {

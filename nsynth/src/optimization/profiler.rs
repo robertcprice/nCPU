@@ -236,8 +236,7 @@ fn detect_bottlenecks(code: &str, line_count: usize) -> Result<Vec<Bottleneck>, 
                     impact_multiplier: loop_depth as f64 * 10.0,
                     description: format!(
                         "Nested loop at depth {} detected starting at line {}",
-                        loop_depth,
-                        loop_start_line
+                        loop_depth, loop_start_line
                     ),
                 });
             }
@@ -257,7 +256,8 @@ fn detect_bottlenecks(code: &str, line_count: usize) -> Result<Vec<Bottleneck>, 
                             complexity: "O(n^2)".to_string(),
                             size_factor: "n".to_string(),
                             impact_multiplier: 100.0,
-                            description: "Linear search inside loop creates quadratic complexity".to_string(),
+                            description: "Linear search inside loop creates quadratic complexity"
+                                .to_string(),
                         });
                         break;
                     }
@@ -275,7 +275,8 @@ fn detect_bottlenecks(code: &str, line_count: usize) -> Result<Vec<Bottleneck>, 
                         complexity: "O(n)".to_string(),
                         size_factor: "n".to_string(),
                         impact_multiplier: 5.0,
-                        description: "Repeated allocation in loop - consider pre-allocation".to_string(),
+                        description: "Repeated allocation in loop - consider pre-allocation"
+                            .to_string(),
                     });
                 }
             }
@@ -375,7 +376,10 @@ pub fn generate_optimizations(profiled: &ProfiledCode) -> Vec<Optimization> {
         // Caching for repeated lookups
         if bottleneck.description.contains("search") || bottleneck.description.contains("find") {
             optimizations.push(Optimization {
-                description: format!("Add memoization cache for repeated lookups (line {})", bottleneck.line),
+                description: format!(
+                    "Add memoization cache for repeated lookups (line {})",
+                    bottleneck.line
+                ),
                 opt_type: OptimizationType::Caching,
                 line_range: (bottleneck.line, bottleneck.line + 5),
                 confidence: 0.90,
@@ -409,10 +413,7 @@ pub fn generate_optimizations(profiled: &ProfiledCode) -> Vec<Optimization> {
                 optimized_code: generate_parallel_code(hotspot),
                 rationale: vec![
                     format!("High iteration count: {}", hotspot.execution_count),
-                    format!(
-                        "Available cores: {}",
-                        num_cpus::get()
-                    ),
+                    format!("Available cores: {}", num_cpus::get()),
                     "Loop iterations appear independent".to_string(),
                 ],
                 caveats: vec![
@@ -427,10 +428,7 @@ pub fn generate_optimizations(profiled: &ProfiledCode) -> Vec<Optimization> {
 }
 
 /// Generate optimized code applying the suggested transformation
-pub fn optimize_profiled(
-    profiled: &ProfiledCode,
-    optimizations: &[Optimization],
-) -> String {
+pub fn optimize_profiled(profiled: &ProfiledCode, optimizations: &[Optimization]) -> String {
     let mut optimized_code = profiled.code.clone();
 
     // Sort optimizations by confidence (highest first)

@@ -3,7 +3,9 @@
 //! Common probability distributions with sampling and log-probability computation.
 
 use rand::Rng;
-use rand_distr::{Distribution as RandDistribution, Standard, Uniform, Normal, Bernoulli as RandBernoulli};
+use rand_distr::{
+    Bernoulli as RandBernoulli, Distribution as RandDistribution, Normal, Standard, Uniform,
+};
 use std::f64::consts::PI;
 
 /// Probability distribution types
@@ -93,10 +95,13 @@ impl ProbDistribution {
             }
             ProbDistribution::Dirichlet(alphas) => {
                 // Simplified Dirichlet - normalize gamma samples
-                let mut samples: Vec<f64> = alphas.iter().map(|&a| {
-                    let u1: f64 = rng.sample(Standard);
-                    u1 * a
-                }).collect();
+                let mut samples: Vec<f64> = alphas
+                    .iter()
+                    .map(|&a| {
+                        let u1: f64 = rng.sample(Standard);
+                        u1 * a
+                    })
+                    .collect();
                 let sum: f64 = samples.iter().sum();
                 if sum > 0.0 {
                     samples = samples.iter().map(|s| s / sum).collect();
@@ -163,9 +168,7 @@ impl ProbDistribution {
     /// Get support (possible values) for discrete distributions
     pub fn support(&self) -> Option<Vec<Value>> {
         match self {
-            ProbDistribution::Bernoulli { .. } => {
-                Some(vec![Value::Bool(false), Value::Bool(true)])
-            }
+            ProbDistribution::Bernoulli { .. } => Some(vec![Value::Bool(false), Value::Bool(true)]),
             ProbDistribution::Categorical(probs) => {
                 Some((0..probs.len()).map(|i| Value::Int(i as i64)).collect())
             }
@@ -188,7 +191,12 @@ impl ProbDistribution {
             ProbDistribution::Gamma { shape, scale } => shape * scale,
             ProbDistribution::Dirichlet(alphas) => {
                 let sum: f64 = alphas.iter().sum();
-                alphas.iter().map(|a| a / sum).collect::<Vec<_>>().iter().sum()
+                alphas
+                    .iter()
+                    .map(|a| a / sum)
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .sum()
             }
         }
     }
@@ -204,10 +212,14 @@ impl ProbDistribution {
             ProbDistribution::Bernoulli { p } => p * (1.0 - p),
             ProbDistribution::Categorical(probs) => {
                 let mean = self.mean();
-                probs.iter().enumerate().map(|(i, &p)| {
-                    let diff = i as f64 - mean;
-                    p * diff * diff
-                }).sum()
+                probs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &p)| {
+                        let diff = i as f64 - mean;
+                        p * diff * diff
+                    })
+                    .sum()
             }
             ProbDistribution::Exponential { lambda } => 1.0 / (lambda * lambda),
             ProbDistribution::Poisson { lambda } => *lambda,
@@ -239,7 +251,10 @@ mod tests {
 
     #[test]
     fn test_uniform_sample() {
-        let dist = ProbDistribution::Uniform { low: 0.0, high: 10.0 };
+        let dist = ProbDistribution::Uniform {
+            low: 0.0,
+            high: 10.0,
+        };
         for _ in 0..100 {
             let val = dist.sample();
             if let Value::Float(f) = val {
@@ -252,7 +267,10 @@ mod tests {
 
     #[test]
     fn test_normal_mean() {
-        let dist = ProbDistribution::Normal { mean: 5.0, std: 2.0 };
+        let dist = ProbDistribution::Normal {
+            mean: 5.0,
+            std: 2.0,
+        };
         assert_eq!(dist.mean(), 5.0);
         assert_eq!(dist.variance(), 4.0);
     }

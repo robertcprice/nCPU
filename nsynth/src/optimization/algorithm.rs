@@ -216,17 +216,23 @@ impl AlgorithmSelector {
         if constraints.requires_stability {
             feasible.retain(|&a| matches!(a, AlgorithmChoice::MergeSort));
             reasons.push(
-                "Stability required: only MergeSort is stable among O(n log n) algorithms".to_string()
+                "Stability required: only MergeSort is stable among O(n log n) algorithms"
+                    .to_string(),
             );
         }
 
         // In-place constraints
         if constraints.in_place_required {
             feasible.retain(|&a| {
-                matches!(a, AlgorithmChoice::QuickSort | AlgorithmChoice::HeapSort | AlgorithmChoice::LinearSearch)
+                matches!(
+                    a,
+                    AlgorithmChoice::QuickSort
+                        | AlgorithmChoice::HeapSort
+                        | AlgorithmChoice::LinearSearch
+                )
             });
             reasons.push(
-                "In-place required: excluding algorithms requiring additional space".to_string()
+                "In-place required: excluding algorithms requiring additional space".to_string(),
             );
         }
 
@@ -253,10 +259,7 @@ impl AlgorithmSelector {
         };
 
         // Check profile feedback for confidence adjustment
-        let adjusted_confidence = self.adjust_confidence_with_feedback(
-            algorithm,
-            confidence,
-        );
+        let adjusted_confidence = self.adjust_confidence_with_feedback(algorithm, confidence);
 
         AlgorithmSelection {
             algorithm,
@@ -287,7 +290,10 @@ impl AlgorithmSelector {
         }
 
         // Check if binary search is feasible (sorted data)
-        if analysis.feasible_algorithms.contains(&AlgorithmChoice::BinarySearch) {
+        if analysis
+            .feasible_algorithms
+            .contains(&AlgorithmChoice::BinarySearch)
+        {
             // For large sorted datasets, binary search is optimal
             if size > 1000 {
                 return (
@@ -312,7 +318,10 @@ impl AlgorithmSelector {
         }
 
         // For unsorted data, decide between HashMap and LinearSearch
-        if analysis.feasible_algorithms.contains(&AlgorithmChoice::HashMapLookup) {
+        if analysis
+            .feasible_algorithms
+            .contains(&AlgorithmChoice::HashMapLookup)
+        {
             // Large unsorted data: hash map is worth the memory cost
             if size > 1000 {
                 return (
@@ -371,7 +380,10 @@ impl AlgorithmSelector {
 
         // Data fits in cache: quicksort excels with good cache locality
         if input.fits_in_cache {
-            if analysis.feasible_algorithms.contains(&AlgorithmChoice::QuickSort) {
+            if analysis
+                .feasible_algorithms
+                .contains(&AlgorithmChoice::QuickSort)
+            {
                 return (
                     AlgorithmChoice::QuickSort,
                     0.93,
@@ -384,12 +396,16 @@ impl AlgorithmSelector {
         }
 
         // Memory constrained: heap sort for O(1) space guarantee
-        if constraints.memory_available.is_some() &&
-           analysis.feasible_algorithms.contains(&AlgorithmChoice::HeapSort) {
+        if constraints.memory_available.is_some()
+            && analysis
+                .feasible_algorithms
+                .contains(&AlgorithmChoice::HeapSort)
+        {
             return (
                 AlgorithmChoice::HeapSort,
                 0.88,
-                "Memory constrained: HeapSort provides guaranteed O(n log n) with O(1) space".to_string(),
+                "Memory constrained: HeapSort provides guaranteed O(n log n) with O(1) space"
+                    .to_string(),
             );
         }
 
@@ -406,21 +422,29 @@ impl AlgorithmSelector {
         match constraints.access_pattern {
             AccessPattern::Sequential => {
                 // Merge sort has better sequential access patterns
-                if analysis.feasible_algorithms.contains(&AlgorithmChoice::MergeSort) {
+                if analysis
+                    .feasible_algorithms
+                    .contains(&AlgorithmChoice::MergeSort)
+                {
                     return (
                         AlgorithmChoice::MergeSort,
                         0.87,
-                        "Sequential access pattern: MergeSort has predictable memory access".to_string(),
+                        "Sequential access pattern: MergeSort has predictable memory access"
+                            .to_string(),
                     );
                 }
             }
             AccessPattern::Random => {
                 // Quick sort handles random access better
-                if analysis.feasible_algorithms.contains(&AlgorithmChoice::QuickSort) {
+                if analysis
+                    .feasible_algorithms
+                    .contains(&AlgorithmChoice::QuickSort)
+                {
                     return (
                         AlgorithmChoice::QuickSort,
                         0.89,
-                        "Random access pattern: QuickSort works well with random access".to_string(),
+                        "Random access pattern: QuickSort works well with random access"
+                            .to_string(),
                     );
                 }
             }
@@ -428,8 +452,11 @@ impl AlgorithmSelector {
         }
 
         // Partially sorted data: consider timsort (not implemented, default to merge sort)
-        if constraints.sortedness > 0.5 &&
-           analysis.feasible_algorithms.contains(&AlgorithmChoice::MergeSort) {
+        if constraints.sortedness > 0.5
+            && analysis
+                .feasible_algorithms
+                .contains(&AlgorithmChoice::MergeSort)
+        {
             return (
                 AlgorithmChoice::MergeSort,
                 0.86,
@@ -441,7 +468,10 @@ impl AlgorithmSelector {
         }
 
         // Default: quick sort for general case
-        if analysis.feasible_algorithms.contains(&AlgorithmChoice::QuickSort) {
+        if analysis
+            .feasible_algorithms
+            .contains(&AlgorithmChoice::QuickSort)
+        {
             return (
                 AlgorithmChoice::QuickSort,
                 0.84,
@@ -450,7 +480,10 @@ impl AlgorithmSelector {
         }
 
         // Fallback to merge sort if quicksort not available
-        if analysis.feasible_algorithms.contains(&AlgorithmChoice::MergeSort) {
+        if analysis
+            .feasible_algorithms
+            .contains(&AlgorithmChoice::MergeSort)
+        {
             return (
                 AlgorithmChoice::MergeSort,
                 0.82,
@@ -467,7 +500,11 @@ impl AlgorithmSelector {
     }
 
     /// Adjust confidence score based on profile feedback.
-    fn adjust_confidence_with_feedback(&self, algorithm: AlgorithmChoice, base_confidence: f64) -> f64 {
+    fn adjust_confidence_with_feedback(
+        &self,
+        algorithm: AlgorithmChoice,
+        base_confidence: f64,
+    ) -> f64 {
         if let Some(&feedback_score) = self.profile_feedback.get(&algorithm) {
             // Blend base confidence with feedback score
             // feedback_score should be normalized to 0-1 range
@@ -484,7 +521,11 @@ impl AlgorithmSelector {
         let normalized = (performance_score / 100.0).min(1.0).max(0.0);
 
         // Exponential moving average update
-        let current = self.profile_feedback.get(&algorithm).copied().unwrap_or(normalized);
+        let current = self
+            .profile_feedback
+            .get(&algorithm)
+            .copied()
+            .unwrap_or(normalized);
         let updated = current * 0.8 + normalized * 0.2;
 
         self.profile_feedback.insert(algorithm, updated);
@@ -588,7 +629,10 @@ mod tests {
         let selection = selector.select_algorithm(OperationType::Sort, &input, &constraints);
 
         // Heap sort should be selected for in-place memory constraint
-        assert!(matches!(selection.algorithm, AlgorithmChoice::HeapSort | AlgorithmChoice::QuickSort));
+        assert!(matches!(
+            selection.algorithm,
+            AlgorithmChoice::HeapSort | AlgorithmChoice::QuickSort
+        ));
     }
 
     #[test]
@@ -618,7 +662,9 @@ mod tests {
         let analysis = selector.analyze_constraints(&constraints, &input);
 
         // HashMap should be excluded due to memory constraints
-        assert!(!analysis.feasible_algorithms.contains(&AlgorithmChoice::HashMapLookup));
+        assert!(!analysis
+            .feasible_algorithms
+            .contains(&AlgorithmChoice::HashMapLookup));
     }
 
     #[test]
@@ -636,7 +682,11 @@ mod tests {
 
         let analysis = selector.analyze_constraints(&constraints, &input);
 
-        assert!(!analysis.feasible_algorithms.contains(&AlgorithmChoice::BinarySearch));
-        assert!(!analysis.feasible_algorithms.contains(&AlgorithmChoice::BTreeSearch));
+        assert!(!analysis
+            .feasible_algorithms
+            .contains(&AlgorithmChoice::BinarySearch));
+        assert!(!analysis
+            .feasible_algorithms
+            .contains(&AlgorithmChoice::BTreeSearch));
     }
 }

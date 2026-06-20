@@ -37,24 +37,37 @@ fn generate_function_purpose(semantics: &CodeSemantics) -> String {
     let mut purpose = String::new();
 
     // Determine main operation
-    let main_op = semantics.operations.first().map(|s| s.as_str()).unwrap_or("process");
+    let main_op = semantics
+        .operations
+        .first()
+        .map(|s| s.as_str())
+        .unwrap_or("process");
 
     match main_op {
         "add" | "addition" => purpose.push_str("Function that adds two values together"),
-        "subtract" | "subtraction" => purpose.push_str("Function that subtracts one value from another"),
+        "subtract" | "subtraction" => {
+            purpose.push_str("Function that subtracts one value from another")
+        }
         "multiply" | "multiplication" => purpose.push_str("Function that multiplies two values"),
         "divide" | "division" => purpose.push_str("Function that divides one value by another"),
         "map" => purpose.push_str("Function that transforms each element in a collection"),
         "filter" => purpose.push_str("Function that selects elements meeting a condition"),
-        "reduce" | "fold" => purpose.push_str("Function that combines all elements into a single value"),
+        "reduce" | "fold" => {
+            purpose.push_str("Function that combines all elements into a single value")
+        }
         "reverse" => purpose.push_str("Function that reverses the order of elements"),
         "sort" => purpose.push_str("Function that sorts elements in ascending order"),
-        "search" | "binary_search" => purpose.push_str("Function that finds an element in a collection"),
+        "search" | "binary_search" => {
+            purpose.push_str("Function that finds an element in a collection")
+        }
         "split" => purpose.push_str("Function that divides a string into parts"),
         "join" => purpose.push_str("Function that concatenates elements with a separator"),
         _ => {
             if !semantics.algorithms.is_empty() {
-                purpose.push_str(&format!("Function that implements {}", semantics.algorithms[0]));
+                purpose.push_str(&format!(
+                    "Function that implements {}",
+                    semantics.algorithms[0]
+                ));
             } else {
                 purpose.push_str("Function that processes input data");
             }
@@ -62,10 +75,20 @@ fn generate_function_purpose(semantics: &CodeSemantics) -> String {
     }
 
     // Add input/output info
-    purpose.push_str(&format!(", taking {} input(s)", semantics.io_types.inputs.len()));
+    purpose.push_str(&format!(
+        ", taking {} input(s)",
+        semantics.io_types.inputs.len()
+    ));
 
     if !semantics.io_types.inputs.is_empty() {
-        purpose.push_str(&format!(" of type{}", if semantics.io_types.inputs.len() > 1 { "s" } else { "" }));
+        purpose.push_str(&format!(
+            " of type{}",
+            if semantics.io_types.inputs.len() > 1 {
+                "s"
+            } else {
+                ""
+            }
+        ));
         for (i, input_type) in semantics.io_types.inputs.iter().enumerate() {
             if i == 0 {
                 purpose.push_str(&format!(" {}", input_type));
@@ -89,7 +112,10 @@ fn generate_operations_description(semantics: &CodeSemantics) -> String {
     if semantics.operations.len() == 1 {
         desc.push_str(&format!("Performs {} operation", semantics.operations[0]));
     } else if semantics.operations.len() == 2 {
-        desc.push_str(&format!("Performs {} and {} operations", semantics.operations[0], semantics.operations[1]));
+        desc.push_str(&format!(
+            "Performs {} and {} operations",
+            semantics.operations[0], semantics.operations[1]
+        ));
     } else {
         desc.push_str(&format!("Performs multiple operations: "));
         for (i, op) in semantics.operations.iter().enumerate() {
@@ -111,14 +137,21 @@ fn generate_algorithms_description(semantics: &CodeSemantics) -> String {
 
     for algo in &semantics.algorithms {
         match algo.as_str() {
-            "binary_search" => desc.push_str("Uses binary search algorithm for O(log n) lookup in sorted data. "),
+            "binary_search" => {
+                desc.push_str("Uses binary search algorithm for O(log n) lookup in sorted data. ")
+            }
             "merge_sort" => desc.push_str("Implements merge sort for stable O(n log n) sorting. "),
-            "quick_sort" => desc.push_str("Implements quick sort for efficient O(n log n) average-case sorting. "),
+            "quick_sort" => desc
+                .push_str("Implements quick sort for efficient O(n log n) average-case sorting. "),
             "heap_sort" => desc.push_str("Implements heap sort for O(n log n) in-place sorting. "),
-            "dijkstra" => desc.push_str("Implements Dijkstra's algorithm for shortest path finding. "),
+            "dijkstra" => {
+                desc.push_str("Implements Dijkstra's algorithm for shortest path finding. ")
+            }
             "bfs" => desc.push_str("Uses breadth-first search for level-order traversal. "),
             "dfs" => desc.push_str("Uses depth-first search for graph traversal. "),
-            "fibonacci" => desc.push_str("Generates Fibonacci sequence using recursion or iteration. "),
+            "fibonacci" => {
+                desc.push_str("Generates Fibonacci sequence using recursion or iteration. ")
+            }
             "factorial" => desc.push_str("Computes factorial of a number. "),
             "gcd" => desc.push_str("Computes greatest common divisor using Euclidean algorithm. "),
             _ => desc.push_str(&format!("Implements {} algorithm. ", algo)),
@@ -137,7 +170,10 @@ fn generate_data_structures_description(semantics: &CodeSemantics) -> String {
     let mut desc = String::new();
 
     if semantics.data_structures.len() == 1 {
-        desc.push_str(&format!("Works with {} data structure", semantics.data_structures[0]));
+        desc.push_str(&format!(
+            "Works with {} data structure",
+            semantics.data_structures[0]
+        ));
     } else {
         desc.push_str(&format!("Works with multiple data structures: "));
         for (i, ds) in semantics.data_structures.iter().enumerate() {
@@ -157,8 +193,10 @@ fn generate_data_structures_description(semantics: &CodeSemantics) -> String {
 fn generate_complexity_description(semantics: &CodeSemantics) -> String {
     let mut desc = String::new();
 
-    desc.push_str(&format!("Time complexity: {}, Space complexity: {}.",
-        semantics.complexity, semantics.space_complexity));
+    desc.push_str(&format!(
+        "Time complexity: {}, Space complexity: {}.",
+        semantics.complexity, semantics.space_complexity
+    ));
 
     desc
 }

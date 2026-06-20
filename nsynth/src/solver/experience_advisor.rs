@@ -92,8 +92,14 @@ mod tests {
             description: "",
             signature: "fn add_two(a: i64, b: i64) -> i64",
             examples: vec![
-                Example { inputs: vec![Value::Int(1), Value::Int(2)], expected: Value::Int(3) },
-                Example { inputs: vec![Value::Int(4), Value::Int(5)], expected: Value::Int(9) },
+                Example {
+                    inputs: vec![Value::Int(1), Value::Int(2)],
+                    expected: Value::Int(3),
+                },
+                Example {
+                    inputs: vec![Value::Int(4), Value::Int(5)],
+                    expected: Value::Int(9),
+                },
             ],
             holdouts: vec![],
             reference_code: "",

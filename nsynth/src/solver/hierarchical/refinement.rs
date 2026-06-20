@@ -27,7 +27,10 @@ pub enum Type {
     Tuple(Vec<Type>),
     Option(Box<Type>),
     Result(Box<Type>, Box<Type>),
-    Function { params: Vec<Type>, return_type: Box<Type> },
+    Function {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
     Unknown,
     Named(String),
 }
@@ -57,10 +60,7 @@ pub enum ConstraintKind {
 }
 
 /// Refine program with type constraints
-pub fn refine_with_types(
-    _partial: &Problem,
-    _types: &TypeContext,
-) -> Result<Problem, String> {
+pub fn refine_with_types(_partial: &Problem, _types: &TypeContext) -> Result<Problem, String> {
     // In production, this would:
     // 1. Analyze partial program for type holes
     // 2. Use type context to fill holes
@@ -72,9 +72,7 @@ pub fn refine_with_types(
 }
 
 /// Infer types from examples
-pub fn infer_types_from_examples(
-    examples: &[crate::benchmark::Example],
-) -> TypeContext {
+pub fn infer_types_from_examples(examples: &[crate::benchmark::Example]) -> TypeContext {
     let mut variable_types = std::collections::HashMap::new();
     let signatures = std::collections::HashMap::new();
     let mut constraints = Vec::new();
@@ -115,16 +113,15 @@ fn value_to_type(value: &crate::benchmark::Value) -> Type {
         crate::benchmark::Value::Bool(_) => Type::Bool,
         crate::benchmark::Value::Array(_) => Type::Array(Box::new(Type::Int)),
         crate::benchmark::Value::Pair(_, _) => Type::Tuple(vec![Type::Int, Type::Int]),
-        crate::benchmark::Value::Quad(_, _, _, _) => Type::Tuple(vec![Type::Int, Type::Int, Type::Int, Type::Int]),
+        crate::benchmark::Value::Quad(_, _, _, _) => {
+            Type::Tuple(vec![Type::Int, Type::Int, Type::Int, Type::Int])
+        }
         crate::benchmark::Value::Tree(_) => Type::Named("Tree".to_string()),
     }
 }
 
 /// Validate program against type constraints
-pub fn validate_types(
-    _program: &str,
-    _context: &TypeContext,
-) -> Result<(), Vec<String>> {
+pub fn validate_types(_program: &str, _context: &TypeContext) -> Result<(), Vec<String>> {
     // In production, this would:
     // 1. Parse program into AST
     // 2. Type-check each expression
@@ -141,12 +138,10 @@ mod tests {
 
     #[test]
     fn test_infer_types_from_examples() {
-        let examples = vec![
-            Example {
-                inputs: vec![Value::Int(5)],
-                expected: Value::Int(10),
-            },
-        ];
+        let examples = vec![Example {
+            inputs: vec![Value::Int(5)],
+            expected: Value::Int(10),
+        }];
 
         let context = infer_types_from_examples(&examples);
         assert_eq!(context.constraints.len(), 2);

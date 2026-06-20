@@ -9,16 +9,7 @@
 pub mod experience;
 
 pub use experience::{
-    Experience,
-    ExperienceDB,
-    EffectivenessStats,
-    ExperienceDay,
-    Lesson,
-    LessonPattern,
-    LessonAction,
-    ProblemSnapshot,
-    SolutionSnapshot,
+    EffectivenessStats, Experience, ExperienceDB, ExperienceDay, Lesson, LessonAction,
+    LessonPattern, ProblemComplexity, ProblemSnapshot, SolutionSnapshot, SolveMetadata,
     SolveOutcome,
-    SolveMetadata,
-    ProblemComplexity,
 };

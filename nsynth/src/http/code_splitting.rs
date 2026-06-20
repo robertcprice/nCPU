@@ -8,9 +8,9 @@
 //! - Minification for size optimization
 //! - Asset optimization for images, fonts, and static resources
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 /// Strategy for how to split code into chunks
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -361,10 +361,7 @@ impl Default for ComponentSplitConfig {
                 "**/components/**/*.rs".to_string(),
                 "**/views/**/*.rs".to_string(),
             ],
-            exclude: vec![
-                "**/common/**".to_string(),
-                "**/shared/**".to_string(),
-            ],
+            exclude: vec!["**/common/**".to_string(), "**/shared/**".to_string()],
             size_threshold: 1024, // 1KB
         }
     }
@@ -725,18 +722,24 @@ mod tests {
                 prefetch: PrefetchStrategy::Viewport,
                 routes: {
                     let mut map = HashMap::new();
-                    map.insert("home".to_string(), RouteConfig {
-                        pattern: "/".to_string(),
-                        chunk: "home".to_string(),
-                        eager: true,
-                        prefetch: None,
-                    });
-                    map.insert("about".to_string(), RouteConfig {
-                        pattern: "/about".to_string(),
-                        chunk: "about".to_string(),
-                        eager: false,
-                        prefetch: Some(PrefetchStrategy::Hover),
-                    });
+                    map.insert(
+                        "home".to_string(),
+                        RouteConfig {
+                            pattern: "/".to_string(),
+                            chunk: "home".to_string(),
+                            eager: true,
+                            prefetch: None,
+                        },
+                    );
+                    map.insert(
+                        "about".to_string(),
+                        RouteConfig {
+                            pattern: "/about".to_string(),
+                            chunk: "about".to_string(),
+                            eager: false,
+                            prefetch: Some(PrefetchStrategy::Hover),
+                        },
+                    );
                     map
                 },
             })
@@ -783,8 +786,8 @@ mod tests {
         ];
 
         for strategy in strategies {
-            let config = CodeSplitConfig::new("/tmp/dist")
-                .with_vendor_splitting(VendorSplitConfig {
+            let config =
+                CodeSplitConfig::new("/tmp/dist").with_vendor_splitting(VendorSplitConfig {
                     group_strategy: strategy,
                     ..Default::default()
                 });
@@ -802,11 +805,10 @@ mod tests {
         ];
 
         for level in levels {
-            let config = CodeSplitConfig::new("/tmp/dist")
-                .with_minification(Minification {
-                    level,
-                    ..Default::default()
-                });
+            let config = CodeSplitConfig::new("/tmp/dist").with_minification(Minification {
+                level,
+                ..Default::default()
+            });
 
             assert_eq!(config.minification.level, level);
         }
@@ -823,7 +825,11 @@ mod tests {
         ];
 
         let config = CodeSplitConfig::new("/tmp/dist");
-        assert!(config.asset_optimization.images.target_formats.contains(&ImageFormat::WebP));
+        assert!(config
+            .asset_optimization
+            .images
+            .target_formats
+            .contains(&ImageFormat::WebP));
     }
 
     #[test]
@@ -837,7 +843,10 @@ mod tests {
         ];
 
         let config = test_config();
-        assert_eq!(config.routes.as_ref().unwrap().prefetch, PrefetchStrategy::Viewport);
+        assert_eq!(
+            config.routes.as_ref().unwrap().prefetch,
+            PrefetchStrategy::Viewport
+        );
     }
 
     #[test]

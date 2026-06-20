@@ -37,7 +37,9 @@ impl ValidationResult {
 
     /// Create a failed validation result with issues
     pub fn failed(issues: Vec<Issue>) -> Self {
-        let passed = issues.iter().all(|i| i.severity != Severity::Critical && i.severity != Severity::High);
+        let passed = issues
+            .iter()
+            .all(|i| i.severity != Severity::Critical && i.severity != Severity::High);
         let score = Self::calculate_score(&issues, &[]);
         let category_counts = Self::count_categories(&issues);
 
@@ -70,7 +72,9 @@ impl ValidationResult {
             }
         }
 
-        let passed = all_issues.iter().all(|i| i.severity != Severity::Critical && i.severity != Severity::High);
+        let passed = all_issues
+            .iter()
+            .all(|i| i.severity != Severity::Critical && i.severity != Severity::High);
         let score = Self::calculate_score(&all_issues, &all_warnings);
 
         Self {
@@ -84,14 +88,34 @@ impl ValidationResult {
 
     /// Calculate quality score from issues and warnings
     fn calculate_score(issues: &[Issue], warnings: &[Warning]) -> f64 {
-        let critical = issues.iter().filter(|i| i.severity == Severity::Critical).count();
-        let high = issues.iter().filter(|i| i.severity == Severity::High).count();
-        let medium = issues.iter().filter(|i| i.severity == Severity::Medium).count();
-        let low = issues.iter().filter(|i| i.severity == Severity::Low).count();
-        let info = issues.iter().filter(|i| i.severity == Severity::Info).count();
+        let critical = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Critical)
+            .count();
+        let high = issues
+            .iter()
+            .filter(|i| i.severity == Severity::High)
+            .count();
+        let medium = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Medium)
+            .count();
+        let low = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Low)
+            .count();
+        let info = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Info)
+            .count();
         let warnings_count = warnings.len();
 
-        let penalty = (critical * 100) + (high * 50) + (medium * 10) + (low * 5) + (info * 1) + (warnings_count * 2);
+        let penalty = (critical * 100)
+            + (high * 50)
+            + (medium * 10)
+            + (low * 5)
+            + (info * 1)
+            + (warnings_count * 2);
         let max_score = 100.0;
 
         ((max_score - penalty as f64) / max_score).max(0.0)
@@ -108,9 +132,21 @@ impl ValidationResult {
 
     /// Get summary message
     pub fn summary(&self) -> String {
-        let critical = self.issues.iter().filter(|i| i.severity == Severity::Critical).count();
-        let high = self.issues.iter().filter(|i| i.severity == Severity::High).count();
-        let medium = self.issues.iter().filter(|i| i.severity == Severity::Medium).count();
+        let critical = self
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Critical)
+            .count();
+        let high = self
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::High)
+            .count();
+        let medium = self
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Medium)
+            .count();
 
         format!(
             "Validation: {} - Score: {:.2}% - Issues: {} critical, {} high, {} medium, {} warnings",
@@ -147,11 +183,7 @@ pub struct Issue {
 
 impl Issue {
     /// Create a new issue
-    pub fn new(
-        severity: Severity,
-        category: IssueCategory,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn new(severity: Severity, category: IssueCategory, message: impl Into<String>) -> Self {
         Self {
             severity,
             category,
@@ -360,12 +392,10 @@ mod tests {
 
     #[test]
     fn test_merge_results() {
-        let result1 = ValidationResult::failed(vec![
-            Issue::medium(IssueCategory::Style, "Style issue 1"),
-        ]);
-        let result2 = ValidationResult::failed(vec![
-            Issue::medium(IssueCategory::Style, "Style issue 2"),
-        ]);
+        let result1 =
+            ValidationResult::failed(vec![Issue::medium(IssueCategory::Style, "Style issue 1")]);
+        let result2 =
+            ValidationResult::failed(vec![Issue::medium(IssueCategory::Style, "Style issue 2")]);
 
         let merged = ValidationResult::merge(vec![result1, result2]);
 

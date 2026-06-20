@@ -8,9 +8,8 @@ pub mod api_graph;
 pub mod graph;
 
 pub use api_graph::{
-    APIGraph, API_ID, APINode, Language, APICategory,
-    UsagePattern, Alternative, MigrationPath,
-    SharedAPIGraph, populate_default_graph,
+    populate_default_graph, APICategory, APIGraph, APINode, Alternative, Language, MigrationPath,
+    SharedAPIGraph, UsagePattern, API_ID,
 };
 
 pub use graph::{CodeKnowledgeGraph, DonorNode};
@@ -24,8 +23,12 @@ pub fn query_apis(query: &str, language_hint: Option<Language>) -> Vec<String> {
 
     for node in graph.nodes.values() {
         if language_hint.map_or(true, |lang| node.language == lang) {
-            if node.name.to_lowercase().contains(&query_lower) ||
-               node.tags.iter().any(|t| t.to_lowercase().contains(&query_lower)) {
+            if node.name.to_lowercase().contains(&query_lower)
+                || node
+                    .tags
+                    .iter()
+                    .any(|t| t.to_lowercase().contains(&query_lower))
+            {
                 results.push(node.name.clone());
             }
         }

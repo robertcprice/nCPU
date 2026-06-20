@@ -9,8 +9,8 @@
 //! - Periodic background sync
 //! - App shortcuts and install prompts
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ============================================================================
 // Service Worker Core Types
@@ -142,10 +142,7 @@ pub struct CacheStrategy {
 
 impl CacheStrategy {
     /// Create a new cache strategy
-    pub fn new(
-        strategy_type: CacheStrategyType,
-        cache_name: impl Into<String>,
-    ) -> Self {
+    pub fn new(strategy_type: CacheStrategyType, cache_name: impl Into<String>) -> Self {
         Self {
             strategy_type,
             cache_name: cache_name.into(),
@@ -185,9 +182,9 @@ impl CacheStrategy {
         if self.patterns.is_empty() {
             return true;
         }
-        self.patterns.iter().any(|pattern| {
-            wildcard_match(pattern, url)
-        })
+        self.patterns
+            .iter()
+            .any(|pattern| wildcard_match(pattern, url))
     }
 }
 
@@ -250,7 +247,10 @@ impl CacheStorage {
 
     /// Put entry in cache
     pub fn put(&mut self, cache_name: &str, url: impl Into<String>, entry: CacheEntry) {
-        let cache = self.caches.entry(cache_name.to_string()).or_insert_with(HashMap::new);
+        let cache = self
+            .caches
+            .entry(cache_name.to_string())
+            .or_insert_with(HashMap::new);
         cache.insert(url.into(), entry);
 
         // Enforce size limit
@@ -478,7 +478,11 @@ impl PushManager {
     }
 
     /// Set VAPID keys
-    pub fn with_vapid_keys(mut self, public: impl Into<String>, private: impl Into<String>) -> Self {
+    pub fn with_vapid_keys(
+        mut self,
+        public: impl Into<String>,
+        private: impl Into<String>,
+    ) -> Self {
         self.vapid_keys = Some(VapidKeys {
             public_key: public.into(),
             private_key: private.into(),
@@ -772,7 +776,12 @@ impl WebManifest {
     }
 
     /// Add icon
-    pub fn with_icon(mut self, src: impl Into<String>, sizes: impl Into<String>, icon_type: impl Into<String>) -> Self {
+    pub fn with_icon(
+        mut self,
+        src: impl Into<String>,
+        sizes: impl Into<String>,
+        icon_type: impl Into<String>,
+    ) -> Self {
         self.icons.push(ManifestIcon {
             src: src.into(),
             sizes: sizes.into(),
@@ -783,7 +792,12 @@ impl WebManifest {
     }
 
     /// Add shortcut
-    pub fn with_shortcut(mut self, id: impl Into<String>, name: impl Into<String>, url: impl Into<String>) -> Self {
+    pub fn with_shortcut(
+        mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        url: impl Into<String>,
+    ) -> Self {
         self.shortcuts.push(AppShortcut {
             id: id.into(),
             name: name.into(),
@@ -969,9 +983,7 @@ impl PWAPrimitives {
 
     /// Find matching cache strategy for URL
     pub fn find_cache_strategy(&self, url: &str) -> Option<&CacheStrategy> {
-        self.cache_strategies
-            .iter()
-            .find(|s| s.matches(url))
+        self.cache_strategies.iter().find(|s| s.matches(url))
     }
 
     /// Get cache storage
@@ -1144,8 +1156,8 @@ mod tests {
 
     #[test]
     fn test_cache_strategy_matching() {
-        let strategy = CacheStrategy::new(CacheStrategyType::CacheFirst, "v1")
-            .with_pattern("/api/*");
+        let strategy =
+            CacheStrategy::new(CacheStrategyType::CacheFirst, "v1").with_pattern("/api/*");
 
         assert!(strategy.matches("/api/users"));
         assert!(strategy.matches("/api/posts/123"));
@@ -1215,8 +1227,7 @@ mod tests {
 
     #[test]
     fn test_push_manager() {
-        let mut manager = PushManager::new()
-            .with_vapid_keys("public_key", "private_key");
+        let mut manager = PushManager::new().with_vapid_keys("public_key", "private_key");
 
         let sub = PushSubscription::new("endpoint", "auth", "p256dh");
         let registered = manager.subscribe(sub);
@@ -1297,8 +1308,8 @@ mod tests {
         assert!(pwa.find_cache_strategy("/any").is_some());
 
         // Set manifest
-        let manifest = WebManifest::new("Test", "T", "/")
-            .with_icon("/icon.png", "192x192", "image/png");
+        let manifest =
+            WebManifest::new("Test", "T", "/").with_icon("/icon.png", "192x192", "image/png");
         pwa.set_manifest(manifest);
         assert!(pwa.is_installable());
     }

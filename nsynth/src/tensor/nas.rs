@@ -6,8 +6,8 @@
 //! - Search Space definition
 //! - Bilevel optimization for architecture and weights
 
+use super::ops::{Shape, Tensor};
 use std::boxed::Box;
-use super::ops::{Tensor, Shape};
 
 /// DARTS Cell - Differentiable Architecture Search Cell
 ///
@@ -166,11 +166,11 @@ impl DARTSCell {
     // Helper: compute softmax for operation weights
     fn compute_softmax(&self, logits: &Tensor) -> Tensor {
         let max_val = logits.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let exp_sum: f64 = logits.data.iter()
-            .map(|&x| (x - max_val).exp())
-            .sum();
+        let exp_sum: f64 = logits.data.iter().map(|&x| (x - max_val).exp()).sum();
 
-        let probs: Vec<f64> = logits.data.iter()
+        let probs: Vec<f64> = logits
+            .data
+            .iter()
             .map(|&x| ((x - max_val).exp()) / exp_sum)
             .collect();
 
@@ -227,7 +227,8 @@ impl DARTSCell {
         }
 
         // Argmax
-        sampled_values.iter()
+        sampled_values
+            .iter()
             .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .map(|(idx, _)| idx)
@@ -280,9 +281,8 @@ impl ENAS {
         let logits = (self.controller)(&controller_input);
 
         // Apply temperature scaling
-        let scaled_logits = Tensor::vector(
-            logits.data.iter().map(|&x| x / self.temperature).collect()
-        );
+        let scaled_logits =
+            Tensor::vector(logits.data.iter().map(|&x| x / self.temperature).collect());
 
         // Sample with log probability computation
         let (arch_embedding, log_prob) = self.sample_with_log_prob(&scaled_logits);
@@ -322,9 +322,7 @@ impl ENAS {
     /// Scalar loss tensor
     pub fn reinforce_loss(&self, log_prob: &Tensor, reward: f64) -> Tensor {
         // Negative because we maximize reward (minimize negative reward)
-        let neg_log_prob = Tensor::vector(
-            log_prob.data.iter().map(|&x| -x * reward).collect()
-        );
+        let neg_log_prob = Tensor::vector(log_prob.data.iter().map(|&x| -x * reward).collect());
         neg_log_prob
     }
 
@@ -336,7 +334,11 @@ impl ENAS {
     ///
     /// # Returns
     /// Model output and entropy bonus
-    pub fn evaluate_child_model(&self, arch_embedding: &Tensor, inputs: &Tensor) -> (Tensor, Tensor) {
+    pub fn evaluate_child_model(
+        &self,
+        arch_embedding: &Tensor,
+        inputs: &Tensor,
+    ) -> (Tensor, Tensor) {
         // Forward pass with shared weights
         let output = self.forward_with_shared_weights(arch_embedding, inputs);
 
@@ -353,22 +355,21 @@ impl ENAS {
         }
 
         let mean: f64 = rewards.data.iter().sum::<f64>() / rewards.data.len() as f64;
-        let variance: f64 = rewards.data.iter()
+        let variance: f64 = rewards
+            .data
+            .iter()
             .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / rewards.data.len() as f64;
+            .sum::<f64>()
+            / rewards.data.len() as f64;
         let std = variance.sqrt().max(1e-8);
 
-        Tensor::vector(rewards.data.iter()
-            .map(|&x| (x - mean) / std)
-            .collect())
+        Tensor::vector(rewards.data.iter().map(|&x| (x - mean) / std).collect())
     }
 
     // Helper: sample with log probability
     fn sample_with_log_prob(&self, logits: &Tensor) -> (Tensor, Tensor) {
         let max_val = logits.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let exp_vals: Vec<f64> = logits.data.iter()
-            .map(|&x| (x - max_val).exp())
-            .collect();
+        let exp_vals: Vec<f64> = logits.data.iter().map(|&x| (x - max_val).exp()).collect();
         let exp_sum: f64 = exp_vals.iter().sum();
 
         // Sample index
@@ -387,41 +388,44 @@ impl ENAS {
         // Log probability
         let log_prob = (exp_vals[selected_idx] / exp_sum).ln();
 
-        (Tensor::scalar(selected_idx as f64), Tensor::scalar(log_prob))
+        (
+            Tensor::scalar(selected_idx as f64),
+            Tensor::scalar(log_prob),
+        )
     }
 
     // Helper: compute log probabilities
     fn compute_log_probs(&self, logits: &Tensor) -> Tensor {
         let softmax_probs = self.compute_softmax(logits);
-        Tensor::vector(
-            softmax_probs.data.iter().map(|&p| p.ln()).collect()
-        )
+        Tensor::vector(softmax_probs.data.iter().map(|&p| p.ln()).collect())
     }
 
     // Helper: compute softmax
     fn compute_softmax(&self, logits: &Tensor) -> Tensor {
         let max_val = logits.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let exp_sum: f64 = logits.data.iter()
-            .map(|&x| (x - max_val).exp())
-            .sum();
+        let exp_sum: f64 = logits.data.iter().map(|&x| (x - max_val).exp()).sum();
 
-        Tensor::vector(logits.data.iter()
-            .map(|&x| (x - max_val).exp() / exp_sum)
-            .collect())
+        Tensor::vector(
+            logits
+                .data
+                .iter()
+                .map(|&x| (x - max_val).exp() / exp_sum)
+                .collect(),
+        )
     }
 
     // Helper: forward with shared weights
     fn forward_with_shared_weights(&self, _arch: &Tensor, inputs: &Tensor) -> Tensor {
         // Simplified: return input scaled by shared weights
         let scale_factor = self.shared_weights.data.get(0).copied().unwrap_or(1.0);
-        Tensor::vector(
-            inputs.data.iter().map(|&x| x * scale_factor).collect()
-        )
+        Tensor::vector(inputs.data.iter().map(|&x| x * scale_factor).collect())
     }
 
     // Helper: compute entropy
     fn compute_entropy(&self, probs: &Tensor) -> Tensor {
-        let entropy: f64 = probs.data.iter()
+        let entropy: f64 = probs
+            .data
+            .iter()
             .filter(|&&p| p > 0.0)
             .map(|&p| -p * p.ln())
             .sum();
@@ -431,10 +435,13 @@ impl ENAS {
 
     // Helper: compute reinforce loss
     fn compute_reinforce_loss(&self, log_probs: &Tensor, rewards: &Tensor) -> Tensor {
-        let loss: f64 = log_probs.data.iter()
+        let loss: f64 = log_probs
+            .data
+            .iter()
             .zip(rewards.data.iter())
             .map(|(&lp, &r)| -lp * r)
-            .sum::<f64>() / log_probs.data.len() as f64;
+            .sum::<f64>()
+            / log_probs.data.len() as f64;
 
         Tensor::scalar(loss)
     }
@@ -535,9 +542,11 @@ impl SearchSpace {
     /// * `layers` - Layer options for each layer
     /// * `connections` - Valid connectivity patterns
     pub fn new(layers: Vec<LayerOptions>, connections: AdjacencyMatrix) -> Self {
-        let encoding_dim = layers.iter()
+        let encoding_dim = layers
+            .iter()
             .map(|l| l.total_configurations())
-            .sum::<usize>() + connections.valid_connections.len();
+            .sum::<usize>()
+            + connections.valid_connections.len();
 
         Self {
             layers,
@@ -749,11 +758,7 @@ impl NasOptimizer {
     ///
     /// # Returns
     /// Tuple of (arch_updates, weight_updates)
-    pub fn step(
-        &self,
-        arch_grads: &Tensor,
-        weight_grads: &Tensor,
-    ) -> (Tensor, Tensor) {
+    pub fn step(&self, arch_grads: &Tensor, weight_grads: &Tensor) -> (Tensor, Tensor) {
         // Apply momentum and learning rate to architecture
         let arch_updates = self.compute_arch_updates(arch_grads);
 
@@ -849,13 +854,16 @@ impl NasOptimizer {
 
     // Helper: compute MSE
     fn compute_mse(&self, predictions: &Tensor, targets: &Tensor) -> Tensor {
-        let mse: f64 = predictions.data.iter()
+        let mse: f64 = predictions
+            .data
+            .iter()
             .zip(targets.data.iter())
             .map(|(&p, &t)| {
                 let diff = p - t;
                 diff * diff
             })
-            .sum::<f64>() / predictions.data.len() as f64;
+            .sum::<f64>()
+            / predictions.data.len() as f64;
 
         Tensor::scalar(mse)
     }
@@ -896,10 +904,8 @@ mod tests {
 
     #[test]
     fn test_darts_forward() {
-        let ops: Vec<Box<dyn Fn(&Tensor) -> Tensor>> = vec![
-            Box::new(identity_op),
-            Box::new(scale_op),
-        ];
+        let ops: Vec<Box<dyn Fn(&Tensor) -> Tensor>> =
+            vec![Box::new(identity_op), Box::new(scale_op)];
 
         let cell = DARTSCell::new(3, ops);
         let input = Tensor::vector(vec![1.0, 2.0, 3.0]);
@@ -912,10 +918,8 @@ mod tests {
 
     #[test]
     fn test_darts_sample_architecture() {
-        let ops: Vec<Box<dyn Fn(&Tensor) -> Tensor>> = vec![
-            Box::new(identity_op),
-            Box::new(scale_op),
-        ];
+        let ops: Vec<Box<dyn Fn(&Tensor) -> Tensor>> =
+            vec![Box::new(identity_op), Box::new(scale_op)];
 
         let cell = DARTSCell::new(3, ops);
 
@@ -928,10 +932,8 @@ mod tests {
 
     #[test]
     fn test_darts_arch_parameters() {
-        let ops: Vec<Box<dyn Fn(&Tensor) -> Tensor>> = vec![
-            Box::new(identity_op),
-            Box::new(scale_op),
-        ];
+        let ops: Vec<Box<dyn Fn(&Tensor) -> Tensor>> =
+            vec![Box::new(identity_op), Box::new(scale_op)];
 
         let cell = DARTSCell::new(2, ops);
 
@@ -997,9 +999,7 @@ mod tests {
 
     #[test]
     fn test_search_space_random_sample() {
-        let layers = vec![
-            LayerOptions::new(2, vec![3, 5], vec![32, 64]),
-        ];
+        let layers = vec![LayerOptions::new(2, vec![3, 5], vec![32, 64])];
         let connections = AdjacencyMatrix::new(1);
 
         let search_space = SearchSpace::new(layers, connections);
@@ -1012,9 +1012,7 @@ mod tests {
 
     #[test]
     fn test_search_space_encode_decode() {
-        let layers = vec![
-            LayerOptions::new(2, vec![3, 5], vec![32, 64]),
-        ];
+        let layers = vec![LayerOptions::new(2, vec![3, 5], vec![32, 64])];
         let connections = AdjacencyMatrix::new(1);
 
         let search_space = SearchSpace::new(layers, connections);
@@ -1032,9 +1030,7 @@ mod tests {
 
     #[test]
     fn test_search_space_is_valid() {
-        let layers = vec![
-            LayerOptions::new(2, vec![3, 5], vec![32, 64]),
-        ];
+        let layers = vec![LayerOptions::new(2, vec![3, 5], vec![32, 64])];
         let connections = AdjacencyMatrix::new(1);
 
         let search_space = SearchSpace::new(layers, connections);

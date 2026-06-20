@@ -20,9 +20,9 @@
 //! let result = pool.execute("worker-1", WorkerMessage::compute([2, 3])).await?;
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 // ============================================================================
@@ -343,12 +343,18 @@ impl WorkerPool {
     }
 
     /// Add a worker to the pool
-    pub async fn add_worker(&self, id: impl Into<String>, script: impl Into<String>) -> Result<(), WorkerError> {
+    pub async fn add_worker(
+        &self,
+        id: impl Into<String>,
+        script: impl Into<String>,
+    ) -> Result<(), WorkerError> {
         let mut workers = self.workers.write().await;
         let id = id.into();
 
         if workers.len() >= self.max_size {
-            return Err(WorkerError::InitializationFailed("Pool is full".to_string()));
+            return Err(WorkerError::InitializationFailed(
+                "Pool is full".to_string(),
+            ));
         }
 
         let mut worker = WebWorker::new(script);
@@ -377,12 +383,7 @@ impl WorkerPool {
 
     /// Get all workers
     pub async fn get_all_workers(&self) -> Vec<WebWorker> {
-        self.workers
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect()
+        self.workers.read().await.values().cloned().collect()
     }
 
     /// Get available (ready) workers
@@ -489,8 +490,14 @@ impl WorkerPool {
         let workers = self.workers.read().await;
         let total = workers.len();
         let available = workers.values().filter(|w| w.is_available()).count();
-        let busy = workers.values().filter(|w| w.state == WorkerState::Busy).count();
-        let errored = workers.values().filter(|w| w.state == WorkerState::Errored).count();
+        let busy = workers
+            .values()
+            .filter(|w| w.state == WorkerState::Busy)
+            .count();
+        let errored = workers
+            .values()
+            .filter(|w| w.state == WorkerState::Errored)
+            .count();
 
         WorkerPoolStats {
             total_workers: total,
@@ -794,11 +801,7 @@ impl AudioWorklet {
     }
 
     /// Process audio through an instance
-    pub fn process(
-        &mut self,
-        instance_id: &str,
-        input: &[f32],
-    ) -> Result<Vec<f32>, WorkerError> {
+    pub fn process(&mut self, instance_id: &str, input: &[f32]) -> Result<Vec<f32>, WorkerError> {
         let instance = self
             .instances
             .get_mut(instance_id)
@@ -1263,7 +1266,10 @@ mod tests {
     fn test_audio_worklet_load_processor() {
         let mut worklet = AudioWorklet::new("test");
         assert!(worklet
-            .load_processor("gain", "class GainProcessor extends AudioWorkletProcessor {}")
+            .load_processor(
+                "gain",
+                "class GainProcessor extends AudioWorkletProcessor {}"
+            )
             .is_ok());
 
         assert!(worklet.processors.contains_key("gain"));
@@ -1272,7 +1278,9 @@ mod tests {
     #[test]
     fn test_audio_worklet_create_instance() {
         let mut worklet = AudioWorklet::new("test");
-        worklet.load_processor("gain", "class GainProcessor {}").unwrap();
+        worklet
+            .load_processor("gain", "class GainProcessor {}")
+            .unwrap();
 
         let instance = worklet.create_instance("gain", 128);
         assert!(instance.is_ok());
@@ -1286,7 +1294,9 @@ mod tests {
     #[test]
     fn test_audio_worklet_process() {
         let mut worklet = AudioWorklet::new("test");
-        worklet.load_processor("gain", "class GainProcessor {}").unwrap();
+        worklet
+            .load_processor("gain", "class GainProcessor {}")
+            .unwrap();
 
         let instance = worklet.create_instance("gain", 128).unwrap();
         let instance_id = instance.id.clone();
@@ -1326,7 +1336,9 @@ mod tests {
     #[test]
     fn test_audio_worklet_suspend_resume() {
         let mut worklet = AudioWorklet::new("test");
-        worklet.load_processor("gain", "class GainProcessor {}").unwrap();
+        worklet
+            .load_processor("gain", "class GainProcessor {}")
+            .unwrap();
 
         let instance = worklet.create_instance("gain", 128).unwrap();
         let instance_id = instance.id.clone();
@@ -1343,7 +1355,9 @@ mod tests {
     #[test]
     fn test_audio_worklet_close_instance() {
         let mut worklet = AudioWorklet::new("test");
-        worklet.load_processor("gain", "class GainProcessor {}").unwrap();
+        worklet
+            .load_processor("gain", "class GainProcessor {}")
+            .unwrap();
 
         let instance = worklet.create_instance("gain", 128).unwrap();
         let instance_id = instance.id.clone();
@@ -1389,7 +1403,9 @@ mod tests {
     #[test]
     fn test_paint_worklet_get_class() {
         let mut worklet = PaintWorklet::new("test");
-        worklet.register_from_code("circle", "class Circle {}").unwrap();
+        worklet
+            .register_from_code("circle", "class Circle {}")
+            .unwrap();
 
         let class = worklet.get_class("circle");
         assert!(class.is_some());
@@ -1399,7 +1415,9 @@ mod tests {
     #[test]
     fn test_paint_worklet_paint() {
         let mut worklet = PaintWorklet::new("test");
-        worklet.register_from_code("circle", "class Circle {}").unwrap();
+        worklet
+            .register_from_code("circle", "class Circle {}")
+            .unwrap();
 
         let props = HashMap::new();
         let result = worklet.paint("circle", 100.0, 100.0, &props);
@@ -1414,7 +1432,9 @@ mod tests {
     #[test]
     fn test_paint_worklet_class_names() {
         let mut worklet = PaintWorklet::new("test");
-        worklet.register_from_code("circle", "class Circle {}").unwrap();
+        worklet
+            .register_from_code("circle", "class Circle {}")
+            .unwrap();
         worklet.register_from_code("rect", "class Rect {}").unwrap();
 
         let names = worklet.class_names();
@@ -1496,7 +1516,9 @@ mod tests {
     #[tokio::test]
     async fn test_worker_pool_execute() {
         let pool = WorkerPool::new(4);
-        pool.add_worker("worker-1", "const add = (a, b) => a + b;").await.unwrap();
+        pool.add_worker("worker-1", "const add = (a, b) => a + b;")
+            .await
+            .unwrap();
 
         let msg = WorkerMessage::compute(vec![2, 3]);
         let result = pool.execute("worker-1", msg).await;

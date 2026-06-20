@@ -17,9 +17,9 @@ pub mod linguigenesis_bridge;
 pub mod meta;
 pub mod meta_learner;
 pub mod method_router;
-pub mod multi;
 pub mod mog_transpile;
 pub mod morph_transduce;
+pub mod multi;
 #[cfg(feature = "nl")]
 pub mod nl;
 pub mod optimization;

@@ -336,12 +336,15 @@ impl WebAuthnServer {
             .map(|ids| {
                 ids.into_iter()
                     .map(|id| {
-                        Ok::<PublicKeyCredentialDescriptor, WebAuthnError>(PublicKeyCredentialDescriptor {
-                            type_: CredentialType::PublicKey,
-                            id: base64_simd::URL_SAFE.decode_to_vec(&id)
-                                .map_err(|_| WebAuthnError::InvalidChallenge)?,
-                            transports: None,
-                        })
+                        Ok::<PublicKeyCredentialDescriptor, WebAuthnError>(
+                            PublicKeyCredentialDescriptor {
+                                type_: CredentialType::PublicKey,
+                                id: base64_simd::URL_SAFE
+                                    .decode_to_vec(&id)
+                                    .map_err(|_| WebAuthnError::InvalidChallenge)?,
+                                transports: None,
+                            },
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
@@ -397,9 +400,9 @@ impl WebAuthnServer {
         response: CredentialCreationResponse,
     ) -> Result<StoredCredential, WebAuthnError> {
         // Verify client data
-        let client_data: serde_json::Value = serde_json::from_slice(
-            &response.response.authenticator_data
-        ).map_err(|_| WebAuthnError::VerificationFailed)?;
+        let client_data: serde_json::Value =
+            serde_json::from_slice(&response.response.authenticator_data)
+                .map_err(|_| WebAuthnError::VerificationFailed)?;
 
         // Verify origin
         let origin = client_data
@@ -449,7 +452,8 @@ impl WebAuthnServer {
         };
 
         // Store credential
-        self.credentials.insert(credential_id.clone(), credential.clone());
+        self.credentials
+            .insert(credential_id.clone(), credential.clone());
         self.user_credentials
             .entry(credential.user_id.clone())
             .or_insert_with(Vec::new)
@@ -469,16 +473,19 @@ impl WebAuthnServer {
             self.user_credentials
                 .get(&uid)
                 .map(|creds| {
-                    Ok::<Vec<_>, ()>(creds.iter().map(|id| {
-                        let cred = self.credentials.get(id).unwrap();
-                        PublicKeyCredentialDescriptor {
-                            type_: CredentialType::PublicKey,
-                            id: base64_simd::URL_SAFE
-                                .decode_to_vec(id)
-                                .unwrap_or_default(),
-                            transports: Some(cred.transports.clone()),
-                        }
-                    }).collect())
+                    Ok::<Vec<_>, ()>(
+                        creds
+                            .iter()
+                            .map(|id| {
+                                let cred = self.credentials.get(id).unwrap();
+                                PublicKeyCredentialDescriptor {
+                                    type_: CredentialType::PublicKey,
+                                    id: base64_simd::URL_SAFE.decode_to_vec(id).unwrap_or_default(),
+                                    transports: Some(cred.transports.clone()),
+                                }
+                            })
+                            .collect(),
+                    )
                 })
                 .and_then(|r| r.ok())
         } else {
@@ -523,7 +530,12 @@ impl WebAuthnServer {
 
         // Verify counter to prevent replay attacks
         let counter_bytes = &authenticator_data[33..37];
-        let counter = u32::from_be_bytes([counter_bytes[0], counter_bytes[1], counter_bytes[2], counter_bytes[3]]);
+        let counter = u32::from_be_bytes([
+            counter_bytes[0],
+            counter_bytes[1],
+            counter_bytes[2],
+            counter_bytes[3],
+        ]);
 
         if counter <= credential.counter {
             return Err(WebAuthnError::InvalidSignature);
@@ -777,12 +789,14 @@ pub struct WebRTCPeer {
 impl WebRTCPeer {
     pub fn new(config: RtcConfiguration) -> Self {
         Self {
-            id: format!("{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
-            rand::random::<u32>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u64>()),
+            id: format!(
+                "{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
+                rand::random::<u32>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u64>()
+            ),
             config,
             local_description: None,
             remote_description: None,
@@ -942,14 +956,8 @@ impl WebRTCPeer {
     }
 
     /// Create data channel
-    pub fn create_data_channel(
-        &mut self,
-        label: String,
-    ) -> Result<WebRTCDataChannel, String> {
-        let channel = WebRTCDataChannel::new(
-            label.clone(),
-            DataChannelId::new(self.id.clone()),
-        );
+    pub fn create_data_channel(&mut self, label: String) -> Result<WebRTCDataChannel, String> {
+        let channel = WebRTCDataChannel::new(label.clone(), DataChannelId::new(self.id.clone()));
 
         self.data_channels.push(label);
         Ok(channel)
@@ -971,12 +979,18 @@ pub struct DataChannelId(String);
 
 impl DataChannelId {
     pub fn new(peer_id: String) -> Self {
-        Self(format!("{}_{}", peer_id, format!("{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
-            rand::random::<u32>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u64>())))
+        Self(format!(
+            "{}_{}",
+            peer_id,
+            format!(
+                "{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
+                rand::random::<u32>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u64>()
+            )
+        ))
     }
 
     pub fn as_str(&self) -> &str {
@@ -1124,12 +1138,14 @@ pub struct MediaStreamTrack {
 impl MediaStreamTrack {
     pub fn new(kind: MediaTrackKind, label: String) -> Self {
         Self {
-            id: format!("{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
-            rand::random::<u32>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u64>()),
+            id: format!(
+                "{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
+                rand::random::<u32>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u64>()
+            ),
             kind,
             label,
             enabled: true,
@@ -1169,12 +1185,14 @@ impl MediaStreamTrack {
 
     pub fn clone_track(&self) -> MediaStreamTrack {
         Self {
-            id: format!("{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
-            rand::random::<u32>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u64>()),
+            id: format!(
+                "{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
+                rand::random::<u32>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u64>()
+            ),
             kind: self.kind.clone(),
             label: self.label.clone(),
             enabled: self.enabled,
@@ -1196,12 +1214,14 @@ pub struct MediaStream {
 impl MediaStream {
     pub fn new() -> Self {
         Self {
-            id: format!("{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
-            rand::random::<u32>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u64>()),
+            id: format!(
+                "{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
+                rand::random::<u32>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u64>()
+            ),
             tracks: Vec::new(),
             active: true,
         }
@@ -1262,12 +1282,14 @@ impl MediaStream {
 
     pub fn clone(&self) -> MediaStream {
         Self {
-            id: format!("{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
-            rand::random::<u32>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u64>()),
+            id: format!(
+                "{{{:08x}-{:04x}-{:4x}-{:4x}-{:012x}}}",
+                rand::random::<u32>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u16>(),
+                rand::random::<u64>()
+            ),
             tracks: self.tracks.iter().map(|t| t.clone_track()).collect(),
             active: self.active,
         }
@@ -1334,7 +1356,10 @@ impl MediaDevices {
         Ok(stream)
     }
 
-    pub fn display_media(&self, constraints: MediaStreamConstraints) -> Result<MediaStream, String> {
+    pub fn display_media(
+        &self,
+        constraints: MediaStreamConstraints,
+    ) -> Result<MediaStream, String> {
         let mut stream = MediaStream::new();
 
         if constraints.video.unwrap_or(false) {
@@ -1521,10 +1546,8 @@ mod tests {
 
     #[test]
     fn test_data_channel_send() {
-        let mut channel = WebRTCDataChannel::new(
-            "test".to_string(),
-            DataChannelId::new("peer1".to_string()),
-        );
+        let mut channel =
+            WebRTCDataChannel::new("test".to_string(), DataChannelId::new("peer1".to_string()));
         channel.set_state(DataChannelState::Open);
         channel.send(&b"hello"[..]).unwrap();
         assert_eq!(channel.buffered_amount(), 5);
@@ -1532,10 +1555,8 @@ mod tests {
 
     #[test]
     fn test_data_channel_send_text() {
-        let mut channel = WebRTCDataChannel::new(
-            "test".to_string(),
-            DataChannelId::new("peer1".to_string()),
-        );
+        let mut channel =
+            WebRTCDataChannel::new("test".to_string(), DataChannelId::new("peer1".to_string()));
         channel.set_state(DataChannelState::Open);
         channel.send_text("hello world").unwrap();
         assert_eq!(channel.buffered_amount(), 11);
@@ -1543,20 +1564,16 @@ mod tests {
 
     #[test]
     fn test_data_channel_send_when_closed() {
-        let mut channel = WebRTCDataChannel::new(
-            "test".to_string(),
-            DataChannelId::new("peer1".to_string()),
-        );
+        let mut channel =
+            WebRTCDataChannel::new("test".to_string(), DataChannelId::new("peer1".to_string()));
         let result = channel.send(&b"hello"[..]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_data_channel_close() {
-        let mut channel = WebRTCDataChannel::new(
-            "test".to_string(),
-            DataChannelId::new("peer1".to_string()),
-        );
+        let mut channel =
+            WebRTCDataChannel::new("test".to_string(), DataChannelId::new("peer1".to_string()));
         channel.set_state(DataChannelState::Open);
         channel.close();
         assert_eq!(channel.state(), DataChannelState::Closed);
@@ -1612,18 +1629,36 @@ mod tests {
     #[test]
     fn test_media_stream_audio_tracks() {
         let mut stream = MediaStream::new();
-        stream.add_track(MediaStreamTrack::new(MediaTrackKind::Audio, "audio1".to_string()));
-        stream.add_track(MediaStreamTrack::new(MediaTrackKind::Audio, "audio2".to_string()));
-        stream.add_track(MediaStreamTrack::new(MediaTrackKind::Video, "video".to_string()));
+        stream.add_track(MediaStreamTrack::new(
+            MediaTrackKind::Audio,
+            "audio1".to_string(),
+        ));
+        stream.add_track(MediaStreamTrack::new(
+            MediaTrackKind::Audio,
+            "audio2".to_string(),
+        ));
+        stream.add_track(MediaStreamTrack::new(
+            MediaTrackKind::Video,
+            "video".to_string(),
+        ));
         assert_eq!(stream.audio_tracks().len(), 2);
     }
 
     #[test]
     fn test_media_stream_video_tracks() {
         let mut stream = MediaStream::new();
-        stream.add_track(MediaStreamTrack::new(MediaTrackKind::Audio, "audio".to_string()));
-        stream.add_track(MediaStreamTrack::new(MediaTrackKind::Video, "video1".to_string()));
-        stream.add_track(MediaStreamTrack::new(MediaTrackKind::Video, "video2".to_string()));
+        stream.add_track(MediaStreamTrack::new(
+            MediaTrackKind::Audio,
+            "audio".to_string(),
+        ));
+        stream.add_track(MediaStreamTrack::new(
+            MediaTrackKind::Video,
+            "video1".to_string(),
+        ));
+        stream.add_track(MediaStreamTrack::new(
+            MediaTrackKind::Video,
+            "video2".to_string(),
+        ));
         assert_eq!(stream.video_tracks().len(), 2);
     }
 
@@ -1840,10 +1875,8 @@ mod tests {
 
     #[test]
     fn test_data_channel_priority() {
-        let channel = WebRTCDataChannel::new(
-            "test".to_string(),
-            DataChannelId::new("peer1".to_string()),
-        );
+        let channel =
+            WebRTCDataChannel::new("test".to_string(), DataChannelId::new("peer1".to_string()));
         assert_eq!(channel.priority(), DataChannelPriority::Medium);
     }
 }

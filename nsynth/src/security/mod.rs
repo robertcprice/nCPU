@@ -6,16 +6,7 @@
 pub mod vulnerability;
 
 pub use vulnerability::{
-    Confidence,
-    Location,
-    ScanConfig,
-    ScanResult,
-    TaintSink,
-    TaintSource,
-    VulnerabilityFinding,
-    VulnerabilityScanner,
-    VulnerabilityType,
-    scan_vulnerabilities,
-    scan_vulnerabilities_with_config,
-    VULN_PATTERNS,
+    scan_vulnerabilities, scan_vulnerabilities_with_config, Confidence, Location, ScanConfig,
+    ScanResult, TaintSink, TaintSource, VulnerabilityFinding, VulnerabilityScanner,
+    VulnerabilityType, VULN_PATTERNS,
 };

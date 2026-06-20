@@ -2,19 +2,8 @@
 //!
 //! Each stage performs a specific category of validation.
 
-use super::{
-    ValidationResult,
-    Issue,
-    IssueCategory,
-    Warning,
-};
-use crate::bidirectional::parser::{
-    AST,
-    Function,
-    Statement,
-    Expression,
-    BinOp,
-};
+use super::{Issue, IssueCategory, ValidationResult, Warning};
+use crate::bidirectional::parser::{BinOp, Expression, Function, Statement, AST};
 use crate::validation::pipeline::ValidationStage;
 
 /// Syntax validation stage
@@ -50,10 +39,10 @@ impl SyntaxValidationStage {
                         issues.push(
                             Issue::medium(
                                 IssueCategory::Syntax,
-                                "Unreachable code after return or panic"
+                                "Unreachable code after return or panic",
                             )
                             .with_location("generated", idx + 1, 0)
-                            .with_fix("Remove unreachable statements")
+                            .with_fix("Remove unreachable statements"),
                         );
                     }
                 }
@@ -62,10 +51,10 @@ impl SyntaxValidationStage {
                         issues.push(
                             Issue::medium(
                                 IssueCategory::Syntax,
-                                "Unreachable code after return or panic"
+                                "Unreachable code after return or panic",
                             )
                             .with_location("generated", idx + 1, 0)
-                            .with_fix("Remove unreachable statements")
+                            .with_fix("Remove unreachable statements"),
                         );
                     }
                 }
@@ -84,22 +73,23 @@ impl SyntaxValidationStage {
             match stmt {
                 Statement::If { then_block, .. } if then_block.is_empty() => {
                     issues.push(
-                        Issue::low(
-                            IssueCategory::Syntax,
-                            "Empty if block"
-                        )
-                        .with_location("generated", idx + 1, 0)
-                        .with_fix("Add logic or remove empty if")
+                        Issue::low(IssueCategory::Syntax, "Empty if block")
+                            .with_location("generated", idx + 1, 0)
+                            .with_fix("Add logic or remove empty if"),
                     );
                 }
-                Statement::Loop { body } | Statement::While { body, .. } | Statement::For { body, .. } if body.is_empty() => {
+                Statement::Loop { body }
+                | Statement::While { body, .. }
+                | Statement::For { body, .. }
+                    if body.is_empty() =>
+                {
                     issues.push(
                         Issue::medium(
                             IssueCategory::Syntax,
-                            "Empty loop body - possible infinite loop or no-op"
+                            "Empty loop body - possible infinite loop or no-op",
                         )
                         .with_location("generated", idx + 1, 0)
-                        .with_fix("Add loop body or remove loop")
+                        .with_fix("Add loop body or remove loop"),
                     );
                 }
                 _ => {}
@@ -128,10 +118,10 @@ impl TypeValidationStage {
                 issues.push(
                     Issue::high(
                         IssueCategory::Type,
-                        format!("Parameter '{}' has no type annotation", param.name)
+                        format!("Parameter '{}' has no type annotation", param.name),
                     )
                     .with_location("generated", 0, 0)
-                    .with_fix("Add explicit type annotation")
+                    .with_fix("Add explicit type annotation"),
                 );
             }
         }
@@ -143,16 +133,22 @@ impl TypeValidationStage {
     fn check_return_type(&self, function: &Function) -> Vec<Issue> {
         let mut issues = Vec::new();
 
-        let has_return = function.body.iter().any(|s| matches!(s, Statement::Return(_)));
+        let has_return = function
+            .body
+            .iter()
+            .any(|s| matches!(s, Statement::Return(_)));
 
         if has_return && function.return_type == "()" {
             issues.push(
                 Issue::medium(
                     IssueCategory::Type,
-                    format!("Function '{}' returns value but declares unit return type", function.name)
+                    format!(
+                        "Function '{}' returns value but declares unit return type",
+                        function.name
+                    ),
                 )
                 .with_location("generated", 0, 0)
-                .with_fix("Update return type annotation")
+                .with_fix("Update return type annotation"),
             );
         }
 
@@ -189,9 +185,9 @@ impl SecurityValidationStage {
                                 issues.push(
                                     Issue::high(
                                         IssueCategory::Security,
-                                        "Potential integer overflow from size-based operation"
+                                        "Potential integer overflow from size-based operation",
                                     )
-                                    .with_fix("Use checked_mul or saturating operations")
+                                    .with_fix("Use checked_mul or saturating operations"),
                                 );
                             }
                         }
@@ -214,13 +210,14 @@ impl SecurityValidationStage {
         let mut issues = Vec::new();
 
         match stmt {
-            Statement::Expr(expr) if matches!(&**expr, Expression::Call { func, .. } if func == "panic" || func == "unreachable") => {
+            Statement::Expr(expr) if matches!(&**expr, Expression::Call { func, .. } if func == "panic" || func == "unreachable") =>
+            {
                 issues.push(
                     Issue::medium(
                         IssueCategory::Security,
-                        "Direct panic call may cause program termination"
+                        "Direct panic call may cause program termination",
                     )
-                    .with_fix("Use Result or Option for error handling")
+                    .with_fix("Use Result or Option for error handling"),
                 );
             }
             _ => {}
@@ -239,11 +236,8 @@ impl SecurityValidationStage {
                 if let Expression::Int(n) = &**index {
                     if *n < 0 {
                         issues.push(
-                            Issue::high(
-                                IssueCategory::Security,
-                                "Negative array index"
-                            )
-                            .with_fix("Ensure index is non-negative")
+                            Issue::high(IssueCategory::Security, "Negative array index")
+                                .with_fix("Ensure index is non-negative"),
                         );
                     }
                 }
@@ -283,16 +277,23 @@ impl PerformanceValidationStage {
                         issues.push(
                             Issue::medium(
                                 IssueCategory::Performance,
-                                format!("Nested loops at depth {} - potential O(n^{}) complexity", loop_depth, loop_depth)
+                                format!(
+                                    "Nested loops at depth {} - potential O(n^{}) complexity",
+                                    loop_depth, loop_depth
+                                ),
                             )
-                            .with_fix("Consider algorithmic optimization")
+                            .with_fix("Consider algorithmic optimization"),
                         );
                     }
                 }
                 Statement::Block(inner) => {
                     issues.extend(self.check_nested_loops(inner));
                 }
-                Statement::If { condition: _, then_block, else_block } => {
+                Statement::If {
+                    condition: _,
+                    then_block,
+                    else_block,
+                } => {
                     issues.extend(self.check_nested_loops(then_block));
                     if let Some(else_block) = else_block {
                         issues.extend(self.check_nested_loops(else_block));
@@ -320,9 +321,9 @@ impl PerformanceValidationStage {
                             issues.push(
                                 Issue::low(
                                     IssueCategory::Performance,
-                                    "String concatenation in loop may allocate repeatedly"
+                                    "String concatenation in loop may allocate repeatedly",
                                 )
-                                .with_fix("Use String::with_capacity or format!")
+                                .with_fix("Use String::with_capacity or format!"),
                             );
                         }
                     }
@@ -352,9 +353,9 @@ impl PerformanceValidationStage {
                 issues.push(
                     Issue::low(
                         IssueCategory::Performance,
-                        format!("'{}' called {} times - consider caching", func, count)
+                        format!("'{}' called {} times - consider caching", func, count),
                     )
-                    .with_fix("Store result in a variable")
+                    .with_fix("Store result in a variable"),
                 );
             }
         }
@@ -391,10 +392,10 @@ impl CorrectnessValidationStage {
                             issues.push(
                                 Issue::medium(
                                     IssueCategory::Correctness,
-                                    "Direct float comparison may fail due to precision"
+                                    "Direct float comparison may fail due to precision",
                                 )
-                                .with_fix("Use epsilon-based comparison")
-                                );
+                                .with_fix("Use epsilon-based comparison"),
+                            );
                         }
 
                         // Check for comparison with literal that might be typo
@@ -403,9 +404,9 @@ impl CorrectnessValidationStage {
                                 issues.push(
                                     Issue::low(
                                         IssueCategory::Correctness,
-                                        "Comparison with 1 might be a typo for assignment"
+                                        "Comparison with 1 might be a typo for assignment",
                                     )
-                                    .with_fix("Verify intended comparison")
+                                    .with_fix("Verify intended comparison"),
                                 );
                             }
                         }
@@ -430,11 +431,8 @@ impl CorrectnessValidationStage {
             Expression::BinOp { op, right, .. } if matches!(op, BinOp::Div | BinOp::Mod) => {
                 if let Expression::Int(0) = &**right {
                     issues.push(
-                        Issue::critical(
-                            IssueCategory::Correctness,
-                            "Division by zero"
-                        )
-                        .with_fix("Add guards or check for zero divisor")
+                        Issue::critical(IssueCategory::Correctness, "Division by zero")
+                            .with_fix("Add guards or check for zero divisor"),
                     );
                 }
             }
@@ -452,15 +450,13 @@ impl CorrectnessValidationStage {
             Expression::BinOp { op, .. } => {
                 if matches!(op, BinOp::Le | BinOp::Lt) {
                     // Look for patterns like i < len where i might need to be <=
-                    issues.extend(
-                        std::iter::once(
-                            Issue::low(
-                                IssueCategory::Correctness,
-                                "Potential off-by-one error in comparison"
-                            )
-                            .with_fix("Verify boundary conditions")
+                    issues.extend(std::iter::once(
+                        Issue::low(
+                            IssueCategory::Correctness,
+                            "Potential off-by-one error in comparison",
                         )
-                    );
+                        .with_fix("Verify boundary conditions"),
+                    ));
                 }
             }
             _ => {}
@@ -486,9 +482,9 @@ impl CorrectnessValidationStage {
                 issues.push(
                     Issue::low(
                         IssueCategory::Correctness,
-                        format!("Parameter '{}' is never used", param.name)
+                        format!("Parameter '{}' is never used", param.name),
                     )
-                    .with_fix("Prefix with '_' or remove parameter")
+                    .with_fix("Prefix with '_' or remove parameter"),
                 );
             }
         }
@@ -521,9 +517,9 @@ impl StyleValidationStage {
             issues.push(
                 Issue::low(
                     IssueCategory::Style,
-                    format!("Function '{}' should use snake_case naming", function.name)
+                    format!("Function '{}' should use snake_case naming", function.name),
                 )
-                .with_fix("Rename to snake_case")
+                .with_fix("Rename to snake_case"),
             );
         }
 
@@ -533,9 +529,9 @@ impl StyleValidationStage {
                 issues.push(
                     Issue::low(
                         IssueCategory::Style,
-                        format!("Parameter '{}' should use snake_case naming", param.name)
+                        format!("Parameter '{}' should use snake_case naming", param.name),
                     )
-                    .with_fix("Rename to snake_case")
+                    .with_fix("Rename to snake_case"),
                 );
             }
         }
@@ -552,9 +548,12 @@ impl StyleValidationStage {
             issues.push(
                 Issue::medium(
                     IssueCategory::Style,
-                    format!("Function '{}' has {} statements - consider splitting", function.name, statement_count)
+                    format!(
+                        "Function '{}' has {} statements - consider splitting",
+                        function.name, statement_count
+                    ),
                 )
-                .with_fix("Extract helper functions")
+                .with_fix("Extract helper functions"),
             );
         }
 
@@ -737,12 +736,19 @@ impl super::pipeline::ValidationStage for StyleValidationStage {
         }
 
         // Style issues don't fail validation
-        let warnings: Vec<_> = issues.into_iter().map(|i| {
-            let file = i.location.as_ref().map(|l| l.file.as_str()).unwrap_or("generated");
-            let line = i.location.as_ref().map(|l| l.line).unwrap_or(0);
-            let column = i.location.as_ref().map(|l| l.column).unwrap_or(0);
-            Warning::new(i.message).with_location(file, line, column)
-        }).collect();
+        let warnings: Vec<_> = issues
+            .into_iter()
+            .map(|i| {
+                let file = i
+                    .location
+                    .as_ref()
+                    .map(|l| l.file.as_str())
+                    .unwrap_or("generated");
+                let line = i.location.as_ref().map(|l| l.line).unwrap_or(0);
+                let column = i.location.as_ref().map(|l| l.column).unwrap_or(0);
+                Warning::new(i.message).with_location(file, line, column)
+            })
+            .collect();
 
         ValidationResult {
             passed: true,
@@ -761,7 +767,7 @@ impl super::pipeline::ValidationStage for StyleValidationStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bidirectional::parser::{AST, Function, Parameter, Statement, Expression, BinOp};
+    use crate::bidirectional::parser::{BinOp, Expression, Function, Parameter, Statement, AST};
 
     #[test]
     fn test_syntax_validation() {
@@ -792,9 +798,10 @@ mod tests {
         let ast = AST {
             functions: vec![Function {
                 name: "test".to_string(),
-                params: vec![
-                    Parameter { name: "x".to_string(), type_: "".to_string() }
-                ],
+                params: vec![Parameter {
+                    name: "x".to_string(),
+                    type_: "".to_string(),
+                }],
                 return_type: "()".to_string(),
                 body: vec![Statement::Return(Box::new(Expression::Int(0)))],
                 attributes: vec![],
@@ -815,13 +822,11 @@ mod tests {
                 name: "test".to_string(),
                 params: vec![],
                 return_type: "()".to_string(),
-                body: vec![
-                    Statement::Expr(Box::new(Expression::BinOp {
-                        op: BinOp::Div,
-                        left: Box::new(Expression::Int(10)),
-                        right: Box::new(Expression::Int(0)),
-                    })),
-                ],
+                body: vec![Statement::Expr(Box::new(Expression::BinOp {
+                    op: BinOp::Div,
+                    left: Box::new(Expression::Int(10)),
+                    right: Box::new(Expression::Int(0)),
+                }))],
                 attributes: vec![],
             }],
             structs: vec![],
@@ -836,25 +841,19 @@ mod tests {
     fn test_performance_validation() {
         let stage = PerformanceValidationStage::new();
 
-        let nested_loop = vec![
-            Statement::For {
-                var: "i".to_string(),
-                iter: Box::new(Expression::Variable("items".to_string())),
-                body: vec![
-                    Statement::For {
-                        var: "j".to_string(),
-                        iter: Box::new(Expression::Variable("inner".to_string())),
-                        body: vec![
-                            Statement::For {
-                                var: "k".to_string(),
-                                iter: Box::new(Expression::Variable("deep".to_string())),
-                                body: vec![],
-                            }
-                        ],
-                    }
-                ],
-            }
-        ];
+        let nested_loop = vec![Statement::For {
+            var: "i".to_string(),
+            iter: Box::new(Expression::Variable("items".to_string())),
+            body: vec![Statement::For {
+                var: "j".to_string(),
+                iter: Box::new(Expression::Variable("inner".to_string())),
+                body: vec![Statement::For {
+                    var: "k".to_string(),
+                    iter: Box::new(Expression::Variable("deep".to_string())),
+                    body: vec![],
+                }],
+            }],
+        }];
 
         let ast = AST {
             functions: vec![Function {
@@ -878,9 +877,10 @@ mod tests {
         let ast = AST {
             functions: vec![Function {
                 name: "test".to_string(),
-                params: vec![
-                    Parameter { name: "unused".to_string(), type_: "i64".to_string() }
-                ],
+                params: vec![Parameter {
+                    name: "unused".to_string(),
+                    type_: "i64".to_string(),
+                }],
                 return_type: "()".to_string(),
                 body: vec![Statement::Return(Box::new(Expression::Int(0)))],
                 attributes: vec![],

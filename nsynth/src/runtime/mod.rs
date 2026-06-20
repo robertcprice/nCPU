@@ -10,8 +10,8 @@ use crate::benchmark::{generated_holdouts, Problem, Value as BenchmarkValue};
 
 // System/FFI modules
 pub mod extern_;
-pub mod syscall;
 pub mod resource;
+pub mod syscall;
 
 /// Error type for runtime FFI operations (separate from String-based errors)
 #[derive(Debug, Clone)]

@@ -75,12 +75,18 @@ impl BayesianLinear {
         // Sample epsilon for weights
         let eps_weight = Tensor::randn(self.weight_mu.shape.clone());
         let sigma_weight = self.softplus(&self.weight_rho);
-        let weight_samples = self.weight_mu.add(&sigma_weight.mul(&eps_weight).unwrap()).unwrap();
+        let weight_samples = self
+            .weight_mu
+            .add(&sigma_weight.mul(&eps_weight).unwrap())
+            .unwrap();
 
         // Sample epsilon for bias
         let eps_bias = Tensor::randn(self.bias_mu.shape.clone());
         let sigma_bias = self.softplus(&self.bias_rho);
-        let bias_samples = self.bias_mu.add(&sigma_bias.mul(&eps_bias).unwrap()).unwrap();
+        let bias_samples = self
+            .bias_mu
+            .add(&sigma_bias.mul(&eps_bias).unwrap())
+            .unwrap();
 
         (weight_samples, bias_samples)
     }
@@ -149,7 +155,8 @@ impl BayesianLinear {
             let sigma_var = sigma_val * sigma_val;
             let mu_val = mu.data[i];
 
-            let term = 0.5 * ((prior_var / sigma_var).ln() + (sigma_var + mu_val * mu_val) / prior_var - 1.0);
+            let term = 0.5
+                * ((prior_var / sigma_var).ln() + (sigma_var + mu_val * mu_val) / prior_var - 1.0);
             kl_sum += term;
         }
 
@@ -238,7 +245,11 @@ impl MCDropout {
         let mut data = Vec::with_capacity(x.data.len());
 
         for &val in &x.data {
-            let keep = if pseudo_random() < self.dropout_rate { 0.0 } else { 1.0 };
+            let keep = if pseudo_random() < self.dropout_rate {
+                0.0
+            } else {
+                1.0
+            };
             data.push(val * keep * scale);
         }
 
@@ -349,11 +360,10 @@ impl VariationalLayer {
             let sigma_sq = sigma_val * sigma_val;
 
             // KL(q||p) where q ~ N(mu, sigma²), p ~ N(prior_mu, prior_sigma²)
-            let kl_term = 0.5 * (
-                (self.prior_sigma.powi(2) / sigma_sq).ln() +
-                (sigma_sq + (mu_val - self.prior_mu).powi(2)) / self.prior_sigma.powi(2) -
-                1.0
-            );
+            let kl_term = 0.5
+                * ((self.prior_sigma.powi(2) / sigma_sq).ln()
+                    + (sigma_sq + (mu_val - self.prior_mu).powi(2)) / self.prior_sigma.powi(2)
+                    - 1.0);
             kl_sum += kl_term;
         }
 
@@ -426,7 +436,10 @@ fn pseudo_random() -> f64 {
     }
     SEED.with(|seed| {
         let s = seed.get();
-        seed.set(s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407));
+        seed.set(
+            s.wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407),
+        );
         (s >> 11) as f64 / ((1u64 << 53) as f64)
     })
 }
@@ -568,7 +581,11 @@ mod tests {
 
         assert_eq!(sample.shape.dims, vec![2, 2]);
         // Samples should vary from mu due to randomness
-        let mu_different = sample.data.iter().zip(mu.data.iter()).any(|(s, &m)| (*s - m).abs() > 0.01);
+        let mu_different = sample
+            .data
+            .iter()
+            .zip(mu.data.iter())
+            .any(|(s, &m)| (*s - m).abs() > 0.01);
         assert!(mu_different);
     }
 

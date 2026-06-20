@@ -473,20 +473,14 @@ impl APIGraph {
 
     /// Get node by name
     pub fn get_by_name(&self, name: &str) -> Option<&APINode> {
-        self.name_index
-            .get(name)
-            .and_then(|id| self.nodes.get(id))
+        self.name_index.get(name).and_then(|id| self.nodes.get(id))
     }
 
     /// Find APIs by function name
     pub fn find_by_function(&self, function_name: &str) -> Vec<&APINode> {
         self.function_index
             .get(function_name)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.nodes.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -494,11 +488,7 @@ impl APIGraph {
     pub fn find_by_language(&self, language: Language) -> Vec<&APINode> {
         self.language_index
             .get(&language)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.nodes.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -506,11 +496,7 @@ impl APIGraph {
     pub fn find_by_category(&self, category: APICategory) -> Vec<&APINode> {
         self.category_index
             .get(&category)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.nodes.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -518,11 +504,7 @@ impl APIGraph {
     pub fn find_by_tag(&self, tag: &str) -> Vec<&APINode> {
         self.tag_index
             .get(tag)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.nodes.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -540,11 +522,8 @@ impl APIGraph {
 
     /// Find migration path from one API to another
     pub fn find_migration_path(&self, from: API_ID, to: API_ID) -> Option<&MigrationPath> {
-        self.get_node(from).and_then(|node| {
-            node.migrations
-                .iter()
-                .find(|m| m.to_api == to)
-        })
+        self.get_node(from)
+            .and_then(|node| node.migrations.iter().find(|m| m.to_api == to))
     }
 
     /// Search APIs by query string (matches name, description, tags)
@@ -569,8 +548,9 @@ impl APIGraph {
 
             // Check function names
             for func in &node.functions {
-                if func.name.to_lowercase().contains(&query_lower) ||
-                   func.description.to_lowercase().contains(&query_lower) {
+                if func.name.to_lowercase().contains(&query_lower)
+                    || func.description.to_lowercase().contains(&query_lower)
+                {
                     results.push(node);
                     break;
                 }
@@ -602,17 +582,15 @@ impl APIGraph {
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize: {}", e))?;
-        std::fs::write(path, json)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        std::fs::write(path, json).map_err(|e| format!("Failed to write file: {}", e))?;
         Ok(())
     }
 
     /// Load graph from JSON file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let json = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        serde_json::from_str(&json)
-            .map_err(|e| format!("Failed to deserialize: {}", e))
+        let json =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        serde_json::from_str(&json).map_err(|e| format!("Failed to deserialize: {}", e))
     }
 
     /// Get statistics about the graph
@@ -622,9 +600,7 @@ impl APIGraph {
             total_edges: self.edges.len(),
             languages: self.language_index.len(),
             categories: self.category_index.len(),
-            total_functions: self.nodes.values()
-                .map(|n| n.functions.len())
-                .sum(),
+            total_functions: self.nodes.values().map(|n| n.functions.len()).sum(),
         }
     }
 }
@@ -927,22 +903,20 @@ pub fn populate_default_graph() -> APIGraph {
     let mut next_id: API_ID = 1;
 
     macro_rules! add_api {
-        ($name:expr, $lang:expr, $cat:expr, $versions:expr, $funcs:expr, $patterns:expr, $tags:expr) => {
-            {
-                let id = next_id;
-                next_id += 1;
+        ($name:expr, $lang:expr, $cat:expr, $versions:expr, $funcs:expr, $patterns:expr, $tags:expr) => {{
+            let id = next_id;
+            next_id += 1;
 
-                let node = APINodeBuilder::new(id, $name.to_string(), $lang, $cat)
-                    .version($versions)
-                    .functions($funcs)
-                    .tags($tags)
-                    .patterns($patterns)
-                    .build();
+            let node = APINodeBuilder::new(id, $name.to_string(), $lang, $cat)
+                .version($versions)
+                .functions($funcs)
+                .tags($tags)
+                .patterns($patterns)
+                .build();
 
-                graph.add_node(node);
-                id
-            }
-        };
+            graph.add_node(node);
+            id
+        }};
     }
 
     // ============================================================
@@ -957,7 +931,8 @@ pub fn populate_default_graph() -> APIGraph {
         vec![
             APFunction {
                 name: "useState".to_string(),
-                signature: "useState<T>(initial: T | (() => T)): [T, Dispatch<SetStateAction<T>>]".to_string(),
+                signature: "useState<T>(initial: T | (() => T)): [T, Dispatch<SetStateAction<T>>]"
+                    .to_string(),
                 description: "Hook for managing component state".to_string(),
                 parameters: vec![],
                 return_type: "State pair".to_string(),
@@ -967,7 +942,9 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "useEffect".to_string(),
-                signature: "useEffect(effect: () => void | (() => void), deps?: DependencyList): void".to_string(),
+                signature:
+                    "useEffect(effect: () => void | (() => void), deps?: DependencyList): void"
+                        .to_string(),
                 description: "Hook for side effects in functional components".to_string(),
                 parameters: vec![],
                 return_type: "void".to_string(),
@@ -1022,7 +999,11 @@ pub fn populate_default_graph() -> APIGraph {
                 complexity: Complexity::Medium,
             },
         ],
-        vec!["ui".to_string(), "frontend".to_string(), "components".to_string()]
+        vec![
+            "ui".to_string(),
+            "frontend".to_string(),
+            "components".to_string()
+        ]
     );
 
     let vue_id = add_api!(
@@ -1112,7 +1093,8 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "derived".to_string(),
-                signature: "derived<T, U>(store: Store<T>, fn: (value: T) => U): Readable<U>".to_string(),
+                signature: "derived<T, U>(store: Store<T>, fn: (value: T) => U): Readable<U>"
+                    .to_string(),
                 description: "Create derived store from existing store".to_string(),
                 parameters: vec![],
                 return_type: "Readable<U>".to_string(),
@@ -1121,16 +1103,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Store-based state management".to_string(),
+            code_template: "const store = writable(initialValue);".to_string(),
+            when_to_use: "For global or shared state".to_string(),
+            category: PatternCategory::StateManagement,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            UsagePattern {
-                description: "Store-based state management".to_string(),
-                code_template: "const store = writable(initialValue);".to_string(),
-                when_to_use: "For global or shared state".to_string(),
-                category: PatternCategory::StateManagement,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["ui".to_string(), "frontend".to_string(), "compiler".to_string()]
+            "ui".to_string(),
+            "frontend".to_string(),
+            "compiler".to_string()
+        ]
     );
 
     let next_id = add_api!(
@@ -1200,7 +1184,8 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "useAsyncData".to_string(),
-                signature: "useAsyncData<T>(handler: () => Promise<T>): AsyncDataReturn<T>".to_string(),
+                signature: "useAsyncData<T>(handler: () => Promise<T>): AsyncDataReturn<T>"
+                    .to_string(),
                 description: "Handle async data with SSR".to_string(),
                 parameters: vec![],
                 return_type: "AsyncDataReturn<T>".to_string(),
@@ -1219,16 +1204,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "SSR-compatible data fetching".to_string(),
+            code_template: "const { data, error } = await useFetch('/api/data');".to_string(),
+            when_to_use: "For data fetching with automatic SSR hydration".to_string(),
+            category: PatternCategory::DataTransformation,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "SSR-compatible data fetching".to_string(),
-                code_template: "const { data, error } = await useFetch('/api/data');".to_string(),
-                when_to_use: "For data fetching with automatic SSR hydration".to_string(),
-                category: PatternCategory::DataTransformation,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["ssr".to_string(), "vue".to_string(), "fullstack".to_string()]
+            "ssr".to_string(),
+            "vue".to_string(),
+            "fullstack".to_string()
+        ]
     );
 
     // ============================================================
@@ -1311,16 +1298,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "MVC pattern with models and views".to_string(),
+            code_template: "class Item(models.Model):\n    name = models.CharField()".to_string(),
+            when_to_use: "For traditional MVC web applications".to_string(),
+            category: PatternCategory::DataStructures,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            UsagePattern {
-                description: "MVC pattern with models and views".to_string(),
-                code_template: "class Item(models.Model):\n    name = models.CharField()".to_string(),
-                when_to_use: "For traditional MVC web applications".to_string(),
-                category: PatternCategory::DataStructures,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["batteries".to_string(), "orm".to_string(), "mvc".to_string()]
+            "batteries".to_string(),
+            "orm".to_string(),
+            "mvc".to_string()
+        ]
     );
 
     add_api!(
@@ -1350,16 +1339,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Microservice routing".to_string(),
+            code_template: "@app.route('/')\ndef hello():\n    return 'Hello'".to_string(),
+            when_to_use: "For lightweight microservices".to_string(),
+            category: PatternCategory::Networking,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Microservice routing".to_string(),
-                code_template: "@app.route('/')\ndef hello():\n    return 'Hello'".to_string(),
-                when_to_use: "For lightweight microservices".to_string(),
-                category: PatternCategory::Networking,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["micro".to_string(), "lightweight".to_string(), "wsgi".to_string()]
+            "micro".to_string(),
+            "lightweight".to_string(),
+            "wsgi".to_string()
+        ]
     );
 
     // ============================================================
@@ -1393,16 +1384,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Async handler routing".to_string(),
+            code_template: ".route(\"/\", web::get().to(index))".to_string(),
+            when_to_use: "For async HTTP endpoints".to_string(),
+            category: PatternCategory::AsyncOperation,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            UsagePattern {
-                description: "Async handler routing".to_string(),
-                code_template: ".route(\"/\", web::get().to(index))".to_string(),
-                when_to_use: "For async HTTP endpoints".to_string(),
-                category: PatternCategory::AsyncOperation,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["actor".to_string(), "async".to_string(), "performance".to_string()]
+            "actor".to_string(),
+            "async".to_string(),
+            "performance".to_string()
+        ]
     );
 
     add_api!(
@@ -1432,16 +1425,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Tower-based routing".to_string(),
+            code_template: ".route(\"/\", get(handler))".to_string(),
+            when_to_use: "For composable service architecture".to_string(),
+            category: PatternCategory::Networking,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            UsagePattern {
-                description: "Tower-based routing".to_string(),
-                code_template: ".route(\"/\", get(handler))".to_string(),
-                when_to_use: "For composable service architecture".to_string(),
-                category: PatternCategory::Networking,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["tower".to_string(), "tokio".to_string(), "minimal".to_string()]
+            "tower".to_string(),
+            "tokio".to_string(),
+            "minimal".to_string()
+        ]
     );
 
     // ============================================================
@@ -1475,16 +1470,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Handler registration".to_string(),
+            code_template: "r.GET(\"/ping\", func(c *gin.Context) {})".to_string(),
+            when_to_use: "For API route definitions".to_string(),
+            category: PatternCategory::Networking,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Handler registration".to_string(),
-                code_template: "r.GET(\"/ping\", func(c *gin.Context) {})".to_string(),
-                when_to_use: "For API route definitions".to_string(),
-                category: PatternCategory::Networking,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["httprouter".to_string(), "middleware".to_string(), "fast".to_string()]
+            "httprouter".to_string(),
+            "middleware".to_string(),
+            "fast".to_string()
+        ]
     );
 
     add_api!(
@@ -1514,16 +1511,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Minimalist routing".to_string(),
+            code_template: "e.GET(\"/\", handler)".to_string(),
+            when_to_use: "For clean, minimal APIs".to_string(),
+            category: PatternCategory::Networking,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Minimalist routing".to_string(),
-                code_template: "e.GET(\"/\", handler)".to_string(),
-                when_to_use: "For clean, minimal APIs".to_string(),
-                category: PatternCategory::Networking,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["minimal".to_string(), "middleware".to_string(), "fast".to_string()]
+            "minimal".to_string(),
+            "middleware".to_string(),
+            "fast".to_string()
+        ]
     );
 
     // ============================================================
@@ -1557,16 +1556,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Annotation-driven REST".to_string(),
+            code_template: "@GetMapping(\"/items/{id}\")".to_string(),
+            when_to_use: "For enterprise REST APIs".to_string(),
+            category: PatternCategory::Networking,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            UsagePattern {
-                description: "Annotation-driven REST".to_string(),
-                code_template: "@GetMapping(\"/items/{id}\")".to_string(),
-                when_to_use: "For enterprise REST APIs".to_string(),
-                category: PatternCategory::Networking,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["enterprise".to_string(), "spring".to_string(), "ioc".to_string()]
+            "enterprise".to_string(),
+            "spring".to_string(),
+            "ioc".to_string()
+        ]
     );
 
     // ============================================================
@@ -1581,7 +1582,9 @@ pub fn populate_default_graph() -> APIGraph {
         vec![
             APFunction {
                 name: "createStore".to_string(),
-                signature: "createStore<S, A>(reducer: Reducer<S, A>, preloadedState?: S): Store<S, A>".to_string(),
+                signature:
+                    "createStore<S, A>(reducer: Reducer<S, A>, preloadedState?: S): Store<S, A>"
+                        .to_string(),
                 description: "Create a Redux store".to_string(),
                 parameters: vec![],
                 return_type: "Store<S, A>".to_string(),
@@ -1591,7 +1594,8 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "configureStore".to_string(),
-                signature: "configureStore<S>(options: ConfigureStoreOptions<S>): EnhancedStore<S>".to_string(),
+                signature: "configureStore<S>(options: ConfigureStoreOptions<S>): EnhancedStore<S>"
+                    .to_string(),
                 description: "Create store with Redux Toolkit".to_string(),
                 parameters: vec![],
                 return_type: "EnhancedStore<S>".to_string(),
@@ -1600,16 +1604,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Centralized state".to_string(),
+            code_template: "const store = createStore(reducer);".to_string(),
+            when_to_use: "For complex global state".to_string(),
+            category: PatternCategory::StateManagement,
+            complexity: Complexity::Complex,
+        },],
         vec![
-            UsagePattern {
-                description: "Centralized state".to_string(),
-                code_template: "const store = createStore(reducer);".to_string(),
-                when_to_use: "For complex global state".to_string(),
-                category: PatternCategory::StateManagement,
-                complexity: Complexity::Complex,
-            },
-        ],
-        vec!["flux".to_string(), "predictable".to_string(), "immutable".to_string()]
+            "flux".to_string(),
+            "predictable".to_string(),
+            "immutable".to_string()
+        ]
     );
 
     add_api!(
@@ -1721,16 +1727,19 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Type-safe database queries".to_string(),
+            code_template: "const users = await prisma.user.findMany({ where: { active: true } });"
+                .to_string(),
+            when_to_use: "For type-safe database operations".to_string(),
+            category: PatternCategory::Database,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Type-safe database queries".to_string(),
-                code_template: "const users = await prisma.user.findMany({ where: { active: true } });".to_string(),
-                when_to_use: "For type-safe database operations".to_string(),
-                category: PatternCategory::Database,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["typescript".to_string(), "type-safe".to_string(), "postgresql".to_string()]
+            "typescript".to_string(),
+            "type-safe".to_string(),
+            "postgresql".to_string()
+        ]
     );
 
     add_api!(
@@ -1760,15 +1769,13 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
-        vec![
-            UsagePattern {
-                description: "ORM-based database operations".to_string(),
-                code_template: "engine = create_engine('sqlite:///:memory:')".to_string(),
-                when_to_use: "For Python database abstraction".to_string(),
-                category: PatternCategory::Database,
-                complexity: Complexity::Medium,
-            },
-        ],
+        vec![UsagePattern {
+            description: "ORM-based database operations".to_string(),
+            code_template: "engine = create_engine('sqlite:///:memory:')".to_string(),
+            when_to_use: "For Python database abstraction".to_string(),
+            category: PatternCategory::Database,
+            complexity: Complexity::Medium,
+        },],
         vec!["orm".to_string(), "python".to_string(), "sql".to_string()]
     );
 
@@ -1777,28 +1784,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Rust,
         APICategory::Orm,
         "2.1.0",
+        vec![APFunction {
+            name: "load".to_string(),
+            signature: "load(conn: &mut Conn): QueryResult<Vec<T>>".to_string(),
+            description: "Load results from query".to_string(),
+            parameters: vec![],
+            return_type: "QueryResult<Vec<T>>".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Compile-time checked SQL".to_string(),
+            code_template: "users.load(&mut connection)?".to_string(),
+            when_to_use: "For type-safe database queries".to_string(),
+            category: PatternCategory::Database,
+            complexity: Complexity::Complex,
+        },],
         vec![
-            APFunction {
-                name: "load".to_string(),
-                signature: "load(conn: &mut Conn): QueryResult<Vec<T>>".to_string(),
-                description: "Load results from query".to_string(),
-                parameters: vec![],
-                return_type: "QueryResult<Vec<T>>".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Compile-time checked SQL".to_string(),
-                code_template: "users.load(&mut connection)?".to_string(),
-                when_to_use: "For type-safe database queries".to_string(),
-                category: PatternCategory::Database,
-                complexity: Complexity::Complex,
-            },
-        ],
-        vec!["rust".to_string(), "type-safe".to_string(), "compile-time".to_string()]
+            "rust".to_string(),
+            "type-safe".to_string(),
+            "compile-time".to_string()
+        ]
     );
 
     add_api!(
@@ -1828,15 +1835,13 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
-        vec![
-            UsagePattern {
-                description: "ORM for Go".to_string(),
-                code_template: "db.Find(&users, \"active = ?\", true)".to_string(),
-                when_to_use: "For Go database operations".to_string(),
-                category: PatternCategory::Database,
-                complexity: Complexity::Medium,
-            },
-        ],
+        vec![UsagePattern {
+            description: "ORM for Go".to_string(),
+            code_template: "db.Find(&users, \"active = ?\", true)".to_string(),
+            when_to_use: "For Go database operations".to_string(),
+            category: PatternCategory::Database,
+            complexity: Complexity::Medium,
+        },],
         vec!["go".to_string(), "orm".to_string(), "postgres".to_string()]
     );
 
@@ -1908,28 +1913,30 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::RestClient,
         "3.0.0",
+        vec![APFunction {
+            name: "fetch".to_string(),
+            signature: "fetch(url: string, init?: RequestInit): Promise<Response>".to_string(),
+            description: "Fetch resource from network".to_string(),
+            parameters: vec![],
+            return_type: "Promise<Response>".to_string(),
+            is_async: true,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Browser-native HTTP requests".to_string(),
+            code_template:
+                "const response = await fetch('/api/data');\nconst data = await response.json();"
+                    .to_string(),
+            when_to_use: "For simple HTTP requests".to_string(),
+            category: PatternCategory::Networking,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "fetch".to_string(),
-                signature: "fetch(url: string, init?: RequestInit): Promise<Response>".to_string(),
-                description: "Fetch resource from network".to_string(),
-                parameters: vec![],
-                return_type: "Promise<Response>".to_string(),
-                is_async: true,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Browser-native HTTP requests".to_string(),
-                code_template: "const response = await fetch('/api/data');\nconst data = await response.json();".to_string(),
-                when_to_use: "For simple HTTP requests".to_string(),
-                category: PatternCategory::Networking,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["browser".to_string(), "native".to_string(), "polyfill".to_string()]
+            "browser".to_string(),
+            "native".to_string(),
+            "polyfill".to_string()
+        ]
     );
 
     add_api!(
@@ -1959,15 +1966,13 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
-        vec![
-            UsagePattern {
-                description: "Pythonic HTTP requests".to_string(),
-                code_template: "response = requests.get('https://api.example.com')".to_string(),
-                when_to_use: "For simple HTTP calls in Python".to_string(),
-                category: PatternCategory::Networking,
-                complexity: Complexity::Simple,
-            },
-        ],
+        vec![UsagePattern {
+            description: "Pythonic HTTP requests".to_string(),
+            code_template: "response = requests.get('https://api.example.com')".to_string(),
+            when_to_use: "For simple HTTP calls in Python".to_string(),
+            category: PatternCategory::Networking,
+            complexity: Complexity::Simple,
+        },],
         vec!["http".to_string(), "python".to_string(), "rest".to_string()]
     );
 
@@ -1998,16 +2003,20 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Async HTTP for Python".to_string(),
+            code_template:
+                "async with httpx.AsyncClient() as client:\n    response = await client.get(url)"
+                    .to_string(),
+            when_to_use: "For async HTTP requests".to_string(),
+            category: PatternCategory::AsyncOperation,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            UsagePattern {
-                description: "Async HTTP for Python".to_string(),
-                code_template: "async with httpx.AsyncClient() as client:\n    response = await client.get(url)".to_string(),
-                when_to_use: "For async HTTP requests".to_string(),
-                category: PatternCategory::AsyncOperation,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["async".to_string(), "http2".to_string(), "modern".to_string()]
+            "async".to_string(),
+            "http2".to_string(),
+            "modern".to_string()
+        ]
     );
 
     add_api!(
@@ -2015,27 +2024,23 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Rust,
         APICategory::RestClient,
         "0.12.0",
-        vec![
-            APFunction {
-                name: "get".to_string(),
-                signature: "get(url: &str): Builder".to_string(),
-                description: "Create GET request builder".to_string(),
-                parameters: vec![],
-                return_type: "Builder".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Type-safe HTTP client".to_string(),
-                code_template: "let response = reqwest::get(url).await?;".to_string(),
-                when_to_use: "For HTTP requests in Rust".to_string(),
-                category: PatternCategory::Networking,
-                complexity: Complexity::Simple,
-            },
-        ],
+        vec![APFunction {
+            name: "get".to_string(),
+            signature: "get(url: &str): Builder".to_string(),
+            description: "Create GET request builder".to_string(),
+            parameters: vec![],
+            return_type: "Builder".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Type-safe HTTP client".to_string(),
+            code_template: "let response = reqwest::get(url).await?;".to_string(),
+            when_to_use: "For HTTP requests in Rust".to_string(),
+            category: PatternCategory::Networking,
+            complexity: Complexity::Simple,
+        },],
         vec!["rust".to_string(), "async".to_string(), "json".to_string()]
     );
 
@@ -2061,7 +2066,8 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "filter".to_string(),
-                signature: "filter(collection: Collection, predicate: Predicate): Array".to_string(),
+                signature: "filter(collection: Collection, predicate: Predicate): Array"
+                    .to_string(),
                 description: "Filter collection".to_string(),
                 parameters: vec![],
                 return_type: "Array".to_string(),
@@ -2071,7 +2077,9 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "reduce".to_string(),
-                signature: "reduce(collection: Collection, iteratee: Iteratee, accumulator: any): any".to_string(),
+                signature:
+                    "reduce(collection: Collection, iteratee: Iteratee, accumulator: any): any"
+                        .to_string(),
                 description: "Reduce collection".to_string(),
                 parameters: vec![],
                 return_type: "any".to_string(),
@@ -2091,7 +2099,8 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "sortBy".to_string(),
-                signature: "sortBy(collection: Collection, iteratees: Iteratee[]): Array".to_string(),
+                signature: "sortBy(collection: Collection, iteratees: Iteratee[]): Array"
+                    .to_string(),
                 description: "Sort collection".to_string(),
                 parameters: vec![],
                 return_type: "Array".to_string(),
@@ -2101,7 +2110,8 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "groupBy".to_string(),
-                signature: "groupBy(collection: Collection, iteratee: Iteratee): Object".to_string(),
+                signature: "groupBy(collection: Collection, iteratee: Iteratee): Object"
+                    .to_string(),
                 description: "Group collection by key".to_string(),
                 parameters: vec![],
                 return_type: "Object".to_string(),
@@ -2150,16 +2160,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Functional array operations".to_string(),
+            code_template: "const result = _.map([1, 2, 3], n => n * 2);".to_string(),
+            when_to_use: "For collection manipulation".to_string(),
+            category: PatternCategory::CollectionUtilities,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Functional array operations".to_string(),
-                code_template: "const result = _.map([1, 2, 3], n => n * 2);".to_string(),
-                when_to_use: "For collection manipulation".to_string(),
-                category: PatternCategory::CollectionUtilities,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["utility".to_string(), "functional".to_string(), "collections".to_string()]
+            "utility".to_string(),
+            "functional".to_string(),
+            "collections".to_string()
+        ]
     );
 
     add_api!(
@@ -2199,16 +2211,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Functional programming".to_string(),
+            code_template: "pipe(map(double), filter(even), take(5))(data)".to_string(),
+            when_to_use: "For functional composition".to_string(),
+            category: PatternCategory::FunctionalProgramming,
+            complexity: Complexity::Complex,
+        },],
         vec![
-            UsagePattern {
-                description: "Functional programming".to_string(),
-                code_template: "pipe(map(double), filter(even), take(5))(data)".to_string(),
-                when_to_use: "For functional composition".to_string(),
-                category: PatternCategory::FunctionalProgramming,
-                complexity: Complexity::Complex,
-            },
-        ],
-        vec!["fp".to_string(), "curry".to_string(), "immutable".to_string()]
+            "fp".to_string(),
+            "curry".to_string(),
+            "immutable".to_string()
+        ]
     );
 
     add_api!(
@@ -2248,15 +2262,13 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
-        vec![
-            UsagePattern {
-                description: "Date manipulation".to_string(),
-                code_template: "format(addDays(new Date(), 7), 'yyyy-MM-dd')".to_string(),
-                when_to_use: "For date calculations".to_string(),
-                category: PatternCategory::DataTransformation,
-                complexity: Complexity::Simple,
-            },
-        ],
+        vec![UsagePattern {
+            description: "Date manipulation".to_string(),
+            code_template: "format(addDays(new Date(), 7), 'yyyy-MM-dd')".to_string(),
+            when_to_use: "For date calculations".to_string(),
+            category: PatternCategory::DataTransformation,
+            complexity: Complexity::Simple,
+        },],
         vec!["date".to_string(), "time".to_string(), "format".to_string()]
     );
 
@@ -2265,28 +2277,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::DateTime,
         "1.11.10",
+        vec![APFunction {
+            name: "dayjs".to_string(),
+            signature: "dayjs(date?: DateInput): Dayjs".to_string(),
+            description: "Parse date".to_string(),
+            parameters: vec![],
+            return_type: "Dayjs".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Lightweight date library".to_string(),
+            code_template: "dayjs().add(7, 'day').format('YYYY-MM-DD')".to_string(),
+            when_to_use: "For simple date operations".to_string(),
+            category: PatternCategory::DataTransformation,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "dayjs".to_string(),
-                signature: "dayjs(date?: DateInput): Dayjs".to_string(),
-                description: "Parse date".to_string(),
-                parameters: vec![],
-                return_type: "Dayjs".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Lightweight date library".to_string(),
-                code_template: "dayjs().add(7, 'day').format('YYYY-MM-DD')".to_string(),
-                when_to_use: "For simple date operations".to_string(),
-                category: PatternCategory::DataTransformation,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["date".to_string(), "minimal".to_string(), "moment-compatible".to_string()]
+            "date".to_string(),
+            "minimal".to_string(),
+            "moment-compatible".to_string()
+        ]
     );
 
     add_api!(
@@ -2294,28 +2306,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::DateTime,
         "2.29.4",
+        vec![APFunction {
+            name: "moment".to_string(),
+            signature: "moment(date?: DateInput): Moment".to_string(),
+            description: "Create moment".to_string(),
+            parameters: vec![],
+            return_type: "Moment".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Legacy date handling".to_string(),
+            code_template: "moment().add(7, 'days').format('YYYY-MM-DD')".to_string(),
+            when_to_use: "Legacy codebases".to_string(),
+            category: PatternCategory::DataTransformation,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "moment".to_string(),
-                signature: "moment(date?: DateInput): Moment".to_string(),
-                description: "Create moment".to_string(),
-                parameters: vec![],
-                return_type: "Moment".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Legacy date handling".to_string(),
-                code_template: "moment().add(7, 'days').format('YYYY-MM-DD')".to_string(),
-                when_to_use: "Legacy codebases".to_string(),
-                category: PatternCategory::DataTransformation,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["date".to_string(), "legacy".to_string(), "deprecated".to_string()]
+            "date".to_string(),
+            "legacy".to_string(),
+            "deprecated".to_string()
+        ]
     );
 
     // ============================================================
@@ -2398,16 +2410,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Jest-compatible testing".to_string(),
+            code_template: "it('works', () => { expect(1 + 1).toBe(2); });".to_string(),
+            when_to_use: "For Vite-based projects".to_string(),
+            category: PatternCategory::Testing,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Jest-compatible testing".to_string(),
-                code_template: "it('works', () => { expect(1 + 1).toBe(2); });".to_string(),
-                when_to_use: "For Vite-based projects".to_string(),
-                category: PatternCategory::Testing,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["testing".to_string(), "vite".to_string(), "jest-compatible".to_string()]
+            "testing".to_string(),
+            "vite".to_string(),
+            "jest-compatible".to_string()
+        ]
     );
 
     add_api!(
@@ -2415,28 +2429,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Python,
         APICategory::TestingFramework,
         "8.0.0",
+        vec![APFunction {
+            name: "fixture".to_string(),
+            signature: "@fixture: Decorator".to_string(),
+            description: "Test fixture decorator".to_string(),
+            parameters: vec![],
+            return_type: "Decorator".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Python testing".to_string(),
+            code_template: "@pytest.fixture\ndef client():\n    return TestClient(app)".to_string(),
+            when_to_use: "For Python test suites".to_string(),
+            category: PatternCategory::Testing,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "fixture".to_string(),
-                signature: "@fixture: Decorator".to_string(),
-                description: "Test fixture decorator".to_string(),
-                parameters: vec![],
-                return_type: "Decorator".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Python testing".to_string(),
-                code_template: "@pytest.fixture\ndef client():\n    return TestClient(app)".to_string(),
-                when_to_use: "For Python test suites".to_string(),
-                category: PatternCategory::Testing,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["python".to_string(), "testing".to_string(), "fixtures".to_string()]
+            "python".to_string(),
+            "testing".to_string(),
+            "fixtures".to_string()
+        ]
     );
 
     // ============================================================
@@ -2480,16 +2494,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Structured logging".to_string(),
+            code_template: "logger.info('User logged in', { userId });".to_string(),
+            when_to_use: "For production logging".to_string(),
+            category: PatternCategory::Logging,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Structured logging".to_string(),
-                code_template: "logger.info('User logged in', { userId });".to_string(),
-                when_to_use: "For production logging".to_string(),
-                category: PatternCategory::Logging,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["logging".to_string(), "transport".to_string(), "node".to_string()]
+            "logging".to_string(),
+            "transport".to_string(),
+            "node".to_string()
+        ]
     );
 
     add_api!(
@@ -2497,28 +2513,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Logging,
         "8.19.0",
+        vec![APFunction {
+            name: "pino".to_string(),
+            signature: "pino(options?: Options): Logger".to_string(),
+            description: "Create Pino logger".to_string(),
+            parameters: vec![],
+            return_type: "Logger".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "High-performance logging".to_string(),
+            code_template: "logger.info({ userId }, 'User action');".to_string(),
+            when_to_use: "For high-throughput logging".to_string(),
+            category: PatternCategory::Logging,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "pino".to_string(),
-                signature: "pino(options?: Options): Logger".to_string(),
-                description: "Create Pino logger".to_string(),
-                parameters: vec![],
-                return_type: "Logger".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "High-performance logging".to_string(),
-                code_template: "logger.info({ userId }, 'User action');".to_string(),
-                when_to_use: "For high-throughput logging".to_string(),
-                category: PatternCategory::Logging,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["logging".to_string(), "performance".to_string(), "json".to_string()]
+            "logging".to_string(),
+            "performance".to_string(),
+            "json".to_string()
+        ]
     );
 
     add_api!(
@@ -2526,28 +2542,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Rust,
         APICategory::Logging,
         "1.2.0",
+        vec![APFunction {
+            name: "init_config".to_string(),
+            signature: "init_config(config: Config): Result<Handle, SetLoggerError>".to_string(),
+            description: "Initialize from config".to_string(),
+            parameters: vec![],
+            return_type: "Result<Handle, SetLoggerError>".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Configurable logging".to_string(),
+            code_template: "log4rs::init_config_file(config_file)?".to_string(),
+            when_to_use: "For flexible Rust logging".to_string(),
+            category: PatternCategory::Logging,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "init_config".to_string(),
-                signature: "init_config(config: Config): Result<Handle, SetLoggerError>".to_string(),
-                description: "Initialize from config".to_string(),
-                parameters: vec![],
-                return_type: "Result<Handle, SetLoggerError>".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Configurable logging".to_string(),
-                code_template: "log4rs::init_config_file(config_file)?".to_string(),
-                when_to_use: "For flexible Rust logging".to_string(),
-                category: PatternCategory::Logging,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["rust".to_string(), "logging".to_string(), "config".to_string()]
+            "rust".to_string(),
+            "logging".to_string(),
+            "config".to_string()
+        ]
     );
 
     // ============================================================
@@ -2581,16 +2597,20 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Schema validation".to_string(),
+            code_template:
+                "const schema = z.object({ name: z.string() });\nconst result = schema.parse(data);"
+                    .to_string(),
+            when_to_use: "For runtime type validation".to_string(),
+            category: PatternCategory::Validation,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Schema validation".to_string(),
-                code_template: "const schema = z.object({ name: z.string() });\nconst result = schema.parse(data);".to_string(),
-                when_to_use: "For runtime type validation".to_string(),
-                category: PatternCategory::Validation,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["validation".to_string(), "typescript".to_string(), "schema".to_string()]
+            "validation".to_string(),
+            "typescript".to_string(),
+            "schema".to_string()
+        ]
     );
 
     add_api!(
@@ -2598,28 +2618,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::DataValidation,
         "1.4.0",
+        vec![APFunction {
+            name: "object".to_string(),
+            signature: "object(schema: ObjectSchema): ObjectSchema".to_string(),
+            description: "Object schema".to_string(),
+            parameters: vec![],
+            return_type: "ObjectSchema".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Object validation".to_string(),
+            code_template: "await schema.validate(data)".to_string(),
+            when_to_use: "For form validation".to_string(),
+            category: PatternCategory::Validation,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "object".to_string(),
-                signature: "object(schema: ObjectSchema): ObjectSchema".to_string(),
-                description: "Object schema".to_string(),
-                parameters: vec![],
-                return_type: "ObjectSchema".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Object validation".to_string(),
-                code_template: "await schema.validate(data)".to_string(),
-                when_to_use: "For form validation".to_string(),
-                category: PatternCategory::Validation,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["validation".to_string(), "form".to_string(), "object".to_string()]
+            "validation".to_string(),
+            "form".to_string(),
+            "object".to_string()
+        ]
     );
 
     add_api!(
@@ -2627,28 +2647,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Python,
         APICategory::DataValidation,
         "2.6.0",
+        vec![APFunction {
+            name: "BaseModel".to_string(),
+            signature: "class BaseModel".to_string(),
+            description: "Base model class".to_string(),
+            parameters: vec![],
+            return_type: "BaseModel".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Type validation".to_string(),
+            code_template: "class User(BaseModel):\n    name: str\n    age: int".to_string(),
+            when_to_use: "For Python data validation".to_string(),
+            category: PatternCategory::Validation,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "BaseModel".to_string(),
-                signature: "class BaseModel".to_string(),
-                description: "Base model class".to_string(),
-                parameters: vec![],
-                return_type: "BaseModel".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Type validation".to_string(),
-                code_template: "class User(BaseModel):\n    name: str\n    age: int".to_string(),
-                when_to_use: "For Python data validation".to_string(),
-                category: PatternCategory::Validation,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["python".to_string(), "validation".to_string(), "types".to_string()]
+            "python".to_string(),
+            "validation".to_string(),
+            "types".to_string()
+        ]
     );
 
     // ============================================================
@@ -2660,28 +2680,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Configuration,
         "16.3.0",
+        vec![APFunction {
+            name: "config".to_string(),
+            signature: "config(options?: ConfigOptions): void".to_string(),
+            description: "Load env vars".to_string(),
+            parameters: vec![],
+            return_type: "void".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Environment variables".to_string(),
+            code_template: "require('dotenv').config()".to_string(),
+            when_to_use: "For env-based configuration".to_string(),
+            category: PatternCategory::Configuration,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "config".to_string(),
-                signature: "config(options?: ConfigOptions): void".to_string(),
-                description: "Load env vars".to_string(),
-                parameters: vec![],
-                return_type: "void".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Environment variables".to_string(),
-                code_template: "require('dotenv').config()".to_string(),
-                when_to_use: "For env-based configuration".to_string(),
-                category: PatternCategory::Configuration,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["env".to_string(), "config".to_string(), "dotenv".to_string()]
+            "env".to_string(),
+            "config".to_string(),
+            "dotenv".to_string()
+        ]
     );
 
     add_api!(
@@ -2689,27 +2709,23 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Go,
         APICategory::Configuration,
         "1.18.0",
-        vec![
-            APFunction {
-                name: "New".to_string(),
-                signature: "New() *Viper".to_string(),
-                description: "Create Viper instance".to_string(),
-                parameters: vec![],
-                return_type: "*Viper".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Go configuration".to_string(),
-                code_template: "viper.SetConfigFile(\"config.yaml\")".to_string(),
-                when_to_use: "For flexible config in Go".to_string(),
-                category: PatternCategory::Configuration,
-                complexity: Complexity::Medium,
-            },
-        ],
+        vec![APFunction {
+            name: "New".to_string(),
+            signature: "New() *Viper".to_string(),
+            description: "Create Viper instance".to_string(),
+            parameters: vec![],
+            return_type: "*Viper".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Go configuration".to_string(),
+            code_template: "viper.SetConfigFile(\"config.yaml\")".to_string(),
+            when_to_use: "For flexible config in Go".to_string(),
+            category: PatternCategory::Configuration,
+            complexity: Complexity::Medium,
+        },],
         vec!["go".to_string(), "config".to_string(), "yaml".to_string()]
     );
 
@@ -2745,7 +2761,8 @@ pub fn populate_default_graph() -> APIGraph {
             },
             APFunction {
                 name: "pipe".to_string(),
-                signature: "pipe(...operators: OperatorFunction<T, R>[]): OperatorFunction<T, R>".to_string(),
+                signature: "pipe(...operators: OperatorFunction<T, R>[]): OperatorFunction<T, R>"
+                    .to_string(),
                 description: "Compose operators".to_string(),
                 parameters: vec![],
                 return_type: "OperatorFunction<T, R>".to_string(),
@@ -2754,16 +2771,19 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Reactive streams".to_string(),
+            code_template: "from([1, 2, 3]).pipe(map(x => x * 2)).subscribe(console.log)"
+                .to_string(),
+            when_to_use: "For event streams".to_string(),
+            category: PatternCategory::AsyncOperation,
+            complexity: Complexity::Complex,
+        },],
         vec![
-            UsagePattern {
-                description: "Reactive streams".to_string(),
-                code_template: "from([1, 2, 3]).pipe(map(x => x * 2)).subscribe(console.log)".to_string(),
-                when_to_use: "For event streams".to_string(),
-                category: PatternCategory::AsyncOperation,
-                complexity: Complexity::Complex,
-            },
-        ],
-        vec!["reactive".to_string(), "streams".to_string(), "observable".to_string()]
+            "reactive".to_string(),
+            "streams".to_string(),
+            "observable".to_string()
+        ]
     );
 
     add_api!(
@@ -2793,16 +2813,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Async coordination".to_string(),
+            code_template: "results = await gather(task1(), task2())".to_string(),
+            when_to_use: "For concurrent async operations".to_string(),
+            category: PatternCategory::AsyncOperation,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            UsagePattern {
-                description: "Async coordination".to_string(),
-                code_template: "results = await gather(task1(), task2())".to_string(),
-                when_to_use: "For concurrent async operations".to_string(),
-                category: PatternCategory::AsyncOperation,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["python".to_string(), "async".to_string(), "await".to_string()]
+            "python".to_string(),
+            "async".to_string(),
+            "await".to_string()
+        ]
     );
 
     // ============================================================
@@ -2836,15 +2858,13 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
-        vec![
-            UsagePattern {
-                description: "CLI definition".to_string(),
-                code_template: "program.command('deploy <env>').action(deploy)".to_string(),
-                when_to_use: "For Node.js CLIs".to_string(),
-                category: PatternCategory::CliFramework,
-                complexity: Complexity::Simple,
-            },
-        ],
+        vec![UsagePattern {
+            description: "CLI definition".to_string(),
+            code_template: "program.command('deploy <env>').action(deploy)".to_string(),
+            when_to_use: "For Node.js CLIs".to_string(),
+            category: PatternCategory::CliFramework,
+            complexity: Complexity::Simple,
+        },],
         vec!["cli".to_string(), "command".to_string(), "node".to_string()]
     );
 
@@ -2853,27 +2873,24 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Rust,
         APICategory::CliFramework,
         "4.5.0",
-        vec![
-            APFunction {
-                name: "Parser::new".to_string(),
-                signature: "Parser::new() -> Parser".to_string(),
-                description: "Create CLI parser".to_string(),
-                parameters: vec![],
-                return_type: "Parser".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Derive-based CLI".to_string(),
-                code_template: "#[derive(Parser)]\nstruct Cli { #[arg(short)] verbose: bool }".to_string(),
-                when_to_use: "For Rust CLIs".to_string(),
-                category: PatternCategory::CliFramework,
-                complexity: Complexity::Simple,
-            },
-        ],
+        vec![APFunction {
+            name: "Parser::new".to_string(),
+            signature: "Parser::new() -> Parser".to_string(),
+            description: "Create CLI parser".to_string(),
+            parameters: vec![],
+            return_type: "Parser".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Derive-based CLI".to_string(),
+            code_template: "#[derive(Parser)]\nstruct Cli { #[arg(short)] verbose: bool }"
+                .to_string(),
+            when_to_use: "For Rust CLIs".to_string(),
+            category: PatternCategory::CliFramework,
+            complexity: Complexity::Simple,
+        },],
         vec!["rust".to_string(), "cli".to_string(), "derive".to_string()]
     );
 
@@ -2882,28 +2899,30 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Go,
         APICategory::CliFramework,
         "1.8.0",
+        vec![APFunction {
+            name: "Execute".to_string(),
+            signature: "Execute() error".to_string(),
+            description: "Execute command".to_string(),
+            parameters: vec![],
+            return_type: "error".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Go CLI framework".to_string(),
+            code_template:
+                "var rootCmd = &cobra.Command{ Run: func(cmd *cobra.Command, args []string) {} }"
+                    .to_string(),
+            when_to_use: "For Go command-line apps".to_string(),
+            category: PatternCategory::CliFramework,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "Execute".to_string(),
-                signature: "Execute() error".to_string(),
-                description: "Execute command".to_string(),
-                parameters: vec![],
-                return_type: "error".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Go CLI framework".to_string(),
-                code_template: "var rootCmd = &cobra.Command{ Run: func(cmd *cobra.Command, args []string) {} }".to_string(),
-                when_to_use: "For Go command-line apps".to_string(),
-                category: PatternCategory::CliFramework,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["go".to_string(), "cli".to_string(), "kubernetes".to_string()]
+            "go".to_string(),
+            "cli".to_string(),
+            "kubernetes".to_string()
+        ]
     );
 
     // ============================================================
@@ -2915,28 +2934,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Authentication,
         "0.7.0",
+        vec![APFunction {
+            name: "use".to_string(),
+            signature: "use(strategy: Strategy): void".to_string(),
+            description: "Use auth strategy".to_string(),
+            parameters: vec![],
+            return_type: "void".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Auth strategies".to_string(),
+            code_template: "passport.use(new LocalStrategy(verify))".to_string(),
+            when_to_use: "For Node.js authentication".to_string(),
+            category: PatternCategory::Authentication,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "use".to_string(),
-                signature: "use(strategy: Strategy): void".to_string(),
-                description: "Use auth strategy".to_string(),
-                parameters: vec![],
-                return_type: "void".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Auth strategies".to_string(),
-                code_template: "passport.use(new LocalStrategy(verify))".to_string(),
-                when_to_use: "For Node.js authentication".to_string(),
-                category: PatternCategory::Authentication,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["auth".to_string(), "oauth".to_string(), "strategies".to_string()]
+            "auth".to_string(),
+            "oauth".to_string(),
+            "strategies".to_string()
+        ]
     );
 
     add_api!(
@@ -2944,27 +2963,23 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Authentication,
         "4.0.0",
-        vec![
-            APFunction {
-                name: "Auth0Client".to_string(),
-                signature: "Auth0Client(options: Auth0ClientOptions): Auth0Client".to_string(),
-                description: "Auth0 client".to_string(),
-                parameters: vec![],
-                return_type: "Auth0Client".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Auth0 integration".to_string(),
-                code_template: "const auth0 = await auth0.createClient()".to_string(),
-                when_to_use: "For Auth0 authentication".to_string(),
-                category: PatternCategory::Authentication,
-                complexity: Complexity::Medium,
-            },
-        ],
+        vec![APFunction {
+            name: "Auth0Client".to_string(),
+            signature: "Auth0Client(options: Auth0ClientOptions): Auth0Client".to_string(),
+            description: "Auth0 client".to_string(),
+            parameters: vec![],
+            return_type: "Auth0Client".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Auth0 integration".to_string(),
+            code_template: "const auth0 = await auth0.createClient()".to_string(),
+            when_to_use: "For Auth0 authentication".to_string(),
+            category: PatternCategory::Authentication,
+            complexity: Complexity::Medium,
+        },],
         vec!["auth".to_string(), "oauth".to_string(), "sso".to_string()]
     );
 
@@ -3009,16 +3024,20 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Real-time events".to_string(),
+            code_template:
+                "io.on('connection', (socket) => {\n  socket.on('message', (data) => {});\n});"
+                    .to_string(),
+            when_to_use: "For real-time communication".to_string(),
+            category: PatternCategory::WebSocket,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            UsagePattern {
-                description: "Real-time events".to_string(),
-                code_template: "io.on('connection', (socket) => {\n  socket.on('message', (data) => {});\n});".to_string(),
-                when_to_use: "For real-time communication".to_string(),
-                category: PatternCategory::WebSocket,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["websocket".to_string(), "realtime".to_string(), "fallback".to_string()]
+            "websocket".to_string(),
+            "realtime".to_string(),
+            "fallback".to_string()
+        ]
     );
 
     add_api!(
@@ -3026,28 +3045,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::WebSocket,
         "8.16.0",
+        vec![APFunction {
+            name: "WebSocket".to_string(),
+            signature: "WebSocket(url: string): WebSocket".to_string(),
+            description: "WebSocket client".to_string(),
+            parameters: vec![],
+            return_type: "WebSocket".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Native WebSocket".to_string(),
+            code_template: "const ws = new WebSocket('ws://localhost')".to_string(),
+            when_to_use: "For WebSocket communication".to_string(),
+            category: PatternCategory::WebSocket,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "WebSocket".to_string(),
-                signature: "WebSocket(url: string): WebSocket".to_string(),
-                description: "WebSocket client".to_string(),
-                parameters: vec![],
-                return_type: "WebSocket".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Native WebSocket".to_string(),
-                code_template: "const ws = new WebSocket('ws://localhost')".to_string(),
-                when_to_use: "For WebSocket communication".to_string(),
-                category: PatternCategory::WebSocket,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["websocket".to_string(), "rfc6455".to_string(), "minimal".to_string()]
+            "websocket".to_string(),
+            "rfc6455".to_string(),
+            "minimal".to_string()
+        ]
     );
 
     // ============================================================
@@ -3081,15 +3100,13 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
-        vec![
-            UsagePattern {
-                description: "Redis-backed jobs".to_string(),
-                code_template: "queue.add('email', { to: 'user@example.com' })".to_string(),
-                when_to_use: "For background job processing".to_string(),
-                category: PatternCategory::AsyncOperation,
-                complexity: Complexity::Medium,
-            },
-        ],
+        vec![UsagePattern {
+            description: "Redis-backed jobs".to_string(),
+            code_template: "queue.add('email', { to: 'user@example.com' })".to_string(),
+            when_to_use: "For background job processing".to_string(),
+            category: PatternCategory::AsyncOperation,
+            complexity: Complexity::Medium,
+        },],
         vec!["redis".to_string(), "queue".to_string(), "jobs".to_string()]
     );
 
@@ -3098,28 +3115,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::Python,
         APICategory::MessageQueue,
         "5.3.0",
+        vec![APFunction {
+            name: "Celery".to_string(),
+            signature: "Celery(app: str, broker: str): Celery".to_string(),
+            description: "Create Celery app".to_string(),
+            parameters: vec![],
+            return_type: "Celery".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Python task queue".to_string(),
+            code_template: "@app.task\ndef send_email(to: str): pass".to_string(),
+            when_to_use: "For Python background tasks".to_string(),
+            category: PatternCategory::AsyncOperation,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "Celery".to_string(),
-                signature: "Celery(app: str, broker: str): Celery".to_string(),
-                description: "Create Celery app".to_string(),
-                parameters: vec![],
-                return_type: "Celery".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Python task queue".to_string(),
-                code_template: "@app.task\ndef send_email(to: str): pass".to_string(),
-                when_to_use: "For Python background tasks".to_string(),
-                category: PatternCategory::AsyncOperation,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["python".to_string(), "queue".to_string(), "worker".to_string()]
+            "python".to_string(),
+            "queue".to_string(),
+            "worker".to_string()
+        ]
     );
 
     // ============================================================
@@ -3153,16 +3170,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Key-value caching".to_string(),
+            code_template: "await redis.set('key', JSON.stringify(data))".to_string(),
+            when_to_use: "For fast key-value storage".to_string(),
+            category: PatternCategory::Caching,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Key-value caching".to_string(),
-                code_template: "await redis.set('key', JSON.stringify(data))".to_string(),
-                when_to_use: "For fast key-value storage".to_string(),
-                category: PatternCategory::Caching,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["redis".to_string(), "cache".to_string(), "key-value".to_string()]
+            "redis".to_string(),
+            "cache".to_string(),
+            "key-value".to_string()
+        ]
     );
 
     add_api!(
@@ -3170,28 +3189,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Caching,
         "1.0.0",
+        vec![APFunction {
+            name: "get".to_string(),
+            signature: "get(key: string): Promise<any>".to_string(),
+            description: "Get cached value".to_string(),
+            parameters: vec![],
+            return_type: "Promise<any>".to_string(),
+            is_async: true,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Memcached caching".to_string(),
+            code_template: "const value = await memcached.get('key')".to_string(),
+            when_to_use: "For distributed caching".to_string(),
+            category: PatternCategory::Caching,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "get".to_string(),
-                signature: "get(key: string): Promise<any>".to_string(),
-                description: "Get cached value".to_string(),
-                parameters: vec![],
-                return_type: "Promise<any>".to_string(),
-                is_async: true,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Memcached caching".to_string(),
-                code_template: "const value = await memcached.get('key')".to_string(),
-                when_to_use: "For distributed caching".to_string(),
-                category: PatternCategory::Caching,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["memcached".to_string(), "cache".to_string(), "distributed".to_string()]
+            "memcached".to_string(),
+            "cache".to_string(),
+            "distributed".to_string()
+        ]
     );
 
     // ============================================================
@@ -3203,28 +3222,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Scheduling,
         "5.0.0",
+        vec![APFunction {
+            name: "every".to_string(),
+            signature: "every(interval: string): Job".to_string(),
+            description: "Schedule recurring job".to_string(),
+            parameters: vec![],
+            return_type: "Job".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Job scheduling".to_string(),
+            code_template: "agenda.every('10 minutes').process(sendReminder)".to_string(),
+            when_to_use: "For recurring tasks".to_string(),
+            category: PatternCategory::Scheduling,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "every".to_string(),
-                signature: "every(interval: string): Job".to_string(),
-                description: "Schedule recurring job".to_string(),
-                parameters: vec![],
-                return_type: "Job".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Job scheduling".to_string(),
-                code_template: "agenda.every('10 minutes').process(sendReminder)".to_string(),
-                when_to_use: "For recurring tasks".to_string(),
-                category: PatternCategory::Scheduling,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["mongodb".to_string(), "cron".to_string(), "jobs".to_string()]
+            "mongodb".to_string(),
+            "cron".to_string(),
+            "jobs".to_string()
+        ]
     );
 
     add_api!(
@@ -3232,28 +3251,29 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Scheduling,
         "3.0.0",
+        vec![APFunction {
+            name: "schedule".to_string(),
+            signature: "schedule(cronExpression: string, task: Function): ScheduledTask"
+                .to_string(),
+            description: "Schedule cron task".to_string(),
+            parameters: vec![],
+            return_type: "ScheduledTask".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Cron scheduling".to_string(),
+            code_template: "cron.schedule('0 * * * *', task)".to_string(),
+            when_to_use: "For cron-like scheduling".to_string(),
+            category: PatternCategory::Scheduling,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "schedule".to_string(),
-                signature: "schedule(cronExpression: string, task: Function): ScheduledTask".to_string(),
-                description: "Schedule cron task".to_string(),
-                parameters: vec![],
-                return_type: "ScheduledTask".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Cron scheduling".to_string(),
-                code_template: "cron.schedule('0 * * * *', task)".to_string(),
-                when_to_use: "For cron-like scheduling".to_string(),
-                category: PatternCategory::Scheduling,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["cron".to_string(), "schedule".to_string(), "minimal".to_string()]
+            "cron".to_string(),
+            "schedule".to_string(),
+            "minimal".to_string()
+        ]
     );
 
     // ============================================================
@@ -3265,28 +3285,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Parsing,
         "1.0.0-rc.12",
+        vec![APFunction {
+            name: "load".to_string(),
+            signature: "load(html: string): CheerioAPI".to_string(),
+            description: "Load HTML".to_string(),
+            parameters: vec![],
+            return_type: "CheerioAPI".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "HTML parsing".to_string(),
+            code_template: "const $ = cheerio.load(html); $('a').each(...)".to_string(),
+            when_to_use: "For HTML scraping".to_string(),
+            category: PatternCategory::Parsing,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "load".to_string(),
-                signature: "load(html: string): CheerioAPI".to_string(),
-                description: "Load HTML".to_string(),
-                parameters: vec![],
-                return_type: "CheerioAPI".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "HTML parsing".to_string(),
-                code_template: "const $ = cheerio.load(html); $('a').each(...)".to_string(),
-                when_to_use: "For HTML scraping".to_string(),
-                category: PatternCategory::Parsing,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["html".to_string(), "scraping".to_string(), "jquery".to_string()]
+            "html".to_string(),
+            "scraping".to_string(),
+            "jquery".to_string()
+        ]
     );
 
     add_api!(
@@ -3294,28 +3314,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Parsing,
         "4.1.0",
+        vec![APFunction {
+            name: "load".to_string(),
+            signature: "load(text: string): any".to_string(),
+            description: "Parse YAML".to_string(),
+            parameters: vec![],
+            return_type: "any".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "YAML parsing".to_string(),
+            code_template: "const config = yaml.load(fs.readFileSync('config.yaml'))".to_string(),
+            when_to_use: "For YAML files".to_string(),
+            category: PatternCategory::Parsing,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "load".to_string(),
-                signature: "load(text: string): any".to_string(),
-                description: "Parse YAML".to_string(),
-                parameters: vec![],
-                return_type: "any".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "YAML parsing".to_string(),
-                code_template: "const config = yaml.load(fs.readFileSync('config.yaml'))".to_string(),
-                when_to_use: "For YAML files".to_string(),
-                category: PatternCategory::Parsing,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["yaml".to_string(), "config".to_string(), "parse".to_string()]
+            "yaml".to_string(),
+            "config".to_string(),
+            "parse".to_string()
+        ]
     );
 
     // ============================================================
@@ -3349,16 +3369,18 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
+        vec![UsagePattern {
+            description: "Password hashing".to_string(),
+            code_template: "const hash = await bcrypt.hash(password, 10)".to_string(),
+            when_to_use: "For secure password storage".to_string(),
+            category: PatternCategory::Security,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            UsagePattern {
-                description: "Password hashing".to_string(),
-                code_template: "const hash = await bcrypt.hash(password, 10)".to_string(),
-                when_to_use: "For secure password storage".to_string(),
-                category: PatternCategory::Security,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["security".to_string(), "password".to_string(), "hash".to_string()]
+            "security".to_string(),
+            "password".to_string(),
+            "hash".to_string()
+        ]
     );
 
     add_api!(
@@ -3388,15 +3410,13 @@ pub fn populate_default_graph() -> APIGraph {
                 deprecated: false,
             },
         ],
-        vec![
-            UsagePattern {
-                description: "JWT tokens".to_string(),
-                code_template: "const token = jwt.sign({ userId }, secret)".to_string(),
-                when_to_use: "For JWT authentication".to_string(),
-                category: PatternCategory::Security,
-                complexity: Complexity::Simple,
-            },
-        ],
+        vec![UsagePattern {
+            description: "JWT tokens".to_string(),
+            code_template: "const token = jwt.sign({ userId }, secret)".to_string(),
+            when_to_use: "For JWT authentication".to_string(),
+            category: PatternCategory::Security,
+            complexity: Complexity::Simple,
+        },],
         vec!["jwt".to_string(), "auth".to_string(), "token".to_string()]
     );
 
@@ -3409,28 +3429,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::Encoding,
         "1.5.0",
+        vec![APFunction {
+            name: "fromByteArray".to_string(),
+            signature: "fromByteArray(bytes: Uint8Array): string".to_string(),
+            description: "Encode base64".to_string(),
+            parameters: vec![],
+            return_type: "string".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Base64 encoding".to_string(),
+            code_template: "const encoded = base64.fromByteArray(bytes)".to_string(),
+            when_to_use: "For base64 encoding".to_string(),
+            category: PatternCategory::Encoding,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "fromByteArray".to_string(),
-                signature: "fromByteArray(bytes: Uint8Array): string".to_string(),
-                description: "Encode base64".to_string(),
-                parameters: vec![],
-                return_type: "string".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Base64 encoding".to_string(),
-                code_template: "const encoded = base64.fromByteArray(bytes)".to_string(),
-                when_to_use: "For base64 encoding".to_string(),
-                category: PatternCategory::Encoding,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["base64".to_string(), "encoding".to_string(), "binary".to_string()]
+            "base64".to_string(),
+            "encoding".to_string(),
+            "binary".to_string()
+        ]
     );
 
     // ============================================================
@@ -3442,28 +3462,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::FormHandling,
         "7.49.0",
+        vec![APFunction {
+            name: "useForm".to_string(),
+            signature: "useForm<T>(): UseFormReturn<T>".to_string(),
+            description: "Form management hook".to_string(),
+            parameters: vec![],
+            return_type: "UseFormReturn<T>".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Form state management".to_string(),
+            code_template: "const { register, handleSubmit } = useForm()".to_string(),
+            when_to_use: "For React form handling".to_string(),
+            category: PatternCategory::FormHandling,
+            complexity: Complexity::Simple,
+        },],
         vec![
-            APFunction {
-                name: "useForm".to_string(),
-                signature: "useForm<T>(): UseFormReturn<T>".to_string(),
-                description: "Form management hook".to_string(),
-                parameters: vec![],
-                return_type: "UseFormReturn<T>".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Form state management".to_string(),
-                code_template: "const { register, handleSubmit } = useForm()".to_string(),
-                when_to_use: "For React form handling".to_string(),
-                category: PatternCategory::FormHandling,
-                complexity: Complexity::Simple,
-            },
-        ],
-        vec!["react".to_string(), "forms".to_string(), "validation".to_string()]
+            "react".to_string(),
+            "forms".to_string(),
+            "validation".to_string()
+        ]
     );
 
     add_api!(
@@ -3471,28 +3491,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::FormHandling,
         "2.4.0",
+        vec![APFunction {
+            name: "Formik".to_string(),
+            signature: "Formik<Props>(props: Props): ReactElement".to_string(),
+            description: "Formik component".to_string(),
+            parameters: vec![],
+            return_type: "ReactElement".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "Form component".to_string(),
+            code_template: "<Formik initialValues={{}} onSubmit={handleSubmit}>".to_string(),
+            when_to_use: "For structured form handling".to_string(),
+            category: PatternCategory::FormHandling,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "Formik".to_string(),
-                signature: "Formik<Props>(props: Props): ReactElement".to_string(),
-                description: "Formik component".to_string(),
-                parameters: vec![],
-                return_type: "ReactElement".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "Form component".to_string(),
-                code_template: "<Formik initialValues={{}} onSubmit={handleSubmit}>".to_string(),
-                when_to_use: "For structured form handling".to_string(),
-                category: PatternCategory::FormHandling,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["react".to_string(), "forms".to_string(), "component".to_string()]
+            "react".to_string(),
+            "forms".to_string(),
+            "component".to_string()
+        ]
     );
 
     // ============================================================
@@ -3504,28 +3524,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::DatabaseDriver,
         "8.11.0",
+        vec![APFunction {
+            name: "Client".to_string(),
+            signature: "Client(config: ClientConfig): Client".to_string(),
+            description: "PostgreSQL client".to_string(),
+            parameters: vec![],
+            return_type: "Client".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "PostgreSQL connection".to_string(),
+            code_template: "const client = new Client({ connectionString })".to_string(),
+            when_to_use: "For PostgreSQL access".to_string(),
+            category: PatternCategory::Database,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "Client".to_string(),
-                signature: "Client(config: ClientConfig): Client".to_string(),
-                description: "PostgreSQL client".to_string(),
-                parameters: vec![],
-                return_type: "Client".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "PostgreSQL connection".to_string(),
-                code_template: "const client = new Client({ connectionString })".to_string(),
-                when_to_use: "For PostgreSQL access".to_string(),
-                category: PatternCategory::Database,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["postgresql".to_string(), "postgres".to_string(), "sql".to_string()]
+            "postgresql".to_string(),
+            "postgres".to_string(),
+            "sql".to_string()
+        ]
     );
 
     add_api!(
@@ -3533,28 +3553,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::DatabaseDriver,
         "3.6.0",
+        vec![APFunction {
+            name: "createConnection".to_string(),
+            signature: "createConnection(config: ConnectionConfig): Connection".to_string(),
+            description: "MySQL connection".to_string(),
+            parameters: vec![],
+            return_type: "Connection".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "MySQL connection".to_string(),
+            code_template: "const conn = mysql.createConnection({ host, user })".to_string(),
+            when_to_use: "For MySQL/MariaDB".to_string(),
+            category: PatternCategory::Database,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "createConnection".to_string(),
-                signature: "createConnection(config: ConnectionConfig): Connection".to_string(),
-                description: "MySQL connection".to_string(),
-                parameters: vec![],
-                return_type: "Connection".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "MySQL connection".to_string(),
-                code_template: "const conn = mysql.createConnection({ host, user })".to_string(),
-                when_to_use: "For MySQL/MariaDB".to_string(),
-                category: PatternCategory::Database,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["mysql".to_string(), "mariadb".to_string(), "sql".to_string()]
+            "mysql".to_string(),
+            "mariadb".to_string(),
+            "sql".to_string()
+        ]
     );
 
     add_api!(
@@ -3562,28 +3582,28 @@ pub fn populate_default_graph() -> APIGraph {
         Language::TypeScript,
         APICategory::DatabaseDriver,
         "6.3.0",
+        vec![APFunction {
+            name: "MongoClient".to_string(),
+            signature: "MongoClient(uri: string): MongoClient".to_string(),
+            description: "MongoDB client".to_string(),
+            parameters: vec![],
+            return_type: "MongoClient".to_string(),
+            is_async: false,
+            is_static: false,
+            deprecated: false,
+        },],
+        vec![UsagePattern {
+            description: "MongoDB connection".to_string(),
+            code_template: "const client = new MongoClient('mongodb://localhost')".to_string(),
+            when_to_use: "For MongoDB".to_string(),
+            category: PatternCategory::Database,
+            complexity: Complexity::Medium,
+        },],
         vec![
-            APFunction {
-                name: "MongoClient".to_string(),
-                signature: "MongoClient(uri: string): MongoClient".to_string(),
-                description: "MongoDB client".to_string(),
-                parameters: vec![],
-                return_type: "MongoClient".to_string(),
-                is_async: false,
-                is_static: false,
-                deprecated: false,
-            },
-        ],
-        vec![
-            UsagePattern {
-                description: "MongoDB connection".to_string(),
-                code_template: "const client = new MongoClient('mongodb://localhost')".to_string(),
-                when_to_use: "For MongoDB".to_string(),
-                category: PatternCategory::Database,
-                complexity: Complexity::Medium,
-            },
-        ],
-        vec!["mongodb".to_string(), "mongo".to_string(), "nosql".to_string()]
+            "mongodb".to_string(),
+            "mongo".to_string(),
+            "nosql".to_string()
+        ]
     );
 
     // ============================================================

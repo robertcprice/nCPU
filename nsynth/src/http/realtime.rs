@@ -3,7 +3,7 @@
 //! Complete implementation of Socket.IO and Server-Sent Events (SSE)
 //! for real-time bidirectional communication and streaming.
 
-use crate::http::types::{HeaderMap, Request, Response, StatusCode, Method};
+use crate::http::types::{HeaderMap, Method, Request, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -254,12 +254,7 @@ impl Namespace {
 
     /// Get all clients
     pub fn clients(&self) -> Vec<Arc<Mutex<SocketIOClient>>> {
-        self.clients
-            .lock()
-            .unwrap()
-            .values()
-            .cloned()
-            .collect()
+        self.clients.lock().unwrap().values().cloned().collect()
     }
 
     /// Get client count
@@ -405,9 +400,10 @@ impl SocketIOServer {
 
         Self {
             namespace: ns.clone(),
-            namespaces: Arc::new(Mutex::new(HashMap::from([
-                ("/".to_string(), default.clone())
-            ]))),
+            namespaces: Arc::new(Mutex::new(HashMap::from([(
+                "/".to_string(),
+                default.clone(),
+            )]))),
             rooms: Arc::new(Mutex::new(HashMap::new())),
             default_namespace: default,
             ping_interval: 25000,
@@ -457,12 +453,19 @@ impl SocketIOServer {
     }
 
     /// Handle new connection
-    pub fn handle_connection(&self, client_id: impl Into<String>, namespace: &str) -> Arc<Mutex<SocketIOClient>> {
+    pub fn handle_connection(
+        &self,
+        client_id: impl Into<String>,
+        namespace: &str,
+    ) -> Arc<Mutex<SocketIOClient>> {
         let client = Arc::new(Mutex::new(SocketIOClient::new(client_id, namespace)));
 
         // Add to clients list
         let id = client.lock().unwrap().id.clone();
-        self.clients.lock().unwrap().insert(id.clone(), client.clone());
+        self.clients
+            .lock()
+            .unwrap()
+            .insert(id.clone(), client.clone());
 
         // Add to namespace
         if let Some(ns) = self.namespace(namespace) {
@@ -524,14 +527,26 @@ impl SocketIOServer {
     }
 
     /// Emit to room
-    pub fn emit_to_room(&self, namespace: &str, room: &str, event: impl Into<String>, data: EventData) {
+    pub fn emit_to_room(
+        &self,
+        namespace: &str,
+        room: &str,
+        event: impl Into<String>,
+        data: EventData,
+    ) {
         if let Some(ns) = self.namespace(namespace) {
             ns.emit_to_room(room, event, data);
         }
     }
 
     /// Emit to specific client
-    pub fn emit_to_client(&self, namespace: &str, client_id: &str, event: impl Into<String>, data: EventData) {
+    pub fn emit_to_client(
+        &self,
+        namespace: &str,
+        client_id: &str,
+        event: impl Into<String>,
+        data: EventData,
+    ) {
         if let Some(ns) = self.namespace(namespace) {
             ns.emit_to_client(client_id, event, data);
         }
@@ -692,7 +707,7 @@ impl EventSource {
                         percent_encoding::percent_decode(value.as_bytes())
                             .decode_utf8()
                             .unwrap_or_default()
-                            .to_string()
+                            .to_string(),
                     );
                 }
             }
@@ -753,7 +768,10 @@ impl SSEServer {
         let client = Arc::new(EventSource::from_request(client_id.clone(), req));
 
         // Add to clients
-        self.clients.lock().unwrap().insert(client_id.clone(), client.clone());
+        self.clients
+            .lock()
+            .unwrap()
+            .insert(client_id.clone(), client.clone());
 
         // Build SSE response
         let response = Response::new(StatusCode::OK)
@@ -1077,11 +1095,17 @@ mod tests {
         client.set("username", EventData::String("alice".to_string()));
         client.set("count", EventData::Number(42));
 
-        assert_eq!(client.get("username"), Some(EventData::String("alice".to_string())));
+        assert_eq!(
+            client.get("username"),
+            Some(EventData::String("alice".to_string()))
+        );
         assert_eq!(client.get("count"), Some(EventData::Number(42)));
         assert_eq!(client.get("missing"), None);
 
-        assert_eq!(client.remove("username"), Some(EventData::String("alice".to_string())));
+        assert_eq!(
+            client.remove("username"),
+            Some(EventData::String("alice".to_string()))
+        );
         assert_eq!(client.get("username"), None);
     }
 
@@ -1279,7 +1303,10 @@ mod tests {
         let req = Request::new(Method::GET, "/events");
         let (client, response) = server.handle_connection(&req);
 
-        assert_eq!(&client.id, server.clients.lock().unwrap().keys().next().unwrap());
+        assert_eq!(
+            &client.id,
+            server.clients.lock().unwrap().keys().next().unwrap()
+        );
         assert_eq!(response.status, StatusCode::OK);
         assert_eq!(response.content_type(), Some("text/event-stream"));
     }
@@ -1328,7 +1355,11 @@ mod tests {
             *called_clone.lock().unwrap() = true;
         });
 
-        handler.handle(client.clone(), "test", &EventData::String("test".to_string()));
+        handler.handle(
+            client.clone(),
+            "test",
+            &EventData::String("test".to_string()),
+        );
 
         assert!(*called.lock().unwrap());
     }
@@ -1346,9 +1377,7 @@ mod tests {
 
     #[test]
     fn test_sse_server_config() {
-        let server = SSEServer::new()
-            .with_keep_alive(60)
-            .with_retry(5000);
+        let server = SSEServer::new().with_keep_alive(60).with_retry(5000);
 
         assert_eq!(server.keep_alive_interval, 60);
         assert_eq!(server.retry_interval, 5000);

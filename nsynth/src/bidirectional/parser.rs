@@ -47,19 +47,37 @@ pub struct Field {
 #[derive(Debug, Clone)]
 pub enum Statement {
     /// Variable declaration
-    Let { name: String, type_: Option<String>, value: Box<Expression> },
+    Let {
+        name: String,
+        type_: Option<String>,
+        value: Box<Expression>,
+    },
     /// Assignment
-    Assign { name: String, value: Box<Expression> },
+    Assign {
+        name: String,
+        value: Box<Expression>,
+    },
     /// Return statement
     Return(Box<Expression>),
     /// If statement
-    If { condition: Box<Expression>, then_block: Vec<Statement>, else_block: Option<Vec<Statement>> },
+    If {
+        condition: Box<Expression>,
+        then_block: Vec<Statement>,
+        else_block: Option<Vec<Statement>>,
+    },
     /// Loop
     Loop { body: Vec<Statement> },
     /// While loop
-    While { condition: Box<Expression>, body: Vec<Statement> },
+    While {
+        condition: Box<Expression>,
+        body: Vec<Statement>,
+    },
     /// For loop
-    For { var: String, iter: Box<Expression>, body: Vec<Statement> },
+    For {
+        var: String,
+        iter: Box<Expression>,
+        body: Vec<Statement>,
+    },
     /// Expression statement
     Expr(Box<Expression>),
     /// Block
@@ -80,17 +98,34 @@ pub enum Expression {
     /// Variable reference
     Variable(String),
     /// Binary operation
-    BinOp { op: BinOp, left: Box<Expression>, right: Box<Expression> },
+    BinOp {
+        op: BinOp,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
     /// Unary operation
-    UnaryOp { op: UnaryOp, operand: Box<Expression> },
+    UnaryOp {
+        op: UnaryOp,
+        operand: Box<Expression>,
+    },
     /// Function call
     Call { func: String, args: Vec<Expression> },
     /// Method call
-    MethodCall { object: Box<Expression>, method: String, args: Vec<Expression> },
+    MethodCall {
+        object: Box<Expression>,
+        method: String,
+        args: Vec<Expression>,
+    },
     /// Field access
-    FieldAccess { object: Box<Expression>, field: String },
+    FieldAccess {
+        object: Box<Expression>,
+        field: String,
+    },
     /// Index access
-    Index { object: Box<Expression>, index: Box<Expression> },
+    Index {
+        object: Box<Expression>,
+        index: Box<Expression>,
+    },
     /// Array literal
     Array(Vec<Expression>),
 }
@@ -98,17 +133,38 @@ pub enum Expression {
 /// Binary operators
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Mod,
-    BitAnd, BitOr, BitXor, Shl, Shr,
-    Eq, Lt, Le, Gt, Ge, Ne,
-    And, Or,
-    Assign, AddAssign, SubAssign, MulAssign, DivAssign,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    Eq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Ne,
+    And,
+    Or,
+    Assign,
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
 }
 
 /// Unary operators
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
-    Neg, Not, Deref, Ref,
+    Neg,
+    Not,
+    Deref,
+    Ref,
 }
 
 /// Parse Rust code into AST
@@ -142,7 +198,11 @@ pub fn parse_code(code: &str) -> Result<AST, String> {
         }
     }
 
-    Ok(AST { functions, structs, imports })
+    Ok(AST {
+        functions,
+        structs,
+        imports,
+    })
 }
 
 /// Parse struct definition
@@ -173,7 +233,8 @@ fn parse_function_signature(line: &str) -> Option<Function> {
         if param_list.is_empty() {
             Vec::new()
         } else {
-            param_list.split(',')
+            param_list
+                .split(',')
                 .map(|p| {
                     let p = p.trim();
                     let mut iter = p.split_whitespace();

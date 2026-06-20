@@ -205,12 +205,7 @@ impl Parallelizer {
         for (i, line) in lines.iter().enumerate() {
             for pattern in &loop_patterns {
                 if pattern.matches(line) {
-                    if let Some(candidate) = self.analyze_loop(
-                        &lines,
-                        i,
-                        pattern,
-                        language,
-                    ) {
+                    if let Some(candidate) = self.analyze_loop(&lines, i, pattern, language) {
                         candidates.push(candidate);
                     }
                 }
@@ -221,22 +216,14 @@ impl Parallelizer {
     }
 
     /// Parallelize code by transforming detected candidates
-    pub fn parallelize(
-        &mut self,
-        code: &str,
-        language: TargetLanguage,
-    ) -> Vec<Parallelization> {
+    pub fn parallelize(&mut self, code: &str, language: TargetLanguage) -> Vec<Parallelization> {
         let candidates = self.detect_parallel_candidates(code, language);
         let mut parallelizations = Vec::new();
 
         for candidate in candidates {
             // Only parallelize if safe enough
             if candidate.safety_score >= self.config.safety_threshold {
-                let parallelization = self.generate_parallelization(
-                    code,
-                    &candidate,
-                    language,
-                );
+                let parallelization = self.generate_parallelization(code, &candidate, language);
                 parallelizations.push(parallelization);
             }
         }
@@ -255,9 +242,7 @@ impl Parallelizer {
 
         // Sort parallelizations by line range (reverse order to preserve line numbers)
         let mut sorted: Vec<_> = parallelizations.to_vec();
-        sorted.sort_by(|a, b| {
-            b.original_line_range.0.cmp(&a.original_line_range.0)
-        });
+        sorted.sort_by(|a, b| b.original_line_range.0.cmp(&a.original_line_range.0));
 
         for parallelization in sorted {
             let start = parallelization.original_line_range.0;
@@ -265,15 +250,21 @@ impl Parallelizer {
 
             if start < end {
                 let result_lines: Vec<&str> = result.lines().collect();
-                let before: Vec<String> = result_lines[..start].iter().map(|s| s.to_string()).collect();
+                let before: Vec<String> = result_lines[..start]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
                 let after: Vec<String> = if end < result_lines.len() {
                     result_lines[end..].iter().map(|s| s.to_string()).collect()
                 } else {
                     Vec::new()
                 };
 
-                let parallel_code_lines: Vec<String> =
-                    parallelization.parallel_code.lines().map(|s| s.to_string()).collect();
+                let parallel_code_lines: Vec<String> = parallelization
+                    .parallel_code
+                    .lines()
+                    .map(|s| s.to_string())
+                    .collect();
 
                 let new_lines: Vec<String> = before
                     .into_iter()
@@ -315,18 +306,11 @@ impl Parallelizer {
         }
 
         // Analyze dependencies
-        let dependency_analysis = self.analyze_dependencies(
-            loop_body,
-            &loop_variable,
-            language,
-        );
+        let dependency_analysis = self.analyze_dependencies(loop_body, &loop_variable, language);
 
         // Recommend strategy based on characteristics
-        let recommended_strategy = self.recommend_strategy(
-            &dependency_analysis,
-            iteration_count,
-            body_complexity,
-        );
+        let recommended_strategy =
+            self.recommend_strategy(&dependency_analysis, iteration_count, body_complexity);
 
         // Calculate expected speedup
         let expected_speedup = self.calculate_speedup(
@@ -449,7 +433,8 @@ impl Parallelizer {
 
             // Check for shared mutable state
             for var in &defined_vars {
-                if line.contains(&format!("{} += ", var)) || line.contains(&format!("{} -= ", var)) {
+                if line.contains(&format!("{} += ", var)) || line.contains(&format!("{} -= ", var))
+                {
                     dependencies.push(Dependency {
                         dep_type: DependencyType::Waw,
                         source: var.clone(),
@@ -512,7 +497,8 @@ impl Parallelizer {
 
         for line in loop_body {
             // Simple heuristic: extract words followed by operators
-            let parts: Vec<&str> = line.split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+            let parts: Vec<&str> = line
+                .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
                 .collect();
 
             for (i, part) in parts.iter().enumerate() {
@@ -610,40 +596,23 @@ impl Parallelizer {
     ) -> Parallelization {
         let description = format!(
             "Parallelize loop {} with {} iterations using {} strategy",
-            candidate.loop_variable,
-            candidate.iteration_count,
-            candidate.recommended_strategy
+            candidate.loop_variable, candidate.iteration_count, candidate.recommended_strategy
         );
 
-        let parallel_code = self.generate_parallel_code(
-            original_code,
-            candidate,
-            language,
-        );
+        let parallel_code = self.generate_parallel_code(original_code, candidate, language);
 
         let rationale = vec![
             format!(
                 "Loop has {} independent iterations",
                 candidate.iteration_count
             ),
-            format!(
-                "Body complexity: {} operations",
-                candidate.body_complexity
-            ),
-            format!(
-                "Safety confidence: {:.2}",
-                candidate.safety_score
-            ),
-            format!(
-                "Expected speedup: {:.1}x",
-                candidate.expected_speedup
-            ),
+            format!("Body complexity: {} operations", candidate.body_complexity),
+            format!("Safety confidence: {:.2}", candidate.safety_score),
+            format!("Expected speedup: {:.1}x", candidate.expected_speedup),
         ];
 
         let caveats = if candidate.dependency_analysis.is_independent {
-            vec![
-                "Thread synchronization overhead may reduce gains for small workloads".to_string(),
-            ]
+            vec!["Thread synchronization overhead may reduce gains for small workloads".to_string()]
         } else {
             vec![
                 format!(
@@ -711,7 +680,7 @@ let results: Vec<_> = (0..{}).into_par_iter()
                 )
             }
 
-            ParallelStrategy::WorkStealing => {{
+            ParallelStrategy::WorkStealing => {
                 format!(
                     r#"// Parallelized using Rayon (work stealing for load balancing)
 use rayon::iter::{{ParallelIterator, IntoParallelIterator}};
@@ -727,10 +696,9 @@ let results: Vec<_> = (0..{}).into_par_iter()
 
 // Work stealing dynamically balances load across threads
 "#,
-                    candidate.line_range.0,
-                    candidate.line_range.1
+                    candidate.line_range.0, candidate.line_range.1
                 )
-            }}
+            }
 
             ParallelStrategy::Pipeline => {
                 format!(
@@ -753,8 +721,7 @@ let stage2: Vec<_> = stage1.par_iter()
 
 // Pipeline pattern for dependent computations
 "#,
-                    candidate.iteration_count,
-                    candidate.loop_variable
+                    candidate.iteration_count, candidate.loop_variable
                 )
             }
 
@@ -784,8 +751,7 @@ fn process_range(start: usize, end: usize) -> Vec<OutputType> {{
 // Process entire range
 let results = process_range(0, {});
 "#,
-                    candidate.loop_variable,
-                    candidate.iteration_count
+                    candidate.loop_variable, candidate.iteration_count
                 )
             }
 
@@ -821,7 +787,10 @@ let results: Vec<_> = (0..{})
 
     /// Generate JavaScript/TypeScript parallel code using async/await
     fn generate_js_parallel(&self, candidate: &ParallelCandidate) -> String {
-        let is_ts = matches!(candidate.recommended_strategy, ParallelStrategy::WorkStealing);
+        let is_ts = matches!(
+            candidate.recommended_strategy,
+            ParallelStrategy::WorkStealing
+        );
 
         let type_annotation = if is_ts { ": number" } else { "" };
 
@@ -965,9 +934,7 @@ def parallel_pipeline(items):
 # Usage:
 # results = parallel_pipeline(range({}))
 "#,
-                    candidate.line_range.0,
-                    candidate.line_range.1,
-                    candidate.iteration_count
+                    candidate.line_range.0, candidate.line_range.1, candidate.iteration_count
                 )
             }
 
@@ -1058,11 +1025,9 @@ def parallel_batch(items, batch_size=BATCH_SIZE):
     /// Get loop patterns for a specific language
     fn get_loop_patterns(&self, language: TargetLanguage) -> Vec<LoopPattern> {
         match language {
-            TargetLanguage::Rust => vec![
-                LoopPattern::new("for", |line| {
-                    line.trim().starts_with("for ") && line.contains("in ")
-                }),
-            ],
+            TargetLanguage::Rust => vec![LoopPattern::new("for", |line| {
+                line.trim().starts_with("for ") && line.contains("in ")
+            })],
             TargetLanguage::JavaScript | TargetLanguage::TypeScript => vec![
                 LoopPattern::new("for", |line| {
                     line.trim().starts_with("for ") && line.contains("of ")
@@ -1071,11 +1036,9 @@ def parallel_batch(items, batch_size=BATCH_SIZE):
                     line.trim().starts_with("for (let ") || line.trim().starts_with("for (const ")
                 }),
             ],
-            TargetLanguage::Python => vec![
-                LoopPattern::new("for", |line| {
-                    line.trim().starts_with("for ") && line.contains(" in ")
-                }),
-            ],
+            TargetLanguage::Python => vec![LoopPattern::new("for", |line| {
+                line.trim().starts_with("for ") && line.contains(" in ")
+            })],
         }
     }
 
@@ -1088,7 +1051,11 @@ def parallel_batch(items, batch_size=BATCH_SIZE):
     ) {
         let key = (language, strategy);
         let normalized = (performance_score / 100.0).min(1.0).max(0.0);
-        let current = self.profile_feedback.get(&key).copied().unwrap_or(normalized);
+        let current = self
+            .profile_feedback
+            .get(&key)
+            .copied()
+            .unwrap_or(normalized);
         let updated = current * 0.8 + normalized * 0.2;
         self.profile_feedback.insert(key, updated);
     }
@@ -1185,10 +1152,7 @@ pub fn detect_parallel_from_hotspots(
 }
 
 /// Create work stealing configuration for optimal load balancing
-pub fn configure_work_stealing(
-    total_items: usize,
-    target_cores: usize,
-) -> WorkStealingConfig {
+pub fn configure_work_stealing(total_items: usize, target_cores: usize) -> WorkStealingConfig {
     let min_chunk_size = (total_items / (target_cores * 4)).max(1);
     let max_chunk_size = (total_items / target_cores).max(min_chunk_size);
 
@@ -1382,7 +1346,8 @@ def example():
 
         parallelizer.update_feedback(TargetLanguage::Rust, ParallelStrategy::WorkStealing, 85.0);
 
-        let feedback = parallelizer.get_feedback(TargetLanguage::Rust, ParallelStrategy::WorkStealing);
+        let feedback =
+            parallelizer.get_feedback(TargetLanguage::Rust, ParallelStrategy::WorkStealing);
         assert!(feedback.is_some());
         assert!(feedback.unwrap() > 0.0);
     }

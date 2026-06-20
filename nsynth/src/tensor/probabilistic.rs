@@ -25,7 +25,10 @@ use std::f64::consts::PI;
 /// Scalar tensor containing KL divergence value
 pub fn kl_divergence(p: &Tensor, q: &Tensor) -> Tensor {
     // Ensure both distributions have same shape
-    assert_eq!(p.shape.dims, q.shape.dims, "Distributions must have same shape");
+    assert_eq!(
+        p.shape.dims, q.shape.dims,
+        "Distributions must have same shape"
+    );
 
     // Add small epsilon for numerical stability
     let epsilon = 1e-8;
@@ -106,12 +109,8 @@ pub fn kl_divergence_diag_gaussian(
         let var2_i = var2.data[i].max(1e-8);
 
         // Component-wise KL for diagonal Gaussian
-        let component_kl = 0.5 * (
-            var1_i / var2_i +
-            ((mu2_i - mu1_i).powi(2) / var2_i) -
-            1.0 +
-            (var2_i / var1_i).ln()
-        );
+        let component_kl = 0.5
+            * (var1_i / var2_i + ((mu2_i - mu1_i).powi(2) / var2_i) - 1.0 + (var2_i / var1_i).ln());
 
         kl += component_kl;
     }
@@ -305,9 +304,8 @@ impl NormalDistribution {
             let sigma_i = self.sigma.data[i];
 
             // Log probability of univariate normal
-            let log_p_i = -0.5 * (2.0 * PI).ln()
-                - sigma_i.ln()
-                - 0.5 * ((x_i - mu_i) / sigma_i).powi(2);
+            let log_p_i =
+                -0.5 * (2.0 * PI).ln() - sigma_i.ln() - 0.5 * ((x_i - mu_i) / sigma_i).powi(2);
 
             log_prob += log_p_i;
         }
@@ -403,10 +401,7 @@ impl VariationalInference {
         let z = q.sample(1);
 
         // Reshape z to [dim] for likelihood computation
-        let z_flat = Tensor::new(
-            z.data[0..q.mu.data.len()].to_vec(),
-            q.mu.shape.clone()
-        );
+        let z_flat = Tensor::new(z.data[0..q.mu.data.len()].to_vec(), q.mu.shape.clone());
 
         // Expected log-likelihood: E_q[log p(x|z)]
         let log_likelihood = (self.likelihood)(x, &z_flat);
@@ -514,7 +509,10 @@ mod tests {
         let var2 = Tensor::new(vec![1.0, 1.0], Shape::new(vec![2]));
 
         let kl = kl_divergence_diag_gaussian(&mu1, &var1, &mu2, &var2);
-        assert!(kl.data[0].abs() < 1e-6, "KL(N||N) with same params should be 0");
+        assert!(
+            kl.data[0].abs() < 1e-6,
+            "KL(N||N) with same params should be 0"
+        );
 
         // KL(N(0,1) || N(0,2)) should be positive
         let mu1 = Tensor::new(vec![0.0], Shape::new(vec![1]));
@@ -523,7 +521,10 @@ mod tests {
         let var2 = Tensor::new(vec![2.0], Shape::new(vec![1]));
 
         let kl = kl_divergence_diag_gaussian(&mu1, &var1, &mu2, &var2);
-        assert!(kl.data[0] > 0.0, "KL should be positive for different distributions");
+        assert!(
+            kl.data[0] > 0.0,
+            "KL should be positive for different distributions"
+        );
     }
 
     #[test]
@@ -536,8 +537,14 @@ mod tests {
         let delta = Tensor::new(vec![1.0, 0.0, 0.0, 0.0], Shape::new(vec![4]));
         let h_delta = entropy(&delta);
 
-        assert!(h_uniform.data[0] > h_delta.data[0], "Uniform has higher entropy than delta");
-        assert!(h_delta.data[0].abs() < 1e-6, "Delta distribution has ~0 entropy");
+        assert!(
+            h_uniform.data[0] > h_delta.data[0],
+            "Uniform has higher entropy than delta"
+        );
+        assert!(
+            h_delta.data[0].abs() < 1e-6,
+            "Delta distribution has ~0 entropy"
+        );
 
         // Entropy should be non-negative
         assert!(h_uniform.data[0] > 0.0, "Entropy should be non-negative");
@@ -586,8 +593,14 @@ mod tests {
         mean_1 /= 1000.0;
 
         // Sample means should be close to true means
-        assert!((mean_0 - 5.0).abs() < 0.2, "Sample mean should be close to true mean");
-        assert!((mean_1 - (-3.0)).abs() < 0.2, "Sample mean should be close to true mean");
+        assert!(
+            (mean_0 - 5.0).abs() < 0.2,
+            "Sample mean should be close to true mean"
+        );
+        assert!(
+            (mean_1 - (-3.0)).abs() < 0.2,
+            "Sample mean should be close to true mean"
+        );
     }
 
     #[test]

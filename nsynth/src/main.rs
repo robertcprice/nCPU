@@ -129,12 +129,14 @@ fn transpile_to_target(rust_code: &str, target: TargetLang) -> String {
                 .replace("let ", "let ")
         }
         TargetLang::Go | TargetLang::Java => {
-            eprintln!("{} transpile not yet implemented, returning Rust code",
+            eprintln!(
+                "{} transpile not yet implemented, returning Rust code",
                 match target {
                     TargetLang::Go => "Go",
                     TargetLang::Java => "Java",
                     _ => "unknown",
-                });
+                }
+            );
             rust_code.to_string()
         }
     }
@@ -409,8 +411,7 @@ fn main() {
     let use_legacy_fallback = has_flag(&args, "--legacy-fallback");
     let use_probabilistic = has_flag(&args, "--probabilistic");
     let use_agentic = has_flag(&args, "--agentic");
-    let target_lang = arg_value(&args, "--target")
-        .and_then(|t| parse_target_lang(&t));
+    let target_lang = arg_value(&args, "--target").and_then(|t| parse_target_lang(&t));
     let memory_root = arg_value(&args, "--memory-root")
         .map(PathBuf::from)
         .unwrap_or_else(default_memory_root);
@@ -692,7 +693,13 @@ fn main() {
                         println!("method: {}", result.method);
                         println!("family: {}", result.family);
                         println!("memory_records: {}", orchestrator.memory.total_successes());
-                        println!("{}", transpile_to_target(&result.code, target_lang.unwrap_or(TargetLang::Rust)));
+                        println!(
+                            "{}",
+                            transpile_to_target(
+                                &result.code,
+                                target_lang.unwrap_or(TargetLang::Rust)
+                            )
+                        );
                         return;
                     }
                     let result = if use_differentiable_only || prefer_differentiable {
@@ -733,7 +740,13 @@ fn main() {
                         println!("method: {}", result.method);
                         println!("family: {}", result.family);
                         println!("memory_records: {}", orchestrator.memory.total_successes());
-                        println!("{}", transpile_to_target(&result.code, target_lang.unwrap_or(TargetLang::Rust)));
+                        println!(
+                            "{}",
+                            transpile_to_target(
+                                &result.code,
+                                target_lang.unwrap_or(TargetLang::Rust)
+                            )
+                        );
                     } else {
                         eprintln!(
                             "failed: {}",

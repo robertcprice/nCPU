@@ -10,10 +10,9 @@ pub mod clarify;
 
 // Re-exports from clarify module
 pub use clarify::{
-    Question, QuestionOption, Answer, ClarificationState,
-    Checkpoint, SynthesisPhase, PartialResults, IntermediateValue,
-    CandidateAttempt, PartialSolution, InteractiveSession,
-    ask_clarification, execute_interactive,
+    ask_clarification, execute_interactive, Answer, CandidateAttempt, Checkpoint,
+    ClarificationState, InteractiveSession, IntermediateValue, PartialResults, PartialSolution,
+    Question, QuestionOption, SynthesisPhase,
 };
 
 // Re-export legacy interactive functions for compatibility
@@ -38,7 +37,7 @@ pub struct InteractiveTrace {
 pub struct InteractiveProblem {
     pub name: String,
     #[serde(skip)]
-    pub base_problem: Problem,  // Skip serialization to avoid serde issues
+    pub base_problem: Problem, // Skip serialization to avoid serde issues
     pub traces: Vec<InteractiveTrace>,
 }
 
@@ -49,7 +48,7 @@ pub struct InteractiveSolveResult {
     pub method: String,
     pub error: Option<String>,
     #[serde(skip)]
-    pub metadata: DifferentiableMetadata,  // Skip to avoid serde issues
+    pub metadata: DifferentiableMetadata, // Skip to avoid serde issues
 }
 
 // Placeholder functions for compatibility
@@ -67,7 +66,10 @@ pub fn solve_interactive_problem(_problem: &Problem) -> InteractiveSolveResult {
     }
 }
 
-pub fn verify_interactive_program(_problem: &InteractiveProblem, _code: &str) -> Result<(), String> {
+pub fn verify_interactive_program(
+    _problem: &InteractiveProblem,
+    _code: &str,
+) -> Result<(), String> {
     Err("Not implemented".to_string())
 }
 
@@ -176,7 +178,8 @@ mod tests {
 
     #[test]
     fn test_interactive_result() {
-        let success = InteractiveResult::success("fn test() {}".to_string(), "test_method".to_string());
+        let success =
+            InteractiveResult::success("fn test() {}".to_string(), "test_method".to_string());
         assert!(success.success);
         assert!(success.code.is_some());
         assert!(success.error.is_none());

@@ -242,7 +242,11 @@ impl ProtoMessage {
 
         // Nested enums
         for enum_def in &self.enums {
-            output.push_str(&format!("{}{}\n", indent_str, enum_def.to_proto_string_indented(indent + 2)));
+            output.push_str(&format!(
+                "{}{}\n",
+                indent_str,
+                enum_def.to_proto_string_indented(indent + 2)
+            ));
         }
 
         // Fields
@@ -371,7 +375,10 @@ impl ProtoEnum {
         let mut output = format!("{}enum {} {{\n", indent_str, self.name);
 
         for value in &self.values {
-            output.push_str(&format!("{}  {} = {};\n", indent_str, value.name, value.number));
+            output.push_str(&format!(
+                "{}  {} = {};\n",
+                indent_str, value.name, value.number
+            ));
         }
 
         output.push_str(&format!("{}}}", indent_str));
@@ -469,7 +476,13 @@ impl ProtoMethod {
 
         format!(
             "{}{} {}({}{}) returns ({}{});\n",
-            indent_str, stream_sig, self.name, req_stream, self.request_type, resp_stream, self.response_type
+            indent_str,
+            stream_sig,
+            self.name,
+            req_stream,
+            self.request_type,
+            resp_stream,
+            self.response_type
         )
     }
 }
@@ -528,7 +541,6 @@ pub enum GrpcStatusCode {
     DataLoss = 15,
     Unauthenticated = 16,
 }
-
 
 impl GrpcStatusCode {
     /// Get status code name
@@ -789,7 +801,10 @@ impl<Req, Res> GrpcMethod<Req, Res> {
     }
 
     /// Create new server streaming method
-    pub fn server_streaming(name: impl Into<String>, handler: GrpcServerStreamHandler<Req, Res>) -> Self {
+    pub fn server_streaming(
+        name: impl Into<String>,
+        handler: GrpcServerStreamHandler<Req, Res>,
+    ) -> Self {
         Self {
             name: name.into(),
             method_type: GrpcMethodType::ServerStreaming,
@@ -804,7 +819,10 @@ impl<Req, Res> GrpcMethod<Req, Res> {
     }
 
     /// Create new client streaming method
-    pub fn client_streaming(name: impl Into<String>, handler: GrpcClientStreamHandler<Req, Res>) -> Self {
+    pub fn client_streaming(
+        name: impl Into<String>,
+        handler: GrpcClientStreamHandler<Req, Res>,
+    ) -> Self {
         Self {
             name: name.into(),
             method_type: GrpcMethodType::ClientStreaming,
@@ -819,7 +837,10 @@ impl<Req, Res> GrpcMethod<Req, Res> {
     }
 
     /// Create new bidirectional streaming method
-    pub fn bidi_streaming(name: impl Into<String>, handler: GrpcBidiStreamHandler<Req, Res>) -> Self {
+    pub fn bidi_streaming(
+        name: impl Into<String>,
+        handler: GrpcBidiStreamHandler<Req, Res>,
+    ) -> Self {
         Self {
             name: name.into(),
             method_type: GrpcMethodType::BidiStreaming,
@@ -1094,7 +1115,8 @@ pub type TrpcQueryHandler<TInput, TOutput> = fn(TrpcContext, TInput) -> TrpcResp
 pub type TrpcMutationHandler<TInput, TOutput> = fn(TrpcContext, TInput) -> TrpcResponse<TOutput>;
 
 /// tRPC subscription handler
-pub type TrpcSubscriptionHandler<TInput, TOutput> = fn(TrpcContext, TInput) -> TrpcSubscription<TOutput>;
+pub type TrpcSubscriptionHandler<TInput, TOutput> =
+    fn(TrpcContext, TInput) -> TrpcSubscription<TOutput>;
 
 /// tRPC subscription (for real-time updates)
 #[derive(Debug)]
@@ -1197,7 +1219,10 @@ impl<TInput, TOutput> TrpcProcedure<TInput, TOutput> {
     }
 
     /// Create mutation procedure
-    pub fn mutation(name: impl Into<String>, handler: TrpcMutationHandler<TInput, TOutput>) -> Self {
+    pub fn mutation(
+        name: impl Into<String>,
+        handler: TrpcMutationHandler<TInput, TOutput>,
+    ) -> Self {
         Self {
             name: name.into(),
             procedure_type: TrpcProcedureType::Mutation,
@@ -1210,7 +1235,10 @@ impl<TInput, TOutput> TrpcProcedure<TInput, TOutput> {
     }
 
     /// Create subscription procedure
-    pub fn subscription(name: impl Into<String>, handler: TrpcSubscriptionHandler<TInput, TOutput>) -> Self {
+    pub fn subscription(
+        name: impl Into<String>,
+        handler: TrpcSubscriptionHandler<TInput, TOutput>,
+    ) -> Self {
         Self {
             name: name.into(),
             procedure_type: TrpcProcedureType::Subscription,
@@ -1244,19 +1272,28 @@ impl TrpcRouter {
     }
 
     /// Register query procedure
-    pub fn query<TInput, TOutput>(&mut self, procedure: TrpcProcedure<TInput, TOutput>) -> &mut Self {
+    pub fn query<TInput, TOutput>(
+        &mut self,
+        procedure: TrpcProcedure<TInput, TOutput>,
+    ) -> &mut Self {
         self.procedures.push(procedure.name);
         self
     }
 
     /// Register mutation procedure
-    pub fn mutation<TInput, TOutput>(&mut self, procedure: TrpcProcedure<TInput, TOutput>) -> &mut Self {
+    pub fn mutation<TInput, TOutput>(
+        &mut self,
+        procedure: TrpcProcedure<TInput, TOutput>,
+    ) -> &mut Self {
         self.procedures.push(procedure.name);
         self
     }
 
     /// Register subscription procedure
-    pub fn subscription<TInput, TOutput>(&mut self, procedure: TrpcProcedure<TInput, TOutput>) -> &mut Self {
+    pub fn subscription<TInput, TOutput>(
+        &mut self,
+        procedure: TrpcProcedure<TInput, TOutput>,
+    ) -> &mut Self {
         self.procedures.push(procedure.name);
         self
     }
@@ -1502,9 +1539,14 @@ mod tests {
     #[test]
     fn test_proto_service() {
         let mut service = ProtoService::new("UserService");
-        service.add_method(ProtoMethod::new("GetUser", "GetUserRequest", "GetUserResponse"));
+        service.add_method(ProtoMethod::new(
+            "GetUser",
+            "GetUserRequest",
+            "GetUserResponse",
+        ));
         service.add_method(
-            ProtoMethod::new("ListUsers", "ListUsersRequest", "ListUsersResponse").server_streaming(),
+            ProtoMethod::new("ListUsers", "ListUsersRequest", "ListUsersResponse")
+                .server_streaming(),
         );
 
         let proto = service.to_proto_string();
@@ -1532,7 +1574,11 @@ mod tests {
         file.add_message(user_msg.clone());
 
         let mut service = ProtoService::new("UserService");
-        service.add_method(ProtoMethod::new("GetUser", "GetUserRequest", "GetUserResponse"));
+        service.add_method(ProtoMethod::new(
+            "GetUser",
+            "GetUserRequest",
+            "GetUserResponse",
+        ));
         file.add_service(service.clone());
 
         let proto = file.to_proto_string();
@@ -1626,10 +1672,9 @@ mod tests {
     fn test_grpc_service() {
         let mut service = GrpcService::new("api.v1", "UserService");
 
-        service.register_method(GrpcMethod::<String, String>::unary(
-            "GetUser",
-            |_, _| GrpcResponse::ok("user".to_string()),
-        ));
+        service.register_method(GrpcMethod::<String, String>::unary("GetUser", |_, _| {
+            GrpcResponse::ok("user".to_string())
+        }));
 
         assert_eq!(service.full_name(), "api.v1.UserService");
         assert_eq!(service.method_count(), 1);
@@ -1844,10 +1889,9 @@ mod tests {
         metadata.insert("x-method-name", "GetUser");
         metadata.insert("x-timeout", "30s");
 
-        let method = GrpcMethod::<String, String>::unary(
-            "GetUser",
-            |_, _| GrpcResponse::ok("user".to_string()),
-        )
+        let method = GrpcMethod::<String, String>::unary("GetUser", |_, _| {
+            GrpcResponse::ok("user".to_string())
+        })
         .with_metadata(metadata);
 
         assert_eq!(method.metadata.get("x-method-name"), Some("GetUser"));
@@ -1921,9 +1965,14 @@ mod tests {
         let mut order_msg = ProtoMessage::new("Order");
         order_msg.add_field(ProtoField::new("id", ProtoFieldType::Uint64, 1));
         order_msg.add_field(ProtoField::new("customer_id", ProtoFieldType::Uint64, 2));
-        order_msg.add_field(ProtoField::new("status", ProtoFieldType::Enum("OrderStatus".to_string()), 3));
+        order_msg.add_field(ProtoField::new(
+            "status",
+            ProtoFieldType::Enum("OrderStatus".to_string()),
+            3,
+        ));
         order_msg.add_field(
-            ProtoField::new("items", ProtoFieldType::Message("OrderItem".to_string()), 4).repeated(),
+            ProtoField::new("items", ProtoFieldType::Message("OrderItem".to_string()), 4)
+                .repeated(),
         );
         order_msg.add_field(ProtoField::new(
             "shipping_address",
@@ -1936,10 +1985,22 @@ mod tests {
         // Order service
         let mut order_service = ProtoService::new("OrderService");
         order_service.add_method(ProtoMethod::new("GetOrder", "GetOrderRequest", "Order"));
-        order_service.add_method(ProtoMethod::new("CreateOrder", "CreateOrderRequest", "Order"));
+        order_service.add_method(ProtoMethod::new(
+            "CreateOrder",
+            "CreateOrderRequest",
+            "Order",
+        ));
         order_service.add_method(ProtoMethod::new("ListOrders", "ListOrdersRequest", "Order"));
-        order_service.add_method(ProtoMethod::new("UpdateOrder", "UpdateOrderRequest", "Order"));
-        order_service.add_method(ProtoMethod::new("OrderUpdates", "OrderUpdateRequest", "OrderUpdate"));
+        order_service.add_method(ProtoMethod::new(
+            "UpdateOrder",
+            "UpdateOrderRequest",
+            "Order",
+        ));
+        order_service.add_method(ProtoMethod::new(
+            "OrderUpdates",
+            "OrderUpdateRequest",
+            "OrderUpdate",
+        ));
         file.add_service(order_service);
 
         let proto = file.to_proto_string();

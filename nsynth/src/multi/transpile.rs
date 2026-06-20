@@ -1,8 +1,8 @@
 //! Main Transpiler for Multi-Language Code Generation
 
 use super::{
-    lang::{TargetLang, LanguageTarget, MogType, MogOp, common_type_map},
     js::JavaScriptTarget,
+    lang::{common_type_map, LanguageTarget, MogOp, MogType, TargetLang},
     py::PythonTarget,
     ts::TypeScriptTarget,
 };
@@ -78,12 +78,24 @@ pub enum ASTNode {
 /// Transpile AST to target language
 pub fn transpile(ast: &[ASTNode], target: TargetLang) -> Result<String, TranspileError> {
     let language_target: Box<dyn LanguageTarget> = match target {
-        TargetLang::Rust => return Err(TranspileError::UnsupportedOperation("Rust transpile not implemented (source is Rust)".into())),
+        TargetLang::Rust => {
+            return Err(TranspileError::UnsupportedOperation(
+                "Rust transpile not implemented (source is Rust)".into(),
+            ))
+        }
         TargetLang::JavaScript => Box::new(JavaScriptTarget::new()),
         TargetLang::TypeScript => Box::new(TypeScriptTarget::new()),
         TargetLang::Python => Box::new(PythonTarget::new()),
-        TargetLang::Go => return Err(TranspileError::UnsupportedOperation("Go transpile not implemented yet".into())),
-        TargetLang::Java => return Err(TranspileError::UnsupportedOperation("Java transpile not implemented yet".into())),
+        TargetLang::Go => {
+            return Err(TranspileError::UnsupportedOperation(
+                "Go transpile not implemented yet".into(),
+            ))
+        }
+        TargetLang::Java => {
+            return Err(TranspileError::UnsupportedOperation(
+                "Java transpile not implemented yet".into(),
+            ))
+        }
     };
 
     let mut output = String::new();
@@ -145,7 +157,11 @@ fn transpile_node(
             if f.is_finite() {
                 f.to_string()
             } else if f.is_infinite() {
-                if f.is_sign_positive() { "Infinity".to_string() } else { "-Infinity".to_string() }
+                if f.is_sign_positive() {
+                    "Infinity".to_string()
+                } else {
+                    "-Infinity".to_string()
+                }
             } else {
                 "NaN".to_string()
             }
@@ -228,12 +244,11 @@ fn transpile_node(
             ctx.indent -= 1;
 
             match ctx.target {
-                TargetLang::JavaScript | TargetLang::TypeScript => {
-                    Ok(format!("for (const {} of {}) {{\n{}\n}}", var, iter_str, body_str))
-                }
-                TargetLang::Python => {
-                    Ok(format!("for {} in {}:\n{}", var, iter_str, body_str))
-                }
+                TargetLang::JavaScript | TargetLang::TypeScript => Ok(format!(
+                    "for (const {} of {}) {{\n{}\n}}",
+                    var, iter_str, body_str
+                )),
+                TargetLang::Python => Ok(format!("for {} in {}:\n{}", var, iter_str, body_str)),
                 _ => Err(TranspileError::UnsupportedOperation("For loop".into())),
             }
         }
@@ -251,9 +266,7 @@ fn transpile_node(
                 TargetLang::JavaScript | TargetLang::TypeScript => {
                     Ok(format!("while (true) {{\n{}\n}}", body_str))
                 }
-                TargetLang::Python => {
-                    Ok(format!("while True:\n{}", body_str))
-                }
+                TargetLang::Python => Ok(format!("while True:\n{}", body_str)),
                 _ => Err(TranspileError::UnsupportedOperation("Loop".into())),
             }
         }
@@ -261,7 +274,12 @@ fn transpile_node(
         ASTNode::Continue => Ok("continue".to_string()),
 
         // Functions
-        ASTNode::Function { name, params, ret, body } => {
+        ASTNode::Function {
+            name,
+            params,
+            ret,
+            body,
+        } => {
             let mut body_str = String::new();
             ctx.indent += 1;
             for node in body {
@@ -277,7 +295,8 @@ fn transpile_node(
             Ok(target.format_function(name, params, ret, &body_str))
         }
         ASTNode::Call(func, args) => {
-            let arg_strs: Result<Vec<String>, TranspileError> = args.iter()
+            let arg_strs: Result<Vec<String>, TranspileError> = args
+                .iter()
                 .map(|a| transpile_node(a, target, ctx))
                 .collect();
             Ok(target.format_call(func, &arg_strs?))
@@ -289,7 +308,8 @@ fn transpile_node(
 
         // Data structures
         ASTNode::Array(elements) => {
-            let elem_strs: Result<Vec<String>, TranspileError> = elements.iter()
+            let elem_strs: Result<Vec<String>, TranspileError> = elements
+                .iter()
                 .map(|e| transpile_node(e, target, ctx))
                 .collect();
             Ok(format!("[{}]", elem_strs?.join(", ")))
@@ -300,30 +320,30 @@ fn transpile_node(
             Ok(format!("{}[{}]", array_str, index_str))
         }
         ASTNode::Tuple(elements) => {
-            let elem_strs: Result<Vec<String>, TranspileError> = elements.iter()
+            let elem_strs: Result<Vec<String>, TranspileError> = elements
+                .iter()
                 .map(|e| transpile_node(e, target, ctx))
                 .collect();
             match ctx.target {
                 TargetLang::JavaScript | TargetLang::TypeScript => {
                     Ok(format!("[{}]", elem_strs?.join(", ")))
                 }
-                TargetLang::Python => {
-                    Ok(format!("({})", elem_strs?.join(", ")))
-                }
+                TargetLang::Python => Ok(format!("({})", elem_strs?.join(", "))),
                 _ => Err(TranspileError::UnsupportedOperation("Tuple".into())),
             }
         }
         ASTNode::Struct { name, fields } => {
-            let field_strs: Vec<String> = fields.iter()
+            let field_strs: Vec<String> = fields
+                .iter()
                 .map(|(n, t)| format!("{}: {}", n, target.type_map(t)))
                 .collect();
             match ctx.target {
-                TargetLang::TypeScript => {
-                    Ok(format!("interface {} {{ {} }}", name, field_strs.join("; ")))
-                }
-                TargetLang::Python => {
-                    Ok(format!("class {}:\n    pass", name))
-                }
+                TargetLang::TypeScript => Ok(format!(
+                    "interface {} {{ {} }}",
+                    name,
+                    field_strs.join("; ")
+                )),
+                TargetLang::Python => Ok(format!("class {}:\n    pass", name)),
                 _ => Err(TranspileError::UnsupportedOperation("Struct".into())),
             }
         }
@@ -332,15 +352,17 @@ fn transpile_node(
 
 /// Escape string literals
 fn escape_string(s: &str) -> String {
-    s.chars().flat_map(|c| match c {
-        '\n' => Some("\\n".to_string()),
-        '\r' => Some("\\r".to_string()),
-        '\t' => Some("\\t".to_string()),
-        '"' => Some("\\\"".to_string()),
-        '\\' => Some("\\\\".to_string()),
-        _ if c.is_ascii_control() => None,
-        _ => Some(c.to_string()),
-    }).collect::<String>()
+    s.chars()
+        .flat_map(|c| match c {
+            '\n' => Some("\\n".to_string()),
+            '\r' => Some("\\r".to_string()),
+            '\t' => Some("\\t".to_string()),
+            '"' => Some("\\\"".to_string()),
+            '\\' => Some("\\\\".to_string()),
+            _ if c.is_ascii_control() => None,
+            _ => Some(c.to_string()),
+        })
+        .collect::<String>()
 }
 
 /// Infer type from AST node (simplified)
@@ -352,7 +374,7 @@ fn infer_type(node: &ASTNode) -> MogType {
         ASTNode::Float(_) => MogType::Float,
         ASTNode::String(_) => MogType::String,
         ASTNode::Array(_) => MogType::Array(Box::new(MogType::Int)), // Default to Int array
-        ASTNode::Var(_) => MogType::Int, // Default
+        ASTNode::Var(_) => MogType::Int,                             // Default
         _ => MogType::Unit,
     }
 }
@@ -363,12 +385,11 @@ mod tests {
 
     #[test]
     fn test_transpile_arithmetic() {
-        let ast = vec![
-            ASTNode::Binary(MogOp::Add,
-                Box::new(ASTNode::Int(1)),
-                Box::new(ASTNode::Int(2))
-            ),
-        ];
+        let ast = vec![ASTNode::Binary(
+            MogOp::Add,
+            Box::new(ASTNode::Int(1)),
+            Box::new(ASTNode::Int(2)),
+        )];
 
         let js = transpile(&ast, TargetLang::JavaScript).unwrap();
         assert!(js.contains("1 + 2"));
@@ -379,19 +400,19 @@ mod tests {
 
     #[test]
     fn test_transpile_function() {
-        let ast = vec![
-            ASTNode::Function {
-                name: "add".to_string(),
-                params: vec![("a".to_string(), MogType::Int), ("b".to_string(), MogType::Int)],
-                ret: MogType::Int,
-                body: vec![
-                    ASTNode::Binary(MogOp::Add,
-                        Box::new(ASTNode::Var("a".to_string())),
-                        Box::new(ASTNode::Var("b".to_string()))
-                    ),
-                ],
-            },
-        ];
+        let ast = vec![ASTNode::Function {
+            name: "add".to_string(),
+            params: vec![
+                ("a".to_string(), MogType::Int),
+                ("b".to_string(), MogType::Int),
+            ],
+            ret: MogType::Int,
+            body: vec![ASTNode::Binary(
+                MogOp::Add,
+                Box::new(ASTNode::Var("a".to_string())),
+                Box::new(ASTNode::Var("b".to_string())),
+            )],
+        }];
 
         let js = transpile(&ast, TargetLang::JavaScript).unwrap();
         assert!(js.contains("function add"));

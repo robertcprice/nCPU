@@ -8,7 +8,7 @@ use linguigenesis_core::{
     belief::BeliefState,
     comprehension::Comprehension,
     entity::{Entity, EntityType, RelationType},
-    reasoning::{KnowledgeQA, AnalogyReasoner},
+    reasoning::{AnalogyReasoner, KnowledgeQA},
     registry::Registry,
 };
 use std::path::{Path, PathBuf};
@@ -87,13 +87,18 @@ impl LinguigenesisBridge {
         if !path.as_os_str().is_empty() && path.exists() {
             match Registry::from_json_auto(path) {
                 Ok((registry, modified)) => {
-                    eprintln!("[Linguigenesis] Loaded {} entities from {}",
+                    eprintln!(
+                        "[Linguigenesis] Loaded {} entities from {}",
                         registry.stats().total_entities,
-                        path.display());
+                        path.display()
+                    );
                     return (registry, modified);
                 }
                 Err(e) => {
-                    eprintln!("[Linguigenesis] Failed to load registry: {}, using fallback", e);
+                    eprintln!(
+                        "[Linguigenesis] Failed to load registry: {}, using fallback",
+                        e
+                    );
                 }
             }
         }
@@ -110,10 +115,11 @@ impl LinguigenesisBridge {
             return Ok(()); // No file to watch
         };
 
-        let metadata = std::fs::metadata(path)
-            .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+        let metadata =
+            std::fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
 
-        let modified = metadata.modified()
+        let modified = metadata
+            .modified()
             .map_err(|e| format!("Failed to get modified time: {}", e))?;
 
         if let Some(last) = self.last_modified {
@@ -127,11 +133,15 @@ impl LinguigenesisBridge {
         let (new_registry, new_modified) = Self::load_registry_with_fallback(path);
 
         // Update all components
-        *self.registry.write()
+        *self
+            .registry
+            .write()
             .map_err(|_| "Lock error".to_string())? = new_registry;
 
         // Update comprehension with new registry
-        let mut comp = self.comprehension.write()
+        let mut comp = self
+            .comprehension
+            .write()
             .map_err(|_| "Lock error".to_string())?;
         *comp = Comprehension::new((*self.registry.read().unwrap()).clone());
 
@@ -160,7 +170,9 @@ impl LinguigenesisBridge {
     /// Parse NL and generate synthesis examples
     pub fn nl_to_examples(&self, input: &str) -> Result<Vec<Example>, BridgeError> {
         // Parse NL into belief state
-        let mut comp = self.comprehension.write()
+        let mut comp = self
+            .comprehension
+            .write()
             .map_err(|_| BridgeError::LockError)?;
 
         let belief = comp.parse(input);
@@ -181,189 +193,413 @@ impl LinguigenesisBridge {
         // ARITHMETIC OPERATIONS
         // ============================================================
         if text.contains("add") || text.contains("sum") || text.contains("plus") {
-            examples.push(Example { inputs: vec![Value::Int(2), Value::Int(3)], expected: Value::Int(5) });
-            examples.push(Example { inputs: vec![Value::Int(-1), Value::Int(1)], expected: Value::Int(0) });
-        } else if text.contains("subtract") || text.contains("minus") || text.contains("difference") {
-            examples.push(Example { inputs: vec![Value::Int(5), Value::Int(3)], expected: Value::Int(2) });
-            examples.push(Example { inputs: vec![Value::Int(10), Value::Int(4)], expected: Value::Int(6) });
+            examples.push(Example {
+                inputs: vec![Value::Int(2), Value::Int(3)],
+                expected: Value::Int(5),
+            });
+            examples.push(Example {
+                inputs: vec![Value::Int(-1), Value::Int(1)],
+                expected: Value::Int(0),
+            });
+        } else if text.contains("subtract") || text.contains("minus") || text.contains("difference")
+        {
+            examples.push(Example {
+                inputs: vec![Value::Int(5), Value::Int(3)],
+                expected: Value::Int(2),
+            });
+            examples.push(Example {
+                inputs: vec![Value::Int(10), Value::Int(4)],
+                expected: Value::Int(6),
+            });
         } else if text.contains("multiply") || text.contains("product") || text.contains("times") {
-            examples.push(Example { inputs: vec![Value::Int(3), Value::Int(4)], expected: Value::Int(12) });
+            examples.push(Example {
+                inputs: vec![Value::Int(3), Value::Int(4)],
+                expected: Value::Int(12),
+            });
         } else if text.contains("divide") || text.contains("quotient") {
-            examples.push(Example { inputs: vec![Value::Int(12), Value::Int(3)], expected: Value::Int(4) });
+            examples.push(Example {
+                inputs: vec![Value::Int(12), Value::Int(3)],
+                expected: Value::Int(4),
+            });
         } else if text.contains("mod") || text.contains("modulo") || text.contains("remainder") {
-            examples.push(Example { inputs: vec![Value::Int(10), Value::Int(3)], expected: Value::Int(1) });
+            examples.push(Example {
+                inputs: vec![Value::Int(10), Value::Int(3)],
+                expected: Value::Int(1),
+            });
         } else if text.contains("pow") || text.contains("exponent") || text.contains("power") {
-            examples.push(Example { inputs: vec![Value::Int(2), Value::Int(8)], expected: Value::Int(256) });
+            examples.push(Example {
+                inputs: vec![Value::Int(2), Value::Int(8)],
+                expected: Value::Int(256),
+            });
         } else if text.contains("sqrt") || text.contains("square root") {
-            examples.push(Example { inputs: vec![Value::Int(16)], expected: Value::Int(4) });
+            examples.push(Example {
+                inputs: vec![Value::Int(16)],
+                expected: Value::Int(4),
+            });
         } else if text.contains("abs") || text.contains("absolute") {
-            examples.push(Example { inputs: vec![Value::Int(-5)], expected: Value::Int(5) });
+            examples.push(Example {
+                inputs: vec![Value::Int(-5)],
+                expected: Value::Int(5),
+            });
         } else if text.contains("min") || text.contains("minimum") {
-            examples.push(Example { inputs: vec![Value::Int(3), Value::Int(7)], expected: Value::Int(3) });
+            examples.push(Example {
+                inputs: vec![Value::Int(3), Value::Int(7)],
+                expected: Value::Int(3),
+            });
         } else if text.contains("max") || text.contains("maximum") {
-            examples.push(Example { inputs: vec![Value::Int(3), Value::Int(7)], expected: Value::Int(7) });
+            examples.push(Example {
+                inputs: vec![Value::Int(3), Value::Int(7)],
+                expected: Value::Int(7),
+            });
         } else if text.contains("clamp") {
-            examples.push(Example { inputs: vec![Value::Int(5), Value::Int(0), Value::Int(10)], expected: Value::Int(5) });
-            examples.push(Example { inputs: vec![Value::Int(-5), Value::Int(0), Value::Int(10)], expected: Value::Int(0) });
+            examples.push(Example {
+                inputs: vec![Value::Int(5), Value::Int(0), Value::Int(10)],
+                expected: Value::Int(5),
+            });
+            examples.push(Example {
+                inputs: vec![Value::Int(-5), Value::Int(0), Value::Int(10)],
+                expected: Value::Int(0),
+            });
         } else if text.contains("gcd") {
-            examples.push(Example { inputs: vec![Value::Int(48), Value::Int(18)], expected: Value::Int(6) });
+            examples.push(Example {
+                inputs: vec![Value::Int(48), Value::Int(18)],
+                expected: Value::Int(6),
+            });
         } else if text.contains("factorial") || text.contains("factor") {
-            examples.push(Example { inputs: vec![Value::Int(5)], expected: Value::Int(120) });
+            examples.push(Example {
+                inputs: vec![Value::Int(5)],
+                expected: Value::Int(120),
+            });
 
         // ============================================================
         // ARRAY OPERATIONS
         // ============================================================
         } else if text.contains("reverse") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Array(vec![3, 2, 1]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Array(vec![3, 2, 1]),
+            });
         } else if text.contains("filter") || text.contains("select") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])], expected: Value::Array(vec![2, 4]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])],
+                expected: Value::Array(vec![2, 4]),
+            });
         } else if text.contains("map") && !text.contains("hash") && !text.contains("tree") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Array(vec![2, 4, 6]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Array(vec![2, 4, 6]),
+            });
         } else if text.contains("sort") {
-            examples.push(Example { inputs: vec![Value::Array(vec![3, 1, 4, 1, 5])], expected: Value::Array(vec![1, 1, 3, 4, 5]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![3, 1, 4, 1, 5])],
+                expected: Value::Array(vec![1, 1, 3, 4, 5]),
+            });
         } else if text.contains("merge sort") || text.contains("mergesort") {
-            examples.push(Example { inputs: vec![Value::Array(vec![5, 2, 8, 1, 9])], expected: Value::Array(vec![1, 2, 5, 8, 9]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![5, 2, 8, 1, 9])],
+                expected: Value::Array(vec![1, 2, 5, 8, 9]),
+            });
         } else if text.contains("quick sort") || text.contains("quicksort") {
-            examples.push(Example { inputs: vec![Value::Array(vec![5, 2, 8, 1, 9])], expected: Value::Array(vec![1, 2, 5, 8, 9]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![5, 2, 8, 1, 9])],
+                expected: Value::Array(vec![1, 2, 5, 8, 9]),
+            });
         } else if text.contains("reduce") || text.contains("fold") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3, 4])], expected: Value::Int(10) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3, 4])],
+                expected: Value::Int(10),
+            });
         } else if text.contains("scan") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3, 4])], expected: Value::Array(vec![1, 3, 6, 10]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3, 4])],
+                expected: Value::Array(vec![1, 3, 6, 10]),
+            });
         } else if text.contains("zip") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3]), Value::Array(vec![4, 5, 6])], expected: Value::Array(vec![1, 4, 2, 5, 3, 6]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3]), Value::Array(vec![4, 5, 6])],
+                expected: Value::Array(vec![1, 4, 2, 5, 3, 6]),
+            });
         } else if text.contains("chunk") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])], expected: Value::Array(vec![1, 2, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
         } else if text.contains("flatten") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Array(vec![1, 2, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
         } else if text.contains("take") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])], expected: Value::Array(vec![1, 2, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
         } else if text.contains("skip") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])], expected: Value::Array(vec![4, 5]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])],
+                expected: Value::Array(vec![4, 5]),
+            });
         } else if text.contains("distinct") || text.contains("unique") || text.contains("dedup") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 2, 3, 3, 3])], expected: Value::Array(vec![1, 2, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 2, 3, 3, 3])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
         } else if text.contains("rotate") || text.contains("shift") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])], expected: Value::Array(vec![2, 3, 4, 5, 1]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3, 4, 5])],
+                expected: Value::Array(vec![2, 3, 4, 5, 1]),
+            });
 
         // ============================================================
         // STRING OPERATIONS
         // ============================================================
         } else if text.contains("split") && !text.contains("array") {
-            examples.push(Example { inputs: vec![Value::Str("hello world".to_string())], expected: Value::Array(vec![1, 2]) });
+            examples.push(Example {
+                inputs: vec![Value::Str("hello world".to_string())],
+                expected: Value::Array(vec![1, 2]),
+            });
         } else if text.contains("join") && !text.contains("array") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Str("1-2-3".to_string()) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Str("1-2-3".to_string()),
+            });
         } else if text.contains("trim") {
-            examples.push(Example { inputs: vec![Value::Str("  hello  ".to_string())], expected: Value::Str("hello".to_string()) });
+            examples.push(Example {
+                inputs: vec![Value::Str("  hello  ".to_string())],
+                expected: Value::Str("hello".to_string()),
+            });
         } else if text.contains("replace") && !text.contains("array") {
-            examples.push(Example { inputs: vec![Value::Str("hello world".to_string())], expected: Value::Str("hello there".to_string()) });
+            examples.push(Example {
+                inputs: vec![Value::Str("hello world".to_string())],
+                expected: Value::Str("hello there".to_string()),
+            });
         } else if text.contains("substring") || text.contains("slice") {
-            examples.push(Example { inputs: vec![Value::Str("hello".to_string())], expected: Value::Str("ell".to_string()) });
+            examples.push(Example {
+                inputs: vec![Value::Str("hello".to_string())],
+                expected: Value::Str("ell".to_string()),
+            });
         } else if text.contains("upper") || text.contains("uppercase") {
-            examples.push(Example { inputs: vec![Value::Str("hello".to_string())], expected: Value::Str("HELLO".to_string()) });
+            examples.push(Example {
+                inputs: vec![Value::Str("hello".to_string())],
+                expected: Value::Str("HELLO".to_string()),
+            });
         } else if text.contains("lower") || text.contains("lowercase") {
-            examples.push(Example { inputs: vec![Value::Str("HELLO".to_string())], expected: Value::Str("hello".to_string()) });
+            examples.push(Example {
+                inputs: vec![Value::Str("HELLO".to_string())],
+                expected: Value::Str("hello".to_string()),
+            });
         } else if text.contains("length") {
-            examples.push(Example { inputs: vec![Value::Str("hello".to_string())], expected: Value::Int(5) });
+            examples.push(Example {
+                inputs: vec![Value::Str("hello".to_string())],
+                expected: Value::Int(5),
+            });
 
         // ============================================================
         // SEARCH OPERATIONS
         // ============================================================
         } else if text.contains("binary") && (text.contains("search") || text.contains("find")) {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 3, 5, 7, 9, 11]), Value::Int(7)], expected: Value::Int(3) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 3, 5, 7, 9, 11]), Value::Int(7)],
+                expected: Value::Int(3),
+            });
         } else if text.contains("linear") && (text.contains("search") || text.contains("find")) {
-            examples.push(Example { inputs: vec![Value::Array(vec![5, 3, 8, 1, 9]), Value::Int(8)], expected: Value::Int(2) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![5, 3, 8, 1, 9]), Value::Int(8)],
+                expected: Value::Int(2),
+            });
         } else if text.contains("search") || text.contains("find") || text.contains("index") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 3, 5, 7, 9]), Value::Int(5)], expected: Value::Int(2) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 3, 5, 7, 9]), Value::Int(5)],
+                expected: Value::Int(2),
+            });
 
         // ============================================================
         // ALGORITHMS
         // ============================================================
         } else if text.contains("fibonacci") || text.contains("fib") {
-            examples.push(Example { inputs: vec![Value::Int(10)], expected: Value::Int(55) });
+            examples.push(Example {
+                inputs: vec![Value::Int(10)],
+                expected: Value::Int(55),
+            });
         } else if text.contains("factorial") {
-            examples.push(Example { inputs: vec![Value::Int(5)], expected: Value::Int(120) });
+            examples.push(Example {
+                inputs: vec![Value::Int(5)],
+                expected: Value::Int(120),
+            });
         } else if text.contains("prime") || text.contains("sieve") {
-            examples.push(Example { inputs: vec![Value::Int(10)], expected: Value::Array(vec![2, 3, 5, 7]) });
+            examples.push(Example {
+                inputs: vec![Value::Int(10)],
+                expected: Value::Array(vec![2, 3, 5, 7]),
+            });
         } else if text.contains("lcs") || text.contains("longest common subsequence") {
-            examples.push(Example { inputs: vec![Value::Str("abcde".to_string()), Value::Str("ace".to_string())], expected: Value::Int(3) });
+            examples.push(Example {
+                inputs: vec![
+                    Value::Str("abcde".to_string()),
+                    Value::Str("ace".to_string()),
+                ],
+                expected: Value::Int(3),
+            });
         } else if text.contains("edit") && text.contains("distance") {
-            examples.push(Example { inputs: vec![Value::Str("kitten".to_string()), Value::Str("sitting".to_string())], expected: Value::Int(3) });
+            examples.push(Example {
+                inputs: vec![
+                    Value::Str("kitten".to_string()),
+                    Value::Str("sitting".to_string()),
+                ],
+                expected: Value::Int(3),
+            });
         } else if text.contains("knapsack") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Int(5) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Int(5),
+            });
         } else if text.contains("max") && text.contains("subarray") || text.contains("kadane") {
-            examples.push(Example { inputs: vec![Value::Array(vec![-2, 1, -3, 4, -1, 2, 1, -5, 4])], expected: Value::Int(6) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![-2, 1, -3, 4, -1, 2, 1, -5, 4])],
+                expected: Value::Int(6),
+            });
         } else if text.contains("bfs") || text.contains("breadth") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Array(vec![1, 2, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
         } else if text.contains("dfs") || text.contains("depth") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Array(vec![1, 2, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
         } else if text.contains("dijkstra") || text.contains("shortest") && text.contains("path") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Int(5) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Int(5),
+            });
         } else if text.contains("topological") || text.contains("topo") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Array(vec![1, 2, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
 
         // ============================================================
         // DATA STRUCTURES
         // ============================================================
         } else if text.contains("stack") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Int(3) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Int(3),
+            });
         } else if text.contains("queue") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Int(1) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Int(1),
+            });
         } else if text.contains("heap") || text.contains("priority") {
-            examples.push(Example { inputs: vec![Value::Array(vec![5, 3, 8, 1, 9])], expected: Value::Int(1) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![5, 3, 8, 1, 9])],
+                expected: Value::Int(1),
+            });
         } else if text.contains("set") && !text.contains("offset") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 2, 3])], expected: Value::Array(vec![1, 2, 3]) });
-        } else if text.contains("tree") && (text.contains("inorder") || text.contains("preorder") || text.contains("postorder")) {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Array(vec![2, 1, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 2, 3])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
+        } else if text.contains("tree")
+            && (text.contains("inorder") || text.contains("preorder") || text.contains("postorder"))
+        {
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Array(vec![2, 1, 3]),
+            });
         } else if text.contains("bst") || text.contains("binary search tree") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Array(vec![1, 2, 3]) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Array(vec![1, 2, 3]),
+            });
         } else if text.contains("graph") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 2, 3])], expected: Value::Int(3) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Int(3),
+            });
 
         // ============================================================
         // PATTERN MATCHING
         // ============================================================
         } else if text.contains("match") && text.contains("pattern") {
-            examples.push(Example { inputs: vec![Value::Int(5)], expected: Value::Int(10) });
+            examples.push(Example {
+                inputs: vec![Value::Int(5)],
+                expected: Value::Int(10),
+            });
         } else if text.contains("regex") || text.contains("pattern") && text.contains("extract") {
-            examples.push(Example { inputs: vec![Value::Str("hello123".to_string())], expected: Value::Str("123".to_string()) });
+            examples.push(Example {
+                inputs: vec![Value::Str("hello123".to_string())],
+                expected: Value::Str("123".to_string()),
+            });
 
         // ============================================================
         // CONCURRENCY
         // ============================================================
         } else if text.contains("spawn") || text.contains("thread") {
-            examples.push(Example { inputs: vec![Value::Int(5)], expected: Value::Int(5) });
+            examples.push(Example {
+                inputs: vec![Value::Int(5)],
+                expected: Value::Int(5),
+            });
         } else if text.contains("channel") || text.contains("send") {
-            examples.push(Example { inputs: vec![Value::Int(5)], expected: Value::Int(5) });
+            examples.push(Example {
+                inputs: vec![Value::Int(5)],
+                expected: Value::Int(5),
+            });
         } else if text.contains("mutex") || text.contains("lock") {
-            examples.push(Example { inputs: vec![Value::Int(5)], expected: Value::Int(5) });
+            examples.push(Example {
+                inputs: vec![Value::Int(5)],
+                expected: Value::Int(5),
+            });
 
         // ============================================================
         // LOGIC/BOOLEAN
         // ============================================================
         } else if text.contains("any") || text.contains("some") {
-            examples.push(Example { inputs: vec![Value::Array(vec![0, 0, 1])], expected: Value::Int(1) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![0, 0, 1])],
+                expected: Value::Int(1),
+            });
         } else if text.contains("all") || text.contains("every") {
-            examples.push(Example { inputs: vec![Value::Array(vec![1, 1, 1])], expected: Value::Int(1) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![1, 1, 1])],
+                expected: Value::Int(1),
+            });
         } else if text.contains("none") || text.contains("not") {
-            examples.push(Example { inputs: vec![Value::Array(vec![0, 0])], expected: Value::Int(1) });
+            examples.push(Example {
+                inputs: vec![Value::Array(vec![0, 0])],
+                expected: Value::Int(1),
+            });
 
         // ============================================================
         // DEFAULT: Simple arithmetic
         // ============================================================
         } else {
-            examples.push(Example { inputs: vec![Value::Int(10), Value::Int(5)], expected: Value::Int(15) });
+            examples.push(Example {
+                inputs: vec![Value::Int(10), Value::Int(5)],
+                expected: Value::Int(15),
+            });
         }
 
         Ok(examples)
     }
 
     /// Generate function definition examples
-    fn generate_function_examples(&self, belief: &BeliefState, input: &str) -> Result<Vec<Example>, BridgeError> {
+    fn generate_function_examples(
+        &self,
+        belief: &BeliefState,
+        input: &str,
+    ) -> Result<Vec<Example>, BridgeError> {
         let mut examples = Vec::new();
 
         // Look for operation keywords in both entities and input text
         // (entities might be empty for some inputs)
         let entity_text = belief.comprehension.entities.join(" ").to_lowercase();
-        let text = if entity_text.is_empty() { input.to_lowercase() } else { entity_text };
+        let text = if entity_text.is_empty() {
+            input.to_lowercase()
+        } else {
+            entity_text
+        };
 
         if text.contains("add") || text.contains("sum") {
             examples.push(Example {
@@ -406,7 +642,10 @@ impl LinguigenesisBridge {
     }
 
     /// Generate data transformation examples
-    fn generate_transformation_examples(&self, _belief: &BeliefState) -> Result<Vec<Example>, BridgeError> {
+    fn generate_transformation_examples(
+        &self,
+        _belief: &BeliefState,
+    ) -> Result<Vec<Example>, BridgeError> {
         let mut examples = Vec::new();
 
         // Array transformations
@@ -424,9 +663,17 @@ impl LinguigenesisBridge {
     }
 
     /// Generate algorithm examples
-    fn generate_algorithm_examples(&self, belief: &BeliefState, input: &str) -> Result<Vec<Example>, BridgeError> {
+    fn generate_algorithm_examples(
+        &self,
+        belief: &BeliefState,
+        input: &str,
+    ) -> Result<Vec<Example>, BridgeError> {
         let entity_text = belief.comprehension.entities.join(" ").to_lowercase();
-        let text = if entity_text.is_empty() { input.to_lowercase() } else { entity_text };
+        let text = if entity_text.is_empty() {
+            input.to_lowercase()
+        } else {
+            entity_text
+        };
         let mut examples = Vec::new();
 
         if text.contains("sort") {
@@ -456,7 +703,10 @@ impl LinguigenesisBridge {
     }
 
     /// Generate data structure examples
-    fn generate_data_structure_examples(&self, _belief: &BeliefState) -> Result<Vec<Example>, BridgeError> {
+    fn generate_data_structure_examples(
+        &self,
+        _belief: &BeliefState,
+    ) -> Result<Vec<Example>, BridgeError> {
         let mut examples = Vec::new();
 
         // Stack/queue operations
@@ -469,7 +719,11 @@ impl LinguigenesisBridge {
     }
 
     /// Generate default examples from belief
-    fn generate_default_examples(&self, _belief: &BeliefState, input: &str) -> Result<Vec<Example>, BridgeError> {
+    fn generate_default_examples(
+        &self,
+        _belief: &BeliefState,
+        input: &str,
+    ) -> Result<Vec<Example>, BridgeError> {
         let mut examples = Vec::new();
 
         // Simple arithmetic as fallback
@@ -483,7 +737,9 @@ impl LinguigenesisBridge {
 
     /// Get belief state from NL (for debugging)
     pub fn get_belief_state(&self, input: &str) -> Result<BeliefState, BridgeError> {
-        let mut comp = self.comprehension.write()
+        let mut comp = self
+            .comprehension
+            .write()
             .map_err(|_| BridgeError::LockError)?;
 
         Ok(comp.parse(input))
@@ -521,12 +777,20 @@ impl LinguigenesisBridge {
         add_op!("map", "Apply function to each element", 101);
         add_op!("filter", "Select elements meeting condition", 102);
         add_op!("reduce", "Combine all elements into single value", 103);
-        add_op!("fold", "Alias for reduce - accumulate with initial value", 103);
+        add_op!(
+            "fold",
+            "Alias for reduce - accumulate with initial value",
+            103
+        );
         add_op!("reverse", "Reverse array order", 104);
         add_op!("sort", "Sort array in ascending order", 105);
 
         // Additional iterator ops
-        add_op!("scan", "Running reduction producing intermediate values", 106);
+        add_op!(
+            "scan",
+            "Running reduction producing intermediate values",
+            106
+        );
         add_op!("zip", "Combine two sequences pairwise", 107);
         add_op!("unzip", "Split sequence of pairs into two sequences", 108);
         add_op!("chunk", "Divide sequence into fixed-size chunks", 109);
@@ -641,7 +905,10 @@ impl LinguigenesisBridge {
         add_type!("tree", "Hierarchical node structure");
         add_type!("binary_tree", "Tree with at most two children per node");
         add_type!("avl_tree", "Self-balancing binary search tree");
-        add_type!("red_black_tree", "Balanced binary search tree with color properties");
+        add_type!(
+            "red_black_tree",
+            "Balanced binary search tree with color properties"
+        );
         add_type!("b_tree", "Balanced tree for disk storage");
         add_type!("trie", "Prefix tree for string keys");
         add_type!("graph", "Network of nodes and edges");
@@ -678,9 +945,17 @@ impl LinguigenesisBridge {
         // ============================================================
         add_op!("linear_search", "O(n) sequential search", 401);
         add_op!("binary_search", "O(log n) search in sorted array", 402);
-        add_op!("interpolation_search", "O(log log n) search in uniform data", 403);
+        add_op!(
+            "interpolation_search",
+            "O(log log n) search in uniform data",
+            403
+        );
         add_op!("jump_search", "O(sqrt(n)) search by jumping", 404);
-        add_op!("exponential_search", "Search in unbounded sorted range", 405);
+        add_op!(
+            "exponential_search",
+            "Search in unbounded sorted range",
+            405
+        );
         add_op!("fibonacci_search", "Search using Fibonacci numbers", 406);
         add_op!("ternary_search", "Search in unimodal function", 407);
         add_op!("bfs", "Breadth-first search level-order traversal", 408);
@@ -693,7 +968,11 @@ impl LinguigenesisBridge {
         // ============================================================
         // ALGORITHMS - SORTING
         // ============================================================
-        add_op!("merge_sort", "O(n log n) stable sort divide-and-conquer", 501);
+        add_op!(
+            "merge_sort",
+            "O(n log n) stable sort divide-and-conquer",
+            501
+        );
         add_op!("quick_sort", "O(n log n) average partition sort", 502);
         add_op!("heap_sort", "O(n log n) in-place sort using heap", 503);
         add_op!("insertion_sort", "O(n^2) sort for small/nearly sorted", 504);
@@ -731,17 +1010,37 @@ impl LinguigenesisBridge {
         add_op!("kruskal", "Minimum spanning tree Kruskal's algorithm", 702);
         add_op!("boruvka", "Minimum spanning tree Boruvka's algorithm", 703);
         add_op!("topological_order", "Linear ordering of DAG vertices", 704);
-        add_op!("strongly_connected_components", "Kosaraju or Tarjan SCC", 705);
-        add_op!("articulation_points", "Find critical vertices in graph", 706);
+        add_op!(
+            "strongly_connected_components",
+            "Kosaraju or Tarjan SCC",
+            705
+        );
+        add_op!(
+            "articulation_points",
+            "Find critical vertices in graph",
+            706
+        );
         add_op!("bridges", "Find critical edges in graph", 707);
-        add_op!("biconnected_components", "Maximal biconnected subgraphs", 708);
+        add_op!(
+            "biconnected_components",
+            "Maximal biconnected subgraphs",
+            708
+        );
         add_op!("eulerian_path", "Path using every edge once", 709);
         add_op!("hamiltonian_path", "Path visiting every vertex once", 710);
         add_op!("max_flow", "Ford-Fulkerson maximum flow", 711);
         add_op!("min_cut", "Minimum cut separating source and sink", 712);
-        add_op!("bipartite_matching", "Maximum matching in bipartite graph", 713);
+        add_op!(
+            "bipartite_matching",
+            "Maximum matching in bipartite graph",
+            713
+        );
         add_op!("hungarian", "Assignment problem optimization", 714);
-        add_op!("minimum_vertex_cover", "Minimum vertices covering edges", 715);
+        add_op!(
+            "minimum_vertex_cover",
+            "Minimum vertices covering edges",
+            715
+        );
 
         // ============================================================
         // ALGORITHMS - TREE
@@ -773,13 +1072,29 @@ impl LinguigenesisBridge {
         add_op!("sieve", "Sieve of Eratosthenes generate primes", 903);
         add_op!("gcd_euclid", "Euclidean GCD algorithm", 904);
         add_op!("extended_gcd", "Extended Euclidean with coefficients", 905);
-        add_op!("modular_exponentiation", "(base^exp) % mod efficiently", 906);
+        add_op!(
+            "modular_exponentiation",
+            "(base^exp) % mod efficiently",
+            906
+        );
         add_op!("modular_inverse", "Multiplicative inverse modulo", 907);
         add_op!("chinese_remainder", "Solve simultaneous congruences", 908);
-        add_op!("is_perfect_square", "Check if integer is perfect square", 909);
+        add_op!(
+            "is_perfect_square",
+            "Check if integer is perfect square",
+            909
+        );
         add_op!("is_power_of_two", "Check if n is 2^k", 910);
-        add_op!("next_permutation", "Lexicographically next permutation", 911);
-        add_op!("prev_permutation", "Lexicographically previous permutation", 912);
+        add_op!(
+            "next_permutation",
+            "Lexicographically next permutation",
+            911
+        );
+        add_op!(
+            "prev_permutation",
+            "Lexicographically previous permutation",
+            912
+        );
         add_op!("combinations", "nCk binomial coefficient", 913);
         add_op!("permutations", "nPk arrangements", 914);
         add_op!("catalan", "Catalan number C_n", 915);
@@ -788,7 +1103,11 @@ impl LinguigenesisBridge {
         // DESIGN PATTERNS
         // ============================================================
         add_op!("builder", "Construct complex object step-by-step", 1001);
-        add_op!("factory", "Create objects without specifying exact type", 1002);
+        add_op!(
+            "factory",
+            "Create objects without specifying exact type",
+            1002
+        );
         add_op!("singleton", "Ensure only one instance exists", 1003);
         add_op!("observer", "Subscribe to notifications on changes", 1004);
         add_op!("strategy", "Interchangeable algorithms", 1005);
@@ -797,11 +1116,19 @@ impl LinguigenesisBridge {
         add_op!("decorator", "Add behavior dynamically", 1008);
         add_op!("facade", "Simplified interface to complex system", 1009);
         add_op!("proxy", "Placeholder for another object", 1010);
-        add_op!("iterator", "Traverse collection without exposing representation", 1011);
+        add_op!(
+            "iterator",
+            "Traverse collection without exposing representation",
+            1011
+        );
         add_op!("visitor", "Separate operation from structure", 1012);
         add_op!("memento", "Capture and restore internal state", 1013);
         add_op!("state", "Alter behavior when state changes", 1014);
-        add_op!("template_method", "Skeleton of algorithm in operation", 1015);
+        add_op!(
+            "template_method",
+            "Skeleton of algorithm in operation",
+            1015
+        );
         add_op!("chain_of_responsibility", "Pass request along chain", 1016);
         add_op!("composite", "Tree structure of objects", 1017);
         add_op!("flyweight", "Share common state between objects", 1018);
@@ -823,7 +1150,11 @@ impl LinguigenesisBridge {
         add_op!("fetch_add", "Atomic increment with return", 1110);
         add_op!("fetch_sub", "Atomic decrement with return", 1111);
         add_op!("read_write_lock", "Multiple readers or one writer", 1112);
-        add_op!("condition_variable", "Wait for condition to become true", 1113);
+        add_op!(
+            "condition_variable",
+            "Wait for condition to become true",
+            1113
+        );
         add_op!("once", "Execute initialization exactly once", 1114);
         add_op!("rc", "Reference counting shared ownership", 1115);
         add_op!("arc", "Atomic reference counting", 1116);
@@ -864,7 +1195,11 @@ impl LinguigenesisBridge {
         add_op!("and_then", "Chain computations that may fail", 1307);
         add_op!("or_else", "Chain error handling", 1308);
         add_op!("ok_or", "Convert Option to Result", 1309);
-        add_op!("ok_or_else", "Convert Option to Result with lazy error", 1310);
+        add_op!(
+            "ok_or_else",
+            "Convert Option to Result with lazy error",
+            1310
+        );
         add_op!("is_ok", "Check if Result is success", 1311);
         add_op!("is_err", "Check if Result is error", 1312);
         add_op!("is_some", "Check if Option has value", 1313);
@@ -979,7 +1314,12 @@ pub fn infer_signature(fn_name: &str, examples: &[Example]) -> String {
         Value::Tree(_) => "Tree",
     };
 
-    format!("fn {}({}) -> {}", fn_name, param_types.join(", "), return_type)
+    format!(
+        "fn {}({}) -> {}",
+        fn_name,
+        param_types.join(", "),
+        return_type
+    )
 }
 
 fn param_names(idx: usize) -> String {
@@ -1022,7 +1362,10 @@ mod tests {
         let bridge = LinguigenesisBridge::new();
         let belief = bridge.get_belief_state("map elements").unwrap();
         // Should have parsed as data transformation
-        assert_eq!(belief.intent.intent_type, linguigenesis_core::belief::IntentType::DataTransformation);
+        assert_eq!(
+            belief.intent.intent_type,
+            linguigenesis_core::belief::IntentType::DataTransformation
+        );
     }
 
     #[test]

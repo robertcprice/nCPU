@@ -98,8 +98,7 @@ impl Tool for FsTool {
                 let rel = call.optional("path").unwrap_or(".");
                 let path = self.safe_path(rel)?;
                 let mut names: Vec<String> = Vec::new();
-                let entries =
-                    fs::read_dir(&path).map_err(|e| ToolError::Io(e.to_string()))?;
+                let entries = fs::read_dir(&path).map_err(|e| ToolError::Io(e.to_string()))?;
                 for entry in entries {
                     let entry = entry.map_err(|e| ToolError::Io(e.to_string()))?;
                     names.push(entry.file_name().to_string_lossy().to_string());
@@ -138,11 +137,7 @@ mod tests {
     use super::*;
 
     fn temp_sandbox(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "nsynth_fs_{}_{}",
-            std::process::id(),
-            tag
-        ));
+        let dir = std::env::temp_dir().join(format!("nsynth_fs_{}_{}", std::process::id(), tag));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -152,8 +147,12 @@ mod tests {
     fn test_write_read_roundtrip() {
         let root = temp_sandbox("rw");
         let tool = FsTool::new(&root);
-        tool.invoke(&ToolCall::new("write").arg("path", "a/b.txt").arg("content", "hi"))
-            .unwrap();
+        tool.invoke(
+            &ToolCall::new("write")
+                .arg("path", "a/b.txt")
+                .arg("content", "hi"),
+        )
+        .unwrap();
         let out = tool
             .invoke(&ToolCall::new("read").arg("path", "a/b.txt"))
             .unwrap();
@@ -165,10 +164,18 @@ mod tests {
     fn test_append_and_list() {
         let root = temp_sandbox("append");
         let tool = FsTool::new(&root);
-        tool.invoke(&ToolCall::new("write").arg("path", "log.txt").arg("content", "a"))
-            .unwrap();
-        tool.invoke(&ToolCall::new("append").arg("path", "log.txt").arg("content", "b"))
-            .unwrap();
+        tool.invoke(
+            &ToolCall::new("write")
+                .arg("path", "log.txt")
+                .arg("content", "a"),
+        )
+        .unwrap();
+        tool.invoke(
+            &ToolCall::new("append")
+                .arg("path", "log.txt")
+                .arg("content", "b"),
+        )
+        .unwrap();
         let read = tool
             .invoke(&ToolCall::new("read").arg("path", "log.txt"))
             .unwrap();
@@ -204,8 +211,12 @@ mod tests {
     fn test_exists_and_remove() {
         let root = temp_sandbox("rm");
         let tool = FsTool::new(&root);
-        tool.invoke(&ToolCall::new("write").arg("path", "f.txt").arg("content", "x"))
-            .unwrap();
+        tool.invoke(
+            &ToolCall::new("write")
+                .arg("path", "f.txt")
+                .arg("content", "x"),
+        )
+        .unwrap();
         assert_eq!(
             tool.invoke(&ToolCall::new("exists").arg("path", "f.txt"))
                 .unwrap()

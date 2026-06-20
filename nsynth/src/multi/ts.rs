@@ -1,8 +1,8 @@
 //! TypeScript Target for Multi-Language Code Generation
 
 use super::{
-    lang::{TargetLang, LanguageTarget, MogType, MogOp, common_type_map},
     js::JavaScriptTarget,
+    lang::{common_type_map, LanguageTarget, MogOp, MogType, TargetLang},
 };
 
 /// TypeScript code generator
@@ -51,16 +51,15 @@ impl TypeScriptTarget {
                 format!("{}[]", inner_str)
             }
             MogType::Function(params, ret) => {
-                let param_str: Vec<String> = params.iter()
+                let param_str: Vec<String> = params
+                    .iter()
                     .map(|p| format!("_: {}", self.ts_type_map(p)))
                     .collect();
                 let ret_str = self.ts_type_map(ret);
                 format!("({}) => {}", param_str.join(", "), ret_str)
             }
             MogType::Tuple(types) => {
-                let types_str: Vec<String> = types.iter()
-                    .map(|t| self.ts_type_map(t))
-                    .collect();
+                let types_str: Vec<String> = types.iter().map(|t| self.ts_type_map(t)).collect();
                 format!("[{}]", types_str.join(", "))
             }
             _ => common_type_map(TargetLang::TypeScript, mog_type),
@@ -78,12 +77,21 @@ impl LanguageTarget for TypeScriptTarget {
     }
 
     fn stdlib(&self) -> String {
-        format!(r#"// TypeScript Standard Library
+        format!(
+            r#"// TypeScript Standard Library
 // @ts-check
-{}"#, self.js.stdlib())
+{}"#,
+            self.js.stdlib()
+        )
     }
 
-    fn format_function(&self, name: &str, params: &[(String, MogType)], ret: &MogType, body: &str) -> String {
+    fn format_function(
+        &self,
+        name: &str,
+        params: &[(String, MogType)],
+        ret: &MogType,
+        body: &str,
+    ) -> String {
         let mut output = String::new();
 
         // Add JSDoc comment
@@ -97,7 +105,8 @@ impl LanguageTarget for TypeScriptTarget {
         output.push_str(name);
         output.push_str("(");
 
-        let param_strs: Vec<String> = params.iter()
+        let param_strs: Vec<String> = params
+            .iter()
             .map(|(n, ty)| format!("{}: {}", n, self.type_map(ty)))
             .collect();
 
@@ -166,7 +175,10 @@ mod tests {
         let target = TypeScriptTarget::new();
         assert_eq!(target.type_map(&MogType::Int), "number");
         assert_eq!(target.type_map(&MogType::String), "string");
-        assert_eq!(target.type_map(&MogType::Array(Box::new(MogType::Int))), "number[]");
+        assert_eq!(
+            target.type_map(&MogType::Array(Box::new(MogType::Int))),
+            "number[]"
+        );
     }
 
     #[test]
@@ -174,7 +186,10 @@ mod tests {
         let target = TypeScriptTarget::new();
         let formatted = target.format_function(
             "add",
-            &[("a".to_string(), MogType::Int), ("b".to_string(), MogType::Int)],
+            &[
+                ("a".to_string(), MogType::Int),
+                ("b".to_string(), MogType::Int),
+            ],
             &MogType::Int,
             "    return a + b;\n",
         );

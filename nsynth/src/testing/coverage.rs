@@ -4,7 +4,7 @@
 //! including path coverage, edge case coverage, and boundary coverage.
 
 use crate::benchmark::Problem;
-use crate::testing::{TestSuite, TestCategory, TestCase, CodePath, PathCondition};
+use crate::testing::{CodePath, PathCondition, TestCase, TestCategory, TestSuite};
 use std::collections::HashSet;
 
 /// Coverage metrics for a test suite
@@ -33,7 +33,8 @@ impl CoverageMetrics {
 
     /// Calculate overall coverage from individual metrics
     pub fn calculate_overall(&mut self) {
-        self.overall_coverage = (self.path_coverage + self.edge_coverage + self.boundary_coverage) / 3.0;
+        self.overall_coverage =
+            (self.path_coverage + self.edge_coverage + self.boundary_coverage) / 3.0;
     }
 }
 
@@ -111,7 +112,7 @@ impl CoverageAnalyzer {
         }
 
         // Array operations paths
-        if sig.contains("[i64]") || sig.contains("[" ) {
+        if sig.contains("[i64]") || sig.contains("[") {
             paths.extend(self.array_paths());
         }
 
@@ -147,12 +148,20 @@ impl CoverageAnalyzer {
             CodePath {
                 id: "int_overflow_pos".to_string(),
                 description: "Positive boundary (near overflow)".to_string(),
-                conditions: vec![PathCondition::Range("x".to_string(), i64::MAX - 10, i64::MAX)],
+                conditions: vec![PathCondition::Range(
+                    "x".to_string(),
+                    i64::MAX - 10,
+                    i64::MAX,
+                )],
             },
             CodePath {
                 id: "int_overflow_neg".to_string(),
                 description: "Negative boundary (near overflow)".to_string(),
-                conditions: vec![PathCondition::Range("x".to_string(), i64::MIN, i64::MIN + 10)],
+                conditions: vec![PathCondition::Range(
+                    "x".to_string(),
+                    i64::MIN,
+                    i64::MIN + 10,
+                )],
             },
         ]
     }
@@ -204,7 +213,9 @@ impl CoverageAnalyzer {
             CodePath {
                 id: "string_with_spaces".to_string(),
                 description: "String with leading/trailing spaces".to_string(),
-                conditions: vec![PathCondition::Custom("s.starts_with(' ') || s.ends_with(' ')".to_string())],
+                conditions: vec![PathCondition::Custom(
+                    "s.starts_with(' ') || s.ends_with(' ')".to_string(),
+                )],
             },
         ]
     }
@@ -397,7 +408,11 @@ impl CoverageAnalyzer {
     }
 
     /// Suggest additional tests to improve coverage
-    pub fn suggest_improvements(&self, suite: &TestSuite, metrics: &CoverageMetrics) -> Vec<String> {
+    pub fn suggest_improvements(
+        &self,
+        suite: &TestSuite,
+        metrics: &CoverageMetrics,
+    ) -> Vec<String> {
         let mut suggestions = Vec::new();
 
         // Check edge coverage
@@ -428,7 +443,7 @@ impl CoverageAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{int, array, string};
+    use crate::testing::{array, int, string};
 
     #[test]
     fn test_coverage_metrics() {

@@ -324,10 +324,8 @@ impl Quantization {
 
         let (scale, zero_point) = match self.quant_mode {
             QuantMode::Symmetric => {
-                let max_val = weights.data.iter().cloned().fold(f64::NAN, f64::max)
-                    / q_max;
-                let min_val = weights.data.iter().cloned().fold(f64::NAN, f64::min)
-                    / q_min;
+                let max_val = weights.data.iter().cloned().fold(f64::NAN, f64::max) / q_max;
+                let min_val = weights.data.iter().cloned().fold(f64::NAN, f64::min) / q_min;
                 let scale = max_val.abs().max(min_val.abs());
                 (scale, 0.0)
             }
@@ -340,8 +338,7 @@ impl Quantization {
             }
             QuantMode::PerChannel => {
                 // Fallback to symmetric for per-tensor
-                let max_val = weights.data.iter().cloned().fold(f64::NAN, f64::max)
-                    / q_max;
+                let max_val = weights.data.iter().cloned().fold(f64::NAN, f64::max) / q_max;
                 let scale = max_val.abs();
                 (scale, 0.0)
             }
@@ -416,20 +413,11 @@ impl Quantization {
     ///
     /// # Returns
     /// Dequantized floating-point tensor
-    pub fn dequantize(
-        &self,
-        quantized: &Tensor,
-        scale: &Tensor,
-        zero_point: &Tensor,
-    ) -> Tensor {
+    pub fn dequantize(&self, quantized: &Tensor, scale: &Tensor, zero_point: &Tensor) -> Tensor {
         let s = scale.data[0];
         let zp = zero_point.data[0];
 
-        let dequantized_data: Vec<f64> = quantized
-            .data
-            .iter()
-            .map(|&q| (q - zp) * s)
-            .collect();
+        let dequantized_data: Vec<f64> = quantized.data.iter().map(|&q| (q - zp) * s).collect();
 
         Tensor::new(dequantized_data, quantized.shape.clone())
     }
@@ -479,7 +467,10 @@ impl KnowledgeDistillation {
     /// ```
     pub fn new(temperature: f64, alpha: f64) -> Self {
         assert!(temperature > 0.0, "Temperature must be positive");
-        assert!(alpha >= 0.0 && alpha <= 1.0, "Alpha must be between 0 and 1");
+        assert!(
+            alpha >= 0.0 && alpha <= 1.0,
+            "Alpha must be between 0 and 1"
+        );
         Self {
             teacher_model: None,
             temperature,
@@ -592,14 +583,18 @@ impl KnowledgeDistillation {
 
     /// Adjust alpha (balance between losses)
     pub fn set_alpha(&mut self, alpha: f64) {
-        assert!(alpha >= 0.0 && alpha <= 1.0, "Alpha must be between 0 and 1");
+        assert!(
+            alpha >= 0.0 && alpha <= 1.0,
+            "Alpha must be between 0 and 1"
+        );
         self.alpha = alpha;
     }
 
     /// Cosine annealing schedule for temperature
     pub fn anneal_temperature(&mut self, epoch: usize, total_epochs: usize) {
         let progress = epoch as f64 / total_epochs as f64;
-        let new_temp = self.temperature * (1.0 - 0.5 * (1.0 + (progress * std::f64::consts::PI).cos()));
+        let new_temp =
+            self.temperature * (1.0 - 0.5 * (1.0 + (progress * std::f64::consts::PI).cos()));
         self.temperature = new_temp.max(1.0);
     }
 }

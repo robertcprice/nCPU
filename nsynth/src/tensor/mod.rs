@@ -86,14 +86,13 @@ pub use nas::{AdjacencyMatrix, DARTSCell, LayerOptions, NasOptimizer, SearchSpac
 // Probabilistic primitives and variational inference
 pub mod probabilistic;
 pub use probabilistic::{
-    kl_divergence, kl_divergence_continuous, kl_divergence_diag_gaussian,
-    entropy, conditional_entropy, mutual_information,
-    VariationalInference, NormalDistribution,
+    conditional_entropy, entropy, kl_divergence, kl_divergence_continuous,
+    kl_divergence_diag_gaussian, mutual_information, NormalDistribution, VariationalInference,
 };
 
 // Bayesian Neural Network primitives
 pub mod bayesian_nn;
-pub use bayesian_nn::{BayesianLinear, MCDropout, VariationalLayer, bbb_loss, reparameterize};
+pub use bayesian_nn::{bbb_loss, reparameterize, BayesianLinear, MCDropout, VariationalLayer};
 
 // Model compression primitives
 pub mod compression;

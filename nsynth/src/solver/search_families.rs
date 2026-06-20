@@ -253,6 +253,15 @@ pub(super) fn search_struct_conditional_fields(
     None
 }
 
+/// True when the problem's signature returns an array (`-> [i64]`). Scalar-output
+/// array teachers (those that read `expected_int()`) must decline array-output
+/// problems: their `expected` is an array that `expected_int()` would mis-read,
+/// and on some shapes that previously panicked. Array-output teachers (e.g.
+/// `search_merge_sort`) deliberately do NOT call this.
+pub(super) fn is_array_output(signature: &str) -> bool {
+    signature.replace(' ', "").contains("->[")
+}
+
 pub(super) fn search_closure_map_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
@@ -2949,6 +2958,9 @@ pub(super) fn search_array_mean(problem: &Problem, fn_name: &str) -> Option<Solv
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     let passes = problem.examples.iter().all(|ex| {
         if ex.inputs.len() != 1 {
@@ -2977,6 +2989,9 @@ pub(super) fn search_array_mean(problem: &Problem, fn_name: &str) -> Option<Solv
 pub(super) fn search_array_median(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3009,6 +3024,9 @@ pub(super) fn search_array_median(problem: &Problem, fn_name: &str) -> Option<So
 pub(super) fn search_array_mode(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3051,6 +3069,9 @@ pub(super) fn search_array_variance(problem: &Problem, fn_name: &str) -> Option<
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     let passes = problem.examples.iter().all(|ex| {
         if ex.inputs.len() != 1 {
@@ -3088,6 +3109,9 @@ pub(super) fn search_array_variance(problem: &Problem, fn_name: &str) -> Option<
 pub(super) fn search_array_stddev(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3139,6 +3163,9 @@ pub(super) fn search_array_percentile(problem: &Problem, fn_name: &str) -> Optio
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     // Try common percentiles: 25 (Q1), 50 (median), 75 (Q3)
     for percentile in &[25, 50, 75] {
@@ -3181,6 +3208,9 @@ pub(super) fn search_array_coefficient_variation(
 ) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3347,6 +3377,9 @@ pub(super) fn search_array_iqr_outlier(problem: &Problem, fn_name: &str) -> Opti
 pub(super) fn search_array_skewness(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3553,6 +3586,9 @@ pub(super) fn search_lis(problem: &Problem, fn_name: &str) -> Option<SolveResult
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     let passes = problem.examples.iter().all(|ex| {
         if ex.inputs.len() != 1 {
@@ -3596,6 +3632,9 @@ pub(super) fn search_lds(problem: &Problem, fn_name: &str) -> Option<SolveResult
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     let passes = problem.examples.iter().all(|ex| {
         if ex.inputs.len() != 1 {
@@ -3637,6 +3676,9 @@ pub(super) fn search_lds(problem: &Problem, fn_name: &str) -> Option<SolveResult
 pub(super) fn search_coin_change_min(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3702,6 +3744,9 @@ pub(super) fn search_coin_change_count(problem: &Problem, fn_name: &str) -> Opti
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     // Infer target similarly
     let mut targets = HashSet::new();
@@ -3759,6 +3804,9 @@ pub(super) fn search_coin_change_count(problem: &Problem, fn_name: &str) -> Opti
 pub(super) fn search_subset_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 

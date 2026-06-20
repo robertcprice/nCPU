@@ -3,9 +3,9 @@
 //! Synthesizes modules incrementally, using results from
 //! dependencies to inform subsequent synthesis.
 
+pub use super::decomposition::ModuleSpec;
 use crate::benchmark::Problem;
 use crate::solver::SolveResult;
-pub use super::decomposition::ModuleSpec;
 use std::collections::HashMap;
 
 /// Synthesis cache for reuse
@@ -140,9 +140,10 @@ fn sort_by_dependencies(modules: &[ModuleSpec]) -> Vec<&ModuleSpec> {
         let mut still_waiting = Vec::new();
 
         for module in remaining {
-            let deps_resolved = module.dependencies.iter().all(|dep| {
-                sorted.iter().any(|s: &&ModuleSpec| s.name == *dep)
-            });
+            let deps_resolved = module
+                .dependencies
+                .iter()
+                .all(|dep| sorted.iter().any(|s: &&ModuleSpec| s.name == *dep));
 
             if deps_resolved {
                 ready.push(module);
@@ -164,10 +165,7 @@ fn sort_by_dependencies(modules: &[ModuleSpec]) -> Vec<&ModuleSpec> {
 }
 
 /// Synthesize a single module
-fn synthesize_module(
-    module: &ModuleSpec,
-    _cache: &SynthCache,
-) -> Result<SolveResult, String> {
+fn synthesize_module(module: &ModuleSpec, _cache: &SynthCache) -> Result<SolveResult, String> {
     // Convert module to problem
     let problem = module_to_problem(module)?;
 
@@ -196,7 +194,10 @@ fn module_to_problem(module: &ModuleSpec) -> Result<Problem, String> {
         synthetic_args: Vec::new(),
         synthetic_values: Vec::new(),
         recursive_allowed: false,
-        tree_input: first.inputs.iter().any(|v| matches!(v, crate::benchmark::Value::Tree(_))),
+        tree_input: first
+            .inputs
+            .iter()
+            .any(|v| matches!(v, crate::benchmark::Value::Tree(_))),
         explicit_stack: false,
         functions: Vec::new(),
     })

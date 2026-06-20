@@ -3,9 +3,9 @@
 //! RAII-style automatic cleanup for file descriptors, sockets, and other system resources.
 //! Prevents resource leaks by ensuring resources are released when dropped.
 
+use crate::runtime::{Errno, FfiResult};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use crate::runtime::{Errno, FfiResult};
 
 /// Resource types that can be tracked and auto-cleaned
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,7 +100,9 @@ impl ResourceManager {
     /// Register a file descriptor
     pub fn register_file(&mut self, fd: i32) -> FfiResult<()> {
         if fd < 0 {
-            return Err(Errno::InvalidArgument("Invalid file descriptor".to_string()));
+            return Err(Errno::InvalidArgument(
+                "Invalid file descriptor".to_string(),
+            ));
         }
         if self.count_files() >= self.limits.max_files {
             return Err(Errno::ResourceExhausted("Too many open files".to_string()));
@@ -112,10 +114,14 @@ impl ResourceManager {
     /// Register a socket
     pub fn register_socket(&mut self, fd: i32) -> FfiResult<()> {
         if fd < 0 {
-            return Err(Errno::InvalidArgument("Invalid socket descriptor".to_string()));
+            return Err(Errno::InvalidArgument(
+                "Invalid socket descriptor".to_string(),
+            ));
         }
         if self.count_sockets() >= self.limits.max_sockets {
-            return Err(Errno::ResourceExhausted("Too many open sockets".to_string()));
+            return Err(Errno::ResourceExhausted(
+                "Too many open sockets".to_string(),
+            ));
         }
         self.resources.insert(ResourceType::Socket(fd));
         Ok(())
@@ -136,7 +142,9 @@ impl ResourceManager {
     /// Register a pipe
     pub fn register_pipe(&mut self, read_fd: i32, write_fd: i32) -> FfiResult<()> {
         if read_fd < 0 || write_fd < 0 {
-            return Err(Errno::InvalidArgument("Invalid pipe file descriptors".to_string()));
+            return Err(Errno::InvalidArgument(
+                "Invalid pipe file descriptors".to_string(),
+            ));
         }
         if self.count_pipes() >= self.limits.max_pipes {
             return Err(Errno::ResourceExhausted("Too many pipes".to_string()));
@@ -163,22 +171,34 @@ impl ResourceManager {
 
     /// Get count of open files
     fn count_files(&self) -> usize {
-        self.resources.iter().filter(|r| matches!(r, ResourceType::FileDesc(_))).count()
+        self.resources
+            .iter()
+            .filter(|r| matches!(r, ResourceType::FileDesc(_)))
+            .count()
     }
 
     /// Get count of open sockets
     fn count_sockets(&self) -> usize {
-        self.resources.iter().filter(|r| matches!(r, ResourceType::Socket(_))).count()
+        self.resources
+            .iter()
+            .filter(|r| matches!(r, ResourceType::Socket(_)))
+            .count()
     }
 
     /// Get count of processes
     fn count_processes(&self) -> usize {
-        self.resources.iter().filter(|r| matches!(r, ResourceType::Process(_))).count()
+        self.resources
+            .iter()
+            .filter(|r| matches!(r, ResourceType::Process(_)))
+            .count()
     }
 
     /// Get count of pipes
     fn count_pipes(&self) -> usize {
-        self.resources.iter().filter(|r| matches!(r, ResourceType::Pipe(..))).count()
+        self.resources
+            .iter()
+            .filter(|r| matches!(r, ResourceType::Pipe(..)))
+            .count()
     }
 
     /// Get total resource count

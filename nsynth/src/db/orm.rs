@@ -2,9 +2,9 @@
 //!
 //! Object-Relational Mapping traits and repository patterns for type-safe database operations.
 
-use std::marker::PhantomData;
 use crate::db::pool::SharedPool;
-use crate::db::sql::{Value, ColumnType};
+use crate::db::sql::{ColumnType, Value};
+use std::marker::PhantomData;
 
 /// Trait for database models
 pub trait Model {

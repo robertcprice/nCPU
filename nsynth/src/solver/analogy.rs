@@ -57,7 +57,9 @@ pub(crate) fn in_refit() -> bool {
 /// True when an in-flight re-fit re-solve has exceeded [`REFIT_BUDGET_SECS`].
 /// Always false outside a re-fit, so top-level solves are never time-capped here.
 pub(crate) fn refit_budget_exhausted() -> bool {
-    REFIT_START.with(|c| c.get()).is_some_and(|t| t.elapsed().as_secs_f32() > REFIT_BUDGET_SECS)
+    REFIT_START
+        .with(|c| c.get())
+        .is_some_and(|t| t.elapsed().as_secs_f32() > REFIT_BUDGET_SECS)
 }
 
 /// Rename the donor program's entry function (and all of its references, e.g.
@@ -278,20 +280,31 @@ fn perturb_value(v: &Value) -> Vec<Value> {
         ],
         Value::Float(bits) => {
             let f = f64::from_bits(*bits);
-            vec![Value::Float((f + 1.0).to_bits()), Value::Float((f * 2.0).to_bits())]
+            vec![
+                Value::Float((f + 1.0).to_bits()),
+                Value::Float((f * 2.0).to_bits()),
+            ]
         }
         Value::Bool(b) => vec![Value::Bool(!b)],
         Value::Str(s) => {
             let mut doubled = s.clone();
             doubled.push_str(s);
-            vec![Value::Str(doubled), Value::Str(String::new()), Value::Str(s.to_uppercase())]
+            vec![
+                Value::Str(doubled),
+                Value::Str(String::new()),
+                Value::Str(s.to_uppercase()),
+            ]
         }
         Value::Array(a) => {
             let mut rev = a.clone();
             rev.reverse();
             let mut grown = a.clone();
             grown.push(a.first().copied().unwrap_or(0));
-            let shrunk: Vec<i64> = if a.len() > 1 { a[..a.len() - 1].to_vec() } else { a.clone() };
+            let shrunk: Vec<i64> = if a.len() > 1 {
+                a[..a.len() - 1].to_vec()
+            } else {
+                a.clone()
+            };
             vec![Value::Array(rev), Value::Array(grown), Value::Array(shrunk)]
         }
         // Pair/Quad/Tree and any other shape: no synthetic perturbation. (Pair
@@ -540,10 +553,14 @@ mod tests {
 
     #[test]
     fn remap_renames_declaration_and_recursion() {
-        let donor = "fn fact(n: i64) -> i64 { if (n <= 1) { return 1; } return (n * fact((n - 1))); }";
+        let donor =
+            "fn fact(n: i64) -> i64 { if (n <= 1) { return 1; } return (n * fact((n - 1))); }";
         let out = remap_donor_to_query(donor, "factorial").unwrap();
         assert!(out.contains("fn factorial("));
-        assert!(out.contains("factorial((n - 1))"), "recursive call renamed: {out}");
+        assert!(
+            out.contains("factorial((n - 1))"),
+            "recursive call renamed: {out}"
+        );
         assert!(!out.contains("fact("), "no donor name left: {out}");
     }
 
@@ -585,7 +602,10 @@ mod tests {
         let donor = "// this helper fn add does stuff\nfn real(n: i64) -> i64 { return n; }";
         let out = remap_donor_to_query(donor, "query").unwrap();
         assert!(out.contains("fn query("), "real decl renamed: {out}");
-        assert!(out.contains("// this helper fn add does stuff"), "comment untouched: {out}");
+        assert!(
+            out.contains("// this helper fn add does stuff"),
+            "comment untouched: {out}"
+        );
     }
 
     #[test]
@@ -593,14 +613,20 @@ mod tests {
         let donor = "fn sum(n: i64) -> i64 { let _label = \"sum total\"; return n; }";
         let out = remap_donor_to_query(donor, "total").unwrap();
         assert!(out.contains("fn total("), "{out}");
-        assert!(out.contains("\"sum total\""), "string literal preserved: {out}");
+        assert!(
+            out.contains("\"sum total\""),
+            "string literal preserved: {out}"
+        );
     }
 
     // ---- integration: real transfer through the verifier ----
     use crate::benchmark::{Example, Value};
 
     fn ex(i: i64, o: i64) -> Example {
-        Example { inputs: vec![Value::Int(i)], expected: Value::Int(o) }
+        Example {
+            inputs: vec![Value::Int(i)],
+            expected: Value::Int(o),
+        }
     }
 
     fn scalar_problem(
@@ -649,8 +675,12 @@ mod tests {
     fn cross_name_transfer_emits_verified_solution() {
         with_scratch_cache(|| {
             // Donor solves doubling under the name `dbl`.
-            let donor_problem =
-                scalar_problem("donor", "fn dbl(n: i64) -> i64", vec![ex(1, 2), ex(2, 4)], vec![]);
+            let donor_problem = scalar_problem(
+                "donor",
+                "fn dbl(n: i64) -> i64",
+                vec![ex(1, 2), ex(2, 4)],
+                vec![],
+            );
             crate::solved_cache::record(
                 &donor_problem,
                 "search_scalar_expr",
@@ -705,7 +735,10 @@ mod tests {
     }
 
     fn arr_ex(xs: &[i64], o: i64) -> Example {
-        Example { inputs: vec![Value::Array(xs.to_vec())], expected: Value::Int(o) }
+        Example {
+            inputs: vec![Value::Array(xs.to_vec())],
+            expected: Value::Int(o),
+        }
     }
 
     #[test]
@@ -732,7 +765,11 @@ mod tests {
             );
             let result = analogy_solve(&query).expect("array donor should transfer");
             assert!(result.success);
-            assert!(result.method.starts_with("analogy:"), "method: {}", result.method);
+            assert!(
+                result.method.starts_with("analogy:"),
+                "method: {}",
+                result.method
+            );
             assert!(
                 crate::runtime::verify_problem_code_strict(&query, &result.code).is_ok(),
                 "emitted array code must verify"
@@ -741,7 +778,10 @@ mod tests {
     }
 
     fn str_ex(s: &str, o: i64) -> Example {
-        Example { inputs: vec![Value::Str(s.to_string())], expected: Value::Int(o) }
+        Example {
+            inputs: vec![Value::Str(s.to_string())],
+            expected: Value::Int(o),
+        }
     }
 
     #[test]
@@ -749,7 +789,10 @@ mod tests {
         assert!(perturb_value(&Value::Int(5)).contains(&Value::Int(6)));
         assert_eq!(perturb_value(&Value::Bool(true)), vec![Value::Bool(false)]);
         let arr = perturb_value(&Value::Array(vec![1, 2, 3]));
-        assert!(arr.contains(&Value::Array(vec![3, 2, 1])), "reversed variant");
+        assert!(
+            arr.contains(&Value::Array(vec![3, 2, 1])),
+            "reversed variant"
+        );
         assert!(perturb_value(&Value::Str("ab".into())).contains(&Value::Str("abab".into())));
         // Unsupported shapes yield no perturbations (graceful).
         assert!(perturb_value(&Value::Tree(vec![])).is_empty());
@@ -826,7 +869,11 @@ mod tests {
                 vec![str_ex("scatter", 1), str_ex("zzz", 0)],
             );
             let result = analogy_solve(&query).expect("string donor should transfer");
-            assert!(result.method.starts_with("analogy:"), "method: {}", result.method);
+            assert!(
+                result.method.starts_with("analogy:"),
+                "method: {}",
+                result.method
+            );
             assert!(
                 crate::runtime::verify_problem_code_strict(&query, &result.code).is_ok(),
                 "emitted string code must verify"
@@ -837,7 +884,8 @@ mod tests {
     #[test]
     fn empty_cache_returns_none() {
         with_scratch_cache(|| {
-            let query = scalar_problem("scale2", "fn scale2(n: i64) -> i64", vec![ex(1, 2)], vec![]);
+            let query =
+                scalar_problem("scale2", "fn scale2(n: i64) -> i64", vec![ex(1, 2)], vec![]);
             assert!(analogy_solve(&query).is_none());
         });
     }
@@ -845,8 +893,12 @@ mod tests {
     #[test]
     fn empty_holdouts_emit_but_do_not_credit_transfer() {
         with_scratch_cache(|| {
-            let donor_problem =
-                scalar_problem("donor", "fn dbl(n: i64) -> i64", vec![ex(1, 2), ex(2, 4)], vec![]);
+            let donor_problem = scalar_problem(
+                "donor",
+                "fn dbl(n: i64) -> i64",
+                vec![ex(1, 2), ex(2, 4)],
+                vec![],
+            );
             crate::solved_cache::record(
                 &donor_problem,
                 "search_scalar_expr",

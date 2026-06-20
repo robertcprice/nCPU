@@ -17,7 +17,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 fn arg(args: &[String], key: &str) -> Option<String> {
-    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1).cloned())
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1).cloned())
 }
 fn flag(args: &[String], key: &str) -> bool {
     args.iter().any(|a| a == key)
@@ -35,7 +37,9 @@ fn main() {
 
     let d = Config::default();
     let cfg = Config {
-        max_iters: arg(&args, "--max-iters").and_then(|v| v.parse().ok()).unwrap_or(d.max_iters),
+        max_iters: arg(&args, "--max-iters")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d.max_iters),
         max_no_improve: arg(&args, "--max-no-improve")
             .and_then(|v| v.parse().ok())
             .unwrap_or(d.max_no_improve),
@@ -43,9 +47,15 @@ fn main() {
             .and_then(|v| v.parse().ok())
             .map(Duration::from_secs)
             .unwrap_or(d.deadline),
-        sigma: arg(&args, "--sigma").and_then(|v| v.parse().ok()).unwrap_or(d.sigma),
-        lr: arg(&args, "--lr").and_then(|v| v.parse().ok()).unwrap_or(d.lr),
-        seed: arg(&args, "--seed").and_then(|v| v.parse().ok()).unwrap_or(d.seed),
+        sigma: arg(&args, "--sigma")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d.sigma),
+        lr: arg(&args, "--lr")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d.lr),
+        seed: arg(&args, "--seed")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d.seed),
     };
     let commit = flag(&args, "--commit");
     let audit_log: Option<PathBuf> = arg(&args, "--audit-log").map(PathBuf::from);

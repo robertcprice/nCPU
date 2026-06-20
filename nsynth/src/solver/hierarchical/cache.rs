@@ -53,11 +53,14 @@ where
             self.evict_lru();
         }
 
-        self.data.insert(key, CacheEntry {
-            value,
-            hits: 0,
-            last_access: std::time::Instant::now(),
-        });
+        self.data.insert(
+            key,
+            CacheEntry {
+                value,
+                hits: 0,
+                last_access: std::time::Instant::now(),
+            },
+        );
     }
 
     /// Check if key exists

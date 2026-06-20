@@ -122,7 +122,11 @@ mod tests {
     fn test_echo_runs() {
         let tool = ShellTool::default();
         let out = tool
-            .invoke(&ToolCall::new("run").arg("cmd", "echo").arg("args", "hello world"))
+            .invoke(
+                &ToolCall::new("run")
+                    .arg("cmd", "echo")
+                    .arg("args", "hello world"),
+            )
             .unwrap();
         assert_eq!(out.content.trim(), "hello world");
         assert_eq!(out.metadata.get("exit_code").map(|s| s.as_str()), Some("0"));

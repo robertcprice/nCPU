@@ -45,8 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let summary = mog_synth::bidirectional::generator::generate_summary(
         &mog_synth::bidirectional::analyzer::analyze_semantics(
-            &mog_synth::bidirectional::parser::parse_code(&code)?
-        )
+            &mog_synth::bidirectional::parser::parse_code(&code)?,
+        ),
     );
 
     println!("Summary: {}", summary);

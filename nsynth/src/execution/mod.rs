@@ -10,6 +10,6 @@
 pub mod sandbox;
 
 pub use sandbox::{
-    Example, ExecutionMetrics, ExecutionResult, InputValue, Language, Sandbox,
-    SandboxConfig, SandboxError, VerificationReport,
+    Example, ExecutionMetrics, ExecutionResult, InputValue, Language, Sandbox, SandboxConfig,
+    SandboxError, VerificationReport,
 };

@@ -390,9 +390,7 @@ impl Orchestrator {
         let start_time = std::time::Instant::now();
 
         // Round 1: Initial synthesis
-        let initial_proposals = self
-            .run_initial_synthesis(&examples)
-            .await?;
+        let initial_proposals = self.run_initial_synthesis(&examples).await?;
 
         if initial_proposals.is_empty() {
             return Err(SolverError::NoSolutionFound(
@@ -415,7 +413,9 @@ impl Orchestrator {
             let best = reviewed_proposals
                 .iter()
                 .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap())
-                .ok_or_else(|| SolverError::NoSolutionFound("No proposals to select".to_string()))?;
+                .ok_or_else(|| {
+                    SolverError::NoSolutionFound("No proposals to select".to_string())
+                })?;
             (best.clone(), Vec::new())
         };
 
@@ -494,7 +494,10 @@ impl Orchestrator {
              // Strategy: {}\n\
              todo!()\
              }}",
-            agent_id, strategy, examples.len(), strategy
+            agent_id,
+            strategy,
+            examples.len(),
+            strategy
         );
 
         let metadata = serde_json::json!({
@@ -528,9 +531,7 @@ impl Orchestrator {
                 }
 
                 let feedback = self.simulate_agent_review(agent.id(), &proposal).await?;
-                proposal
-                    .reviews
-                    .insert(agent.id(), feedback);
+                proposal.reviews.insert(agent.id(), feedback);
             }
         }
 
@@ -598,17 +599,17 @@ impl Orchestrator {
     }
 
     /// Select the best proposal for a given agent
-    async fn select_best_proposal(&self, agent_id: AgentId, proposals: &[SolutionProposal]) -> usize {
+    async fn select_best_proposal(
+        &self,
+        agent_id: AgentId,
+        proposals: &[SolutionProposal],
+    ) -> usize {
         // Simple heuristic: select proposal with highest average review score
         let mut best_idx = 0;
         let mut best_score = 0.0f64;
 
         for (idx, proposal) in proposals.iter().enumerate() {
-            let avg_score: f64 = proposal
-                .reviews
-                .values()
-                .map(|r| r.score)
-                .sum::<f64>()
+            let avg_score: f64 = proposal.reviews.values().map(|r| r.score).sum::<f64>()
                 / proposal.reviews.len().max(1) as f64;
 
             if avg_score > best_score {
@@ -723,13 +724,19 @@ mod tests {
     #[tokio::test]
     async fn test_agent_capabilities() {
         let agents = Agent::create_all();
-        assert!(agents.iter().any(|a| matches!(a, Agent::Synthesizer { .. })));
-        assert!(agents.iter().any(|a| matches!(a, Agent::SecurityExpert { .. })));
+        assert!(agents
+            .iter()
+            .any(|a| matches!(a, Agent::Synthesizer { .. })));
+        assert!(agents
+            .iter()
+            .any(|a| matches!(a, Agent::SecurityExpert { .. })));
 
         let synthesizer = agents
             .iter()
             .find(|a| matches!(a, Agent::Synthesizer { .. }))
             .unwrap();
-        assert!(synthesizer.capabilities().contains(&"synthesis".to_string()));
+        assert!(synthesizer
+            .capabilities()
+            .contains(&"synthesis".to_string()));
     }
 }

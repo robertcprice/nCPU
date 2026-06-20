@@ -16,8 +16,8 @@ use crate::benchmark::{Problem, Value};
 use crate::solver::SolveResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A complete experience record from a single solve attempt.
@@ -134,44 +134,29 @@ pub enum LessonPattern {
         output_type: String,
     },
     /// Pattern based on problem category
-    CategoryPattern {
-        category: String,
-    },
+    CategoryPattern { category: String },
     /// Pattern based on required constructs
-    ConstructPattern {
-        required_constructs: Vec<String>,
-    },
+    ConstructPattern { required_constructs: Vec<String> },
     /// Pattern based on complexity
     ComplexityPattern {
         min_complexity: ProblemComplexity,
         max_complexity: ProblemComplexity,
     },
     /// Composite pattern (all must match)
-    CompositePattern {
-        patterns: Vec<LessonPattern>,
-    },
+    CompositePattern { patterns: Vec<LessonPattern> },
 }
 
 /// Action to take when a lesson's pattern matches.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LessonAction {
     /// Try a specific solving method first
-    PreferMethod {
-        method: String,
-    },
+    PreferMethod { method: String },
     /// Apply a specific code construct
-    UseConstruct {
-        construct: String,
-        template: String,
-    },
+    UseConstruct { construct: String, template: String },
     /// Use a specific strategy
-    UseStrategy {
-        strategy: String,
-    },
+    UseStrategy { strategy: String },
     /// Configure solver parameters
-    ConfigureSolver {
-        params: HashMap<String, String>,
-    },
+    ConfigureSolver { params: HashMap<String, String> },
 }
 
 /// Metadata about the solving process.
@@ -202,10 +187,10 @@ impl ExperienceDB {
     /// Create or load an experience database.
     pub fn new(db_path: PathBuf) -> Result<Self, String> {
         if db_path.exists() {
-            let content = fs::read_to_string(&db_path)
-                .map_err(|e| format!("Failed to read DB: {}", e))?;
-            let db: ExperienceDB = serde_json::from_str(&content)
-                .map_err(|e| format!("Failed to parse DB: {}", e))?;
+            let content =
+                fs::read_to_string(&db_path).map_err(|e| format!("Failed to read DB: {}", e))?;
+            let db: ExperienceDB =
+                serde_json::from_str(&content).map_err(|e| format!("Failed to parse DB: {}", e))?;
             Ok(db)
         } else {
             // Ensure parent directory exists
@@ -225,8 +210,7 @@ impl ExperienceDB {
     pub fn save(&self) -> Result<(), String> {
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize DB: {}", e))?;
-        fs::write(&self.db_path, content)
-            .map_err(|e| format!("Failed to write DB: {}", e))?;
+        fs::write(&self.db_path, content).map_err(|e| format!("Failed to write DB: {}", e))?;
         Ok(())
     }
 
@@ -290,7 +274,10 @@ impl ExperienceDB {
         let mut lessons = Vec::new();
 
         // Only learn from successes and partial successes
-        if !matches!(outcome, SolveOutcome::Success | SolveOutcome::PartialSuccess) {
+        if !matches!(
+            outcome,
+            SolveOutcome::Success | SolveOutcome::PartialSuccess
+        ) {
             return lessons;
         }
 
@@ -308,9 +295,17 @@ impl ExperienceDB {
             action: LessonAction::PreferMethod {
                 method: solution.method.clone(),
             },
-            effectiveness: if matches!(outcome, SolveOutcome::Success) { 1.0 } else { 0.5 },
+            effectiveness: if matches!(outcome, SolveOutcome::Success) {
+                1.0
+            } else {
+                0.5
+            },
             applications: 1,
-            successes: if matches!(outcome, SolveOutcome::Success) { 1 } else { 0 },
+            successes: if matches!(outcome, SolveOutcome::Success) {
+                1
+            } else {
+                0
+            },
             confidence: 0.5, // Starts low, increases with evidence
         });
 
@@ -327,9 +322,17 @@ impl ExperienceDB {
                     construct: construct.clone(),
                     template: format!("// Template for {}", construct),
                 },
-                effectiveness: if matches!(outcome, SolveOutcome::Success) { 1.0 } else { 0.5 },
+                effectiveness: if matches!(outcome, SolveOutcome::Success) {
+                    1.0
+                } else {
+                    0.5
+                },
                 applications: 1,
-                successes: if matches!(outcome, SolveOutcome::Success) { 1 } else { 0 },
+                successes: if matches!(outcome, SolveOutcome::Success) {
+                    1
+                } else {
+                    0
+                },
                 confidence: 0.5,
             });
         }
@@ -349,7 +352,8 @@ impl ExperienceDB {
                 existing.updated_at = lesson.updated_at;
 
                 // Increase confidence with more data
-                existing.confidence = (existing.confidence * 0.9) + (0.1 * (1.0 - 1.0 / (existing.applications + 1) as f64));
+                existing.confidence = (existing.confidence * 0.9)
+                    + (0.1 * (1.0 - 1.0 / (existing.applications + 1) as f64));
                 return;
             }
         }
@@ -362,7 +366,9 @@ impl ExperienceDB {
     pub fn find_similar_problems(&self, problem: &Problem, limit: usize) -> Vec<&Experience> {
         let snapshot = ProblemSnapshot::from_problem(problem);
 
-        let mut scored: Vec<_> = self.experiences.iter()
+        let mut scored: Vec<_> = self
+            .experiences
+            .iter()
             .map(|exp| {
                 let score = similarity_score(&snapshot, &exp.problem);
                 (exp, score)
@@ -373,27 +379,26 @@ impl ExperienceDB {
         // Sort by similarity score descending
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        scored.into_iter()
-            .take(limit)
-            .map(|(exp, _)| exp)
-            .collect()
+        scored.into_iter().take(limit).map(|(exp, _)| exp).collect()
     }
 
     /// Get effective actions for a given problem.
     pub fn get_effective_actions(&self, problem: &Problem) -> Vec<&Lesson> {
         let snapshot = ProblemSnapshot::from_problem(problem);
 
-        let mut relevant: Vec<_> = self.lessons.iter()
-            .filter(|lesson| {
-                lesson.pattern.matches(&snapshot) && lesson.effectiveness > 0.5
-            })
+        let mut relevant: Vec<_> = self
+            .lessons
+            .iter()
+            .filter(|lesson| lesson.pattern.matches(&snapshot) && lesson.effectiveness > 0.5)
             .collect();
 
         // Sort by effectiveness and confidence
         relevant.sort_by(|a, b| {
             let score_a = a.effectiveness * a.confidence;
             let score_b = b.effectiveness * b.confidence;
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         relevant
@@ -405,7 +410,10 @@ impl ExperienceDB {
 
         for exp in &self.experiences {
             let day = exp.timestamp / 86400; // Days since epoch
-            stats.daily_counts.entry(day).or_insert_with(ExperienceDay::default);
+            stats
+                .daily_counts
+                .entry(day)
+                .or_insert_with(ExperienceDay::default);
 
             let day_stats = stats.daily_counts.get_mut(&day).unwrap();
             day_stats.total += 1;
@@ -472,7 +480,8 @@ fn similarity_score(a: &ProblemSnapshot, b: &ProblemSnapshot) -> f64 {
     }
 
     // Complexity similarity
-    let complexity_diff = complexity_score(&a.complexity) as i64 - complexity_score(&b.complexity) as i64;
+    let complexity_diff =
+        complexity_score(&a.complexity) as i64 - complexity_score(&b.complexity) as i64;
     score += 0.1 - (complexity_diff.abs() as f64 * 0.02).max(0.0);
 
     score.max(0.0)
@@ -522,13 +531,18 @@ impl ProblemSnapshot {
     pub fn from_problem(problem: &Problem) -> Self {
         use ProblemComplexity::*;
 
-        let arity = problem.examples.first()
+        let arity = problem
+            .examples
+            .first()
             .map(|e| e.inputs.len())
             .unwrap_or(0);
 
-        let input_pattern = problem.examples.first()
+        let input_pattern = problem
+            .examples
+            .first()
             .map(|e| {
-                e.inputs.iter()
+                e.inputs
+                    .iter()
                     .map(|v| match v {
                         Value::Int(_) => 'I',
                         Value::Float(_) => 'F',
@@ -553,7 +567,8 @@ impl ProblemSnapshot {
             Some(Value::Quad(_, _, _, _)) => "Quad",
             Some(Value::Tree(_)) => "Tree",
             None => "Unknown",
-        }.to_string();
+        }
+        .to_string();
 
         let complexity = if problem.examples.len() > 8 {
             VeryComplex
@@ -612,25 +627,27 @@ impl LessonPattern {
     /// Check if this pattern matches a problem snapshot.
     pub fn matches(&self, problem: &ProblemSnapshot) -> bool {
         match self {
-            Self::TypePattern { input_pattern, output_type } => {
-                problem.input_pattern == *input_pattern && problem.output_type == *output_type
-            }
-            Self::CategoryPattern { category } => {
-                problem.category == *category
-            }
-            Self::ConstructPattern { required_constructs: _ } => {
+            Self::TypePattern {
+                input_pattern,
+                output_type,
+            } => problem.input_pattern == *input_pattern && problem.output_type == *output_type,
+            Self::CategoryPattern { category } => problem.category == *category,
+            Self::ConstructPattern {
+                required_constructs: _,
+            } => {
                 // TODO: Implement construct matching
                 true
             }
-            Self::ComplexityPattern { min_complexity, max_complexity } => {
+            Self::ComplexityPattern {
+                min_complexity,
+                max_complexity,
+            } => {
                 let score = complexity_score(&problem.complexity);
                 let min = complexity_score(min_complexity);
                 let max = complexity_score(max_complexity);
                 score >= min && score <= max
             }
-            Self::CompositePattern { patterns } => {
-                patterns.iter().all(|p| p.matches(problem))
-            }
+            Self::CompositePattern { patterns } => patterns.iter().all(|p| p.matches(problem)),
         }
     }
 }

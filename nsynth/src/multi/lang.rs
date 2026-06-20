@@ -40,7 +40,10 @@ impl TargetLang {
 
     /// Whether language uses semicolons
     pub fn uses_semicolons(&self) -> bool {
-        matches!(self, TargetLang::JavaScript | TargetLang::TypeScript | TargetLang::Go | TargetLang::Java)
+        matches!(
+            self,
+            TargetLang::JavaScript | TargetLang::TypeScript | TargetLang::Go | TargetLang::Java
+        )
     }
 
     /// Whether language uses braces
@@ -152,7 +155,13 @@ pub trait LanguageTarget {
     fn stdlib(&self) -> String;
 
     /// Format function declaration
-    fn format_function(&self, name: &str, params: &[(String, MogType)], ret: &MogType, body: &str) -> String;
+    fn format_function(
+        &self,
+        name: &str,
+        params: &[(String, MogType)],
+        ret: &MogType,
+        body: &str,
+    ) -> String;
 
     /// Format variable declaration
     fn format_var(&self, name: &str, ty: &MogType, value: Option<&str>) -> String;
@@ -178,51 +187,41 @@ pub trait LanguageTarget {
 /// Common type mappings
 pub fn common_type_map(lang: TargetLang, mog_type: &MogType) -> String {
     match mog_type {
-        MogType::Unit => {
-            match lang {
-                TargetLang::Rust => "()".to_string(),
-                TargetLang::JavaScript | TargetLang::TypeScript => "void".to_string(),
-                TargetLang::Python => "None".to_string(),
-                TargetLang::Go => "struct{}".to_string(),
-                TargetLang::Java => "void".to_string(),
-            }
-        }
-        MogType::Bool => {
-            match lang {
-                TargetLang::Rust => "bool".to_string(),
-                TargetLang::JavaScript | TargetLang::TypeScript => "boolean".to_string(),
-                TargetLang::Python => "bool".to_string(),
-                TargetLang::Go => "bool".to_string(),
-                TargetLang::Java => "boolean".to_string(),
-            }
-        }
-        MogType::Int => {
-            match lang {
-                TargetLang::Rust => "i64".to_string(),
-                TargetLang::JavaScript | TargetLang::TypeScript => "number".to_string(),
-                TargetLang::Python => "int".to_string(),
-                TargetLang::Go => "int64".to_string(),
-                TargetLang::Java => "long".to_string(),
-            }
-        }
-        MogType::Float => {
-            match lang {
-                TargetLang::Rust => "f64".to_string(),
-                TargetLang::JavaScript | TargetLang::TypeScript => "number".to_string(),
-                TargetLang::Python => "float".to_string(),
-                TargetLang::Go => "float64".to_string(),
-                TargetLang::Java => "double".to_string(),
-            }
-        }
-        MogType::String => {
-            match lang {
-                TargetLang::Rust => "String".to_string(),
-                TargetLang::JavaScript | TargetLang::TypeScript => "string".to_string(),
-                TargetLang::Python => "str".to_string(),
-                TargetLang::Go => "string".to_string(),
-                TargetLang::Java => "String".to_string(),
-            }
-        }
+        MogType::Unit => match lang {
+            TargetLang::Rust => "()".to_string(),
+            TargetLang::JavaScript | TargetLang::TypeScript => "void".to_string(),
+            TargetLang::Python => "None".to_string(),
+            TargetLang::Go => "struct{}".to_string(),
+            TargetLang::Java => "void".to_string(),
+        },
+        MogType::Bool => match lang {
+            TargetLang::Rust => "bool".to_string(),
+            TargetLang::JavaScript | TargetLang::TypeScript => "boolean".to_string(),
+            TargetLang::Python => "bool".to_string(),
+            TargetLang::Go => "bool".to_string(),
+            TargetLang::Java => "boolean".to_string(),
+        },
+        MogType::Int => match lang {
+            TargetLang::Rust => "i64".to_string(),
+            TargetLang::JavaScript | TargetLang::TypeScript => "number".to_string(),
+            TargetLang::Python => "int".to_string(),
+            TargetLang::Go => "int64".to_string(),
+            TargetLang::Java => "long".to_string(),
+        },
+        MogType::Float => match lang {
+            TargetLang::Rust => "f64".to_string(),
+            TargetLang::JavaScript | TargetLang::TypeScript => "number".to_string(),
+            TargetLang::Python => "float".to_string(),
+            TargetLang::Go => "float64".to_string(),
+            TargetLang::Java => "double".to_string(),
+        },
+        MogType::String => match lang {
+            TargetLang::Rust => "String".to_string(),
+            TargetLang::JavaScript | TargetLang::TypeScript => "string".to_string(),
+            TargetLang::Python => "str".to_string(),
+            TargetLang::Go => "string".to_string(),
+            TargetLang::Java => "String".to_string(),
+        },
         MogType::Array(inner) => {
             let inner_str = common_type_map(lang, inner);
             match lang {
@@ -235,9 +234,7 @@ pub fn common_type_map(lang: TargetLang, mog_type: &MogType) -> String {
             }
         }
         MogType::Function(params, ret) => {
-            let param_str: Vec<String> = params.iter()
-                .map(|p| common_type_map(lang, p))
-                .collect();
+            let param_str: Vec<String> = params.iter().map(|p| common_type_map(lang, p)).collect();
             let ret_str = common_type_map(lang, ret);
             match lang {
                 TargetLang::Rust => format!("fn({}) -> {}", param_str.join(", "), ret_str),
@@ -252,12 +249,12 @@ pub fn common_type_map(lang: TargetLang, mog_type: &MogType) -> String {
             }
         }
         MogType::Tuple(types) => {
-            let types_str: Vec<String> = types.iter()
-                .map(|t| common_type_map(lang, t))
-                .collect();
+            let types_str: Vec<String> = types.iter().map(|t| common_type_map(lang, t)).collect();
             match lang {
                 TargetLang::Rust => format!("({})", types_str.join(", ")),
-                TargetLang::JavaScript | TargetLang::TypeScript => format!("[{}]", types_str.join(", ")),
+                TargetLang::JavaScript | TargetLang::TypeScript => {
+                    format!("[{}]", types_str.join(", "))
+                }
                 TargetLang::Python => format!("Tuple[{}]", types_str.join(", ")),
                 TargetLang::Go => format!("struct {{ {} }}", types_str.join("; ")),
                 TargetLang::Java => format!("Tuple<{}>", types_str.join(", ")),
@@ -283,7 +280,10 @@ mod tests {
     #[test]
     fn test_type_map() {
         assert_eq!(common_type_map(TargetLang::Rust, &MogType::Int), "i64");
-        assert_eq!(common_type_map(TargetLang::JavaScript, &MogType::Int), "number");
+        assert_eq!(
+            common_type_map(TargetLang::JavaScript, &MogType::Int),
+            "number"
+        );
         assert_eq!(common_type_map(TargetLang::Python, &MogType::String), "str");
     }
 

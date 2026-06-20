@@ -3,12 +3,7 @@
 //! Multi-stage validation pipeline that runs validation stages in sequence
 //! and aggregates results.
 
-use super::{
-    stages::*,
-    ValidationResult,
-    Issue,
-    Severity,
-};
+use super::{stages::*, Issue, Severity, ValidationResult};
 use crate::bidirectional::parser::AST;
 
 /// Main validation pipeline
@@ -139,7 +134,8 @@ impl ValidationPipeline {
             }
 
             let stage_result = stage.validate(&current_program);
-            let fixable_issues: Vec<_> = stage_result.issues
+            let fixable_issues: Vec<_> = stage_result
+                .issues
                 .into_iter()
                 .filter(|i| i.suggested_fix.is_some())
                 .collect();
@@ -158,9 +154,10 @@ impl ValidationPipeline {
         // Add info about how many issues were fixed
         let final_result = if fixed_count > 0 {
             ValidationResult {
-                warnings: vec![
-                    super::Warning::new(format!("Auto-fixed {} issues", fixed_count))
-                ],
+                warnings: vec![super::Warning::new(format!(
+                    "Auto-fixed {} issues",
+                    fixed_count
+                ))],
                 ..final_result
             }
         } else {
@@ -182,10 +179,7 @@ impl ValidationPipeline {
 
     /// Run validation on multiple programs
     pub fn validate_batch(&self, programs: &[AST]) -> Vec<ValidationResult> {
-        programs
-            .iter()
-            .map(|p| self.validate(p))
-            .collect()
+        programs.iter().map(|p| self.validate(p)).collect()
     }
 
     /// Generate a validation report
@@ -239,9 +233,17 @@ impl ValidationReport {
         output.push_str("╠════════════════════════════════════════════════════════╣\n");
 
         // Overall status
-        let status = if self.passed { "✓ PASSED" } else { "✗ FAILED" };
+        let status = if self.passed {
+            "✓ PASSED"
+        } else {
+            "✗ FAILED"
+        };
         output.push_str(&format!("║ Status: {:<50} ║\n", status));
-        output.push_str(&format!("║ Score:  {:.1}% / 100.0%{:>38} ║\n", self.score * 100.0, ""));
+        output.push_str(&format!(
+            "║ Score:  {:.1}% / 100.0%{:>38} ║\n",
+            self.score * 100.0,
+            ""
+        ));
 
         output.push_str("╠════════════════════════════════════════════════════════╣\n");
         output.push_str("║ ISSUES BY SEVERITY                                    ║\n");
@@ -298,7 +300,7 @@ fn truncate_mark(issues: &mut Vec<Issue>, max: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bidirectional::parser::{AST, Function};
+    use crate::bidirectional::parser::{Function, AST};
 
     #[test]
     fn test_pipeline_creation() {

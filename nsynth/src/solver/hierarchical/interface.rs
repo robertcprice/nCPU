@@ -75,7 +75,11 @@ fn infer_signature_from_examples(examples: &[Example]) -> String {
         crate::benchmark::Value::Tree(_) => "Tree",
     };
 
-    format!("fn synthesized({}) -> {}", param_types.join(", "), return_type)
+    format!(
+        "fn synthesized({}) -> {}",
+        param_types.join(", "),
+        return_type
+    )
 }
 
 /// Parameter names
@@ -143,7 +147,10 @@ pub fn extract_constraints(examples: &[Example]) -> Vec<super::decomposition::Co
     let mut constraints = Vec::new();
 
     // Analyze input patterns
-    if examples.iter().all(|ex| ex.inputs.len() == examples[0].inputs.len()) {
+    if examples
+        .iter()
+        .all(|ex| ex.inputs.len() == examples[0].inputs.len())
+    {
         constraints.push(super::decomposition::Constraint {
             kind: super::decomposition::ConstraintKind::Correctness,
             description: "Fixed arity function".to_string(),
@@ -152,7 +159,9 @@ pub fn extract_constraints(examples: &[Example]) -> Vec<super::decomposition::Co
 
     // Check for array operations
     if examples.iter().any(|ex| {
-        ex.inputs.iter().any(|v| matches!(v, crate::benchmark::Value::Array(_)))
+        ex.inputs
+            .iter()
+            .any(|v| matches!(v, crate::benchmark::Value::Array(_)))
     }) {
         constraints.push(super::decomposition::Constraint {
             kind: super::decomposition::ConstraintKind::Performance,
@@ -176,12 +185,10 @@ mod tests {
 
     #[test]
     fn test_discover_interface_simple() {
-        let examples = vec![
-            Example {
-                inputs: vec![Value::Int(2), Value::Int(3)],
-                expected: Value::Int(5),
-            },
-        ];
+        let examples = vec![Example {
+            inputs: vec![Value::Int(2), Value::Int(3)],
+            expected: Value::Int(5),
+        }];
 
         let interface = discover_interface(&examples);
         assert_eq!(interface.exports.len(), 1);

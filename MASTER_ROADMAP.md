@@ -285,6 +285,64 @@ pub struct Episode {
 - 100+ tools available
 - <1s memory retrieval time
 
+#### 2.4 Verified Repo-Repair Loop (Weeks 10-13)
+**Files**:
+- `nsynth/src/agent/repo.rs`
+- `nsynth/src/agent/repo/guardrails.rs`
+- `nsynth/src/agent/repo/hardness.rs`
+- `nsynth/src/agent/repo/failure_parser.rs`
+- `nsynth/src/agent/repo/patch_gate.rs`
+- `nsynth/src/agent/repo/credit.rs`
+- `nsynth/src/agent/repo/repo_agent.rs`
+- `nsynth/src/agent/repo/trace.rs`
+
+```rust
+pub struct HardnessProfile {
+    localization: f64,
+    ambiguity: f64,
+    edit_surface: f64,
+    test_complexity: f64,
+    regression_risk: f64,
+    reasoning_depth: f64,
+    tool_dependency: f64,
+    verification_cost: f64,
+}
+
+pub struct RepoTaskSpec {
+    id: String,
+    kind: RepoTaskKind,
+    issue: String,
+    test_command: String,
+    allowed_files: Vec<String>,
+    hardness: HardnessProfile,
+    max_iterations: usize,
+}
+```
+
+**Implementation constraint**: keep this phase Rust-native inside `nsynth`; do not add Python orchestration for the repo-agent loop.
+
+**External patterns to integrate**:
+- **white-spider**: continuous task queue, repo scanning, TODO/untested-file mining, review → follow-up loop, retry-on-failure discipline.
+- **Clauder**: ignore/immutable policy files, permission allow/deny/ask model, unsafe-command gate, secret detection, git checkpoints, SQLite trace logging, `/consult`/`/spawn`/`/recruit`/`/review` workflow patterns.
+- **claude-code-rust**: Rust/Tokio process lifecycle, NDJSON command/event envelopes, inline permission UX, tool-call state tracking, bridge lifecycle/error handling, native terminal performance patterns for a future nCPU CLI/TUI.
+
+**Deliverables**:
+- Guardrail layer for ignored/immutable paths, unsafe commands, secret-like prompts, and policy decisions.
+- Hardness Miner that scores tasks by localization, ambiguity, edit surface, test complexity, regression risk, reasoning depth, tool dependency, and verification cost.
+- Repo task spec format with base repo, issue, test command, allowed files, max iterations, and hardness profile.
+- Failure Parser that converts raw compile/test/runtime output into structured failure kind, likely cause, and suggested repair action.
+- Patch Gate that rejects forbidden edits, unsafe paths, unrelated files, placeholder paths, and failed verification.
+- Credit Assignment ledger that assigns success/blame across comprehension, localization, planning, retrieval, tool use, synthesis, testing, verification, failure parsing, and memory.
+- Repo Agent skeleton that ties the above pieces into a deterministic loop before any LLM/solver invocation.
+
+**Success Metrics**:
+- 20 local hardness tasks generated from repo state.
+- 5 single-file bugs, 5 missing-test repairs, 5 multi-file features, 5 regression repairs.
+- 100% of generated tasks include a test command, allowed-file policy, and hardness profile.
+- Patch Gate rejects forbidden paths and unsafe commands before execution.
+- Failure Parser classifies compile, test, type, missing-import, formatting, lint, timeout, permission, and no-change failures.
+- Credit ledger records at least one credit/blame entry per completed or failed task.
+
 ---
 
 ### 🎯 Phase 3: World Model & Knowledge Integration (Weeks 11-16)

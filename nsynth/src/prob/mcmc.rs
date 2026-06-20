@@ -3,7 +3,7 @@
 //! Bayesian inference using Metropolis-Hastings and variational methods.
 
 use crate::prob::distribution::{ProbDistribution, Value};
-use crate::prob::primitive::{Observation, ProbContext, QueryType, QueryResult};
+use crate::prob::primitive::{Observation, ProbContext, QueryResult, QueryType};
 use std::time::{Duration, Instant};
 
 /// MCMC sampler configuration
@@ -113,11 +113,7 @@ impl McmcSampler {
     }
 
     /// Run Metropolis-Hastings sampler
-    pub fn metropolis_hastings<F>(
-        &self,
-        log_target: F,
-        init: Vec<f64>,
-    ) -> McmcResult
+    pub fn metropolis_hastings<F>(&self, log_target: F, init: Vec<f64>) -> McmcResult
     where
         F: Fn(&[f64]) -> f64 + Send + Sync,
     {
@@ -182,18 +178,17 @@ impl McmcSampler {
 
     /// Propose new parameters (random walk)
     fn propose(current: &[f64], step_size: f64) -> Vec<f64> {
-        current.iter().map(|&p| {
-            let noise: f64 = rand::random();
-            p + (noise - 0.5) * 2.0 * step_size
-        }).collect()
+        current
+            .iter()
+            .map(|&p| {
+                let noise: f64 = rand::random();
+                p + (noise - 0.5) * 2.0 * step_size
+            })
+            .collect()
     }
 
     /// Run Gibbs sampling (for conjugate models)
-    pub fn gibbs<F>(
-        &self,
-        sample_conditional: F,
-        init: Vec<f64>,
-    ) -> McmcResult
+    pub fn gibbs<F>(&self, sample_conditional: F, init: Vec<f64>) -> McmcResult
     where
         F: Fn(usize, &[f64]) -> f64 + Send + Sync,
     {
@@ -299,9 +294,7 @@ impl McmcResult {
             return None;
         }
 
-        let mut values: Vec<f64> = self.samples.iter()
-            .map(|s| s[param_idx])
-            .collect();
+        let mut values: Vec<f64> = self.samples.iter().map(|s| s[param_idx]).collect();
         values.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
         let n = values.len();
@@ -333,15 +326,14 @@ pub struct VariationalInference {
 impl VariationalInference {
     /// Create new VI instance
     pub fn new(steps: usize, learning_rate: f64) -> Self {
-        Self { steps, learning_rate }
+        Self {
+            steps,
+            learning_rate,
+        }
     }
 
     /// Run mean-field variational inference
-    pub fn infer<F>(
-        &self,
-        elbo: F,
-        init: Vec<f64>,
-    ) -> VariationalResult
+    pub fn infer<F>(&self, elbo: F, init: Vec<f64>) -> VariationalResult
     where
         F: Fn(&[f64]) -> f64 + Send + Sync,
     {

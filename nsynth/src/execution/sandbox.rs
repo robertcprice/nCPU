@@ -44,9 +44,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::process::CommandExt;
-#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -244,46 +244,29 @@ impl Default for ExecutionMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SandboxError {
     /// Compilation failed with syntax/type errors
-    CompilationFailed {
-        language: Language,
-        stderr: String,
-    },
+    CompilationFailed { language: Language, stderr: String },
     /// Execution timed out
     Timeout {
         language: Language,
         timeout_secs: u64,
     },
     /// Memory limit exceeded
-    MemoryLimitExceeded {
-        limit_bytes: usize,
-    },
+    MemoryLimitExceeded { limit_bytes: usize },
     /// Runtime panic or crash
     RuntimePanic {
         message: String,
         backtrace: Option<String>,
     },
     /// Signal received (Unix-specific)
-    Signal {
-        signal: i32,
-        name: String,
-    },
+    Signal { signal: i32, name: String },
     /// I/O error during execution
-    IoError {
-        message: String,
-    },
+    IoError { message: String },
     /// Language runtime not available
-    RuntimeUnavailable {
-        language: Language,
-    },
+    RuntimeUnavailable { language: Language },
     /// Security violation (unsafe operation attempted)
-    SecurityViolation {
-        operation: String,
-    },
+    SecurityViolation { operation: String },
     /// Output too large to capture
-    OutputTooLarge {
-        size: usize,
-        limit: usize,
-    },
+    OutputTooLarge { size: usize, limit: usize },
 }
 
 impl fmt::Display for SandboxError {
@@ -292,11 +275,22 @@ impl fmt::Display for SandboxError {
             SandboxError::CompilationFailed { language, stderr } => {
                 write!(f, "{} compilation failed: {}", language, stderr)
             }
-            SandboxError::Timeout { language, timeout_secs } => {
-                write!(f, "{} execution timed out after {}s", language, timeout_secs)
+            SandboxError::Timeout {
+                language,
+                timeout_secs,
+            } => {
+                write!(
+                    f,
+                    "{} execution timed out after {}s",
+                    language, timeout_secs
+                )
             }
             SandboxError::MemoryLimitExceeded { limit_bytes } => {
-                write!(f, "Memory limit exceeded ({} MB)", limit_bytes / 1024 / 1024)
+                write!(
+                    f,
+                    "Memory limit exceeded ({} MB)",
+                    limit_bytes / 1024 / 1024
+                )
             }
             SandboxError::RuntimePanic { message, backtrace } => {
                 write!(f, "Runtime panic: {}", message)?;
@@ -488,9 +482,7 @@ impl Sandbox {
         fs::write(&source_file, code)?;
 
         let executable = match language {
-            Language::Rust => {
-                self.compile_rust(&source_file)?
-            }
+            Language::Rust => self.compile_rust(&source_file)?,
             Language::JavaScript => {
                 // JavaScript doesn't need compilation, just return the source
                 source_file
@@ -664,9 +656,11 @@ impl Sandbox {
         // Write inputs to stdin
         if let Some(mut stdin) = child.stdin.take() {
             let input_str = self.format_inputs(inputs, language);
-            stdin.write_all(input_str.as_bytes()).map_err(|e| SandboxError::IoError {
-                message: format!("Failed to write to stdin: {}", e),
-            })?;
+            stdin
+                .write_all(input_str.as_bytes())
+                .map_err(|e| SandboxError::IoError {
+                    message: format!("Failed to write to stdin: {}", e),
+                })?;
         }
 
         // Set up timeout monitoring
@@ -958,10 +952,7 @@ mod tests {
     fn test_input_value_display() {
         assert_eq!(InputValue::Int(42).to_string(), "42");
         assert_eq!(InputValue::Bool(true).to_string(), "true");
-        assert_eq!(
-            InputValue::IntArray(vec![1, 2, 3]).to_string(),
-            "[1, 2, 3]"
-        );
+        assert_eq!(InputValue::IntArray(vec![1, 2, 3]).to_string(), "[1, 2, 3]");
     }
 
     #[test]

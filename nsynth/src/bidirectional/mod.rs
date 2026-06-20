@@ -3,13 +3,13 @@
 //! Reverse pipeline that analyzes generated code and produces
 //! natural language documentation using Linguigenesis.
 
-pub mod parser;
 pub mod analyzer;
 pub mod generator;
+pub mod parser;
 
-pub use parser::parse_code;
 pub use analyzer::{analyze_semantics, CodeSemantics};
 pub use generator::generate_nl;
+pub use parser::parse_code;
 
 /// Complete Code → NL pipeline
 pub fn code_to_nl(code: &str) -> Result<String, String> {

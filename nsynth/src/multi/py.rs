@@ -1,8 +1,6 @@
 //! Python Target for Multi-Language Code Generation
 
-use super::{
-    lang::{TargetLang, LanguageTarget, MogType, MogOp, common_type_map},
-};
+use super::lang::{common_type_map, LanguageTarget, MogOp, MogType, TargetLang};
 
 /// Python code generator
 pub struct PythonTarget {
@@ -50,7 +48,11 @@ impl PythonTarget {
     }
 
     fn needs_type_hints(&self) -> bool {
-        self.types && matches!(self.version, PythonVersion::Python3_9 | PythonVersion::Python3_10 | PythonVersion::Python3_11)
+        self.types
+            && matches!(
+                self.version,
+                PythonVersion::Python3_9 | PythonVersion::Python3_10 | PythonVersion::Python3_11
+            )
     }
 }
 
@@ -122,13 +124,21 @@ impl LanguageTarget for PythonTarget {
     }
 
     fn stdlib(&self) -> String {
-        format!(r#"# Python Standard Library
+        format!(
+            r#"# Python Standard Library
 import math
 from typing import List, Tuple, Optional, Callable, Any
-"#)
+"#
+        )
     }
 
-    fn format_function(&self, name: &str, params: &[(String, MogType)], ret: &MogType, body: &str) -> String {
+    fn format_function(
+        &self,
+        name: &str,
+        params: &[(String, MogType)],
+        ret: &MogType,
+        body: &str,
+    ) -> String {
         let mut output = String::new();
 
         if self.comments {
@@ -141,7 +151,8 @@ from typing import List, Tuple, Optional, Callable, Any
         output.push_str(name);
         output.push_str("(");
 
-        let param_strs: Vec<String> = params.iter()
+        let param_strs: Vec<String> = params
+            .iter()
             .map(|(n, ty)| {
                 if self.needs_type_hints() {
                     format!("{}: {}", n, self.type_map(ty))
@@ -243,7 +254,10 @@ mod tests {
         let target = PythonTarget::new().with_types(true);
         let formatted = target.format_function(
             "add",
-            &[("a".to_string(), MogType::Int), ("b".to_string(), MogType::Int)],
+            &[
+                ("a".to_string(), MogType::Int),
+                ("b".to_string(), MogType::Int),
+            ],
             &MogType::Int,
             "    return a + b\n",
         );

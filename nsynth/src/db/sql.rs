@@ -26,20 +26,14 @@ pub enum Query {
         where_: Option<Expr>,
     },
     /// DELETE query
-    Delete {
-        table: String,
-        where_: Option<Expr>,
-    },
+    Delete { table: String, where_: Option<Expr> },
     /// CREATE TABLE query
     Create {
         table: String,
         columns: Vec<ColumnDef>,
     },
     /// DROP TABLE query
-    Drop {
-        table: String,
-        if_exists: bool,
-    },
+    Drop { table: String, if_exists: bool },
 }
 
 impl Query {
@@ -352,7 +346,11 @@ pub fn to_sql(query: &Query) -> String {
             limit,
             offset,
         } => {
-            let cols_str = if cols.is_empty() { "*" } else { &cols.join(", ") };
+            let cols_str = if cols.is_empty() {
+                "*"
+            } else {
+                &cols.join(", ")
+            };
             let mut sql = format!("SELECT {} FROM {}", cols_str, quote_table(table));
 
             if let Some(w) = where_ {
@@ -362,7 +360,13 @@ pub fn to_sql(query: &Query) -> String {
             if let Some(ob) = order_by {
                 let order_str: Vec<String> = ob
                     .iter()
-                    .map(|o| format!("{} {}", quote_ident(&o.column), if o.asc { "ASC" } else { "DESC" }))
+                    .map(|o| {
+                        format!(
+                            "{} {}",
+                            quote_ident(&o.column),
+                            if o.asc { "ASC" } else { "DESC" }
+                        )
+                    })
                     .collect();
                 sql.push_str(&format!(" ORDER BY {}", order_str.join(", ")));
             }
@@ -383,7 +387,10 @@ pub fn to_sql(query: &Query) -> String {
             format!(
                 "INSERT INTO {} ({}) VALUES ({})",
                 quote_table(table),
-                cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", "),
+                cols.iter()
+                    .map(|c| quote_ident(c))
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 vals.join(", ")
             )
         }
@@ -412,11 +419,11 @@ pub fn to_sql(query: &Query) -> String {
         Query::Create { table, columns } => {
             let cols: Vec<String> = columns
                 .iter()
-                    .map(|c| {
-                        let mut parts = vec![
-                            quote_ident(&c.name),
-                            column_type_to_sql(&c.type_).to_string(),
-                        ];
+                .map(|c| {
+                    let mut parts = vec![
+                        quote_ident(&c.name),
+                        column_type_to_sql(&c.type_).to_string(),
+                    ];
 
                     if c.primary_key {
                         parts.push("PRIMARY KEY".to_string());
@@ -456,7 +463,12 @@ fn expr_to_sql(expr: &Expr) -> String {
         Expr::Column(name) => quote_ident(name),
         Expr::Literal(v) => value_to_sql(v),
         Expr::BinOp(left, op, right) => {
-            format!("({} {} {})", expr_to_sql(left), op_to_sql(op), expr_to_sql(right))
+            format!(
+                "({} {} {})",
+                expr_to_sql(left),
+                op_to_sql(op),
+                expr_to_sql(right)
+            )
         }
         Expr::UnaryOp(op, inner) => format!("{} {}", op_to_sql(op), expr_to_sql(inner)),
         Expr::Function(name, args) => {
@@ -534,9 +546,7 @@ fn escape_string(s: &str) -> String {
 
 /// Hex encode blob
 fn hex_encode(b: &[u8]) -> String {
-    b.iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    b.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 #[cfg(test)]

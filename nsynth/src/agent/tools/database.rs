@@ -96,9 +96,9 @@ impl Tool for DbTool {
             }
             "insert" => {
                 let name = call.require("table")?;
-                let table = tables
-                    .get_mut(name)
-                    .ok_or_else(|| ToolError::InvalidArg("table".to_string(), "no such table".to_string()))?;
+                let table = tables.get_mut(name).ok_or_else(|| {
+                    ToolError::InvalidArg("table".to_string(), "no such table".to_string())
+                })?;
                 let values: Vec<String> = call
                     .require("values")?
                     .split(',')
@@ -119,16 +119,24 @@ impl Tool for DbTool {
             }
             "select" => {
                 let name = call.require("table")?;
-                let table = tables
-                    .get(name)
-                    .ok_or_else(|| ToolError::InvalidArg("table".to_string(), "no such table".to_string()))?;
+                let table = tables.get(name).ok_or_else(|| {
+                    ToolError::InvalidArg("table".to_string(), "no such table".to_string())
+                })?;
 
                 let filter = match call.optional("where") {
                     Some(spec) => {
                         let (col, val) = Self::parse_filter(spec)?;
-                        let idx = table.columns.iter().position(|c| c == &col).ok_or_else(|| {
-                            ToolError::InvalidArg("where".to_string(), format!("no column '{col}'"))
-                        })?;
+                        let idx =
+                            table
+                                .columns
+                                .iter()
+                                .position(|c| c == &col)
+                                .ok_or_else(|| {
+                                    ToolError::InvalidArg(
+                                        "where".to_string(),
+                                        format!("no column '{col}'"),
+                                    )
+                                })?;
                         Some((idx, val))
                     }
                     None => None,
@@ -154,13 +162,17 @@ impl Tool for DbTool {
             }
             "delete" => {
                 let name = call.require("table")?;
-                let table = tables
-                    .get_mut(name)
-                    .ok_or_else(|| ToolError::InvalidArg("table".to_string(), "no such table".to_string()))?;
-                let (col, val) = Self::parse_filter(call.require("where")?)?;
-                let idx = table.columns.iter().position(|c| c == &col).ok_or_else(|| {
-                    ToolError::InvalidArg("where".to_string(), format!("no column '{col}'"))
+                let table = tables.get_mut(name).ok_or_else(|| {
+                    ToolError::InvalidArg("table".to_string(), "no such table".to_string())
                 })?;
+                let (col, val) = Self::parse_filter(call.require("where")?)?;
+                let idx = table
+                    .columns
+                    .iter()
+                    .position(|c| c == &col)
+                    .ok_or_else(|| {
+                        ToolError::InvalidArg("where".to_string(), format!("no column '{col}'"))
+                    })?;
                 let before = table.rows.len();
                 table
                     .rows
@@ -170,9 +182,9 @@ impl Tool for DbTool {
             }
             "count" => {
                 let name = call.require("table")?;
-                let table = tables
-                    .get(name)
-                    .ok_or_else(|| ToolError::InvalidArg("table".to_string(), "no such table".to_string()))?;
+                let table = tables.get(name).ok_or_else(|| {
+                    ToolError::InvalidArg("table".to_string(), "no such table".to_string())
+                })?;
                 Ok(ToolOutput::new(table.rows.len().to_string()))
             }
             "list_tables" => {

@@ -727,7 +727,11 @@ fn default_extensions() -> Vec<String> {
 }
 
 fn default_main_fields() -> Vec<String> {
-    vec!["browser".to_string(), "module".to_string(), "main".to_string()]
+    vec![
+        "browser".to_string(),
+        "module".to_string(),
+        "main".to_string(),
+    ]
 }
 
 impl Default for ViteResolveConfig {
@@ -736,7 +740,11 @@ impl Default for ViteResolveConfig {
             alias: HashMap::new(),
             extensions: default_extensions(),
             main_fields: default_main_fields(),
-            conditions: vec!["module".to_string(), "browser".to_string(), "development".to_string()],
+            conditions: vec![
+                "module".to_string(),
+                "browser".to_string(),
+                "development".to_string(),
+            ],
         }
     }
 }
@@ -1146,7 +1154,10 @@ impl WebpackLoader {
     /// Babel loader
     pub fn babel() -> Self {
         let mut options = HashMap::new();
-        options.insert("presets".to_string(), serde_json::json!(["@babel/preset-env", "@babel/preset-react"]));
+        options.insert(
+            "presets".to_string(),
+            serde_json::json!(["@babel/preset-env", "@babel/preset-react"]),
+        );
         options.insert("cacheDirectory".to_string(), serde_json::json!(true));
 
         Self {
@@ -2651,10 +2662,7 @@ mod tests {
         assert_eq!(config.public_dir, "static");
         assert_eq!(config.plugins.len(), 1);
         assert_eq!(config.resolve.alias.get("@"), Some(&"/src".to_string()));
-        assert_eq!(
-            config.env.get("NODE_ENV"),
-            Some(&"production".to_string())
-        );
+        assert_eq!(config.env.get("NODE_ENV"), Some(&"production".to_string()));
     }
 
     #[test]
@@ -2701,7 +2709,10 @@ mod tests {
             .minify(true)
             .sourcemap(SourceMapType::External)
             .external("lodash".to_string())
-            .define("process.env.NODE_ENV".to_string(), "\"production\"".to_string())
+            .define(
+                "process.env.NODE_ENV".to_string(),
+                "\"production\"".to_string(),
+            )
             .loader(".png".to_string(), EsbuildLoader::Dataurl)
             .metafile(true)
             .build_config();
@@ -2820,8 +2831,7 @@ mod tests {
 
         for strategy in strategies {
             let serialized = serde_json::to_string(&strategy).unwrap();
-            let deserialized: ResolutionStrategy =
-                serde_json::from_str(&serialized).unwrap();
+            let deserialized: ResolutionStrategy = serde_json::from_str(&serialized).unwrap();
             assert_eq!(strategy, deserialized);
         }
     }
@@ -2906,11 +2916,7 @@ mod tests {
 
     #[test]
     fn test_chunk_type() {
-        let types = vec![
-            ChunkType::JavaScript,
-            ChunkType::Css,
-            ChunkType::Asset,
-        ];
+        let types = vec![ChunkType::JavaScript, ChunkType::Css, ChunkType::Asset];
 
         for chunk_type in types {
             let serialized = serde_json::to_string(&chunk_type).unwrap();

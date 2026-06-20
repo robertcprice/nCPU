@@ -2,7 +2,7 @@
 //!
 //! Extracts operations, patterns, algorithms from AST for NL generation.
 
-use crate::bidirectional::parser::{AST, BinOp, Expression, Statement};
+use crate::bidirectional::parser::{BinOp, Expression, Statement, AST};
 
 /// Semantic information extracted from code
 #[derive(Debug, Clone)]
@@ -173,12 +173,20 @@ fn analyze_type(type_: &str, data_structures: &mut Vec<String>) {
 }
 
 /// Analyze statement for operations and patterns
-fn analyze_statement(stmt: &Statement, operations: &mut Vec<String>, control_flow: &mut Vec<String>, patterns: &mut Vec<String>) {
+fn analyze_statement(
+    stmt: &Statement,
+    operations: &mut Vec<String>,
+    control_flow: &mut Vec<String>,
+    patterns: &mut Vec<String>,
+) {
     match stmt {
         Statement::Let { .. } => patterns.push("variable_declaration".to_string()),
         Statement::Assign { .. } => patterns.push("assignment".to_string()),
         Statement::Return(_) => patterns.push("return".to_string()),
-        Statement::If { else_block: Some(_), .. } => control_flow.push("conditional_with_else".to_string()),
+        Statement::If {
+            else_block: Some(_),
+            ..
+        } => control_flow.push("conditional_with_else".to_string()),
         Statement::If { .. } => control_flow.push("conditional".to_string()),
         Statement::Loop { .. } => control_flow.push("infinite_loop".to_string()),
         Statement::While { .. } => control_flow.push("while_loop".to_string()),
@@ -195,20 +203,20 @@ fn analyze_statement(stmt: &Statement, operations: &mut Vec<String>, control_flo
 /// Analyze expression for operations
 fn analyze_expression(expr: &Expression, operations: &mut Vec<String>, patterns: &mut Vec<String>) {
     match expr {
-        Expression::BinOp { op, .. } => {
-            match op {
-                BinOp::Add => operations.push("addition".to_string()),
-                BinOp::Sub => operations.push("subtraction".to_string()),
-                BinOp::Mul => operations.push("multiplication".to_string()),
-                BinOp::Div => operations.push("division".to_string()),
-                BinOp::Mod => operations.push("modulo".to_string()),
-                BinOp::And => operations.push("logical_and".to_string()),
-                BinOp::Or => operations.push("logical_or".to_string()),
-                BinOp::Eq => operations.push("equality_check".to_string()),
-                BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => operations.push("comparison".to_string()),
-                _ => {}
+        Expression::BinOp { op, .. } => match op {
+            BinOp::Add => operations.push("addition".to_string()),
+            BinOp::Sub => operations.push("subtraction".to_string()),
+            BinOp::Mul => operations.push("multiplication".to_string()),
+            BinOp::Div => operations.push("division".to_string()),
+            BinOp::Mod => operations.push("modulo".to_string()),
+            BinOp::And => operations.push("logical_and".to_string()),
+            BinOp::Or => operations.push("logical_or".to_string()),
+            BinOp::Eq => operations.push("equality_check".to_string()),
+            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                operations.push("comparison".to_string())
             }
-        }
+            _ => {}
+        },
         Expression::Call { func, .. } => {
             // Track method calls as operations
             if !operations.contains(func) {
@@ -241,7 +249,10 @@ fn infer_complexity(algorithms: &[String], operations: &[String]) -> String {
     }
 
     // Check for operation patterns
-    if operations.iter().any(|o| o.contains("nested") || o.contains("double")) {
+    if operations
+        .iter()
+        .any(|o| o.contains("nested") || o.contains("double"))
+    {
         return "O(n²)".to_string();
     }
 
@@ -249,7 +260,10 @@ fn infer_complexity(algorithms: &[String], operations: &[String]) -> String {
         return "O(n log n)".to_string();
     }
 
-    if operations.iter().any(|o| o.contains("loop") || o.contains("iteration")) {
+    if operations
+        .iter()
+        .any(|o| o.contains("loop") || o.contains("iteration"))
+    {
         return "O(n)".to_string();
     }
 
@@ -266,7 +280,10 @@ fn infer_space_complexity(data_structures: &[String], algorithms: &[String]) -> 
         }
     }
 
-    if data_structures.iter().any(|ds| ds == "vector" || ds == "array") {
+    if data_structures
+        .iter()
+        .any(|ds| ds == "vector" || ds == "array")
+    {
         return "O(n)".to_string();
     }
 

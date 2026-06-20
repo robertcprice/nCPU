@@ -3,15 +3,19 @@
 //! Bayesian program synthesis with probabilistic modeling, MCMC inference,
 //! and uncertainty quantification.
 
-pub mod distribution;
-pub mod primitive;
-pub mod mcmc;
 pub mod codegen;
+pub mod distribution;
+pub mod mcmc;
+pub mod primitive;
 
-pub use distribution::{ProbDistribution, Value as DistValue};
 pub use codegen::generate_probabilistic_code;
-pub use primitive::{sample, observe, Observation, ProbContext, QueryType, QueryResult, ProbabilisticModel};
-pub use mcmc::{McmcSampler, McmcConfig, McmcState, McmcResult, VariationalInference, VariationalResult};
+pub use distribution::{ProbDistribution, Value as DistValue};
+pub use mcmc::{
+    McmcConfig, McmcResult, McmcSampler, McmcState, VariationalInference, VariationalResult,
+};
+pub use primitive::{
+    observe, sample, Observation, ProbContext, ProbabilisticModel, QueryResult, QueryType,
+};
 
 /// Probabilistic synthesis configuration
 #[derive(Debug, Clone)]
@@ -69,18 +73,14 @@ impl ProbConfig {
 }
 
 /// Run Bayesian inference on a probabilistic model
-pub fn infer<F>(
-    log_target: F,
-    init: Vec<f64>,
-    config: ProbConfig,
-) -> McmcResult
+pub fn infer<F>(log_target: F, init: Vec<f64>, config: ProbConfig) -> McmcResult
 where
     F: Fn(&[f64]) -> f64 + Send + Sync,
 {
     let sampler = McmcSampler::new(
         McmcConfig::default()
             .with_iterations(config.max_iterations)
-            .with_burn_in(config.burn_in)
+            .with_burn_in(config.burn_in),
     );
 
     sampler.metropolis_hastings(log_target, init)
@@ -115,9 +115,7 @@ mod tests {
 
     #[test]
     fn test_prob_config() {
-        let config = ProbConfig::new()
-            .with_max_iterations(500)
-            .with_burn_in(50);
+        let config = ProbConfig::new().with_max_iterations(500).with_burn_in(50);
 
         assert_eq!(config.max_iterations, 500);
         assert_eq!(config.burn_in, 50);
@@ -138,16 +136,16 @@ mod tests {
 
     #[test]
     fn test_synthesize_probabilistic() {
-        let obs = vec![
-            Observation::new("coin", DistValue::Bool(true), ProbDistribution::Bernoulli { p: 0.5 }),
-        ];
+        let obs = vec![Observation::new(
+            "coin",
+            DistValue::Bool(true),
+            ProbDistribution::Bernoulli { p: 0.5 },
+        )];
 
-        let examples = vec![
-            crate::benchmark::Example {
-                inputs: vec![crate::benchmark::Value::Int(1)],
-                expected: crate::benchmark::Value::Int(1),
-            },
-        ];
+        let examples = vec![crate::benchmark::Example {
+            inputs: vec![crate::benchmark::Value::Int(1)],
+            expected: crate::benchmark::Value::Int(1),
+        }];
 
         let result = synthesize_probabilistic(&obs, &examples);
         assert!(result.is_ok());

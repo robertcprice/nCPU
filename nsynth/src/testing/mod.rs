@@ -7,10 +7,10 @@
 //! - Fuzzing input generation
 //! - Coverage tracking and reporting
 
-pub mod generation;
 pub mod coverage;
+pub mod generation;
 
-use crate::benchmark::{Value, Example, TreeNode};
+use crate::benchmark::{Example, TreeNode, Value};
 use std::collections::HashMap;
 
 /// A single test case with metadata
@@ -72,14 +72,16 @@ impl TestSuite {
 
     /// Get tests by category
     pub fn tests_by_category(&self, category: TestCategory) -> Vec<&TestCase> {
-        self.tests.iter()
+        self.tests
+            .iter()
             .filter(|t| t.category == category)
             .collect()
     }
 
     /// Convert test suite to examples for benchmark format
     pub fn to_examples(&self) -> Vec<Example> {
-        self.tests.iter()
+        self.tests
+            .iter()
             .map(|t| Example {
                 inputs: t.inputs.clone(),
                 expected: t.expected.clone(),
@@ -146,12 +148,22 @@ impl TestCase {
     }
 
     /// Create a boundary test
-    pub fn boundary(name: String, inputs: Vec<Value>, expected: Value, description: String) -> Self {
+    pub fn boundary(
+        name: String,
+        inputs: Vec<Value>,
+        expected: Value,
+        description: String,
+    ) -> Self {
         Self::new(name, inputs, expected, description, TestCategory::Boundary)
     }
 
     /// Create a property test
-    pub fn property(name: String, inputs: Vec<Value>, expected: Value, description: String) -> Self {
+    pub fn property(
+        name: String,
+        inputs: Vec<Value>,
+        expected: Value,
+        description: String,
+    ) -> Self {
         Self::new(name, inputs, expected, description, TestCategory::Property)
     }
 
