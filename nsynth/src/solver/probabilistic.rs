@@ -15,17 +15,14 @@ use crate::solver::SolveResult;
 /// - Float outputs without clear deterministic pattern
 /// - Sampling-like patterns (many examples with similar structure)
 pub fn is_probabilistic_problem(problem: &Problem) -> bool {
-    // Check 1: Conflicting examples (non-deterministic behavior)
-    if has_conflicting_examples(&problem.examples) {
+    if has_conflicting_scalar_examples(&problem.examples) {
         return true;
     }
 
-    // Check 2: Float outputs suggesting uncertainty
     if suggests_uncertainty(&problem.examples) {
         return true;
     }
 
-    // Check 3: Sampling-like patterns
     if suggests_sampling_process(&problem.examples) {
         return true;
     }
@@ -33,21 +30,26 @@ pub fn is_probabilistic_problem(problem: &Problem) -> bool {
     false
 }
 
-/// Check if examples have conflicting I/O (same inputs → different outputs)
-fn has_conflicting_examples(examples: &[Example]) -> bool {
+fn has_conflicting_scalar_examples(examples: &[Example]) -> bool {
     use std::collections::HashMap;
 
     let mut input_map: HashMap<Vec<i64>, Vec<i64>> = HashMap::new();
 
     for ex in examples {
-        // Convert inputs to comparable key
+        if !ex
+            .inputs
+            .iter()
+            .all(|input| matches!(input, Value::Int(_) | Value::Float(_) | Value::Bool(_)))
+        {
+            continue;
+        }
+
         let key = inputs_to_key(&ex.inputs);
         let output = output_to_int(&ex.expected);
 
-        // Check if this key already has conflicting outputs
         if let Some(existing) = input_map.get(&key) {
             if existing.iter().any(|&o| o != output) {
-                return true; // Found conflicting outputs
+                return true;
             }
         }
 
@@ -408,7 +410,22 @@ mod tests {
                 expected: Value::Bool(false),
             },
         ];
-        assert!(has_conflicting_examples(&examples));
+        assert!(has_conflicting_scalar_examples(&examples));
+    }
+
+    #[test]
+    fn test_array_variance_does_not_count_as_conflict() {
+        let examples = vec![
+            Example {
+                inputs: vec![Value::Array(vec![1, 2, 3])],
+                expected: Value::Int(3),
+            },
+            Example {
+                inputs: vec![Value::Array(vec![-5])],
+                expected: Value::Int(0),
+            },
+        ];
+        assert!(!has_conflicting_scalar_examples(&examples));
     }
 
     #[test]
