@@ -435,17 +435,6 @@ impl Drop for RefitGuard {
     }
 }
 
-/// Record transfer credit for a winning donor — but only when the query has
-/// holdouts. With empty holdouts the strict verifier degenerates to
-/// example-matching and cannot detect an overfit, so crediting the ranker/cache
-/// on that weak evidence could poison future routing.
-fn credit_transfer(problem: &Problem, donor: &crate::knowledge::DonorNode) {
-    if !problem.holdouts.is_empty() {
-        crate::meta_learner::record_transfer_success(problem, &donor.code);
-        crate::solved_cache::note_transfer_success(&donor.method, &donor.code);
-    }
-}
-
 fn make_result(code: String, method: String) -> SolveResult {
     SolveResult {
         success: true,
@@ -472,9 +461,11 @@ fn make_result(code: String, method: String) -> SolveResult {
 /// 2. **Type-specific re-fit fallback** ([`REFITTERS`]) for donors that are
 ///    *close* but need adaptation (constant re-fitting via teacher distillation).
 ///
-/// Non-fabrication: every emit path is gated by `verify_problem_code_strict`
-/// against the ORIGINAL problem; nothing unverified is ever returned.
+/// Non-fabrication: every emit path is gated by verification against the
+/// observable synthesis examples; evaluator holdouts are stripped at entry.
 pub fn analogy_solve(problem: &Problem) -> Option<SolveResult> {
+    let synthesis_problem = problem.synthesis_view();
+    let problem = &synthesis_problem;
     let kg = crate::knowledge::CodeKnowledgeGraph::build_from_cache();
     if kg.is_empty() {
         return None;
@@ -502,7 +493,6 @@ pub fn analogy_solve(problem: &Problem) -> Option<SolveResult> {
         // (1) Universal direct transfer: the renamed donor itself, verified
         // against the query. Type-agnostic; the cheapest possible transfer.
         if crate::runtime::verify_problem_code_strict(problem, &adapted).is_ok() {
-            credit_transfer(problem, &donor);
             return Some(make_result(
                 adapted,
                 format!("analogy:direct:{}", donor.method),
@@ -510,15 +500,14 @@ pub fn analogy_solve(problem: &Problem) -> Option<SolveResult> {
         }
 
         // (2) Cheap type-specific re-fit. Each self-guards by type and verifies
-        // internally; we re-assert against the ORIGINAL problem (real examples +
-        // holdouts), never the teacher-augmented set, and only accept a
+        // internally; we re-assert against the original observable examples,
+        // never the teacher-augmented set, and only accept a
         // `success` result (mirroring the trusted CachedTeachers gate).
         for refit in CHEAP_REFITTERS {
             if let Some(mut result) = refit(problem, &adapted) {
                 if result.success
                     && crate::runtime::verify_problem_code_strict(problem, &result.code).is_ok()
                 {
-                    credit_transfer(problem, &donor);
                     result.method = format!("analogy:refit:{}", result.method);
                     return Some(result);
                 }
@@ -536,7 +525,6 @@ pub fn analogy_solve(problem: &Problem) -> Option<SolveResult> {
                 if result.success
                     && crate::runtime::verify_problem_code_strict(problem, &result.code).is_ok()
                 {
-                    credit_transfer(problem, &donor);
                     result.method = format!("analogy:refit:universal:{}", result.method);
                     return Some(result);
                 }

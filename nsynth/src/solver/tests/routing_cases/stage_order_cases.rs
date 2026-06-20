@@ -81,7 +81,7 @@ fn expr_template_fallback_is_explicit() {
 }
 
 #[test]
-fn reference_distillation_precedes_template_reference() {
+fn reference_distillation_is_excluded_from_production_stages() {
     let problem = Problem {
         name: "abs_diff_reference_custom_v0".to_string(),
         category: "test",
@@ -103,23 +103,12 @@ fn reference_distillation_precedes_template_reference() {
         functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
-    let distill_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::ReferenceDistillation)
-        .expect("reference distillation stage missing");
-    let template_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::TemplateReference)
-        .expect("template reference stage missing");
-    assert!(
-        distill_idx < template_idx,
-        "expected reference distillation before template_reference, got {:?}",
-        stages
-    );
+    assert!(!stages.contains(&PostEnumerativeStage::ReferenceDistillation));
+    assert!(!stages.contains(&PostEnumerativeStage::TemplateReference));
 }
 
 #[test]
-fn native_scalar_distillation_precedes_template_reference() {
+fn native_scalar_reference_distillation_is_excluded() {
     let problem = Problem {
         name: "abs_diff_native_reference_custom_v0".to_string(),
         category: "test",
@@ -141,23 +130,12 @@ fn native_scalar_distillation_precedes_template_reference() {
         functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
-    let native_distill_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::NativeScalarTeacherDistillation)
-        .expect("native scalar distillation stage missing");
-    let template_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::TemplateReference)
-        .expect("template reference stage missing");
-    assert!(
-        native_distill_idx < template_idx,
-        "expected native scalar distillation before template_reference, got {:?}",
-        stages
-    );
+    assert!(!stages.contains(&PostEnumerativeStage::NativeScalarTeacherDistillation));
+    assert!(!stages.contains(&PostEnumerativeStage::TemplateReference));
 }
 
 #[test]
-fn array_reference_distillation_precedes_template_reference() {
+fn array_reference_distillation_is_excluded() {
     let problem = Problem {
         name: "count_positive_reference_custom_v0".to_string(),
         category: "test",
@@ -179,27 +157,17 @@ fn array_reference_distillation_precedes_template_reference() {
         functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
-    let arr_distill_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::ArrayTeacherDistillation)
-        .expect("array teacher distillation stage missing");
     let expr_tpl_idx = stages
         .iter()
         .position(|stage| *stage == PostEnumerativeStage::ExprTemplates)
         .expect("expr template stage missing");
-    let ref_tpl_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::TemplateReference)
-        .expect("template reference stage missing");
-    assert!(
-        arr_distill_idx < expr_tpl_idx && expr_tpl_idx < ref_tpl_idx,
-        "expected array teacher distillation before template/reference fallback, got {:?}",
-        stages
-    );
+    assert_eq!(stages[expr_tpl_idx], PostEnumerativeStage::ExprTemplates);
+    assert!(!stages.contains(&PostEnumerativeStage::ArrayTeacherDistillation));
+    assert!(!stages.contains(&PostEnumerativeStage::TemplateReference));
 }
 
 #[test]
-fn expr_templates_precede_scalar_and_reference_templates() {
+fn expr_templates_precede_scalar_templates_without_reference_oracles() {
     let problem = Problem {
         name: "manhattan_reference_custom_v0".to_string(),
         category: "test",
@@ -229,19 +197,16 @@ fn expr_templates_precede_scalar_and_reference_templates() {
         .iter()
         .position(|stage| *stage == PostEnumerativeStage::ScalarTemplates)
         .expect("scalar template stage missing");
-    let ref_tpl_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::TemplateReference)
-        .expect("template reference stage missing");
     assert!(
-        expr_tpl_idx < scalar_tpl_idx && scalar_tpl_idx < ref_tpl_idx,
-        "expected expr templates before scalar/reference templates, got {:?}",
+        expr_tpl_idx < scalar_tpl_idx,
+        "expected expr templates before scalar templates, got {:?}",
         stages
     );
+    assert!(!stages.contains(&PostEnumerativeStage::TemplateReference));
 }
 
 #[test]
-fn differentiable_bridge_precedes_reference_and_template_fallbacks() {
+fn differentiable_bridge_runs_without_reference_fallbacks() {
     let problem = Problem {
         name: "abs_diff_bridge_custom_v0".to_string(),
         category: "test",
@@ -267,19 +232,9 @@ fn differentiable_bridge_precedes_reference_and_template_fallbacks() {
         .iter()
         .position(|stage| *stage == PostEnumerativeStage::BridgeGradient)
         .expect("bridge gradient stage missing");
-    let ref_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::ReferenceDistillation)
-        .expect("reference distillation stage missing");
-    let template_idx = stages
-        .iter()
-        .position(|stage| *stage == PostEnumerativeStage::TemplateReference)
-        .expect("template reference stage missing");
-    assert!(
-        bridge_idx < ref_idx && ref_idx < template_idx,
-        "expected bridge gradient before reference/template fallbacks, got {:?}",
-        stages
-    );
+    assert_eq!(stages[bridge_idx], PostEnumerativeStage::BridgeGradient);
+    assert!(!stages.contains(&PostEnumerativeStage::ReferenceDistillation));
+    assert!(!stages.contains(&PostEnumerativeStage::TemplateReference));
 }
 
 #[test]

@@ -394,12 +394,12 @@ fn enumerate_array_programs() -> Vec<ArrayProgram> {
     programs
 }
 
-/// Pull the `[i64]` input arrays out of the examples + holdouts so the OE table
+/// Pull the observable `[i64]` input arrays out of the examples so the OE table
 /// can be built. Returns `None` unless the first argument is an array and every
 /// other argument is scalar (the class this slice covers).
 fn array_inputs(problem: &Problem) -> Option<Vec<Vec<i64>>> {
     let mut inputs = Vec::new();
-    for example in problem.examples.iter().chain(problem.holdouts.iter()) {
+    for example in &problem.examples {
         let arr = match example.inputs.first()? {
             Value::Array(values) => values.clone(),
             _ => return None,

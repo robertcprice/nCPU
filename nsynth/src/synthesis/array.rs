@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 fn array_seed_inputs(problem: &Problem) -> Option<Vec<(Vec<i64>, Vec<i64>)>> {
     let mut seeds = Vec::new();
-    for example in problem.examples.iter().chain(problem.holdouts.iter()) {
+    for example in &problem.examples {
         let arr = match example.inputs.first()? {
             Value::Array(values) => values.clone(),
             _ => return None,
@@ -211,6 +211,8 @@ pub(super) fn synthesize_array_gradient_only(problem: &Problem) -> Option<SolveR
 }
 
 pub fn synthesize_array_from_teacher(problem: &Problem, teacher_code: &str) -> Option<SolveResult> {
+    let synthesis_problem = problem.synthesis_view();
+    let problem = &synthesis_problem;
     let mut augmented = problem.clone();
     let teacher_examples = array_teacher_examples_from_code(problem, teacher_code)?;
     augmented.examples.extend(teacher_examples);
@@ -222,5 +224,5 @@ pub fn synthesize_array_from_teacher(problem: &Problem, teacher_code: &str) -> O
 }
 
 pub fn synthesize_array(problem: &Problem) -> Option<SolveResult> {
-    synthesize_array_gradient_only(problem)
+    synthesize_array_gradient_only(&problem.synthesis_view())
 }

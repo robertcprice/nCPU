@@ -651,13 +651,19 @@ fn solve_problem_differentiable_with_schedule(
 }
 
 pub fn solve_problem_differentiable_fast_probe(problem: &Problem) -> DifferentiableSolveResult {
-    solve_problem_differentiable_with_schedule(problem, &[(120, 1, 42)], &[(180, 1, 52)])
+    solve_problem_differentiable_with_schedule(
+        &problem.synthesis_view(),
+        &[(120, 1, 42)],
+        &[(180, 1, 52)],
+    )
 }
 
 pub fn solve_problem_differentiable_from_teacher(
     problem: &Problem,
     teacher_code: &str,
 ) -> DifferentiableSolveResult {
+    let synthesis_problem = problem.synthesis_view();
+    let problem = &synthesis_problem;
     let Some(examples) = scalar_examples(problem) else {
         return unsupported_scalar_result();
     };
@@ -730,6 +736,8 @@ pub fn solve_problem_differentiable_from_teacher(
 }
 
 pub fn solve_problem_differentiable_only(problem: &Problem) -> DifferentiableSolveResult {
+    let synthesis_problem = problem.synthesis_view();
+    let problem = &synthesis_problem;
     if is_small_output_scalar_problem(problem) {
         return solve_problem_differentiable_with_schedule(problem, &[(240, 1, 42)], &[]);
     }

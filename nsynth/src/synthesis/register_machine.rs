@@ -555,6 +555,8 @@ impl SoftArrayRegisterMachine {
 
 /// Attempt synthesis via SoftRegisterMachine for scalar problems.
 pub fn synthesize_register_machine(problem: &Problem) -> Option<SolveResult> {
+    let synthesis_problem = problem.synthesis_view();
+    let problem = &synthesis_problem;
     // Only scalar-input problems
     if !problem
         .examples

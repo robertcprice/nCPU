@@ -17,7 +17,6 @@ use crate::runtime::{
 };
 use crate::solver::SolveResult;
 
-
 // ─── Program type 1: SoftExprProgram ─────────────────────────────────────────
 //
 // Handles: fn f(a, b, ...) -> i64 { [v0 = pre_s1 OP pre_s2;] return s1 OP s2; }
@@ -2787,23 +2786,22 @@ impl SoftChainedBranch {
     }
 }
 
-
 // ─── Main synthesis entry point ───────────────────────────────────────────────
 
 /// Pure gradient-only synthesis (no templates). Used to measure true gradient capability.
 pub fn synthesize_gradient_only(problem: &Problem) -> Option<SolveResult> {
-    synthesize_scalar_inner(problem, false)
+    synthesize_scalar_inner(&problem.synthesis_view(), false)
 }
 
 /// Attempt native gradient-based synthesis for scalar (all-i64) problems.
 /// Returns `None` if the problem has non-scalar inputs or synthesis fails.
 pub fn synthesize_scalar(problem: &Problem) -> Option<SolveResult> {
-    synthesize_scalar_inner(problem, true)
+    synthesize_scalar_inner(&problem.synthesis_view(), true)
 }
 
 fn scalar_teacher_seed_inputs(problem: &Problem) -> Option<Vec<Vec<i64>>> {
     let mut seeds = Vec::new();
-    for example in problem.examples.iter().chain(problem.holdouts.iter()) {
+    for example in &problem.examples {
         let mut row = Vec::with_capacity(example.inputs.len());
         for value in &example.inputs {
             let Value::Int(v) = value else {
@@ -2910,7 +2908,7 @@ fn dedupe_scalar_examples(examples: Vec<Example>) -> Option<Vec<Example>> {
 
 fn mismatched_scalar_teacher_inputs(problem: &Problem, code: &str) -> Option<Vec<Vec<i64>>> {
     let mut failing = Vec::new();
-    for example in problem.examples.iter().chain(problem.holdouts.iter()) {
+    for example in &problem.examples {
         let mut inputs = Vec::with_capacity(example.inputs.len());
         for value in &example.inputs {
             let Value::Int(v) = value else {
@@ -3772,6 +3770,8 @@ pub fn synthesize_scalar_from_teacher(
     problem: &Problem,
     teacher_code: &str,
 ) -> Option<SolveResult> {
+    let synthesis_problem = problem.synthesis_view();
+    let problem = &synthesis_problem;
     if !problem
         .examples
         .iter()
@@ -3818,6 +3818,8 @@ pub fn synthesize_scalar_from_teacher(
 /// Scalar template fallback only. This keeps hardcoded patterns available as a
 /// last resort without rerunning the full gradient stack.
 pub fn synthesize_scalar_templates_only(problem: &Problem) -> Option<SolveResult> {
+    let synthesis_problem = problem.synthesis_view();
+    let problem = &synthesis_problem;
     if !problem
         .examples
         .iter()
@@ -3834,13 +3836,13 @@ pub fn synthesize_scalar_templates_only(problem: &Problem) -> Option<SolveResult
 /// Fast differentiable expression synthesis: only gradient-backed expression
 /// and branch models, with no direct template execution.
 pub fn synthesize_scalar_expr_only(problem: &Problem) -> Option<SolveResult> {
-    synthesize_scalar_expr_inner(problem, false, true)
+    synthesize_scalar_expr_inner(&problem.synthesis_view(), false, true)
 }
 
 /// Expression/template fallback only. Keeps direct expression, loop, and array
 /// templates available as an explicit late-stage escape hatch.
 pub fn synthesize_scalar_expr_templates_only(problem: &Problem) -> Option<SolveResult> {
-    synthesize_scalar_expr_inner(problem, true, false)
+    synthesize_scalar_expr_inner(&problem.synthesis_view(), true, false)
 }
 
 fn synthesize_scalar_expr_inner(
