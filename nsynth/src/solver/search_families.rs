@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use crate::benchmark::TreeNode;
 use super::search_codegen::*;
 use super::search_runtime::*;
 use super::*;
+use crate::benchmark::TreeNode;
 
 /// Minimum examples for the general membership/DNF array classifiers to fire.
 /// Every structural benchmark problem has <= 10 examples; requiring more keeps
@@ -92,7 +92,10 @@ pub(super) fn search_struct_pair_patterns(problem: &Problem, fn_name: &str) -> O
 /// as: field_new = field_old OP reducer(arr).
 ///
 /// Returns: (code_struct_field_reduction, field updates, estimated lines, confidence)
-pub(super) fn search_struct_field_reduction(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+pub(super) fn search_struct_field_reduction(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
 
     // Expect (State, [i64]) signature
@@ -133,8 +136,8 @@ pub(super) fn search_struct_field_reduction(problem: &Problem, fn_name: &str) ->
     if passes {
         // For demo: emit a two-field pattern (count, sum)
         let fields = vec![
-            ("count", "+", "sum"),    // wrong; should infer from examples
-            ("sum", "+", "sum"),      // wrong; should infer from examples
+            ("count", "+", "sum"), // wrong; should infer from examples
+            ("sum", "+", "sum"),   // wrong; should infer from examples
         ];
         let code = code_struct_field_reduction(fn_name, "state", "arr", &fields);
         return verified_result(problem, code, "search_struct_field_reduction");
@@ -149,7 +152,10 @@ pub(super) fn search_struct_field_reduction(problem: &Problem, fn_name: &str) ->
 /// with mutual coupling (e.g., both increment, or one is negated delta).
 ///
 /// Returns: (code_struct_coupled_fields, coupling pattern, estimated lines, confidence)
-pub(super) fn search_struct_coupled_fields(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+pub(super) fn search_struct_coupled_fields(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
 
     // Expect (State, [i64]) signature
@@ -171,9 +177,9 @@ pub(super) fn search_struct_coupled_fields(problem: &Problem, fn_name: &str) -> 
     // Placeholder: enumerate (field1, op1, reducer1, field2, op2, reducer2) patterns
     // For now, hardcode a common pattern: (count, +, sum), (sum, +, sum)
     let patterns = vec![
-        ("count", "+", "sum", "sum", "+", "sum"),      // increment both
+        ("count", "+", "sum", "sum", "+", "sum"), // increment both
         ("count", "+", "count_positive", "sum", "+", "sum"), // count & sum
-        ("min", "-", "min", "max", "+", "max"),        // cross-range coupling
+        ("min", "-", "min", "max", "+", "max"),   // cross-range coupling
     ];
 
     for (f1, o1, r1, f2, o2, r2) in patterns {
@@ -199,7 +205,10 @@ pub(super) fn search_struct_coupled_fields(problem: &Problem, fn_name: &str) -> 
 /// Pattern: field_new = if cond(arr) then update_true(field) else update_false(field)
 ///
 /// Returns: (code_struct_conditional_fields, condition + updates, estimated lines, confidence)
-pub(super) fn search_struct_conditional_fields(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+pub(super) fn search_struct_conditional_fields(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
 
     // Expect (State, [i64]) signature
@@ -235,19 +244,22 @@ pub(super) fn search_struct_conditional_fields(problem: &Problem, fn_name: &str)
 
         if passes {
             let code = code_struct_conditional_fields(
-                fn_name,
-                "state",
-                "arr",
-                field,
-                cond,
-                upd_true,
-                upd_false,
+                fn_name, "state", "arr", field, cond, upd_true, upd_false,
             );
             return verified_result(problem, code, "search_struct_conditional_fields");
         }
     }
 
     None
+}
+
+/// True when the problem's signature returns an array (`-> [i64]`). Scalar-output
+/// array teachers (those that read `expected_int()`) must decline array-output
+/// problems: their `expected` is an array that `expected_int()` would mis-read,
+/// and on some shapes that previously panicked. Array-output teachers (e.g.
+/// `search_merge_sort`) deliberately do NOT call this.
+pub(super) fn is_array_output(signature: &str) -> bool {
+    signature.replace(' ', "").contains("->[")
 }
 
 pub(super) fn search_closure_map_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
@@ -344,10 +356,7 @@ pub(super) fn search_array_item_loop(problem: &Problem, fn_name: &str) -> Option
 /// `op` in {+, -, *, min, max} — the small set of per-tick game-loop
 /// shapes that already run in production games. See
 /// `docs/stateful_synthesis_status.md` Stage 1.
-pub(super) fn search_stateful_reducer(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_stateful_reducer(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64, ParamType::ArrayI64] {
         return None;
@@ -371,21 +380,17 @@ pub(super) fn search_stateful_reducer(
             // Reducer ground truth: apply the reduction to the array.
             let reducer_fn: Box<dyn Fn(&[i64]) -> i64> = match *reducer {
                 "sum" => Box::new(|arr: &[i64]| arr.iter().sum()),
-                "max" => Box::new(|arr: &[i64]| {
-                    arr.iter().copied().max().unwrap_or(0)
-                }),
-                "min" => Box::new(|arr: &[i64]| {
-                    arr.iter().copied().min().unwrap_or(0)
-                }),
-                "count_positive" => Box::new(|arr: &[i64]| {
-                    arr.iter().filter(|&&x| x > 0).count() as i64
-                }),
-                "count_zero" => Box::new(|arr: &[i64]| {
-                    arr.iter().filter(|&&x| x == 0).count() as i64
-                }),
-                "count_negative" => Box::new(|arr: &[i64]| {
-                    arr.iter().filter(|&&x| x < 0).count() as i64
-                }),
+                "max" => Box::new(|arr: &[i64]| arr.iter().copied().max().unwrap_or(0)),
+                "min" => Box::new(|arr: &[i64]| arr.iter().copied().min().unwrap_or(0)),
+                "count_positive" => {
+                    Box::new(|arr: &[i64]| arr.iter().filter(|&&x| x > 0).count() as i64)
+                }
+                "count_zero" => {
+                    Box::new(|arr: &[i64]| arr.iter().filter(|&&x| x == 0).count() as i64)
+                }
+                "count_negative" => {
+                    Box::new(|arr: &[i64]| arr.iter().filter(|&&x| x < 0).count() as i64)
+                }
                 _ => continue,
             };
             // Validate against the problem's examples directly so we
@@ -415,18 +420,8 @@ pub(super) fn search_stateful_reducer(
                 got == ex.expected_int()
             });
             if passes {
-                let code = code_stateful_reducer(
-                    fn_name,
-                    state_arg,
-                    arr_arg,
-                    op,
-                    reducer,
-                );
-                return verified_result(
-                    problem,
-                    code,
-                    "search_stateful_reducer",
-                );
+                let code = code_stateful_reducer(fn_name, state_arg, arr_arg, op, reducer);
+                return verified_result(problem, code, "search_stateful_reducer");
             }
         }
     }
@@ -445,24 +440,18 @@ pub(super) fn search_stateful_reducer_dual(
     fn_name: &str,
 ) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
-    if param_types
-        != [
-            ParamType::I64,
-            ParamType::ArrayI64,
-            ParamType::ArrayI64,
-        ]
-    {
+    if param_types != [ParamType::I64, ParamType::ArrayI64, ParamType::ArrayI64] {
         return None;
     }
     // Pattern set: (reducer_a, op1, reducer_b, op2).
     // Curated for the benchmarks in this session; each maps to a
     // distinct real-world stateful update.
     let patterns = &[
-        ("sum", "+", "sum", "-"),   // delta accumulator
-        ("sum", "+", "sum", "+"),   // sum of both
-        ("sum", "-", "sum", "+"),   // reverse delta
-        ("max", "+", "min", "-"),   // cross range
-        ("min", "+", "max", "-"),   // reverse cross range
+        ("sum", "+", "sum", "-"),                       // delta accumulator
+        ("sum", "+", "sum", "+"),                       // sum of both
+        ("sum", "-", "sum", "+"),                       // reverse delta
+        ("max", "+", "min", "-"),                       // cross range
+        ("min", "+", "max", "-"),                       // reverse cross range
         ("count_positive", "+", "count_negative", "-"), // signed count
         ("count_negative", "+", "count_positive", "-"), // reverse signed
         ("count_positive", "+", "count_positive", "+"), // boost
@@ -508,21 +497,9 @@ pub(super) fn search_stateful_reducer_dual(
             got == ex.expected_int()
         });
         if passes {
-            let code = code_stateful_reducer_dual(
-                fn_name,
-                "state",
-                "a",
-                "b",
-                op1,
-                red_a,
-                op2,
-                red_b,
-            );
-            return verified_result(
-                problem,
-                code,
-                "search_stateful_reducer_dual",
-            );
+            let code =
+                code_stateful_reducer_dual(fn_name, "state", "a", "b", op1, red_a, op2, red_b);
+            return verified_result(problem, code, "search_stateful_reducer_dual");
         }
     }
     None
@@ -549,9 +526,7 @@ pub(super) fn search_stateful_reducer_event(
     fn_name: &str,
 ) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
-    if param_types
-        != [ParamType::I64, ParamType::I64, ParamType::ArrayI64]
-    {
+    if param_types != [ParamType::I64, ParamType::I64, ParamType::ArrayI64] {
         eprintln!(
             "[search_stateful_reducer_temporal] param_types={:?} for sig={}",
             param_types, problem.signature
@@ -572,36 +547,36 @@ pub(super) fn search_stateful_reducer_event(
     // gate_kind "event_gt_0" → if event > 0 then combined else state
     // gate_kind "event_eq_0" → if event == 0 then state else combined
     let patterns = &[
-        ("sum", "add_arr", "+", ""),                 // state + sum(arr)
-        ("sum", "add_arr", "-", ""),                 // state - sum(arr)
-        ("sum", "mul_event", "+", ""),               // state + event*sum(arr)
-        ("sum", "mul_event", "-", ""),               // state - event*sum(arr)
-        ("sum", "add_event", "+", ""),               // state + sum(arr) + event
-        ("sum", "add_event", "-", ""),               // state - sum(arr) - event
-        ("max", "add_arr", "+", ""),                 // state + max(arr)
-        ("min", "add_arr", "-", ""),                 // state - min(arr)
-        ("count_positive", "add_arr", "+", ""),      // state + count_positive(arr)
-        ("count_negative", "add_arr", "-", ""),      // state - count_negative(arr)
-        ("sum", "add_arr", "+", "event_gt_0"),       // if event>0 then state+sum(arr) else state
-        ("sum", "add_arr", "+", "event_eq_0"),       // if event==0 then state else state+sum(arr)
-        ("sum", "add_arr", "-", "event_gt_0"),       // if event>0 then state-sum(arr) else state
-        ("sum", "add_arr", "-", "event_eq_0"),       // if event==0 then state else state-sum(arr)
-        ("sum", "add_arr", "+", "event_le_0"),       // if event<=0 then state+sum(arr) else state
-        ("sum", "add_arr", "-", "event_le_0"),       // if event<=0 then state-sum(arr) else state
-        ("sum", "add_arr", "+", "event_lt_0"),       // if event<0 then state+sum(arr) else state
-        ("sum", "add_arr", "-", "event_lt_0"),       // if event<0 then state-sum(arr) else state
-        ("count_positive", "mul_event", "+", ""),    // state + event*count_positive(arr)
-        ("count_positive", "mul_event", "-", ""),    // state - event*count_positive(arr)
-        // Composite patterns use two reducers.
-        // We handle them as a separate small set below.
+        ("sum", "add_arr", "+", ""),              // state + sum(arr)
+        ("sum", "add_arr", "-", ""),              // state - sum(arr)
+        ("sum", "mul_event", "+", ""),            // state + event*sum(arr)
+        ("sum", "mul_event", "-", ""),            // state - event*sum(arr)
+        ("sum", "add_event", "+", ""),            // state + sum(arr) + event
+        ("sum", "add_event", "-", ""),            // state - sum(arr) - event
+        ("max", "add_arr", "+", ""),              // state + max(arr)
+        ("min", "add_arr", "-", ""),              // state - min(arr)
+        ("count_positive", "add_arr", "+", ""),   // state + count_positive(arr)
+        ("count_negative", "add_arr", "-", ""),   // state - count_negative(arr)
+        ("sum", "add_arr", "+", "event_gt_0"),    // if event>0 then state+sum(arr) else state
+        ("sum", "add_arr", "+", "event_eq_0"),    // if event==0 then state else state+sum(arr)
+        ("sum", "add_arr", "-", "event_gt_0"),    // if event>0 then state-sum(arr) else state
+        ("sum", "add_arr", "-", "event_eq_0"),    // if event==0 then state else state-sum(arr)
+        ("sum", "add_arr", "+", "event_le_0"),    // if event<=0 then state+sum(arr) else state
+        ("sum", "add_arr", "-", "event_le_0"),    // if event<=0 then state-sum(arr) else state
+        ("sum", "add_arr", "+", "event_lt_0"),    // if event<0 then state+sum(arr) else state
+        ("sum", "add_arr", "-", "event_lt_0"),    // if event<0 then state-sum(arr) else state
+        ("count_positive", "mul_event", "+", ""), // state + event*count_positive(arr)
+        ("count_positive", "mul_event", "-", ""), // state - event*count_positive(arr)
+                                                  // Composite patterns use two reducers.
+                                                  // We handle them as a separate small set below.
     ];
     // Composite two-reducer patterns
     let composites = &[
         // (red_a, red_b, op_inner, op_outer, gate_kind)
-        ("sum", "count_positive", "+", "+", ""),  // state + sum + count_pos
-        ("sum", "count_negative", "+", "-", ""),  // state + sum - count_neg
-        ("sum", "max", "+", "+", ""),             // state + sum + max
-        ("max", "sum", "+", "-", ""),             // state + max - sum
+        ("sum", "count_positive", "+", "+", ""), // state + sum + count_pos
+        ("sum", "count_negative", "+", "-", ""), // state + sum - count_neg
+        ("sum", "max", "+", "+", ""),            // state + sum + max
+        ("max", "sum", "+", "-", ""),            // state + max - sum
     ];
 
     // Validate each candidate pattern against the problem examples.
@@ -650,16 +625,32 @@ pub(super) fn search_stateful_reducer_event(
             let got: i64 = match gate {
                 "" => combined,
                 "event_gt_0" => {
-                    if event > 0 { combined } else { state }
+                    if event > 0 {
+                        combined
+                    } else {
+                        state
+                    }
                 }
                 "event_eq_0" => {
-                    if event == 0 { state } else { combined }
+                    if event == 0 {
+                        state
+                    } else {
+                        combined
+                    }
                 }
                 "event_le_0" => {
-                    if event <= 0 { combined } else { state }
+                    if event <= 0 {
+                        combined
+                    } else {
+                        state
+                    }
                 }
                 "event_lt_0" => {
-                    if event < 0 { combined } else { state }
+                    if event < 0 {
+                        combined
+                    } else {
+                        state
+                    }
                 }
                 _ => return false,
             };
@@ -667,20 +658,9 @@ pub(super) fn search_stateful_reducer_event(
         });
         if passes {
             let code = code_stateful_reducer_event(
-                fn_name,
-                state_arg,
-                event_arg,
-                arr_arg,
-                combine,
-                op,
-                reducer,
-                gate,
+                fn_name, state_arg, event_arg, arr_arg, combine, op, reducer, gate,
             );
-            return verified_result(
-                problem,
-                code,
-                "search_stateful_reducer_event",
-            );
+            return verified_result(problem, code, "search_stateful_reducer_event");
         }
     }
     // Composite two-reducer patterns
@@ -737,20 +717,9 @@ pub(super) fn search_stateful_reducer_event(
         });
         if passes {
             let code = code_stateful_reducer_event_composite(
-                fn_name,
-                state_arg,
-                event_arg,
-                arr_arg,
-                red_a,
-                red_b,
-                op_inner,
-                op_outer,
+                fn_name, state_arg, event_arg, arr_arg, red_a, red_b, op_inner, op_outer,
             );
-            return verified_result(
-                problem,
-                code,
-                "search_stateful_reducer_event",
-            );
+            return verified_result(problem, code, "search_stateful_reducer_event");
         }
     }
     None
@@ -785,10 +754,7 @@ fn reducer_fn(name: &str) -> Option<Box<dyn Fn(&[i64]) -> i64>> {
 /// Captures running-max/min accumulators, trigger accumulators, and
 /// state-flip patterns — all the conditional stateful updates the
 /// 2-arg reducer teacher cannot express.
-pub(super) fn search_stateful_replace(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_stateful_replace(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64, ParamType::ArrayI64] {
         return None;
@@ -801,18 +767,18 @@ pub(super) fn search_stateful_replace(
     //   "max", "min", "first", "last", "zero", "one", "neg_one",
     //   "state_plus_one", "state_minus_one", "neg_state"
     let patterns = &[
-        ("max_gt_zero", "max"),       // running max
-        ("min_lt_zero", "min"),       // running min (triggered by negative)
-        ("any_pos", "zero"),          // reset on positive
-        ("any_neg", "zero"),          // reset on negative
-        ("any_pos", "one"),           // set to 1 on positive
-        ("any_neg", "neg_one"),       // set to -1 on negative
-        ("any_pos", "neg_state"),     // flip on positive
-        ("any_neg", "neg_state"),     // flip on negative
-        ("any_pos", "state_plus_one"), // increment on positive
+        ("max_gt_zero", "max"),         // running max
+        ("min_lt_zero", "min"),         // running min (triggered by negative)
+        ("any_pos", "zero"),            // reset on positive
+        ("any_neg", "zero"),            // reset on negative
+        ("any_pos", "one"),             // set to 1 on positive
+        ("any_neg", "neg_one"),         // set to -1 on negative
+        ("any_pos", "neg_state"),       // flip on positive
+        ("any_neg", "neg_state"),       // flip on negative
+        ("any_pos", "state_plus_one"),  // increment on positive
         ("any_neg", "state_minus_one"), // decrement on negative
-        ("max_gt_zero", "max"),       // dup-safe running max
-        ("min_lt_zero", "min"),       // dup-safe running min
+        ("max_gt_zero", "max"),         // dup-safe running max
+        ("min_lt_zero", "min"),         // dup-safe running min
     ];
     for &(pred, new_value) in patterns {
         let mut per_example: Vec<(i64, Vec<i64>, i64, bool)> = Vec::new();
@@ -824,11 +790,17 @@ pub(super) fn search_stateful_replace(
             }
             let state = match &ex.inputs[0] {
                 Value::Int(v) => *v,
-                _ => { all_pass = false; break; }
+                _ => {
+                    all_pass = false;
+                    break;
+                }
             };
             let arr = match &ex.inputs[1] {
                 Value::Array(v) => v.clone(),
-                _ => { all_pass = false; break; }
+                _ => {
+                    all_pass = false;
+                    break;
+                }
             };
             let pred_holds = match pred {
                 "any_pos" => arr.iter().any(|&x| x > 0),
@@ -845,7 +817,10 @@ pub(super) fn search_stateful_replace(
             if !pred_holds {
                 let ok = state == ex.expected_int();
                 per_example.push((state, arr.clone(), ex.expected_int(), ok));
-                if !ok { all_pass = false; break; }
+                if !ok {
+                    all_pass = false;
+                    break;
+                }
                 continue;
             }
             let got = match new_value {
@@ -859,19 +834,21 @@ pub(super) fn search_stateful_replace(
                 "state_plus_one" => state + 1,
                 "state_minus_one" => state - 1,
                 "neg_state" => -state,
-                _ => { all_pass = false; break; }
+                _ => {
+                    all_pass = false;
+                    break;
+                }
             };
             let ok = got == ex.expected_int();
             per_example.push((state, arr.clone(), ex.expected_int(), ok));
-            if !ok { all_pass = false; break; }
+            if !ok {
+                all_pass = false;
+                break;
+            }
         }
         if all_pass {
             let code = code_stateful_replace(fn_name, pred, new_value);
-            return verified_result(
-                problem,
-                code,
-                "search_stateful_replace",
-            );
+            return verified_result(problem, code, "search_stateful_replace");
         }
     }
     None
@@ -1788,22 +1765,27 @@ pub(super) fn search_stateful_reducer_temporal(
     fn_name: &str,
 ) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
-    eprintln!("[temporal] sig={} param_types={:?}", problem.signature, param_types);
-    if param_types
-        != [ParamType::I64, ParamType::I64, ParamType::ArrayI64]
-    {
+    eprintln!(
+        "[temporal] sig={} param_types={:?}",
+        problem.signature, param_types
+    );
+    if param_types != [ParamType::I64, ParamType::I64, ParamType::ArrayI64] {
         return None;
     }
     eprintln!("[temporal] ENTERED");
 
     eprintln!("[temporal] examples.len()={}", problem.examples.len());
     for ex in &problem.examples {
-        eprintln!("[temporal]   ex: inputs.len()={} expected={:?}", ex.inputs.len(), ex.expected);
+        eprintln!(
+            "[temporal]   ex: inputs.len()={} expected={:?}",
+            ex.inputs.len(),
+            ex.expected
+        );
     }
 
     let time_kinds: &[&str] = &[
-        "identity", "neg", "tick_n2", "tick_n3", "tick_n4",
-        "tick_n5", "tick_n6", "odd_n2", "odd_n3",
+        "identity", "neg", "tick_n2", "tick_n3", "tick_n4", "tick_n5", "tick_n6", "odd_n2",
+        "odd_n3",
     ];
     let reducer_combos: &[(&str, &str)] = &[
         ("sum", "+"),
@@ -1816,7 +1798,10 @@ pub(super) fn search_stateful_reducer_temporal(
     let no_reducer_combos: &[&str] = &["+", "-"];
 
     for &(reducer, op_state) in reducer_combos {
-        eprintln!("[temporal] with-reducer loop: reducer={} op_state={}", reducer, op_state);
+        eprintln!(
+            "[temporal] with-reducer loop: reducer={} op_state={}",
+            reducer, op_state
+        );
         let reducer_fn = match reducer_fn(reducer) {
             Some(f) => f,
             None => continue,
@@ -1848,13 +1833,55 @@ pub(super) fn search_stateful_reducer_temporal(
                     let time_expr: i64 = match time_kind {
                         "identity" => t,
                         "neg" => -t,
-                        "tick_n2" => if t % 2 == 0 { 1 } else { 0 },
-                        "tick_n3" => if t % 3 == 0 { 1 } else { 0 },
-                        "tick_n4" => if t % 4 == 0 { 1 } else { 0 },
-                        "tick_n5" => if t % 5 == 0 { 1 } else { 0 },
-                        "tick_n6" => if t % 6 == 0 { 1 } else { 0 },
-                        "odd_n2" => if t % 2 == 1 { 1 } else { 0 },
-                        "odd_n3" => if t % 3 == 1 { 1 } else { 0 },
+                        "tick_n2" => {
+                            if t % 2 == 0 {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        "tick_n3" => {
+                            if t % 3 == 0 {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        "tick_n4" => {
+                            if t % 4 == 0 {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        "tick_n5" => {
+                            if t % 5 == 0 {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        "tick_n6" => {
+                            if t % 6 == 0 {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        "odd_n2" => {
+                            if t % 2 == 1 {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        "odd_n3" => {
+                            if t % 3 == 1 {
+                                1
+                            } else {
+                                0
+                            }
+                        }
                         _ => return false,
                     };
                     let got = match time_op {
@@ -1866,20 +1893,9 @@ pub(super) fn search_stateful_reducer_temporal(
                 });
                 if passes {
                     let code = code_stateful_reducer_temporal(
-                        fn_name,
-                        "state",
-                        "t",
-                        "arr",
-                        reducer,
-                        op_state,
-                        time_kind,
-                        time_op,
+                        fn_name, "state", "t", "arr", reducer, op_state, time_kind, time_op,
                     );
-                    return verified_result(
-                        problem,
-                        code,
-                        "search_stateful_reducer_temporal",
-                    );
+                    return verified_result(problem, code, "search_stateful_reducer_temporal");
                 }
             }
         }
@@ -1887,9 +1903,15 @@ pub(super) fn search_stateful_reducer_temporal(
     eprintln!("[temporal] about to enter no-reducer loop");
 
     for &op_state in no_reducer_combos {
-        eprintln!("[temporal] no-reducer loop entered with op_state={}", op_state);
+        eprintln!(
+            "[temporal] no-reducer loop entered with op_state={}",
+            op_state
+        );
         for &time_kind in time_kinds {
-            eprintln!("[temporal] trying no-reducer op={} time_kind={}", op_state, time_kind);
+            eprintln!(
+                "[temporal] trying no-reducer op={} time_kind={}",
+                op_state, time_kind
+            );
             let passes = problem.examples.iter().all(|ex| {
                 if ex.inputs.len() != 3 {
                     return false;
@@ -1909,13 +1931,55 @@ pub(super) fn search_stateful_reducer_temporal(
                 let time_expr: i64 = match time_kind {
                     "identity" => t,
                     "neg" => -t,
-                    "tick_n2" => if t % 2 == 0 { 1 } else { 0 },
-                    "tick_n3" => if t % 3 == 0 { 1 } else { 0 },
-                    "tick_n4" => if t % 4 == 0 { 1 } else { 0 },
-                    "tick_n5" => if t % 5 == 0 { 1 } else { 0 },
-                    "tick_n6" => if t % 6 == 0 { 1 } else { 0 },
-                    "odd_n2" => if t % 2 == 1 { 1 } else { 0 },
-                    "odd_n3" => if t % 3 == 1 { 1 } else { 0 },
+                    "tick_n2" => {
+                        if t % 2 == 0 {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    "tick_n3" => {
+                        if t % 3 == 0 {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    "tick_n4" => {
+                        if t % 4 == 0 {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    "tick_n5" => {
+                        if t % 5 == 0 {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    "tick_n6" => {
+                        if t % 6 == 0 {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    "odd_n2" => {
+                        if t % 2 == 1 {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    "odd_n3" => {
+                        if t % 3 == 1 {
+                            1
+                        } else {
+                            0
+                        }
+                    }
                     _ => return false,
                 };
                 let got = match op_state {
@@ -1927,17 +1991,9 @@ pub(super) fn search_stateful_reducer_temporal(
             });
             if passes {
                 let code = code_stateful_reducer_temporal_no_reducer(
-                    fn_name,
-                    "state",
-                    "t",
-                    op_state,
-                    time_kind,
+                    fn_name, "state", "t", op_state, time_kind,
                 );
-                return verified_result(
-                    problem,
-                    code,
-                    "search_stateful_reducer_temporal",
-                );
+                return verified_result(problem, code, "search_stateful_reducer_temporal");
             }
         }
     }
@@ -1946,10 +2002,7 @@ pub(super) fn search_stateful_reducer_temporal(
 }
 
 /// Stage 5: Factorial pattern recognition (explicit-stack iteration).
-pub(super) fn search_recursive_factorial(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_recursive_factorial(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -1973,10 +2026,7 @@ pub(super) fn search_recursive_factorial(
 }
 
 /// Stage 5: Fibonacci pattern recognition (explicit-stack iteration).
-pub(super) fn search_recursive_fibonacci(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_recursive_fibonacci(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2042,11 +2092,7 @@ pub(super) fn search_mutual_recursion_even_odd(
 
     if passes {
         let code = code_mutual_recursion_even_odd(fn_name);
-        return verified_result(
-            problem,
-            code,
-            "search_mutual_recursion_even_odd",
-        );
+        return verified_result(problem, code, "search_mutual_recursion_even_odd");
     }
     None
 }
@@ -2092,21 +2138,14 @@ pub(super) fn search_mutual_recursion_fib_pair(
 
     if passes {
         let code = code_mutual_recursion_fib_pair(fn_name);
-        return verified_result(
-            problem,
-            code,
-            "search_mutual_recursion_fib_pair",
-        );
+        return verified_result(problem, code, "search_mutual_recursion_fib_pair");
     }
     None
 }
 
 /// Stage 5: Tribonacci Teacher
 /// Detects: tribonacci(n) = trib(n-1) + trib(n-2) + trib(n-3), base: 0,0,1
-pub(super) fn search_tribonacci(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tribonacci(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2150,10 +2189,7 @@ pub(super) fn search_tribonacci(
 }
 
 /// Stage 5: Tree Traversal - Preorder (Root, Left, Right)
-pub(super) fn search_tree_preorder_sum(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_preorder_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if problem.examples.is_empty() {
         return None;
     }
@@ -2167,13 +2203,10 @@ pub(super) fn search_tree_preorder_sum(
     }
 
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes.as_slice()),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes.as_slice()),
+            _ => None,
+        })?;
 
         if ex.expected_int() != sum_tree_preorder(0, tree) {
             return None;
@@ -2185,10 +2218,7 @@ pub(super) fn search_tree_preorder_sum(
 }
 
 /// Stage 5: Tree Traversal - Inorder (Left, Root, Right)
-pub(super) fn search_tree_inorder_sum(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_inorder_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if problem.examples.is_empty() {
         return None;
     }
@@ -2202,13 +2232,10 @@ pub(super) fn search_tree_inorder_sum(
     }
 
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes.as_slice()),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes.as_slice()),
+            _ => None,
+        })?;
 
         if ex.expected_int() != sum_tree_inorder(0, tree) {
             return None;
@@ -2220,10 +2247,7 @@ pub(super) fn search_tree_inorder_sum(
 }
 
 /// Stage 5: Tree Traversal - Postorder (Left, Right, Root)
-pub(super) fn search_tree_postorder_sum(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_postorder_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if problem.examples.is_empty() {
         return None;
     }
@@ -2237,13 +2261,10 @@ pub(super) fn search_tree_postorder_sum(
     }
 
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes.as_slice()),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes.as_slice()),
+            _ => None,
+        })?;
 
         if ex.expected_int() != sum_tree_postorder(0, tree) {
             return None;
@@ -2255,10 +2276,7 @@ pub(super) fn search_tree_postorder_sum(
 }
 
 /// Stage 5: Tree Traversal - Level Order (BFS)
-pub(super) fn search_tree_level_order_sum(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_tree_level_order_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if problem.examples.is_empty() {
         return None;
     }
@@ -2272,13 +2290,10 @@ pub(super) fn search_tree_level_order_sum(
     }
 
     for ex in &problem.examples {
-        let tree = ex
-            .inputs
-            .iter()
-            .find_map(|v| match v {
-                Value::Tree(nodes) => Some(nodes.as_slice()),
-                _ => None,
-            })?;
+        let tree = ex.inputs.iter().find_map(|v| match v {
+            Value::Tree(nodes) => Some(nodes.as_slice()),
+            _ => None,
+        })?;
 
         if ex.expected_int() != sum_tree_level_order(tree) {
             return None;
@@ -2291,10 +2306,7 @@ pub(super) fn search_tree_level_order_sum(
 
 /// Stage 5: Ackermann Function (mu-recursive hierarchy)
 /// Computes: A(m, n) with limited support (m <= 3, n <= 10)
-pub(super) fn search_ackermann(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_ackermann(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64, ParamType::I64] {
         return None;
@@ -2332,10 +2344,7 @@ pub(super) fn search_ackermann(
 
 /// Stage 5: Quick-Select (find k-th smallest)
 /// Detects: find k-th smallest element in array via partition
-pub(super) fn search_quickselect(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_quickselect(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64, ParamType::I64] {
         return None;
@@ -2372,10 +2381,7 @@ pub(super) fn search_quickselect(
 }
 
 /// Stage 5: Merge Sort (stable sort via divide-and-conquer)
-pub(super) fn search_merge_sort(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_merge_sort(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
         return None;
@@ -2408,10 +2414,7 @@ pub(super) fn search_merge_sort(
 
 /// Stage 5: Binary Search Tree - Search for Key
 /// Detects: searches BST for a target value
-pub(super) fn search_bst_search(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_bst_search(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if problem.examples.is_empty() {
         return None;
     }
@@ -2448,10 +2451,7 @@ pub(super) fn search_bst_search(
 
 /// Stage 5: Binary Search Tree - Insert into BST
 /// Detects: inserts a value into BST maintaining order
-pub(super) fn search_bst_insert(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_bst_insert(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if problem.examples.is_empty() {
         return None;
     }
@@ -2467,10 +2467,7 @@ pub(super) fn search_bst_insert(
 
 /// Stage 5: Binary Search Tree - Delete from BST
 /// Detects: removes a value from BST maintaining order
-pub(super) fn search_bst_delete(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_bst_delete(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if problem.examples.is_empty() {
         return None;
     }
@@ -2489,13 +2486,10 @@ pub(super) fn search_bst_delete(
 // ============================================================================
 
 fn extract_tree_for_search(problem: &Problem) -> Option<&[TreeNode]> {
-    problem.examples[0]
-        .inputs
-        .iter()
-        .find_map(|v| match v {
-            Value::Tree(nodes) => Some(nodes.as_slice()),
-            _ => None,
-        })
+    problem.examples[0].inputs.iter().find_map(|v| match v {
+        Value::Tree(nodes) => Some(nodes.as_slice()),
+        _ => None,
+    })
 }
 
 fn sum_tree_preorder(idx: i32, tree: &[TreeNode]) -> i64 {
@@ -2503,9 +2497,7 @@ fn sum_tree_preorder(idx: i32, tree: &[TreeNode]) -> i64 {
         return 0;
     }
     let node = &tree[idx as usize];
-    node.value
-        + sum_tree_preorder(node.left, tree)
-        + sum_tree_preorder(node.right, tree)
+    node.value + sum_tree_preorder(node.left, tree) + sum_tree_preorder(node.right, tree)
 }
 
 fn sum_tree_inorder(idx: i32, tree: &[TreeNode]) -> i64 {
@@ -2513,9 +2505,7 @@ fn sum_tree_inorder(idx: i32, tree: &[TreeNode]) -> i64 {
         return 0;
     }
     let node = &tree[idx as usize];
-    sum_tree_inorder(node.left, tree)
-        + node.value
-        + sum_tree_inorder(node.right, tree)
+    sum_tree_inorder(node.left, tree) + node.value + sum_tree_inorder(node.right, tree)
 }
 
 fn sum_tree_postorder(idx: i32, tree: &[TreeNode]) -> i64 {
@@ -2523,9 +2513,7 @@ fn sum_tree_postorder(idx: i32, tree: &[TreeNode]) -> i64 {
         return 0;
     }
     let node = &tree[idx as usize];
-    sum_tree_postorder(node.left, tree)
-        + sum_tree_postorder(node.right, tree)
-        + node.value
+    sum_tree_postorder(node.left, tree) + sum_tree_postorder(node.right, tree) + node.value
 }
 
 fn sum_tree_level_order(tree: &[TreeNode]) -> i64 {
@@ -2701,10 +2689,7 @@ pub(super) fn search_sequence_cubic_polynomial(
 
 /// Chebyshev polynomial sequence: T_n(x) = cos(n * arccos(x))
 /// For integer sequences, detect patterns like T_n(2), T_n(3), etc.
-pub(super) fn search_chebyshev_sequence(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_chebyshev_sequence(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2752,10 +2737,7 @@ pub(super) fn search_chebyshev_sequence(
 
 /// Hermite polynomial sequence: H_n(x)
 /// For integer sequences, detect patterns like H_n(0), H_n(1), etc.
-pub(super) fn search_hermite_sequence(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_hermite_sequence(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2802,10 +2784,7 @@ pub(super) fn search_hermite_sequence(
 
 /// Legendre polynomial sequence: P_n(x)
 /// For integer sequences, detect patterns like P_n(1), P_n(2), etc.
-pub(super) fn search_legendre_sequence(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_legendre_sequence(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2929,10 +2908,7 @@ pub(super) fn search_geometric_progression(
 
 /// Harmonic progression (HP): 1/a, 1/(a+d), 1/(a+2d), ...
 /// For integer sequences, validates the reciprocal AP pattern.
-pub(super) fn search_harmonic_progression(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_harmonic_progression(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2977,12 +2953,12 @@ pub(super) fn search_harmonic_progression(
 
 /// Stage 8: Mean (Average) Teacher
 /// Recognizes: sum(arr) / len(arr)
-pub(super) fn search_array_mean(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_mean(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3010,12 +2986,12 @@ pub(super) fn search_array_mean(
 
 /// Stage 8: Median Teacher
 /// Recognizes: middle value when sorted
-pub(super) fn search_array_median(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_median(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3045,12 +3021,12 @@ pub(super) fn search_array_median(
 
 /// Stage 8: Mode (Most Frequent Value) Teacher
 /// Recognizes: most frequently occurring value
-pub(super) fn search_array_mode(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_mode(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3088,12 +3064,12 @@ pub(super) fn search_array_mode(
 
 /// Stage 8: Variance Teacher
 /// Recognizes: sum((x - mean)^2) / n
-pub(super) fn search_array_variance(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_variance(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3110,12 +3086,14 @@ pub(super) fn search_array_variance(
         }
 
         let mean = arr.iter().sum::<i64>() / arr.len() as i64;
-        let variance = arr.iter()
+        let variance = arr
+            .iter()
             .map(|&x| {
                 let diff = x - mean;
                 diff * diff
             })
-            .sum::<i64>() / arr.len() as i64;
+            .sum::<i64>()
+            / arr.len() as i64;
         variance == ex.expected_int()
     });
 
@@ -3128,12 +3106,12 @@ pub(super) fn search_array_variance(
 
 /// Stage 8: Standard Deviation Teacher
 /// Recognizes: sqrt(variance)
-pub(super) fn search_array_stddev(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_stddev(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3150,12 +3128,14 @@ pub(super) fn search_array_stddev(
         }
 
         let mean = arr.iter().sum::<i64>() / arr.len() as i64;
-        let variance = arr.iter()
+        let variance = arr
+            .iter()
             .map(|&x| {
                 let diff = x - mean;
                 diff * diff
             })
-            .sum::<i64>() / arr.len() as i64;
+            .sum::<i64>()
+            / arr.len() as i64;
 
         // Integer square root
         let mut stddev = 0i64;
@@ -3178,12 +3158,12 @@ pub(super) fn search_array_stddev(
 
 /// Stage 8: Percentile Teacher
 /// Recognizes: value at specified percentile rank (25th, 50th, 75th)
-pub(super) fn search_array_percentile(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_percentile(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3204,7 +3184,11 @@ pub(super) fn search_array_percentile(
             let mut sorted = arr.clone();
             sorted.sort_unstable();
             let idx = (sorted.len() as i64 * percentile) / 100;
-            let idx = if idx >= sorted.len() as i64 { sorted.len() - 1 } else { idx as usize };
+            let idx = if idx >= sorted.len() as i64 {
+                sorted.len() - 1
+            } else {
+                idx as usize
+            };
             sorted[idx] == ex.expected_int()
         });
 
@@ -3226,6 +3210,9 @@ pub(super) fn search_array_coefficient_variation(
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     let passes = problem.examples.iter().all(|ex| {
         if ex.inputs.len() != 1 {
@@ -3244,12 +3231,14 @@ pub(super) fn search_array_coefficient_variation(
             return ex.expected_int() == 0;
         }
 
-        let variance = arr.iter()
+        let variance = arr
+            .iter()
             .map(|&x| {
                 let diff = x - mean;
                 diff * diff
             })
-            .sum::<i64>() / arr.len() as i64;
+            .sum::<i64>()
+            / arr.len() as i64;
 
         // Integer square root
         let mut stddev = 0i64;
@@ -3274,10 +3263,7 @@ pub(super) fn search_array_coefficient_variation(
 
 /// Stage 8: Z-Score Outlier Detection Teacher
 /// Recognizes: is value within N standard deviations of mean?
-pub(super) fn search_array_zscore_outlier(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_zscore_outlier(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64, ParamType::I64] {
         return None;
@@ -3303,12 +3289,14 @@ pub(super) fn search_array_zscore_outlier(
             }
 
             let mean = arr.iter().sum::<i64>() / arr.len() as i64;
-            let variance = arr.iter()
+            let variance = arr
+                .iter()
                 .map(|&x| {
                     let diff = x - mean;
                     diff * diff
                 })
-                .sum::<i64>() / arr.len() as i64;
+                .sum::<i64>()
+                / arr.len() as i64;
 
             let mut stddev = 0i64;
             let mut sq = 0i64;
@@ -3338,10 +3326,7 @@ pub(super) fn search_array_zscore_outlier(
 
 /// Stage 8: IQR Outlier Detection Teacher
 /// Recognizes: is value within 1.5*IQR of quartiles?
-pub(super) fn search_array_iqr_outlier(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_iqr_outlier(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64, ParamType::I64] {
         return None;
@@ -3389,12 +3374,12 @@ pub(super) fn search_array_iqr_outlier(
 
 /// Stage 8: Skewness Teacher
 /// Recognizes: Fisher-Pearson skewness coefficient
-pub(super) fn search_array_skewness(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_array_skewness(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3601,6 +3586,9 @@ pub(super) fn search_lis(problem: &Problem, fn_name: &str) -> Option<SolveResult
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     let passes = problem.examples.iter().all(|ex| {
         if ex.inputs.len() != 1 {
@@ -3644,6 +3632,9 @@ pub(super) fn search_lds(problem: &Problem, fn_name: &str) -> Option<SolveResult
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     let passes = problem.examples.iter().all(|ex| {
         if ex.inputs.len() != 1 {
@@ -3685,6 +3676,9 @@ pub(super) fn search_lds(problem: &Problem, fn_name: &str) -> Option<SolveResult
 pub(super) fn search_coin_change_min(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3750,6 +3744,9 @@ pub(super) fn search_coin_change_count(problem: &Problem, fn_name: &str) -> Opti
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    if is_array_output(problem.signature) {
+        return None;
+    }
 
     // Infer target similarly
     let mut targets = HashSet::new();
@@ -3807,6 +3804,9 @@ pub(super) fn search_coin_change_count(problem: &Problem, fn_name: &str) -> Opti
 pub(super) fn search_subset_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
+        return None;
+    }
+    if is_array_output(problem.signature) {
         return None;
     }
 
@@ -3871,6 +3871,11 @@ pub(super) fn search_partition_equal_sum(problem: &Problem, fn_name: &str) -> Op
     if param_types != [ParamType::ArrayI64] {
         return None;
     }
+    // Scalar-output teacher: skip array-output problems (`-> [i64]`), whose
+    // `expected` is an array that would be mis-read as an int below.
+    if problem.signature.replace(' ', "").contains("->[") {
+        return None;
+    }
 
     let passes = problem.examples.iter().all(|ex| {
         if ex.inputs.len() != 1 {
@@ -3893,6 +3898,11 @@ pub(super) fn search_partition_equal_sum(problem: &Problem, fn_name: &str) -> Op
         }
 
         let target = total / 2;
+        // A negative target (negative even total) cannot index the DP table;
+        // no non-empty subset sums to it under this teacher's assumptions.
+        if target < 0 {
+            return ex.expected_int() == 0;
+        }
 
         // Simulate partition equal sum
         let mut dp = vec![0i64; (target + 1) as usize];

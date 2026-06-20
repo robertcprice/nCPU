@@ -4719,6 +4719,23 @@ fn synthesize_scalar_inner(problem: &Problem, use_templates: bool) -> Option<Sol
     let fn_name = problem.function_name();
     let n_args = problem.examples.first()?.inputs.len();
 
+    // Global wall-clock budget for the whole gradient sweep. This function runs
+    // N_RESTARTS × ~20 gradient blocks; on data that never converges (a
+    // contradictory teacher-augmented re-fit, or a genuinely unsynthesizable
+    // problem) it could otherwise grind for minutes before missing. The budget is
+    // generous — far above any run that actually converges — so it only trims the
+    // pathological tail and does not cost real solves coverage. Scaled by arg
+    // count, mirroring the expr path's own budget.
+    let _train_deadline = crate::synthesis::common::TrainDeadline::set(
+        std::time::Duration::from_secs_f32(if n_args <= 2 {
+            60.0
+        } else if n_args <= 3 {
+            90.0
+        } else {
+            120.0
+        }),
+    );
+
     // Template fast-path: try reference code + common inline patterns before gradient descent
     if use_templates {
         if let Some(result) = try_scalar_templates(problem, fn_name, n_args) {

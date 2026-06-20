@@ -44,7 +44,9 @@ impl std::fmt::Display for Value {
             Value::Tree(nodes) => {
                 write!(f, "Tree[")?;
                 for (i, node) in nodes.iter().enumerate() {
-                    if i > 0 { write!(f, "; ")?; }
+                    if i > 0 {
+                        write!(f, "; ")?;
+                    }
                     write!(f, "({}, {}, {})", node.value, node.left, node.right)?;
                 }
                 write!(f, "]")
@@ -104,6 +106,15 @@ pub fn value_as_f64(v: &Value) -> Option<f64> {
     }
 }
 
+/// Definition of a single function within a multi-function program.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FunctionDef {
+    pub name: String,
+    pub signature: String,
+    pub examples: Vec<Example>,
+    pub entry_point: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Problem {
     pub name: String,
@@ -118,6 +129,7 @@ pub struct Problem {
     pub recursive_allowed: bool,
     pub tree_input: bool,
     pub explicit_stack: bool,
+    pub functions: Vec<FunctionDef>,
 }
 
 impl Problem {
@@ -130,9 +142,19 @@ impl Problem {
     }
 
     /// True when the function returns a string (used to pick the right print
-    /// builtin and expected-output rendering).
+    /// builtin and expected-output rendering). Case-insensitive so `-> String`
+    /// and `-> string` both match.
     fn returns_string(&self) -> bool {
-        self.signature.replace(' ', "").contains("->string")
+        self.signature
+            .replace(' ', "")
+            .to_ascii_lowercase()
+            .contains("->string")
+    }
+
+    /// True when the function returns an array (`-> [i64]`), so the wrapper
+    /// prints with the array-capable `println` rather than `println_i64`.
+    fn returns_array(&self) -> bool {
+        self.signature.replace(' ', "").contains("->[")
     }
 
     pub fn expected_stdout(&self) -> String {
@@ -145,9 +167,10 @@ impl Problem {
 
     pub fn build_wrapper(&self) -> Result<String, String> {
         let fn_name = self.function_name();
-        // String-returning functions print with the generic `println` (raw
-        // string); integer functions print with `println_i64`.
-        let print = if self.returns_string() {
+        // String- and array-returning functions print with the generic
+        // `println` (which renders strings raw and arrays as "[a, b, c]");
+        // integer functions print with `println_i64`.
+        let print = if self.returns_string() || self.returns_array() {
             "println"
         } else {
             "println_i64"
@@ -208,10 +231,7 @@ fn example(inputs: Vec<Value>, expected: i64) -> Example {
 
 /// An example with a struct (Quad) expected output.
 fn example_quad(inputs: Vec<Value>, expected: Value) -> Example {
-    Example {
-        inputs,
-        expected,
-    }
+    Example { inputs, expected }
 }
 
 /// An example with a string expected output (for string-returning problems).
@@ -240,7 +260,8 @@ fn render_expected(value: &Value) -> String {
         Value::Pair(a, b) => format!("({a}, {b})"),
         Value::Quad(a, b, c, d) => format!("({a}, {b}, {c}, {d})"),
         Value::Tree(nodes) => {
-            let node_strs: Vec<String> = nodes.iter()
+            let node_strs: Vec<String> = nodes
+                .iter()
                 .map(|n| format!("({},{},{})", n.value, n.left, n.right))
                 .collect();
             format!("Tree[{}]", node_strs.join(";"))
@@ -310,7 +331,11 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
         Value::Int(v) => Ok(v.to_string()),
         Value::Float(b) => Ok(format!("{:.7}", f64::from_bits(*b))),
         Value::Str(v) => Ok(render_string(v)),
-        Value::Bool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),
+        Value::Bool(b) => Ok(if *b {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }),
         Value::Array(values) => Ok(format!(
             "[{}]",
             values
@@ -333,17 +358,29 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
         }
         Value::Quad(a, b, c, d) => {
             if problem.signature.contains("DualTally") {
-                Ok(format!("DualTally {{ pos_count: {a}, neg_count: {b}, zero_count: {c}, total: {d} }}"))
+                Ok(format!(
+                    "DualTally {{ pos_count: {a}, neg_count: {b}, zero_count: {c}, total: {d} }}"
+                ))
             } else if problem.signature.contains("RateLimiter") {
-                Ok(format!("RateLimiter {{ total: {a}, exceeded: {b}, count: {c}, limit_reached: {d} }}"))
+                Ok(format!(
+                    "RateLimiter {{ total: {a}, exceeded: {b}, count: {c}, limit_reached: {d} }}"
+                ))
             } else if problem.signature.contains("RunningCorrelation") {
-                Ok(format!("RunningCorrelation {{ sum_x: {a}, sum_y: {b}, sum_xy: {c}, count: {d} }}"))
+                Ok(format!(
+                    "RunningCorrelation {{ sum_x: {a}, sum_y: {b}, sum_xy: {c}, count: {d} }}"
+                ))
             } else if problem.signature.contains("MutualInfo") {
-                Ok(format!("MutualInfo {{ joint_00: {a}, joint_01: {b}, joint_10: {c}, joint_11: {d} }}"))
+                Ok(format!(
+                    "MutualInfo {{ joint_00: {a}, joint_01: {b}, joint_10: {c}, joint_11: {d} }}"
+                ))
             } else if problem.signature.contains("ThresholdClassifier") {
-                Ok(format!("ThresholdClassifier {{ below: {a}, between: {b}, above: {c}, total: {d} }}"))
+                Ok(format!(
+                    "ThresholdClassifier {{ below: {a}, between: {b}, above: {c}, total: {d} }}"
+                ))
             } else if problem.signature.contains("PairedExtrema") {
-                Ok(format!("PairedExtrema {{ min: {a}, min_idx: {b}, max: {c}, max_idx: {d} }}"))
+                Ok(format!(
+                    "PairedExtrema {{ min: {a}, min_idx: {b}, max: {c}, max_idx: {d} }}"
+                ))
             } else {
                 Err(format!(
                     "cannot render quad literal for {} with signature {}",
@@ -351,12 +388,10 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
                 ))
             }
         }
-        Value::Tree(_nodes) => {
-            Err(format!(
-                "tree rendering not yet implemented for {}",
-                problem.name
-            ))
-        }
+        Value::Tree(_nodes) => Err(format!(
+            "tree rendering not yet implemented for {}",
+            problem.name
+        )),
     }
 }
 
@@ -383,6 +418,7 @@ fn problem(
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     }
 }
 
@@ -1941,7 +1977,10 @@ fn make_is_sorted(variant: usize) -> Problem {
 }
 
 fn example_bool(inputs: Vec<Value>, expected: bool) -> Example {
-    Example { inputs, expected: Value::Bool(expected) }
+    Example {
+        inputs,
+        expected: Value::Bool(expected),
+    }
 }
 
 /// Same task as `is_sorted` but the predicate is carried in Mog's
@@ -2108,10 +2147,8 @@ fn make_has_strictly_increasing_run(variant: usize) -> Problem {
     let signature: &'static str =
         Box::leak(format!("fn {name}(arr: [i64]) -> i64").into_boxed_str());
     let description: &'static str = Box::leak(
-        format!(
-            "Return 1 iff arr contains a strictly increasing run of length >= {run_length}."
-        )
-        .into_boxed_str(),
+        format!("Return 1 iff arr contains a strictly increasing run of length >= {run_length}.")
+            .into_boxed_str(),
     );
     problem(
         &name,
@@ -2290,10 +2327,8 @@ fn make_longest_run(variant: usize) -> Problem {
     let signature: &'static str =
         Box::leak(format!("fn {name}(arr: [i64]) -> i64").into_boxed_str());
     let description: &'static str = Box::leak(
-        format!(
-            "Return the length of the longest contiguous run of {target} in arr."
-        )
-        .into_boxed_str(),
+        format!("Return the length of the longest contiguous run of {target} in arr.")
+            .into_boxed_str(),
     );
     problem(
         &name,
@@ -4328,6 +4363,7 @@ mod tests {
             recursive_allowed: false,
             tree_input: true,
             explicit_stack: false,
+            functions: vec![],
         };
         let rendered = render_value(&dummy_problem, &tree_val);
         assert!(rendered.is_err());

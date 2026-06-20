@@ -1,18 +1,19 @@
 use std::fs;
 use std::path::PathBuf;
 
-use mog_synth::benchmark::{get_benchmark, Example, Problem, Value};
+use mog_synth::benchmark::{get_benchmark, Example, FunctionDef, Problem, Value};
 use mog_synth::enumerative;
-use mog_synth::interactive::{
+use mog_synth::interactive_legacy::{
     solve_interactive_problem, solve_interactive_problem_differentiable_only,
 };
 use mog_synth::morph_transduce::{solve_morph_transduction, StrExample};
+use mog_synth::multi::TargetLang;
 use mog_synth::orchestrator::Orchestrator;
 use mog_synth::runtime::{execute_program, execute_program_with_input};
 use mog_synth::solver::{
     solve_benchmark, solve_benchmark_differentiable_only, solve_benchmark_legacy_only,
     solve_benchmark_prefer_differentiable, solve_benchmark_with_legacy_fallback, solve_problem,
-    solve_problem_differentiable_only, solve_problem_legacy_only,
+    solve_problem_agentic, solve_problem_differentiable_only, solve_problem_legacy_only,
     solve_problem_prefer_differentiable, solve_problem_with_legacy_fallback,
 };
 use mog_synth::string_synth::{synthesize_string_program, StrSynthExample};
@@ -75,6 +76,72 @@ fn run_emitted_on_input(
     Ok(format!("{value:?}"))
 }
 
+/// Parse target language from CLI argument
+fn parse_target_lang(s: &str) -> Option<TargetLang> {
+    match s.to_lowercase().as_str() {
+        "rust" => Some(TargetLang::Rust),
+        "js" | "javascript" => Some(TargetLang::JavaScript),
+        "py" | "python" => Some(TargetLang::Python),
+        "ts" | "typescript" => Some(TargetLang::TypeScript),
+        "go" => Some(TargetLang::Go),
+        "java" => Some(TargetLang::Java),
+        _ => {
+            eprintln!("unknown target language: {s}");
+            eprintln!("supported: rust, javascript, python, typescript, go, java");
+            None
+        }
+    }
+}
+
+/// Transpile synthesized Rust code to target language (placeholder)
+fn transpile_to_target(rust_code: &str, target: TargetLang) -> String {
+    match target {
+        TargetLang::Rust => rust_code.to_string(),
+        TargetLang::JavaScript => {
+            // Simple demonstration - convert basic Rust to JS
+            rust_code
+                .replace("fn ", "function ")
+                .replace(" -> i64", "")
+                .replace(" -> String", "")
+                .replace("let ", "let ")
+                .replace("return ", "return ")
+                .replace("i64", "let")
+                .replace("//", "//")
+        }
+        TargetLang::Python => {
+            // Simple demonstration - convert basic Rust to Python
+            rust_code
+                .replace("fn ", "def ")
+                .replace(" -> i64", ":")
+                .replace(" -> String", ":")
+                .replace("let ", "")
+                .replace(";", "")
+                .replace("{", "")
+                .replace("}", "")
+                .replace("//", "#")
+        }
+        TargetLang::TypeScript => {
+            // Similar to JS with types
+            rust_code
+                .replace("fn ", "function ")
+                .replace(" -> i64", ": number")
+                .replace(" -> String", ": string")
+                .replace("let ", "let ")
+        }
+        TargetLang::Go | TargetLang::Java => {
+            eprintln!(
+                "{} transpile not yet implemented, returning Rust code",
+                match target {
+                    TargetLang::Go => "Go",
+                    TargetLang::Java => "Java",
+                    _ => "unknown",
+                }
+            );
+            rust_code.to_string()
+        }
+    }
+}
+
 fn default_memory_root() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
@@ -127,7 +194,7 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         }
         // Expected output may be int, bool, string, or array — all first-class now.
         let exp = &v["expected"];
-        let mut expected = if let Some(n) = exp.as_i64() {
+        let expected = if let Some(n) = exp.as_i64() {
             Value::Int(n)
         } else if exp.is_f64() {
             Value::Float(exp.as_f64().unwrap().to_bits())
@@ -163,8 +230,38 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         .filter_map(|e| parse_example(e).ok())
         .collect();
 
-    if examples.is_empty() {
-        return Err("no valid examples".to_string());
+    // Optional `functions[]`: each declares its own name/signature/examples and
+    // an `entry_point` flag. Populating this routes the agentic path to
+    // executor-driven compositional synthesis (each function solved
+    // independently, then composed).
+    let functions: Vec<FunctionDef> = v["functions"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|f| {
+            let fname = f["name"].as_str()?.to_string();
+            let fsig = f["signature"].as_str()?.to_string();
+            let fexamples: Vec<Example> = f["examples"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|e| parse_example(e).ok())
+                .collect();
+            if fexamples.is_empty() {
+                return None;
+            }
+            let entry_point = f["entry_point"].as_bool().unwrap_or(false);
+            Some(FunctionDef {
+                name: fname,
+                signature: fsig,
+                examples: fexamples,
+                entry_point,
+            })
+        })
+        .collect();
+
+    if examples.is_empty() && functions.is_empty() {
+        return Err("no valid examples or functions".to_string());
     }
 
     Ok(Problem {
@@ -176,16 +273,17 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         holdouts,
         reference_code: "",
 
-    synthetic_args: Vec::new(),
+        synthetic_args: Vec::new(),
 
-    synthetic_values: Vec::new(),
+        synthetic_values: Vec::new(),
 
-    recursive_allowed: false,
+        recursive_allowed: false,
 
-    tree_input: false,
+        tree_input: false,
 
-    explicit_stack: false,
+        explicit_stack: false,
 
+        functions,
     })
 }
 
@@ -196,7 +294,11 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
 fn try_string_program(json_str: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
     let signature = v["signature"].as_str().unwrap_or("");
-    if !signature.replace(' ', "").contains("->string") {
+    if !signature
+        .replace(' ', "")
+        .to_ascii_lowercase()
+        .contains("->string")
+    {
         return None;
     }
     let fn_name = signature
@@ -314,6 +416,9 @@ fn main() {
     let prefer_differentiable = has_flag(&args, "--prefer-differentiable");
     let use_legacy_only = has_flag(&args, "--legacy-only");
     let use_legacy_fallback = has_flag(&args, "--legacy-fallback");
+    let use_probabilistic = has_flag(&args, "--probabilistic");
+    let use_agentic = has_flag(&args, "--agentic");
+    let target_lang = arg_value(&args, "--target").and_then(|t| parse_target_lang(&t));
     let memory_root = arg_value(&args, "--memory-root")
         .map(PathBuf::from)
         .unwrap_or_else(default_memory_root);
@@ -377,7 +482,9 @@ fn main() {
             "go" => mog_synth::mog_transpile::to_go(&mog),
             "java" => mog_synth::mog_transpile::to_java(&mog),
             other => {
-                eprintln!("unknown transpile target: {other} (expected python|rust|typescript|go|java)");
+                eprintln!(
+                    "unknown transpile target: {other} (expected python|rust|typescript|go|java)"
+                );
                 std::process::exit(1);
             }
         };
@@ -438,7 +545,13 @@ fn main() {
                         .map(|e| e.inputs.len())
                         .unwrap_or(0)
                 );
-                let result = solve_problem(&problem);
+                // Route to the agentic path when explicitly requested or when
+                // the problem declares functions (compositional synthesis).
+                let result = if use_agentic || !problem.functions.is_empty() {
+                    solve_problem_agentic(&problem)
+                } else {
+                    solve_problem(&problem)
+                };
                 let mut output = serde_json::json!({
                     "success": result.success,
                     "code": result.code,
@@ -486,6 +599,9 @@ fn main() {
             std::collections::BTreeMap::new();
         let mut failures: Vec<String> = Vec::new();
         let started = std::time::Instant::now();
+        if use_probabilistic {
+            eprintln!("[main] probabilistic synthesis enabled (automatic detection)");
+        }
         for problem in &problems {
             let t0 = std::time::Instant::now();
             let result = if use_differentiable_only {
@@ -546,6 +662,21 @@ fn main() {
 
         match problem {
             Some(problem) => {
+                // Observability for the learning loop: print the experience-derived
+                // route win-boosts for this problem and exit. Lets cold-vs-warm
+                // experience effects be inspected directly from the CLI.
+                if has_flag(&args, "--experience-boosts") {
+                    let boosts = mog_synth::solver::experience_route_boosts(&problem);
+                    let obj = serde_json::json!({
+                        "problem": problem.name,
+                        "experience_boosts": boosts
+                            .iter()
+                            .map(|(m, b)| serde_json::json!({ "method": m, "boost": b }))
+                            .collect::<Vec<_>>(),
+                    });
+                    println!("{obj}");
+                    return;
+                }
                 if use_interactive {
                     if use_legacy_only || use_legacy_fallback {
                         eprintln!("interactive synthesis does not support legacy modes");
@@ -569,7 +700,13 @@ fn main() {
                         println!("method: {}", result.method);
                         println!("family: {}", result.family);
                         println!("memory_records: {}", orchestrator.memory.total_successes());
-                        println!("{}", result.code);
+                        println!(
+                            "{}",
+                            transpile_to_target(
+                                &result.code,
+                                target_lang.unwrap_or(TargetLang::Rust)
+                            )
+                        );
                         return;
                     }
                     let result = if use_differentiable_only || prefer_differentiable {
@@ -610,7 +747,13 @@ fn main() {
                         println!("method: {}", result.method);
                         println!("family: {}", result.family);
                         println!("memory_records: {}", orchestrator.memory.total_successes());
-                        println!("{}", result.code);
+                        println!(
+                            "{}",
+                            transpile_to_target(
+                                &result.code,
+                                target_lang.unwrap_or(TargetLang::Rust)
+                            )
+                        );
                     } else {
                         eprintln!(
                             "failed: {}",
@@ -619,7 +762,9 @@ fn main() {
                         std::process::exit(1);
                     }
                 } else {
-                    let result = if use_differentiable_only {
+                    let result = if use_agentic {
+                        solve_problem_agentic(&problem)
+                    } else if use_differentiable_only {
                         solve_problem_differentiable_only(&problem)
                     } else if prefer_differentiable {
                         solve_problem_prefer_differentiable(&problem)

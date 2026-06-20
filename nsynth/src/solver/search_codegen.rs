@@ -1120,14 +1120,20 @@ pub(super) fn code_stateful_reducer(
             if state_arg == arr_arg {
                 "    if r > state { r = state; }\n    return r;\n".to_string()
             } else {
-                format!("    if r > {state} {{ r = {state}; }}\n    return r;\n", state = state_arg)
+                format!(
+                    "    if r > {state} {{ r = {state}; }}\n    return r;\n",
+                    state = state_arg
+                )
             }
         }
         "max" => {
             if state_arg == arr_arg {
                 "    if r < state { r = state; }\n    return r;\n".to_string()
             } else {
-                format!("    if r < {state} {{ r = {state}; }}\n    return r;\n", state = state_arg)
+                format!(
+                    "    if r < {state} {{ r = {state}; }}\n    return r;\n",
+                    state = state_arg
+                )
             }
         }
         other => format!("    return r; // unknown op: {}\n", other),
@@ -1211,16 +1217,32 @@ pub(super) fn code_stateful_reducer_event(
         ("add_arr", "+") => format!("{state} + r", state = state_arg),
         ("add_arr", "-") => format!("{state} - r", state = state_arg),
         ("mul_event", "+") => {
-            format!("{state} + {event} * r", state = state_arg, event = event_arg)
+            format!(
+                "{state} + {event} * r",
+                state = state_arg,
+                event = event_arg
+            )
         }
         ("mul_event", "-") => {
-            format!("{state} - {event} * r", state = state_arg, event = event_arg)
+            format!(
+                "{state} - {event} * r",
+                state = state_arg,
+                event = event_arg
+            )
         }
         ("add_event", "+") => {
-            format!("{state} + r + {event}", state = state_arg, event = event_arg)
+            format!(
+                "{state} + r + {event}",
+                state = state_arg,
+                event = event_arg
+            )
         }
         ("add_event", "-") => {
-            format!("{state} - r - {event}", state = state_arg, event = event_arg)
+            format!(
+                "{state} - r - {event}",
+                state = state_arg,
+                event = event_arg
+            )
         }
         _ => format!("{state} + r", state = state_arg),
     };
@@ -1308,11 +1330,7 @@ pub(super) fn code_stateful_reducer_event_composite(
 /// Predicates are encoded as a single pass over `arr` checking the
 /// relevant property; new_value is one of the supported constant or
 /// state-derived expressions.
-pub(super) fn code_stateful_replace(
-    fn_name: &str,
-    pred: &str,
-    new_value: &str,
-) -> String {
+pub(super) fn code_stateful_replace(fn_name: &str, pred: &str, new_value: &str) -> String {
     // Each predicate maps to a guard like `p = 0/1`. The condition
     // selects when the *new value* should be returned — i.e. when
     // the predicate holds. For "any_pos", p=1 means "found a
@@ -1353,9 +1371,7 @@ pub(super) fn code_stateful_replace(
         "max" => "    r: i64 = arr[0];\n    for v in arr { if v > r { r = v; } }\n",
         "min" => "    r: i64 = arr[0];\n    for v in arr { if v < r { r = v; } }\n",
         "first" => "    r: i64 = arr[0];\n",
-        "last" => {
-            "    r: i64 = 0;\n    for v in arr { r = v; }\n"
-        }
+        "last" => "    r: i64 = 0;\n    for v in arr { r = v; }\n",
         "zero" => "    r: i64 = 0;\n",
         "one" => "    r: i64 = 1;\n",
         "neg_one" => "    r: i64 = -1;\n",
@@ -1906,9 +1922,7 @@ pub(super) fn code_struct_field_reduction(
             "count_zero" => "arr.iter().filter(|&&x| x == 0).count() as i64",
             _ => "0",
         };
-        let update = format!(
-            "    s.{field_name} = s.{field_name} {op} ({reduce_fn});\n"
-        );
+        let update = format!("    s.{field_name} = s.{field_name} {op} ({reduce_fn});\n");
         field_updates.push_str(&update);
     }
 
@@ -2059,31 +2073,52 @@ pub(super) fn code_stateful_reducer_temporal(
         "identity" => (String::new(), time_arg.to_string()),
         "neg" => (String::new(), format!("-{}", time_arg)),
         "tick_n2" => (
-            format!("    tval: i64 = 0;\n    if {t} % 2 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 2 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "tick_n3" => (
-            format!("    tval: i64 = 0;\n    if {t} % 3 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 3 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "tick_n4" => (
-            format!("    tval: i64 = 0;\n    if {t} % 4 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 4 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "tick_n5" => (
-            format!("    tval: i64 = 0;\n    if {t} % 5 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 5 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "tick_n6" => (
-            format!("    tval: i64 = 0;\n    if {t} % 6 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 6 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "odd_n2" => (
-            format!("    tval: i64 = 0;\n    if {t} % 2 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 2 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "odd_n3" => (
-            format!("    tval: i64 = 0;\n    if {t} % 3 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 3 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         _ => (String::new(), time_arg.to_string()),
@@ -2128,31 +2163,52 @@ pub(super) fn code_stateful_reducer_temporal_no_reducer(
         "identity" => (String::new(), time_arg.to_string()),
         "neg" => (String::new(), format!("-{}", time_arg)),
         "tick_n2" => (
-            format!("    tval: i64 = 0;\n    if {t} % 2 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 2 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "tick_n3" => (
-            format!("    tval: i64 = 0;\n    if {t} % 3 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 3 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "tick_n4" => (
-            format!("    tval: i64 = 0;\n    if {t} % 4 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 4 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "tick_n5" => (
-            format!("    tval: i64 = 0;\n    if {t} % 5 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 5 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "tick_n6" => (
-            format!("    tval: i64 = 0;\n    if {t} % 6 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 6 == 0 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "odd_n2" => (
-            format!("    tval: i64 = 0;\n    if {t} % 2 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 2 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         "odd_n3" => (
-            format!("    tval: i64 = 0;\n    if {t} % 3 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n", t = time_arg),
+            format!(
+                "    tval: i64 = 0;\n    if {t} % 3 == 1 {{ tval = 1; }} else {{ tval = 0; }}\n",
+                t = time_arg
+            ),
             "tval".to_string(),
         ),
         _ => (String::new(), time_arg.to_string()),
@@ -2265,7 +2321,13 @@ pub(super) fn code_sequence_quadratic_polynomial(fn_name: &str, a: i64, b: i64, 
 }
 
 /// Polynomial sequence: cubic a*n^3 + b*n^2 + c*n + d
-pub(super) fn code_sequence_cubic_polynomial(fn_name: &str, a: i64, b: i64, c: i64, d: i64) -> String {
+pub(super) fn code_sequence_cubic_polynomial(
+    fn_name: &str,
+    a: i64,
+    b: i64,
+    c: i64,
+    d: i64,
+) -> String {
     format!(
         "fn {fn_name}(n: i64) -> i64 {{\n    return ({a} * n * n * n) + ({b} * n * n) + ({c} * n) + {d};\n}}\n",
         fn_name = fn_name,
@@ -3087,4 +3149,3 @@ pub(super) fn code_climb_stairs_dp(fn_name: &str) -> String {
         fn_name,
     )
 }
-

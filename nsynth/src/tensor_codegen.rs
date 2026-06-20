@@ -78,7 +78,12 @@ impl TensorType {
 
     /// Format as Mog type annotation: `tensor<3, 4, i64>`.
     pub fn mog_annotation(&self) -> String {
-        let dims = self.shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ");
+        let dims = self
+            .shape
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         format!("tensor<{}, {}>", dims, self.dtype)
     }
 }
@@ -158,9 +163,13 @@ impl TensorCodegen {
     /// let t_0 = dot(a, b) as i64;
     /// ```
     pub fn dot(&mut self, a: &str, b: &str) -> Result<String, String> {
-        let a_type = self.variables.get(a)
+        let a_type = self
+            .variables
+            .get(a)
             .ok_or_else(|| format!("variable {} not found", a))?;
-        let b_type = self.variables.get(b)
+        let b_type = self
+            .variables
+            .get(b)
             .ok_or_else(|| format!("variable {} not found", b))?;
 
         if a_type.shape != b_type.shape {
@@ -184,9 +193,13 @@ impl TensorCodegen {
     /// let t_0 = matmul(a, b) as tensor<3, 4>;
     /// ```
     pub fn matmul(&mut self, a: &str, b: &str) -> Result<String, String> {
-        let a_type = self.variables.get(a)
+        let a_type = self
+            .variables
+            .get(a)
             .ok_or_else(|| format!("variable {} not found", a))?;
-        let b_type = self.variables.get(b)
+        let b_type = self
+            .variables
+            .get(b)
             .ok_or_else(|| format!("variable {} not found", b))?;
 
         if a_type.shape.len() != 2 || b_type.shape.len() != 2 {
@@ -228,7 +241,9 @@ impl TensorCodegen {
     /// let t_0 = transpose(a) as tensor<4, 3>;
     /// ```
     pub fn transpose(&mut self, a: &str) -> Result<String, String> {
-        let a_type = self.variables.get(a)
+        let a_type = self
+            .variables
+            .get(a)
             .ok_or_else(|| format!("variable {} not found", a))?;
 
         if a_type.shape.len() != 2 {
@@ -259,7 +274,9 @@ impl TensorCodegen {
     /// let t_0 = slice_row(matrix, 1) as tensor<5, i64>;
     /// ```
     pub fn slice_row(&mut self, matrix: &str, row_idx: usize) -> Result<String, String> {
-        let mat_type = self.variables.get(matrix)
+        let mat_type = self
+            .variables
+            .get(matrix)
             .ok_or_else(|| format!("variable {} not found", matrix))?;
 
         if mat_type.shape.len() != 2 {
@@ -313,7 +330,11 @@ impl Default for TensorCodegen {
 ///
 /// This is used by higher-level synthesis algorithms.
 pub fn codegen_broadcast(scalar: i64, target_shape: Vec<usize>, output_var: &str) -> String {
-    let shape_str = target_shape.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ");
+    let shape_str = target_shape
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "let {} = broadcast({}) as tensor<{}, i64>;",
         output_var, scalar, shape_str
@@ -342,7 +363,12 @@ pub fn codegen_matmul(
 }
 
 /// Standalone function: generate complete Mog code for transpose.
-pub fn codegen_transpose(a_var: &str, result_rows: usize, result_cols: usize, output_var: &str) -> String {
+pub fn codegen_transpose(
+    a_var: &str,
+    result_rows: usize,
+    result_cols: usize,
+    output_var: &str,
+) -> String {
     format!(
         "let {} = transpose({}) as tensor<{}, {}>;",
         output_var, a_var, result_rows, result_cols
@@ -350,7 +376,12 @@ pub fn codegen_transpose(a_var: &str, result_rows: usize, result_cols: usize, ou
 }
 
 /// Standalone function: generate complete Mog code for row slicing.
-pub fn codegen_slice_row(matrix_var: &str, row_idx: usize, num_cols: usize, output_var: &str) -> String {
+pub fn codegen_slice_row(
+    matrix_var: &str,
+    row_idx: usize,
+    num_cols: usize,
+    output_var: &str,
+) -> String {
     format!(
         "let {} = slice_row({}, {}) as tensor<{}, i64>;",
         output_var, matrix_var, row_idx, num_cols
@@ -416,8 +447,10 @@ mod tests {
     #[test]
     fn test_codegen_matmul() {
         let mut gen = TensorCodegen::new();
-        gen.variables.insert("a".to_string(), TensorType::matrix(3, 4));
-        gen.variables.insert("b".to_string(), TensorType::matrix(4, 5));
+        gen.variables
+            .insert("a".to_string(), TensorType::matrix(3, 4));
+        gen.variables
+            .insert("b".to_string(), TensorType::matrix(4, 5));
         let result = gen.matmul("a", "b").unwrap();
         let code = gen.finish();
         assert!(code.contains("matmul(a, b)"));
@@ -429,8 +462,10 @@ mod tests {
     #[test]
     fn test_codegen_matmul_dimension_mismatch() {
         let mut gen = TensorCodegen::new();
-        gen.variables.insert("a".to_string(), TensorType::matrix(3, 4));
-        gen.variables.insert("b".to_string(), TensorType::matrix(5, 6));
+        gen.variables
+            .insert("a".to_string(), TensorType::matrix(3, 4));
+        gen.variables
+            .insert("b".to_string(), TensorType::matrix(5, 6));
         let err = gen.matmul("a", "b");
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("inner dimensions mismatch"));
@@ -439,7 +474,8 @@ mod tests {
     #[test]
     fn test_codegen_transpose() {
         let mut gen = TensorCodegen::new();
-        gen.variables.insert("a".to_string(), TensorType::matrix(3, 4));
+        gen.variables
+            .insert("a".to_string(), TensorType::matrix(3, 4));
         let result = gen.transpose("a").unwrap();
         let code = gen.finish();
         assert!(code.contains("transpose(a)"));
@@ -450,7 +486,8 @@ mod tests {
     #[test]
     fn test_codegen_slice_row() {
         let mut gen = TensorCodegen::new();
-        gen.variables.insert("matrix".to_string(), TensorType::matrix(5, 3));
+        gen.variables
+            .insert("matrix".to_string(), TensorType::matrix(5, 3));
         let result = gen.slice_row("matrix", 2).unwrap();
         let code = gen.finish();
         assert!(code.contains("slice_row(matrix, 2)"));
@@ -461,7 +498,8 @@ mod tests {
     #[test]
     fn test_codegen_slice_row_out_of_bounds() {
         let mut gen = TensorCodegen::new();
-        gen.variables.insert("matrix".to_string(), TensorType::matrix(3, 4));
+        gen.variables
+            .insert("matrix".to_string(), TensorType::matrix(3, 4));
         let err = gen.slice_row("matrix", 5);
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("out of bounds"));

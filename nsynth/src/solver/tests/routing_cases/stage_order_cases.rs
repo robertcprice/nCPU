@@ -32,6 +32,7 @@ fn scalar_template_fallback_is_explicit() {
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     };
     let result = crate::synthesis::synthesize_scalar_templates_only(&problem)
         .expect("template fallback should solve positive_or_default");
@@ -71,6 +72,7 @@ fn expr_template_fallback_is_explicit() {
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     };
     let result = crate::synthesis::synthesize_scalar_expr_templates_only(&problem)
         .expect("expr template fallback should solve manhattan distance");
@@ -98,6 +100,7 @@ fn reference_distillation_precedes_template_reference() {
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
     let distill_idx = stages
@@ -135,6 +138,7 @@ fn native_scalar_distillation_precedes_template_reference() {
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
     let native_distill_idx = stages
@@ -172,6 +176,7 @@ fn array_reference_distillation_precedes_template_reference() {
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
     let arr_distill_idx = stages
@@ -213,6 +218,7 @@ fn expr_templates_precede_scalar_and_reference_templates() {
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
     let expr_tpl_idx = stages
@@ -254,6 +260,7 @@ fn differentiable_bridge_precedes_reference_and_template_fallbacks() {
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     };
     let stages = post_enumerative_stage_order(&problem);
     let bridge_idx = stages

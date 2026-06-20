@@ -58,7 +58,15 @@ pub fn code_polynomial_generic(fn_name: &str, coeffs: &[i64], degree: usize) -> 
 
     let mut body = String::new();
     for i in 0..degree {
-        body.push_str(&format!("    t{}: i64 = t * {};\n", i + 1, if i == 0 { "t".to_string() } else { format!("t{}", i) }));
+        body.push_str(&format!(
+            "    t{}: i64 = t * {};\n",
+            i + 1,
+            if i == 0 {
+                "t".to_string()
+            } else {
+                format!("t{}", i)
+            }
+        ));
     }
 
     let mut expr = String::new();
@@ -79,10 +87,9 @@ pub fn code_polynomial_generic(fn_name: &str, coeffs: &[i64], degree: usize) -> 
         }
     }
 
-    body.push_str(&format!("    return {expr};", ));
+    body.push_str(&format!("    return {expr};",));
 
-    format!("fn __FN__(t: i64) -> i64 {{\n{body}\n}}", )
-        .replace("__FN__", fn_name)
+    format!("fn __FN__(t: i64) -> i64 {{\n{body}\n}}",).replace("__FN__", fn_name)
 }
 
 // ============================================================================

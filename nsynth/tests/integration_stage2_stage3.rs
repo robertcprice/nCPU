@@ -86,7 +86,8 @@ fn stage2_matrix_row_sum() -> Problem {
             inputs: vec![Value::Array(vec![5, 5, 5, 5, 5, 5])],
             expected: Value::Int(15),
         }],
-        reference_code: "fn row_sum_first(matrix: [i64]) -> i64 { matrix[0] + matrix[1] + matrix[2] }",
+        reference_code:
+            "fn row_sum_first(matrix: [i64]) -> i64 { matrix[0] + matrix[1] + matrix[2] }",
         ..Default::default()
     }
 }
@@ -111,7 +112,8 @@ fn stage2_vector_add() -> Problem {
             inputs: vec![Value::Array(vec![3, 3, 3]), Value::Array(vec![1, 1, 1])],
             expected: Value::Array(vec![4, 4, 4]),
         }],
-        reference_code: "fn vec_add(a: [i64], b: [i64]) -> [i64] { [a[0]+b[0], a[1]+b[1], a[2]+b[2]] }",
+        reference_code:
+            "fn vec_add(a: [i64], b: [i64]) -> [i64] { [a[0]+b[0], a[1]+b[1], a[2]+b[2]] }",
         ..Default::default()
     }
 }
@@ -161,7 +163,8 @@ fn stage2_vector_max() -> Problem {
             inputs: vec![Value::Array(vec![2, 8, 1, 9])],
             expected: Value::Int(9),
         }],
-        reference_code: "fn vec_max(v: [i64]) -> i64 { max(max(max(v[0], v[1]), v[2]), max(v[3], v[4])) }",
+        reference_code:
+            "fn vec_max(v: [i64]) -> i64 { max(max(max(v[0], v[1]), v[2]), max(v[3], v[4])) }",
         ..Default::default()
     }
 }
@@ -211,7 +214,8 @@ fn stage2_pairwise_distances() -> Problem {
             inputs: vec![Value::Array(vec![1, 1]), Value::Array(vec![3, 3])],
             expected: Value::Int(4),
         }],
-        reference_code: "fn vec_dist(a: [i64], b: [i64]) -> i64 { abs(a[0]-b[0]) + abs(a[1]-b[1]) }",
+        reference_code:
+            "fn vec_dist(a: [i64], b: [i64]) -> i64 { abs(a[0]-b[0]) + abs(a[1]-b[1]) }",
         ..Default::default()
     }
 }
@@ -424,15 +428,16 @@ fn stage2_stage3_end_to_end_synthesis() {
                     stage2_passed += 1;
                 }
                 Err(e) => {
-                    println!(
-                        "❌ {} [verification failed: {}]",
-                        problem.name, e
-                    );
+                    println!("❌ {} [verification failed: {}]", problem.name, e);
                     stage2_failed += 1;
                 }
             }
         } else {
-            println!("❌ {} [solve failed: {}]", problem.name, result.error.as_deref().unwrap_or("unknown"));
+            println!(
+                "❌ {} [solve failed: {}]",
+                problem.name,
+                result.error.as_deref().unwrap_or("unknown")
+            );
             stage2_failed += 1;
         }
     }
@@ -464,15 +469,16 @@ fn stage2_stage3_end_to_end_synthesis() {
                     stage3_passed += 1;
                 }
                 Err(e) => {
-                    println!(
-                        "❌ {} [verification failed: {}]",
-                        problem.name, e
-                    );
+                    println!("❌ {} [verification failed: {}]", problem.name, e);
                     stage3_failed += 1;
                 }
             }
         } else {
-            println!("❌ {} [solve failed: {}]", problem.name, result.error.as_deref().unwrap_or("unknown"));
+            println!(
+                "❌ {} [solve failed: {}]",
+                problem.name,
+                result.error.as_deref().unwrap_or("unknown")
+            );
             stage3_failed += 1;
         }
     }
@@ -519,9 +525,7 @@ fn stage2_stage3_end_to_end_synthesis() {
         },
         stage3_mean_time
     );
-    println!(
-        "────────────────────────────────────────────────────────────────────────────────"
-    );
+    println!("────────────────────────────────────────────────────────────────────────────────");
     println!(
         "TOTAL:             {}/{} passed",
         stage2_passed + stage3_passed,

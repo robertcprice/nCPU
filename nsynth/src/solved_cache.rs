@@ -152,13 +152,43 @@ impl SolvedCache {
     }
 
     /// Load from disk. Empty cache on any read / parse error — never panics.
+    ///
+    /// Fast-fail guards (added after a 13.4 GB runaway file hung the solver
+    /// ~30s on every start): before reading the whole file we stat it and
+    /// refuse anything larger than [`MAX_CACHE_FILE_BYTES`]; after reading we
+    /// sanity-check that the content looks like the expected TAB-delimited line
+    /// format and bail to an empty store if it does not. Both paths log exactly
+    /// one stderr line and return an empty cache rather than hanging.
     pub fn load() -> Self {
         let Some(path) = cache_path() else {
             return Self::new();
         };
+        // Stat-based fast-fail: never even read a multi-GB runaway file.
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > MAX_CACHE_FILE_BYTES {
+                eprintln!(
+                    "[solved-cache] skip load: file {} is {} bytes > {} cap (treating as empty)",
+                    path.display(),
+                    meta.len(),
+                    MAX_CACHE_FILE_BYTES
+                );
+                return Self::new();
+            }
+        }
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Self::new();
         };
+        // Content fast-fail: the format is line-oriented `fp \t method \t ...`.
+        // If the file is non-empty but no line carries a TAB, it's not our
+        // format (truncated, JSON blob, binary garbage) — skip rather than
+        // populate the cache with junk or churn on a malformed parse.
+        if !raw.is_empty() && !raw.lines().any(|l| !l.is_empty() && l.contains('\t')) {
+            eprintln!(
+                "[solved-cache] skip load: file {} is not in the expected TAB line format (treating as empty)",
+                path.display()
+            );
+            return Self::new();
+        }
         let mut entries = BTreeMap::new();
         for line in raw.lines() {
             if line.is_empty() {
@@ -211,6 +241,19 @@ impl SolvedCache {
     }
 
     pub fn insert(&mut self, fp: String, sol: CachedSolution) {
+        // Per-entry size cap: refuse to cache pathologically large rows. A
+        // single multi-megabyte program must not be able to bloat the file —
+        // this is one of the two guards (alongside `max_entries`) that keep the
+        // cache from ever filling the disk again.
+        let cap = max_entry_bytes();
+        if cap > 0 && fp.len().saturating_add(sol.code.len()) > cap {
+            eprintln!(
+                "[solved-cache] skip oversized entry: key+code = {} bytes > {} cap",
+                fp.len() + sol.code.len(),
+                cap
+            );
+            return;
+        }
         // Preserve existing success counters when the new solution matches
         // what's already stored — don't reset a teacher's "keeps working"
         // prior just because we re-ran the bench.
@@ -221,6 +264,18 @@ impl SolvedCache {
         }
         self.entries.insert(fp, sol);
         self.dirty = true;
+
+        // Hard cap enforcement. `record()` does an amortised score/recency
+        // prune at 1.25× the cap, but `insert()` is also reachable directly
+        // (tests, future callers), so guarantee the bound here too: once the
+        // store strictly exceeds the cap, prune back down to it. Splitting the
+        // budget between score- and recency-ranked keeps mirrors `record()`.
+        let cap = max_entries();
+        if cap > 0 && self.entries.len() > cap {
+            let keep_score = cap / 2;
+            let keep_recency = cap - keep_score;
+            self.prune(keep_score, keep_recency);
+        }
     }
 
     /// Bump the transfer-success counter for the entry matching `fp` when its
@@ -428,13 +483,49 @@ pub fn record(problem: &Problem, method: &str, code: &str) {
     });
 }
 
-/// Maximum cache entries before `record` triggers a prune. `0` disables the
-/// bound entirely (the default — no eviction until the user opts in). Set
-/// via `NSYNTH_CACHE_MAX_ENTRIES`.
+/// Maximum cache entries before `record` triggers a prune. Defaults to
+/// [`DEFAULT_MAX_ENTRIES`] (50_000) so eviction is *always on* — a missing or
+/// unparseable env var must never silently disable the bound, because that is
+/// exactly how the on-disk cache once grew to 13.4 GB and filled the disk.
+/// Setting `NSYNTH_CACHE_MAX_ENTRIES=0` still disables the bound for callers
+/// that explicitly opt out. Override via `NSYNTH_CACHE_MAX_ENTRIES`.
 fn max_entries() -> usize {
     match std::env::var("NSYNTH_CACHE_MAX_ENTRIES") {
-        Ok(raw) => raw.parse::<usize>().unwrap_or(0),
-        Err(_) => 0,
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(n) => n,
+            // Garbage env value falls back to the safe default rather than 0
+            // (which would disable eviction).
+            Err(_) => DEFAULT_MAX_ENTRIES,
+        },
+        Err(_) => DEFAULT_MAX_ENTRIES,
+    }
+}
+
+/// Default cap on cached entries. Chosen to keep the on-disk file well under
+/// the [`MAX_CACHE_FILE_BYTES`] fast-fail limit even with large programs.
+const DEFAULT_MAX_ENTRIES: usize = 50_000;
+
+/// Default per-entry byte budget (key + code). Entries above this are not
+/// cached at all — a single pathological program must not be able to bloat the
+/// file. Override via `NSYNTH_CACHE_MAX_ENTRY_BYTES`.
+const DEFAULT_MAX_ENTRY_BYTES: usize = 65_536;
+
+/// Hard ceiling on the on-disk cache file the loader is willing to read. A
+/// file larger than this is assumed corrupt / runaway and is skipped entirely
+/// (the loader returns an empty store) rather than spending ~30s parsing a
+/// multi-GB blob and hanging the solver. 256 MiB.
+const MAX_CACHE_FILE_BYTES: u64 = 268_435_456;
+
+/// Per-entry byte cap (key + code). Entries whose key+code exceed this are
+/// silently skipped on insert. Override via `NSYNTH_CACHE_MAX_ENTRY_BYTES`; a
+/// garbage value falls back to the default. `0` disables the cap.
+fn max_entry_bytes() -> usize {
+    match std::env::var("NSYNTH_CACHE_MAX_ENTRY_BYTES") {
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => DEFAULT_MAX_ENTRY_BYTES,
+        },
+        Err(_) => DEFAULT_MAX_ENTRY_BYTES,
     }
 }
 
@@ -576,7 +667,9 @@ pub fn bootstrap_retrain_due() -> bool {
 /// distilled from; the original fingerprint is unrecoverable at this point.
 /// Matches the first cache entry whose (method, code) agrees.
 pub fn note_transfer_success(method: &str, code: &str) {
-    if cache_path().is_none() {
+    // Suppressed during a learning freeze (e.g. RSI evaluation) so measuring the
+    // solver cannot mutate cache success-counts mid-evaluation.
+    if crate::learning_freeze::is_frozen() || cache_path().is_none() {
         return;
     }
     with_cache(|c| {
@@ -713,16 +806,17 @@ mod tests {
             holdouts: vec![],
             reference_code: "fn test(a: i64) -> i64 { return a; }\n",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
+            explicit_stack: false,
 
+            functions: vec![],
         }
     }
 
@@ -950,6 +1044,217 @@ mod tests {
         let (before, after) = cache.prune(10, 10);
         assert_eq!(before, 1);
         assert_eq!(after, 1);
+    }
+
+    /// Inserting past the configured cap must evict back down to the cap so
+    /// the store can never grow without bound (the root cause of the 13.4 GB
+    /// runaway). Drives `insert()` directly with a tiny cap set via env.
+    #[test]
+    fn insert_evicts_at_max_entries_cap() {
+        with_test_lock(|| {
+            // SAFETY: env mutation is serialized by the test lock.
+            unsafe {
+                std::env::set_var("NSYNTH_CACHE_MAX_ENTRIES", "4");
+                // Don't let the per-entry byte cap interfere with this test.
+                std::env::remove_var("NSYNTH_CACHE_MAX_ENTRY_BYTES");
+            }
+            assert_eq!(max_entries(), 4, "env override must take effect");
+
+            let mut cache = SolvedCache::new();
+            // Insert well past the cap. Vary success_count/recency so prune has
+            // a deterministic ordering to work with.
+            for i in 0..20u64 {
+                cache.insert(
+                    format!("fp_{i:02}"),
+                    CachedSolution {
+                        code: format!("body {i}"),
+                        method: "m".to_string(),
+                        success_count: 0,
+                        last_used_at: i, // strictly increasing recency
+                    },
+                );
+            }
+            assert!(
+                cache.len() <= 4,
+                "store must never exceed the cap; got {}",
+                cache.len()
+            );
+            // The most-recent inserts (highest last_used_at) must survive the
+            // recency keep half.
+            assert!(
+                cache.entries.contains_key("fp_19"),
+                "newest entry must survive eviction"
+            );
+
+            unsafe {
+                std::env::remove_var("NSYNTH_CACHE_MAX_ENTRIES");
+            }
+        });
+    }
+
+    /// `NSYNTH_CACHE_MAX_ENTRIES` unset must NOT mean "eviction disabled" — the
+    /// default is now a finite 50_000, the regression guard for the runaway.
+    #[test]
+    fn max_entries_defaults_to_finite_cap() {
+        with_test_lock(|| {
+            // SAFETY: serialized by the test lock.
+            unsafe {
+                std::env::remove_var("NSYNTH_CACHE_MAX_ENTRIES");
+            }
+            assert_eq!(max_entries(), DEFAULT_MAX_ENTRIES);
+            assert!(max_entries() > 0, "default must be a finite, nonzero cap");
+
+            // Garbage value also falls back to the safe default, never 0.
+            unsafe {
+                std::env::set_var("NSYNTH_CACHE_MAX_ENTRIES", "not-a-number");
+            }
+            assert_eq!(max_entries(), DEFAULT_MAX_ENTRIES);
+
+            // Explicit opt-out is still honoured.
+            unsafe {
+                std::env::set_var("NSYNTH_CACHE_MAX_ENTRIES", "0");
+            }
+            assert_eq!(max_entries(), 0);
+
+            unsafe {
+                std::env::remove_var("NSYNTH_CACHE_MAX_ENTRIES");
+            }
+        });
+    }
+
+    /// An entry whose key+code exceeds the per-entry byte cap must be silently
+    /// dropped, never stored — one pathological program can't bloat the file.
+    #[test]
+    fn insert_rejects_oversized_entry() {
+        with_test_lock(|| {
+            // SAFETY: serialized by the test lock.
+            unsafe {
+                std::env::set_var("NSYNTH_CACHE_MAX_ENTRY_BYTES", "64");
+                // Keep the entry-count cap out of the way.
+                std::env::set_var("NSYNTH_CACHE_MAX_ENTRIES", "0");
+            }
+            assert_eq!(max_entry_bytes(), 64);
+
+            let mut cache = SolvedCache::new();
+            // Oversized: key + code far exceeds 64 bytes.
+            cache.insert(
+                "huge".to_string(),
+                CachedSolution {
+                    code: "x".repeat(200),
+                    method: "m".to_string(),
+                    success_count: 0,
+                    last_used_at: 0,
+                },
+            );
+            assert!(
+                !cache.entries.contains_key("huge"),
+                "oversized entry must be rejected"
+            );
+            assert_eq!(cache.len(), 0);
+
+            // A small entry under the cap is still accepted.
+            cache.insert(
+                "small".to_string(),
+                CachedSolution {
+                    code: "ok".to_string(),
+                    method: "m".to_string(),
+                    success_count: 0,
+                    last_used_at: 0,
+                },
+            );
+            assert!(cache.entries.contains_key("small"));
+
+            unsafe {
+                std::env::remove_var("NSYNTH_CACHE_MAX_ENTRY_BYTES");
+                std::env::remove_var("NSYNTH_CACHE_MAX_ENTRIES");
+            }
+        });
+    }
+
+    /// A cache file larger than the fast-fail ceiling must be skipped — the
+    /// loader returns an empty store instead of reading/parsing a multi-GB
+    /// blob and hanging. We exercise the size guard without actually writing
+    /// 256 MB by lowering nothing and instead asserting the guard's behaviour
+    /// via a sparse (logically large) file when supported, falling back to a
+    /// content-format check that doesn't require a giant file.
+    #[test]
+    fn load_skips_oversized_file() {
+        with_test_lock(|| {
+            let path = std::env::temp_dir().join(format!(
+                "nsynth_test_oversized_cache_{}.json",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&path);
+
+            // Create a file whose reported length exceeds MAX_CACHE_FILE_BYTES
+            // without writing that many real bytes: set_len makes a sparse
+            // file on the test platforms (APFS / most Linux fs). The bytes read
+            // back would be zeros, but the stat-based guard fires first.
+            {
+                let f = std::fs::File::create(&path).expect("create temp cache");
+                f.set_len(MAX_CACHE_FILE_BYTES + 1)
+                    .expect("extend temp cache to oversized length");
+            }
+            assert!(
+                std::fs::metadata(&path).unwrap().len() > MAX_CACHE_FILE_BYTES,
+                "precondition: file must report oversized length"
+            );
+
+            // SAFETY: serialized by the test lock.
+            unsafe {
+                std::env::set_var("NSYNTH_CACHE_PATH", &path);
+            }
+            let cache = SolvedCache::load();
+            assert_eq!(
+                cache.len(),
+                0,
+                "oversized file must be skipped, yielding an empty store"
+            );
+
+            unsafe {
+                std::env::remove_var("NSYNTH_CACHE_PATH");
+            }
+            let _ = std::fs::remove_file(&path);
+        });
+    }
+
+    /// A non-empty cache file that is not in the expected TAB line format
+    /// (truncated JSON, binary garbage) must be skipped rather than parsed
+    /// into junk entries or hung on.
+    #[test]
+    fn load_skips_corrupt_non_tab_file() {
+        with_test_lock(|| {
+            let path = std::env::temp_dir().join(format!(
+                "nsynth_test_corrupt_cache_{}.json",
+                std::process::id()
+            ));
+            // Looks like a JSON blob — no TAB anywhere, so it's clearly not our
+            // line format.
+            std::fs::write(&path, "{\"this\":\"is not the line format at all\"}\n")
+                .expect("write corrupt cache");
+
+            // SAFETY: serialized by the test lock.
+            unsafe {
+                std::env::set_var("NSYNTH_CACHE_PATH", &path);
+            }
+            let cache = SolvedCache::load();
+            assert_eq!(
+                cache.len(),
+                0,
+                "corrupt non-TAB file must be skipped, yielding an empty store"
+            );
+
+            // Sanity: a well-formed TAB file still loads normally.
+            std::fs::write(&path, "fp1\tmethod1\t0\t0\tfn t() {}\n").expect("write valid cache");
+            let cache2 = SolvedCache::load();
+            assert_eq!(cache2.len(), 1, "valid TAB file must still load");
+            assert!(cache2.get("fp1").is_some());
+
+            unsafe {
+                std::env::remove_var("NSYNTH_CACHE_PATH");
+            }
+            let _ = std::fs::remove_file(&path);
+        });
     }
 
     #[test]

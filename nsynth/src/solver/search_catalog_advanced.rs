@@ -172,10 +172,7 @@ fn code_strictly_increasing(fn_name: &str) -> String {
     )
 }
 
-pub(super) fn search_strictly_increasing(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_strictly_increasing(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
         return None;
@@ -261,13 +258,8 @@ fn code_first_index_of(fn_name: &str, target: i64) -> String {
     .replace("__T__", &target_str)
 }
 
-pub(super) fn search_first_index_of(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
-    const CANDIDATE_TARGETS: &[i64] = &[
-        0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5,
-    ];
+pub(super) fn search_first_index_of(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    const CANDIDATE_TARGETS: &[i64] = &[0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5];
 
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
@@ -306,13 +298,8 @@ fn code_last_index_of(fn_name: &str, target: i64) -> String {
     .replace("__T__", &target_str)
 }
 
-pub(super) fn search_last_index_of(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
-    const CANDIDATE_TARGETS: &[i64] = &[
-        0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5,
-    ];
+pub(super) fn search_last_index_of(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    const CANDIDATE_TARGETS: &[i64] = &[0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5];
 
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
@@ -358,10 +345,7 @@ fn code_is_anagram(fn_name: &str) -> String {
     )
 }
 
-pub(super) fn search_is_anagram(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_is_anagram(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64, ParamType::ArrayI64] {
         return None;
@@ -394,13 +378,8 @@ fn code_longest_run(fn_name: &str, target: i64) -> String {
     .replace("__T__", &target_str)
 }
 
-pub(super) fn search_longest_run(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
-    const CANDIDATE_TARGETS: &[i64] = &[
-        0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5,
-    ];
+pub(super) fn search_longest_run(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    const CANDIDATE_TARGETS: &[i64] = &[0, 1, -1, 2, 3, 5, 7, 10, -2, 100, 42, 13, 17, -5];
 
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {
@@ -435,10 +414,7 @@ fn code_intersects(fn_name: &str) -> String {
     )
 }
 
-pub(super) fn search_intersects(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_intersects(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64, ParamType::ArrayI64] {
         return None;

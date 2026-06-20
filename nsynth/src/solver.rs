@@ -5,11 +5,16 @@ use crate::differentiable::{
 };
 use crate::method_router;
 
+mod analogy;
 mod benchmarking;
+mod experience_advisor;
 mod helpers;
+mod hierarchical;
 mod legacy_fallback;
 mod pipeline;
 mod post_enumerative;
+mod probabilistic;
+mod recovery;
 mod routing;
 mod scalar_search;
 mod search;
@@ -66,6 +71,43 @@ pub struct SolveResult {
     pub method: String,
     pub error: Option<String>,
     pub metadata: DifferentiableMetadata,
+}
+
+// Type aliases for compatibility with orchestrator
+pub type SynthesisResult = SolveResult;
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum SolverError {
+    #[error("Communication error: {0}")]
+    CommunicationError(String),
+    #[error("No solution found: {0}")]
+    NoSolutionFound(String),
+    #[error("Configuration error: {0}")]
+    ConfigurationError(String),
+    #[error("IO error: {0}")]
+    IoError(String),
+    #[error("Parse error: {0}")]
+    ParseError(String),
+    #[error("Verification failed: {0}")]
+    VerificationFailed(String),
+    #[error("Timeout: {0}")]
+    Timeout(String),
+    #[error("Other: {0}")]
+    Other(String),
+    #[error("Task join error: {0}")]
+    JoinError(String),
+}
+
+impl From<std::io::Error> for SolverError {
+    fn from(err: std::io::Error) -> Self {
+        SolverError::IoError(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for SolverError {
+    fn from(err: serde_json::Error) -> Self {
+        SolverError::ParseError(err.to_string())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,6 +238,130 @@ pub fn string_lexicon_map_code(
 
 pub fn solve_problem_search_only(problem: &Problem) -> SolveResult {
     search::solve_problem_search_only(problem)
+}
+
+/// Solve using the Phase 2 agentic orchestration layer.
+///
+/// The problem is decomposed into a dependency graph of synthesis subtasks by the
+/// adaptive `TaskDecomposer`, the standard pipeline solver is invoked exactly once
+/// to produce the actual program, and the planning graph is then walked in
+/// dependency order to record completion. The decomposer is an orchestration layer
+/// around the real solver — it does not fabricate solutions. On a planning or
+/// synthesis failure the error is surfaced through the normal `SolveResult` shape.
+pub fn solve_problem_agentic(problem: &Problem) -> SolveResult {
+    use crate::agent::{DecompositionStrategy, TaskDecomposer};
+    use std::time::Instant;
+
+    let started = Instant::now();
+
+    // Multi-function problems are genuine compositions: synthesize each declared
+    // function independently via the real solver, driven by the async executor,
+    // and compose the results.
+    let result = if !problem.functions.is_empty() {
+        crate::agent::solve_compositional(problem)
+    } else {
+        let mut decomposer = TaskDecomposer::new(DecompositionStrategy::Adaptive);
+        match decomposer.integrate_solver(problem, solve_problem) {
+            Ok(result) => result,
+            Err(e) => SolveResult {
+                success: false,
+                code: String::new(),
+                method: "agentic".to_string(),
+                error: Some(e.to_string()),
+                metadata: Default::default(),
+            },
+        }
+    };
+
+    // Record the run as an experience for the learning loop (best-effort: a
+    // recording failure must never fail a solve). Skipped under test.
+    record_agentic_experience(problem, &result, started.elapsed().as_millis() as u64);
+
+    result
+}
+
+/// Observability for the Phase 4.1 learning loop: the experience-derived route
+/// win-boosts that would be folded into routing for `problem`, sorted strongest
+/// first. Empty when no experience DB is loaded. Exposed for the CLI
+/// `--experience-boosts` flag and for inspecting cold-vs-warm behavior.
+pub fn experience_route_boosts(problem: &Problem) -> Vec<(String, u32)> {
+    let mut v: Vec<(String, u32)> = experience_advisor::route_boosts(problem)
+        .into_iter()
+        .collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
+/// Best-effort recording of an agentic solve into the experience DB. All errors
+/// are swallowed — learning is a side-channel, never a failure mode for solving.
+/// Shares its DB path with the routing advisor so writes and reads agree.
+fn record_agentic_experience(problem: &Problem, result: &SolveResult, solve_time_ms: u64) {
+    let Some(path) = experience_advisor::db_path() else {
+        return;
+    };
+    if let Ok(mut db) = crate::learning::experience::ExperienceDB::new(path) {
+        let _ = db.record_experience(problem, result, solve_time_ms);
+    }
+}
+
+/// Solve from natural language description
+/// Uses Linguigenesis bridge to parse NL → examples → code
+#[cfg(feature = "nl")]
+pub fn solve_from_nl(description: &str, fn_name: Option<&str>) -> Result<SolveResult, String> {
+    use crate::linguigenesis_bridge::LinguigenesisBridge;
+
+    let bridge = LinguigenesisBridge::new();
+
+    // Parse NL into examples
+    let examples = bridge
+        .nl_to_examples(description)
+        .map_err(|e| format!("Failed to parse NL: {}", e))?;
+
+    if examples.is_empty() {
+        return Err("No examples generated from description".to_string());
+    }
+
+    // Build Problem from examples
+    let name = fn_name.unwrap_or("synthesized").to_string();
+    let signature = crate::linguigenesis_bridge::infer_signature(&name, &examples);
+    let signature = Box::leak(signature.into_boxed_str()); // Leak to get &'static str
+    let problem = Problem {
+        name,
+        category: "nl",
+        description: "", // Can't store non-static str, use name field
+        signature,       // Inferred from examples
+        examples,
+        holdouts: Vec::new(),
+        reference_code: "",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
+        functions: Vec::new(),
+    };
+
+    // Solve using standard pipeline
+    Ok(solve_problem(&problem))
+}
+
+/// Get belief state from NL (for debugging/analysis)
+#[cfg(feature = "nl")]
+pub fn analyze_nl(
+    description: &str,
+) -> Result<crate::linguigenesis_bridge::BridgeBeliefState, String> {
+    use crate::linguigenesis_bridge::LinguigenesisBridge;
+
+    let bridge = LinguigenesisBridge::new();
+    let belief = bridge
+        .get_belief_state(description)
+        .map_err(|e| format!("Failed to parse NL: {}", e))?;
+
+    Ok(crate::linguigenesis_bridge::BridgeBeliefState {
+        intent_type: format!("{:?}", belief.intent.intent_type),
+        entities: belief.comprehension.entities,
+        confidence: belief.reflection.clarity_score as f64,
+    })
 }
 
 pub fn solve_benchmark_with_legacy_fallback(problems: &[Problem]) -> BenchmarkSummary {

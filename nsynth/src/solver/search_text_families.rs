@@ -10,10 +10,7 @@ use super::*;
 /// be derived by a rule, so they must be stored. The teacher recovers the table
 /// directly from I/O, compresses it around the majority label (only off-default
 /// words get a branch), and verifies it end to end.
-pub(super) fn search_string_equality_map(
-    problem: &Problem,
-    fn_name: &str,
-) -> Option<SolveResult> {
+pub(super) fn search_string_equality_map(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let strings = unary_string_examples(problem)?;
     // Need enough evidence that this is a real lexicon, not a 1-2 point fluke.
     if problem.examples.len() < 3 {

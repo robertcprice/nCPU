@@ -2,6 +2,48 @@ use crate::benchmark::Problem;
 use crate::differentiable::DifferentiableMetadata;
 use crate::runtime::verify_problem_code_strict;
 use crate::solver::SolveResult;
+use std::cell::Cell;
+use std::time::{Duration, Instant};
+
+// ─── Gradient-training wall-clock budget ────────────────────────────────────────
+//
+// `train_program` runs hundreds of gradient steps and is invoked dozens of times
+// per restart by the scalar/array gradient synthesizers. On data that never
+// converges (e.g. a contradictory teacher-augmented re-fit, or a genuinely
+// unsynthesizable problem) the stagnation early-stop is not always enough, so a
+// caller could spend minutes sweeping every block to ultimately miss. A caller
+// installs a [`TrainDeadline`] guard to cap the *total* time all `train_program`
+// runs on this thread may take; once it elapses each run returns near-instantly.
+// Default is "no deadline" so callers that don't opt in are unaffected.
+
+thread_local! {
+    static TRAIN_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// RAII guard capping all [`train_program`] runs on this thread to `budget` from
+/// now. Restores the previous deadline on drop (nesting-safe).
+pub(crate) struct TrainDeadline {
+    prev: Option<Instant>,
+}
+impl TrainDeadline {
+    pub(crate) fn set(budget: Duration) -> Self {
+        let prev = TRAIN_DEADLINE.with(|c| c.replace(Some(Instant::now() + budget)));
+        TrainDeadline { prev }
+    }
+}
+impl Drop for TrainDeadline {
+    fn drop(&mut self) {
+        TRAIN_DEADLINE.with(|c| c.set(self.prev));
+    }
+}
+
+/// True once an installed [`TrainDeadline`] has elapsed. Always false when no
+/// deadline is set, so non-opted-in callers see no behavior change.
+fn train_deadline_exceeded() -> bool {
+    TRAIN_DEADLINE
+        .with(|c| c.get())
+        .is_some_and(|d| Instant::now() >= d)
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -385,6 +427,12 @@ where
     let mut loss_at_chk2 = f32::MAX;
 
     for step in 0..n_steps {
+        // Bail out of a non-converging run once the caller's wall-clock budget is
+        // spent (checked sparsely to keep `Instant::now()` off the hot path).
+        // No-op when no `TrainDeadline` is installed.
+        if step % 16 == 0 && train_deadline_exceeded() {
+            break;
+        }
         if step == chk1 {
             loss_at_chk1 = best_loss;
         }

@@ -1,9 +1,52 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::thread;
 
-use crate::benchmark::{generated_holdouts, Example, Problem, Value as BenchmarkValue};
-use crate::benchmark::Value as BmValue;
+use crate::benchmark::{generated_holdouts, Problem, Value as BenchmarkValue};
+
+// System/FFI modules
+pub mod extern_;
+pub mod resource;
+pub mod syscall;
+
+/// Error type for runtime FFI operations (separate from String-based errors)
+#[derive(Debug, Clone)]
+pub enum Errno {
+    /// Permission denied
+    PermissionDenied(String),
+    /// Invalid argument
+    InvalidArgument(String),
+    /// I/O error
+    IOError(String),
+    /// Not found
+    NotFound(String),
+    /// Operation not supported
+    NotSupported(String),
+    /// Resource exhausted
+    ResourceExhausted(String),
+}
+
+impl std::fmt::Display for Errno {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Errno::PermissionDenied(s) => write!(f, "Permission denied: {}", s),
+            Errno::InvalidArgument(s) => write!(f, "Invalid argument: {}", s),
+            Errno::IOError(s) => write!(f, "I/O error: {}", s),
+            Errno::NotFound(s) => write!(f, "Not found: {}", s),
+            Errno::NotSupported(s) => write!(f, "Not supported: {}", s),
+            Errno::ResourceExhausted(s) => write!(f, "Resource exhausted: {}", s),
+        }
+    }
+}
+
+impl std::error::Error for Errno {}
+
+/// Result type for FFI operations (separate from existing Result<T, String>)
+pub type FfiResult<T> = std::result::Result<T, Errno>;
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -18,6 +61,11 @@ pub enum Value {
         name: String,
         fields: HashMap<String, Value>,
     },
+    Enum {
+        type_name: String,
+        variant: String,
+        fields: Vec<Value>,
+    },
     Result {
         is_ok: bool,
         value: Box<Value>,
@@ -29,7 +77,11 @@ pub enum Value {
     Function(String),
     Builtin(Builtin),
     Closure(Closure),
+    FileHandle(i64),
     Unit,
+    Channel(i64),
+    Mutex(i64),
+    ThreadHandle(i64),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -39,14 +91,32 @@ pub enum Builtin {
     Println,
     PrintF64,
     PrintString,
+    Print,
     ReadI64,
     ReadString,
+    Read,
     HasInput,
     Len,
     Abs,
     Min,
     Max,
     Pow,
+    OpenFile,
+    ReadFile,
+    WriteFile,
+    CloseFile,
+    Reduce,
+    Spawn,
+    Send,
+    Recv,
+    NewChannel,
+    NewMutex,
+    Lock,
+    Unlock,
+    ParallelFor,
+    Error,
+    Unwrap,
+    UnwrapOr,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +124,7 @@ pub struct Closure {
     params: Vec<String>,
     body: Vec<Stmt>,
     env: Env,
+    type_params: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,21 +133,36 @@ struct Env(Rc<EnvData>);
 #[derive(Debug)]
 struct EnvData {
     parent: Option<Env>,
+    module_name: Option<String>,
     values: RefCell<HashMap<String, Value>>,
+    modules: RefCell<HashMap<String, Env>>,
 }
 
 impl Env {
     fn new() -> Self {
         Self(Rc::new(EnvData {
             parent: None,
+            module_name: None,
             values: RefCell::new(HashMap::new()),
+            modules: RefCell::new(HashMap::new()),
+        }))
+    }
+
+    fn with_module(module_name: String) -> Self {
+        Self(Rc::new(EnvData {
+            parent: None,
+            module_name: Some(module_name),
+            values: RefCell::new(HashMap::new()),
+            modules: RefCell::new(HashMap::new()),
         }))
     }
 
     fn child(&self) -> Self {
         Self(Rc::new(EnvData {
             parent: Some(self.clone()),
+            module_name: self.0.module_name.clone(),
             values: RefCell::new(HashMap::new()),
+            modules: RefCell::new(HashMap::new()),
         }))
     }
 
@@ -84,11 +170,41 @@ impl Env {
         self.0.values.borrow_mut().insert(name.to_string(), value);
     }
 
+    fn define_module(&self, name: &str, env: Env) {
+        self.0.modules.borrow_mut().insert(name.to_string(), env);
+    }
+
     fn get(&self, name: &str) -> Option<Value> {
         if let Some(value) = self.0.values.borrow().get(name).cloned() {
             return Some(value);
         }
+
+        // Check for module-qualified names (e.g., "module::function")
+        if name.contains("::") {
+            let parts: Vec<&str> = name.split("::").collect();
+            if parts.len() == 2 {
+                let module_name = parts[0];
+                let symbol_name = parts[1];
+                if let Some(module_env) = self.0.modules.borrow().get(module_name) {
+                    return module_env.get(symbol_name);
+                }
+            }
+        }
+
         self.0.parent.as_ref().and_then(|parent| parent.get(name))
+    }
+
+    fn resolve_import(&self, module_name: &str, symbols: &[String]) -> Result<(), String> {
+        if let Some(module_env) = self.0.modules.borrow().get(module_name) {
+            for symbol in symbols {
+                if let Some(value) = module_env.get(symbol) {
+                    self.define(symbol, value);
+                }
+            }
+            Ok(())
+        } else {
+            Err(format!("module '{module_name}' not found"))
+        }
     }
 
     fn set(&self, name: &str, value: Value) -> Result<(), String> {
@@ -110,16 +226,69 @@ pub struct StructDecl {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnumDecl {
+    pub name: String,
+    pub variants: Vec<EnumVariant>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypeAlias {
+    pub name: String,
+    pub target: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TraitDecl {
+    pub name: String,
+    pub methods: Vec<Function>,
+    pub type_params: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImplBlock {
+    pub target_type: String,
+    pub trait_name: Option<String>,
+    pub methods: Vec<Function>,
+    pub type_params: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
     pub name: String,
     pub params: Vec<String>,
     pub body: Vec<Stmt>,
+    pub type_params: Vec<String>,
+    pub is_method: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModuleDecl {
+    pub name: String,
+    pub exports: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportDecl {
+    pub module_name: String,
+    pub symbols: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
+    pub modules: HashMap<String, ModuleDecl>,
+    pub imports: Vec<ImportDecl>,
     pub structs: HashMap<String, StructDecl>,
+    pub enums: HashMap<String, EnumDecl>,
+    pub type_aliases: HashMap<String, TypeAlias>,
     pub functions: HashMap<String, Function>,
+    pub traits: HashMap<String, TraitDecl>,
+    pub impls: Vec<ImplBlock>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,9 +322,22 @@ pub enum Stmt {
         iterable: Expr,
         body: Vec<Stmt>,
     },
-    Break,
-    Continue,
+    ForParallel {
+        var_name: String,
+        start: Expr,
+        end: Expr,
+        body: Vec<Stmt>,
+    },
+    Break(Option<String>),
+    Continue(Option<String>),
     Expr(Expr),
+    Try {
+        var_name: Option<String>,
+        expr: Expr,
+        then_block: Vec<Stmt>,
+        catch_block: Vec<Stmt>,
+    },
+    Throw(Expr),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +361,11 @@ pub enum Expr {
         name: String,
         fields: Vec<(String, Expr)>,
     },
+    EnumConstruct {
+        type_name: String,
+        variant: String,
+        fields: Vec<Expr>,
+    },
     Ident(String),
     Unary(UnaryOp, Box<Expr>),
     Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -189,11 +376,13 @@ pub enum Expr {
     Closure {
         params: Vec<String>,
         body: Vec<Stmt>,
+        type_params: Vec<String>,
     },
     Ok(Box<Expr>),
     Err(Box<Expr>),
     Some(Box<Expr>),
     None,
+    Try(Box<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +391,7 @@ pub enum Pattern {
     Err(String),
     Some(String),
     None,
+    EnumVariant(String, String),
     Ident(String),
 }
 
@@ -238,6 +428,11 @@ pub enum BinaryOp {
 enum Token {
     Fn,
     Struct,
+    Enum,
+    Type,
+    Module,
+    Import,
+    Export,
     Return,
     If,
     Else,
@@ -245,6 +440,7 @@ enum Token {
     For,
     In,
     To,
+    Parallel,
     Match,
     Break,
     Continue,
@@ -254,6 +450,19 @@ enum Token {
     None,
     True,
     False,
+    Spawn,
+    Send,
+    Recv,
+    Channel,
+    Mutex,
+    Lock,
+    Unlock,
+    Try,
+    Throw,
+    Catch,
+    Trait,
+    Impl,
+    SelfType,
     Ident(String),
     Int(i64),
     /// A float literal kept as its source text (so the `Token` enum stays `Eq`);
@@ -282,6 +491,7 @@ enum Token {
     GtEq,
     Eq,
     ColonEq,
+    DoubleColon,
     Arrow,
     FatArrow,
     Question,
@@ -302,6 +512,245 @@ enum Token {
 pub fn parse_program(src: &str) -> Result<Program, String> {
     let tokens = lex(src)?;
     Parser::new(tokens).parse_program()
+}
+
+/// Validate that all function calls in the program refer to defined functions.
+/// Returns Ok with the function signature if validation passes, Err with undefined functions.
+pub fn validate_call_graph(src: &str) -> Result<String, String> {
+    let program = parse_program(src)?;
+    let mut undefined_calls: Vec<String> = Vec::new();
+    let defined_functions: std::collections::HashSet<String> =
+        program.functions.keys().cloned().collect();
+
+    // Built-in functions that are always available
+    let builtins: std::collections::HashSet<&str> = [
+        "println_i64",
+        "println_f64",
+        "println",
+        "print_f64",
+        "print_string",
+        "print",
+        "read_i64",
+        "read_string",
+        "read_line",
+        "read",
+        "has_input",
+        "len",
+        "abs",
+        "min",
+        "max",
+        "pow",
+        "open_file",
+        "read_file",
+        "write_file",
+        "close_file",
+        "reduce",
+        "spawn",
+        "send",
+        "recv",
+        "new_channel",
+        "new_mutex",
+        "lock",
+        "unlock",
+        "error",
+        "unwrap",
+        "unwrap_or",
+    ]
+    .into_iter()
+    .collect();
+
+    // Collect all function calls from the program
+    for function in program.functions.values() {
+        collect_calls_from_stmts(
+            &function.body,
+            &mut undefined_calls,
+            &defined_functions,
+            &builtins,
+        );
+    }
+
+    if undefined_calls.is_empty() {
+        Ok("All function calls are defined.".to_string())
+    } else {
+        Err(format!(
+            "Undefined function calls: {}",
+            undefined_calls.join(", ")
+        ))
+    }
+}
+
+fn collect_calls_from_stmts(
+    stmts: &[Stmt],
+    undefined_calls: &mut Vec<String>,
+    defined_functions: &std::collections::HashSet<String>,
+    builtins: &std::collections::HashSet<&str>,
+) {
+    for stmt in stmts {
+        collect_calls_from_stmt(stmt, undefined_calls, defined_functions, builtins);
+    }
+}
+
+fn collect_calls_from_stmt(
+    stmt: &Stmt,
+    undefined_calls: &mut Vec<String>,
+    defined_functions: &std::collections::HashSet<String>,
+    builtins: &std::collections::HashSet<&str>,
+) {
+    match stmt {
+        Stmt::VarDecl(_, expr) | Stmt::Expr(expr) | Stmt::Return(expr) => {
+            collect_calls_from_expr(expr, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::Assign(target, expr) => {
+            collect_calls_from_target(target, undefined_calls, defined_functions, builtins);
+            collect_calls_from_expr(expr, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::If {
+            condition,
+            then_block,
+            else_block,
+        } => {
+            collect_calls_from_expr(condition, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(then_block, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(else_block, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::While { condition, body } => {
+            collect_calls_from_expr(condition, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(body, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::ForTo {
+            start, end, body, ..
+        } => {
+            collect_calls_from_expr(start, undefined_calls, defined_functions, builtins);
+            collect_calls_from_expr(end, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(body, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::ForInRange {
+            start, end, body, ..
+        } => {
+            collect_calls_from_expr(start, undefined_calls, defined_functions, builtins);
+            collect_calls_from_expr(end, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(body, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::ForIn { iterable, body, .. } => {
+            collect_calls_from_expr(iterable, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(body, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::ForParallel {
+            start, end, body, ..
+        } => {
+            collect_calls_from_expr(start, undefined_calls, defined_functions, builtins);
+            collect_calls_from_expr(end, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(body, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::Try {
+            expr,
+            then_block,
+            catch_block,
+            ..
+        } => {
+            collect_calls_from_expr(expr, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(then_block, undefined_calls, defined_functions, builtins);
+            collect_calls_from_stmts(catch_block, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::Throw(expr) => {
+            collect_calls_from_expr(expr, undefined_calls, defined_functions, builtins);
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+    }
+}
+
+fn collect_calls_from_target(
+    target: &Target,
+    undefined_calls: &mut Vec<String>,
+    defined_functions: &std::collections::HashSet<String>,
+    builtins: &std::collections::HashSet<&str>,
+) {
+    match target {
+        Target::Ident(_) => {}
+        Target::Field(base, _) | Target::Index(base, _) => {
+            collect_calls_from_expr(base, undefined_calls, defined_functions, builtins);
+        }
+    }
+}
+
+fn collect_calls_from_expr(
+    expr: &Expr,
+    undefined_calls: &mut Vec<String>,
+    defined_functions: &std::collections::HashSet<String>,
+    builtins: &std::collections::HashSet<&str>,
+) {
+    match expr {
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::None => {}
+        Expr::ArrayLit(elements) => {
+            for elem in elements {
+                collect_calls_from_expr(elem, undefined_calls, defined_functions, builtins);
+            }
+        }
+        Expr::StructConstruct { fields, .. } => {
+            for (_, field_expr) in fields {
+                collect_calls_from_expr(field_expr, undefined_calls, defined_functions, builtins);
+            }
+        }
+        Expr::EnumConstruct { fields, .. } => {
+            for field_expr in fields {
+                collect_calls_from_expr(field_expr, undefined_calls, defined_functions, builtins);
+            }
+        }
+        Expr::Ident(_name) => {
+            // Identifier references are not calls
+        }
+        Expr::Unary(_, inner) => {
+            collect_calls_from_expr(inner, undefined_calls, defined_functions, builtins);
+        }
+        Expr::Binary(lhs, _, rhs) => {
+            collect_calls_from_expr(lhs, undefined_calls, defined_functions, builtins);
+            collect_calls_from_expr(rhs, undefined_calls, defined_functions, builtins);
+        }
+        Expr::Call(callee, args) => {
+            // Check if this is a method call (e.g., arr.push(1))
+            if let Expr::Field(base, _method) = &**callee {
+                // For method calls, we need to check if the method is valid
+                // But the base value's type determines available methods
+                collect_calls_from_expr(base, undefined_calls, defined_functions, builtins);
+            } else if let Expr::Ident(name) = &**callee {
+                // Direct function call
+                if !defined_functions.contains(name) && !builtins.contains(name.as_str()) {
+                    if !undefined_calls.contains(name) {
+                        undefined_calls.push(name.clone());
+                    }
+                }
+            } else {
+                // Expression that evaluates to a function/closure
+                collect_calls_from_expr(callee, undefined_calls, defined_functions, builtins);
+            }
+            for arg in args {
+                collect_calls_from_expr(arg, undefined_calls, defined_functions, builtins);
+            }
+        }
+        Expr::Field(base, _) => {
+            collect_calls_from_expr(base, undefined_calls, defined_functions, builtins);
+        }
+        Expr::Index(base, idx) => {
+            collect_calls_from_expr(base, undefined_calls, defined_functions, builtins);
+            collect_calls_from_expr(idx, undefined_calls, defined_functions, builtins);
+        }
+        Expr::Match(subject, arms) => {
+            collect_calls_from_expr(subject, undefined_calls, defined_functions, builtins);
+            for (_, arm_expr) in arms {
+                collect_calls_from_expr(arm_expr, undefined_calls, defined_functions, builtins);
+            }
+        }
+        Expr::Closure {
+            params: _,
+            body,
+            type_params: _,
+        } => {
+            collect_calls_from_stmts(body, undefined_calls, defined_functions, builtins);
+        }
+        Expr::Ok(inner) | Expr::Err(inner) | Expr::Some(inner) | Expr::Try(inner) => {
+            collect_calls_from_expr(inner, undefined_calls, defined_functions, builtins);
+        }
+    }
 }
 
 pub fn execute_function(
@@ -354,6 +803,7 @@ pub fn execute_str_function(
 pub struct ExecutionResult {
     pub output: String,
     pub return_value: Option<i64>,
+    pub side_effects: SideEffects,
 }
 
 pub fn execute_program_with_input(
@@ -474,11 +924,9 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
                 fields,
             })
         }
-        BenchmarkValue::Tree(_) => {
-            Err(format!(
-                "tree argument conversion not yet implemented for problem {problem_name}"
-            ))
-        }
+        BenchmarkValue::Tree(_) => Err(format!(
+            "tree argument conversion not yet implemented for problem {problem_name}"
+        )),
     }
 }
 
@@ -538,6 +986,16 @@ fn display_value(value: &Value) -> Result<String, String> {
         }),
         Value::Str(v) => Ok(v.clone()),
         Value::Unit => Ok(String::new()),
+        Value::FileHandle(id) => Ok(format!("<file {}>", id)),
+        // Array rendering must match `benchmark::render_expected` ("[a, b, c]")
+        // so array-returning programs verify against the expected stdout.
+        Value::Array(items) => {
+            let rendered = items
+                .iter()
+                .map(display_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(format!("[{}]", rendered.join(", ")))
+        }
         other => Err(format!("cannot display {:?}", other)),
     }
 }
@@ -645,6 +1103,11 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
             let token = match ident.as_str() {
                 "fn" => Token::Fn,
                 "struct" => Token::Struct,
+                "enum" => Token::Enum,
+                "type" => Token::Type,
+                "mod" => Token::Module,
+                "import" => Token::Import,
+                "export" => Token::Export,
                 "return" => Token::Return,
                 "if" => Token::If,
                 "else" => Token::Else,
@@ -652,6 +1115,7 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                 "for" => Token::For,
                 "in" => Token::In,
                 "to" => Token::To,
+                "parallel" => Token::Parallel,
                 "match" => Token::Match,
                 "break" => Token::Break,
                 "continue" => Token::Continue,
@@ -661,6 +1125,19 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                 "none" => Token::None,
                 "true" => Token::True,
                 "false" => Token::False,
+                "spawn" => Token::Spawn,
+                "send" => Token::Send,
+                "recv" => Token::Recv,
+                "channel" => Token::Channel,
+                "mutex" => Token::Mutex,
+                "lock" => Token::Lock,
+                "unlock" => Token::Unlock,
+                "try" => Token::Try,
+                "throw" => Token::Throw,
+                "catch" => Token::Catch,
+                "trait" => Token::Trait,
+                "impl" => Token::Impl,
+                "self" => Token::SelfType,
                 _ => Token::Ident(ident),
             };
             out.push(token);
@@ -765,6 +1242,9 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                 if matches!(chars.peek(), Some('=')) {
                     chars.next();
                     out.push(Token::ColonEq);
+                } else if matches!(chars.peek(), Some(':')) {
+                    chars.next();
+                    out.push(Token::DoubleColon);
                 } else {
                     out.push(Token::Colon);
                 }
@@ -833,13 +1313,41 @@ impl Parser {
     }
 
     fn parse_program(mut self) -> Result<Program, String> {
+        let mut modules = HashMap::new();
+        let mut imports = Vec::new();
         let mut structs = HashMap::new();
+        let mut enums = HashMap::new();
+        let mut type_aliases = HashMap::new();
         let mut functions = HashMap::new();
+        let mut traits = HashMap::new();
+        let mut impls = Vec::new();
 
         while !self.at(&Token::Eof) {
-            if self.at(&Token::Struct) {
+            if self.at(&Token::Module) {
+                let (module_decl, module_functions) = self.parse_module_decl_with_functions()?;
+                modules.insert(module_decl.name.clone(), module_decl);
+                // Add module functions to the global function table
+                for func in module_functions {
+                    functions.insert(func.name.clone(), func);
+                }
+            } else if self.at(&Token::Import) {
+                let import = self.parse_import_decl()?;
+                imports.push(import);
+            } else if self.at(&Token::Struct) {
                 let decl = self.parse_struct_decl()?;
                 structs.insert(decl.name.clone(), decl);
+            } else if self.at(&Token::Enum) {
+                let decl = self.parse_enum_decl()?;
+                enums.insert(decl.name.clone(), decl);
+            } else if self.at(&Token::Type) {
+                let alias = self.parse_type_alias()?;
+                type_aliases.insert(alias.name.clone(), alias);
+            } else if self.at(&Token::Trait) {
+                let decl = self.parse_trait_decl()?;
+                traits.insert(decl.name.clone(), decl);
+            } else if self.at(&Token::Impl) {
+                let impl_block = self.parse_impl_block()?;
+                impls.push(impl_block);
             } else if self.at(&Token::Fn) {
                 let func = self.parse_function_decl()?;
                 functions.insert(func.name.clone(), func);
@@ -851,7 +1359,89 @@ impl Parser {
             }
         }
 
-        Ok(Program { structs, functions })
+        Ok(Program {
+            modules,
+            imports,
+            structs,
+            enums,
+            type_aliases,
+            functions,
+            traits,
+            impls,
+        })
+    }
+
+    fn parse_module_decl_with_functions(&mut self) -> Result<(ModuleDecl, Vec<Function>), String> {
+        self.expect(&Token::Module)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        let mut exports = Vec::new();
+        let mut functions = Vec::new();
+
+        while !self.at(&Token::RBrace) {
+            // Skip semicolons between declarations
+            if self.at(&Token::Semi) {
+                self.bump();
+                continue;
+            }
+
+            if self.at(&Token::Export) {
+                self.bump();
+                let symbol = self.expect_ident()?;
+                exports.push(symbol);
+                // Optional comma after export
+                if self.at(&Token::Comma) {
+                    self.bump();
+                }
+            } else if self.at(&Token::Fn) {
+                let func = self.parse_function_decl()?;
+                // Only add to exports if not already exported
+                if !exports.contains(&func.name) {
+                    exports.push(func.name.clone());
+                }
+                functions.push(func);
+                // Optional comma after function
+                if self.at(&Token::Comma) {
+                    self.bump();
+                }
+            } else {
+                return Err(format!(
+                    "expected export or function in module, got {:?}",
+                    self.current()
+                ));
+            }
+        }
+
+        self.expect(&Token::RBrace)?;
+        Ok((
+            ModuleDecl {
+                name: name.clone(),
+                exports,
+            },
+            functions,
+        ))
+    }
+
+    fn parse_import_decl(&mut self) -> Result<ImportDecl, String> {
+        self.expect(&Token::Import)?;
+        let module_name = self.expect_ident()?;
+        let mut symbols = Vec::new();
+        if self.at(&Token::Colon) {
+            self.bump();
+            self.expect(&Token::LBrace)?;
+            while !self.at(&Token::RBrace) {
+                symbols.push(self.expect_ident()?);
+                if self.at(&Token::Comma) {
+                    self.bump();
+                }
+            }
+            self.expect(&Token::RBrace)?;
+        }
+        self.expect(&Token::Semi)?;
+        Ok(ImportDecl {
+            module_name,
+            symbols,
+        })
     }
 
     fn parse_struct_decl(&mut self) -> Result<StructDecl, String> {
@@ -871,16 +1461,164 @@ impl Parser {
         Ok(StructDecl { name, fields })
     }
 
+    fn parse_enum_decl(&mut self) -> Result<EnumDecl, String> {
+        self.expect(&Token::Enum)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        let mut variants = Vec::new();
+        while !self.at(&Token::RBrace) {
+            let variant_name = self.expect_ident()?;
+            let mut fields = Vec::new();
+            if self.at(&Token::LParen) {
+                self.bump();
+                while !self.at(&Token::RParen) {
+                    fields.push(self.expect_ident()?);
+                    if self.at(&Token::Colon) {
+                        self.bump();
+                        self.skip_type_until(&[Token::Comma, Token::RParen])?;
+                    }
+                    if self.at(&Token::Comma) {
+                        self.bump();
+                    }
+                }
+                self.expect(&Token::RParen)?;
+            }
+            variants.push(EnumVariant {
+                name: variant_name,
+                fields,
+            });
+            if self.at(&Token::Comma) {
+                self.bump();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(EnumDecl { name, variants })
+    }
+
+    fn parse_type_alias(&mut self) -> Result<TypeAlias, String> {
+        self.expect(&Token::Type)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::Eq)?;
+        let target = self.expect_ident()?;
+        self.skip_type_until(&[Token::Semi])?;
+        self.expect(&Token::Semi)?;
+        Ok(TypeAlias { name, target })
+    }
+
+    fn parse_trait_decl(&mut self) -> Result<TraitDecl, String> {
+        self.expect(&Token::Trait)?;
+        let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
+        self.expect(&Token::LBrace)?;
+        let mut methods = Vec::new();
+        while !self.at(&Token::RBrace) {
+            if self.at(&Token::Semi) {
+                self.bump();
+                continue;
+            }
+            // Trait methods are just signatures (no body in traits)
+            if self.at(&Token::Fn) {
+                let mut func = self.parse_function_decl()?;
+                func.is_method = true;
+                methods.push(func);
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(TraitDecl {
+            name,
+            methods,
+            type_params,
+        })
+    }
+
+    fn parse_impl_block(&mut self) -> Result<ImplBlock, String> {
+        self.expect(&Token::Impl)?;
+        let type_params = self.parse_type_params()?;
+
+        // Check for trait impl: "impl Trait for Type" or "impl Type"
+        let target_type = self.expect_ident()?;
+        let mut trait_name = None;
+
+        // Check if next identifier is "for"
+        let next_is_for = if let Token::Ident(ref s) = self.current() {
+            s == "for"
+        } else {
+            false
+        };
+
+        if next_is_for {
+            // This is "impl Trait for Type"
+            self.bump(); // consume "for"
+            trait_name = Some(target_type.clone());
+            // Skip type if present
+            if self.at(&Token::Lt) {
+                self.skip_type_until(&[Token::LBrace])?;
+            }
+        }
+
+        // Get the actual target type (or the type after "for")
+        let final_target = if trait_name.is_some() {
+            self.expect_ident()?
+        } else {
+            target_type
+        };
+
+        self.expect(&Token::LBrace)?;
+        let mut methods = Vec::new();
+        while !self.at(&Token::RBrace) {
+            if self.at(&Token::Semi) {
+                self.bump();
+                continue;
+            }
+            if self.at(&Token::Fn) {
+                let mut func = self.parse_function_decl()?;
+                func.is_method = true;
+                methods.push(func);
+            }
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(ImplBlock {
+            target_type: final_target,
+            trait_name,
+            methods,
+            type_params,
+        })
+    }
+
     fn parse_function_decl(&mut self) -> Result<Function, String> {
         self.expect(&Token::Fn)?;
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         let params = self.parse_params()?;
         if self.at(&Token::Arrow) {
             self.bump();
             self.skip_type_until(&[Token::LBrace])?;
         }
         let body = self.parse_block()?;
-        Ok(Function { name, params, body })
+        Ok(Function {
+            name,
+            params,
+            body,
+            type_params,
+            is_method: false,
+        })
+    }
+
+    fn parse_type_params(&mut self) -> Result<Vec<String>, String> {
+        let mut type_params = Vec::new();
+        if self.at(&Token::Lt) {
+            self.bump();
+            while !self.at(&Token::Gt) {
+                let param = self.expect_ident()?;
+                type_params.push(param);
+                if self.at(&Token::Comma) {
+                    self.bump();
+                }
+            }
+            self.expect(&Token::Gt)?;
+        }
+        Ok(type_params)
     }
 
     fn parse_params(&mut self) -> Result<Vec<String>, String> {
@@ -937,11 +1675,30 @@ impl Parser {
         }
         if self.at(&Token::Break) {
             self.bump();
-            return Ok(Stmt::Break);
+            // Check for label: 'break' | 'break' ':' identifier
+            if self.at(&Token::Colon) {
+                self.bump();
+                let label = self.expect_ident()?;
+                return Ok(Stmt::Break(Some(label)));
+            }
+            return Ok(Stmt::Break(None));
         }
         if self.at(&Token::Continue) {
             self.bump();
-            return Ok(Stmt::Continue);
+            // Check for label: 'continue' | 'continue' ':' identifier
+            if self.at(&Token::Colon) {
+                self.bump();
+                let label = self.expect_ident()?;
+                return Ok(Stmt::Continue(Some(label)));
+            }
+            return Ok(Stmt::Continue(None));
+        }
+        if self.at(&Token::Try) {
+            return self.parse_try_stmt();
+        }
+        if self.at(&Token::Throw) {
+            self.bump();
+            return Ok(Stmt::Throw(self.parse_expr()?));
         }
 
         if let Token::Ident(_) = self.current() {
@@ -970,7 +1727,17 @@ impl Parser {
     }
 
     fn parse_for_stmt(&mut self) -> Result<Stmt, String> {
-        self.expect(&Token::For)?;
+        let is_parallel = if self.at(&Token::For) {
+            self.bump();
+            false
+        } else if self.at(&Token::Parallel) {
+            self.bump();
+            self.expect(&Token::For)?;
+            true
+        } else {
+            return Err("expected for or parallel for".to_string());
+        };
+
         let var_name = self.expect_ident()?;
 
         if self.at(&Token::ColonEq) {
@@ -979,6 +1746,14 @@ impl Parser {
             self.expect(&Token::To)?;
             let end = self.parse_expr()?;
             let body = self.parse_block()?;
+            if is_parallel {
+                return Ok(Stmt::ForParallel {
+                    var_name,
+                    start,
+                    end,
+                    body,
+                });
+            }
             return Ok(Stmt::ForTo {
                 var_name,
                 start,
@@ -1026,6 +1801,33 @@ impl Parser {
             condition,
             then_block,
             else_block,
+        })
+    }
+
+    fn parse_try_stmt(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Try)?;
+        let mut var_name = None;
+        // Check for optional variable binding: 'try x = expr' or 'try expr'
+        if let Token::Ident(name) = self.current().clone() {
+            if matches!(self.peek(), Token::Eq) {
+                self.bump();
+                self.expect(&Token::Eq)?;
+                var_name = Some(name);
+            }
+        }
+        let expr = self.parse_expr()?;
+        let then_block = self.parse_block()?;
+        let catch_block = if self.at(&Token::Catch) {
+            self.bump();
+            self.parse_block()?
+        } else {
+            Vec::new()
+        };
+        Ok(Stmt::Try {
+            var_name,
+            expr,
+            then_block,
+            catch_block,
         })
     }
 
@@ -1221,6 +2023,11 @@ impl Parser {
                 expr = Expr::Index(Box::new(expr), Box::new(index));
                 continue;
             }
+            if self.at(&Token::Question) {
+                self.bump();
+                expr = Expr::Try(Box::new(expr));
+                continue;
+            }
             break;
         }
         Ok(expr)
@@ -1292,6 +2099,25 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                     Ok(Expr::StructConstruct { name, fields })
+                } else if self.at(&Token::DoubleColon) {
+                    self.bump();
+                    let variant = self.expect_ident()?;
+                    let mut fields = Vec::new();
+                    if self.at(&Token::LParen) {
+                        self.bump();
+                        while !self.at(&Token::RParen) {
+                            fields.push(self.parse_expr()?);
+                            if self.at(&Token::Comma) {
+                                self.bump();
+                            }
+                        }
+                        self.expect(&Token::RParen)?;
+                    }
+                    Ok(Expr::EnumConstruct {
+                        type_name: name,
+                        variant,
+                        fields,
+                    })
                 } else {
                     Ok(Expr::Ident(name))
                 }
@@ -1377,10 +2203,23 @@ impl Parser {
                 self.bump();
                 Ok(Pattern::None)
             }
-            Token::Ident(name) => {
-                let name = name.clone();
+            Token::Ident(type_name) => {
+                let type_name = type_name.clone();
                 self.bump();
-                Ok(Pattern::Ident(name))
+                if self.at(&Token::DoubleColon) {
+                    self.bump();
+                    let variant = self.expect_ident()?;
+                    if self.at(&Token::LParen) {
+                        self.bump();
+                        let _binding = self.expect_ident()?;
+                        self.expect(&Token::RParen)?;
+                        Ok(Pattern::EnumVariant(type_name, variant))
+                    } else {
+                        Ok(Pattern::EnumVariant(type_name, variant))
+                    }
+                } else {
+                    Ok(Pattern::Ident(type_name))
+                }
             }
             _ => Err(format!("unexpected token in pattern: {:?}", self.current())),
         }
@@ -1388,13 +2227,18 @@ impl Parser {
 
     fn parse_closure(&mut self) -> Result<Expr, String> {
         self.expect(&Token::Fn)?;
+        let type_params = self.parse_type_params()?;
         let params = self.parse_params()?;
         if self.at(&Token::Arrow) {
             self.bump();
             self.skip_type_until(&[Token::LBrace])?;
         }
         let body = self.parse_block()?;
-        Ok(Expr::Closure { params, body })
+        Ok(Expr::Closure {
+            params,
+            body,
+            type_params,
+        })
     }
 
     fn parse_call_args(&mut self) -> Result<Vec<Expr>, String> {
@@ -1486,12 +2330,106 @@ fn expr_to_target(expr: Expr) -> Result<Target, String> {
     }
 }
 
-#[derive(Clone, Debug)]
 struct Runtime {
     program: Program,
     global: Env,
     output: RefCell<Vec<String>>,
     input: RefCell<VecDeque<String>>,
+    side_effects: RefCell<SideEffects>,
+    file_handles: RefCell<HashMap<i64, RefCell<File>>>,
+    next_file_id: RefCell<i64>,
+    channels: RefCell<HashMap<i64, MutexChannel>>,
+    next_channel_id: RefCell<i64>,
+    mutexes: RefCell<HashMap<i64, MutexValue>>,
+    next_mutex_id: RefCell<i64>,
+    threads: RefCell<HashMap<i64, thread::JoinHandle<()>>>,
+    next_thread_id: RefCell<i64>,
+    monomorphized_functions: RefCell<HashMap<String, Function>>,
+    type_inference_cache: RefCell<HashMap<String, Vec<String>>>,
+}
+
+struct MutexChannel {
+    sender: Option<mpsc::Sender<Value>>,
+    receiver: Option<mpsc::Receiver<Value>>,
+}
+
+impl MutexChannel {
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        Self {
+            sender: Some(sender),
+            receiver: Some(receiver),
+        }
+    }
+}
+
+struct MutexValue {
+    value: RefCell<Option<Value>>,
+    locked: RefCell<bool>,
+}
+
+impl MutexValue {
+    fn new() -> Self {
+        Self {
+            value: RefCell::new(None),
+            locked: RefCell::new(false),
+        }
+    }
+
+    fn lock(&self) -> Result<(), String> {
+        let mut locked = self.locked.borrow_mut();
+        if *locked {
+            return Err("mutex already locked".to_string());
+        }
+        *locked = true;
+        Ok(())
+    }
+
+    fn unlock(&self) -> Result<(), String> {
+        let mut locked = self.locked.borrow_mut();
+        if !*locked {
+            return Err("mutex not locked".to_string());
+        }
+        *locked = false;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SideEffects {
+    pub prints: Vec<String>,
+    pub reads: Vec<String>,
+    pub files_read: Vec<String>,
+    pub files_written: Vec<String>,
+}
+
+impl SideEffects {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn track_print(&mut self, value: &str) {
+        self.prints.push(value.to_string());
+    }
+
+    fn track_read(&mut self, value: &str) {
+        self.reads.push(value.to_string());
+    }
+
+    fn track_file_read(&mut self, path: &str) {
+        self.files_read.push(path.to_string());
+    }
+
+    fn track_file_write(&mut self, path: &str) {
+        self.files_written.push(path.to_string());
+    }
+
+    pub fn has_any(&self) -> bool {
+        !self.prints.is_empty()
+            || !self.reads.is_empty()
+            || !self.files_read.is_empty()
+            || !self.files_written.is_empty()
+    }
 }
 
 impl Runtime {
@@ -1501,28 +2439,82 @@ impl Runtime {
 
     fn with_input(program: Program, input: Vec<String>) -> Self {
         let global = Env::new();
+
+        // Initialize module environments
+        for (module_name, module_decl) in &program.modules {
+            let module_env = Env::with_module(module_name.clone());
+            for export in &module_decl.exports {
+                if let Some(_function) = program.functions.get(export) {
+                    module_env.define(export, Value::Function(export.clone()));
+                }
+            }
+            global.define_module(module_name, module_env);
+        }
+
+        // Process imports
+        for import in &program.imports {
+            let _ = global.resolve_import(&import.module_name, &import.symbols);
+        }
+
         for name in program.functions.keys() {
             global.define(name, Value::Function(name.clone()));
+        }
+
+        // Register impl block methods
+        for impl_block in &program.impls {
+            for method in &impl_block.methods {
+                // Create a qualified name for the method: Type::method_name
+                let qualified_name = format!("{}::{}", impl_block.target_type, method.name);
+                global.define(&qualified_name, Value::Function(qualified_name.clone()));
+            }
         }
         global.define("println_i64", Value::Builtin(Builtin::PrintlnI64));
         global.define("println_f64", Value::Builtin(Builtin::PrintlnF64));
         global.define("println", Value::Builtin(Builtin::Println));
         global.define("print_f64", Value::Builtin(Builtin::PrintF64));
         global.define("print_string", Value::Builtin(Builtin::PrintString));
+        global.define("print", Value::Builtin(Builtin::Print));
         global.define("read_i64", Value::Builtin(Builtin::ReadI64));
         global.define("read_string", Value::Builtin(Builtin::ReadString));
         global.define("read_line", Value::Builtin(Builtin::ReadString));
+        global.define("read", Value::Builtin(Builtin::Read));
         global.define("has_input", Value::Builtin(Builtin::HasInput));
         global.define("len", Value::Builtin(Builtin::Len));
         global.define("abs", Value::Builtin(Builtin::Abs));
         global.define("min", Value::Builtin(Builtin::Min));
         global.define("max", Value::Builtin(Builtin::Max));
         global.define("pow", Value::Builtin(Builtin::Pow));
+        global.define("open_file", Value::Builtin(Builtin::OpenFile));
+        global.define("read_file", Value::Builtin(Builtin::ReadFile));
+        global.define("write_file", Value::Builtin(Builtin::WriteFile));
+        global.define("close_file", Value::Builtin(Builtin::CloseFile));
+        global.define("reduce", Value::Builtin(Builtin::Reduce));
+        global.define("spawn", Value::Builtin(Builtin::Spawn));
+        global.define("send", Value::Builtin(Builtin::Send));
+        global.define("recv", Value::Builtin(Builtin::Recv));
+        global.define("new_channel", Value::Builtin(Builtin::NewChannel));
+        global.define("new_mutex", Value::Builtin(Builtin::NewMutex));
+        global.define("lock", Value::Builtin(Builtin::Lock));
+        global.define("unlock", Value::Builtin(Builtin::Unlock));
+        global.define("error", Value::Builtin(Builtin::Error));
+        global.define("unwrap", Value::Builtin(Builtin::Unwrap));
+        global.define("unwrap_or", Value::Builtin(Builtin::UnwrapOr));
         Self {
             program,
             global,
             output: RefCell::new(Vec::new()),
             input: RefCell::new(input.into_iter().collect()),
+            side_effects: RefCell::new(SideEffects::new()),
+            file_handles: RefCell::new(HashMap::new()),
+            next_file_id: RefCell::new(1),
+            channels: RefCell::new(HashMap::new()),
+            next_channel_id: RefCell::new(1),
+            mutexes: RefCell::new(HashMap::new()),
+            next_mutex_id: RefCell::new(1),
+            threads: RefCell::new(HashMap::new()),
+            next_thread_id: RefCell::new(1),
+            monomorphized_functions: RefCell::new(HashMap::new()),
+            type_inference_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -1536,10 +2528,69 @@ impl Runtime {
         Ok(ExecutionResult {
             output: self.output.borrow().join("\n"),
             return_value,
+            side_effects: self.side_effects.borrow().clone(),
         })
     }
 
     fn call_function(&self, function_name: &str, args: Vec<Value>) -> Result<Value, String> {
+        // Check for qualified method calls (Type::method)
+        if function_name.contains("::") {
+            let parts: Vec<&str> = function_name.split("::").collect();
+            if parts.len() == 2 {
+                let type_name = parts[0];
+                let method_name = parts[1];
+
+                // Find the impl block that contains this method
+                for impl_block in &self.program.impls {
+                    if impl_block.target_type == type_name {
+                        if let Some(method) =
+                            impl_block.methods.iter().find(|m| m.name == method_name)
+                        {
+                            // Set up the environment with 'self' bound to the first argument
+                            let env = self.global.child();
+                            if let Some(self_value) = args.first() {
+                                env.define("self", self_value.clone());
+                            }
+                            // Bind remaining parameters
+                            for (idx, param) in method.params.iter().enumerate().skip(1) {
+                                let value = args.get(idx).cloned().unwrap_or(Value::Unit);
+                                env.define(param, value);
+                            }
+                            return self.call_decl(method, args, env);
+                        }
+                    }
+                }
+                return Err(format!("unknown method {function_name}"));
+            }
+        }
+
+        // First check if this is a generic function that needs monomorphization
+        if let Some(base_function) = self.program.functions.get(function_name) {
+            if !base_function.type_params.is_empty() {
+                // Perform type inference from arguments
+                let type_args = self.infer_type_args(&base_function.type_params, &args)?;
+                let monomorphized_name = self.monomorphization_name(function_name, &type_args);
+
+                // Check if we already have a monomorphized version
+                let monomorphized = if let Some(existing) = self
+                    .monomorphized_functions
+                    .borrow()
+                    .get(&monomorphized_name)
+                {
+                    existing.clone()
+                } else {
+                    // Create new monomorphized function
+                    let mono_func = self.monomorphize_function(base_function, &type_args)?;
+                    self.monomorphized_functions
+                        .borrow_mut()
+                        .insert(monomorphized_name.clone(), mono_func.clone());
+                    mono_func
+                };
+
+                return self.call_decl(&monomorphized, args, self.global.clone());
+            }
+        }
+
         let function = self
             .program
             .functions
@@ -1547,6 +2598,85 @@ impl Runtime {
             .cloned()
             .ok_or_else(|| format!("unknown function {function_name}"))?;
         self.call_decl(&function, args, self.global.clone())
+    }
+
+    fn infer_type_args(
+        &self,
+        type_params: &[String],
+        args: &[Value],
+    ) -> Result<Vec<String>, String> {
+        let mut type_args = Vec::new();
+        let mut cache = self.type_inference_cache.borrow_mut();
+
+        // Infer type from arguments based on their value types
+        for (i, arg) in args.iter().enumerate() {
+            let type_name = match arg {
+                Value::Int(_) => "i64",
+                Value::Float(_) => "f64",
+                Value::Bool(_) => "bool",
+                Value::Str(_) => "string",
+                Value::Array(items) if !items.is_empty() => {
+                    // Infer element type from first element
+                    match &items[0] {
+                        Value::Int(_) => "array<i64>",
+                        Value::Float(_) => "array<f64>",
+                        Value::Bool(_) => "array<bool>",
+                        Value::Str(_) => "array<string>",
+                        _ => "array<unknown>",
+                    }
+                }
+                Value::Array(_) => "array<unknown>",
+                Value::Struct { name, .. } => name,
+                Value::Enum { type_name, .. } => type_name,
+                _ => "unknown",
+            }
+            .to_string();
+
+            // Map type to type parameter if we have a corresponding parameter
+            if i < type_params.len() {
+                type_args.push(type_name.clone());
+                // Cache this inference
+                let key = format!("{}_arg_{}", type_params[i], i);
+                cache.insert(key, vec![type_name.clone()]);
+            }
+        }
+
+        // Fill remaining type parameters with defaults
+        while type_args.len() < type_params.len() {
+            type_args.push("unknown".to_string());
+        }
+
+        Ok(type_args)
+    }
+
+    fn monomorphization_name(&self, function_name: &str, type_args: &[String]) -> String {
+        if type_args.is_empty() {
+            return function_name.to_string();
+        }
+        let type_str = type_args.join(",");
+        format!("{}::<{}>", function_name, type_str)
+    }
+
+    fn monomorphize_function(
+        &self,
+        function: &Function,
+        type_args: &[String],
+    ) -> Result<Function, String> {
+        // Create a monomorphized version by substituting type parameters
+        let mut mono_body = function.body.clone();
+
+        // For now, we create a shallow monomorphization - the body is kept as-is
+        // since our runtime is dynamically typed. In a full implementation,
+        // we would walk the AST and replace type parameter references with
+        // their concrete types.
+
+        Ok(Function {
+            name: self.monomorphization_name(&function.name, type_args),
+            params: function.params.clone(),
+            body: mono_body,
+            type_params: Vec::new(), // No longer generic after monomorphization
+            is_method: function.is_method,
+        })
     }
 
     fn call_decl(&self, function: &Function, args: Vec<Value>, env: Env) -> Result<Value, String> {
@@ -1558,8 +2688,8 @@ impl Runtime {
         match self.exec_block(&function.body, local)? {
             Control::Return(value) => Ok(value),
             Control::Next => Ok(Value::Unit),
-            Control::Break => Err("break outside loop".to_string()),
-            Control::Continue => Err("continue outside loop".to_string()),
+            Control::Break(_) => Err("break outside loop".to_string()),
+            Control::Continue(_) => Err("continue outside loop".to_string()),
         }
     }
 
@@ -1573,7 +2703,47 @@ impl Runtime {
         Ok(Control::Next)
     }
 
+    fn exec_block_with_label(
+        &self,
+        stmts: &[Stmt],
+        env: Env,
+        current_label: Option<&str>,
+    ) -> Result<Control, String> {
+        for stmt in stmts {
+            match self.exec_stmt_with_label(stmt, env.clone(), current_label)? {
+                Control::Next => {}
+                Control::Break(target_label) => {
+                    if target_label.as_deref() == current_label || target_label.is_none() {
+                        return Ok(Control::Break(target_label));
+                    } else if target_label.is_some() {
+                        return Ok(Control::Break(target_label));
+                    }
+                    return Ok(Control::Break(None));
+                }
+                Control::Continue(target_label) => {
+                    if target_label.as_deref() == current_label || target_label.is_none() {
+                        return Ok(Control::Continue(target_label));
+                    } else if target_label.is_some() {
+                        return Ok(Control::Continue(target_label));
+                    }
+                    return Ok(Control::Continue(None));
+                }
+                signal => return Ok(signal),
+            }
+        }
+        Ok(Control::Next)
+    }
+
     fn exec_stmt(&self, stmt: &Stmt, env: Env) -> Result<Control, String> {
+        self.exec_stmt_with_label(stmt, env, None)
+    }
+
+    fn exec_stmt_with_label(
+        &self,
+        stmt: &Stmt,
+        env: Env,
+        current_label: Option<&str>,
+    ) -> Result<Control, String> {
         match stmt {
             Stmt::VarDecl(name, expr) => {
                 let value = self.eval_expr(expr, env.clone())?;
@@ -1593,9 +2763,9 @@ impl Runtime {
             } => {
                 let cond = self.eval_expr(condition, env.clone())?;
                 if truthy(&cond) {
-                    self.exec_block(then_block, env.child())
+                    self.exec_block_with_label(then_block, env.child(), current_label)
                 } else {
-                    self.exec_block(else_block, env.child())
+                    self.exec_block_with_label(else_block, env.child(), current_label)
                 }
             }
             Stmt::While { condition, body } => {
@@ -1605,11 +2775,21 @@ impl Runtime {
                     if iters > 100_000 {
                         return Err("loop exceeded iteration limit".to_string());
                     }
-                    match self.exec_block(body, env.child())? {
+                    match self.exec_block_with_label(body, env.child(), current_label)? {
                         Control::Next => {}
                         Control::Return(value) => return Ok(Control::Return(value)),
-                        Control::Break => break,
-                        Control::Continue => continue,
+                        Control::Break(target_label) => {
+                            if target_label.is_none() || target_label.as_deref() == current_label {
+                                break;
+                            }
+                            return Ok(Control::Break(target_label));
+                        }
+                        Control::Continue(target_label) => {
+                            if target_label.is_some() && target_label.as_deref() != current_label {
+                                return Ok(Control::Continue(target_label));
+                            }
+                            // Unlabeled continue or matching label continues this loop
+                        }
                     }
                 }
                 Ok(Control::Next)
@@ -1625,11 +2805,20 @@ impl Runtime {
                 for item in start..end {
                     let scope = env.child();
                     scope.define(var_name, Value::Int(item));
-                    match self.exec_block(body, scope)? {
+                    match self.exec_block_with_label(body, scope, current_label)? {
                         Control::Next => {}
                         Control::Return(value) => return Ok(Control::Return(value)),
-                        Control::Break => break,
-                        Control::Continue => continue,
+                        Control::Break(target_label) => {
+                            if target_label.is_none() || target_label.as_deref() == current_label {
+                                break;
+                            }
+                            return Ok(Control::Break(target_label));
+                        }
+                        Control::Continue(target_label) => {
+                            if target_label.is_some() && target_label.as_deref() != current_label {
+                                return Ok(Control::Continue(target_label));
+                            }
+                        }
                     }
                 }
                 Ok(Control::Next)
@@ -1645,11 +2834,20 @@ impl Runtime {
                 for item in start..end {
                     let scope = env.child();
                     scope.define(var_name, Value::Int(item));
-                    match self.exec_block(body, scope)? {
+                    match self.exec_block_with_label(body, scope, current_label)? {
                         Control::Next => {}
                         Control::Return(value) => return Ok(Control::Return(value)),
-                        Control::Break => break,
-                        Control::Continue => continue,
+                        Control::Break(target_label) => {
+                            if target_label.is_none() || target_label.as_deref() == current_label {
+                                break;
+                            }
+                            return Ok(Control::Break(target_label));
+                        }
+                        Control::Continue(target_label) => {
+                            if target_label.is_some() && target_label.as_deref() != current_label {
+                                return Ok(Control::Continue(target_label));
+                            }
+                        }
                     }
                 }
                 Ok(Control::Next)
@@ -1667,17 +2865,137 @@ impl Runtime {
                 for item in items {
                     let scope = env.child();
                     scope.define(var_name, item);
-                    match self.exec_block(body, scope)? {
+                    match self.exec_block_with_label(body, scope, current_label)? {
                         Control::Next => {}
                         Control::Return(value) => return Ok(Control::Return(value)),
-                        Control::Break => break,
-                        Control::Continue => continue,
+                        Control::Break(target_label) => {
+                            if target_label.is_none() || target_label.as_deref() == current_label {
+                                break;
+                            }
+                            return Ok(Control::Break(target_label));
+                        }
+                        Control::Continue(target_label) => {
+                            if target_label.is_some() && target_label.as_deref() != current_label {
+                                return Ok(Control::Continue(target_label));
+                            }
+                        }
                     }
                 }
                 Ok(Control::Next)
             }
-            Stmt::Break => Ok(Control::Break),
-            Stmt::Continue => Ok(Control::Continue),
+            Stmt::ForParallel {
+                var_name,
+                start,
+                end,
+                body,
+            } => {
+                let start_val = expect_int(&self.eval_expr(start, env.clone())?)?;
+                let end_val = expect_int(&self.eval_expr(end, env.clone())?)?;
+                let range: Vec<i64> = (start_val..end_val).collect();
+
+                // For now, implement parallel for sequentially
+                // Full thread safety requires major refactoring of Value and Env
+                let mut results = Vec::new();
+                for item in range {
+                    let scope = env.child();
+                    scope.define(var_name, Value::Int(item));
+                    let scope_clone = scope.clone();
+                    match self.exec_block_with_label(body, scope, current_label)? {
+                        Control::Next => {
+                            // Collect result from last expression if any
+                            if let Some(Stmt::Expr(expr)) = body.last() {
+                                if let Ok(value) = self.eval_expr(expr, scope_clone) {
+                                    results.push(value);
+                                }
+                            }
+                        }
+                        Control::Return(value) => return Ok(Control::Return(value)),
+                        Control::Break(target_label) => {
+                            if target_label.is_none() || target_label.as_deref() == current_label {
+                                break;
+                            }
+                            return Ok(Control::Break(target_label));
+                        }
+                        Control::Continue(target_label) => {
+                            if target_label.is_some() && target_label.as_deref() != current_label {
+                                return Ok(Control::Continue(target_label));
+                            }
+                        }
+                    }
+                }
+
+                // Store results in an array in the environment
+                let scope = env.child();
+                scope.define(&format!("{}_results", var_name), Value::Array(results));
+
+                Ok(Control::Next)
+            }
+            Stmt::Try {
+                var_name,
+                expr,
+                then_block,
+                catch_block,
+            } => {
+                match self.eval_expr(expr, env.clone()) {
+                    Ok(Value::Result { is_ok: true, value }) => {
+                        let scope = env.child();
+                        if let Some(name) = var_name {
+                            scope.define(&name, (*value).clone());
+                        }
+                        match self.exec_block_with_label(then_block, scope, current_label)? {
+                            Control::Next => Ok(Control::Next),
+                            signal => return Ok(signal),
+                        }
+                    }
+                    Ok(Value::Result {
+                        is_ok: false,
+                        value,
+                    }) => {
+                        let scope = env.child();
+                        let error_value = (*value).clone();
+                        if let Some(name) = var_name {
+                            scope.define(&name, error_value.clone());
+                        }
+                        if catch_block.is_empty() {
+                            return Err(format!("uncaught error: {:?}", error_value));
+                        }
+                        match self.exec_block_with_label(&catch_block, scope, current_label)? {
+                            Control::Next => Ok(Control::Next),
+                            signal => return Ok(signal),
+                        }
+                    }
+                    Ok(other) => {
+                        // Non-Result values are treated as success
+                        let scope = env.child();
+                        if let Some(name) = var_name {
+                            scope.define(&name, other);
+                        }
+                        match self.exec_block_with_label(then_block, scope, current_label)? {
+                            Control::Next => Ok(Control::Next),
+                            signal => return Ok(signal),
+                        }
+                    }
+                    Err(err) => {
+                        let scope = env.child();
+                        if let Some(name) = var_name {
+                            scope.define(&name, Value::Str(err.clone()));
+                        }
+                        if catch_block.is_empty() {
+                            return Err(err.clone());
+                        }
+                        match self.exec_block_with_label(&catch_block, scope, current_label)? {
+                            Control::Next => Ok(Control::Next),
+                            signal => return Ok(signal),
+                        }
+                    }
+                }
+            }
+            Stmt::Throw(expr) => {
+                let value = self.eval_expr(expr, env)?;
+                Err(format!("thrown error: {:?}", value))
+            }
+            Stmt::Break(label) => Ok(Control::Break(label.clone())),
+            Stmt::Continue(label) => Ok(Control::Continue(label.clone())),
             Stmt::Expr(expr) => {
                 self.eval_expr(expr, env)?;
                 Ok(Control::Next)
@@ -1693,6 +3011,19 @@ impl Runtime {
                 match &mut base_value {
                     Value::Struct { fields, .. } => {
                         fields.insert(field.clone(), value);
+                    }
+                    Value::Enum {
+                        type_name: _,
+                        variant: _,
+                        fields,
+                    } => {
+                        let idx = field
+                            .parse::<usize>()
+                            .map_err(|_| format!("invalid enum field index {field}"))?;
+                        if idx >= fields.len() {
+                            return Err(format!("enum field index {idx} out of bounds"));
+                        }
+                        fields[idx] = value;
                     }
                     _ => return Err(format!("cannot assign field {} on {:?}", field, base_value)),
                 }
@@ -1742,9 +3073,28 @@ impl Runtime {
                     .map(|(field, expr)| Ok((field.clone(), self.eval_expr(expr, env.clone())?)))
                     .collect::<Result<HashMap<_, _>, String>>()?,
             }),
-            Expr::Ident(name) => env
-                .get(name)
-                .ok_or_else(|| format!("undefined variable '{name}'")),
+            Expr::EnumConstruct {
+                type_name,
+                variant,
+                fields,
+            } => Ok(Value::Enum {
+                type_name: type_name.clone(),
+                variant: variant.clone(),
+                fields: fields
+                    .iter()
+                    .map(|expr| self.eval_expr(expr, env.clone()))
+                    .collect::<Result<Vec<_>, _>>()?,
+            }),
+            Expr::Ident(name) => {
+                // Handle 'self' as a reference to the current object
+                if name == "self" {
+                    if let Some(self_value) = env.get("self") {
+                        return Ok(self_value);
+                    }
+                }
+                env.get(name)
+                    .ok_or_else(|| format!("undefined variable '{name}'"))
+            }
             Expr::Unary(op, expr) => {
                 let value = self.eval_expr(expr, env)?;
                 match op {
@@ -1797,6 +3147,19 @@ impl Runtime {
                         .get(field)
                         .cloned()
                         .ok_or_else(|| format!("missing struct field {field}")),
+                    Value::Enum {
+                        type_name: _,
+                        variant: _,
+                        fields,
+                    } => {
+                        let idx = field
+                            .parse::<usize>()
+                            .map_err(|_| format!("invalid enum field index {field}"))?;
+                        fields
+                            .get(idx)
+                            .cloned()
+                            .ok_or_else(|| format!("enum field index {idx} out of bounds"))
+                    }
                     Value::Array(items) if field == "len" => Ok(Value::Int(items.len() as i64)),
                     Value::Str(value) if field == "len" => {
                         Ok(Value::Int(value.chars().count() as i64))
@@ -1830,10 +3193,15 @@ impl Runtime {
                 }
                 Err("non-exhaustive match".to_string())
             }
-            Expr::Closure { params, body } => Ok(Value::Closure(Closure {
+            Expr::Closure {
+                params,
+                body,
+                type_params,
+            } => Ok(Value::Closure(Closure {
                 params: params.clone(),
                 body: body.clone(),
                 env,
+                type_params: type_params.clone(),
             })),
             Expr::Ok(expr) => Ok(Value::Result {
                 is_ok: true,
@@ -1851,6 +3219,17 @@ impl Runtime {
                 is_some: false,
                 value: Box::new(Value::Unit),
             }),
+            Expr::Try(expr) => {
+                let value = self.eval_expr(expr, env)?;
+                match value {
+                    Value::Result { is_ok: true, value } => Ok(*value),
+                    Value::Result {
+                        is_ok: false,
+                        value,
+                    } => Err(format!("unwrap failed on error: {:?}", value)),
+                    other => Ok(other),
+                }
+            }
         }
     }
 
@@ -1958,10 +3337,22 @@ impl Runtime {
     fn call_value(&self, callee: Value, args: Vec<Value>) -> Result<Value, String> {
         match callee {
             Value::Function(name) => {
+                // Handle module-qualified function calls (e.g., "utils::helper")
+                let function_name = if name.contains("::") {
+                    let parts: Vec<&str> = name.split("::").collect();
+                    if parts.len() == 2 {
+                        parts[1] // Extract the function name from "module::function"
+                    } else {
+                        &name
+                    }
+                } else {
+                    &name
+                };
+
                 let function = self
                     .program
                     .functions
-                    .get(&name)
+                    .get(function_name)
                     .cloned()
                     .ok_or_else(|| format!("unknown function {name}"))?;
                 self.call_decl(&function, args, self.global.clone())
@@ -1980,8 +3371,8 @@ impl Runtime {
                             Ok(Value::Unit)
                         }
                     }
-                    Control::Break => Err("break outside loop".to_string()),
-                    Control::Continue => Err("continue outside loop".to_string()),
+                    Control::Break(_) => Err("break outside loop".to_string()),
+                    Control::Continue(_) => Err("continue outside loop".to_string()),
                 }
             }
             Value::Builtin(builtin) => self.call_builtin(builtin, args),
@@ -2188,6 +3579,40 @@ impl Runtime {
         env: Env,
     ) -> Result<Value, String> {
         let mut base_value = self.eval_expr(base_expr, env.clone())?;
+
+        // First check for trait methods based on the type
+        let type_name = match &base_value {
+            Value::Struct { name, .. } => Some(name.clone()),
+            Value::Enum { type_name, .. } => Some(type_name.clone()),
+            Value::Array(_) => Some("Array".to_string()),
+            Value::Str(_) => Some("String".to_string()),
+            Value::Int(_) => Some("i64".to_string()),
+            Value::Float(_) => Some("f64".to_string()),
+            Value::Bool(_) => Some("bool".to_string()),
+            _ => None,
+        };
+
+        if let Some(ty) = type_name {
+            // Check impl blocks for this type
+            for impl_block in &self.program.impls {
+                if impl_block.target_type == ty {
+                    if let Some(method_fn) = impl_block.methods.iter().find(|m| m.name == method) {
+                        // Set up environment with 'self' as the base value
+                        let method_env = env.child();
+                        method_env.define("self", base_value.clone());
+                        method_env.define("self_value", base_value.clone());
+
+                        // Build full argument list: self + args
+                        let mut full_args = vec![base_value.clone()];
+                        full_args.extend(args);
+
+                        return self.call_decl(method_fn, full_args, method_env);
+                    }
+                }
+            }
+        }
+
+        // Fall back to built-in methods
         let result = self.call_method(&mut base_value, method, args)?;
         if matches!(method, "push" | "pop" | "sort") {
             if let Expr::Ident(name) = base_expr {
@@ -2238,8 +3663,24 @@ impl Runtime {
                 if let Some(last) = output.last_mut() {
                     last.push_str(&text);
                 } else {
-                    output.push(text);
+                    output.push(text.clone());
                 }
+                self.side_effects.borrow_mut().track_print(&text);
+                Ok(Value::Unit)
+            }
+            Builtin::Print => {
+                let text = args
+                    .iter()
+                    .map(display_value)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join(" ");
+                let mut output = self.output.borrow_mut();
+                if let Some(last) = output.last_mut() {
+                    last.push_str(&text);
+                } else {
+                    output.push(text.clone());
+                }
+                self.side_effects.borrow_mut().track_print(&text);
                 Ok(Value::Unit)
             }
             Builtin::ReadI64 => {
@@ -2268,6 +3709,20 @@ impl Runtime {
                         .pop_front()
                         .ok_or_else(|| "read_string: no input available".to_string())?
                 };
+                self.side_effects.borrow_mut().track_read(&raw);
+                Ok(Value::Str(raw))
+            }
+            Builtin::Read => {
+                if !args.is_empty() {
+                    return Err("read takes no arguments".to_string());
+                }
+                let raw = {
+                    let mut input = self.input.borrow_mut();
+                    input
+                        .pop_front()
+                        .ok_or_else(|| "read: no input available".to_string())?
+                };
+                self.side_effects.borrow_mut().track_read(&raw);
                 Ok(Value::Str(raw))
             }
             Builtin::HasInput => {
@@ -2284,6 +3739,7 @@ impl Runtime {
                     Value::Array(v) => v.len() as i64,
                     Value::Str(v) => v.chars().count() as i64,
                     Value::Struct { fields, .. } => fields.len() as i64,
+                    Value::Enum { fields, .. } => fields.len() as i64,
                     other => return Err(format!("len unsupported for {:?}", other)),
                 };
                 Ok(Value::Int(len))
@@ -2314,6 +3770,338 @@ impl Runtime {
                     expect_int(&args[0])?.pow(expect_int(&args[1])? as u32),
                 ))
             }
+            Builtin::OpenFile => {
+                let path = args
+                    .first()
+                    .ok_or_else(|| "open_file requires path argument".to_string())?;
+                let path = match path {
+                    Value::Str(p) => p,
+                    other => return Err(format!("open_file path must be string, got {:?}", other)),
+                };
+                let mode = args
+                    .get(1)
+                    .ok_or_else(|| "open_file requires mode argument".to_string())?;
+                let mode_str = match mode {
+                    Value::Str(m) => m.as_str(),
+                    other => return Err(format!("open_file mode must be string, got {:?}", other)),
+                };
+
+                let file_id = *self.next_file_id.borrow();
+                *self.next_file_id.borrow_mut() += 1;
+
+                let options = match mode_str {
+                    "r" => OpenOptions::new().read(true).open(path),
+                    "w" => OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(path),
+                    "a" => OpenOptions::new()
+                        .write(true)
+                        .append(true)
+                        .create(true)
+                        .open(path),
+                    "rw" | "wr" => OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create(true)
+                        .open(path),
+                    other => return Err(format!("open_file: invalid mode '{}'", mode_str)),
+                };
+
+                let file = options.map_err(|e| format!("open_file: {}", e))?;
+                self.file_handles
+                    .borrow_mut()
+                    .insert(file_id, RefCell::new(file));
+                Ok(Value::FileHandle(file_id))
+            }
+            Builtin::ReadFile => {
+                let handle_value = args
+                    .first()
+                    .ok_or_else(|| "read_file requires file handle argument".to_string())?;
+                let handle_id = match handle_value {
+                    Value::FileHandle(id) => *id,
+                    other => return Err(format!("read_file expects file handle, got {:?}", other)),
+                };
+
+                let handles = self.file_handles.borrow();
+                let file_cell = handles
+                    .get(&handle_id)
+                    .ok_or_else(|| format!("read_file: invalid file handle {}", handle_id))?;
+
+                let mut file = file_cell.borrow_mut();
+                let mut content = String::new();
+                file.read_to_string(&mut content)
+                    .map_err(|e| format!("read_file: {}", e))?;
+
+                Ok(Value::Str(content))
+            }
+            Builtin::WriteFile => {
+                if args.len() != 2 {
+                    return Err("write_file requires handle and content arguments".to_string());
+                }
+                let handle_value = &args[0];
+                let handle_id = match handle_value {
+                    Value::FileHandle(id) => *id,
+                    other => {
+                        return Err(format!("write_file expects file handle, got {:?}", other))
+                    }
+                };
+
+                let content = match &args[1] {
+                    Value::Str(s) => s,
+                    other => {
+                        return Err(format!(
+                            "write_file content must be string, got {:?}",
+                            other
+                        ))
+                    }
+                };
+
+                let handles = self.file_handles.borrow();
+                let file_cell = handles
+                    .get(&handle_id)
+                    .ok_or_else(|| format!("write_file: invalid file handle {}", handle_id))?;
+
+                let mut file = file_cell.borrow_mut();
+                file.write_all(content.as_bytes())
+                    .map_err(|e| format!("write_file: {}", e))?;
+                file.flush()
+                    .map_err(|e| format!("write_file: flush failed: {}", e))?;
+
+                Ok(Value::Unit)
+            }
+            Builtin::CloseFile => {
+                let handle_value = args
+                    .first()
+                    .ok_or_else(|| "close_file requires file handle argument".to_string())?;
+                let handle_id = match handle_value {
+                    Value::FileHandle(id) => *id,
+                    other => {
+                        return Err(format!("close_file expects file handle, got {:?}", other))
+                    }
+                };
+
+                self.file_handles
+                    .borrow_mut()
+                    .remove(&handle_id)
+                    .ok_or_else(|| format!("close_file: invalid file handle {}", handle_id))?;
+
+                Ok(Value::Unit)
+            }
+            Builtin::Reduce => {
+                if args.len() != 2 {
+                    return Err("reduce requires array and closure arguments".to_string());
+                }
+                let array = match &args[0] {
+                    Value::Array(items) => items.clone(),
+                    other => {
+                        return Err(format!(
+                            "reduce first argument must be array, got {:?}",
+                            other
+                        ))
+                    }
+                };
+                let closure = match &args[1] {
+                    Value::Closure(c) => c.clone(),
+                    other => {
+                        return Err(format!(
+                            "reduce second argument must be closure, got {:?}",
+                            other
+                        ))
+                    }
+                };
+                if array.is_empty() {
+                    return Err("reduce cannot be called on empty array".to_string());
+                }
+                let mut accumulator = array[0].clone();
+                for item in array.iter().skip(1) {
+                    accumulator = self.call_value(
+                        Value::Closure(closure.clone()),
+                        vec![accumulator, item.clone()],
+                    )?;
+                }
+                Ok(accumulator)
+            }
+            Builtin::NewChannel => {
+                let channel_id = *self.next_channel_id.borrow();
+                *self.next_channel_id.borrow_mut() += 1;
+
+                let channel = MutexChannel::new();
+                self.channels.borrow_mut().insert(channel_id, channel);
+
+                Ok(Value::Channel(channel_id))
+            }
+            Builtin::Send => {
+                if args.len() != 2 {
+                    return Err("send requires channel and value arguments".to_string());
+                }
+                let channel_id = match &args[0] {
+                    Value::Channel(id) => *id,
+                    other => {
+                        return Err(format!(
+                            "send first argument must be channel, got {:?}",
+                            other
+                        ))
+                    }
+                };
+                let value = args[1].clone();
+
+                let channels = self.channels.borrow();
+                let channel = channels
+                    .get(&channel_id)
+                    .ok_or_else(|| format!("send: invalid channel {}", channel_id))?;
+
+                if let Some(sender) = &channel.sender {
+                    sender
+                        .send(value)
+                        .map_err(|e| format!("send failed: {}", e))?;
+                } else {
+                    return Err("send: channel sender disconnected".to_string());
+                }
+
+                Ok(Value::Unit)
+            }
+            Builtin::Recv => {
+                if args.len() != 1 {
+                    return Err("recv requires channel argument".to_string());
+                }
+                let channel_id = match &args[0] {
+                    Value::Channel(id) => *id,
+                    other => return Err(format!("recv argument must be channel, got {:?}", other)),
+                };
+
+                let channels = self.channels.borrow();
+                let channel = channels
+                    .get(&channel_id)
+                    .ok_or_else(|| format!("recv: invalid channel {}", channel_id))?;
+
+                if let Some(receiver) = &channel.receiver {
+                    let value = receiver.recv().map_err(|e| format!("recv failed: {}", e))?;
+                    Ok(value)
+                } else {
+                    return Err("recv: channel receiver disconnected".to_string());
+                }
+            }
+            Builtin::NewMutex => {
+                let mutex_id = *self.next_mutex_id.borrow();
+                *self.next_mutex_id.borrow_mut() += 1;
+
+                let mutex = MutexValue::new();
+                self.mutexes.borrow_mut().insert(mutex_id, mutex);
+
+                Ok(Value::Mutex(mutex_id))
+            }
+            Builtin::Lock => {
+                if args.len() != 1 {
+                    return Err("lock requires mutex argument".to_string());
+                }
+                let mutex_id = match &args[0] {
+                    Value::Mutex(id) => *id,
+                    other => return Err(format!("lock argument must be mutex, got {:?}", other)),
+                };
+
+                let mutexes = self.mutexes.borrow();
+                let mutex = mutexes
+                    .get(&mutex_id)
+                    .ok_or_else(|| format!("lock: invalid mutex {}", mutex_id))?;
+
+                mutex.lock()?;
+                Ok(Value::Unit)
+            }
+            Builtin::Unlock => {
+                if args.len() != 1 {
+                    return Err("unlock requires mutex argument".to_string());
+                }
+                let mutex_id = match &args[0] {
+                    Value::Mutex(id) => *id,
+                    other => return Err(format!("unlock argument must be mutex, got {:?}", other)),
+                };
+
+                let mutexes = self.mutexes.borrow();
+                let mutex = mutexes
+                    .get(&mutex_id)
+                    .ok_or_else(|| format!("unlock: invalid mutex {}", mutex_id))?;
+
+                mutex.unlock()?;
+                Ok(Value::Unit)
+            }
+            Builtin::Spawn => {
+                if args.len() != 1 {
+                    return Err("spawn requires closure argument".to_string());
+                }
+                let closure = match &args[0] {
+                    Value::Closure(c) => c.clone(),
+                    other => {
+                        return Err(format!("spawn argument must be closure, got {:?}", other))
+                    }
+                };
+
+                let thread_id = *self.next_thread_id.borrow();
+                *self.next_thread_id.borrow_mut() += 1;
+
+                // In a full implementation, we'd need to clone the entire runtime
+                // For now, we create a simplified thread that captures the closure
+                let handle = thread::spawn(move || {
+                    // The closure would execute here with its captured environment
+                    // For this implementation, we just note that the thread was spawned
+                });
+
+                self.threads.borrow_mut().insert(thread_id, handle);
+
+                Ok(Value::ThreadHandle(thread_id))
+            }
+            Builtin::ParallelFor => {
+                // ParallelFor is handled through ForParallel stmt, not as a builtin
+                Err("parallel_for should use 'parallel for' syntax, not a builtin call".to_string())
+            }
+            Builtin::Error => {
+                let message = args
+                    .first()
+                    .ok_or_else(|| "error requires one argument".to_string())?;
+                let message = match message {
+                    Value::Str(s) => s,
+                    other => return Err(format!("error message must be string, got {:?}", other)),
+                };
+                Err(message.clone())
+            }
+            Builtin::Unwrap => {
+                let value = args
+                    .first()
+                    .ok_or_else(|| "unwrap requires one argument".to_string())?;
+                match value {
+                    Value::Result { is_ok: true, value } => Ok(*value.clone()),
+                    Value::Result {
+                        is_ok: false,
+                        value,
+                    } => Err(format!("unwrap failed on error: {:?}", value)),
+                    Value::Optional {
+                        is_some: true,
+                        value,
+                    } => Ok(*value.clone()),
+                    Value::Optional { is_some: false, .. } => {
+                        Err("unwrap failed on None".to_string())
+                    }
+                    other => Ok(other.clone()),
+                }
+            }
+            Builtin::UnwrapOr => {
+                if args.len() != 2 {
+                    return Err("unwrap_or requires two arguments".to_string());
+                }
+                let value = &args[0];
+                let default = &args[1];
+                match value {
+                    Value::Result { is_ok: true, value } => Ok(*value.clone()),
+                    Value::Result { is_ok: false, .. } => Ok(default.clone()),
+                    Value::Optional {
+                        is_some: true,
+                        value,
+                    } => Ok(*value.clone()),
+                    Value::Optional { is_some: false, .. } => Ok(default.clone()),
+                    other => Ok(other.clone()),
+                }
+            }
         }
     }
 }
@@ -2322,8 +4110,8 @@ impl Runtime {
 enum Control {
     Next,
     Return(Value),
-    Break,
-    Continue,
+    Break(Option<String>),
+    Continue(Option<String>),
 }
 
 fn truthy(value: &Value) -> bool {
@@ -2333,6 +4121,7 @@ fn truthy(value: &Value) -> bool {
         Value::Str(v) => !v.is_empty(),
         Value::Array(v) => !v.is_empty(),
         Value::Optional { is_some, .. } => *is_some,
+        Value::Enum { .. } => true,
         Value::Unit => false,
         _ => true,
     }
@@ -2343,6 +4132,23 @@ fn value_eq(lhs: &Value, rhs: &Value) -> bool {
         (Value::Int(a), Value::Int(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Str(a), Value::Str(b)) => a == b,
+        (
+            Value::Enum {
+                type_name: a,
+                variant: va,
+                fields: fa,
+            },
+            Value::Enum {
+                type_name: b,
+                variant: vb,
+                fields: fb,
+            },
+        ) => {
+            a == b
+                && va == vb
+                && fa.len() == fb.len()
+                && fa.iter().zip(fb.iter()).all(|(x, y)| value_eq(x, y))
+        }
         _ => false,
     }
 }
@@ -2382,6 +4188,25 @@ fn pattern_matches(pattern: &Pattern, value: &Value, env: &Env) -> bool {
             }
         }
         Pattern::None => matches!(value, Value::Optional { is_some: false, .. }),
+        Pattern::EnumVariant(type_name, variant) => {
+            if let Value::Enum {
+                type_name: tn,
+                variant: vn,
+                fields,
+            } = value
+            {
+                if type_name == tn && variant == vn {
+                    if !fields.is_empty() {
+                        env.define(variant, fields[0].clone());
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
         Pattern::Ident(binding) => {
             env.define(binding, value.clone());
             true
@@ -2391,7 +4216,7 @@ fn pattern_matches(pattern: &Pattern, value: &Value, env: &Env) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::benchmark::get_benchmark;
+    use crate::benchmark::{get_benchmark, Example, Value as BmValue};
     use crate::solver::solve_problem;
 
     use super::*;
@@ -2727,16 +4552,16 @@ fn main() -> i64 {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         let code = "fn is_positive_bool_v0(x: i64) -> i64 {\n    if 0 < x {\n        return 1;\n    }\n    return 0;\n}\n";
         verify_problem_code(&problem, code)
@@ -2766,16 +4591,16 @@ fn main() -> i64 {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         let code = "fn is_positive_bool_to_int_v0(x: i64) -> i64 {\n    if 0 < x {\n        return 1;\n    } else {\n        return 0;\n    }\n}\n";
         verify_problem_code(&problem, code)
@@ -2806,19 +4631,242 @@ fn main() -> i64 {
             holdouts: vec![],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         let code = "fn double_float_v0(x: i64) -> i64 {\n    return x * 2;\n}\n";
         verify_problem_code(&problem, code)
             .unwrap_or_else(|err| panic!("int→float verify failed: {err}"));
+    }
+
+    #[test]
+    fn validates_call_graph_with_valid_program() {
+        let code = r#"
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+fn main() -> i64 {
+    let result = add(5, 3);
+    return result;
+}
+"#;
+        let result = validate_call_graph(code);
+        assert!(result.is_ok(), "Valid program should pass: {:?}", result);
+    }
+
+    #[test]
+    fn validates_call_graph_detects_undefined_function() {
+        let code = r#"
+fn main() -> i64 {
+    let result = undefined_func(5, 3);
+    return result;
+}
+"#;
+        let result = validate_call_graph(code);
+        assert!(result.is_err(), "Should detect undefined function");
+        assert!(result.unwrap_err().contains("undefined_func"));
+    }
+
+    #[test]
+    fn validates_call_graph_with_builtin_functions() {
+        let code = r#"
+fn main() -> i64 {
+    let result = abs(-5);
+    println_i64(result);
+    return result;
+}
+"#;
+        let result = validate_call_graph(code);
+        assert!(
+            result.is_ok(),
+            "Built-in functions should be valid: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn validates_call_graph_with_method_calls() {
+        let code = r#"
+fn main() -> i64 {
+    let arr = [1, 2, 3];
+    arr.push(4);
+    let s = "hello";
+    s.upper();
+    return 0;
+}
+"#;
+        let result = validate_call_graph(code);
+        assert!(result.is_ok(), "Method calls should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn validates_call_graph_with_closure() {
+        let code = r#"
+fn main() -> i64 {
+    let nums = [1, 2, 3];
+    let doubled = nums.map(fn(x) { return x * 2; });
+    return 0;
+}
+"#;
+        let result = validate_call_graph(code);
+        assert!(result.is_ok(), "Closures should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn validates_call_graph_multiple_undefined_functions() {
+        let code = r#"
+fn main() -> i64 {
+    foo();
+    bar();
+    return 0;
+}
+"#;
+        let result = validate_call_graph(code);
+        assert!(result.is_err(), "Should detect undefined functions");
+        let err = result.unwrap_err();
+        assert!(err.contains("foo") || err.contains("bar"));
+    }
+
+    #[test]
+    fn validates_call_graph_with_recursive_call() {
+        let code = r#"
+fn factorial(n: i64) -> i64 {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+fn main() -> i64 {
+    return factorial(5);
+}
+"#;
+        let result = validate_call_graph(code);
+        assert!(
+            result.is_ok(),
+            "Recursive calls should be valid: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn parses_and_executes_module_with_imports() {
+        let code = r#"
+mod math {
+    export add;
+    export multiply;
+
+    fn add(a: i64, b: i64) -> i64 {
+        return a + b;
+    }
+
+    fn multiply(a: i64, b: i64) -> i64 {
+        return a * b;
+    }
+}
+
+import math: {add, multiply};
+
+fn main() -> i64 {
+    result := add(5, 3);
+    product := multiply(4, 7);
+    println_i64(result);
+    println_i64(product);
+    return 0;
+}
+"#;
+        let result = execute_program(code).expect("module program should execute");
+        assert_eq!(result.output, "8\n28");
+    }
+
+    #[test]
+    fn parses_module_with_exports() {
+        let code = r#"
+mod utils {
+    export helper;
+
+    fn helper(x: i64) -> i64 {
+        return x * 2;
+    }
+}
+
+fn main() -> i64 {
+    return 0;
+}
+"#;
+        let result = parse_program(code);
+        assert!(
+            result.is_ok(),
+            "Module parsing should succeed: {:?}",
+            result
+        );
+        let program = result.unwrap();
+        assert!(program.modules.contains_key("utils"));
+        assert_eq!(program.modules["utils"].exports, vec!["helper"]);
+    }
+
+    #[test]
+    fn parses_import_with_specific_symbols() {
+        let code = r#"
+import math: {add, subtract};
+
+fn main() -> i64 {
+    return 0;
+}
+"#;
+        let result = parse_program(code);
+        assert!(
+            result.is_ok(),
+            "Import parsing should succeed: {:?}",
+            result
+        );
+        let program = result.unwrap();
+        assert_eq!(program.imports.len(), 1);
+        assert_eq!(program.imports[0].module_name, "math");
+        assert_eq!(program.imports[0].symbols, vec!["add", "subtract"]);
+    }
+
+    #[test]
+    fn parses_module_with_multiple_exports() {
+        let code = r#"
+mod api {
+    export create;
+    export destroy;
+    export update;
+
+    fn create() -> i64 {
+        return 1;
+    }
+
+    fn destroy() -> i64 {
+        return 0;
+    }
+
+    fn update() -> i64 {
+        return 2;
+    }
+}
+
+fn main() -> i64 {
+    return 0;
+}
+"#;
+        let result = parse_program(code);
+        assert!(
+            result.is_ok(),
+            "Multiple export parsing should succeed: {:?}",
+            result
+        );
+        let program = result.unwrap();
+        assert_eq!(program.modules["api"].exports.len(), 3);
     }
 }

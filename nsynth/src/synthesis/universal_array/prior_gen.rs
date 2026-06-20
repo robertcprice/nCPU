@@ -986,16 +986,16 @@ mod tests {
             holdouts: vec![mk(&[7, 7], 14), mk(&[0, 1, -1], 0)],
             reference_code: "",
 
-        synthetic_args: Vec::new(),
+            synthetic_args: Vec::new(),
 
-        synthetic_values: Vec::new(),
+            synthetic_values: Vec::new(),
 
-        recursive_allowed: false,
+            recursive_allowed: false,
 
-        tree_input: false,
+            tree_input: false,
 
-        explicit_stack: false,
-
+            explicit_stack: false,
+            functions: vec![],
         };
         let examples: Vec<ArrExample> = problem
             .examples

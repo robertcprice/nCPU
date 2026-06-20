@@ -172,6 +172,7 @@ fn grouped_interactive_problem(
             recursive_allowed: false,
             tree_input: false,
             explicit_stack: false,
+            functions: vec![],
         },
         traces: traces.to_vec(),
     })
