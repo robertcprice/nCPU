@@ -74,7 +74,10 @@ impl Default for Mind {
 impl Mind {
     /// Build a mind: synthesizes the lexicon/rules once (slow), then ready to read.
     pub fn new() -> Self {
-        Mind { engine: Engine::new(), discourse: Discourse::new() }
+        Mind {
+            engine: Engine::new(),
+            discourse: Discourse::new(),
+        }
     }
 
     /// Read a sentence into the world model — resolves coreference against what
@@ -354,9 +357,7 @@ impl Mind {
     /// learned no constructions. Purely a read accessor over the engine; it never
     /// mutates anything. Mirrors [`learned_components`](Self::learned_components),
     /// but for grammar acquisition rather than lexical/inferential components.
-    pub fn learned_constructions(
-        &self,
-    ) -> &[crate::understanding::grammar::LearnedConstruction] {
+    pub fn learned_constructions(&self) -> &[crate::understanding::grammar::LearnedConstruction] {
         self.engine.learned_constructions()
     }
 
@@ -424,10 +425,14 @@ impl Mind {
         // curriculum. A learned component's `name` IS its Mog `fn` name, and its
         // teacher is recorded the same way as the base components.
         let learned = self.learned_components();
-        if let Some(component) =
-            learned.iter().find(|name| t.contains(name.as_str()) || name.contains(&t))
+        if let Some(component) = learned
+            .iter()
+            .find(|name| t.contains(name.as_str()) || name.contains(&t))
         {
-            let teacher = self.engine.method_for(component).unwrap_or("(unknown teacher)");
+            let teacher = self
+                .engine
+                .method_for(component)
+                .unwrap_or("(unknown teacher)");
             let source = slice_fn_source(self.engine.program(), component)
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "(source unavailable)".to_string());
@@ -469,7 +474,10 @@ impl Mind {
             );
         };
 
-        let teacher = self.engine.method_for(component).unwrap_or("(unknown teacher)");
+        let teacher = self
+            .engine
+            .method_for(component)
+            .unwrap_or("(unknown teacher)");
 
         // Slice the ACTUAL Mog source for `fn_name` out of the composed program.
         // For the inflection wrappers we ALSO prepend the recovered rule the
@@ -482,8 +490,11 @@ impl Mind {
                 source = format!("{rule_src}\n\n{source}");
             }
         }
-        let source =
-            if source.is_empty() { "(source unavailable)".to_string() } else { source };
+        let source = if source.is_empty() {
+            "(source unavailable)".to_string()
+        } else {
+            source
+        };
 
         format!(
             "I learned the component `{component}` (the {fn_name} program) as part of \
@@ -514,8 +525,10 @@ impl Mind {
         let world = &self.discourse.world;
 
         // Unknown entity: never named in a fact AND not a known world entity.
-        let known_entity =
-            world.entities().iter().any(|e| e.eq_ignore_ascii_case(&entity));
+        let known_entity = world
+            .entities()
+            .iter()
+            .any(|e| e.eq_ignore_ascii_case(&entity));
         let in_a_fact = world.facts().iter().any(|ev| event_mentions(ev, &entity));
         if !known_entity && !in_a_fact {
             return Vec::new();
@@ -604,8 +617,7 @@ impl Mind {
             if atoms.is_empty() {
                 "I don't have a relevant open question for that.".to_string()
             } else {
-                "There is no open question there — I already know the relevant facts."
-                    .to_string()
+                "There is no open question there — I already know the relevant facts.".to_string()
             }
         } else {
             unknowns.join(" ")
@@ -988,17 +1000,31 @@ impl Mind {
                 e.recipient = e.recipient.map(|t| d.resolve(&t));
                 Meaning::Event(e)
             }
-            Meaning::IsA { subject, category, negated } => Meaning::IsA {
+            Meaning::IsA {
+                subject,
+                category,
+                negated,
+            } => Meaning::IsA {
                 subject: d.resolve(subject),
                 category: category.clone(),
                 negated: *negated,
             },
-            Meaning::HasProperty { subject, property, negated } => Meaning::HasProperty {
+            Meaning::HasProperty {
+                subject,
+                property,
+                negated,
+            } => Meaning::HasProperty {
                 subject: d.resolve(subject),
                 property: property.clone(),
                 negated: *negated,
             },
-            Meaning::Comparison { subject, scale, more, than, negated } => Meaning::Comparison {
+            Meaning::Comparison {
+                subject,
+                scale,
+                more,
+                than,
+                negated,
+            } => Meaning::Comparison {
                 subject: d.resolve(subject),
                 scale: scale.clone(),
                 more: *more,
@@ -1242,9 +1268,7 @@ impl Mind {
                 // A mythical creature → the creature-membership lexicon.
                 if CREATURES.contains(&word.as_str()) {
                     return Some(LearnRequest {
-                        gap: format!(
-                            "cannot classify mythical creatures (unknown word: {word})"
-                        ),
+                        gap: format!("cannot classify mythical creatures (unknown word: {word})"),
                         name: "creature_class".to_string(),
                         signature: "fn creature_class(s: string) -> i64",
                         examples: creature_class_examples(),
@@ -1377,7 +1401,12 @@ impl Mind {
             }
         }
 
-        crate::self_improve::extend::StudyReport { rounds, learned, attempted, rejected }
+        crate::self_improve::extend::StudyReport {
+            rounds,
+            learned,
+            attempted,
+            rejected,
+        }
     }
 }
 
@@ -1480,7 +1509,8 @@ fn slice_fn_source(program: &str, name: &str) -> Option<String> {
 /// derived consequences bear on the queried entity.
 fn event_mentions(ev: &Event, entity: &str) -> bool {
     let term_matches = |t: &Option<Term>| {
-        t.as_ref().is_some_and(|term| term.head().eq_ignore_ascii_case(entity))
+        t.as_ref()
+            .is_some_and(|term| term.head().eq_ignore_ascii_case(entity))
     };
     term_matches(&ev.agent) || term_matches(&ev.patient) || term_matches(&ev.recipient)
 }
@@ -1515,8 +1545,8 @@ fn meaning_mentions(m: &Meaning, entity: &str) -> bool {
 /// determiner-headed slot.
 fn is_known_non_noun(engine: &Engine, word: &str) -> bool {
     use crate::comprehension::{
-        FUNCTION_WORDS, GRADABLE, IRREGULAR_PAST, IRREGULAR_VERBS, MODIFIERS,
-        PAST_PARTICIPLE, REG_VERBS, REG_VERBS_PAST,
+        FUNCTION_WORDS, GRADABLE, IRREGULAR_PAST, IRREGULAR_VERBS, MODIFIERS, PAST_PARTICIPLE,
+        REG_VERBS, REG_VERBS_PAST,
     };
 
     // Function/auxiliary/question words and pronouns.
@@ -1528,7 +1558,9 @@ fn is_known_non_noun(engine: &Engine, word: &str) -> bool {
     }
     // Adjectives: plain modifiers + gradable positives/comparatives.
     if MODIFIERS.contains(&word)
-        || GRADABLE.iter().any(|(pos, comp, _)| *pos == word || *comp == word)
+        || GRADABLE
+            .iter()
+            .any(|(pos, comp, _)| *pos == word || *comp == word)
     {
         return true;
     }
@@ -1593,10 +1625,19 @@ mod tests {
         mind.read("The teacher writes the report.");
         mind.read("The author reads the book.");
         // answered from the world model built by reading
-        assert!(mind.ask("Who writes the report?").to_lowercase().contains("teacher"));
-        assert!(mind.ask("What does the author read?").to_lowercase().contains("book"));
+        assert!(mind
+            .ask("Who writes the report?")
+            .to_lowercase()
+            .contains("teacher"));
+        assert!(mind
+            .ask("What does the author read?")
+            .to_lowercase()
+            .contains("book"));
         // a category question, from animacy
-        assert!(mind.ask("Is the report a person?").to_lowercase().starts_with("no"));
+        assert!(mind
+            .ask("Is the report a person?")
+            .to_lowercase()
+            .starts_with("no"));
     }
 
     #[test]
@@ -1604,17 +1645,32 @@ mod tests {
         let mut mind = Mind::new();
         // VP-conjunction with subject ellipsis: both facts must enter the world.
         mind.read("The teacher writes the report and reads the book.");
-        assert!(mind.ask("Who writes the report?").to_lowercase().contains("teacher"));
-        assert!(mind.ask("Who reads the book?").to_lowercase().contains("teacher"));
-        assert!(mind.ask("What does the teacher read?").to_lowercase().contains("book"));
+        assert!(mind
+            .ask("Who writes the report?")
+            .to_lowercase()
+            .contains("teacher"));
+        assert!(mind
+            .ask("Who reads the book?")
+            .to_lowercase()
+            .contains("teacher"));
+        assert!(mind
+            .ask("What does the teacher read?")
+            .to_lowercase()
+            .contains("book"));
     }
 
     #[test]
     fn mind_understands_clausal_conjunction() {
         let mut mind = Mind::new();
         mind.read("The teacher writes the report and the editor reads the book.");
-        assert!(mind.ask("Who writes the report?").to_lowercase().contains("teacher"));
-        assert!(mind.ask("Who reads the book?").to_lowercase().contains("editor"));
+        assert!(mind
+            .ask("Who writes the report?")
+            .to_lowercase()
+            .contains("teacher"));
+        assert!(mind
+            .ask("Who reads the book?")
+            .to_lowercase()
+            .contains("editor"));
     }
 
     #[test]
@@ -1641,8 +1697,14 @@ mod tests {
         // The INTERMEDIATE step ("the teacher writes") is mentioned between the
         // generalized goal and the asserted leaf — the analogue of a transitive
         // middle term — and the named rules attribute each hop.
-        assert!(lw.contains("the teacher writes"), "intermediate fact shown: {w}");
-        assert!(lw.contains("(by drop-patient)"), "names the drop-patient hop: {w}");
+        assert!(
+            lw.contains("the teacher writes"),
+            "intermediate fact shown: {w}"
+        );
+        assert!(
+            lw.contains("(by drop-patient)"),
+            "names the drop-patient hop: {w}"
+        );
         assert!(
             lw.contains("(by generalize-agent)"),
             "names the generalize-agent hop: {w}"
@@ -1712,14 +1774,23 @@ mod tests {
             mind.ask("Does the teacher write the report?"),
             "world-owned event verdict: why must equal ask"
         );
-        assert!(!direct.to_lowercase().contains("because"), "no chain on opaque fact: {direct}");
+        assert!(
+            !direct.to_lowercase().contains("because"),
+            "no chain on opaque fact: {direct}"
+        );
 
         // Transitive comparison ⇒ reconstructed chain naming the `book` intermediate.
         let cmp = mind.why("Is the report longer than the letter?");
         let low = cmp.to_lowercase();
         assert!(low.starts_with("yes"), "transitive comparison true: {cmp}");
-        assert!(low.contains("because"), "transitive comparison must show its work: {cmp}");
-        assert!(low.contains("book"), "transitive proof must name the intermediate 'book': {cmp}");
+        assert!(
+            low.contains("because"),
+            "transitive comparison must show its work: {cmp}"
+        );
+        assert!(
+            low.contains("book"),
+            "transitive proof must name the intermediate 'book': {cmp}"
+        );
         assert!(
             low.contains("comparison-transitivity"),
             "chain must be labeled with the transitivity rule: {cmp}"
@@ -1744,13 +1815,19 @@ mod tests {
 
         // Verdict: "yes" — the guard wakes (derived, not directly asserted).
         let a = mind.ask("Does the guard wake?");
-        assert!(a.to_lowercase().starts_with("yes"), "modus ponens => yes: {a}");
+        assert!(
+            a.to_lowercase().starts_with("yes"),
+            "modus ponens => yes: {a}"
+        );
 
         // Proof: a modus-ponens chain naming both premises.
         let w = mind.why("Does the guard wake?");
         let lw = w.to_lowercase();
         assert!(lw.starts_with("yes"), "why agrees with ask: {w}");
-        assert!(lw.contains("(by modus-ponens)"), "names the modus-ponens rule: {w}");
+        assert!(
+            lw.contains("(by modus-ponens)"),
+            "names the modus-ponens rule: {w}"
+        );
         assert!(lw.contains("because"), "renders a derivation chain: {w}");
         // The asserted antecedent is the grounding leaf...
         assert!(
@@ -1773,7 +1850,10 @@ mod tests {
         mind.read("The guard wakes if the alarm rings.");
         mind.read("The alarm rings.");
         let a = mind.ask("Does the guard wake?");
-        assert!(a.to_lowercase().starts_with("yes"), "inverted-form ponens => yes: {a}");
+        assert!(
+            a.to_lowercase().starts_with("yes"),
+            "inverted-form ponens => yes: {a}"
+        );
     }
 
     #[test]
@@ -1790,7 +1870,10 @@ mod tests {
             la.contains("don't know"),
             "affirming the consequent is refused: {a}"
         );
-        assert!(!la.starts_with("yes"), "must NOT affirm the consequent: {a}");
+        assert!(
+            !la.starts_with("yes"),
+            "must NOT affirm the consequent: {a}"
+        );
     }
 
     #[test]
@@ -1803,7 +1886,10 @@ mod tests {
         mind.read("The alarm does not ring.");
         let a = mind.ask("Does the guard wake?");
         let la = a.to_lowercase();
-        assert!(la.contains("don't know"), "denying the antecedent is refused: {a}");
+        assert!(
+            la.contains("don't know"),
+            "denying the antecedent is refused: {a}"
+        );
         assert!(!la.starts_with("no"), "must NOT deny the antecedent: {a}");
     }
 
@@ -1817,12 +1903,18 @@ mod tests {
         mind.read("The guard does not wake.");
 
         let a = mind.ask("Does the alarm ring?");
-        assert!(a.to_lowercase().starts_with("no"), "modus tollens => no: {a}");
+        assert!(
+            a.to_lowercase().starts_with("no"),
+            "modus tollens => no: {a}"
+        );
 
         let w = mind.why("Does the alarm ring?");
         let lw = w.to_lowercase();
         assert!(lw.starts_with("no"), "why agrees with ask: {w}");
-        assert!(lw.contains("(by modus-tollens)"), "names the modus-tollens rule: {w}");
+        assert!(
+            lw.contains("(by modus-tollens)"),
+            "names the modus-tollens rule: {w}"
+        );
         assert!(
             lw.contains("you told me the guard does not wake"),
             "leaf restates the asserted negated consequent: {w}"
@@ -1841,11 +1933,15 @@ mod tests {
         let mut mind = Mind::new();
         mind.read("If the alarm rings then the guard wakes.");
         assert!(
-            mind.ask("Does the alarm ring?").to_lowercase().contains("don't know"),
+            mind.ask("Does the alarm ring?")
+                .to_lowercase()
+                .contains("don't know"),
             "rule alone says nothing about the antecedent"
         );
         assert!(
-            mind.ask("Does the guard wake?").to_lowercase().contains("don't know"),
+            mind.ask("Does the guard wake?")
+                .to_lowercase()
+                .contains("don't know"),
             "rule alone says nothing about the consequent"
         );
     }
@@ -1863,14 +1959,20 @@ mod tests {
         // entails (by drop-patient + existential generalization) that the editor
         // writes something — so the hypothetical answer is affirmative.
         let mind = Mind::new();
-        let s = mind.suppose("the editor writes the report", "does the editor write something?");
+        let s = mind.suppose(
+            "the editor writes the report",
+            "does the editor write something?",
+        );
         let ls = s.to_lowercase();
         // The supposition is framed and the verdict under it is "yes".
         assert!(
             ls.starts_with("if the editor writes the report, then"),
             "frames the supposition: {s}"
         );
-        assert!(ls.contains("then yes"), "affirmative under the supposition: {s}");
+        assert!(
+            ls.contains("then yes"),
+            "affirmative under the supposition: {s}"
+        );
         // The proof surfaces the assumption as the leaf it routed through.
         assert!(
             ls.contains("you told me the editor writes the report"),
@@ -1887,7 +1989,10 @@ mod tests {
         let baseline = mind.ask("Does the editor write something?");
 
         // A supposition that, IN A CLONE, makes the editor write something.
-        let _ = mind.suppose("the editor writes the report", "does the editor write something?");
+        let _ = mind.suppose(
+            "the editor writes the report",
+            "does the editor write something?",
+        );
 
         // The REAL world is unchanged: the very same baseline question returns
         // EXACTLY what it did before the supposition (no leak from the clone).
@@ -1912,7 +2017,10 @@ mod tests {
             m
         };
         let actual = mind_actual.ask("Does the editor write the report?");
-        assert!(actual.to_lowercase().starts_with("yes"), "actually true: {actual}");
+        assert!(
+            actual.to_lowercase().starts_with("yes"),
+            "actually true: {actual}"
+        );
 
         // Suppose the editor did NOT write the report. In the counterfactual world
         // we assert the contradictory, so the verdict flips to a negative, and the
@@ -1926,14 +2034,20 @@ mod tests {
             lcf.starts_with("if the editor writes the report were not so"),
             "frames the retraction: {cf}"
         );
-        assert!(lcf.contains("rather than"), "contrasts counterfactual vs actual: {cf}");
+        assert!(
+            lcf.contains("rather than"),
+            "contrasts counterfactual vs actual: {cf}"
+        );
         // The counterfactual verdict is the negation; the actual ("yes") is named
         // as the contrast.
         assert!(
             lcf.contains("does not write") || lcf.contains("no,"),
             "counterfactual flips to negative: {cf}"
         );
-        assert!(lcf.contains("yes"), "the actual affirmative is named as the contrast: {cf}");
+        assert!(
+            lcf.contains("yes"),
+            "the actual affirmative is named as the contrast: {cf}"
+        );
     }
 
     #[test]
@@ -1956,8 +2070,14 @@ mod tests {
         // The REAL world is unchanged: same verdict, and no new contradiction was
         // recorded (the negation never entered the real world model).
         let after = mind.ask("Does the editor write the report?");
-        assert_eq!(after, baseline, "what_if_not must not leak: {after} vs {baseline}");
-        assert!(after.to_lowercase().starts_with("yes"), "the real fact still holds: {after}");
+        assert_eq!(
+            after, baseline,
+            "what_if_not must not leak: {after} vs {baseline}"
+        );
+        assert!(
+            after.to_lowercase().starts_with("yes"),
+            "the real fact still holds: {after}"
+        );
         assert_eq!(
             mind.contradictions().len(),
             baseline_contradictions,
@@ -1975,8 +2095,14 @@ mod tests {
 
         let before = mind.ask("What does the author read?");
 
-        let _ = mind.suppose("the editor writes the report", "does the editor write something?");
-        let _ = mind.what_if_not("the author reads the book", "does the author read the book?");
+        let _ = mind.suppose(
+            "the editor writes the report",
+            "does the editor write something?",
+        );
+        let _ = mind.what_if_not(
+            "the author reads the book",
+            "does the author read the book?",
+        );
 
         let after = mind.ask("What does the author read?");
         assert_eq!(
@@ -2003,7 +2129,10 @@ mod tests {
         let q = "Does the teacher write the report?";
         // Baseline verdict is affirmative.
         let baseline = mind.ask(q);
-        assert!(baseline.to_lowercase().starts_with("yes"), "baseline is yes: {baseline}");
+        assert!(
+            baseline.to_lowercase().starts_with("yes"),
+            "baseline is yes: {baseline}"
+        );
 
         let wwcym = mind.what_would_change_your_mind(q);
         let lw = wwcym.to_lowercase();
@@ -2035,7 +2164,11 @@ mod tests {
             "asserting the named flip in a clone genuinely changes the verdict: {flipped_answer}"
         );
         // The real world is untouched: the baseline question still answers Yes.
-        assert_eq!(mind.ask(q), baseline, "verification must not mutate the real world");
+        assert_eq!(
+            mind.ask(q),
+            baseline,
+            "verification must not mutate the real world"
+        );
     }
 
     #[test]
@@ -2075,7 +2208,9 @@ mod tests {
         };
         // Sanity: the author query is genuinely undetermined.
         assert!(
-            mind.ask("Does the author read the book?").to_lowercase().contains("don't know"),
+            mind.ask("Does the author read the book?")
+                .to_lowercase()
+                .contains("don't know"),
             "the author was never read — genuinely unknown"
         );
 
@@ -2109,8 +2244,14 @@ mod tests {
         };
         let why = mind.explain_cause("Why does the street flood?");
         let lw = why.to_lowercase();
-        assert!(lw.starts_with("because"), "leads with the recorded cause: {why}");
-        assert!(lw.contains("rain"), "names the recorded cause (the rain falls): {why}");
+        assert!(
+            lw.starts_with("because"),
+            "leads with the recorded cause: {why}"
+        );
+        assert!(
+            lw.contains("rain"),
+            "names the recorded cause (the rain falls): {why}"
+        );
 
         // SOUNDNESS: with no causal link on record, the mind says it does not know
         // why — it never fabricates a cause.
@@ -2169,7 +2310,9 @@ mod tests {
             "a read entity must surface its known facts (else the test is vacuous)"
         );
         assert!(
-            about_teacher.iter().all(|c| c.to_lowercase().contains("teacher")),
+            about_teacher
+                .iter()
+                .all(|c| c.to_lowercase().contains("teacher")),
             "every claim about 'teacher' must actually be about the teacher: {about_teacher:?}"
         );
 
@@ -2239,61 +2382,75 @@ mod tests {
         // the crate-wide journal-env lock so we never race the journal /
         // self_improve::extend tests on the process-global `NCPU_JOURNAL_PATH`.
         crate::self_improve::journal::test_support::with_journal_env("", || {
-        let mut mind = Mind::new();
+            let mut mind = Mind::new();
 
-        // PRECONDITION: the mind cannot yet classify a mythical creature — the
-        // component is genuinely absent, so the test is not vacuous.
-        assert!(
-            !mind.engine().has_component("creature_class"),
-            "creature_class must be a genuinely new component for this test to mean anything"
-        );
-        // And the gap detector agrees: "dragon" is not yet a known noun.
-        assert!(!mind.knows_word("dragon"), "the mind should not yet know the word 'dragon'");
+            // PRECONDITION: the mind cannot yet classify a mythical creature — the
+            // component is genuinely absent, so the test is not vacuous.
+            assert!(
+                !mind.engine().has_component("creature_class"),
+                "creature_class must be a genuinely new component for this test to mean anything"
+            );
+            // And the gap detector agrees: "dragon" is not yet a known noun.
+            assert!(
+                !mind.knows_word("dragon"),
+                "the mind should not yet know the word 'dragon'"
+            );
 
-        // The self-improvement request: close the creature-classification gap
-        // with curriculum-mined examples.
-        let req = crate::self_improve::extend::LearnRequest {
-            gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
-            name: "creature_class".to_string(),
-            signature: "fn creature_class(s: string) -> i64",
-            examples: crate::comprehension::creature_class_examples(),
-        };
+            // The self-improvement request: close the creature-classification gap
+            // with curriculum-mined examples.
+            let req = crate::self_improve::extend::LearnRequest {
+                gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
+                name: "creature_class".to_string(),
+                signature: "fn creature_class(s: string) -> i64",
+                examples: crate::comprehension::creature_class_examples(),
+            };
 
-        let report = mind.self_improve(req);
+            let report = mind.self_improve(req);
 
-        // The extension was synthesized, gated green, and accepted.
-        assert!(report.synthesized, "creature_class must synthesize: {}", report.message);
-        assert!(
-            report.regression_passed,
-            "the mind's own gate must stay green for a disjoint additive component: {}",
-            report.message
-        );
-        assert!(report.accepted, "a synthesized + gated extension must be accepted: {}", report.message);
-        assert!(!report.method.is_empty(), "the recovering teacher must be recorded");
+            // The extension was synthesized, gated green, and accepted.
+            assert!(
+                report.synthesized,
+                "creature_class must synthesize: {}",
+                report.message
+            );
+            assert!(
+                report.regression_passed,
+                "the mind's own gate must stay green for a disjoint additive component: {}",
+                report.message
+            );
+            assert!(
+                report.accepted,
+                "a synthesized + gated extension must be accepted: {}",
+                report.message
+            );
+            assert!(
+                !report.method.is_empty(),
+                "the recovering teacher must be recorded"
+            );
 
-        // AFTERWARD: the mind's engine was REPLACED with the grafted candidate,
-        // so it now classifies creatures via the synthesized program.
-        assert!(
-            mind.engine().has_component("creature_class"),
-            "the accepted extension must be live on the mind's engine"
-        );
-        assert_eq!(
-            mind.engine().eval_int("creature_class(\"dragon\")"),
-            1,
-            "dragon must classify as a creature on the improved mind"
-        );
-        assert_eq!(
-            mind.engine().eval_int("creature_class(\"report\")"),
-            0,
-            "report must classify as a non-creature on the improved mind"
-        );
+            // AFTERWARD: the mind's engine was REPLACED with the grafted candidate,
+            // so it now classifies creatures via the synthesized program.
+            assert!(
+                mind.engine().has_component("creature_class"),
+                "the accepted extension must be live on the mind's engine"
+            );
+            assert_eq!(
+                mind.engine().eval_int("creature_class(\"dragon\")"),
+                1,
+                "dragon must classify as a creature on the improved mind"
+            );
+            assert_eq!(
+                mind.engine().eval_int("creature_class(\"report\")"),
+                0,
+                "report must classify as a non-creature on the improved mind"
+            );
 
-        // SOUNDNESS: the mind's own regression gate is STILL green after the
-        // swap — growth was monotone, nothing regressed.
-        assert!(
-            mind.self_check().ok(),
-            "the mind must stay green after adopting the new component (monotone growth)"
-        );
+            // SOUNDNESS: the mind's own regression gate is STILL green after the
+            // swap — growth was monotone, nothing regressed.
+            assert!(
+                mind.self_check().ok(),
+                "the mind must stay green after adopting the new component (monotone growth)"
+            );
         });
     }
 
@@ -2302,38 +2459,44 @@ mod tests {
         // A request synthesis CANNOT satisfy (contradictory spec: one input maps
         // to two outputs) must be declined without touching the live engine.
         crate::self_improve::journal::test_support::with_journal_env("", || {
-        let mut mind = Mind::new();
-        // Baseline: the gate is green and the bogus component is absent.
-        assert!(mind.self_check().ok(), "baseline mind must be green");
-        assert!(!mind.engine().has_component("contradictory_class"));
+            let mut mind = Mind::new();
+            // Baseline: the gate is green and the bogus component is absent.
+            assert!(mind.self_check().ok(), "baseline mind must be green");
+            assert!(!mind.engine().has_component("contradictory_class"));
 
-        let examples = vec![
-            crate::benchmark::Example {
-                inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
-                expected: crate::benchmark::Value::Int(1),
-            },
-            crate::benchmark::Example {
-                inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
-                expected: crate::benchmark::Value::Int(0),
-            },
-        ];
-        let req = crate::self_improve::extend::LearnRequest {
-            gap: "impossible contradictory lexicon".to_string(),
-            name: "contradictory_class".to_string(),
-            signature: "fn contradictory_class(s: string) -> i64",
-            examples,
-        };
+            let examples = vec![
+                crate::benchmark::Example {
+                    inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
+                    expected: crate::benchmark::Value::Int(1),
+                },
+                crate::benchmark::Example {
+                    inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
+                    expected: crate::benchmark::Value::Int(0),
+                },
+            ];
+            let req = crate::self_improve::extend::LearnRequest {
+                gap: "impossible contradictory lexicon".to_string(),
+                name: "contradictory_class".to_string(),
+                signature: "fn contradictory_class(s: string) -> i64",
+                examples,
+            };
 
-        let report = mind.self_improve(req);
-        assert!(!report.synthesized, "an unsynthesizable gap must report synthesis failure");
-        assert!(!report.accepted, "a rejected extension is never accepted");
+            let report = mind.self_improve(req);
+            assert!(
+                !report.synthesized,
+                "an unsynthesizable gap must report synthesis failure"
+            );
+            assert!(!report.accepted, "a rejected extension is never accepted");
 
-        // The engine is UNTOUCHED: no bogus component, gate still green.
-        assert!(
-            !mind.engine().has_component("contradictory_class"),
-            "a rejected extension must not be grafted onto the live engine"
-        );
-        assert!(mind.self_check().ok(), "the mind stays green after a rejected attempt");
+            // The engine is UNTOUCHED: no bogus component, gate still green.
+            assert!(
+                !mind.engine().has_component("contradictory_class"),
+                "a rejected extension must not be grafted onto the live engine"
+            );
+            assert!(
+                mind.self_check().ok(),
+                "the mind stays green after a rejected attempt"
+            );
         });
     }
 
@@ -2351,7 +2514,12 @@ mod tests {
     /// surface word and the predicate lemma.
     fn osv_training() -> Vec<crate::understanding::grammar::ConstructionExample<'static>> {
         vec![
-            ("the report the teacher writes", "teacher", "report", "write"),
+            (
+                "the report the teacher writes",
+                "teacher",
+                "report",
+                "write",
+            ),
             ("the book the student reads", "student", "book", "read"),
             ("the memo the doctor fixes", "doctor", "memo", "fix"),
         ]
@@ -2396,15 +2564,27 @@ mod tests {
 
             // LEARN: induce + synthesize + verify + gate + adopt the OSV construction.
             let accepted = mind.learn_construction("object_fronting", &osv_training());
-            assert!(accepted, "a verified, non-regressing construction must be accepted");
+            assert!(
+                accepted,
+                "a verified, non-regressing construction must be accepted"
+            );
 
             // It is now registered on the mind's engine, with the recovered indices.
             let cons = mind.learned_constructions();
             assert_eq!(cons.len(), 1, "exactly one construction adopted");
             assert_eq!(cons[0].name, "object_fronting");
-            assert_eq!(cons[0].patient_idx, 1, "the fronted object is the patient (index 1)");
-            assert_eq!(cons[0].agent_idx, 3, "the embedded subject is the agent (index 3)");
-            assert_eq!(cons[0].predicate_idx, 4, "the final verb is the predicate (index 4)");
+            assert_eq!(
+                cons[0].patient_idx, 1,
+                "the fronted object is the patient (index 1)"
+            );
+            assert_eq!(
+                cons[0].agent_idx, 3,
+                "the embedded subject is the agent (index 3)"
+            );
+            assert_eq!(
+                cons[0].predicate_idx, 4,
+                "the final verb is the predicate (index 4)"
+            );
 
             // AFTER: the fronted clause now parses to the correct Event.
             let Meaning::Event(e) = mind.understand(fronted) else {
@@ -2435,7 +2615,10 @@ mod tests {
 
             // SOUNDNESS: the gate is STILL green (monotone), and an ordinary SVO
             // clause is parsed EXACTLY as a mind that never learned the construction.
-            assert!(mind.self_check().ok(), "the mind must stay green after acquiring grammar");
+            assert!(
+                mind.self_check().ok(),
+                "the mind must stay green after acquiring grammar"
+            );
             let svo = "the teacher writes the report";
             let plain = Mind::new();
             assert!(plain.learned_constructions().is_empty());
@@ -2458,18 +2641,29 @@ mod tests {
             // index 1) — the role-to-position mapping is not a function of the
             // skeleton, so induction must fail and the construction must be rejected.
             let bad: Vec<crate::understanding::grammar::ConstructionExample> = vec![
-                ("the report the teacher writes", "teacher", "report", "write"),
+                (
+                    "the report the teacher writes",
+                    "teacher",
+                    "report",
+                    "write",
+                ),
                 ("the editor the letter reads", "editor", "letter", "read"),
             ];
             let accepted = mind.learn_construction("bad", &bad);
-            assert!(!accepted, "a contradictory role-to-position mapping must be rejected");
+            assert!(
+                !accepted,
+                "a contradictory role-to-position mapping must be rejected"
+            );
 
             // The engine is UNTOUCHED: no construction registered, gate still green.
             assert!(
                 mind.learned_constructions().is_empty(),
                 "a rejected construction must not be registered on the live engine"
             );
-            assert!(mind.self_check().ok(), "the mind stays green after a rejected construction");
+            assert!(
+                mind.self_check().ok(),
+                "the mind stays green after a rejected construction"
+            );
         });
     }
 
@@ -2491,114 +2685,132 @@ mod tests {
         use crate::self_improve::extend::LearnRequest;
 
         crate::self_improve::journal::test_support::with_journal_env("", || {
-        // --- GAP: a fresh mind genuinely cannot classify creatures. ---------
-        let mut mind = Mind::new();
-        assert!(
-            !mind.engine().has_component("creature_class"),
-            "precondition: creature_class absent (test would be vacuous otherwise)"
-        );
-        // Behaviorally prove the gap: with no component, the call resolves to the
-        // missing-function sentinel, NOT a correct 1 for a creature.
-        assert_ne!(
-            mind.engine().eval_int("creature_class(\"dragon\")"),
-            1,
-            "a mind WITHOUT the component must not already answer dragon -> 1"
-        );
-        assert!(!mind.knows_word("dragon"), "gap detector: 'dragon' is unknown pre-improvement");
-
-        // --- INDEPENDENT VERIFICATION that solve_problem (the solver the loop ---
-        // relies on) actually SUCCEEDS on this exact spec, and that the program
-        // it returns answers correctly. This is the load-bearing check: the loop
-        // must not be able to "accept" anything solve_problem would not certify.
-        let examples = crate::comprehension::creature_class_examples();
-        let probe = Problem {
-            name: "creature_class".to_string(),
-            category: "comprehension",
-            description: "",
-            signature: "fn creature_class(s: string) -> i64",
-            examples: examples.clone(),
-            holdouts: Vec::new(),
-            reference_code: "",
-            synthetic_args: Vec::new(),
-            synthetic_values: Vec::new(),
-            recursive_allowed: false,
-            tree_input: false,
-            explicit_stack: false,
-        };
-        let solved = crate::solver::solve_problem(&probe);
-        assert!(
-            solved.success,
-            "solve_problem MUST certify the spec (verification by construction): {:?}",
-            solved.error
-        );
-        // solve_problem only reports success after verify_problem_code_strict has
-        // re-run the candidate over every example + holdouts. Re-run the strict
-        // verifier here ourselves so the "verified" claim is not taken on trust.
-        crate::runtime::verify_problem_code_strict(&probe, &solved.code)
-            .expect("the certified program must pass strict re-verification on all examples");
-
-        // --- RUN THE LOOP through the public Mind API. ----------------------
-        let req = LearnRequest {
-            gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
-            name: "creature_class".to_string(),
-            signature: "fn creature_class(s: string) -> i64",
-            examples,
-        };
-        let report = mind.self_improve(req);
-
-        // --- ACCEPTANCE must be backed by synthesis AND a green gate. -------
-        assert!(report.synthesized, "must synthesize: {}", report.message);
-        assert!(report.accepted, "a verified + gated extension must be accepted: {}", report.message);
-        assert!(report.regression_passed, "the gate must be green: {}", report.message);
-        assert!(!report.method.is_empty(), "the recovering teacher must be recorded");
-
-        // --- QUERYABLE: the component is live on the post-improvement engine. -
-        assert!(
-            mind.engine().has_component("creature_class"),
-            "an accepted extension must be live and queryable on the engine"
-        );
-
-        // --- CORRECT: it answers the way the spec demands. ------------------
-        // dragon -> 1 (a creature), report -> 0 (a known non-creature).
-        assert_eq!(
-            mind.engine().eval_int("creature_class(\"dragon\")"),
-            1,
-            "accepted-but-wrong is FALSE: dragon MUST classify as a creature"
-        );
-        assert_eq!(
-            mind.engine().eval_int("creature_class(\"report\")"),
-            0,
-            "accepted-but-wrong is FALSE: report MUST classify as a non-creature"
-        );
-        // Generalization across the rest of the curriculum-mined spec: every
-        // creature -> 1, several known non-creatures -> 0. A program that merely
-        // overfit to {dragon, report} would fail here.
-        for c in crate::comprehension::CREATURES {
-            assert_eq!(
-                mind.engine().eval_int(&format!("creature_class(\"{c}\")")),
+            // --- GAP: a fresh mind genuinely cannot classify creatures. ---------
+            let mut mind = Mind::new();
+            assert!(
+                !mind.engine().has_component("creature_class"),
+                "precondition: creature_class absent (test would be vacuous otherwise)"
+            );
+            // Behaviorally prove the gap: with no component, the call resolves to the
+            // missing-function sentinel, NOT a correct 1 for a creature.
+            assert_ne!(
+                mind.engine().eval_int("creature_class(\"dragon\")"),
                 1,
-                "every creature must classify as 1: {c}"
+                "a mind WITHOUT the component must not already answer dragon -> 1"
             );
-        }
-        for n in ["author", "teacher", "book", "letter", "poem"] {
+            assert!(
+                !mind.knows_word("dragon"),
+                "gap detector: 'dragon' is unknown pre-improvement"
+            );
+
+            // --- INDEPENDENT VERIFICATION that solve_problem (the solver the loop ---
+            // relies on) actually SUCCEEDS on this exact spec, and that the program
+            // it returns answers correctly. This is the load-bearing check: the loop
+            // must not be able to "accept" anything solve_problem would not certify.
+            let examples = crate::comprehension::creature_class_examples();
+            let probe = Problem {
+                name: "creature_class".to_string(),
+                category: "comprehension",
+                description: "",
+                signature: "fn creature_class(s: string) -> i64",
+                examples: examples.clone(),
+                holdouts: Vec::new(),
+                reference_code: "",
+                synthetic_args: Vec::new(),
+                synthetic_values: Vec::new(),
+                recursive_allowed: false,
+                tree_input: false,
+                explicit_stack: false,
+                functions: vec![],
+            };
+            let solved = crate::solver::solve_problem(&probe);
+            assert!(
+                solved.success,
+                "solve_problem MUST certify the spec (verification by construction): {:?}",
+                solved.error
+            );
+            // solve_problem only reports success after verify_problem_code_strict has
+            // re-run the candidate over every example + holdouts. Re-run the strict
+            // verifier here ourselves so the "verified" claim is not taken on trust.
+            crate::runtime::verify_problem_code_strict(&probe, &solved.code)
+                .expect("the certified program must pass strict re-verification on all examples");
+
+            // --- RUN THE LOOP through the public Mind API. ----------------------
+            let req = LearnRequest {
+                gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
+                name: "creature_class".to_string(),
+                signature: "fn creature_class(s: string) -> i64",
+                examples,
+            };
+            let report = mind.self_improve(req);
+
+            // --- ACCEPTANCE must be backed by synthesis AND a green gate. -------
+            assert!(report.synthesized, "must synthesize: {}", report.message);
+            assert!(
+                report.accepted,
+                "a verified + gated extension must be accepted: {}",
+                report.message
+            );
+            assert!(
+                report.regression_passed,
+                "the gate must be green: {}",
+                report.message
+            );
+            assert!(
+                !report.method.is_empty(),
+                "the recovering teacher must be recorded"
+            );
+
+            // --- QUERYABLE: the component is live on the post-improvement engine. -
+            assert!(
+                mind.engine().has_component("creature_class"),
+                "an accepted extension must be live and queryable on the engine"
+            );
+
+            // --- CORRECT: it answers the way the spec demands. ------------------
+            // dragon -> 1 (a creature), report -> 0 (a known non-creature).
             assert_eq!(
-                mind.engine().eval_int(&format!("creature_class(\"{n}\")")),
-                0,
-                "every mined non-creature must classify as 0: {n}"
+                mind.engine().eval_int("creature_class(\"dragon\")"),
+                1,
+                "accepted-but-wrong is FALSE: dragon MUST classify as a creature"
             );
-        }
+            assert_eq!(
+                mind.engine().eval_int("creature_class(\"report\")"),
+                0,
+                "accepted-but-wrong is FALSE: report MUST classify as a non-creature"
+            );
+            // Generalization across the rest of the curriculum-mined spec: every
+            // creature -> 1, several known non-creatures -> 0. A program that merely
+            // overfit to {dragon, report} would fail here.
+            for c in crate::comprehension::CREATURES {
+                assert_eq!(
+                    mind.engine().eval_int(&format!("creature_class(\"{c}\")")),
+                    1,
+                    "every creature must classify as 1: {c}"
+                );
+            }
+            for n in ["author", "teacher", "book", "letter", "poem"] {
+                assert_eq!(
+                    mind.engine().eval_int(&format!("creature_class(\"{n}\")")),
+                    0,
+                    "every mined non-creature must classify as 0: {n}"
+                );
+            }
 
-        // --- The accepted program is IDENTICAL to what solve_problem certifies. -
-        // The loop must not have accepted some OTHER (unverified) program. The
-        // grafted source must contain exactly the solver-certified code body.
-        assert!(
-            mind.explain_self("creature").is_empty()
-                || mind.engine().has_component("creature_class"),
-            "sanity: engine reflects the graft"
-        );
+            // --- The accepted program is IDENTICAL to what solve_problem certifies. -
+            // The loop must not have accepted some OTHER (unverified) program. The
+            // grafted source must contain exactly the solver-certified code body.
+            assert!(
+                mind.explain_self("creature").is_empty()
+                    || mind.engine().has_component("creature_class"),
+                "sanity: engine reflects the graft"
+            );
 
-        // --- MONOTONE GROWTH: the mind's own gate is still green. -----------
-        assert!(mind.self_check().ok(), "growth must be monotone — gate still green post-graft");
+            // --- MONOTONE GROWTH: the mind's own gate is still green. -----------
+            assert!(
+                mind.self_check().ok(),
+                "growth must be monotone — gate still green post-graft"
+            );
         });
     }
 
@@ -2620,80 +2832,89 @@ mod tests {
         use crate::self_improve::gate::regression_gate;
 
         crate::self_improve::journal::test_support::with_journal_env("", || {
-        let engine = Engine::new();
-        // Baseline: the real lexicon classifies "teacher" as an animate noun (1).
-        // The golden corpus relies on this. Record the exact program so we can
-        // prove non-mutation afterward.
-        assert!(engine.has_component("noun_animacy"), "baseline has the real lexicon");
-        let baseline_teacher = engine.noun_class("teacher");
-        assert!(baseline_teacher > 0, "baseline: 'teacher' is a known noun");
-        let baseline_program_len = engine.program().len();
-        let baseline_gate = regression_gate(&engine);
-        assert!(baseline_gate.ok(), "baseline engine is green and sound");
+            let engine = Engine::new();
+            // Baseline: the real lexicon classifies "teacher" as an animate noun (1).
+            // The golden corpus relies on this. Record the exact program so we can
+            // prove non-mutation afterward.
+            assert!(
+                engine.has_component("noun_animacy"),
+                "baseline has the real lexicon"
+            );
+            let baseline_teacher = engine.noun_class("teacher");
+            assert!(baseline_teacher > 0, "baseline: 'teacher' is a known noun");
+            let baseline_program_len = engine.program().len();
+            let baseline_gate = regression_gate(&engine);
+            assert!(baseline_gate.ok(), "baseline engine is green and sound");
 
-        // A REGRESSING spec: redefine `noun_animacy` so the golden-corpus words
-        // get WRONG classes. It is internally consistent (each input -> one
-        // output), so solve_problem can verify it — but grafting it shadows the
-        // real lexicon and must break the gate. We map every salient curriculum
-        // word to 0 ("not a noun"), which is wrong for the agents/patients the
-        // golden cases exercise.
-        let mut examples: Vec<Example> = Vec::new();
-        for w in [
-            "teacher", "author", "editor", "report", "book", "letter", "student",
-            "captain", "doctor", "pilot", "poem", "story",
-        ] {
-            examples.push(Example {
-                inputs: vec![Value::Str(w.to_string())],
-                expected: Value::Int(0), // WRONG on purpose: these ARE nouns
-            });
-        }
-        let req = LearnRequest {
-            gap: "deliberately wrong noun_animacy shadow".to_string(),
-            name: "noun_animacy".to_string(),
-            signature: "fn noun_animacy(s: string) -> i64",
-            examples,
-        };
+            // A REGRESSING spec: redefine `noun_animacy` so the golden-corpus words
+            // get WRONG classes. It is internally consistent (each input -> one
+            // output), so solve_problem can verify it — but grafting it shadows the
+            // real lexicon and must break the gate. We map every salient curriculum
+            // word to 0 ("not a noun"), which is wrong for the agents/patients the
+            // golden cases exercise.
+            let mut examples: Vec<Example> = Vec::new();
+            for w in [
+                "teacher", "author", "editor", "report", "book", "letter", "student", "captain",
+                "doctor", "pilot", "poem", "story",
+            ] {
+                examples.push(Example {
+                    inputs: vec![Value::Str(w.to_string())],
+                    expected: Value::Int(0), // WRONG on purpose: these ARE nouns
+                });
+            }
+            let req = LearnRequest {
+                gap: "deliberately wrong noun_animacy shadow".to_string(),
+                name: "noun_animacy".to_string(),
+                signature: "fn noun_animacy(s: string) -> i64",
+                examples,
+            };
 
-        let (candidate, report) = self_extend(&engine, &req);
+            let (candidate, report) = self_extend(&engine, &req);
 
-        // It DID synthesize (solve_problem verified it reproduces its own wrong
-        // examples) — proving the candidate is "verified" yet still must be killed.
-        assert!(
-            report.synthesized,
-            "the regressing shadow is internally verifiable: {}",
-            report.message
-        );
-        // ...but the gate must REJECT it: regression on the golden corpus.
-        assert!(
-            !report.regression_passed,
-            "the gate MUST go red for a regressing shadow: {}",
-            report.message
-        );
-        assert!(
-            !report.accepted,
-            "a verified-but-regressing candidate must NOT be accepted: {}",
-            report.message
-        );
-        assert!(candidate.is_none(), "a rejected candidate engine must not be returned");
-        assert!(
-            report.message.contains("regression gate red"),
-            "rejection must be auditable as a gate-red: {}",
-            report.message
-        );
+            // It DID synthesize (solve_problem verified it reproduces its own wrong
+            // examples) — proving the candidate is "verified" yet still must be killed.
+            assert!(
+                report.synthesized,
+                "the regressing shadow is internally verifiable: {}",
+                report.message
+            );
+            // ...but the gate must REJECT it: regression on the golden corpus.
+            assert!(
+                !report.regression_passed,
+                "the gate MUST go red for a regressing shadow: {}",
+                report.message
+            );
+            assert!(
+                !report.accepted,
+                "a verified-but-regressing candidate must NOT be accepted: {}",
+                report.message
+            );
+            assert!(
+                candidate.is_none(),
+                "a rejected candidate engine must not be returned"
+            );
+            assert!(
+                report.message.contains("regression gate red"),
+                "rejection must be auditable as a gate-red: {}",
+                report.message
+            );
 
-        // BASE ENGINE UNCHANGED: same program text length, same classification,
-        // still green. self_extend never mutates its input.
-        assert_eq!(
-            engine.program().len(),
-            baseline_program_len,
-            "self_extend must not mutate the base engine's program"
-        );
-        assert_eq!(
-            engine.noun_class("teacher"),
-            baseline_teacher,
-            "the real lexicon must be intact after a rejected shadow"
-        );
-        assert!(regression_gate(&engine).ok(), "base engine still green after rejection");
+            // BASE ENGINE UNCHANGED: same program text length, same classification,
+            // still green. self_extend never mutates its input.
+            assert_eq!(
+                engine.program().len(),
+                baseline_program_len,
+                "self_extend must not mutate the base engine's program"
+            );
+            assert_eq!(
+                engine.noun_class("teacher"),
+                baseline_teacher,
+                "the real lexicon must be intact after a rejected shadow"
+            );
+            assert!(
+                regression_gate(&engine).ok(),
+                "base engine still green after rejection"
+            );
         });
     }
 
@@ -2714,10 +2935,14 @@ mod tests {
     /// `with_journal_env` but ALSO sets `NCPU_COMPONENTS_PATH` (per the task's
     /// study-test contract). The temp files are removed afterward.
     fn with_study_env<R>(label: &str, f: impl FnOnce() -> R) -> R {
-        let journal = std::env::temp_dir()
-            .join(format!("ncpu_study_journal_{}_{label}.jsonl", std::process::id()));
-        let components = std::env::temp_dir()
-            .join(format!("ncpu_study_components_{}_{label}.jsonl", std::process::id()));
+        let journal = std::env::temp_dir().join(format!(
+            "ncpu_study_journal_{}_{label}.jsonl",
+            std::process::id()
+        ));
+        let components = std::env::temp_dir().join(format!(
+            "ncpu_study_components_{}_{label}.jsonl",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&journal);
         let _ = std::fs::remove_file(&components);
         let components_path = components.to_string_lossy().to_string();
@@ -2749,7 +2974,10 @@ mod tests {
                 !mind.engine().has_component("creature_class"),
                 "creature_class must be genuinely absent before study"
             );
-            assert!(!mind.knows_word("dragon"), "'dragon' must be unknown pre-study");
+            assert!(
+                !mind.knows_word("dragon"),
+                "'dragon' must be unknown pre-study"
+            );
 
             // The corpus mixes a KNOWN sentence with one naming an unknown creature.
             let corpus = [
@@ -2798,7 +3026,10 @@ mod tests {
         with_study_env("nothing", || {
             let mut mind = Mind::new();
             let baseline_learned = mind.learned_components();
-            assert!(baseline_learned.is_empty(), "a fresh mind has learned nothing yet");
+            assert!(
+                baseline_learned.is_empty(),
+                "a fresh mind has learned nothing yet"
+            );
 
             // Every word here is in the base curriculum — no lexical gap anywhere.
             let corpus = [
@@ -2815,7 +3046,10 @@ mod tests {
                 report.learned.is_empty(),
                 "a wholly-known corpus must teach the mind nothing: {report:?}"
             );
-            assert_eq!(report.attempted, 0, "no self-extension attempt on a known corpus: {report:?}");
+            assert_eq!(
+                report.attempted, 0,
+                "no self-extension attempt on a known corpus: {report:?}"
+            );
             assert_eq!(report.rejected, 0, "nothing to reject: {report:?}");
             assert_eq!(
                 report.rounds, 1,
@@ -2827,7 +3061,10 @@ mod tests {
                 mind.learned_components().is_empty(),
                 "no components learned from a known corpus"
             );
-            assert!(mind.self_check().ok(), "the mind stays sound after a no-op study");
+            assert!(
+                mind.self_check().ok(),
+                "the mind stays sound after a no-op study"
+            );
         });
     }
 
@@ -2865,7 +3102,10 @@ mod tests {
                 mind.self_check().ok(),
                 "self_check must be green BEFORE study (the spine starts sound)"
             );
-            assert!(!mind.knows_word("dragon"), "'dragon' must be a real gap pre-study");
+            assert!(
+                !mind.knows_word("dragon"),
+                "'dragon' must be a real gap pre-study"
+            );
             assert!(
                 !mind.knows_word("blorptangle"),
                 "'blorptangle' must be a real (but unmineable) gap pre-study"
@@ -2875,7 +3115,10 @@ mod tests {
                 "creature_class must be genuinely absent before study"
             );
             let base_learned = mind.learned_components();
-            assert!(base_learned.is_empty(), "a fresh mind has learned nothing yet");
+            assert!(
+                base_learned.is_empty(),
+                "a fresh mind has learned nothing yet"
+            );
 
             // The corpus MIXES: a fully-known sentence, an unknown-CREATURE
             // sentence (mineable → verifiable + gateable), and an unknown-
@@ -3024,7 +3267,10 @@ mod tests {
                 "exactly one self-extension attempt (the mineable creature gap); the \
                  unmineable gap produced no attempt: attempted={attempted}"
             );
-            assert_eq!(rejected, 0, "the one mineable attempt was accepted, not rejected");
+            assert_eq!(
+                rejected, 0,
+                "the one mineable attempt was accepted, not rejected"
+            );
         });
     }
 
@@ -3038,7 +3284,10 @@ mod tests {
         with_study_env("unmineable", || {
             let mut mind = Mind::new();
             assert!(mind.self_check().ok(), "green before study");
-            assert!(!mind.knows_word("blorptangle"), "'blorptangle' is a genuine gap");
+            assert!(
+                !mind.knows_word("blorptangle"),
+                "'blorptangle' is a genuine gap"
+            );
 
             // The ONLY gap here is the unmineable unknown word. detect_gap fires,
             // propose_curriculum returns None, so study can never verify or gate
@@ -3054,7 +3303,10 @@ mod tests {
                 report.attempted, 0,
                 "no curriculum can be posed → no self-extension attempt: {report:?}"
             );
-            assert_eq!(report.rejected, 0, "nothing was even attempted to reject: {report:?}");
+            assert_eq!(
+                report.rejected, 0,
+                "nothing was even attempted to reject: {report:?}"
+            );
             assert_eq!(
                 report.rounds, 1,
                 "a dry first round is a fixpoint — converges immediately: {report:?}"
@@ -3067,7 +3319,10 @@ mod tests {
                 !mind.engine().has_component("blorptangle"),
                 "the unmineable word never became a live component"
             );
-            assert!(mind.self_check().ok(), "the mind stays sound after a no-op study");
+            assert!(
+                mind.self_check().ok(),
+                "the mind stays sound after a no-op study"
+            );
         });
     }
 
@@ -3148,7 +3403,10 @@ mod tests {
 
         // PRECONDITION (test is not vacuous): "dragon" is genuinely unknown — the
         // lexicon carries no class for it.
-        assert!(!mind.knows_word("dragon"), "'dragon' must be unknown for this test");
+        assert!(
+            !mind.knows_word("dragon"),
+            "'dragon' must be unknown for this test"
+        );
 
         // A grammatical sentence whose SUBJECT is an unknown creature in a
         // determiner-headed noun slot ("the dragon").
@@ -3157,9 +3415,16 @@ mod tests {
             .expect("an unknown noun in a determiner slot must surface a gap");
 
         // It is a LEXICAL gap (an unknown WORD, not a grammar gap).
-        assert_eq!(gap.kind, GapKind::Lexical, "an unknown noun is a lexical gap: {gap:?}");
+        assert_eq!(
+            gap.kind,
+            GapKind::Lexical,
+            "an unknown noun is a lexical gap: {gap:?}"
+        );
         // Its surface is the FIRST unknown noun the parser needed — "dragon".
-        assert_eq!(gap.surface, "dragon", "the gap names the unknown content word: {gap:?}");
+        assert_eq!(
+            gap.surface, "dragon",
+            "the gap names the unknown content word: {gap:?}"
+        );
         // The context preserves the full input so the curriculum miner can use it.
         assert_eq!(gap.context, "The dragon guards the gold.");
     }
@@ -3216,8 +3481,15 @@ mod tests {
             let gap = mind
                 .detect_gap("The dragon guards the gold.")
                 .expect("(A) a genuine unknown noun MUST surface a gap");
-            assert_eq!(gap.kind, GapKind::Lexical, "(A) unknown noun => lexical: {gap:?}");
-            assert_eq!(gap.surface, "dragon", "(A) gap names the unknown word: {gap:?}");
+            assert_eq!(
+                gap.kind,
+                GapKind::Lexical,
+                "(A) unknown noun => lexical: {gap:?}"
+            );
+            assert_eq!(
+                gap.surface, "dragon",
+                "(A) gap names the unknown word: {gap:?}"
+            );
 
             // ---- (B) FULLY-KNOWN SENTENCE: every content word is in the base
             // curriculum (teacher/report nouns, writes a known 3sg form). NO gap.
@@ -3278,13 +3550,19 @@ mod tests {
             .expect("a lexical creature gap must mine a well-posed curriculum");
 
         // The request targets a string->int classifier and names the surface word.
-        assert_eq!(req.name, "creature_class", "targets the creature membership map");
+        assert_eq!(
+            req.name, "creature_class",
+            "targets the creature membership map"
+        );
         assert!(
             req.signature.contains("-> i64"),
             "a membership classifier returns an int label: {}",
             req.signature
         );
-        assert!(!req.examples.is_empty(), "the mined spec must carry examples");
+        assert!(
+            !req.examples.is_empty(),
+            "the mined spec must carry examples"
+        );
 
         // The gap word must be a POSITIVE (the unknown creature -> 1); the spec is
         // well-posed (no string mapped to two labels — guaranteed by lexicon_examples).
@@ -3316,6 +3594,7 @@ mod tests {
             recursive_allowed: false,
             tree_input: false,
             explicit_stack: false,
+            functions: vec![],
         };
         let solved = crate::solver::solve_problem(&probe);
         assert!(
@@ -3364,7 +3643,10 @@ mod tests {
 
         // PRECONDITIONS: genuinely unlearned. "dragon" is not a base noun and no
         // learned classifier exists, so every integration hook is inert.
-        assert!(!mind.knows_word("dragon"), "'dragon' must be unknown on a fresh mind");
+        assert!(
+            !mind.knows_word("dragon"),
+            "'dragon' must be unknown on a fresh mind"
+        );
         assert!(
             !mind.engine().has_component("creature_class"),
             "a fresh mind has not learned creature_class"
@@ -3480,7 +3762,10 @@ mod tests {
             );
 
             // SOUNDNESS: growth was monotone — the mind stays green after study.
-            assert!(mind.self_check().ok(), "self_check must stay ok after study");
+            assert!(
+                mind.self_check().ok(),
+                "self_check must stay ok after study"
+            );
         });
     }
 
@@ -3557,7 +3842,10 @@ mod tests {
             let mut mind = Mind::new();
 
             // ---- BEFORE: the gap is GENUINE and the behavior is the unlearned one.
-            assert!(!mind.knows_word("dragon"), "'dragon' must be a real gap pre-study");
+            assert!(
+                !mind.knows_word("dragon"),
+                "'dragon' must be a real gap pre-study"
+            );
             assert!(
                 !mind.engine().has_component("creature_class"),
                 "creature_class genuinely absent pre-study (test not vacuous)"
@@ -3770,7 +4058,10 @@ mod tests {
                 !mind.engine().has_component("creature_class"),
                 "creature_class must be genuinely absent before the proposal"
             );
-            assert!(!mind.recognizes_word("wizard"), "'wizard' must be unknown pre-learning");
+            assert!(
+                !mind.recognizes_word("wizard"),
+                "'wizard' must be unknown pre-learning"
+            );
             assert!(mind.self_check().ok(), "baseline mind must be green");
 
             // The UNTRUSTED proposal: 'wizard' is a "creature", with disjoint
@@ -3796,13 +4087,21 @@ mod tests {
 
             // Synthesized + gated green + accepted — the seam carried the untrusted
             // data all the way through the verified funnel.
-            assert!(report.synthesized, "the proposal must synthesize: {}", report.message);
+            assert!(
+                report.synthesized,
+                "the proposal must synthesize: {}",
+                report.message
+            );
             assert!(
                 report.regression_passed,
                 "a disjoint additive classifier must pass the gate: {}",
                 report.message
             );
-            assert!(report.accepted, "a synthesized + gated proposal must be accepted: {}", report.message);
+            assert!(
+                report.accepted,
+                "a synthesized + gated proposal must be accepted: {}",
+                report.message
+            );
 
             // AFTERWARD the classifier is LIVE on the mind's engine and answers right.
             assert!(
@@ -3816,9 +4115,18 @@ mod tests {
             );
             // The verified classifier answers correctly within its proven domain:
             // gap word + members -> 1, non-members -> 0, off-domain -> open-world.
-            assert_eq!(mind.engine().learned_class_verdict("creature", "wizard"), Some(true));
-            assert_eq!(mind.engine().learned_class_verdict("creature", "griffin"), Some(true));
-            assert_eq!(mind.engine().learned_class_verdict("creature", "report"), Some(false));
+            assert_eq!(
+                mind.engine().learned_class_verdict("creature", "wizard"),
+                Some(true)
+            );
+            assert_eq!(
+                mind.engine().learned_class_verdict("creature", "griffin"),
+                Some(true)
+            );
+            assert_eq!(
+                mind.engine().learned_class_verdict("creature", "report"),
+                Some(false)
+            );
             assert_eq!(
                 mind.engine().learned_class_verdict("creature", "submarine"),
                 None,
@@ -3826,7 +4134,10 @@ mod tests {
             );
 
             // Growth was monotone — the gate is still green after the swap.
-            assert!(mind.self_check().ok(), "the mind stays green after adopting the proposal");
+            assert!(
+                mind.self_check().ok(),
+                "the mind stays green after adopting the proposal"
+            );
         });
     }
 
@@ -3855,7 +4166,9 @@ mod tests {
             // currently correct — "the teacher is a person" answers Yes.
             assert!(mind.self_check().ok(), "baseline mind must be green");
             assert!(
-                mind.ask("Is the teacher a person?").to_lowercase().starts_with("yes"),
+                mind.ask("Is the teacher a person?")
+                    .to_lowercase()
+                    .starts_with("yes"),
                 "precondition: the honest mind answers 'teacher is a person' = Yes"
             );
             // Snapshot the engine's program bytes to prove non-mutation on reject.
@@ -3912,15 +4225,21 @@ mod tests {
                 "the engine program must be byte-for-byte unchanged after a rejection"
             );
             assert!(
-                mind.ask("Is the teacher a person?").to_lowercase().starts_with("yes"),
+                mind.ask("Is the teacher a person?")
+                    .to_lowercase()
+                    .starts_with("yes"),
                 "the live mind must still answer 'teacher is a person' = Yes"
             );
-            assert!(mind.self_check().ok(), "self_check stays ok after the rejected proposal");
+            assert!(
+                mind.self_check().ok(),
+                "self_check stays ok after the rejected proposal"
+            );
 
             // (4) The rejection is auditable AND journaled: synthesize was attempted
             // and verified, but it was NOT accepted and did NOT pass the gate.
             assert!(
-                report.message.contains("rejected") && report.message.contains("regression gate red"),
+                report.message.contains("rejected")
+                    && report.message.contains("regression gate red"),
                 "the report must explain the gate rejected the proposal: {}",
                 report.message
             );
@@ -3930,8 +4249,14 @@ mod tests {
                 .find(|e| e.action == "synthesize person_class")
                 .expect("the rejected proposal must be journaled");
             assert!(mine.verified, "the journaled attempt synthesized+verified");
-            assert!(!mine.accepted, "the journaled attempt was rejected, not accepted");
-            assert!(!mine.regression_passed, "the journaled attempt failed the gate");
+            assert!(
+                !mine.accepted,
+                "the journaled attempt was rejected, not accepted"
+            );
+            assert!(
+                !mine.regression_passed,
+                "the journaled attempt failed the gate"
+            );
         });
     }
 
@@ -3960,7 +4285,10 @@ mod tests {
                 program_before,
                 "a no-proposal call must leave the engine byte-for-byte unchanged"
             );
-            assert!(mind.self_check().ok(), "self_check stays ok after a no-op proposal");
+            assert!(
+                mind.self_check().ok(),
+                "self_check stays ok after a no-op proposal"
+            );
         });
     }
 }

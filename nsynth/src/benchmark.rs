@@ -133,6 +133,19 @@ pub struct Problem {
 }
 
 impl Problem {
+    /// Return the information that a synthesizer is allowed to observe.
+    ///
+    /// Holdouts and reference implementations are evaluator-owned oracles. They
+    /// must never influence candidate generation, routing, ranking, or acceptance.
+    /// Keeping this boundary on the data type makes the public solver entrypoints
+    /// safe even when callers pass a benchmark `Problem` directly.
+    pub fn synthesis_view(&self) -> Self {
+        let mut problem = self.clone();
+        problem.holdouts.clear();
+        problem.reference_code = "";
+        problem
+    }
+
     pub fn function_name(&self) -> &str {
         self.signature
             .split_once("fn ")
@@ -3923,7 +3936,7 @@ fn make_count_rate(variant: usize) -> Problem {
         ],
         vec![
             example(vec![int(0), int(0), array(&[1, 2])], 0),
-            example(vec![int(100), int(1), array(&[5])], 105),
+            example(vec![int(100), int(1), array(&[5])], 101),
         ],
         "fn count_rate(state: i64, t: i64, arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for v in arr { if v > 0 { s = s + 1; } }\n    return state + s * t;\n}\n",
     )
@@ -3964,7 +3977,7 @@ fn make_tick_every_2(variant: usize) -> Problem {
             example(vec![int(-5), int(3), array(&[4, 4])], -5),
         ],
         vec![
-            example(vec![int(0), int(0), array(&[1, 1])], 0),
+            example(vec![int(0), int(0), array(&[1, 1])], 2),
             example(vec![int(100), int(6), array(&[1])], 101),
         ],
         "fn tick_every_2(state: i64, t: i64, arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for v in arr { s = s + v; }\n    tval: i64 = 0;\n    if t % 2 == 0 { tval = 1; } else { tval = 0; }\n    return state + s * tval;\n}\n",

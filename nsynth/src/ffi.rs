@@ -50,7 +50,9 @@ pub unsafe extern "C" fn ncpu_read(mind: *mut NcpuMind, sentence: *const c_char)
     if mind.is_null() || sentence.is_null() {
         return -1;
     }
-    let Ok(s) = CStr::from_ptr(sentence).to_str() else { return -1 };
+    let Ok(s) = CStr::from_ptr(sentence).to_str() else {
+        return -1;
+    };
     (*mind).0.read(s);
     0
 }
@@ -72,7 +74,9 @@ pub unsafe extern "C" fn ncpu_ask(
     if mind.is_null() || question.is_null() || out.is_null() || cap == 0 {
         return -1;
     }
-    let Ok(q) = CStr::from_ptr(question).to_str() else { return -1 };
+    let Ok(q) = CStr::from_ptr(question).to_str() else {
+        return -1;
+    };
     let answer = (*mind).0.ask(q);
     let bytes = answer.as_bytes();
     if bytes.len() + 1 > cap {
@@ -102,7 +106,9 @@ pub unsafe extern "C" fn ncpu_verb_3sg(
     if engine.is_null() || base.is_null() || out.is_null() || cap == 0 {
         return -1;
     }
-    let Ok(b) = CStr::from_ptr(base).to_str() else { return -1 };
+    let Ok(b) = CStr::from_ptr(base).to_str() else {
+        return -1;
+    };
     let form = (*engine).0.verb_3sg(b);
     let bytes = form.as_bytes();
     if bytes.len() + 1 > cap {
@@ -148,7 +154,9 @@ unsafe fn with_str<F: FnOnce(&Engine, &str) -> i32>(
     if engine.is_null() || text.is_null() {
         return fallback;
     }
-    let Ok(s) = CStr::from_ptr(text).to_str() else { return fallback };
+    let Ok(s) = CStr::from_ptr(text).to_str() else {
+        return fallback;
+    };
     f(&(*engine).0, s)
 }
 
@@ -184,10 +192,7 @@ pub unsafe extern "C" fn ncpu_check_agreement(
 /// # Safety
 /// `engine` must be a valid handle; `word` a valid NUL-terminated UTF-8 string.
 #[no_mangle]
-pub unsafe extern "C" fn ncpu_is_person(
-    engine: *const NcpuEngine,
-    word: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn ncpu_is_person(engine: *const NcpuEngine, word: *const c_char) -> i32 {
     with_str(engine, word, -1, |e, s| e.is_person(s) as i32)
 }
 

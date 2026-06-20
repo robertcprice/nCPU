@@ -44,7 +44,9 @@ struct Lcg {
 impl Lcg {
     fn new(seed: u64) -> Self {
         // Mix the seed once so seed 0 is not a degenerate fixed point.
-        Lcg { state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1) }
+        Lcg {
+            state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1),
+        }
     }
 
     /// Advance and return a fresh 32-bit value from the high bits of the state.
@@ -164,9 +166,15 @@ struct UnseenQuery {
 impl UnseenQuery {
     fn question(&self, negated: bool) -> String {
         if negated {
-            format!("Does the {} not {} the {}?", self.agent, self.verb_base, self.patient)
+            format!(
+                "Does the {} not {} the {}?",
+                self.agent, self.verb_base, self.patient
+            )
         } else {
-            format!("Does the {} {} the {}?", self.agent, self.verb_base, self.patient)
+            format!(
+                "Does the {} {} the {}?",
+                self.agent, self.verb_base, self.patient
+            )
         }
     }
 }

@@ -83,7 +83,10 @@ fn single_fact_reverse_is_not_yes() {
 
     // Forward holds.
     let a_fwd = qa::answer(&engine, &d, "Is the report longer than the book?");
-    assert!(is_yes(&a_fwd), "forward single fact should be Yes: {a_fwd:?}");
+    assert!(
+        is_yes(&a_fwd),
+        "forward single fact should be Yes: {a_fwd:?}"
+    );
 
     // Reverse must NOT be Yes. (Here it is provably false by asymmetry -> No.)
     let a_rev = qa::answer(&engine, &d, "Is the book longer than the report?");

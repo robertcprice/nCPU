@@ -12,7 +12,7 @@ use crate::comprehension::{
     words_of, Engine, GRADABLE, IRREGULAR_VERBS, MODIFIERS, PAST_PARTICIPLE, REG_VERBS,
 };
 use crate::understanding::meaning::{
-    Aspect, Event, Meaning, Modality, Quantifier, Role, Tense, TemporalRel, Term,
+    Aspect, Event, Meaning, Modality, Quantifier, Role, TemporalRel, Tense, Term,
 };
 
 /// Map a raw sentence to its logical form.
@@ -210,8 +210,7 @@ pub(crate) fn understand_handwritten(engine: &Engine, sentence: &str) -> Meaning
         "what" => return parse_what(engine, &toks, sentence),
         // yes/no question: "does/do [not] X verb Y?" / aspect & future
         // inversions ("is X writing Y?", "has X written Y?", "will X verb Y?").
-        "does" | "do" | "did" | "is" | "are" | "was" | "were" | "has" | "have" | "had"
-        | "will" => {
+        "does" | "do" | "did" | "is" | "are" | "was" | "were" | "has" | "have" | "had" | "will" => {
             return parse_yes_no(engine, &toks, sentence);
         }
         _ => {}
@@ -247,9 +246,7 @@ pub(crate) fn understand_handwritten(engine: &Engine, sentence: &str) -> Meaning
 /// sentence with the same class skeleton shares the same argument structure.
 pub fn token_classes(engine: &Engine, sentence: &str) -> Vec<i64> {
     let toks = words_of(sentence);
-    toks.iter()
-        .map(|w| classify_token(engine, w))
-        .collect()
+    toks.iter().map(|w| classify_token(engine, w)).collect()
 }
 
 /// Class code for a single surface token (see [`token_classes`]).
@@ -339,9 +336,7 @@ fn first_category_idx(engine: &Engine, toks: &[String], from: usize) -> Option<u
 /// so we never invent a category the lexicon does not know.
 fn singular_category(engine: &Engine, word: &str) -> String {
     // Already a known singular noun (class 1/2) or a singular taxonomy class -> keep it.
-    if (engine.noun_class(word) > 0 && !word.ends_with('s'))
-        || is_taxonomy_class_word(word)
-    {
+    if (engine.noun_class(word) > 0 && !word.ends_with('s')) || is_taxonomy_class_word(word) {
         return word.to_string();
     }
     // "teachers" -> "teacher" / "agents" -> "agent": strip a trailing "s" when
@@ -568,8 +563,10 @@ fn build_disjunction(
     // A question disjunction: the leading interrogative scopes over all
     // disjuncts. Re-distribute it so each disjunct is understood as a question,
     // then lift the inner queried bodies into a single yes/no over their Or.
-    let is_question_lead =
-        matches!(head, "is" | "are" | "was" | "were" | "does" | "do" | "did" | "who" | "what");
+    let is_question_lead = matches!(
+        head,
+        "is" | "are" | "was" | "were" | "does" | "do" | "did" | "who" | "what"
+    );
 
     let mut disjunct_meanings: Vec<Meaning> = Vec::new();
     let mut all_yes_no = true;
@@ -758,11 +755,14 @@ fn parse_why_question(engine: &Engine, toks: &[String], original: &str) -> Meani
 /// rewrite "X after Y" into "Y before X" here — preserving the surface relation
 /// keeps the representation faithful and lets the downstream layer canonicalize.
 fn parse_temporal(engine: &Engine, toks: &[String]) -> Option<Meaning> {
-    let (conn, rel) = toks.iter().enumerate().find_map(|(i, w)| match w.as_str() {
-        "before" => Some((i, TemporalRel::Before)),
-        "after" => Some((i, TemporalRel::After)),
-        _ => None,
-    })?;
+    let (conn, rel) = toks
+        .iter()
+        .enumerate()
+        .find_map(|(i, w)| match w.as_str() {
+            "before" => Some((i, TemporalRel::Before)),
+            "after" => Some((i, TemporalRel::After)),
+            _ => None,
+        })?;
     if conn == 0 || conn + 1 >= toks.len() {
         return None;
     }
@@ -1105,7 +1105,11 @@ fn scan_aspect_tense(engine: &Engine, toks: &[String], after: usize) -> Option<V
             }
             // PERFECT: "has/have/had [not] <past-participle>" — aspect Perfect.
             Some(aux @ ("has" | "have" | "had")) => {
-                let aux_tense = if aux == "had" { Tense::Past } else { Tense::Present };
+                let aux_tense = if aux == "had" {
+                    Tense::Past
+                } else {
+                    Tense::Present
+                };
                 let mut j = i + 1;
                 if toks.get(j).map(|w| w == "not").unwrap_or(false) {
                     negated = true;
@@ -1266,7 +1270,11 @@ fn build_fronted_passive_event(engine: &Engine, toks: &[String], tense: Tense) -
         negated = true;
         i += 1;
     }
-    if toks.get(i).map(|w| w == "being" || w == "been").unwrap_or(false) {
+    if toks
+        .get(i)
+        .map(|w| w == "being" || w == "been")
+        .unwrap_or(false)
+    {
         i += 1;
     }
     let pp_idx = first_lexical_idx(toks, i)?;
@@ -1305,7 +1313,11 @@ fn parse_yes_no(engine: &Engine, toks: &[String], original: &str) -> Meaning {
     // PERFECT yes/no: "has the teacher written the report?" -> yes/no over a
     // Perfect-aspect Event. Fronted "has/have/had", subject, then participle.
     if matches!(head, "has" | "have" | "had") {
-        let tense = if head == "had" { Tense::Past } else { Tense::Present };
+        let tense = if head == "had" {
+            Tense::Past
+        } else {
+            Tense::Present
+        };
         if let Some(ev) = build_fronted_aux_event(engine, toks, AuxFrame::Perfect(tense)) {
             return Meaning::YesNoQuestion(Box::new(Meaning::Event(ev)));
         }
@@ -1407,8 +1419,7 @@ fn parse_yes_no(engine: &Engine, toks: &[String], original: &str) -> Meaning {
     // event. The fronted auxiliary supplies the main tense. This makes the
     // question parse to the SAME Restricted-subject Event a declarative would,
     // so the world model answers it correctly instead of "I don't know".
-    if let Some((restricted_subject, main_vidx)) =
-        build_restricted_subject(engine, toks, subj_idx)
+    if let Some((restricted_subject, main_vidx)) = build_restricted_subject(engine, toks, subj_idx)
     {
         // Read the main verb (de-inflected; aux-fronted questions have a bare
         // verb) and any objects, with the tense taken from the fronted aux.
@@ -1520,7 +1531,10 @@ fn parse_who(engine: &Engine, toks: &[String], original: &str) -> Meaning {
             last_noun_idx_within(engine, toks, vidx + 1, tp).map(|oi| term_from(toks, oi)),
             last_noun_idx(engine, toks, tp + 1).map(|ri| term_from(toks, ri)),
         ),
-        None => (last_noun_idx(engine, toks, vidx + 1).map(|oi| term_from(toks, oi)), None),
+        None => (
+            last_noun_idx(engine, toks, vidx + 1).map(|oi| term_from(toks, oi)),
+            None,
+        ),
     };
 
     Meaning::WhQuestion {
@@ -1653,9 +1667,7 @@ fn parse_what(engine: &Engine, toks: &[String], original: &str) -> Meaning {
 /// false) treats it as an INANIMATE thing — it never spuriously satisfies an
 /// agent-only restriction.
 fn is_np_head(engine: &Engine, word: &str) -> bool {
-    engine.noun_class(word) > 0
-        || is_pronoun(word)
-        || engine.learned_class_of(word).is_some()
+    engine.noun_class(word) > 0 || is_pronoun(word) || engine.learned_class_of(word).is_some()
 }
 
 /// Is `word` a LEXICON noun — a known content noun (base animacy lexicon) or a
@@ -1746,7 +1758,8 @@ fn strip_pp_adjunct(engine: &Engine, toks: Vec<String>) -> Vec<String> {
     // The PP must START strictly after the verb (so the verb + its object remain).
     // Scan for the FIRST adjunct preposition after the verb; everything from there
     // to the end is the adjunct and is dropped.
-    if let Some(pp_idx) = (vidx + 1..toks.len()).find(|&i| ADJUNCT_PREPS.contains(&toks[i].as_str()))
+    if let Some(pp_idx) =
+        (vidx + 1..toks.len()).find(|&i| ADJUNCT_PREPS.contains(&toks[i].as_str()))
     {
         // Require at least one core object token between the verb and the PP, so a
         // verb immediately followed by a preposition (an unusual frame) is left
@@ -1784,7 +1797,9 @@ fn first_noun_idx(engine: &Engine, toks: &[String], from: usize) -> Option<usize
 /// Index of the last noun-phrase head (lexicon noun or pronoun) at or after
 /// `from`.
 fn last_noun_idx(engine: &Engine, toks: &[String], from: usize) -> Option<usize> {
-    (from..toks.len()).rev().find(|&i| is_np_head(engine, &toks[i]))
+    (from..toks.len())
+        .rev()
+        .find(|&i| is_np_head(engine, &toks[i]))
 }
 
 /// Build a `Term` from a noun token, consulting the determiner immediately
@@ -2137,7 +2152,8 @@ fn extract_objects(
     // "... <patient> to <recipient>".
     if let Some(to_idx) = find_word(toks, from, "to") {
         // Patient: last object noun BEFORE "to" (the direct object).
-        let patient = last_noun_idx_within(engine, toks, from, to_idx).map(|oi| term_from(toks, oi));
+        let patient =
+            last_noun_idx_within(engine, toks, from, to_idx).map(|oi| term_from(toks, oi));
         // Recipient: first noun AFTER "to".
         let recipient = first_noun_idx(engine, toks, to_idx + 1).map(|oi| term_from(toks, oi));
         return (patient, recipient);
@@ -2505,7 +2521,11 @@ fn parse_passive(engine: &Engine, toks: &[String], subj_idx: usize) -> Option<Me
         negated = true;
         i += 1;
     }
-    if toks.get(i).map(|w| w == "being" || w == "been").unwrap_or(false) {
+    if toks
+        .get(i)
+        .map(|w| w == "being" || w == "been")
+        .unwrap_or(false)
+    {
         i += 1;
     }
 
@@ -2665,10 +2685,7 @@ fn is_plural_subject(engine: &Engine, toks: &[String], subj_idx: usize) -> bool 
     }
     // Must be a recognized noun in plural form: "teachers" with stem "teacher".
     if let Some(stem) = word.strip_suffix('s') {
-        if !stem.is_empty()
-            && engine.noun_class(stem) > 0
-            && !is_taxonomy_class_word(stem)
-        {
+        if !stem.is_empty() && engine.noun_class(stem) > 0 && !is_taxonomy_class_word(stem) {
             return true;
         }
     }
@@ -2778,7 +2795,12 @@ mod tests {
     #[test]
     fn understand_copular_isa() {
         let m = understand(engine(), "The teacher is a person.");
-        let Meaning::IsA { subject, category, negated } = m else {
+        let Meaning::IsA {
+            subject,
+            category,
+            negated,
+        } = m
+        else {
             panic!("expected an IsA, got {m:?}");
         };
         assert_eq!(subject, Term::Entity("teacher".to_string()));
@@ -2806,7 +2828,12 @@ mod tests {
     fn understand_universal_quantifier() {
         // "every teacher writes a report" -> Quantified{ Every, teacher, body }.
         let m = understand(engine(), "Every teacher writes a report.");
-        let Meaning::Quantified { quant, var_category, body } = m else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } = m
+        else {
             panic!("expected a Quantified, got {m:?}");
         };
         assert_eq!(quant, Quantifier::Every);
@@ -2822,14 +2849,24 @@ mod tests {
     #[test]
     fn understand_existential_and_negative_quantifiers() {
         let some = understand(engine(), "Some editor reads the book.");
-        let Meaning::Quantified { quant, var_category, .. } = some else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            ..
+        } = some
+        else {
             panic!("expected a Quantified for 'some', got {some:?}");
         };
         assert_eq!(quant, Quantifier::Some);
         assert_eq!(var_category, "editor");
 
         let none = understand(engine(), "No student answers the question.");
-        let Meaning::Quantified { quant, var_category, body } = none else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } = none
+        else {
             panic!("expected a Quantified for 'no', got {none:?}");
         };
         assert_eq!(quant, Quantifier::No);
@@ -2844,7 +2881,12 @@ mod tests {
         let Meaning::YesNoQuestion(inner) = m else {
             panic!("expected a YesNoQuestion, got {m:?}");
         };
-        let Meaning::Quantified { quant, var_category, body } = *inner else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } = *inner
+        else {
             panic!("expected a Quantified inside the question");
         };
         assert_eq!(quant, Quantifier::Every);
@@ -2882,7 +2924,12 @@ mod tests {
         // "the teacher is careful" -> HasProperty (NOT IsA), because "careful"
         // is an adjective (a MODIFIER), not a noun category.
         let m = understand(engine(), "The teacher is careful.");
-        let Meaning::HasProperty { subject, property, negated } = m else {
+        let Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } = m
+        else {
             panic!("expected a HasProperty, got {m:?}");
         };
         assert_eq!(subject, Term::Entity("teacher".to_string()));
@@ -2893,7 +2940,10 @@ mod tests {
     #[test]
     fn understand_negated_attribute() {
         let m = understand(engine(), "The teacher is not careful.");
-        let Meaning::HasProperty { property, negated, .. } = m else {
+        let Meaning::HasProperty {
+            property, negated, ..
+        } = m
+        else {
             panic!("expected a HasProperty, got {m:?}");
         };
         assert_eq!(property, "careful");
@@ -2907,7 +2957,12 @@ mod tests {
         let Meaning::YesNoQuestion(inner) = m else {
             panic!("expected a YesNoQuestion, got {m:?}");
         };
-        let Meaning::HasProperty { property, negated, subject } = *inner else {
+        let Meaning::HasProperty {
+            property,
+            negated,
+            subject,
+        } = *inner
+        else {
             panic!("expected HasProperty inside the question");
         };
         assert_eq!(subject, Term::Entity("teacher".to_string()));
@@ -3030,7 +3085,14 @@ mod tests {
     fn understand_comparative_declarative() {
         // "the report is longer than the book" -> Comparison on the length scale.
         let m = understand(engine(), "The report is longer than the book.");
-        let Meaning::Comparison { subject, scale, more, than, negated } = m else {
+        let Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } = m
+        else {
             panic!("expected a Comparison, got {m:?}");
         };
         assert_eq!(subject, Term::Entity("report".to_string()));
@@ -3046,12 +3108,22 @@ mod tests {
         // scale ("length") so the world model composes orderings on one axis,
         // but the lesser pole flips the DIRECTION: book falls BELOW report.
         let m = understand(engine(), "The book is shorter than the report.");
-        let Meaning::Comparison { subject, scale, more, than, .. } = m else {
+        let Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            ..
+        } = m
+        else {
             panic!("expected a Comparison, got {m:?}");
         };
         assert_eq!(subject, Term::Entity("book".to_string()));
         assert_eq!(scale, "length");
-        assert!(!more, "shorter is the lesser pole: subject falls below the standard");
+        assert!(
+            !more,
+            "shorter is the lesser pole: subject falls below the standard"
+        );
         assert_eq!(than, Term::Entity("report".to_string()));
     }
 
@@ -3062,7 +3134,13 @@ mod tests {
         let Meaning::YesNoQuestion(inner) = m else {
             panic!("expected a YesNoQuestion, got {m:?}");
         };
-        let Meaning::Comparison { subject, scale, than, .. } = *inner else {
+        let Meaning::Comparison {
+            subject,
+            scale,
+            than,
+            ..
+        } = *inner
+        else {
             panic!("expected a Comparison inside the question");
         };
         assert_eq!(subject, Term::Entity("report".to_string()));
@@ -3099,7 +3177,13 @@ mod tests {
     fn understand_attitude_factive_declarative() {
         // "the teacher knows that the report is long" -> Attitude{know, content}.
         let m = understand(engine(), "The teacher knows that the report is long.");
-        let Meaning::Attitude { holder, verb, content, negated } = m else {
+        let Meaning::Attitude {
+            holder,
+            verb,
+            content,
+            negated,
+        } = m
+        else {
             panic!("expected an Attitude, got {m:?}");
         };
         assert_eq!(holder, Term::Entity("teacher".to_string()));
@@ -3126,7 +3210,10 @@ mod tests {
     #[test]
     fn understand_attitude_embedded_event() {
         // "the teacher says that the student writes a report" — embedded Event.
-        let m = understand(engine(), "The teacher says that the student writes a report.");
+        let m = understand(
+            engine(),
+            "The teacher says that the student writes a report.",
+        );
         let Meaning::Attitude { verb, content, .. } = m else {
             panic!("expected an Attitude, got {m:?}");
         };
@@ -3145,7 +3232,13 @@ mod tests {
         let Meaning::YesNoQuestion(inner) = m else {
             panic!("expected a YesNoQuestion, got {m:?}");
         };
-        let Meaning::Attitude { holder, verb, content, .. } = *inner else {
+        let Meaning::Attitude {
+            holder,
+            verb,
+            content,
+            ..
+        } = *inner
+        else {
             panic!("expected an Attitude inside the question, got it bare");
         };
         assert_eq!(holder, Term::Entity("teacher".to_string()));
@@ -3156,7 +3249,10 @@ mod tests {
     #[test]
     fn negated_attitude() {
         // "the teacher does not know that the report is long" -> negated Attitude.
-        let m = understand(engine(), "The teacher does not know that the report is long.");
+        let m = understand(
+            engine(),
+            "The teacher does not know that the report is long.",
+        );
         let Meaning::Attitude { negated, verb, .. } = m else {
             panic!("expected an Attitude, got {m:?}");
         };
@@ -3172,7 +3268,12 @@ mod tests {
     fn understand_cardinal_declarative() {
         // "two teachers write a report" -> Cardinal{ at_least: 2, teacher, body }.
         let m = understand(engine(), "Two teachers write a report.");
-        let Meaning::Cardinal { at_least, var_category, body } = m else {
+        let Meaning::Cardinal {
+            at_least,
+            var_category,
+            body,
+        } = m
+        else {
             panic!("expected a Cardinal, got {m:?}");
         };
         assert_eq!(at_least, 2);
@@ -3185,7 +3286,12 @@ mod tests {
     #[test]
     fn understand_cardinal_three() {
         let m = understand(engine(), "Three editors read the book.");
-        let Meaning::Cardinal { at_least, var_category, .. } = m else {
+        let Meaning::Cardinal {
+            at_least,
+            var_category,
+            ..
+        } = m
+        else {
             panic!("expected a Cardinal, got {m:?}");
         };
         assert_eq!(at_least, 3);
@@ -3237,7 +3343,12 @@ mod tests {
         // "every agent writes a report" — the category is a taxonomy CLASS word
         // ("agent"), not a leaf noun, and the parser must still bind it.
         let m = understand(engine(), "Every agent writes a report.");
-        let Meaning::Quantified { quant, var_category, body } = m else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } = m
+        else {
             panic!("expected a Quantified, got {m:?}");
         };
         assert_eq!(quant, Quantifier::Every);
@@ -3254,7 +3365,12 @@ mod tests {
         let Meaning::YesNoQuestion(inner) = m else {
             panic!("expected a YesNoQuestion, got {m:?}");
         };
-        let Meaning::Quantified { quant, var_category, .. } = *inner else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            ..
+        } = *inner
+        else {
             panic!("expected a Quantified inside the question");
         };
         assert_eq!(quant, Quantifier::Every);
@@ -3266,7 +3382,12 @@ mod tests {
         // "some thing is a document" is degenerate, but "no thing moves the book"
         // exercises an inanimate taxonomy class as the bound variable.
         let m = understand(engine(), "No thing moves the book.");
-        let Meaning::Quantified { quant, var_category, .. } = m else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            ..
+        } = m
+        else {
             panic!("expected a Quantified, got {m:?}");
         };
         assert_eq!(quant, Quantifier::No);
@@ -3306,7 +3427,10 @@ mod tests {
         assert!(is_taxonomy_class_word("agent"));
         assert!(is_taxonomy_class_word("thing"));
         assert!(!is_taxonomy_class_word("teacher"));
-        assert!(!is_taxonomy_class_word("agents"), "plural is not the singular class word");
+        assert!(
+            !is_taxonomy_class_word("agents"),
+            "plural is not the singular class word"
+        );
         assert!(is_taxonomy_class_head("agent"));
         assert!(is_taxonomy_class_head("agents"));
         assert!(is_taxonomy_class_head("things"));
@@ -3347,7 +3471,9 @@ mod tests {
         assert_eq!(ev.tense, Tense::Present);
         // "had written" is the past perfect.
         let past = understand(engine(), "The teacher had written the report.");
-        let Meaning::Event(pev) = past else { panic!("expected Event") };
+        let Meaning::Event(pev) = past else {
+            panic!("expected Event")
+        };
         assert_eq!(pev.aspect, Aspect::Perfect);
         assert_eq!(pev.tense, Tense::Past);
     }
@@ -3368,7 +3494,9 @@ mod tests {
     fn aspect_simple_unchanged() {
         // Regression: a plain "writes" stays Simple/Present (no aspect leakage).
         let m = understand(engine(), "The teacher writes the report.");
-        let Meaning::Event(ev) = m else { panic!("expected Event") };
+        let Meaning::Event(ev) = m else {
+            panic!("expected Event")
+        };
         assert_eq!(ev.aspect, Aspect::Simple);
         assert_eq!(ev.tense, Tense::Present);
     }
@@ -3380,7 +3508,9 @@ mod tests {
         let Meaning::YesNoQuestion(inner) = m else {
             panic!("expected a YesNoQuestion, got {m:?}");
         };
-        let Meaning::Event(ev) = *inner else { panic!("expected Event inside") };
+        let Meaning::Event(ev) = *inner else {
+            panic!("expected Event inside")
+        };
         assert_eq!(ev.predicate, "write");
         assert_eq!(ev.aspect, Aspect::Progressive);
     }
@@ -3389,15 +3519,23 @@ mod tests {
     fn aspect_perfect_and_future_yes_no() {
         // "has the teacher written the report?" -> Perfect Event yes/no.
         let m = understand(engine(), "Has the teacher written the report?");
-        let Meaning::YesNoQuestion(inner) = m else { panic!("expected YesNo") };
-        let Meaning::Event(ev) = *inner else { panic!("expected Event") };
+        let Meaning::YesNoQuestion(inner) = m else {
+            panic!("expected YesNo")
+        };
+        let Meaning::Event(ev) = *inner else {
+            panic!("expected Event")
+        };
         assert_eq!(ev.aspect, Aspect::Perfect);
         assert_eq!(ev.predicate, "write");
 
         // "will the teacher write the report?" -> Future Event yes/no.
         let m2 = understand(engine(), "Will the teacher write the report?");
-        let Meaning::YesNoQuestion(inner2) = m2 else { panic!("expected YesNo") };
-        let Meaning::Event(ev2) = *inner2 else { panic!("expected Event") };
+        let Meaning::YesNoQuestion(inner2) = m2 else {
+            panic!("expected YesNo")
+        };
+        let Meaning::Event(ev2) = *inner2 else {
+            panic!("expected Event")
+        };
         assert_eq!(ev2.tense, Tense::Future);
         assert_eq!(ev2.predicate, "write");
     }
@@ -3414,7 +3552,12 @@ mod tests {
         ] {
             let s = format!("The teacher {word} write the report.");
             let m = understand(engine(), &s);
-            let Meaning::Modal { modality, body, negated } = m else {
+            let Meaning::Modal {
+                modality,
+                body,
+                negated,
+            } = m
+            else {
                 panic!("expected a Modal for '{word}', got {m:?}");
             };
             assert_eq!(modality, expect, "wrong modality for {word}");
@@ -3455,7 +3598,10 @@ mod tests {
         // SOUNDNESS: "will" marks FUTURE tense, never a Modal force.
         assert_eq!(modal_word("will"), None);
         let m = understand(engine(), "The teacher will write the report.");
-        assert!(matches!(m, Meaning::Event(_)), "will -> future Event, got {m:?}");
+        assert!(
+            matches!(m, Meaning::Event(_)),
+            "will -> future Event, got {m:?}"
+        );
     }
 
     // ---- (3) RELATIVE CLAUSES ---------------------------------------------
@@ -3464,7 +3610,10 @@ mod tests {
     fn relative_clause_subject() {
         // "the teacher who writes the report reads the book" -> the subject is a
         // Restricted{teacher, clause: writes(report)}; the main event is read(book).
-        let m = understand(engine(), "The teacher who writes the report reads the book.");
+        let m = understand(
+            engine(),
+            "The teacher who writes the report reads the book.",
+        );
         let Meaning::Event(ev) = m else {
             panic!("expected an Event, got {m:?}");
         };
@@ -3482,8 +3631,13 @@ mod tests {
     #[test]
     fn relative_clause_with_that() {
         // "that" is an equally valid relativizer.
-        let m = understand(engine(), "The editor that reads the book writes the report.");
-        let Meaning::Event(ev) = m else { panic!("expected Event") };
+        let m = understand(
+            engine(),
+            "The editor that reads the book writes the report.",
+        );
+        let Meaning::Event(ev) = m else {
+            panic!("expected Event")
+        };
         assert_eq!(ev.predicate, "write");
         let Some(Term::Restricted { head, clause }) = ev.agent else {
             panic!("expected Restricted subject");
@@ -3496,7 +3650,9 @@ mod tests {
     fn no_relativizer_keeps_plain_subject() {
         // Regression: an ordinary subject NP must NOT become Restricted.
         let m = understand(engine(), "The teacher writes the report.");
-        let Meaning::Event(ev) = m else { panic!("expected Event") };
+        let Meaning::Event(ev) = m else {
+            panic!("expected Event")
+        };
         assert_eq!(ev.agent, Some(Term::Entity("teacher".to_string())));
     }
 
@@ -3542,11 +3698,16 @@ mod tests {
             engine(),
             "The teacher who writes the report reads the book.",
         );
-        let Meaning::YesNoQuestion(qi) = q else { panic!("expected YesNo") };
+        let Meaning::YesNoQuestion(qi) = q else {
+            panic!("expected YesNo")
+        };
         let (Meaning::Event(qe), Meaning::Event(de)) = (*qi, d) else {
             panic!("expected Events");
         };
-        assert_eq!(qe.agent, de.agent, "question subject must equal declarative subject");
+        assert_eq!(
+            qe.agent, de.agent,
+            "question subject must equal declarative subject"
+        );
         assert_eq!(qe.predicate, de.predicate);
         assert_eq!(qe.patient, de.patient);
     }
@@ -3577,7 +3738,10 @@ mod tests {
         // without the genitive — SOUND: we drop the possessor, never invent a fact.
         let with_poss = understand(engine(), "The teacher writes the editor's report.");
         let plain = understand(engine(), "The teacher writes the report.");
-        assert_eq!(with_poss, plain, "genitive object must not change the core Event");
+        assert_eq!(
+            with_poss, plain,
+            "genitive object must not change the core Event"
+        );
     }
 
     #[test]
@@ -3585,7 +3749,10 @@ mod tests {
         // "the teacher's report is long" — the possessed noun "report" is the
         // subject of the predication; the possessor is dropped.
         let m = understand(engine(), "The teacher's report is long.");
-        let Meaning::HasProperty { subject, property, .. } = m else {
+        let Meaning::HasProperty {
+            subject, property, ..
+        } = m
+        else {
             panic!("expected a HasProperty, got {m:?}");
         };
         assert_eq!(subject, Term::Entity("report".to_string()));
@@ -3602,7 +3769,10 @@ mod tests {
         let base = understand(engine(), "The teacher writes the report.");
         let with_instr = understand(engine(), "The teacher writes the report with a pen.");
         let with_loc = understand(engine(), "The teacher writes the report in the room.");
-        assert_eq!(with_instr, base, "instrument PP must be a droppable adjunct");
+        assert_eq!(
+            with_instr, base,
+            "instrument PP must be a droppable adjunct"
+        );
         assert_eq!(with_loc, base, "locative PP must be a droppable adjunct");
     }
 
@@ -3624,12 +3794,16 @@ mod tests {
         // adjunct prepositions — they must survive PP stripping.
         // Ditransitive "to": recipient preserved.
         let dat = understand(engine(), "The teacher gives the book to the student.");
-        let Meaning::Event(de) = dat else { panic!("expected Event for dative") };
+        let Meaning::Event(de) = dat else {
+            panic!("expected Event for dative")
+        };
         assert_eq!(de.predicate, "give");
         assert_eq!(de.recipient, Some(Term::Entity("student".to_string())));
         // Passive "by": agent preserved.
         let pass = understand(engine(), "The report was written by the teacher.");
-        let Meaning::Event(pe) = pass else { panic!("expected Event for passive") };
+        let Meaning::Event(pe) = pass else {
+            panic!("expected Event for passive")
+        };
         assert_eq!(pe.agent, Some(Term::Entity("teacher".to_string())));
         assert_eq!(pe.patient, Some(Term::Entity("report".to_string())));
     }
@@ -3654,12 +3828,16 @@ mod tests {
     fn passive_present_and_agentless() {
         // Present passive.
         let m = understand(engine(), "The report is written by the editor.");
-        let Meaning::Event(ev) = m else { panic!("expected Event") };
+        let Meaning::Event(ev) = m else {
+            panic!("expected Event")
+        };
         assert_eq!(ev.tense, Tense::Present);
         assert_eq!(ev.agent, Some(Term::Entity("editor".to_string())));
         // Agentless passive: no "by"-phrase -> agent None, patient still set.
         let m2 = understand(engine(), "The report was written.");
-        let Meaning::Event(ev2) = m2 else { panic!("expected Event") };
+        let Meaning::Event(ev2) = m2 else {
+            panic!("expected Event")
+        };
         assert_eq!(ev2.agent, None);
         assert_eq!(ev2.patient, Some(Term::Entity("report".to_string())));
     }
@@ -3668,8 +3846,12 @@ mod tests {
     fn passive_yes_no_question() {
         // "was the report written by the teacher?" -> yes/no over the active Event.
         let m = understand(engine(), "Was the report written by the teacher?");
-        let Meaning::YesNoQuestion(inner) = m else { panic!("expected YesNo") };
-        let Meaning::Event(ev) = *inner else { panic!("expected Event") };
+        let Meaning::YesNoQuestion(inner) = m else {
+            panic!("expected YesNo")
+        };
+        let Meaning::Event(ev) = *inner else {
+            panic!("expected Event")
+        };
         assert_eq!(ev.predicate, "write");
         assert_eq!(ev.agent, Some(Term::Entity("teacher".to_string())));
         assert_eq!(ev.patient, Some(Term::Entity("report".to_string())));
@@ -3692,11 +3874,19 @@ mod tests {
     fn plural_subject_is_distributive_universal() {
         // "the teachers write a report" -> Quantified{Every, teacher, body}.
         let m = understand(engine(), "The teachers write a report.");
-        let Meaning::Quantified { quant, var_category, body } = m else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } = m
+        else {
             panic!("expected a Quantified, got {m:?}");
         };
         assert_eq!(quant, Quantifier::Every);
-        assert_eq!(var_category, "teacher", "plural normalized to singular category");
+        assert_eq!(
+            var_category, "teacher",
+            "plural normalized to singular category"
+        );
         assert_eq!(body.predicate, "write");
         assert_eq!(body.agent, None, "the universal binds the agent slot");
     }
@@ -3705,7 +3895,12 @@ mod tests {
     fn bare_plural_subject_distributive() {
         // "teachers write reports" (no determiner) is also distributive.
         let m = understand(engine(), "Teachers write reports.");
-        let Meaning::Quantified { quant, var_category, body } = m else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } = m
+        else {
             panic!("expected a Quantified, got {m:?}");
         };
         assert_eq!(quant, Quantifier::Every);
@@ -3717,7 +3912,10 @@ mod tests {
     fn singular_subject_stays_event() {
         // Regression: a singular subject is an ordinary Event, NOT a universal.
         let m = understand(engine(), "The teacher writes a report.");
-        assert!(matches!(m, Meaning::Event(_)), "singular must stay Event; got {m:?}");
+        assert!(
+            matches!(m, Meaning::Event(_)),
+            "singular must stay Event; got {m:?}"
+        );
     }
 
     #[test]
@@ -3789,8 +3987,12 @@ mod tests {
         let Meaning::Causal { cause, effect } = m else {
             panic!("expected a Causal, got {m:?}");
         };
-        let Meaning::Event(ce) = *cause else { panic!("cause not an Event") };
-        let Meaning::Event(ee) = *effect else { panic!("effect not an Event") };
+        let Meaning::Event(ce) = *cause else {
+            panic!("cause not an Event")
+        };
+        let Meaning::Event(ee) = *effect else {
+            panic!("effect not an Event")
+        };
         assert_eq!(ce.predicate, "fall");
         assert_eq!(ce.agent, Some(Term::Entity("rain".to_string())));
         assert_eq!(ee.predicate, "flood");
@@ -3812,12 +4014,21 @@ mod tests {
         // alarm rings, consequent: guard wakes}. The clause governed by "if" is
         // the antecedent; the clause after "then" is the consequent.
         let m = understand(engine(), "If the alarm rings then the guard wakes.");
-        let Meaning::Conditional { antecedent, consequent, negated } = m else {
+        let Meaning::Conditional {
+            antecedent,
+            consequent,
+            negated,
+        } = m
+        else {
             panic!("expected a Conditional, got {m:?}");
         };
         assert!(!negated, "a plain conditional is not negated");
-        let Meaning::Event(ae) = *antecedent else { panic!("antecedent not an Event") };
-        let Meaning::Event(ce) = *consequent else { panic!("consequent not an Event") };
+        let Meaning::Event(ae) = *antecedent else {
+            panic!("antecedent not an Event")
+        };
+        let Meaning::Event(ce) = *consequent else {
+            panic!("consequent not an Event")
+        };
         assert_eq!(ae.predicate, "ring");
         assert_eq!(ae.agent, Some(Term::Entity("alarm".to_string())));
         assert_eq!(ce.predicate, "wake");
@@ -3829,11 +4040,20 @@ mod tests {
         // "the guard wakes if the alarm rings" -> the SAME directed rule: the "if"
         // clause is still the antecedent, regardless of surface order.
         let m = understand(engine(), "The guard wakes if the alarm rings.");
-        let Meaning::Conditional { antecedent, consequent, .. } = m else {
+        let Meaning::Conditional {
+            antecedent,
+            consequent,
+            ..
+        } = m
+        else {
             panic!("expected a Conditional, got {m:?}");
         };
-        let Meaning::Event(ae) = *antecedent else { panic!("antecedent not an Event") };
-        let Meaning::Event(ce) = *consequent else { panic!("consequent not an Event") };
+        let Meaning::Event(ae) = *antecedent else {
+            panic!("antecedent not an Event")
+        };
+        let Meaning::Event(ce) = *consequent else {
+            panic!("consequent not an Event")
+        };
         assert_eq!(ae.predicate, "ring", "the 'if' clause is the antecedent");
         assert_eq!(ce.predicate, "wake", "the main clause is the consequent");
     }
@@ -3845,8 +4065,13 @@ mod tests {
         let Meaning::Causal { cause, effect } = m else {
             panic!("expected a Causal, got {m:?}");
         };
-        assert!(matches!(*cause, Meaning::Unknown(_)), "cause is an open placeholder");
-        let Meaning::Event(ee) = *effect else { panic!("effect not an Event") };
+        assert!(
+            matches!(*cause, Meaning::Unknown(_)),
+            "cause is an open placeholder"
+        );
+        let Meaning::Event(ee) = *effect else {
+            panic!("effect not an Event")
+        };
         assert_eq!(ee.predicate, "flood");
         assert_eq!(ee.agent, Some(Term::Entity("street".to_string())));
     }
@@ -3895,12 +4120,20 @@ mod tests {
         let Meaning::Not(inner) = m else {
             panic!("expected an outer Not, got {m:?}");
         };
-        let Meaning::Quantified { quant, var_category, body } = *inner else {
+        let Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } = *inner
+        else {
             panic!("expected a Quantified inside the Not");
         };
         assert_eq!(quant, Quantifier::Every);
         assert_eq!(var_category, "teacher");
-        assert!(!body.negated, "the inner universal body is NOT negated (wide scope)");
+        assert!(
+            !body.negated,
+            "the inner universal body is NOT negated (wide scope)"
+        );
     }
 
     #[test]
@@ -3938,9 +4171,18 @@ mod tests {
         // A non -ing word is not a gerund.
         assert_eq!(gerund_lemma("report"), None);
         // Participle recovery: irregular (lexicon) and regular (== past).
-        assert_eq!(participle_lemma(engine(), "written"), Some("write".to_string()));
-        assert_eq!(participle_lemma(engine(), "given"), Some("give".to_string()));
-        assert_eq!(participle_lemma(engine(), "walked"), Some("walk".to_string()));
+        assert_eq!(
+            participle_lemma(engine(), "written"),
+            Some("write".to_string())
+        );
+        assert_eq!(
+            participle_lemma(engine(), "given"),
+            Some("give".to_string())
+        );
+        assert_eq!(
+            participle_lemma(engine(), "walked"),
+            Some("walk".to_string())
+        );
         // A non-participle is rejected.
         assert_eq!(participle_lemma(engine(), "report"), None);
         // Modal vocabulary maps to forces; "will" is excluded.

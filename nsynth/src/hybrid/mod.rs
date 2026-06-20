@@ -142,7 +142,10 @@ impl MockProposer {
     }
 
     /// Build a `MockProposer` with a custom audit name (otherwise `"mock"`).
-    pub fn new_named(name: impl Into<String>, canned: BTreeMap<String, MembershipProposal>) -> Self {
+    pub fn new_named(
+        name: impl Into<String>,
+        canned: BTreeMap<String, MembershipProposal>,
+    ) -> Self {
         Self {
             name: name.into(),
             canned,
@@ -518,7 +521,13 @@ pub fn proposal_to_learn_request(
     let class_id: String = {
         let mut s: String = class
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
             .collect();
         while s.contains("__") {
             s = s.replace("__", "_");
@@ -527,7 +536,11 @@ pub fn proposal_to_learn_request(
         if s.is_empty() {
             return None;
         }
-        if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if s.chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
             format!("c_{s}")
         } else {
             s
@@ -553,8 +566,7 @@ pub fn proposal_to_learn_request(
     // from BOTH lists so an untrusted proposal's internal contradiction can never
     // silently pick a label (stricter than lexicon_examples' first-seen tie-break).
     let member_set: std::collections::BTreeSet<&str> = members_raw.iter().copied().collect();
-    let nonmember_set: std::collections::BTreeSet<&str> =
-        nonmembers_raw.iter().copied().collect();
+    let nonmember_set: std::collections::BTreeSet<&str> = nonmembers_raw.iter().copied().collect();
     let conflicts: std::collections::BTreeSet<&str> =
         member_set.intersection(&nonmember_set).copied().collect();
 
@@ -762,8 +774,7 @@ mod tests {
             None
         );
         // nonmembers may be empty as long as there is at least one member.
-        let got =
-            parse_proposal(r#"{"class_name":"x","members":["a"],"nonmembers":[]}"#).unwrap();
+        let got = parse_proposal(r#"{"class_name":"x","members":["a"],"nonmembers":[]}"#).unwrap();
         assert_eq!(got.members, vec!["a"]);
         assert!(got.nonmembers.is_empty());
     }
@@ -786,18 +797,20 @@ mod tests {
             members: vec!["griffin".to_string(), "phoenix".to_string()],
             nonmembers: vec!["report".to_string(), "book".to_string()],
         };
-        let req = proposal_to_learn_request(&p, "wizard")
-            .expect("a clean proposal must yield a request");
+        let req =
+            proposal_to_learn_request(&p, "wizard").expect("a clean proposal must yield a request");
 
         assert_eq!(req.name, "creature_class");
         assert_eq!(req.signature, "fn creature_class(s: string) -> i64");
 
         // The gap word is folded in as a member (→ 1); nonmembers are → 0.
         let label = |w: &str| {
-            req.examples.iter().find_map(|ex| match (ex.inputs.first(), &ex.expected) {
-                (Some(Value::Str(s)), Value::Int(n)) if s == w => Some(*n),
-                _ => None,
-            })
+            req.examples
+                .iter()
+                .find_map(|ex| match (ex.inputs.first(), &ex.expected) {
+                    (Some(Value::Str(s)), Value::Int(n)) if s == w => Some(*n),
+                    _ => None,
+                })
         };
         assert_eq!(label("wizard"), Some(1), "gap word must be a member");
         assert_eq!(label("griffin"), Some(1));
@@ -816,7 +829,11 @@ mod tests {
         let n = surfaces.len();
         surfaces.sort_unstable();
         surfaces.dedup();
-        assert_eq!(surfaces.len(), n, "every example word must be unique (well-posed)");
+        assert_eq!(
+            surfaces.len(),
+            n,
+            "every example word must be unique (well-posed)"
+        );
         assert_eq!(n, 5, "wizard + 2 members + 2 nonmembers");
     }
 
@@ -841,7 +858,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(!surfaces.contains(&"hydra"), "contradictory word must be dropped from both lists");
+        assert!(
+            !surfaces.contains(&"hydra"),
+            "contradictory word must be dropped from both lists"
+        );
         assert!(surfaces.contains(&"griffin"));
         assert!(surfaces.contains(&"report"));
         assert!(surfaces.contains(&"wizard"));

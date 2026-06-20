@@ -17,18 +17,46 @@ use crate::solver::solve_problem;
 // ---------------------------------------------------------------------------
 
 pub const AGENTS: &[&str] = &[
-    "author", "captain", "child", "doctor", "editor", "engineer", "farmer",
-    "friend", "guide", "neighbor", "nurse", "officer", "painter", "pilot",
-    "scientist", "singer", "student", "teacher", "tutor", "writer",
+    "author",
+    "captain",
+    "child",
+    "doctor",
+    "editor",
+    "engineer",
+    "farmer",
+    "friend",
+    "guide",
+    "neighbor",
+    "nurse",
+    "officer",
+    "painter",
+    "pilot",
+    "scientist",
+    "singer",
+    "student",
+    "teacher",
+    "tutor",
+    "writer",
 ];
 pub const PATIENTS: &[&str] = &[
-    "article", "book", "chapter", "essay", "lesson", "letter", "memo", "note",
-    "outline", "passage", "poem", "question", "report", "riddle", "story",
-    "summary",
+    "article", "book", "chapter", "essay", "lesson", "letter", "memo", "note", "outline",
+    "passage", "poem", "question", "report", "riddle", "story", "summary",
 ];
 pub const MODIFIERS: &[&str] = &[
-    "brave", "calm", "careful", "cheerful", "clever", "curious", "diligent",
-    "friendly", "generous", "gentle", "honest", "humble", "kind", "patient",
+    "brave",
+    "calm",
+    "careful",
+    "cheerful",
+    "clever",
+    "curious",
+    "diligent",
+    "friendly",
+    "generous",
+    "gentle",
+    "honest",
+    "humble",
+    "kind",
+    "patient",
     "thoughtful",
 ];
 
@@ -64,39 +92,80 @@ pub const GRADABLE: &[(&str, &str, &str)] = &[
 /// detector stays cleanly suffix-separable.
 pub const REG_VERBS: &[(&str, &str)] = &[
     // +s
-    ("walk", "walks"), ("read", "reads"), ("write", "writes"),
-    ("answer", "answers"), ("describe", "describes"), ("explain", "explains"),
-    ("help", "helps"), ("open", "opens"), ("need", "needs"), ("call", "calls"),
-    ("move", "moves"), ("turn", "turns"), ("pour", "pours"), ("kick", "kicks"),
+    ("walk", "walks"),
+    ("read", "reads"),
+    ("write", "writes"),
+    ("answer", "answers"),
+    ("describe", "describes"),
+    ("explain", "explains"),
+    ("help", "helps"),
+    ("open", "opens"),
+    ("need", "needs"),
+    ("call", "calls"),
+    ("move", "moves"),
+    ("turn", "turns"),
+    ("pour", "pours"),
+    ("kick", "kicks"),
     // ditransitive (+s) — give/send/show/offer/hand take a recipient
-    ("give", "gives"), ("send", "sends"), ("show", "shows"),
-    ("offer", "offers"), ("hand", "hands"),
+    ("give", "gives"),
+    ("send", "sends"),
+    ("show", "shows"),
+    ("offer", "offers"),
+    ("hand", "hands"),
     // +es after a sibilant
-    ("watch", "watches"), ("wash", "washes"), ("fix", "fixes"),
-    ("push", "pushes"), ("pass", "passes"), ("toss", "tosses"),
+    ("watch", "watches"),
+    ("wash", "washes"),
+    ("fix", "fixes"),
+    ("push", "pushes"),
+    ("pass", "passes"),
+    ("toss", "tosses"),
     // ditransitive (+es after sibilant ch) — teach takes a recipient
     ("teach", "teaches"),
     // y → ies after a consonant
-    ("carry", "carries"), ("study", "studies"), ("copy", "copies"),
-    ("try", "tries"), ("reply", "replies"), ("bury", "buries"),
+    ("carry", "carries"),
+    ("study", "studies"),
+    ("copy", "copies"),
+    ("try", "tries"),
+    ("reply", "replies"),
+    ("bury", "buries"),
 ];
 
 /// Irregular 3sg verbs — suppletive/contracted forms no rule predicts. These are
 /// a lexicon (stored), composed with the regular rule above.
 pub const IRREGULAR_VERBS: &[(&str, &str)] = &[
-    ("have", "has"), ("be", "is"), ("do", "does"), ("go", "goes"),
+    ("have", "has"),
+    ("be", "is"),
+    ("do", "does"),
+    ("go", "goes"),
 ];
 
 /// Regular past tense as (base, past): +ed / +d (after e) / y->ied. Excludes
 /// verbs with an irregular past (write, read), which live in IRREGULAR_PAST.
 pub const REG_VERBS_PAST: &[(&str, &str)] = &[
-    ("walk", "walked"), ("answer", "answered"), ("describe", "described"),
-    ("explain", "explained"), ("help", "helped"), ("open", "opened"),
-    ("need", "needed"), ("call", "called"), ("move", "moved"), ("turn", "turned"),
-    ("pour", "poured"), ("kick", "kicked"), ("watch", "watched"), ("wash", "washed"),
-    ("fix", "fixed"), ("push", "pushed"), ("pass", "passed"), ("toss", "tossed"),
-    ("carry", "carried"), ("study", "studied"), ("copy", "copied"), ("try", "tried"),
-    ("reply", "replied"), ("bury", "buried"),
+    ("walk", "walked"),
+    ("answer", "answered"),
+    ("describe", "described"),
+    ("explain", "explained"),
+    ("help", "helped"),
+    ("open", "opened"),
+    ("need", "needed"),
+    ("call", "called"),
+    ("move", "moved"),
+    ("turn", "turned"),
+    ("pour", "poured"),
+    ("kick", "kicked"),
+    ("watch", "watched"),
+    ("wash", "washed"),
+    ("fix", "fixed"),
+    ("push", "pushed"),
+    ("pass", "passed"),
+    ("toss", "tossed"),
+    ("carry", "carried"),
+    ("study", "studied"),
+    ("copy", "copied"),
+    ("try", "tried"),
+    ("reply", "replied"),
+    ("bury", "buried"),
 ];
 
 /// Irregular past — unpredictable forms no rule recovers (stored as a lexicon).
@@ -105,11 +174,18 @@ pub const REG_VERBS_PAST: &[(&str, &str)] = &[
 /// the lexicon so `verb_past("show")` resolves without needing a REG_VERBS_PAST
 /// entry.
 pub const IRREGULAR_PAST: &[(&str, &str)] = &[
-    ("write", "wrote"), ("read", "read"), ("go", "went"), ("do", "did"),
-    ("have", "had"), ("be", "was"),
+    ("write", "wrote"),
+    ("read", "read"),
+    ("go", "went"),
+    ("do", "did"),
+    ("have", "had"),
+    ("be", "was"),
     // ditransitive pasts
-    ("give", "gave"), ("send", "sent"), ("show", "showed"),
-    ("tell", "told"), ("teach", "taught"),
+    ("give", "gave"),
+    ("send", "sent"),
+    ("show", "showed"),
+    ("tell", "told"),
+    ("teach", "taught"),
 ];
 
 /// Past participles for the PASSIVE voice and the PERFECT aspect ("the report
@@ -119,9 +195,15 @@ pub const IRREGULAR_PAST: &[(&str, &str)] = &[
 /// ditransitive verbs carry their participles too (given/sent/shown/told/taught).
 pub const PAST_PARTICIPLE: &[(&str, &str)] = &[
     // Irregular participles distinct from the regular `-ed` past.
-    ("write", "written"), ("read", "read"), ("give", "given"),
-    ("send", "sent"), ("show", "shown"), ("tell", "told"),
-    ("teach", "taught"), ("do", "done"), ("go", "gone"),
+    ("write", "written"),
+    ("read", "read"),
+    ("give", "given"),
+    ("send", "sent"),
+    ("show", "shown"),
+    ("tell", "told"),
+    ("teach", "taught"),
+    ("do", "done"),
+    ("go", "gone"),
 ];
 
 /// Sentinel returned by the irregular lexicon for a regular verb ("not
@@ -131,10 +213,10 @@ const REGULAR_SENTINEL: &str = "-";
 /// Function/auxiliary/question words — non-nouns; enough of them that "not a
 /// noun" (0) is the majority label, so unseen words default to non-noun.
 pub const FUNCTION_WORDS: &[&str] = &[
-    "the", "a", "an", "is", "are", "was", "were", "be", "not", "does", "do",
-    "did", "can", "could", "will", "would", "should", "may", "might", "must",
-    "always", "to", "what", "who", "why", "how", "when", "where", "yes", "no",
-    "and", "or", "but", "this", "that", "it", "they", "she", "he", "of", "in",
+    "the", "a", "an", "is", "are", "was", "were", "be", "not", "does", "do", "did", "can", "could",
+    "will", "would", "should", "may", "might", "must", "always", "to", "what", "who", "why", "how",
+    "when", "where", "yes", "no", "and", "or", "but", "this", "that", "it", "they", "she", "he",
+    "of", "in",
 ];
 
 /// Conditional proposition pairs (antecedent, consequent) for the reasoner.
@@ -170,13 +252,22 @@ const CONNECTIVES: &[&str] = &["thus,", "therefore,", "so,", "hence,", "then,"];
 // ---------------------------------------------------------------------------
 
 fn ex_str_int(s: &str, n: i64) -> Example {
-    Example { inputs: vec![Value::Str(s.to_string())], expected: Value::Int(n) }
+    Example {
+        inputs: vec![Value::Str(s.to_string())],
+        expected: Value::Int(n),
+    }
 }
 fn ex_str_str(a: &str, b: &str) -> Example {
-    Example { inputs: vec![Value::Str(a.to_string())], expected: Value::Str(b.to_string()) }
+    Example {
+        inputs: vec![Value::Str(a.to_string())],
+        expected: Value::Str(b.to_string()),
+    }
 }
 fn ex_arr_int(a: &[i64], n: i64) -> Example {
-    Example { inputs: vec![Value::Array(a.to_vec())], expected: Value::Int(n) }
+    Example {
+        inputs: vec![Value::Array(a.to_vec())],
+        expected: Value::Int(n),
+    }
 }
 
 /// Build a binary string-membership spec from in-repo curriculum data: every
@@ -242,13 +333,18 @@ fn make_problem(name: &str, signature: &'static str, examples: Vec<Example>) -> 
         recursive_allowed: false,
         tree_input: false,
         explicit_stack: false,
+        functions: vec![],
     }
 }
 
 fn synth(name: &str, signature: &'static str, examples: Vec<Example>) -> (String, String) {
     let problem = make_problem(name, signature, examples);
     let result = solve_problem(&problem);
-    assert!(result.success, "failed to synthesize {name}: {:?}", result.error);
+    assert!(
+        result.success,
+        "failed to synthesize {name}: {:?}",
+        result.error
+    );
     (result.code, result.method)
 }
 
@@ -327,8 +423,12 @@ fn ends_s_program() -> (String, String) {
         ex.push(ex_str_int(b, 0));
         ex.push(ex_str_int(t, 1));
     }
-    for (sing, plur) in [("captain", "captains"), ("editor", "editors"),
-                         ("report", "reports"), ("book", "books")] {
+    for (sing, plur) in [
+        ("captain", "captains"),
+        ("editor", "editors"),
+        ("report", "reports"),
+        ("book", "books"),
+    ] {
         ex.push(ex_str_int(sing, 0));
         ex.push(ex_str_int(plur, 1));
     }
@@ -343,7 +443,11 @@ fn valid_agreement_program() -> (String, String) {
             ex.push(ex_arr_int(toks, *label));
         }
     }
-    synth("valid_agreement", "fn valid_agreement(arr: [i64]) -> i64", ex)
+    synth(
+        "valid_agreement",
+        "fn valid_agreement(arr: [i64]) -> i64",
+        ex,
+    )
 }
 
 /// Regular 3sg as a suffix-transduction rule (no irregulars, so the rule stays
@@ -357,7 +461,10 @@ fn regular_3sg_program() -> (String, String) {
 /// forms, every regular verb maps to the sentinel (handled by the rule). No
 /// suffix transduction fits this, so the string-lexicon teacher recovers it.
 fn irregular_3sg_program() -> (String, String) {
-    let mut ex: Vec<Example> = IRREGULAR_VERBS.iter().map(|(b, t)| ex_str_str(b, t)).collect();
+    let mut ex: Vec<Example> = IRREGULAR_VERBS
+        .iter()
+        .map(|(b, t)| ex_str_str(b, t))
+        .collect();
     for (b, _) in REG_VERBS {
         ex.push(ex_str_str(b, REGULAR_SENTINEL));
     }
@@ -366,18 +473,28 @@ fn irregular_3sg_program() -> (String, String) {
 
 /// Regular past as a suffix-transduction rule (+ed / +d / y->ied).
 fn regular_past_program() -> (String, String) {
-    let ex = REG_VERBS_PAST.iter().map(|(b, t)| ex_str_str(b, t)).collect();
+    let ex = REG_VERBS_PAST
+        .iter()
+        .map(|(b, t)| ex_str_str(b, t))
+        .collect();
     synth("regular_past", "fn regular_past(s: string) -> string", ex)
 }
 
 /// Irregular past as a whole-word lexicon (write->wrote, read->read, go->went...);
 /// regular verbs map to the sentinel so the rule handles them.
 fn irregular_past_program() -> (String, String) {
-    let mut ex: Vec<Example> = IRREGULAR_PAST.iter().map(|(b, t)| ex_str_str(b, t)).collect();
+    let mut ex: Vec<Example> = IRREGULAR_PAST
+        .iter()
+        .map(|(b, t)| ex_str_str(b, t))
+        .collect();
     for (b, _) in REG_VERBS_PAST {
         ex.push(ex_str_str(b, REGULAR_SENTINEL));
     }
-    synth("irregular_past", "fn irregular_past(s: string) -> string", ex)
+    synth(
+        "irregular_past",
+        "fn irregular_past(s: string) -> string",
+        ex,
+    )
 }
 
 fn prop_id_program() -> (String, String) {
@@ -386,8 +503,11 @@ fn prop_id_program() -> (String, String) {
         clauses.insert(*a);
         clauses.insert(*b);
     }
-    let ex = clauses.iter().enumerate()
-        .map(|(i, c)| ex_str_int(c, i as i64 + 1)).collect();
+    let ex = clauses
+        .iter()
+        .enumerate()
+        .map(|(i, c)| ex_str_int(c, i as i64 + 1))
+        .collect();
     synth("prop_id", "fn prop_id(s: string) -> i64", ex)
 }
 
@@ -556,11 +676,17 @@ impl Engine {
         Engine {
             program,
             methods: vec![
-                ("noun_animacy", na_m), ("valid_roles", vr_m), ("ends_s", es_m),
-                ("valid_agreement", ag_m), ("regular_3sg", reg_m),
-                ("irregular_3sg", irr_m), ("regular_past", rpast_m),
-                ("irregular_past", ipast_m), ("prop_id", pid_m),
-                ("has_negation", neg_m), ("valid_argument", arg_m),
+                ("noun_animacy", na_m),
+                ("valid_roles", vr_m),
+                ("ends_s", es_m),
+                ("valid_agreement", ag_m),
+                ("regular_3sg", reg_m),
+                ("irregular_3sg", irr_m),
+                ("regular_past", rpast_m),
+                ("irregular_past", ipast_m),
+                ("prop_id", pid_m),
+                ("has_negation", neg_m),
+                ("valid_argument", arg_m),
             ],
             learned_members: BTreeMap::new(),
             learned_grammar: crate::understanding::grammar::LearnedGrammar::new(),
@@ -691,17 +817,27 @@ impl Engine {
     }
 
     fn call_int(&self, call: &str) -> i64 {
-        let full = format!("{}\nfn main() -> i64 {{\n  println_i64({call});\n  return 0;\n}}\n",
-                           self.program);
+        let full = format!(
+            "{}\nfn main() -> i64 {{\n  println_i64({call});\n  return 0;\n}}\n",
+            self.program
+        );
         let out = execute_program(&full).map(|r| r.output).unwrap_or_default();
-        out.lines().next().and_then(|l| l.trim().parse().ok()).unwrap_or(0)
+        out.lines()
+            .next()
+            .and_then(|l| l.trim().parse().ok())
+            .unwrap_or(0)
     }
 
     fn call_str(&self, call: &str) -> String {
-        let full = format!("{}\nfn main() -> i64 {{\n  println({call});\n  return 0;\n}}\n",
-                           self.program);
+        let full = format!(
+            "{}\nfn main() -> i64 {{\n  println({call});\n  return 0;\n}}\n",
+            self.program
+        );
         let out = execute_program(&full).map(|r| r.output).unwrap_or_default();
-        out.lines().next().map(|l| l.trim().to_string()).unwrap_or_default()
+        out.lines()
+            .next()
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default()
     }
 
     /// The full synthesized Mog program source this engine composes its answers
@@ -765,9 +901,7 @@ impl Engine {
         self.methods
             .iter()
             .map(|(name, _)| *name)
-            .filter(|name| {
-                name.ends_with("_class") && !Self::BASE_COMPONENT_NAMES.contains(name)
-            })
+            .filter(|name| name.ends_with("_class") && !Self::BASE_COMPONENT_NAMES.contains(name))
             .collect()
     }
 
@@ -855,9 +989,7 @@ impl Engine {
     /// `Vec` is owned heap data, so this is a cheap borrow — and `Engine`'s derived
     /// `Clone` copies it byte-for-byte, which is exactly why a reload restores every
     /// registered construction. Empty on a fresh engine.
-    pub fn learned_constructions(
-        &self,
-    ) -> &[crate::understanding::grammar::LearnedConstruction] {
+    pub fn learned_constructions(&self) -> &[crate::understanding::grammar::LearnedConstruction] {
         self.learned_grammar.constructions()
     }
 
@@ -890,25 +1022,45 @@ impl Engine {
     /// Third-person-singular form of a verb base.
     pub fn verb_3sg(&self, base: &str) -> String {
         let v = self.call_str(&format!("verb_3sg({})", esc(base)));
-        if v.is_empty() { base.to_string() } else { v }
+        if v.is_empty() {
+            base.to_string()
+        } else {
+            v
+        }
     }
 
     /// Past-tense form of a verb base (regular rule + irregular lexicon).
     pub fn verb_past(&self, base: &str) -> String {
         let v = self.call_str(&format!("verb_past({})", esc(base)));
-        if v.is_empty() { base.to_string() } else { v }
+        if v.is_empty() {
+            base.to_string()
+        } else {
+            v
+        }
     }
 
     /// Judge a conditional argument's validity: 1 valid, 0 invalid, -1 unparseable.
     pub fn judge_argument(&self, sentence: &str) -> i64 {
-        let Some((a, _b, premise, _concl)) = segment(sentence) else { return -1 };
+        let Some((a, _b, premise, _concl)) = segment(sentence) else {
+            return -1;
+        };
         let a_bare = bare(&a);
-        let p_is_a = self.call_int(&format!("same_prop({}, {})", esc(&bare(&premise)), esc(&a_bare)));
+        let p_is_a = self.call_int(&format!(
+            "same_prop({}, {})",
+            esc(&bare(&premise)),
+            esc(&a_bare)
+        ));
         let mut toks = vec![if p_is_a == 1 { 1 } else { 2 }];
         if self.call_int(&format!("has_negation({})", esc(&premise))) == 1 {
             toks.push(3);
         }
-        let lit = format!("[{}]", toks.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "));
+        let lit = format!(
+            "[{}]",
+            toks.iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         self.call_int(&format!("valid_argument({lit})"))
     }
 
@@ -980,9 +1132,10 @@ impl Engine {
         let mut candidate = self.clone();
         candidate.program.push('\n');
         candidate.program.push_str(code);
-        candidate
-            .methods
-            .push((Box::leak(name.to_string().into_boxed_str()), method.to_string()));
+        candidate.methods.push((
+            Box::leak(name.to_string().into_boxed_str()),
+            method.to_string(),
+        ));
         if name.ends_with("_class") && !domain.is_empty() {
             candidate.learned_members.insert(name.to_string(), domain);
         }
@@ -1050,15 +1203,25 @@ pub fn bare(clause: &str) -> String {
             c = rest.trim().to_string();
         }
     }
-    for wrapper in ["it is not the case that ", "it is not true that ", "it is true that "] {
+    for wrapper in [
+        "it is not the case that ",
+        "it is not true that ",
+        "it is true that ",
+    ] {
         c = c.replace(wrapper, "");
     }
-    c = c.replace(" is not true", "").replace(" does not happen", "");
+    c = c
+        .replace(" is not true", "")
+        .replace(" does not happen", "");
     c.trim().to_string()
 }
 
 pub fn segment(sentence: &str) -> Option<(String, String, String, String)> {
-    let parts: Vec<&str> = sentence.split('.').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = sentence
+        .split('.')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
     if parts.len() != 3 {
         return None;
     }
@@ -1151,11 +1314,13 @@ mod vocab_tests {
             CREATURES.len(),
             "every creature must be a positive example"
         );
-        assert!(negatives >= 6, "need several non-creature negatives, got {negatives}");
+        assert!(
+            negatives >= 6,
+            "need several non-creature negatives, got {negatives}"
+        );
 
         // Synthesize the lookup through the real solver and confirm success.
-        let (code, _method) =
-            synth("creature_class", "fn creature_class(s: string) -> i64", ex);
+        let (code, _method) = synth("creature_class", "fn creature_class(s: string) -> i64", ex);
 
         // Run the synthesized program: dragon -> 1 (a creature), report -> 0
         // (a known non-creature from PATIENTS).
@@ -1165,7 +1330,10 @@ mod vocab_tests {
                 esc(word)
             );
             let out = execute_program(&full).map(|r| r.output).unwrap_or_default();
-            out.lines().next().and_then(|l| l.trim().parse().ok()).unwrap_or(-1)
+            out.lines()
+                .next()
+                .and_then(|l| l.trim().parse().ok())
+                .unwrap_or(-1)
         };
         assert_eq!(run("dragon"), 1, "dragon must classify as a creature");
         assert_eq!(run("report"), 0, "report must classify as a non-creature");
@@ -1179,7 +1347,9 @@ mod vocab_tests {
         // "dragon" collapses to a single positive; "book" is the only negative.
         assert_eq!(ex.len(), 2);
         assert_eq!(
-            ex.iter().filter(|e| e.inputs == vec![Value::Str("dragon".into())]).count(),
+            ex.iter()
+                .filter(|e| e.inputs == vec![Value::Str("dragon".into())])
+                .count(),
             1,
             "dragon must appear exactly once"
         );
@@ -1187,7 +1357,11 @@ mod vocab_tests {
             .iter()
             .find(|e| e.inputs == vec![Value::Str("dragon".into())])
             .unwrap();
-        assert_eq!(dragon.expected, Value::Int(1), "positive label wins on collision");
+        assert_eq!(
+            dragon.expected,
+            Value::Int(1),
+            "positive label wins on collision"
+        );
     }
 
     /// GRADABLE pairs the positive adjective with its comparative and scale, and

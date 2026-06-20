@@ -119,7 +119,7 @@ fn gaussian_elimination_i64(a: &mut Vec<Vec<i64>>, b: &mut Vec<i64>) -> Result<V
     for col in 0..n {
         let mut pivot_row = col;
         for row in col + 1..n {
-            if a[row][col].abs() > a[pivot_row][col].abs() {
+            if a[row][col].unsigned_abs() > a[pivot_row][col].unsigned_abs() {
                 pivot_row = row;
             }
         }
@@ -135,16 +135,37 @@ fn gaussian_elimination_i64(a: &mut Vec<Vec<i64>>, b: &mut Vec<i64>) -> Result<V
             let factor = a[row][col];
             let divisor = a[col][col];
             for j in col..n {
-                a[row][j] = a[row][j] * divisor - a[col][j] * factor;
+                let left = a[row][j]
+                    .checked_mul(divisor)
+                    .ok_or_else(|| "integer overflow during elimination".to_string())?;
+                let right = a[col][j]
+                    .checked_mul(factor)
+                    .ok_or_else(|| "integer overflow during elimination".to_string())?;
+                a[row][j] = left
+                    .checked_sub(right)
+                    .ok_or_else(|| "integer overflow during elimination".to_string())?;
             }
-            b[row] = b[row] * divisor - b[col] * factor;
+            let left = b[row]
+                .checked_mul(divisor)
+                .ok_or_else(|| "integer overflow during elimination".to_string())?;
+            let right = b[col]
+                .checked_mul(factor)
+                .ok_or_else(|| "integer overflow during elimination".to_string())?;
+            b[row] = left
+                .checked_sub(right)
+                .ok_or_else(|| "integer overflow during elimination".to_string())?;
         }
     }
     let mut x = vec![0i64; n];
     for i in (0..n).rev() {
         let mut sum = b[i];
         for j in i + 1..n {
-            sum -= a[i][j] * x[j];
+            let product = a[i][j]
+                .checked_mul(x[j])
+                .ok_or_else(|| "integer overflow during back substitution".to_string())?;
+            sum = sum
+                .checked_sub(product)
+                .ok_or_else(|| "integer overflow during back substitution".to_string())?;
         }
         if a[i][i] == 0 {
             return Err("Singular matrix".to_string());
@@ -594,10 +615,10 @@ mod tests {
 
     #[test]
     fn test_gaussian_elimination_2x2() {
-        // Solve: 2x + 1y = 5, 1x + 3y = 6
+        // Solve: 2x + 1y = 5, 1x + 3y = 5
         // Solution: x=2, y=1
         let mut a = vec![vec![2, 1], vec![1, 3]];
-        let mut b = vec![5, 6];
+        let mut b = vec![5, 5];
         let result = gaussian_elimination_i64(&mut a, &mut b);
         assert!(result.is_ok());
         let x = result.unwrap();

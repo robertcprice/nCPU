@@ -348,7 +348,10 @@ mod tests {
         let g = LearnedGrammar::new();
         assert!(g.is_empty());
         assert_eq!(g.len(), 0);
-        assert_eq!(g.apply_first(&engine, "The report the teacher writes."), None);
+        assert_eq!(
+            g.apply_first(&engine, "The report the teacher writes."),
+            None
+        );
     }
 
     /// A construction whose skeleton does NOT match the sentence returns `None`
@@ -429,7 +432,12 @@ mod tests {
     fn osv_examples() -> Vec<ConstructionExample<'static>> {
         vec![
             // "the report the teacher writes" — teacher writes the report.
-            ("the report the teacher writes", "teacher", "report", "write"),
+            (
+                "the report the teacher writes",
+                "teacher",
+                "report",
+                "write",
+            ),
             // "the book the student reads" — student reads the book.
             ("the book the student reads", "student", "book", "read"),
             // "the memo the doctor fixes" — doctor fixes the memo.
@@ -458,8 +466,12 @@ mod tests {
         // Applying it to a TRAINING sentence reproduces the labeled roles.
         let toks = crate::comprehension::words_of("the report the teacher writes");
         let classes = token_classes(&engine, "the report the teacher writes");
-        let m = c.apply(&engine, &toks, &classes).expect("should fire on training shape");
-        let Meaning::Event(e) = m else { panic!("expected Event, got {m:?}") };
+        let m = c
+            .apply(&engine, &toks, &classes)
+            .expect("should fire on training shape");
+        let Meaning::Event(e) = m else {
+            panic!("expected Event, got {m:?}")
+        };
         assert_eq!(e.predicate, "write");
         assert_eq!(e.agent, Some(Term::Entity("teacher".to_string())));
         assert_eq!(e.patient, Some(Term::Entity("report".to_string())));
@@ -518,7 +530,12 @@ mod tests {
         // at index 3 (OSV) and the SECOND labels the agent at index 1 (SVO-ish) —
         // a contradiction on the same shape.
         let bad: Vec<ConstructionExample> = vec![
-            ("the report the teacher writes", "teacher", "report", "write"),
+            (
+                "the report the teacher writes",
+                "teacher",
+                "report",
+                "write",
+            ),
             ("the editor the letter reads", "editor", "letter", "read"),
         ];
         let err = learn_construction_from_examples(&engine, "bad", &bad)

@@ -310,11 +310,24 @@ fn search_string_equality_map_learns_animacy_lexicon() {
         "is_animate",
         "fn is_animate(s: string) -> i64",
         &[
-            ("teacher", 1), ("doctor", 1), ("actor", 1), ("singer", 1),
-            ("painter", 1), ("baker", 1), ("dog", 1), ("cat", 1),
-            ("weather", 0), ("tractor", 0), ("finger", 0), ("printer", 0),
-            ("marker", 0), ("fog", 0), ("mat", 0), ("report", 0),
-            ("song", 0), ("door", 0),
+            ("teacher", 1),
+            ("doctor", 1),
+            ("actor", 1),
+            ("singer", 1),
+            ("painter", 1),
+            ("baker", 1),
+            ("dog", 1),
+            ("cat", 1),
+            ("weather", 0),
+            ("tractor", 0),
+            ("finger", 0),
+            ("printer", 0),
+            ("marker", 0),
+            ("fog", 0),
+            ("mat", 0),
+            ("report", 0),
+            ("song", 0),
+            ("door", 0),
         ],
     );
     let result = solve_problem_search_only(&problem);
@@ -341,10 +354,22 @@ fn search_string_equality_map_defers_to_suffix_rule() {
         "ends_s",
         "fn ends_s(s: string) -> i64",
         &[
-            ("walks", 1), ("runs", 1), ("plays", 1), ("reads", 1),
-            ("jumps", 1), ("calls", 1), ("opens", 1), ("needs", 1),
-            ("walk", 0), ("run", 0), ("play", 0), ("read", 0),
-            ("jump", 0), ("call", 0), ("open", 0), ("need", 0),
+            ("walks", 1),
+            ("runs", 1),
+            ("plays", 1),
+            ("reads", 1),
+            ("jumps", 1),
+            ("calls", 1),
+            ("opens", 1),
+            ("needs", 1),
+            ("walk", 0),
+            ("run", 0),
+            ("play", 0),
+            ("read", 0),
+            ("jump", 0),
+            ("call", 0),
+            ("open", 0),
+            ("need", 0),
         ],
     );
     let result = solve_problem_search_only(&problem);
@@ -356,7 +381,8 @@ fn search_string_equality_map_defers_to_suffix_rule() {
         "lookup teacher should have deferred to a general rule, but it fired"
     );
     assert!(
-        result.code.contains("ends_with") || result.code.contains("contains")
+        result.code.contains("ends_with")
+            || result.code.contains("contains")
             || result.code.contains("starts_with"),
         "expected an orthographic-rule program, got: {}",
         result.code

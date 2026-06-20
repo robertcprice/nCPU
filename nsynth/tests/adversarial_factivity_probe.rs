@@ -38,8 +38,12 @@ fn know_is_factive_entails_content() {
     );
 
     // The attitude itself: "Does the teacher know that the report is long?" -> Yes.
-    let att = qa::answer(&engine, &world, "Does the teacher know that the report is long?")
-        .to_lowercase();
+    let att = qa::answer(
+        &engine,
+        &world,
+        "Does the teacher know that the report is long?",
+    )
+    .to_lowercase();
     assert!(
         att.starts_with("yes"),
         "attitude question must be Yes, got: {att:?}"
@@ -71,8 +75,12 @@ fn believe_is_non_factive_does_not_entail_content() {
     );
 
     // Sanity: the attitude proposition itself is still true — the teacher DOES believe it.
-    let att = qa::answer(&engine, &world, "Does the teacher believe that the report is long?")
-        .to_lowercase();
+    let att = qa::answer(
+        &engine,
+        &world,
+        "Does the teacher believe that the report is long?",
+    )
+    .to_lowercase();
     assert!(
         att.starts_with("yes"),
         "the belief itself must hold, got: {att:?}"

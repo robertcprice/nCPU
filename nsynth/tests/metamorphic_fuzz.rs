@@ -56,7 +56,9 @@ struct Lcg {
 impl Lcg {
     fn new(seed: u64) -> Self {
         // Mix the seed once so seed 0 is not a degenerate fixed point.
-        Lcg { state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1) }
+        Lcg {
+            state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1),
+        }
     }
 
     fn next_u32(&mut self) -> u32 {
@@ -103,10 +105,7 @@ const AGENTS: &[&str] = &["teacher", "editor", "author", "doctor"];
 const PATIENTS: &[&str] = &["report", "book", "letter", "note"];
 /// (base, third-singular, past-participle) for the two transitive verbs we read
 /// in the active voice and question in either voice.
-const VERBS: &[(&str, &str, &str)] = &[
-    ("write", "writes", "written"),
-    ("read", "reads", "read"),
-];
+const VERBS: &[(&str, &str, &str)] = &[("write", "writes", "written"), ("read", "reads", "read")];
 
 /// Distinct nouns for the two ends of a comparative ordering. Kept apart from the
 /// active/passive grid only for readability; any in-lexicon noun works.
@@ -140,7 +139,10 @@ fn classify(answer: &str) -> Verdict {
 /// A direct contradiction between two paraphrases: one says Yes and the other
 /// says No. This is ALWAYS a soundness bug regardless of parser coverage.
 fn contradict(a: Verdict, b: Verdict) -> bool {
-    matches!((a, b), (Verdict::Yes, Verdict::No) | (Verdict::No, Verdict::Yes))
+    matches!(
+        (a, b),
+        (Verdict::Yes, Verdict::No) | (Verdict::No, Verdict::Yes)
+    )
 }
 
 // ---------------------------------------------------------------------------

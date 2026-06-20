@@ -299,18 +299,14 @@ pub fn suite() -> Vec<EntailmentCase> {
         // CONVERSE: "X writes BEFORE Y reads" ⊨ "Y reads AFTER X writes".
         EntailmentCase {
             section: "temporal",
-            premises: vec![
-                "The teacher writes the report before the editor reads the book.",
-            ],
+            premises: vec!["The teacher writes the report before the editor reads the book."],
             hypothesis: "Does the editor read the book after the teacher writes the report?",
             gold: Yes,
         },
         // ASYMMETRY: "X before Y" CONTRADICTS "Y before X" over the same pair.
         EntailmentCase {
             section: "temporal",
-            premises: vec![
-                "The teacher writes the report before the editor reads the book.",
-            ],
+            premises: vec!["The teacher writes the report before the editor reads the book."],
             hypothesis: "Does the editor read the book before the teacher writes the report?",
             gold: No,
         },
@@ -318,9 +314,7 @@ pub fn suite() -> Vec<EntailmentCase> {
         // BEFORE Y reads".
         EntailmentCase {
             section: "temporal",
-            premises: vec![
-                "The editor reads the book after the teacher writes the report.",
-            ],
+            premises: vec!["The editor reads the book after the teacher writes the report."],
             hypothesis: "Does the teacher write the report before the editor reads the book?",
             gold: Yes,
         },
@@ -580,7 +574,13 @@ pub fn run_suite() -> BenchReport {
         }
     }
 
-    BenchReport { sections, correct, idk, wrong, total }
+    BenchReport {
+        sections,
+        correct,
+        idk,
+        wrong,
+        total,
+    }
 }
 
 /// Collect the STUDY CORPUS from a suite: the premise + hypothesis sentences of
@@ -600,11 +600,12 @@ pub fn run_suite() -> BenchReport {
 pub fn idk_sentences(suite_cases: &[EntailmentCase]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut push = |s: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
-        if seen.insert(s.to_string()) {
-            out.push(s.to_string());
-        }
-    };
+    let mut push =
+        |s: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+            if seen.insert(s.to_string()) {
+                out.push(s.to_string());
+            }
+        };
     for case in suite_cases {
         let got = run_case(case);
         // A case the engine gets right is not a gap candidate — skip it.
@@ -665,7 +666,11 @@ pub fn idk_sentences(suite_cases: &[EntailmentCase]) -> Vec<String> {
 /// serialize on the crate's env lock (see the test in this module).
 pub fn bench_then_study_then_bench(
     max_rounds: usize,
-) -> (BenchReport, crate::self_improve::extend::StudyReport, BenchReport) {
+) -> (
+    BenchReport,
+    crate::self_improve::extend::StudyReport,
+    BenchReport,
+) {
     // --- Env-fence: redirect store + journal to temp, restoring on exit. ------
     let pid = std::process::id();
     let store_tmp = std::env::temp_dir().join(format!("ncpu_bsb_components_{pid}.jsonl"));
@@ -785,13 +790,21 @@ mod tests {
                 .find(|s| s.section == "learned")
                 .expect("'learned' section present in the after report");
             assert_eq!(
-                (learned_before.correct, learned_before.idk, learned_before.wrong),
+                (
+                    learned_before.correct,
+                    learned_before.idk,
+                    learned_before.wrong
+                ),
                 (0, 1, 0),
                 "BEFORE study, the 'learned' edge case must be a single idk (gold Yes, \
                  engine Unknown), not yet correct"
             );
             assert_eq!(
-                (learned_after.correct, learned_after.idk, learned_after.wrong),
+                (
+                    learned_after.correct,
+                    learned_after.idk,
+                    learned_after.wrong
+                ),
                 (1, 0, 0),
                 "AFTER study, the 'learned' edge case must be correct — the learned \
                  classifier answers it"
@@ -890,7 +903,11 @@ mod tests {
         let n = suite().len();
         assert!(n >= 40, "suite must have >= 40 cases, has {n}");
         // The benchmark report's total must agree with the raw case count.
-        assert_eq!(run_suite().total, n, "run_suite total must equal suite() length");
+        assert_eq!(
+            run_suite().total,
+            n,
+            "run_suite total must equal suite() length"
+        );
     }
 
     /// BREADTH: every one of the nine grammatical phenomena is present with at

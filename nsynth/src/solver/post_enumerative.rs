@@ -433,77 +433,12 @@ fn try_post_enumerative_route(
             None
         }
         ROUTE_REFERENCE_DISTILLATION => {
-            if problem.reference_code.is_empty() {
-                return None;
-            }
-            let t_ref = Instant::now();
-            let result = solve_problem_differentiable_teacher(problem, problem.reference_code);
-            if result.success {
-                eprintln!(
-                    "[solve] reference_distill OK in {:.1}s — {}",
-                    t_ref.elapsed().as_secs_f32(),
-                    result.method
-                );
-                return Some(SolveResult {
-                    success: result.success,
-                    code: result.code,
-                    method: result.method,
-                    error: result.error,
-                    metadata: result.metadata,
-                });
-            }
-            eprintln!(
-                "[solve] reference_distill MISS in {:.1}s",
-                t_ref.elapsed().as_secs_f32()
-            );
+            // Historical telemetry may still recommend this route, but benchmark
+            // reference implementations are never visible to production solving.
             None
         }
-        ROUTE_NATIVE_REFERENCE_DISTILLATION => {
-            if problem.reference_code.is_empty() {
-                return None;
-            }
-            let t_native_ref = Instant::now();
-            if let Some(result) =
-                synthesis::synthesize_scalar_from_teacher(problem, problem.reference_code)
-            {
-                if result.success {
-                    eprintln!(
-                        "[solve] native_reference_distill OK in {:.1}s — {}",
-                        t_native_ref.elapsed().as_secs_f32(),
-                        result.method
-                    );
-                    return Some(result);
-                }
-            }
-            eprintln!(
-                "[solve] native_reference_distill MISS in {:.1}s",
-                t_native_ref.elapsed().as_secs_f32()
-            );
-            None
-        }
-        ROUTE_ARRAY_REFERENCE_DISTILLATION => {
-            if problem.reference_code.is_empty() {
-                return None;
-            }
-            let t_arr_teacher = Instant::now();
-            if let Some(result) =
-                synthesis::synthesize_array_from_teacher(problem, problem.reference_code)
-            {
-                if result.success {
-                    eprintln!(
-                        "[solve] array_reference_distill OK in {:.1}s — {}",
-                        t_arr_teacher.elapsed().as_secs_f32(),
-                        result.method
-                    );
-                    return Some(result);
-                }
-            }
-            eprintln!(
-                "[solve] array_reference_distill MISS in {:.1}s",
-                t_arr_teacher.elapsed().as_secs_f32()
-            );
-            None
-        }
+        ROUTE_NATIVE_REFERENCE_DISTILLATION => None,
+        ROUTE_ARRAY_REFERENCE_DISTILLATION => None,
         ROUTE_EXPR_TEMPLATES => {
             let t_expr_tpl = Instant::now();
             if let Some(result) = synthesis::synthesize_scalar_expr_templates_only(problem) {
@@ -540,19 +475,7 @@ fn try_post_enumerative_route(
             );
             None
         }
-        ROUTE_TEMPLATE_REFERENCE => {
-            let code = problem.reference_code.to_string();
-            if verify_problem_code_strict(problem, &code).is_ok() {
-                return Some(SolveResult {
-                    success: true,
-                    code,
-                    method: "template_reference".to_string(),
-                    error: None,
-                    metadata: DifferentiableMetadata::default(),
-                });
-            }
-            None
-        }
+        ROUTE_TEMPLATE_REFERENCE => None,
         ROUTE_SEARCH => {
             if ctx.is_external && ctx.n_args > 3 {
                 eprintln!(

@@ -527,10 +527,6 @@ pub(super) fn search_stateful_reducer_event(
 ) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64, ParamType::I64, ParamType::ArrayI64] {
-        eprintln!(
-            "[search_stateful_reducer_temporal] param_types={:?} for sig={}",
-            param_types, problem.signature
-        );
         return None;
     }
     let state_arg = "state";
@@ -1765,22 +1761,8 @@ pub(super) fn search_stateful_reducer_temporal(
     fn_name: &str,
 ) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
-    eprintln!(
-        "[temporal] sig={} param_types={:?}",
-        problem.signature, param_types
-    );
     if param_types != [ParamType::I64, ParamType::I64, ParamType::ArrayI64] {
         return None;
-    }
-    eprintln!("[temporal] ENTERED");
-
-    eprintln!("[temporal] examples.len()={}", problem.examples.len());
-    for ex in &problem.examples {
-        eprintln!(
-            "[temporal]   ex: inputs.len()={} expected={:?}",
-            ex.inputs.len(),
-            ex.expected
-        );
     }
 
     let time_kinds: &[&str] = &[
@@ -1798,16 +1780,12 @@ pub(super) fn search_stateful_reducer_temporal(
     let no_reducer_combos: &[&str] = &["+", "-"];
 
     for &(reducer, op_state) in reducer_combos {
-        eprintln!(
-            "[temporal] with-reducer loop: reducer={} op_state={}",
-            reducer, op_state
-        );
         let reducer_fn = match reducer_fn(reducer) {
             Some(f) => f,
             None => continue,
         };
         for &time_kind in time_kinds {
-            for &time_op in &["+", "*"] {
+            for &combine in &["add_add", "add_mul"] {
                 let passes = problem.examples.iter().all(|ex| {
                     if ex.inputs.len() != 3 {
                         return false;
@@ -1825,14 +1803,12 @@ pub(super) fn search_stateful_reducer_temporal(
                         _ => return false,
                     };
                     let r = reducer_fn(&arr);
-                    let r_part = match op_state {
-                        "+" => state + r,
-                        "-" => state - r,
-                        _ => return false,
-                    };
                     let time_expr: i64 = match time_kind {
                         "identity" => t,
-                        "neg" => -t,
+                        "neg" => match t.checked_neg() {
+                            Some(value) => value,
+                            None => return false,
+                        },
                         "tick_n2" => {
                             if t % 2 == 0 {
                                 1
@@ -1884,34 +1860,37 @@ pub(super) fn search_stateful_reducer_temporal(
                         }
                         _ => return false,
                     };
-                    let got = match time_op {
-                        "+" => r_part + time_expr,
-                        "*" => r_part * time_expr,
+                    let term = match combine {
+                        "add_add" => r.checked_add(time_expr),
+                        "add_mul" => r.checked_mul(time_expr),
                         _ => return false,
                     };
-                    got == ex.expected_int()
+                    let Some(term) = term else {
+                        return false;
+                    };
+                    let got = match op_state {
+                        "+" => state.checked_add(term),
+                        "-" => state.checked_sub(term),
+                        _ => return false,
+                    };
+                    got == Some(ex.expected_int())
                 });
                 if passes {
                     let code = code_stateful_reducer_temporal(
-                        fn_name, "state", "t", "arr", reducer, op_state, time_kind, time_op,
+                        fn_name, "state", "t", "arr", reducer, op_state, combine, time_kind,
                     );
-                    return verified_result(problem, code, "search_stateful_reducer_temporal");
+                    if let Some(result) =
+                        verified_result(problem, code, "search_stateful_reducer_temporal")
+                    {
+                        return Some(result);
+                    }
                 }
             }
         }
     }
-    eprintln!("[temporal] about to enter no-reducer loop");
 
     for &op_state in no_reducer_combos {
-        eprintln!(
-            "[temporal] no-reducer loop entered with op_state={}",
-            op_state
-        );
         for &time_kind in time_kinds {
-            eprintln!(
-                "[temporal] trying no-reducer op={} time_kind={}",
-                op_state, time_kind
-            );
             let passes = problem.examples.iter().all(|ex| {
                 if ex.inputs.len() != 3 {
                     return false;
@@ -1930,7 +1909,10 @@ pub(super) fn search_stateful_reducer_temporal(
                 };
                 let time_expr: i64 = match time_kind {
                     "identity" => t,
-                    "neg" => -t,
+                    "neg" => match t.checked_neg() {
+                        Some(value) => value,
+                        None => return false,
+                    },
                     "tick_n2" => {
                         if t % 2 == 0 {
                             1
@@ -1983,17 +1965,21 @@ pub(super) fn search_stateful_reducer_temporal(
                     _ => return false,
                 };
                 let got = match op_state {
-                    "+" => state + time_expr,
-                    "-" => state - time_expr,
+                    "+" => state.checked_add(time_expr),
+                    "-" => state.checked_sub(time_expr),
                     _ => return false,
                 };
-                got == ex.expected_int()
+                got == Some(ex.expected_int())
             });
             if passes {
                 let code = code_stateful_reducer_temporal_no_reducer(
                     fn_name, "state", "t", op_state, time_kind,
                 );
-                return verified_result(problem, code, "search_stateful_reducer_temporal");
+                if let Some(result) =
+                    verified_result(problem, code, "search_stateful_reducer_temporal")
+                {
+                    return Some(result);
+                }
             }
         }
     }
@@ -2003,6 +1989,10 @@ pub(super) fn search_stateful_reducer_temporal(
 
 /// Stage 5: Factorial pattern recognition (explicit-stack iteration).
 pub(super) fn search_recursive_factorial(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    if !problem.recursive_allowed && !problem.explicit_stack {
+        return None;
+    }
+
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2015,7 +2005,10 @@ pub(super) fn search_recursive_factorial(problem: &Problem, fn_name: &str) -> Op
         };
         let expected = ex.expected_int();
 
-        let factorial: i64 = (1..=n).product();
+        if !(0..=20).contains(&n) {
+            return None;
+        }
+        let factorial = (1..=n).try_fold(1i64, |acc, value| acc.checked_mul(value))?;
         if factorial != expected {
             return None;
         }
@@ -2027,6 +2020,10 @@ pub(super) fn search_recursive_factorial(problem: &Problem, fn_name: &str) -> Op
 
 /// Stage 5: Fibonacci pattern recognition (explicit-stack iteration).
 pub(super) fn search_recursive_fibonacci(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    if !problem.recursive_allowed && !problem.explicit_stack {
+        return None;
+    }
+
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2042,6 +2039,10 @@ pub(super) fn search_recursive_fibonacci(problem: &Problem, fn_name: &str) -> Op
             _ => return None,
         };
         let expected = ex.expected_int();
+
+        if !(0..=92).contains(&n) {
+            return None;
+        }
 
         let fib = if n == 0 {
             0
@@ -2072,6 +2073,13 @@ pub(super) fn search_mutual_recursion_even_odd(
     problem: &Problem,
     fn_name: &str,
 ) -> Option<SolveResult> {
+    // Mutual recursion is an opt-in search family. Without this guard it claims
+    // ordinary parity problems before the non-recursive parity teacher and can
+    // introduce unnecessary recursion into a problem that explicitly forbids it.
+    if !problem.recursive_allowed {
+        return None;
+    }
+
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2103,6 +2111,10 @@ pub(super) fn search_mutual_recursion_fib_pair(
     problem: &Problem,
     fn_name: &str,
 ) -> Option<SolveResult> {
+    if !problem.recursive_allowed {
+        return None;
+    }
+
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
         return None;
@@ -2117,6 +2129,10 @@ pub(super) fn search_mutual_recursion_fib_pair(
             _ => return false,
         };
         let expected = ex.expected_int();
+
+        if !(0..=92).contains(&n) {
+            return false;
+        }
 
         // Compute fib(n)
         let fib_n = if n == 0 {
@@ -2160,6 +2176,10 @@ pub(super) fn search_tribonacci(problem: &Problem, fn_name: &str) -> Option<Solv
             _ => return false,
         };
         let expected = ex.expected_int();
+
+        if !(0..=70).contains(&n) {
+            return false;
+        }
 
         let trib = if n == 0 {
             0

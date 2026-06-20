@@ -21,7 +21,10 @@ fn fn_names(src: &str) -> Vec<String> {
     let mut rest = src;
     while let Some(pos) = rest.find("fn ") {
         let after = &rest[pos + 3..];
-        let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        let name: String = after
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
         if !name.is_empty() {
             out.push(name);
         }
@@ -100,7 +103,10 @@ fn explain_self_verb_inflection_quotes_a_real_fn_present_in_the_engine_program()
 
     // The teacher string is genuinely one of the methods the engine holds.
     assert!(
-        engine.methods.iter().any(|(name, t)| *name == "regular_3sg" && t == teacher),
+        engine
+            .methods
+            .iter()
+            .any(|(name, t)| *name == "regular_3sg" && t == teacher),
         "the named teacher is not the recorded provenance for regular_3sg"
     );
 
@@ -154,8 +160,13 @@ fn explain_self_quoted_source_is_not_independently_fabricated_by_the_method() {
             engine.program().contains(&sig),
             "ground-truth engine program is missing {sig:?}"
         );
-        assert!(out.contains(&sig), "explain_self({topic:?}) failed to quote {sig:?}: {out}");
-        let teacher = engine.method_for(component).expect("component has a teacher");
+        assert!(
+            out.contains(&sig),
+            "explain_self({topic:?}) failed to quote {sig:?}: {out}"
+        );
+        let teacher = engine
+            .method_for(component)
+            .expect("component has a teacher");
         assert!(
             out.contains(teacher),
             "explain_self({topic:?}) failed to name real teacher {teacher:?}: {out}"

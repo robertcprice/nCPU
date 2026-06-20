@@ -317,6 +317,12 @@ pub fn shared_manager_with_limits(limits: ResourceLimits) -> SharedResourceManag
 mod tests {
     use super::*;
 
+    fn owned_test_fd() -> i32 {
+        let fd = unsafe { libc::dup(libc::STDIN_FILENO) };
+        assert!(fd >= 0, "failed to duplicate a test file descriptor");
+        fd
+    }
+
     #[test]
     fn test_manager_creation() {
         let manager = ResourceManager::new();
@@ -327,9 +333,10 @@ mod tests {
     #[test]
     fn test_register_file() {
         let mut manager = ResourceManager::new();
-        manager.register_file(3).unwrap();
+        let fd = owned_test_fd();
+        manager.register_file(fd).unwrap();
         assert_eq!(manager.len(), 1);
-        assert!(manager.contains(&ResourceType::FileDesc(3)));
+        assert!(manager.contains(&ResourceType::FileDesc(fd)));
     }
 
     #[test]
@@ -346,26 +353,34 @@ mod tests {
             ..Default::default()
         };
         let mut manager = ResourceManager::with_limits(limits);
-        manager.register_file(1).unwrap();
-        manager.register_file(2).unwrap();
-        let result = manager.register_file(3);
+        manager.register_file(owned_test_fd()).unwrap();
+        manager.register_file(owned_test_fd()).unwrap();
+        let rejected_fd = owned_test_fd();
+        let result = manager.register_file(rejected_fd);
         assert!(result.is_err());
+        unsafe {
+            libc::close(rejected_fd);
+        }
     }
 
     #[test]
     fn test_unregister_fd() {
         let mut manager = ResourceManager::new();
-        manager.register_file(3).unwrap();
-        manager.unregister_fd(3);
-        assert!(!manager.contains(&ResourceType::FileDesc(3)));
+        let fd = owned_test_fd();
+        manager.register_file(fd).unwrap();
+        manager.unregister_fd(fd);
+        assert!(!manager.contains(&ResourceType::FileDesc(fd)));
         assert_eq!(manager.len(), 0);
+        unsafe {
+            libc::close(fd);
+        }
     }
 
     #[test]
     fn test_stats() {
         let mut manager = ResourceManager::new();
-        manager.register_file(1).unwrap();
-        manager.register_socket(4).unwrap();
+        manager.register_file(owned_test_fd()).unwrap();
+        manager.register_socket(owned_test_fd()).unwrap();
         manager.register_process(100).unwrap();
 
         let stats = manager.stats();
@@ -385,9 +400,10 @@ mod tests {
     #[test]
     fn test_shared_manager() {
         let manager = shared_manager();
+        let fd = owned_test_fd();
         {
             let mut guard = manager.lock().unwrap();
-            guard.register_file(3).unwrap();
+            guard.register_file(fd).unwrap();
         }
         // Manager still accessible
         let guard = manager.lock().unwrap();

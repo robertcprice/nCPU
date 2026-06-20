@@ -111,20 +111,32 @@ fn proof_backed_yes_names_a_real_flip_that_revision_makes_genuine() {
 
     // (a) Baseline: a determined Yes that REALLY rests on a proof.
     let baseline = qa::answer(&engine, &discourse, q);
-    assert_eq!(verdict_of(&baseline), V::Yes, "baseline must be Yes: {baseline}");
+    assert_eq!(
+        verdict_of(&baseline),
+        V::Yes,
+        "baseline must be Yes: {baseline}"
+    );
 
     let parsed = semantics::understand(&engine, q);
     let (_ans, proof) = qa::answer_explained(&engine, &discourse, &parsed);
     let proof = proof.expect("a transitively-entailed Yes must carry a PROOF (the Some branch)");
     let leaves = proof_leaves(&proof);
-    assert_eq!(leaves.len(), 1, "exactly one asserted leaf backs this derivation: {leaves:?}");
+    assert_eq!(
+        leaves.len(),
+        1,
+        "exactly one asserted leaf backs this derivation: {leaves:?}"
+    );
     let leaf = leaves[0].clone();
 
     // (b) Build a Mind over the SAME facts and ask what would change its mind.
     let mut mind = Mind::new();
     mind.read("The teacher writes the report.");
     let baseline_mind = mind.ask(q);
-    assert_eq!(verdict_of(&baseline_mind), V::Yes, "Mind baseline Yes: {baseline_mind}");
+    assert_eq!(
+        verdict_of(&baseline_mind),
+        V::Yes,
+        "Mind baseline Yes: {baseline_mind}"
+    );
     let wwcym = mind.what_would_change_your_mind(q);
     let lw = wwcym.to_lowercase();
     // SOUND under revision: telling the leaf's negation IS actionable (it retracts
@@ -156,7 +168,10 @@ fn proof_backed_yes_names_a_real_flip_that_revision_makes_genuine() {
 
     // (e) NO LEAK: the original discourse is unchanged — same baseline verdict.
     let after = qa::answer(&engine, &discourse, q);
-    assert_eq!(after, baseline, "verification must not mutate the source discourse");
+    assert_eq!(
+        after, baseline,
+        "verification must not mutate the source discourse"
+    );
 
     eprintln!("--- wwcym: {wwcym}\n--- cloned answer: {cloned_answer} (was {baseline}) ---");
 }
@@ -177,7 +192,10 @@ fn named_flip_on_an_opaque_yes_genuinely_flips_the_public_verdict() {
     let mut mind = Mind::new();
     mind.read("The teacher writes the report.");
     let wwcym = mind.what_would_change_your_mind(q).to_lowercase();
-    assert!(wwcym.contains("i would change my mind if you told me"), "names a flip: {wwcym}");
+    assert!(
+        wwcym.contains("i would change my mind if you told me"),
+        "names a flip: {wwcym}"
+    );
     assert!(
         wwcym.contains("the teacher does not write the report"),
         "names the contradictory of the queried fact: {wwcym}"
@@ -259,24 +277,39 @@ fn named_flips_on_an_open_question_each_genuinely_decide_it() {
 
     let q = "Does the author read the book?";
     let baseline = qa::answer(&engine, &discourse, q);
-    assert_eq!(verdict_of(&baseline), V::Idk, "baseline undetermined: {baseline}");
+    assert_eq!(
+        verdict_of(&baseline),
+        V::Idk,
+        "baseline undetermined: {baseline}"
+    );
 
     let mut mind = Mind::new();
     mind.read("The teacher writes the report.");
     let wwcym = mind.what_would_change_your_mind(q).to_lowercase();
-    assert!(wwcym.contains("i would change my mind if you told me"), "names a decider: {wwcym}");
+    assert!(
+        wwcym.contains("i would change my mind if you told me"),
+        "names a decider: {wwcym}"
+    );
 
     // Asserting the proposition decides it Yes.
     let prop = semantics::understand(&engine, "the author reads the book");
     let mut yes_clone = discourse.clone();
     yes_clone.world.assert(&prop);
     let yes_ans = qa::answer(&engine, &yes_clone, q);
-    assert_ne!(verdict_of(&yes_ans), V::Idk, "asserting the proposition decides it: {yes_ans}");
+    assert_ne!(
+        verdict_of(&yes_ans),
+        V::Idk,
+        "asserting the proposition decides it: {yes_ans}"
+    );
 
     // Asserting its negation decides it No.
     let neg = polarity_flip(&prop).unwrap();
     let mut no_clone = discourse.clone();
     no_clone.world.assert(&neg);
     let no_ans = qa::answer(&engine, &no_clone, q);
-    assert_ne!(verdict_of(&no_ans), V::Idk, "asserting the negation decides it: {no_ans}");
+    assert_ne!(
+        verdict_of(&no_ans),
+        V::Idk,
+        "asserting the negation decides it: {no_ans}"
+    );
 }

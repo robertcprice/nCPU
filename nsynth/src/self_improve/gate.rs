@@ -226,18 +226,12 @@ pub fn golden_cases() -> Vec<GoldenCase> {
         },
         // ---- Attributes ----------------------------------------------------
         GoldenCase {
-            setup: vec![
-                "The teacher writes the report.",
-                "The teacher is careful.",
-            ],
+            setup: vec!["The teacher writes the report.", "The teacher is careful."],
             question: "Is the teacher careful?",
             expected: "Yes",
         },
         GoldenCase {
-            setup: vec![
-                "The teacher writes the report.",
-                "The teacher is careful.",
-            ],
+            setup: vec!["The teacher writes the report.", "The teacher is careful."],
             question: "Is the teacher kind?",
             expected: "I don't know.",
         },
@@ -310,7 +304,12 @@ pub fn regression_gate(engine: &Engine) -> GateReport {
         }
     }
     let sound = soundness_holds(engine);
-    GateReport { passed, total, failures, sound }
+    GateReport {
+        passed,
+        total,
+        failures,
+        sound,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -542,16 +541,26 @@ mod tests {
                 ));
             }
         }
-        assert!(failures.is_empty(), "golden case mismatches:\n{}", failures.join("\n"));
+        assert!(
+            failures.is_empty(),
+            "golden case mismatches:\n{}",
+            failures.join("\n")
+        );
     }
 
     #[test]
     fn each_soundness_probe_holds() {
         let e = engine();
         assert!(no_false_entailment(e), "open-world entailment probe failed");
-        assert!(asserted_fact_and_negation(e), "assert/negation probe failed");
+        assert!(
+            asserted_fact_and_negation(e),
+            "assert/negation probe failed"
+        );
         assert!(modal_monotonicity(e), "modal monotonicity probe failed");
-        assert!(causal_non_commutativity(e), "causal non-commutativity probe failed");
+        assert!(
+            causal_non_commutativity(e),
+            "causal non-commutativity probe failed"
+        );
     }
 
     #[test]
@@ -587,7 +596,10 @@ mod tests {
             honest.ok(),
             "precondition: the gate must be green on the default engine before we \
              can claim it discriminates; passed {}/{} sound={} failures={:?}",
-            honest.passed, honest.total, honest.sound, honest.failures
+            honest.passed,
+            honest.total,
+            honest.sound,
+            honest.failures
         );
 
         // (2) A case with a deliberately wrong expectation must FAIL `run_case`.
@@ -643,7 +655,8 @@ mod tests {
         assert!(
             report.passed < report.total,
             "the mutated battery must drop at least one case; passed {}/{}",
-            report.passed, report.total
+            report.passed,
+            report.total
         );
         assert_eq!(
             report.total - report.passed,
@@ -659,7 +672,9 @@ mod tests {
             "the gate MUST be red for a battery with a wrong expectation; \
              a gate that reports ok() on broken behavior cannot guard anything. \
              passed {}/{} sound={}",
-            report.passed, report.total, report.sound
+            report.passed,
+            report.total,
+            report.sound
         );
 
         // (4) Soundness arm: even if every behavioral case passed, a `sound=false`
@@ -676,7 +691,12 @@ mod tests {
             "ok() must be false when soundness is violated even if every case passes"
         );
         // And the all-green report with soundness on is the ONLY ok() state.
-        let green = GateReport { passed: n, total: n, failures: Vec::new(), sound: true };
+        let green = GateReport {
+            passed: n,
+            total: n,
+            failures: Vec::new(),
+            sound: true,
+        };
         assert!(green.ok(), "an all-pass, sound report must be ok()");
     }
 }

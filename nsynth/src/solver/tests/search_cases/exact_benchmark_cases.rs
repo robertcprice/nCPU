@@ -220,49 +220,47 @@ fn legacy_fallback_entrypoint_still_solves_full_benchmark() {
 }
 
 #[test]
-fn legacy_only_entrypoint_still_solves_full_benchmark() {
-    // The legacy-only entrypoint intentionally bypasses the new
-    // structural-array teachers (search_strictly_increasing,
-    // search_array_sequence, search_array_feature_dnf,
-    // search_first_index_of, search_last_index_of, etc.) and the
-    // new benchmark factories that depend on them. Filter those out
-    // here so the test exercises legacy fallbacks only on problems
-    // the legacy path is *meant* to handle.
-    let problems = get_benchmark(1);
-    let new_teacher_factories = [
-        "has_strictly_increasing_run",
-        "first_index_of_",
-        "last_index_of_",
-        "strictly_increasing",
-        "array_feature",
-        "string_subsequence",
-        "array_sequence",
-    ];
-    let legacy_problems: Vec<_> = problems
+fn legacy_only_entrypoint_rejects_reference_oracles() {
+    let problem = get_benchmark(1)
         .into_iter()
-        .filter(|p| {
-            !new_teacher_factories
-                .iter()
-                .any(|prefix| p.name.starts_with(prefix))
-        })
-        .collect();
-    let summary = solve_benchmark_legacy_only(&legacy_problems);
-    assert_eq!(
-        summary.solved,
-        legacy_problems.len(),
-        "failures: {:?}",
-        summary.failures
-    );
-    for problem in legacy_problems {
-        let result = solve_problem_legacy_only(&problem);
-        assert!(result.success, "legacy-only failed for {}", problem.name);
-        assert!(
-            result.method.starts_with("legacy_"),
-            "non-legacy method {} for {}",
-            result.method,
-            problem.name
-        );
-    }
+        .find(|p| p.name == "add_two_v0")
+        .unwrap();
+    assert!(!problem.reference_code.is_empty());
+
+    let result = solve_problem_legacy_only(&problem);
+    assert!(!result.success);
+    assert!(result.method.starts_with("legacy_"));
+    assert!(result
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("evaluation-only"));
+}
+
+#[test]
+fn search_output_is_invariant_to_evaluation_oracles() {
+    let problem = get_benchmark(1)
+        .into_iter()
+        .find(|p| p.name == "add_two_v0")
+        .unwrap();
+    let mut poisoned = problem.clone();
+    poisoned.holdouts = vec![Example {
+        inputs: vec![Value::Int(100), Value::Int(-37)],
+        expected: Value::Int(999_999),
+    }];
+    poisoned.reference_code = "fn add_two(a: i64, b: i64) -> i64 { return 999999; }\n";
+
+    let clean_result = solve_problem_search_only(&problem);
+    let poisoned_result = solve_problem_search_only(&poisoned);
+    assert!(clean_result.success, "{:?}", clean_result.error);
+    assert_eq!(clean_result.success, poisoned_result.success);
+    assert_eq!(clean_result.method, poisoned_result.method);
+    assert_eq!(clean_result.code, poisoned_result.code);
+
+    // Evaluation remains separate: the same candidate passes the real holdouts
+    // and fails the deliberately poisoned evaluator oracle.
+    crate::runtime::verify_problem_code_strict(&problem, &clean_result.code).unwrap();
+    assert!(crate::runtime::verify_problem_code_strict(&poisoned, &clean_result.code).is_err());
 }
 
 #[test]

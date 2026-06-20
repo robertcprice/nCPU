@@ -352,17 +352,20 @@ pub(super) fn verified_result(
 // ============================================================================
 
 pub(super) fn code_mutual_recursion_even_odd(fn_name: &str) -> String {
+    let even_helper = format!("{fn_name}_even_helper");
+    let odd_helper = format!("{fn_name}_odd_helper");
     format!(
-        "fn is_even(n: i64) -> i64 {{\n    if n == 0 {{ return 1; }}\n    return is_odd(n - 1);\n}}\n\n\
-         fn is_odd(n: i64) -> i64 {{\n    if n == 0 {{ return 0; }}\n    return is_even(n - 1);\n}}\n\n\
-         fn {fn_name}(n: i64) -> i64 {{\n    return is_even(n);\n}}\n"
+        "fn {even_helper}(n: i64) -> i64 {{\n    if n < 0 {{ return {even_helper}(0 - n); }}\n    if n == 0 {{ return 1; }}\n    return {odd_helper}(n - 1);\n}}\n\n\
+         fn {odd_helper}(n: i64) -> i64 {{\n    if n < 0 {{ return {odd_helper}(0 - n); }}\n    if n == 0 {{ return 0; }}\n    return {even_helper}(n - 1);\n}}\n\n\
+         fn {fn_name}(n: i64) -> i64 {{\n    return {even_helper}(n);\n}}\n"
     )
 }
 
 pub(super) fn code_mutual_recursion_fib_pair(fn_name: &str) -> String {
+    let helper = format!("{fn_name}_fib_helper");
     format!(
-        "fn fib(n: i64) -> i64 {{\n    if n == 0 {{ return 0; }}\n    if n == 1 {{ return 1; }}\n    return fib(n - 1) + fib(n - 2);\n}}\n\n\
-         fn {fn_name}(n: i64) -> i64 {{\n    return fib(n);\n}}\n"
+        "fn {helper}(n: i64) -> i64 {{\n    if n == 0 {{ return 0; }}\n    if n == 1 {{ return 1; }}\n    return {helper}(n - 1) + {helper}(n - 2);\n}}\n\n\
+         fn {fn_name}(n: i64) -> i64 {{\n    return {helper}(n);\n}}\n"
     )
 }
 

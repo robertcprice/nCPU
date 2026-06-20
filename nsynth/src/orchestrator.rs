@@ -567,7 +567,19 @@ mod tests {
         let mut orchestrator = Orchestrator::new(&root).unwrap();
         let results = orchestrator.solve_batch_search_only(&problems);
         assert_eq!(results.len(), problems.len());
-        assert!(results.iter().all(|result| result.success));
+        let failures = problems
+            .iter()
+            .zip(&results)
+            .filter(|(_, result)| !result.success)
+            .map(|(problem, result)| {
+                format!(
+                    "{}: {}",
+                    problem.name,
+                    result.error.as_deref().unwrap_or("unknown")
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(failures.is_empty(), "search-only failures: {failures:#?}");
         assert!(results
             .iter()
             .all(|result| result.family.starts_with("search_")));

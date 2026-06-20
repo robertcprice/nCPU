@@ -6,11 +6,11 @@
 //! world model evaluates their truth, inference relates them, discourse resolves
 //! reference, and QA answers from the model built by reading.
 
+pub mod discourse;
 pub mod grammar;
+pub mod inference;
 pub mod meaning;
+pub mod mind;
+pub mod qa;
 pub mod semantics;
 pub mod world_model;
-pub mod inference;
-pub mod discourse;
-pub mod qa;
-pub mod mind;

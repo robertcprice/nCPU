@@ -28,7 +28,7 @@
 
 use crate::comprehension::{AGENTS, PATIENTS};
 use crate::understanding::meaning::{
-    Aspect, Event, Meaning, Modality, Quantifier, Tense, TemporalRel, Term,
+    Aspect, Event, Meaning, Modality, Quantifier, TemporalRel, Tense, Term,
 };
 
 /// The set of FACTIVE attitude verbs: "know that P" entails P. Non-factive
@@ -945,7 +945,10 @@ pub fn closure(facts: &[Event]) -> Vec<Meaning> {
     let mut seen_entities: Vec<String> = Vec::new();
 
     for ev in facts {
-        for term in [ev.agent.as_ref(), ev.patient.as_ref()].into_iter().flatten() {
+        for term in [ev.agent.as_ref(), ev.patient.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             // Only concrete entities (definite/indefinite) name a real referent
             // we can type. Unresolved pronouns carry no noun to look up.
             let head = match term {
@@ -1436,7 +1439,11 @@ mod tests {
     fn existential_generalization_entails() {
         // "the teacher writes the report" entails "a teacher writes the report".
         let p = ev(entity("teacher"), Some(entity("report")), false);
-        let h = ev(Term::Indefinite("teacher".to_string()), Some(entity("report")), false);
+        let h = ev(
+            Term::Indefinite("teacher".to_string()),
+            Some(entity("report")),
+            false,
+        );
         assert!(matches!(relation(&p, &h), Relation::Entails));
     }
 
@@ -1647,10 +1654,9 @@ mod tests {
         assert!(has(entity("report"), "document"));
         assert!(has(entity("report"), "thing"));
         // Soundness: closure emits no negatives and no cross-branch claims.
-        assert!(!derived.iter().any(|m| matches!(
-            m,
-            Meaning::IsA { negated: true, .. }
-        )));
+        assert!(!derived
+            .iter()
+            .any(|m| matches!(m, Meaning::IsA { negated: true, .. })));
         // Termination/idempotence: a duplicated fact yields the same derived set.
         let fact2 = Event {
             predicate: "write".to_string(),

@@ -29,30 +29,46 @@ impl Term {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Role { Agent, Patient, Recipient }
+pub enum Role {
+    Agent,
+    Patient,
+    Recipient,
+}
 
 /// A natural-language quantifier scoping over a category variable.
 /// `Every` is universal ("every teacher"), `Some` existential ("some teacher"),
 /// `No` negative-existential ("no teacher").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Quantifier { Every, Some, No }   // universal, existential, negative
+pub enum Quantifier {
+    Every,
+    Some,
+    No,
+} // universal, existential, negative
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Tense { Past, Present, Future }   // wrote / writes / will write
+pub enum Tense {
+    Past,
+    Present,
+    Future,
+} // wrote / writes / will write
 
 /// Grammatical aspect on an event: how the action relates to its own internal
 /// time-course. `Simple` ("writes"/"wrote"), `Progressive` ("is writing" —
 /// ongoing), `Perfect` ("has written" — completed with present relevance).
 /// Both Progressive and Perfect entail the simple event holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Aspect { Simple, Progressive, Perfect }   // writes / is writing / has written
+pub enum Aspect {
+    Simple,
+    Progressive,
+    Perfect,
+} // writes / is writing / has written
 
 /// An event/action predication: write(agent: teacher, patient: report), present, not negated.
 /// A ditransitive event also fills the `recipient` slot:
 /// give(agent: teacher, patient: book, recipient: student).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Event {
-    pub predicate: String,        // verb lemma: "write"
+    pub predicate: String, // verb lemma: "write"
     pub agent: Option<Term>,
     pub patient: Option<Term>,
     /// ditransitive recipient ("... to the student"): `None` for 2-place verbs.
@@ -66,12 +82,20 @@ pub struct Event {
 /// Modal force over an event. `Can` possibility, `Must` necessity (entails
 /// `Can`), `Might` epistemic possibility, `Should` weak deontic necessity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Modality { Can, Must, Might, Should }
+pub enum Modality {
+    Can,
+    Must,
+    Might,
+    Should,
+}
 
 /// Temporal ordering relation between two events. `Before` and `After` are
 /// converses; `Before` is transitive and asymmetric (sound).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum TemporalRel { Before, After }
+pub enum TemporalRel {
+    Before,
+    After,
+}
 
 /// The meaning of one sentence.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -79,7 +103,11 @@ pub enum Meaning {
     /// an action/event: "the teacher writes the report"
     Event(Event),
     /// a category/property: "the teacher is a person" -> IsA{ subject, category, negated }
-    IsA { subject: Term, category: String, negated: bool },
+    IsA {
+        subject: Term,
+        category: String,
+        negated: bool,
+    },
     /// a yes/no question: "does the teacher write the report?" wraps the queried meaning
     YesNoQuestion(Box<Meaning>),
     /// a wh-question: "who writes the report?" -> { slot: Agent, body: Event(write, patient=report) }
@@ -89,38 +117,72 @@ pub enum Meaning {
     /// is the verbal predication whose agent ranges over entities of that
     /// category (the body's agent slot is left None or a fresh Indefinite
     /// placeholder — the quantifier binds it).
-    Quantified { quant: Quantifier, var_category: String, body: Event },
+    Quantified {
+        quant: Quantifier,
+        var_category: String,
+        body: Event,
+    },
     /// "X or Y" — true iff any disjunct is true.
     Or(Vec<Meaning>),
     /// "the teacher is careful" — an adjectival property of an entity.
-    HasProperty { subject: Term, property: String, negated: bool },
+    HasProperty {
+        subject: Term,
+        property: String,
+        negated: bool,
+    },
     /// "the report is longer than the book" — gradable comparison.
     /// `scale` is the gradable dimension ("length"/"size"/...); `more` is the
     /// polarity of the comparative (longer/bigger -> `true`); `subject` is
     /// asserted to exceed `than` on that scale when `more` (or fall below when
     /// `!more`). `negated` flips the whole assertion.
-    Comparison { subject: Term, scale: String, more: bool, than: Term, negated: bool },
+    Comparison {
+        subject: Term,
+        scale: String,
+        more: bool,
+        than: Term,
+        negated: bool,
+    },
     /// "the teacher knows that <S>" — a propositional attitude over an embedded
     /// meaning. `verb` is the attitude lemma (know/believe/think/say); `content`
     /// is the embedded clause's Meaning. FACTIVITY is decided downstream by the
     /// verb: "know that P" entails P, "believe/think/say that P" does not.
-    Attitude { holder: Term, verb: String, content: Box<Meaning>, negated: bool },
+    Attitude {
+        holder: Term,
+        verb: String,
+        content: Box<Meaning>,
+        negated: bool,
+    },
     /// "two teachers write a report" — cardinal (at-least) quantification.
     /// True iff at least `at_least` known entities of `var_category` satisfy
     /// `body`.
-    Cardinal { at_least: usize, var_category: String, body: Event },
+    Cardinal {
+        at_least: usize,
+        var_category: String,
+        body: Event,
+    },
     /// "how many teachers write a report?" — a counting question whose answer is
     /// the number of entities of `var_category` that satisfy `body`.
     CountQuestion { var_category: String, body: Event },
     /// "the teacher can/must/might/should write the report" — modal force over an
     /// event. `Must` entails `Can`; possibility does NOT entail actuality.
-    Modal { modality: Modality, body: Box<Event>, negated: bool },
+    Modal {
+        modality: Modality,
+        body: Box<Event>,
+        negated: bool,
+    },
     /// "X writes the report before Y reads the book" — a temporal ordering of two
     /// events. `Before` is transitive and asymmetric.
-    Temporal { rel: TemporalRel, first: Box<Event>, second: Box<Event> },
+    Temporal {
+        rel: TemporalRel,
+        first: Box<Event>,
+        second: Box<Event>,
+    },
     /// "the street floods because the rain falls" — a causal link. Asserting it
     /// presupposes both `cause` and `effect` happened. NOT symmetric.
-    Causal { cause: Box<Meaning>, effect: Box<Meaning> },
+    Causal {
+        cause: Box<Meaning>,
+        effect: Box<Meaning>,
+    },
     /// "if the rain falls then the street floods" — a stated material/defeasible
     /// implication. STRICTLY WEAKER than `Causal`: asserting it does NOT
     /// presuppose either `antecedent` or `consequent` happened — it only states
@@ -128,7 +190,11 @@ pub enum Meaning {
     /// consequent must hold when the antecedent holds. `negated` flips the whole
     /// conditional (its sound contradictory). Modus ponens (antecedent known
     /// true → derive consequent) lives in inference/world_model, not here.
-    Conditional { antecedent: Box<Meaning>, consequent: Box<Meaning>, negated: bool },
+    Conditional {
+        antecedent: Box<Meaning>,
+        consequent: Box<Meaning>,
+        negated: bool,
+    },
     /// "how long is the report?" — a degree question over a gradable `scale`,
     /// answered from known comparison facts (or honestly "I don't know").
     DegreeQuestion { subject: Term, scale: String },

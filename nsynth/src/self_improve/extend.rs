@@ -255,9 +255,10 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
                 req.examples
                     .iter()
                     .filter_map(|ex| match (ex.inputs.first(), &ex.expected) {
-                        (Some(crate::benchmark::Value::Str(w)), crate::benchmark::Value::Int(l)) => {
-                            Some((w.clone(), *l == 1))
-                        }
+                        (
+                            Some(crate::benchmark::Value::Str(w)),
+                            crate::benchmark::Value::Int(l),
+                        ) => Some((w.clone(), *l == 1)),
                         _ => None,
                     })
                     .collect()
@@ -446,56 +447,67 @@ mod tests {
         // the crate-wide journal-env lock so we never race another env-mutating
         // test on the process-global `NCPU_JOURNAL_PATH`.
         crate::self_improve::journal::test_support::with_journal_env("", || {
-        let engine = Engine::new();
-        // Precondition: the component is not already present.
-        assert!(
-            !engine.has_component("creature_class"),
-            "creature_class must be a genuinely new component for this test to mean anything"
-        );
+            let engine = Engine::new();
+            // Precondition: the component is not already present.
+            assert!(
+                !engine.has_component("creature_class"),
+                "creature_class must be a genuinely new component for this test to mean anything"
+            );
 
-        let req = LearnRequest {
-            gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
-            name: "creature_class".to_string(),
-            signature: "fn creature_class(s: string) -> i64",
-            examples: creature_class_examples(),
-        };
+            let req = LearnRequest {
+                gap: "cannot classify mythical creatures (dragon, griffin, phoenix)".to_string(),
+                name: "creature_class".to_string(),
+                signature: "fn creature_class(s: string) -> i64",
+                examples: creature_class_examples(),
+            };
 
-        let (candidate, report) = self_extend(&engine, &req);
+            let (candidate, report) = self_extend(&engine, &req);
 
-        // The extension was synthesized, gated green, and accepted.
-        assert!(report.synthesized, "creature_class must synthesize: {}", report.message);
-        assert!(
-            report.regression_passed,
-            "the gate must stay green for an additive disjoint component: {}",
-            report.message
-        );
-        assert!(report.accepted, "a synthesized + gated extension must be accepted: {}", report.message);
-        assert!(!report.method.is_empty(), "the recovering teacher must be recorded");
+            // The extension was synthesized, gated green, and accepted.
+            assert!(
+                report.synthesized,
+                "creature_class must synthesize: {}",
+                report.message
+            );
+            assert!(
+                report.regression_passed,
+                "the gate must stay green for an additive disjoint component: {}",
+                report.message
+            );
+            assert!(
+                report.accepted,
+                "a synthesized + gated extension must be accepted: {}",
+                report.message
+            );
+            assert!(
+                !report.method.is_empty(),
+                "the recovering teacher must be recorded"
+            );
 
-        // The returned engine actually answers the new query.
-        let new_engine = candidate.expect("an accepted extension must return Some(engine)");
-        assert!(
-            new_engine.has_component("creature_class"),
-            "the accepted engine must contain the grafted component"
-        );
-        // The test words contain no characters needing escaping, so a plain
-        // double-quoted literal is a faithful Mog string arg.
-        assert_eq!(
-            new_engine.eval_int("creature_class(\"dragon\")"),
-            1,
-            "dragon must classify as a creature on the extended engine"
-        );
-        assert_eq!(
-            new_engine.eval_int("creature_class(\"report\")"),
-            0,
-            "report must classify as a non-creature on the extended engine"
-        );
+            // The returned engine actually answers the new query.
+            let new_engine = candidate.expect("an accepted extension must return Some(engine)");
+            assert!(
+                new_engine.has_component("creature_class"),
+                "the accepted engine must contain the grafted component"
+            );
+            // The test words contain no characters needing escaping, so a plain
+            // double-quoted literal is a faithful Mog string arg.
+            assert_eq!(
+                new_engine.eval_int("creature_class(\"dragon\")"),
+                1,
+                "dragon must classify as a creature on the extended engine"
+            );
+            assert_eq!(
+                new_engine.eval_int("creature_class(\"report\")"),
+                0,
+                "report must classify as a non-creature on the extended engine"
+            );
 
-        // The original engine is untouched: it still lacks the component.
-        assert!(
-            !engine.has_component("creature_class"),
-            "self_extend must not mutate the input engine"
-        );
+            // The original engine is untouched: it still lacks the component.
+            assert!(
+                !engine.has_component("creature_class"),
+                "self_extend must not mutate the input engine"
+            );
         });
     }
 
@@ -550,131 +562,143 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
         let tmp_path = tmp.to_string_lossy().to_string();
         crate::self_improve::journal::test_support::with_journal_env(&tmp_path, || {
+            let engine = Engine::new();
 
-        let engine = Engine::new();
-
-        // PRECONDITION 1: the honest engine's gate is green, and the taxonomy
-        // golden behavior we're about to attack is currently correct.
-        let before = regression_gate(&engine);
-        assert!(
-            before.ok(),
-            "precondition: the gate must be green on the default engine before we \
+            // PRECONDITION 1: the honest engine's gate is green, and the taxonomy
+            // golden behavior we're about to attack is currently correct.
+            let before = regression_gate(&engine);
+            assert!(
+                before.ok(),
+                "precondition: the gate must be green on the default engine before we \
              can claim the attack regresses it; passed {}/{} sound={} failures={:?}",
-            before.passed, before.total, before.sound, before.failures
-        );
-        assert_eq!(
-            engine.noun_class("teacher"),
-            1,
-            "precondition: the honest engine classifies 'teacher' as animate (1)"
-        );
-        assert!(
-            engine.is_person("teacher"),
-            "precondition: the honest engine answers 'teacher is a person' = true"
-        );
+                before.passed,
+                before.total,
+                before.sound,
+                before.failures
+            );
+            assert_eq!(
+                engine.noun_class("teacher"),
+                1,
+                "precondition: the honest engine classifies 'teacher' as animate (1)"
+            );
+            assert!(
+                engine.is_person("teacher"),
+                "precondition: the honest engine answers 'teacher is a person' = true"
+            );
 
-        // The POISON spec: a `noun_animacy` that misclassifies the agents the
-        // taxonomy golden cases depend on (teacher/editor/author/student -> 2,
-        // inanimate) while still being a well-posed, synthesizable string->int
-        // map (every input has exactly one output, so synthesis succeeds).
-        let poison = |w: &str, c: i64| Example {
-            inputs: vec![Value::Str(w.to_string())],
-            expected: Value::Int(c),
-        };
-        let examples = vec![
-            poison("teacher", 2), // WRONG: teacher is animate; this breaks taxonomy
-            poison("editor", 2),
-            poison("author", 2),
-            poison("student", 2),
-            poison("report", 2),
-            poison("book", 2),
-            poison("dog", 1), // a couple of correct anchors so the map isn't constant
-            poison("cat", 1),
-        ];
+            // The POISON spec: a `noun_animacy` that misclassifies the agents the
+            // taxonomy golden cases depend on (teacher/editor/author/student -> 2,
+            // inanimate) while still being a well-posed, synthesizable string->int
+            // map (every input has exactly one output, so synthesis succeeds).
+            let poison = |w: &str, c: i64| Example {
+                inputs: vec![Value::Str(w.to_string())],
+                expected: Value::Int(c),
+            };
+            let examples = vec![
+                poison("teacher", 2), // WRONG: teacher is animate; this breaks taxonomy
+                poison("editor", 2),
+                poison("author", 2),
+                poison("student", 2),
+                poison("report", 2),
+                poison("book", 2),
+                poison("dog", 1), // a couple of correct anchors so the map isn't constant
+                poison("cat", 1),
+            ];
 
-        let req = LearnRequest {
-            gap: "attempt to 'refine' the animacy lexicon (adversarial: regresses taxonomy)"
-                .to_string(),
-            name: "noun_animacy".to_string(), // COLLIDES with the engine's lexicon
-            signature: "fn noun_animacy(s: string) -> i64",
-            examples,
-        };
+            let req = LearnRequest {
+                gap: "attempt to 'refine' the animacy lexicon (adversarial: regresses taxonomy)"
+                    .to_string(),
+                name: "noun_animacy".to_string(), // COLLIDES with the engine's lexicon
+                signature: "fn noun_animacy(s: string) -> i64",
+                examples,
+            };
 
-        let (candidate, report) = self_extend(&engine, &req);
+            let (candidate, report) = self_extend(&engine, &req);
 
-        // (1) Synthesis SUCCEEDED — the rejection is the GATE's doing, not a
-        // synthesis failure. This is the crux: the gate is load-bearing.
-        assert!(
-            report.synthesized,
-            "the poison component must actually synthesize (well-posed map), so the \
+            // (1) Synthesis SUCCEEDED — the rejection is the GATE's doing, not a
+            // synthesis failure. This is the crux: the gate is load-bearing.
+            assert!(
+                report.synthesized,
+                "the poison component must actually synthesize (well-posed map), so the \
              rejection is attributable to the GATE, not to synthesis failure: {}",
-            report.message
-        );
+                report.message
+            );
 
-        // (2) The gate went red and the extension was declined.
-        assert!(
-            !report.regression_passed,
-            "the gate MUST go red for a component that regresses a golden case: {}",
-            report.message
-        );
-        assert!(
-            !report.accepted,
-            "a regressing extension must NEVER be accepted: {}",
-            report.message
-        );
+            // (2) The gate went red and the extension was declined.
+            assert!(
+                !report.regression_passed,
+                "the gate MUST go red for a component that regresses a golden case: {}",
+                report.message
+            );
+            assert!(
+                !report.accepted,
+                "a regressing extension must NEVER be accepted: {}",
+                report.message
+            );
 
-        // (3) No candidate engine is returned.
-        assert!(
-            candidate.is_none(),
-            "a gate-rejected extension must return None, not a usable engine"
-        );
+            // (3) No candidate engine is returned.
+            assert!(
+                candidate.is_none(),
+                "a gate-rejected extension must return None, not a usable engine"
+            );
 
-        // (4) The input engine is UNCHANGED: the real noun_animacy is intact, the
-        // taxonomy query is still correct, and the engine never carried a grafted
-        // override (self_extend grafts onto a CLONE; it never mutates `engine`).
-        assert_eq!(
-            engine.noun_class("teacher"),
-            1,
-            "the live engine's noun_animacy must be untouched after a rejection"
-        );
-        assert!(
-            engine.is_person("teacher"),
-            "the live engine must still answer 'teacher is a person' = true"
-        );
-        let after = regression_gate(&engine);
-        assert!(
-            after.ok(),
-            "the live engine's gate must still be green after a rejected attempt; \
+            // (4) The input engine is UNCHANGED: the real noun_animacy is intact, the
+            // taxonomy query is still correct, and the engine never carried a grafted
+            // override (self_extend grafts onto a CLONE; it never mutates `engine`).
+            assert_eq!(
+                engine.noun_class("teacher"),
+                1,
+                "the live engine's noun_animacy must be untouched after a rejection"
+            );
+            assert!(
+                engine.is_person("teacher"),
+                "the live engine must still answer 'teacher is a person' = true"
+            );
+            let after = regression_gate(&engine);
+            assert!(
+                after.ok(),
+                "the live engine's gate must still be green after a rejected attempt; \
              passed {}/{} sound={} failures={:?}",
-            after.passed, after.total, after.sound, after.failures
-        );
+                after.passed,
+                after.total,
+                after.sound,
+                after.failures
+            );
 
-        // (5) The rejection is auditable: the message records the gate verdict and
-        // names at least one failing golden case (a taxonomy/agreement question).
-        assert!(
-            report.message.contains("rejected") && report.message.contains("regression gate red"),
-            "the report must explain the gate rejected the extension: {}",
-            report.message
-        );
-        assert!(
-            report.message.to_lowercase().contains("person")
-                || report.message.to_lowercase().contains("agent")
-                || report.message.to_lowercase().contains("how many")
-                || report.message.contains("failing cases:"),
-            "the report must name the regressed golden case(s): {}",
-            report.message
-        );
+            // (5) The rejection is auditable: the message records the gate verdict and
+            // names at least one failing golden case (a taxonomy/agreement question).
+            assert!(
+                report.message.contains("rejected")
+                    && report.message.contains("regression gate red"),
+                "the report must explain the gate rejected the extension: {}",
+                report.message
+            );
+            assert!(
+                report.message.to_lowercase().contains("person")
+                    || report.message.to_lowercase().contains("agent")
+                    || report.message.to_lowercase().contains("how many")
+                    || report.message.contains("failing cases:"),
+                "the report must name the regressed golden case(s): {}",
+                report.message
+            );
 
-        // (6) The rejected attempt is JOURNALED: synthesize was attempted and
-        // verified, but it was NOT accepted and did NOT pass the gate. The audit
-        // trail records the rejection, not just successes.
-        let entries = crate::self_improve::journal::entries();
-        let mine = entries
-            .iter()
-            .find(|e| e.action == "synthesize noun_animacy")
-            .expect("the rejected attempt must be journaled");
-        assert!(mine.verified, "the journaled attempt synthesized+verified");
-        assert!(!mine.accepted, "the journaled attempt was rejected, not accepted");
-        assert!(!mine.regression_passed, "the journaled attempt failed the gate");
+            // (6) The rejected attempt is JOURNALED: synthesize was attempted and
+            // verified, but it was NOT accepted and did NOT pass the gate. The audit
+            // trail records the rejection, not just successes.
+            let entries = crate::self_improve::journal::entries();
+            let mine = entries
+                .iter()
+                .find(|e| e.action == "synthesize noun_animacy")
+                .expect("the rejected attempt must be journaled");
+            assert!(mine.verified, "the journaled attempt synthesized+verified");
+            assert!(
+                !mine.accepted,
+                "the journaled attempt was rejected, not accepted"
+            );
+            assert!(
+                !mine.regression_passed,
+                "the journaled attempt failed the gate"
+            );
         });
         let _ = std::fs::remove_file(&tmp);
     }
@@ -687,35 +711,41 @@ mod tests {
     #[test]
     fn unsatisfiable_extension_is_rejected_without_synthesis() {
         crate::self_improve::journal::test_support::with_journal_env("", || {
-        let engine = Engine::new();
-        // Contradictory spec: "dragon" -> 1 AND "dragon" -> 0. No deterministic
-        // function reproduces both, so synthesis must fail.
-        let examples = vec![
-            Example {
-                inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
-                expected: crate::benchmark::Value::Int(1),
-            },
-            Example {
-                inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
-                expected: crate::benchmark::Value::Int(0),
-            },
-        ];
-        let req = LearnRequest {
-            gap: "impossible contradictory lexicon".to_string(),
-            name: "contradictory_class".to_string(),
-            signature: "fn contradictory_class(s: string) -> i64",
-            examples,
-        };
+            let engine = Engine::new();
+            // Contradictory spec: "dragon" -> 1 AND "dragon" -> 0. No deterministic
+            // function reproduces both, so synthesis must fail.
+            let examples = vec![
+                Example {
+                    inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
+                    expected: crate::benchmark::Value::Int(1),
+                },
+                Example {
+                    inputs: vec![crate::benchmark::Value::Str("dragon".to_string())],
+                    expected: crate::benchmark::Value::Int(0),
+                },
+            ];
+            let req = LearnRequest {
+                gap: "impossible contradictory lexicon".to_string(),
+                name: "contradictory_class".to_string(),
+                signature: "fn contradictory_class(s: string) -> i64",
+                examples,
+            };
 
-        let (candidate, report) = self_extend(&engine, &req);
-        assert!(candidate.is_none(), "an unsynthesizable gap must return None");
-        assert!(!report.synthesized, "synthesis must report failure");
-        assert!(!report.accepted, "an unsynthesized extension is never accepted");
-        assert!(
-            report.message.contains("no verified program"),
-            "the report must explain the gap stayed open: {}",
-            report.message
-        );
+            let (candidate, report) = self_extend(&engine, &req);
+            assert!(
+                candidate.is_none(),
+                "an unsynthesizable gap must return None"
+            );
+            assert!(!report.synthesized, "synthesis must report failure");
+            assert!(
+                !report.accepted,
+                "an unsynthesized extension is never accepted"
+            );
+            assert!(
+                report.message.contains("no verified program"),
+                "the report must explain the gap stayed open: {}",
+                report.message
+            );
         });
     }
 
@@ -724,7 +754,12 @@ mod tests {
     /// each tagged with its agent / patient surface word and predicate lemma.
     fn osv_examples() -> Vec<ConstructionExample<'static>> {
         vec![
-            ("the report the teacher writes", "teacher", "report", "write"),
+            (
+                "the report the teacher writes",
+                "teacher",
+                "report",
+                "write",
+            ),
             ("the book the student reads", "student", "book", "read"),
             ("the memo the doctor fixes", "doctor", "memo", "fix"),
         ]
@@ -767,14 +802,21 @@ mod tests {
             let (candidate, report) = self_learn_construction(&engine, &req);
 
             // Induced, gated green, accepted.
-            assert!(report.synthesized, "OSV must induce + verify: {}", report.message);
+            assert!(
+                report.synthesized,
+                "OSV must induce + verify: {}",
+                report.message
+            );
             assert!(
                 report.regression_passed,
                 "an additive OSV construction must pass the gate (its skeleton is not \
                  base-parseable): {}",
                 report.message
             );
-            assert!(report.accepted, "a verified + gated construction must be accepted");
+            assert!(
+                report.accepted,
+                "a verified + gated construction must be accepted"
+            );
 
             // The returned engine registered it AND now parses OSV correctly.
             let learned = candidate.expect("an accepted construction returns Some(engine)");
@@ -789,16 +831,24 @@ mod tests {
             assert_eq!(e.predicate, "read");
             assert_eq!(
                 e.agent,
-                Some(crate::understanding::meaning::Term::Entity("editor".to_string()))
+                Some(crate::understanding::meaning::Term::Entity(
+                    "editor".to_string()
+                ))
             );
             assert_eq!(
                 e.patient,
-                Some(crate::understanding::meaning::Term::Entity("letter".to_string()))
+                Some(crate::understanding::meaning::Term::Entity(
+                    "letter".to_string()
+                ))
             );
 
             // PERSISTED: the accepted construction is durably in the store.
             let stored = store::load_constructions();
-            assert_eq!(stored.len(), 1, "the accepted construction must be persisted");
+            assert_eq!(
+                stored.len(),
+                1,
+                "the accepted construction must be persisted"
+            );
             assert_eq!(stored[0].name, "object_fronting");
             assert_eq!(stored[0].skeletons, vec![vec![0, 1, 0, 1, 2]]);
             assert_eq!(stored[0].agent_idx, 3);

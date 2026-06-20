@@ -406,7 +406,10 @@ mod tests {
         unsafe {
             std::env::set_var("NCPU_COMPONENTS_PATH", "");
         }
-        save_one(&sample("x_class", "fn x_class(s: string) -> i64 { return 0; }\n"));
+        save_one(&sample(
+            "x_class",
+            "fn x_class(s: string) -> i64 { return 0; }\n",
+        ));
         assert!(
             load().is_empty(),
             "empty NCPU_COMPONENTS_PATH must disable the store"
@@ -435,7 +438,10 @@ mod tests {
             let got = load();
             assert_eq!(got.len(), 2, "merge-by-name must not duplicate a_class");
             // a_class moved to last (refreshed), b_class is now first.
-            let a_row = got.iter().find(|c| c.name == "a_class").expect("a_class present");
+            let a_row = got
+                .iter()
+                .find(|c| c.name == "a_class")
+                .expect("a_class present");
             assert!(a_row.code.contains("99"), "refreshed code must win");
         });
     }
@@ -476,7 +482,10 @@ mod tests {
     #[test]
     fn clear_removes_the_store() {
         with_temp_store(|path| {
-            save_one(&sample("c_class", "fn c_class(s: string) -> i64 { return 0; }\n"));
+            save_one(&sample(
+                "c_class",
+                "fn c_class(s: string) -> i64 { return 0; }\n",
+            ));
             assert!(path.exists());
             assert_eq!(load().len(), 1);
             clear();
@@ -722,11 +731,15 @@ fn noun_animacy(s: string) -> i64 {\n\
             assert_eq!(e.predicate, "write");
             assert_eq!(
                 e.agent,
-                Some(crate::understanding::meaning::Term::Entity("teacher".to_string()))
+                Some(crate::understanding::meaning::Term::Entity(
+                    "teacher".to_string()
+                ))
             );
             assert_eq!(
                 e.patient,
-                Some(crate::understanding::meaning::Term::Entity("report".to_string()))
+                Some(crate::understanding::meaning::Term::Entity(
+                    "report".to_string()
+                ))
             );
 
             // The reloaded engine is still SOUND (a sound OSV rule leaves the gate
@@ -805,7 +818,9 @@ fn noun_animacy(s: string) -> i64 {\n\
             assert_eq!(e.predicate, "write");
             assert_eq!(
                 e.agent,
-                Some(crate::understanding::meaning::Term::Entity("teacher".to_string())),
+                Some(crate::understanding::meaning::Term::Entity(
+                    "teacher".to_string()
+                )),
                 "the base SVO agent must remain `teacher` — the colliding rule was rejected"
             );
         });

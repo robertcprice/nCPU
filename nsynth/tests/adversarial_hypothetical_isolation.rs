@@ -162,12 +162,16 @@ fn world_level_clone_isolation_leaves_facts_untouched() {
 
     // ---- MIRROR `what_if_not`: clone, assert the contradictory into the CLONE -
     let fact_meaning = semantics::understand(&engine, "the teacher writes the report");
-    let negation = polarity_flip(&fact_meaning)
-        .expect("an asserted event must have a sound contradictory");
+    let negation =
+        polarity_flip(&fact_meaning).expect("an asserted event must have a sound contradictory");
     let cf_answer = {
         let mut counterfactual = discourse.clone();
         counterfactual.world.assert(&negation);
-        qa::answer(&engine, &counterfactual, "does the teacher write the report?")
+        qa::answer(
+            &engine,
+            &counterfactual,
+            "does the teacher write the report?",
+        )
     };
     // NON-VACUITY: in the counterfactual clone the verdict flipped away from "yes".
     assert!(

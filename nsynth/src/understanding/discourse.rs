@@ -71,7 +71,10 @@ impl Discourse {
         let right_has_subject = matches!(
             right.first().map(|s| s.as_str()),
             Some("the") | Some("a") | Some("an")
-        ) || right.first().map(|w| engine.noun_class(w) > 0).unwrap_or(false);
+        ) || right
+            .first()
+            .map(|w| engine.noun_class(w) > 0)
+            .unwrap_or(false);
 
         let mut conjuncts = vec![left.join(" ")];
         if right_has_subject {
@@ -482,7 +485,8 @@ mod tests {
         d.read(engine(), "The author reads the book.");
         d.read(engine(), "They read the letter.");
         // "the author reads the letter" should now be a fact (they -> author).
-        let q = crate::understanding::semantics::understand(engine(), "the author reads the letter");
+        let q =
+            crate::understanding::semantics::understand(engine(), "the author reads the letter");
         assert_eq!(d.world.holds(&q), Some(true));
     }
 }

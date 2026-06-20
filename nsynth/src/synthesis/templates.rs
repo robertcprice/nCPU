@@ -2,9 +2,11 @@ use super::*;
 
 // ─── Template library ─────────────────────────────────────────────────────────
 
-/// Try verified templates before gradient descent.
-/// First tries the benchmark's reference_code directly, then inline alternatives
-/// for patterns that use complex Mog syntax the runtime may not support.
+/// Try generic verified templates before gradient descent.
+///
+/// Benchmark reference implementations are deliberately not candidates: they
+/// belong exclusively to evaluation and using them would turn synthesis into an
+/// answer lookup.
 pub(crate) fn try_scalar_templates(
     problem: &Problem,
     fn_name: &str,
@@ -24,13 +26,7 @@ pub(crate) fn try_scalar_templates(
         }
     };
 
-    // Always try the benchmark reference code first
-    if let Some(r) = make_result(problem.reference_code.to_string()) {
-        return Some(r);
-    }
-
-    // Inline alternatives for patterns using complex Mog types (Result, Option, match)
-    // or any pattern the reference_code evaluator might reject.
+    // Inline alternatives for common program structures.
     let candidates: Vec<String> = match n_args {
         1 => vec![
             // positive_or_default: if x > 0 return x else 0

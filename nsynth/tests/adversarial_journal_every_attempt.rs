@@ -80,10 +80,9 @@ fn with_temp_journal<R>(f: impl FnOnce(&std::path::Path) -> R) -> R {
 }
 
 fn find_by_gap<'a>(entries: &'a [JournalEntry], gap: &str) -> &'a JournalEntry {
-    entries
-        .iter()
-        .find(|e| e.gap == gap)
-        .unwrap_or_else(|| panic!("journal is missing an entry for gap {gap:?}; SILENT self-modification"))
+    entries.iter().find(|e| e.gap == gap).unwrap_or_else(|| {
+        panic!("journal is missing an entry for gap {gap:?}; SILENT self-modification")
+    })
 }
 
 #[test]
@@ -137,8 +136,7 @@ fn every_attempt_accepted_and_rejected_is_journaled() {
             "a synthesized + gated extension must be accepted: {}",
             accept_report.message
         );
-        let accept_engine =
-            accept_cand.expect("an accepted extension must return Some(engine)");
+        let accept_engine = accept_cand.expect("an accepted extension must return Some(engine)");
         assert_eq!(
             accept_engine.eval_int("creature_class(\"dragon\")"),
             1,
@@ -276,7 +274,10 @@ fn empty_env_disables_the_loop_journal() {
         examples: creature_class_examples(),
     };
     let (_cand, report) = self_extend(&engine, &req);
-    assert!(report.accepted, "the control extension still synthesizes + gates");
+    assert!(
+        report.accepted,
+        "the control extension still synthesizes + gates"
+    );
     assert!(
         journal::entries().is_empty(),
         "an empty NCPU_JOURNAL_PATH must disable journaling even on the live loop"

@@ -31,7 +31,11 @@ fn engine() -> &'static Engine {
 fn careful_parses_to_hasproperty_not_isa() {
     let m = semantics::understand(engine(), "The teacher is careful.");
     match &m {
-        Meaning::HasProperty { subject, property, negated } => {
+        Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } => {
             assert_eq!(*subject, Term::Entity("teacher".to_string()));
             assert_eq!(property, "careful");
             assert!(!negated, "affirmative attribute");

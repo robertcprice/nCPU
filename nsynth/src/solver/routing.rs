@@ -89,9 +89,13 @@ pub(super) fn route_is_applicable(
         | ROUTE_REGISTER_MACHINE
         | ROUTE_EXPR_TEMPLATES
         | ROUTE_SEARCH => true,
-        ROUTE_EXPR_ONLY | ROUTE_NATIVE_REFERENCE_DISTILLATION => ctx.scalar_only_inputs,
-        ROUTE_ARRAY_REFERENCE_DISTILLATION => ctx.has_array_input,
-        ROUTE_TEMPLATE_REFERENCE => !problem.reference_code.is_empty(),
+        ROUTE_EXPR_ONLY => ctx.scalar_only_inputs,
+        // Reference implementations are evaluator-owned oracles, never solver
+        // routes. Keep the route identifiers parseable for old telemetry only.
+        ROUTE_REFERENCE_DISTILLATION
+        | ROUTE_NATIVE_REFERENCE_DISTILLATION
+        | ROUTE_ARRAY_REFERENCE_DISTILLATION
+        | ROUTE_TEMPLATE_REFERENCE => false,
         _ => !problem.examples.is_empty(),
     }
 }
@@ -114,27 +118,9 @@ pub(super) fn default_post_enumerative_routes(
     if route_is_applicable(ROUTE_BRIDGE_GRADIENT, problem, ctx) {
         routes.push(ROUTE_BRIDGE_GRADIENT);
     }
-    if route_is_applicable(ROUTE_REFERENCE_DISTILLATION, problem, ctx)
-        && !problem.reference_code.is_empty()
-    {
-        routes.push(ROUTE_REFERENCE_DISTILLATION);
-    }
-    if route_is_applicable(ROUTE_NATIVE_REFERENCE_DISTILLATION, problem, ctx)
-        && !problem.reference_code.is_empty()
-    {
-        routes.push(ROUTE_NATIVE_REFERENCE_DISTILLATION);
-    }
-    if route_is_applicable(ROUTE_ARRAY_REFERENCE_DISTILLATION, problem, ctx)
-        && !problem.reference_code.is_empty()
-    {
-        routes.push(ROUTE_ARRAY_REFERENCE_DISTILLATION);
-    }
     routes.push(ROUTE_EXPR_TEMPLATES);
     if route_is_applicable(ROUTE_SCALAR_TEMPLATES, problem, ctx) {
         routes.push(ROUTE_SCALAR_TEMPLATES);
-    }
-    if route_is_applicable(ROUTE_TEMPLATE_REFERENCE, problem, ctx) {
-        routes.push(ROUTE_TEMPLATE_REFERENCE);
     }
     routes.push(ROUTE_SEARCH);
 

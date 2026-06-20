@@ -12,7 +12,7 @@ use crate::comprehension::{capitalize, Engine, AGENTS, GRADABLE, PATIENTS};
 use crate::understanding::discourse::Discourse;
 use crate::understanding::inference::{prove, relation, Proof, Relation};
 use crate::understanding::meaning::{
-    Aspect, Event, Meaning, Modality, Quantifier, Role, Tense, TemporalRel, Term,
+    Aspect, Event, Meaning, Modality, Quantifier, Role, TemporalRel, Tense, Term,
 };
 
 /// Answer a question against the world model built up in `discourse`.
@@ -40,9 +40,9 @@ pub fn answer(engine: &Engine, discourse: &Discourse, question: &str) -> String 
         // truth (universal/existential/negative quantification over entities,
         // disjunction, asserted attributes) augmented by sound inference and the
         // taxonomy, then reply Yes / No / I don't know.
-        Meaning::Quantified { .. }
-        | Meaning::Or(_)
-        | Meaning::HasProperty { .. } => answer_yes_no(engine, discourse, &m),
+        Meaning::Quantified { .. } | Meaning::Or(_) | Meaning::HasProperty { .. } => {
+            answer_yes_no(engine, discourse, &m)
+        }
         // A Comparison reaching `answer` is a truth query ("Is the report longer
         // than the book?"): its truth (direct + transitive closure, respecting
         // negation) lives in the world model, so route through `answer_yes_no`.
@@ -124,9 +124,9 @@ pub fn answer_explained(
         Meaning::WhQuestion { slot, body } => (answer_wh(discourse, slot, &body), None),
         Meaning::IsA { .. } => answer_yes_no_explained(engine, discourse, &m),
         Meaning::Event(_) => answer_yes_no_explained(engine, discourse, &m),
-        Meaning::Quantified { .. }
-        | Meaning::Or(_)
-        | Meaning::HasProperty { .. } => answer_yes_no_explained(engine, discourse, &m),
+        Meaning::Quantified { .. } | Meaning::Or(_) | Meaning::HasProperty { .. } => {
+            answer_yes_no_explained(engine, discourse, &m)
+        }
         Meaning::Comparison { .. } => answer_yes_no_explained(engine, discourse, &m),
         Meaning::Attitude { ref content, .. } if is_content_query(content) => {
             (answer_attitude_content(engine, discourse, &m), None)
@@ -204,7 +204,10 @@ fn answer_yes_no_explained(
                 proof,
             ),
             false => (
-                format!("No, {}.", realize(engine, body, /*force_negated=*/ Some(true))),
+                format!(
+                    "No, {}.",
+                    realize(engine, body, /*force_negated=*/ Some(true))
+                ),
                 proof,
             ),
         };
@@ -300,10 +303,7 @@ fn world_truth(discourse: &Discourse, body: &Meaning) -> Option<bool> {
 ///     of the query (we proved the negation, hence the query is false).
 ///
 /// `None` (open-world) truth always carries a `None` proof.
-pub fn world_truth_traced(
-    discourse: &Discourse,
-    body: &Meaning,
-) -> (Option<bool>, Option<Proof>) {
+pub fn world_truth_traced(discourse: &Discourse, body: &Meaning) -> (Option<bool>, Option<Proof>) {
     // ASPECT is non-truth-conditional for fact-matching in this curriculum: a
     // Present/Past Progressive ("is writing") or Perfect ("has written") query is
     // true exactly when the underlying SIMPLE eventuality holds. Normalize a
@@ -414,7 +414,10 @@ pub fn world_truth_traced(
     // "every teacher does not write a report" (a Quantified with a negated body).
     if let Meaning::Not(inner) = body {
         // The flipped truth has no single-meaning certificate here: None proof.
-        return (three_valued_not(world_truth_traced(discourse, inner).0), None);
+        return (
+            three_valued_not(world_truth_traced(discourse, inner).0),
+            None,
+        );
     }
 
     // Modal monotonicity, computed compositionally in QA as a belt-and-suspenders
@@ -426,7 +429,12 @@ pub fn world_truth_traced(
     //     Can/Might. We NEVER derive actuality FROM a modal (possibility does not
     //     entail the event happened) and never claim a modal true from an
     //     unproven event — so this only ever STRENGTHENS to a sound `Some(true)`.
-    if let Meaning::Modal { modality, body: ev, negated: false } = body {
+    if let Meaning::Modal {
+        modality,
+        body: ev,
+        negated: false,
+    } = body
+    {
         if matches!(modality, Modality::Can | Modality::Might) {
             // The actual occurrence of the event makes it possible.
             let (et, ep) = world_truth_traced(discourse, &Meaning::Event((**ev).clone()));
@@ -516,24 +524,42 @@ fn polarity_flip_query(m: &Meaning) -> Option<Meaning> {
             e.negated = !e.negated;
             Some(Meaning::Event(e))
         }
-        Meaning::IsA { subject, category, negated } => Some(Meaning::IsA {
+        Meaning::IsA {
+            subject,
+            category,
+            negated,
+        } => Some(Meaning::IsA {
             subject: subject.clone(),
             category: category.clone(),
             negated: !negated,
         }),
-        Meaning::HasProperty { subject, property, negated } => Some(Meaning::HasProperty {
+        Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } => Some(Meaning::HasProperty {
             subject: subject.clone(),
             property: property.clone(),
             negated: !negated,
         }),
-        Meaning::Comparison { subject, scale, more, than, negated } => Some(Meaning::Comparison {
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } => Some(Meaning::Comparison {
             subject: subject.clone(),
             scale: scale.clone(),
             more: *more,
             than: than.clone(),
             negated: !negated,
         }),
-        Meaning::Modal { modality, body, negated } => Some(Meaning::Modal {
+        Meaning::Modal {
+            modality,
+            body,
+            negated,
+        } => Some(Meaning::Modal {
             modality: *modality,
             body: body.clone(),
             negated: !negated,
@@ -837,7 +863,12 @@ fn answer_attitude_content(_engine: &Engine, _discourse: &Discourse, _m: &Meanin
 /// query — behaviour is byte-for-byte identical to before the integration. We
 /// NEVER answer Yes unless the verified program evaluates to exactly 1.
 fn learned_classifier_truth(engine: &Engine, body: &Meaning) -> Option<(bool, Option<Proof>)> {
-    let Meaning::IsA { subject, category, negated } = body else {
+    let Meaning::IsA {
+        subject,
+        category,
+        negated,
+    } = body
+    else {
         return None;
     };
     // Only concrete (non-pronoun, non-restricted) entities have a head word the
@@ -872,7 +903,12 @@ fn learned_classifier_truth(engine: &Engine, body: &Meaning) -> Option<(bool, Op
 /// It returns `None` for any noun outside the known lexicon, deferring to the
 /// open world rather than guessing.
 fn taxonomy_truth(body: &Meaning) -> Option<bool> {
-    let Meaning::IsA { subject, category, negated } = body else {
+    let Meaning::IsA {
+        subject,
+        category,
+        negated,
+    } = body
+    else {
         return None;
     };
     let head = subject.head();
@@ -1018,7 +1054,11 @@ pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>)
             let negated = force_negated.unwrap_or(ev.negated);
             realize_event(engine, ev, negated)
         }
-        Meaning::IsA { subject, category, negated } => {
+        Meaning::IsA {
+            subject,
+            category,
+            negated,
+        } => {
             let neg = force_negated.unwrap_or(*negated);
             let subj = surface_term_plain(subject);
             let article = indefinite_article(category);
@@ -1037,9 +1077,11 @@ pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>)
         // phrase as the subject, then the inflected verbal predication. The
         // quantified subject is third-person singular for agreement ("every
         // teacher writes"), so we inflect the verb with `verb_3sg`.
-        Meaning::Quantified { quant, var_category, body } => {
-            realize_quantified(engine, *quant, var_category, body, force_negated)
-        }
+        Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } => realize_quantified(engine, *quant, var_category, body, force_negated),
         // "X or Y" — join the realized disjuncts with "or".
         Meaning::Or(disjuncts) => disjuncts
             .iter()
@@ -1047,7 +1089,11 @@ pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>)
             .collect::<Vec<_>>()
             .join(" or "),
         // "the teacher is (not) careful" — adjectival property.
-        Meaning::HasProperty { subject, property, negated } => {
+        Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } => {
             let neg = force_negated.unwrap_or(*negated);
             let subj = surface_term_plain(subject);
             if neg {
@@ -1060,7 +1106,13 @@ pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>)
         // comparison with the lexicon's comparative form for the scale's polarity
         // ("longer"/"shorter") rather than a "more (length)" paraphrase. A
         // negative comparison uses the periphrastic "is not <comparative>".
-        Meaning::Comparison { subject, scale, more, than, negated } => {
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } => {
             let neg = force_negated.unwrap_or(*negated);
             let comp = comparative_for(scale, *more);
             let cop = if neg { "is not" } else { "is" };
@@ -1075,7 +1127,12 @@ pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>)
         // "the teacher knows that <content>" — inflect the attitude verb for the
         // (third-person-singular) holder via the synthesized 3sg program; a
         // negative attitude uses the periphrastic "does not <verb> that ...".
-        Meaning::Attitude { holder, verb, content, negated } => {
+        Meaning::Attitude {
+            holder,
+            verb,
+            content,
+            negated,
+        } => {
             let neg = force_negated.unwrap_or(*negated);
             let subj = surface_term_plain(holder);
             let verb_phrase = if neg {
@@ -1083,12 +1140,19 @@ pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>)
             } else {
                 engine.verb_3sg(verb)
             };
-            format!("{subj} {verb_phrase} that {}", realize(engine, content, None))
+            format!(
+                "{subj} {verb_phrase} that {}",
+                realize(engine, content, None)
+            )
         }
         // "two teachers write a report" — realize the at-least cardinal as a
         // number phrase + plural-agnostic restatement of the body. The body's
         // bound agent is replaced by the cardinal noun phrase.
-        Meaning::Cardinal { at_least, var_category, body } => {
+        Meaning::Cardinal {
+            at_least,
+            var_category,
+            body,
+        } => {
             let negated = force_negated.unwrap_or(body.negated);
             let count = number_phrase(*at_least);
             let verb_phrase = cardinal_verb_phrase(engine, body, negated);
@@ -1110,10 +1174,18 @@ pub(crate) fn realize(engine: &Engine, m: &Meaning, force_negated: Option<bool>)
         // "the teacher can/must/might/should [not] write the report" — a modal
         // auxiliary takes the BASE verb (no agreement/tense inflection on a modal
         // VP: "can write", never "can writes"). The object keeps its surface form.
-        Meaning::Modal { modality, body, negated } => {
+        Meaning::Modal {
+            modality,
+            body,
+            negated,
+        } => {
             let modal = modal_word(*modality);
             let neg = force_negated.unwrap_or(*negated);
-            let modal = if neg { format!("{modal} not") } else { modal.to_string() };
+            let modal = if neg {
+                format!("{modal} not")
+            } else {
+                modal.to_string()
+            };
             let subj = body
                 .agent
                 .as_ref()
@@ -1199,7 +1271,8 @@ fn realize_event(engine: &Engine, ev: &Event, negated: bool) -> String {
     // take "are/have" agreement; for a single Entity/Indefinite subject we use
     // the singular "is/has". The world models singular agents, so default singular.
     let plural = subject_is_plural(ev.agent.as_ref());
-    let verb_phrase = aspectual_verb_phrase(engine, &ev.predicate, ev.tense, ev.aspect, negated, plural);
+    let verb_phrase =
+        aspectual_verb_phrase(engine, &ev.predicate, ev.tense, ev.aspect, negated, plural);
 
     match ev.patient.as_ref() {
         Some(obj) => format!("{} {} {}", subj, verb_phrase, surface_term_plain(obj)),
@@ -1323,7 +1396,13 @@ fn realize_quantified(
     };
 
     match body.patient.as_ref() {
-        Some(obj) => format!("{} {} {} {}", det, var_category, verb_phrase, surface_term_plain(obj)),
+        Some(obj) => format!(
+            "{} {} {} {}",
+            det,
+            var_category,
+            verb_phrase,
+            surface_term_plain(obj)
+        ),
         None => format!("{} {} {}", det, var_category, verb_phrase),
     }
 }
@@ -1344,7 +1423,11 @@ fn comparative_for(scale: &str, more: bool) -> String {
         .filter(|(_, _, s)| *s == scale)
         .map(|(pos, comp, _)| (*pos, *comp))
         .collect();
-    let pick = if more { on_scale.first() } else { on_scale.get(1) };
+    let pick = if more {
+        on_scale.first()
+    } else {
+        on_scale.get(1)
+    };
     match pick {
         Some((_, comp)) => (*comp).to_string(),
         // Unknown scale (no lexicon entry): a safe paraphrase.
@@ -1500,7 +1583,11 @@ fn same_predicate(a: &str, b: &str) -> bool {
 fn resolve_meaning(discourse: &Discourse, m: &Meaning) -> Meaning {
     match m {
         Meaning::Event(ev) => Meaning::Event(resolve_event(discourse, ev)),
-        Meaning::IsA { subject, category, negated } => Meaning::IsA {
+        Meaning::IsA {
+            subject,
+            category,
+            negated,
+        } => Meaning::IsA {
             subject: discourse.resolve(subject),
             category: category.clone(),
             negated: *negated,
@@ -1515,7 +1602,11 @@ fn resolve_meaning(discourse: &Discourse, m: &Meaning) -> Meaning {
         // TODO(skeleton): resolve pronouns inside the new meanings. Quantified
         // bodies have a bound (None/Indefinite) agent, so nothing to resolve
         // yet; Or recurses into disjuncts; HasProperty resolves its subject.
-        Meaning::Quantified { quant, var_category, body } => Meaning::Quantified {
+        Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } => Meaning::Quantified {
             quant: *quant,
             var_category: var_category.clone(),
             body: resolve_event(discourse, body),
@@ -1526,7 +1617,11 @@ fn resolve_meaning(discourse: &Discourse, m: &Meaning) -> Meaning {
                 .map(|d| resolve_meaning(discourse, d))
                 .collect(),
         ),
-        Meaning::HasProperty { subject, property, negated } => Meaning::HasProperty {
+        Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } => Meaning::HasProperty {
             subject: discourse.resolve(subject),
             property: property.clone(),
             negated: *negated,
@@ -1534,20 +1629,35 @@ fn resolve_meaning(discourse: &Discourse, m: &Meaning) -> Meaning {
         // Resolve pronouns inside the new meanings against discourse history so a
         // query like "is it longer than the book?" / "does it know that ...?"
         // queries the entity the pronoun refers to.
-        Meaning::Comparison { subject, scale, more, than, negated } => Meaning::Comparison {
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } => Meaning::Comparison {
             subject: discourse.resolve(subject),
             scale: scale.clone(),
             more: *more,
             than: discourse.resolve(than),
             negated: *negated,
         },
-        Meaning::Attitude { holder, verb, content, negated } => Meaning::Attitude {
+        Meaning::Attitude {
+            holder,
+            verb,
+            content,
+            negated,
+        } => Meaning::Attitude {
             holder: discourse.resolve(holder),
             verb: verb.clone(),
             content: Box::new(resolve_meaning(discourse, content)),
             negated: *negated,
         },
-        Meaning::Cardinal { at_least, var_category, body } => Meaning::Cardinal {
+        Meaning::Cardinal {
+            at_least,
+            var_category,
+            body,
+        } => Meaning::Cardinal {
             at_least: *at_least,
             var_category: var_category.clone(),
             body: resolve_event(discourse, body),
@@ -1560,7 +1670,11 @@ fn resolve_meaning(discourse: &Discourse, m: &Meaning) -> Meaning {
         // meanings so a query like "can it write the report?" or "why does it
         // flood?" queries the entity the pronoun refers to, and a relative-clause
         // subject resolves to the entity that satisfies its clause.
-        Meaning::Modal { modality, body, negated } => Meaning::Modal {
+        Meaning::Modal {
+            modality,
+            body,
+            negated,
+        } => Meaning::Modal {
             modality: *modality,
             body: Box::new(resolve_event(discourse, body)),
             negated: *negated,
@@ -1576,7 +1690,11 @@ fn resolve_meaning(discourse: &Discourse, m: &Meaning) -> Meaning {
         },
         // Resolve pronouns inside both clauses of a conditional, mirroring Causal,
         // so "if it floods then it closes?" queries the resolved referents.
-        Meaning::Conditional { antecedent, consequent, negated } => Meaning::Conditional {
+        Meaning::Conditional {
+            antecedent,
+            consequent,
+            negated,
+        } => Meaning::Conditional {
             antecedent: Box::new(resolve_meaning(discourse, antecedent)),
             consequent: Box::new(resolve_meaning(discourse, consequent)),
             negated: *negated,
@@ -1816,7 +1934,10 @@ mod tests {
         // The world may answer Some(true) itself, or the inference fallback does;
         // either way it must NOT be a false negative or unsound true.
         let v = world_truth(&d, &some_q);
-        assert!(v != Some(false), "an existential entailed by a fact is not false; got {v:?}");
+        assert!(
+            v != Some(false),
+            "an existential entailed by a fact is not false; got {v:?}"
+        );
     }
 
     // ---- Disjunction (Or) ---------------------------------------------------
@@ -2081,10 +2202,7 @@ mod tests {
             var_category: "teacher".to_string(),
             body: bound_body("report"),
         };
-        assert_eq!(
-            realize(engine(), &card, None),
-            "two teacher write a report"
-        );
+        assert_eq!(realize(engine(), &card, None), "two teacher write a report");
     }
 
     // ---- Counting questions -------------------------------------------------
@@ -2210,22 +2328,67 @@ mod tests {
     fn aspect_realization_progressive_perfect_future() {
         let e = engine();
         // Progressive present: "is writing".
-        let prog = Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Progressive, false));
+        let prog = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Progressive,
+            false,
+        ));
         assert_eq!(realize(e, &prog, None), "the teacher is writing the report");
         // Progressive past: "was writing".
-        let prog_past = Meaning::Event(write_ev("teacher", "report", Tense::Past, Aspect::Progressive, false));
-        assert_eq!(realize(e, &prog_past, None), "the teacher was writing the report");
+        let prog_past = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Past,
+            Aspect::Progressive,
+            false,
+        ));
+        assert_eq!(
+            realize(e, &prog_past, None),
+            "the teacher was writing the report"
+        );
         // Perfect present: "has written" (irregular participle from the lexicon).
-        let perf = Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Perfect, false));
-        assert_eq!(realize(e, &perf, None), "the teacher has written the report");
+        let perf = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Perfect,
+            false,
+        ));
+        assert_eq!(
+            realize(e, &perf, None),
+            "the teacher has written the report"
+        );
         // Perfect past: "had written".
-        let perf_past = Meaning::Event(write_ev("teacher", "report", Tense::Past, Aspect::Perfect, false));
-        assert_eq!(realize(e, &perf_past, None), "the teacher had written the report");
+        let perf_past = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Past,
+            Aspect::Perfect,
+            false,
+        ));
+        assert_eq!(
+            realize(e, &perf_past, None),
+            "the teacher had written the report"
+        );
         // Future: "will write" (future dominates aspect).
-        let fut = Meaning::Event(write_ev("teacher", "report", Tense::Future, Aspect::Simple, false));
+        let fut = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Future,
+            Aspect::Simple,
+            false,
+        ));
         assert_eq!(realize(e, &fut, None), "the teacher will write the report");
         // Simple present unchanged: "writes".
-        let simple = Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Simple, false));
+        let simple = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+            false,
+        ));
         assert_eq!(realize(e, &simple, None), "the teacher writes the report");
     }
 
@@ -2233,14 +2396,41 @@ mod tests {
     fn aspect_realization_negation() {
         let e = engine();
         // Progressive negative: "is not writing".
-        let prog = Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Progressive, true));
-        assert_eq!(realize(e, &prog, None), "the teacher is not writing the report");
+        let prog = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Progressive,
+            true,
+        ));
+        assert_eq!(
+            realize(e, &prog, None),
+            "the teacher is not writing the report"
+        );
         // Perfect negative: "has not written".
-        let perf = Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Perfect, true));
-        assert_eq!(realize(e, &perf, None), "the teacher has not written the report");
+        let perf = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Perfect,
+            true,
+        ));
+        assert_eq!(
+            realize(e, &perf, None),
+            "the teacher has not written the report"
+        );
         // Future negative: "will not write".
-        let fut = Meaning::Event(write_ev("teacher", "report", Tense::Future, Aspect::Simple, true));
-        assert_eq!(realize(e, &fut, None), "the teacher will not write the report");
+        let fut = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Future,
+            Aspect::Simple,
+            true,
+        ));
+        assert_eq!(
+            realize(e, &fut, None),
+            "the teacher will not write the report"
+        );
     }
 
     #[test]
@@ -2252,11 +2442,11 @@ mod tests {
         assert_eq!(gerund_of("describe"), "describing"); // drop silent e
         assert_eq!(gerund_of("watch"), "watching"); // cluster, no doubling
         assert_eq!(gerund_of("see"), "seeing"); // ee kept
-        // Participles: irregular from the lexicon, regular == past.
+                                                // Participles: irregular from the lexicon, regular == past.
         assert_eq!(participle_of(e, "write"), "written");
         assert_eq!(participle_of(e, "give"), "given");
         assert_eq!(participle_of(e, "read"), "read"); // irregular, unchanged
-        // A regular verb's participle is its past form.
+                                                      // A regular verb's participle is its past form.
         assert_eq!(participle_of(e, "walk"), e.verb_past("walk"));
     }
 
@@ -2267,13 +2457,43 @@ mod tests {
         // written the report?" must answer Yes (aspect ignored in fact-matching).
         let mut d = Discourse::new();
         d.read(engine(), "The teacher writes the report.");
-        let perf = Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Perfect, false));
-        assert_eq!(world_truth(&d, &perf), Some(true), "perfect of a holding event is true");
-        let prog = Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Progressive, false));
-        assert_eq!(world_truth(&d, &prog), Some(true), "progressive of a holding event is true");
+        let perf = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Perfect,
+            false,
+        ));
+        assert_eq!(
+            world_truth(&d, &perf),
+            Some(true),
+            "perfect of a holding event is true"
+        );
+        let prog = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Progressive,
+            false,
+        ));
+        assert_eq!(
+            world_truth(&d, &prog),
+            Some(true),
+            "progressive of a holding event is true"
+        );
         // Future is genuinely open (no future fact asserted).
-        let fut = Meaning::Event(write_ev("teacher", "report", Tense::Future, Aspect::Simple, false));
-        assert_eq!(world_truth(&d, &fut), None, "future is open without a future fact");
+        let fut = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Future,
+            Aspect::Simple,
+            false,
+        ));
+        assert_eq!(
+            world_truth(&d, &fut),
+            None,
+            "future is open without a future fact"
+        );
     }
 
     // ---- (2) MODALITY: monotonicity, realization ----------------------------
@@ -2281,7 +2501,13 @@ mod tests {
     fn modal(modality: Modality, negated: bool) -> Meaning {
         Meaning::Modal {
             modality,
-            body: Box::new(write_ev("teacher", "report", Tense::Present, Aspect::Simple, false)),
+            body: Box::new(write_ev(
+                "teacher",
+                "report",
+                Tense::Present,
+                Aspect::Simple,
+                false,
+            )),
             negated,
         }
     }
@@ -2289,12 +2515,27 @@ mod tests {
     #[test]
     fn modal_realization() {
         let e = engine();
-        assert_eq!(realize(e, &modal(Modality::Can, false), None), "the teacher can write the report");
-        assert_eq!(realize(e, &modal(Modality::Must, false), None), "the teacher must write the report");
-        assert_eq!(realize(e, &modal(Modality::Might, false), None), "the teacher might write the report");
-        assert_eq!(realize(e, &modal(Modality::Should, false), None), "the teacher should write the report");
+        assert_eq!(
+            realize(e, &modal(Modality::Can, false), None),
+            "the teacher can write the report"
+        );
+        assert_eq!(
+            realize(e, &modal(Modality::Must, false), None),
+            "the teacher must write the report"
+        );
+        assert_eq!(
+            realize(e, &modal(Modality::Might, false), None),
+            "the teacher might write the report"
+        );
+        assert_eq!(
+            realize(e, &modal(Modality::Should, false), None),
+            "the teacher should write the report"
+        );
         // Negated modal: "can not".
-        assert_eq!(realize(e, &modal(Modality::Can, true), None), "the teacher can not write the report");
+        assert_eq!(
+            realize(e, &modal(Modality::Can, true), None),
+            "the teacher can not write the report"
+        );
     }
 
     #[test]
@@ -2316,11 +2557,24 @@ mod tests {
         // the bare event happened. The honest answer is "I don't know.".
         let d = Discourse::new();
         let a = answer_yes_no(engine(), &d, &modal(Modality::Can, false));
-        assert!(a.to_lowercase().contains("don't know"), "unknown modal is open-world; got: {a}");
+        assert!(
+            a.to_lowercase().contains("don't know"),
+            "unknown modal is open-world; got: {a}"
+        );
         // And an unproven event must not be derivable from a (hypothetical) Can:
         // qa only goes event->modal, never modal->event.
-        let bare_event = Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Simple, false));
-        assert_eq!(world_truth(&d, &bare_event), None, "no modal->actuality leak");
+        let bare_event = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+            false,
+        ));
+        assert_eq!(
+            world_truth(&d, &bare_event),
+            None,
+            "no modal->actuality leak"
+        );
     }
 
     // ---- (4) PASSIVE: maps to the same active predicate-argument structure ---
@@ -2331,8 +2585,20 @@ mod tests {
         // active "the teacher wrote the report" (agent=teacher, patient=report,
         // past). So an asserted active past fact answers the passive yes/no truth.
         let mut d = Discourse::new();
-        d.world.assert(&Meaning::Event(write_ev("teacher", "report", Tense::Past, Aspect::Simple, false)));
-        let passive_query = Meaning::Event(write_ev("teacher", "report", Tense::Past, Aspect::Simple, false));
+        d.world.assert(&Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Past,
+            Aspect::Simple,
+            false,
+        )));
+        let passive_query = Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Past,
+            Aspect::Simple,
+            false,
+        ));
         assert_eq!(world_truth(&d, &passive_query), Some(true));
     }
 
@@ -2341,7 +2607,13 @@ mod tests {
     fn temporal(rel: TemporalRel) -> Meaning {
         Meaning::Temporal {
             rel,
-            first: Box::new(write_ev("teacher", "report", Tense::Present, Aspect::Simple, false)),
+            first: Box::new(write_ev(
+                "teacher",
+                "report",
+                Tense::Present,
+                Aspect::Simple,
+                false,
+            )),
             second: Box::new(Event {
                 predicate: "read".to_string(),
                 agent: Some(Term::Entity("editor".to_string())),
@@ -2374,7 +2646,10 @@ mod tests {
         // world model; qa under-derives to "I don't know." when it has nothing).
         let d = Discourse::new();
         let a = answer_yes_no(engine(), &d, &temporal(TemporalRel::Before));
-        assert!(a.to_lowercase().contains("don't know"), "unknown temporal is open; got: {a}");
+        assert!(
+            a.to_lowercase().contains("don't know"),
+            "unknown temporal is open; got: {a}"
+        );
     }
 
     // ---- (7) CAUSAL: why-answer + non-commutative realization ---------------
@@ -2441,8 +2716,14 @@ mod tests {
             effect: Box::new(street_floods.clone()),
         };
         let a = answer_why(engine(), &d, &why);
-        assert!(a.to_lowercase().starts_with("because"), "why answer leads with 'because'; got: {a}");
-        assert!(a.to_lowercase().contains("rain"), "answer names the cause; got: {a}");
+        assert!(
+            a.to_lowercase().starts_with("because"),
+            "why answer leads with 'because'; got: {a}"
+        );
+        assert!(
+            a.to_lowercase().contains("rain"),
+            "answer names the cause; got: {a}"
+        );
     }
 
     #[test]
@@ -2463,7 +2744,10 @@ mod tests {
             })),
         };
         let a = answer_why(engine(), &d, &why);
-        assert!(a.to_lowercase().contains("don't know"), "no cause -> honest; got: {a}");
+        assert!(
+            a.to_lowercase().contains("don't know"),
+            "no cause -> honest; got: {a}"
+        );
     }
 
     // ---- (8) DEGREE QUESTIONS: answer from known comparisons ----------------
@@ -2493,7 +2777,10 @@ mod tests {
         // know." — we never invent a numeric measure or a comparison.
         let d = Discourse::new();
         let a = answer_degree(engine(), &d, &Term::Entity("report".to_string()), "length");
-        assert!(a.to_lowercase().contains("don't know"), "no comparison -> honest; got: {a}");
+        assert!(
+            a.to_lowercase().contains("don't know"),
+            "no comparison -> honest; got: {a}"
+        );
     }
 
     #[test]
@@ -2575,9 +2862,17 @@ mod tests {
         // the key soundness property is the three-valued negation flip. Verify the
         // wide-scope value equals the flip of the inner universal's value.
         let inner = world_truth(&d, &every_writes);
-        assert_eq!(wide, three_valued_not(inner), "wide scope = NOT(inner universal)");
+        assert_eq!(
+            wide,
+            three_valued_not(inner),
+            "wide scope = NOT(inner universal)"
+        );
         // And the narrow reading is evaluated as a universal over a negated body.
-        assert_eq!(narrow, Some(true), "every teacher does-not-write holds in this world");
+        assert_eq!(
+            narrow,
+            Some(true),
+            "every teacher does-not-write holds in this world"
+        );
     }
 
     #[test]
@@ -2631,9 +2926,20 @@ mod tests {
         };
         let wide = world_truth(&d, &not_every_writes);
         let narrow = world_truth(&d, &every_not_writes);
-        assert_eq!(wide, Some(true), "not every teacher writes (editor doesn't) -> true");
-        assert_eq!(narrow, Some(false), "not every teacher does-not-write (teacher does) -> false");
-        assert_ne!(wide, narrow, "the two scope readings get DIFFERENT truth values");
+        assert_eq!(
+            wide,
+            Some(true),
+            "not every teacher writes (editor doesn't) -> true"
+        );
+        assert_eq!(
+            narrow,
+            Some(false),
+            "not every teacher does-not-write (teacher does) -> false"
+        );
+        assert_ne!(
+            wide, narrow,
+            "the two scope readings get DIFFERENT truth values"
+        );
     }
 
     // ---- (3) RELATIVE CLAUSES: subject resolves to the matching entity ------
@@ -2643,7 +2949,13 @@ mod tests {
         // World knows two teachers; only one writes the report. A Restricted
         // subject "the teacher who writes the report" must resolve to THAT teacher.
         let mut d = Discourse::new();
-        d.world.assert(&Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Simple, false)));
+        d.world.assert(&Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+            false,
+        )));
         // A second person who does NOT write the report.
         d.world.assert(&Meaning::Event(Event {
             predicate: "read".to_string(),
@@ -2676,8 +2988,20 @@ mod tests {
         // SOUNDNESS: if TWO teachers satisfy the clause, the Restricted term is NOT
         // collapsed to one arbitrarily — resolution returns None (keep restricted).
         let mut d = Discourse::new();
-        d.world.assert(&Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Simple, false)));
-        d.world.assert(&Meaning::Event(write_ev("editor", "report", Tense::Present, Aspect::Simple, false)));
+        d.world.assert(&Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+            false,
+        )));
+        d.world.assert(&Meaning::Event(write_ev(
+            "editor",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+            false,
+        )));
         let clause = Event {
             predicate: "write".to_string(),
             agent: None,
@@ -2688,7 +3012,10 @@ mod tests {
             negated: false,
         };
         let resolved = resolve_restricted(&d, "person", &clause);
-        assert_eq!(resolved, None, "ambiguous restriction must not pick arbitrarily");
+        assert_eq!(
+            resolved, None,
+            "ambiguous restriction must not pick arbitrarily"
+        );
     }
 
     #[test]
@@ -2697,7 +3024,13 @@ mod tests {
         // subject is a Restricted term; after resolution the event becomes
         // read(teacher, book), and a yes/no query about it answers Yes.
         let mut d = Discourse::new();
-        d.world.assert(&Meaning::Event(write_ev("teacher", "report", Tense::Present, Aspect::Simple, false)));
+        d.world.assert(&Meaning::Event(write_ev(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+            false,
+        )));
         d.world.assert(&Meaning::Event(Event {
             predicate: "read".to_string(),
             agent: Some(Term::Entity("teacher".to_string())),
@@ -2748,7 +3081,11 @@ mod tests {
         let e = engine();
         let mut d = Discourse::new();
         d.world.assert(&Meaning::Event(write_ev(
-            "teacher", "report", Tense::Present, Aspect::Simple, false,
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+            false,
         )));
         d.world.assert(&Meaning::Event(Event {
             predicate: "read".to_string(),
@@ -2768,7 +3105,10 @@ mod tests {
             ans.starts_with("Yes"),
             "relative-clause question must answer Yes, got {ans:?}"
         );
-        assert_ne!(ans, "I don't know.", "must not be the old unanswered behaviour");
+        assert_ne!(
+            ans, "I don't know.",
+            "must not be the old unanswered behaviour"
+        );
 
         // SOUNDNESS / open-world: a relative-clause question about an event the
         // world has NOT recorded answers "I don't know" — NEVER a guessed "No".
@@ -2836,7 +3176,9 @@ mod tests {
         assert_eq!(realize(e, &perf, None), "they have written the report");
         // Singular subject stays singular ("is"/"has").
         assert!(subject_is_plural(Some(&Term::Pronoun("they".to_string()))));
-        assert!(!subject_is_plural(Some(&Term::Entity("teacher".to_string()))));
+        assert!(!subject_is_plural(Some(&Term::Entity(
+            "teacher".to_string()
+        ))));
     }
 
     // ---- Dispatcher routing for the new domains -----------------------------
@@ -2862,14 +3204,19 @@ mod tests {
             Meaning::Modal { .. } => answer_yes_no(engine(), &d, &can),
             other => panic!("expected Modal, got {other:?}"),
         };
-        assert!(routed.to_lowercase().starts_with("yes"), "modal of actual event -> yes; got: {routed}");
+        assert!(
+            routed.to_lowercase().starts_with("yes"),
+            "modal of actual event -> yes; got: {routed}"
+        );
         // Degree -> comparison phrase.
         let dq = Meaning::DegreeQuestion {
             subject: Term::Entity("report".to_string()),
             scale: "length".to_string(),
         };
         let routed_dq = match resolve_meaning(&d, &dq) {
-            Meaning::DegreeQuestion { subject, scale } => answer_degree(engine(), &d, &subject, &scale),
+            Meaning::DegreeQuestion { subject, scale } => {
+                answer_degree(engine(), &d, &subject, &scale)
+            }
             other => panic!("expected DegreeQuestion, got {other:?}"),
         };
         assert_eq!(routed_dq, "Longer than the book.");

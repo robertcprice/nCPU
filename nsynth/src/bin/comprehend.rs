@@ -75,16 +75,31 @@ use mog_synth::understanding::{qa, semantics};
 fn demo_comprehend(engine: &Engine) {
     println!("nCPU comprehending — every semantic decision is a synthesized program:\n");
     for (name, method) in &engine.methods {
-        if matches!(*name, "noun_animacy" | "valid_roles" | "ends_s" | "valid_agreement") {
+        if matches!(
+            *name,
+            "noun_animacy" | "valid_roles" | "ends_s" | "valid_agreement"
+        ) {
             println!("  {name:<16}: via {method}");
         }
     }
 
     let probes = [
-        ("the author writes the article", true, "animate -> inanimate"),
+        (
+            "the author writes the article",
+            true,
+            "animate -> inanimate",
+        ),
         ("the article writes the author", false, "inanimate subject"),
-        ("the teacher helps the student", false, "animate -> ANIMATE object"),
-        ("the book blocks the chapter", false, "inanimate -> inanimate"),
+        (
+            "the teacher helps the student",
+            false,
+            "animate -> ANIMATE object",
+        ),
+        (
+            "the book blocks the chapter",
+            false,
+            "inanimate -> inanimate",
+        ),
     ];
     println!("\n  [selectional restriction]");
     for (s, want, why) in probes {
@@ -97,7 +112,11 @@ fn demo_comprehend(engine: &Engine) {
     let agree = [
         ("the captain watches the report", true, "singular + 3sg"),
         ("the captains watch the report", true, "plural + base"),
-        ("the captains watches the report", false, "plural + 3sg  <- old rule's BUG"),
+        (
+            "the captains watches the report",
+            false,
+            "plural + 3sg  <- old rule's BUG",
+        ),
         ("the captain watch the report", false, "singular + base"),
     ];
     println!("\n  [subject-verb agreement]");
@@ -105,17 +124,30 @@ fn demo_comprehend(engine: &Engine) {
     for (s, want, why) in agree {
         let got = engine.check_agreement(s);
         let mark = if got == want { "OK " } else { "ERR" };
-        println!("     [{mark}] got={} want={}  ({why}): {s}", got as i32, want as i32);
+        println!(
+            "     [{mark}] got={} want={}  ({why}): {s}",
+            got as i32, want as i32
+        );
         if why.contains("BUG") {
             bug_fixed = !got;
         }
     }
-    println!("\n  \"The captains watches.\" is now {} — agreement bug fixed.",
-             if bug_fixed { "REJECTED" } else { "still accepted" });
+    println!(
+        "\n  \"The captains watches.\" is now {} — agreement bug fixed.",
+        if bug_fixed {
+            "REJECTED"
+        } else {
+            "still accepted"
+        }
+    );
 }
 
 fn verb_between(engine: &Engine, words: &[String], subj: &str) -> String {
-    let start = words.iter().position(|w| w == subj).map(|i| i + 1).unwrap_or(0);
+    let start = words
+        .iter()
+        .position(|w| w == subj)
+        .map(|i| i + 1)
+        .unwrap_or(0);
     for w in &words[start..] {
         if engine.noun_class(w) == 0 && w != "the" && w != "a" {
             return w.clone();
@@ -126,18 +158,23 @@ fn verb_between(engine: &Engine, words: &[String], subj: &str) -> String {
 
 fn respond(engine: &Engine, last_subject: &mut Option<String>, utterance: &str) -> String {
     let raw = words_of(utterance);
-    let words: Vec<String> = raw.iter().map(|w| {
-        match (w.as_str(), last_subject.as_ref()) {
+    let words: Vec<String> = raw
+        .iter()
+        .map(|w| match (w.as_str(), last_subject.as_ref()) {
             ("it" | "they" | "she" | "he", Some(s)) => s.clone(),
             _ => w.clone(),
-        }
-    }).collect();
+        })
+        .collect();
     if words.is_empty() {
         return "I didn't catch that.".into();
     }
     let head = words[0].clone();
     let clause = words.join(" ");
-    let nouns: Vec<String> = words.iter().filter(|w| engine.noun_class(w) > 0).cloned().collect();
+    let nouns: Vec<String> = words
+        .iter()
+        .filter(|w| engine.noun_class(w) > 0)
+        .cloned()
+        .collect();
     if let Some(first) = nouns.first() {
         *last_subject = Some(first.clone());
     }
@@ -178,13 +215,18 @@ fn respond(engine: &Engine, last_subject: &mut Option<String>, utterance: &str) 
                 if i + 1 < words.len() {
                     let verb = &words[i + 1];
                     let fixed_verb = if words[i].ends_with('s') {
-                        verb.trim_end_matches("es").trim_end_matches('s').to_string()
+                        verb.trim_end_matches("es")
+                            .trim_end_matches('s')
+                            .to_string()
                     } else {
                         engine.verb_3sg(verb)
                     };
                     let mut fixed = words.clone();
                     fixed[i + 1] = fixed_verb;
-                    return format!("That isn't grammatical — did you mean: \"{}\"?", fixed.join(" "));
+                    return format!(
+                        "That isn't grammatical — did you mean: \"{}\"?",
+                        fixed.join(" ")
+                    );
                 }
             }
             "That isn't grammatical.".into()
@@ -227,10 +269,26 @@ fn demo_reason(engine: &Engine) {
         let ac = capitalize(a);
         let bc = capitalize(b);
         let cases = [
-            (format!("If {a}, then {b}. {ac}. Therefore, {b}."), 1, "modus ponens"),
-            (format!("If {a}, then {b}. {bc} is not true. Therefore, {a} is not true."), 1, "modus tollens"),
-            (format!("If {a}, then {b}. {bc}. Therefore, {a}."), 0, "affirming the consequent"),
-            (format!("If {a}, then {b}. {ac} is not true. Therefore, {b} is not true."), 0, "denying the antecedent"),
+            (
+                format!("If {a}, then {b}. {ac}. Therefore, {b}."),
+                1,
+                "modus ponens",
+            ),
+            (
+                format!("If {a}, then {b}. {bc} is not true. Therefore, {a} is not true."),
+                1,
+                "modus tollens",
+            ),
+            (
+                format!("If {a}, then {b}. {bc}. Therefore, {a}."),
+                0,
+                "affirming the consequent",
+            ),
+            (
+                format!("If {a}, then {b}. {ac} is not true. Therefore, {b} is not true."),
+                0,
+                "denying the antecedent",
+            ),
         ];
         for (sent, gold, name) in cases {
             let got = engine.judge_argument(&sent);
@@ -249,7 +307,9 @@ fn demo_reason(engine: &Engine) {
         let verdict = if *got == 1 { "VALID  " } else { "invalid" };
         println!("     [{mark}] {verdict}  ({name}): {sent}");
     }
-    println!("\nValidity decided by synthesized programs — no Python classifier in the reasoning path.");
+    println!(
+        "\nValidity decided by synthesized programs — no Python classifier in the reasoning path."
+    );
 }
 
 fn demo_inflect(engine: &Engine) {
@@ -273,7 +333,10 @@ fn demo_inflect(engine: &Engine) {
     }
     println!("  trap — words ending in \"be\" that are NOT the verb \"be\":");
     for v in trap {
-        println!("     {v:<10} -> {}  (rule, not the \"be\"->\"is\" lexicon)", engine.verb_3sg(v));
+        println!(
+            "     {v:<10} -> {}  (rule, not the \"be\"->\"is\" lexicon)",
+            engine.verb_3sg(v)
+        );
     }
     println!("\n  The irregular lexicon keys on whole words, so \"be\"->\"is\" never leaks");
     println!("  into \"scribe\"; regular verbs stay on the rule.");
@@ -343,16 +406,27 @@ fn show_meaning(m: &Meaning) -> String {
                 show_opt_term(&ev.patient),
             )
         }
-        Meaning::IsA { subject, category, negated } => {
+        Meaning::IsA {
+            subject,
+            category,
+            negated,
+        } => {
             let neg = if *negated { "¬" } else { "" };
-            format!("{neg}IsA{{ subject={}, category={category} }}", show_term(subject))
+            format!(
+                "{neg}IsA{{ subject={}, category={category} }}",
+                show_term(subject)
+            )
         }
         Meaning::YesNoQuestion(inner) => format!("YesNo?( {} )", show_meaning(inner)),
         Meaning::WhQuestion { slot, body } => format!(
             "Wh?{{ slot={slot:?}, body={} }}",
             show_meaning(&Meaning::Event(body.clone()))
         ),
-        Meaning::Quantified { quant, var_category, body } => format!(
+        Meaning::Quantified {
+            quant,
+            var_category,
+            body,
+        } => format!(
             "Quantified{{ {quant:?} {var_category}: {} }}",
             show_meaning(&Meaning::Event(body.clone()))
         ),
@@ -360,11 +434,24 @@ fn show_meaning(m: &Meaning) -> String {
             let parts: Vec<String> = disjuncts.iter().map(show_meaning).collect();
             format!("Or( {} )", parts.join(" ∨ "))
         }
-        Meaning::HasProperty { subject, property, negated } => {
+        Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } => {
             let neg = if *negated { "¬" } else { "" };
-            format!("{neg}HasProperty{{ subject={}, property={property} }}", show_term(subject))
+            format!(
+                "{neg}HasProperty{{ subject={}, property={property} }}",
+                show_term(subject)
+            )
         }
-        Meaning::Comparison { subject, scale, more, than, negated } => {
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } => {
             let neg = if *negated { "¬" } else { "" };
             let rel = if *more { ">" } else { "<" };
             format!(
@@ -373,7 +460,12 @@ fn show_meaning(m: &Meaning) -> String {
                 show_term(than)
             )
         }
-        Meaning::Attitude { holder, verb, content, negated } => {
+        Meaning::Attitude {
+            holder,
+            verb,
+            content,
+            negated,
+        } => {
             let neg = if *negated { "¬" } else { "" };
             format!(
                 "{neg}Attitude{{ {} {verb} that {} }}",
@@ -381,7 +473,11 @@ fn show_meaning(m: &Meaning) -> String {
                 show_meaning(content)
             )
         }
-        Meaning::Cardinal { at_least, var_category, body } => format!(
+        Meaning::Cardinal {
+            at_least,
+            var_category,
+            body,
+        } => format!(
             "Cardinal{{ >={at_least} {var_category}: {} }}",
             show_meaning(&Meaning::Event(body.clone()))
         ),
@@ -391,7 +487,11 @@ fn show_meaning(m: &Meaning) -> String {
         ),
         // PLACEHOLDER (skeleton): readable prints for the new grammatical-core
         // meanings. The owners can enrich these as the logic lands.
-        Meaning::Modal { modality, body, negated } => {
+        Meaning::Modal {
+            modality,
+            body,
+            negated,
+        } => {
             let neg = if *negated { "¬" } else { "" };
             format!(
                 "{neg}Modal{{ {modality:?}: {} }}",
@@ -408,7 +508,11 @@ fn show_meaning(m: &Meaning) -> String {
             show_meaning(effect),
             show_meaning(cause)
         ),
-        Meaning::Conditional { antecedent, consequent, negated } => {
+        Meaning::Conditional {
+            antecedent,
+            consequent,
+            negated,
+        } => {
             let neg = if *negated { "¬" } else { "" };
             format!(
                 "{neg}Conditional{{ if {} then {} }}",
@@ -451,15 +555,24 @@ fn demo_understand(engine: &Engine) {
     for s in ["They read it.", "It is a thing."] {
         let m = disc.read(engine, s);
         println!("     {s}");
-        println!("        => {}   (pronouns resolved to concrete entities)", show_meaning(&m));
+        println!(
+            "        => {}   (pronouns resolved to concrete entities)",
+            show_meaning(&m)
+        );
     }
 
     // (c) TRUTH EVALUATION against the world built by reading.
     println!("\n  [truth evaluation — world.holds() over asserted facts]");
     let probes: [(&str, &str); 3] = [
         ("the teacher writes the report", "a TRUE statement"),
-        ("the teacher writes the letter", "a FALSE statement (negated fact)"),
-        ("the editor writes the report", "an UNKNOWN statement (open-world)"),
+        (
+            "the teacher writes the letter",
+            "a FALSE statement (negated fact)",
+        ),
+        (
+            "the editor writes the report",
+            "an UNKNOWN statement (open-world)",
+        ),
     ];
     for (s, why) in probes {
         let m = semantics::understand(engine, s);
@@ -524,10 +637,7 @@ fn demo_understand(engine: &Engine) {
         deep.read(engine, s);
         println!("     read: {s}");
     }
-    println!(
-        "     known entities: {}",
-        deep.world.entities().join(", ")
-    );
+    println!("     known entities: {}", deep.world.entities().join(", "));
 
     // (f.a) QUANTIFIER truth over a category. "agent" is a taxonomy class whose
     // members (by hypernymy) are the teacher and the editor — both write a
@@ -581,10 +691,10 @@ fn demo_understand(engine: &Engine) {
     // (f.b) TAXONOMY / HYPERNYMY: derived membership the world never read.
     println!("\n  [taxonomy — derived super-category membership (never asserted)]");
     for q in [
-        "Is the teacher an agent?",  // teacher -> person -> agent : Yes
-        "Is the teacher a person?",  // direct hypernym            : Yes
-        "Is the report a thing?",    // report -> document -> thing: Yes
-        "Is the report a person?",   // cross-branch               : No
+        "Is the teacher an agent?", // teacher -> person -> agent : Yes
+        "Is the teacher a person?", // direct hypernym            : Yes
+        "Is the report a thing?",   // report -> document -> thing: Yes
+        "Is the report a person?",  // cross-branch               : No
     ] {
         println!("     Q: {q}");
         println!("     A: {}", qa::answer(engine, &deep, q));
@@ -642,7 +752,10 @@ fn demo_understand(engine: &Engine) {
     println!("        => {}", show_meaning(&dt_m));
     let dt_q = "Who does the teacher give the book to?";
     println!("     Q: {dt_q}");
-    println!("     A: {}   (the recipient slot)", qa::answer(engine, &dt, dt_q));
+    println!(
+        "     A: {}   (the recipient slot)",
+        qa::answer(engine, &dt, dt_q)
+    );
 
     // (g.b) COMPARATIVE + TRANSITIVITY. Two orderings on the `length` scale are
     // read; the transitive consequence is answered from world.holds closure.
@@ -814,7 +927,13 @@ fn demo_reflect() {
     println!("  {}", "=".repeat(70));
     println!("  (1) explain_self — the mind surfaces its OWN learned programs");
     println!("  {}", "=".repeat(70));
-    for topic in ["3sg inflection", "past tense", "noun animacy", "agreement", "quantum gravity"] {
+    for topic in [
+        "3sg inflection",
+        "past tense",
+        "noun animacy",
+        "agreement",
+        "quantum gravity",
+    ] {
         let answer = mind.explain_self(topic);
         // Keep the quoted Mog source compact in the transcript: show the framing
         // line and a short head of the source so the demo stays readable.
@@ -871,7 +990,10 @@ fn demo_reflect() {
     reflect_line(
         "suppose",
         "Suppose: \"The editor reads the book.\"  Then: Does the editor read the book?",
-        &mind.suppose("The editor reads the book.", "Does the editor read the book?"),
+        &mind.suppose(
+            "The editor reads the book.",
+            "Does the editor read the book?",
+        ),
     );
     // Prove the hypothesis never leaked into the real world.
     println!(
@@ -931,7 +1053,7 @@ fn demo_reflect() {
     println!("  (8) explain_cause — abduce the cause behind an effect");
     println!("  {}", "=".repeat(70));
     for q in [
-        "Why does the street flood?",  // recorded cause: because the rain falls
+        "Why does the street flood?", // recorded cause: because the rain falls
         "Why does the teacher write the report?", // no recorded cause -> honest
     ] {
         reflect_line("explain_cause", q, &mind.explain_cause(q));
@@ -948,12 +1070,19 @@ fn demo_reflect() {
     println!("  (9) modus ponens — derive a consequent from a rule + its antecedent");
     println!("  {}", "=".repeat(70));
     let mut syllog = Mind::new();
-    for s in ["If the alarm rings then the guard wakes.", "The alarm rings."] {
+    for s in [
+        "If the alarm rings then the guard wakes.",
+        "The alarm rings.",
+    ] {
         let m = syllog.read(s);
         println!("     read: {s}");
         println!("        => {}", show_meaning(&m));
     }
-    reflect_line("why", "Does the guard wake?", &syllog.why("Does the guard wake?"));
+    reflect_line(
+        "why",
+        "Does the guard wake?",
+        &syllog.why("Does the guard wake?"),
+    );
     // The fallacy is refused: from "if P then Q" and Q, P does NOT follow.
     let mut fallacy = Mind::new();
     fallacy.read("If the alarm rings then the guard wakes.");
@@ -967,7 +1096,11 @@ fn demo_reflect() {
     let mut tollens = Mind::new();
     tollens.read("If the alarm rings then the guard wakes.");
     tollens.read("The guard does not wake.");
-    reflect_line("why", "Does the alarm ring? (modus tollens)", &tollens.why("Does the alarm ring?"));
+    reflect_line(
+        "why",
+        "Does the alarm ring? (modus tollens)",
+        &tollens.why("Does the alarm ring?"),
+    );
 
     // -----------------------------------------------------------------------
     // (10) BELIEF REVISION — the mind RESOLVES a contradiction it is told, then
@@ -1022,7 +1155,10 @@ fn trim_for_demo(s: &str, max_lines: usize) -> String {
         return s.to_string();
     }
     let mut out: Vec<String> = lines[..max_lines].iter().map(|l| l.to_string()).collect();
-    out.push(format!("... (+{} more lines of synthesized source)", lines.len() - max_lines));
+    out.push(format!(
+        "... (+{} more lines of synthesized source)",
+        lines.len() - max_lines
+    ));
     out.join("\n")
 }
 
@@ -1056,7 +1192,8 @@ fn demo_grow() {
     // NCPU_COMPONENTS_PATH) so the in-process growth this demo shows never writes
     // to the real $HOME store. (Cross-run PERSISTENCE is the `study` demo's job;
     // `grow` only shows a single mind growing in-process.) Cleaned up at the end.
-    let journal_path = std::env::temp_dir().join(format!("ncpu_grow_demo_{}.jsonl", std::process::id()));
+    let journal_path =
+        std::env::temp_dir().join(format!("ncpu_grow_demo_{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&journal_path);
     // SAFETY: this binary is single-threaded; we set the env once at the top of
     // the demo and restore/clear it at the end.
@@ -1120,10 +1257,16 @@ fn demo_grow() {
         "     has_component(\"creature_class\") = {}   (now grafted in)",
         mind.engine().has_component("creature_class")
     );
-    let probes = ["dragon", "griffin", "phoenix", "unicorn", "report", "teacher", "book"];
+    let probes = [
+        "dragon", "griffin", "phoenix", "unicorn", "report", "teacher", "book",
+    ];
     for w in probes {
         let v = mind.engine().eval_int(&format!("creature_class(\"{w}\")"));
-        let verdict = if v == 1 { "creature   " } else { "not creature" };
+        let verdict = if v == 1 {
+            "creature   "
+        } else {
+            "not creature"
+        };
         println!("     creature_class({w:<8}) = {v}  ({verdict})");
     }
     println!(
@@ -1154,7 +1297,10 @@ fn demo_grow() {
     };
     let rej = mind.self_improve(bad);
     println!("     gap        : {}", rej.gap);
-    println!("     synthesized: {}   (no program reproduces a contradictory spec)", rej.synthesized);
+    println!(
+        "     synthesized: {}   (no program reproduces a contradictory spec)",
+        rej.synthesized
+    );
     println!("     ACCEPTED   : {}", rej.accepted);
     println!("     message    : {}", rej.message);
     println!(
@@ -1179,7 +1325,16 @@ fn demo_grow() {
         println!("     (journal empty)");
     } else {
         for (i, e) in entries.iter().enumerate() {
-            println!("     #{}  action={}  via={}", i + 1, e.action, if e.method.is_empty() { "(none)" } else { &e.method });
+            println!(
+                "     #{}  action={}  via={}",
+                i + 1,
+                e.action,
+                if e.method.is_empty() {
+                    "(none)"
+                } else {
+                    &e.method
+                }
+            );
             println!(
                 "         verified={}  gate_passed={}  accepted={}",
                 e.verified, e.regression_passed, e.accepted
@@ -1317,7 +1472,10 @@ fn demo_hybrid() {
     // Pick the proposer and report which one (and why). Both implement `Proposer`,
     // so the call site is identical — the trust boundary doesn't care which.
     let proposer: &dyn Proposer = if have_key {
-        println!("     proposer   : Claude via OpenRouter ({})", openrouter.name());
+        println!(
+            "     proposer   : Claude via OpenRouter ({})",
+            openrouter.name()
+        );
         println!("                  (OPENROUTER_API_KEY is set — asking the live model)");
         &openrouter
     } else {
@@ -1334,8 +1492,18 @@ fn demo_hybrid() {
         "     proposed-by: {}   (UNTRUSTED breadth source — data only, no code)",
         proposer.name()
     );
-    println!("     synthesized: {}   (a verified Mog program reproduces every example)", report.synthesized);
-    println!("     via teacher: {}", if report.method.is_empty() { "(none)" } else { &report.method });
+    println!(
+        "     synthesized: {}   (a verified Mog program reproduces every example)",
+        report.synthesized
+    );
+    println!(
+        "     via teacher: {}",
+        if report.method.is_empty() {
+            "(none)"
+        } else {
+            &report.method
+        }
+    );
     println!("     gate passed: {}", report.regression_passed);
     println!("     ACCEPTED   : {}", report.accepted);
     println!("     message    : {}\n", report.message);
@@ -1350,7 +1518,10 @@ fn demo_hybrid() {
     // "magic_user"), not a hardcoded one — so the verdicts are honest whatever
     // Claude proposed this run.
     let learned = mind.learned_components();
-    match learned.last().map(|c| c.trim_end_matches("_class").to_string()) {
+    match learned
+        .last()
+        .map(|c| c.trim_end_matches("_class").to_string())
+    {
         Some(cls) => {
             println!("       learned class: `{cls}`   (the LLM proposed it; verified + gated)");
             println!(
@@ -1362,7 +1533,9 @@ fn demo_hybrid() {
                 mind.engine().learned_class_verdict(&cls, "qzzx_offdomain")
             );
         }
-        None => println!("       (no class learned this run — the proposal was declined or gated out)"),
+        None => {
+            println!("       (no class learned this run — the proposal was declined or gated out)")
+        }
     }
     println!(
         "       self_check().ok() = {}   (mind still green — growth was MONOTONE)\n",
@@ -1415,8 +1588,14 @@ fn demo_hybrid() {
         "     synthesized   : {}   (well-posed map ⇒ it VERIFIES — so the rejection is the GATE's)",
         rej.synthesized
     );
-    println!("     gate passed   : {}   (the gate goes RED: it would regress a golden case)", rej.regression_passed);
-    println!("     ACCEPTED      : {}   (an unsound proposal is NEVER adopted)", rej.accepted);
+    println!(
+        "     gate passed   : {}   (the gate goes RED: it would regress a golden case)",
+        rej.regression_passed
+    );
+    println!(
+        "     ACCEPTED      : {}   (an unsound proposal is NEVER adopted)",
+        rej.accepted
+    );
     println!("     message       : {}", rej.message);
     println!(
         "     has_component(\"person_class\") = {}   (the hallucinated classifier was NOT grafted)",
@@ -1451,7 +1630,11 @@ fn demo_hybrid() {
                 "     #{}  action={}  via={}",
                 i + 1,
                 e.action,
-                if e.method.is_empty() { "(none)" } else { &e.method }
+                if e.method.is_empty() {
+                    "(none)"
+                } else {
+                    &e.method
+                }
             );
             println!(
                 "         verified={}  gate_passed={}  accepted={}",
@@ -1460,8 +1643,12 @@ fn demo_hybrid() {
         }
     }
 
-    println!("\nThe LLM gave nCPU BREADTH (it learned to classify \"wizard\") yet could not give it");
-    println!("a single false belief: the hallucinated \"teacher is not a person\" proposal verified");
+    println!(
+        "\nThe LLM gave nCPU BREADTH (it learned to classify \"wizard\") yet could not give it"
+    );
+    println!(
+        "a single false belief: the hallucinated \"teacher is not a person\" proposal verified"
+    );
     println!("but was caught by the gate and discarded, the engine left byte-for-byte unchanged.");
     println!("Breadth from an untrusted source, soundness never spent — that is the hybrid.");
 
@@ -1585,7 +1772,11 @@ fn demo_study() {
     let probes = ["dragon", "griffin", "phoenix", "report", "teacher"];
     for w in probes {
         let v = mind1.engine().eval_int(&format!("creature_class(\"{w}\")"));
-        let tag = if v == 1 { "creature   " } else { "not creature" };
+        let tag = if v == 1 {
+            "creature   "
+        } else {
+            "not creature"
+        };
         println!("       creature_class({w:<8}) = {v}  ({tag})");
     }
     println!(
@@ -1598,7 +1789,10 @@ fn demo_study() {
     println!(
         "\n     PERSISTED to the store: {} component(s) -> {:?}",
         persisted.len(),
-        persisted.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+        persisted
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()
     );
 
     // -----------------------------------------------------------------------
@@ -1615,7 +1809,11 @@ fn demo_study() {
     );
     for w in ["dragon", "wyvern", "report"] {
         let v = mind2.engine().eval_int(&format!("creature_class(\"{w}\")"));
-        let tag = if v == 1 { "creature   " } else { "not creature" };
+        let tag = if v == 1 {
+            "creature   "
+        } else {
+            "not creature"
+        };
         println!("       creature_class({w:<8}) = {v}  ({tag})");
     }
     println!(
@@ -1721,7 +1919,10 @@ fn print_bench_dashboard(report: &mog_synth::eval::entailment::BenchReport) {
 
     const W: usize = 46;
     println!("  {}", "=".repeat(W));
-    println!("  {:<14} {:>8} {:>5} {:>6} {:>6}", "section", "correct", "idk", "wrong", "total");
+    println!(
+        "  {:<14} {:>8} {:>5} {:>6} {:>6}",
+        "section", "correct", "idk", "wrong", "total"
+    );
     println!("  {}", "-".repeat(W));
     for sec in &report.sections {
         println!(
@@ -1735,8 +1936,13 @@ fn print_bench_dashboard(report: &mog_synth::eval::entailment::BenchReport) {
         "OVERALL", report.correct, report.idk, report.wrong, report.total
     );
     println!("  {}", "=".repeat(W));
-    println!("  overall accuracy = {:.1}%   ({} correct of {} cases, {} idk)",
-             report.accuracy() * 100.0, report.correct, report.total, report.idk);
+    println!(
+        "  overall accuracy = {:.1}%   ({} correct of {} cases, {} idk)",
+        report.accuracy() * 100.0,
+        report.correct,
+        report.total,
+        report.idk
+    );
 
     // The bold soundness verdict — the whole point of the open-world bar.
     if report.sound() {
@@ -1784,8 +1990,10 @@ fn demo_bench() {
     println!("  bench -> study -> bench (autonomous, monotone, sound)");
     println!("  {}", "=".repeat(46));
     let (before, study, after) = bench_then_study_then_bench(3);
-    println!("  study: rounds={} attempted={} learned={:?} rejected={}",
-             study.rounds, study.attempted, study.learned, study.rejected);
+    println!(
+        "  study: rounds={} attempted={} learned={:?} rejected={}",
+        study.rounds, study.attempted, study.learned, study.rejected
+    );
     println!(
         "  before -> after:  correct {} -> {}   idk {} -> {}   wrong {} -> {}",
         before.correct, after.correct, before.idk, after.idk, before.wrong, after.wrong
@@ -1806,7 +2014,9 @@ fn demo_bench() {
     );
     println!(
         "  REAL GAIN (after.correct > before.correct) = {}   (+{} case{} flipped idk -> correct)",
-        real_gain, gain, if gain == 1 { "" } else { "s" }
+        real_gain,
+        gain,
+        if gain == 1 { "" } else { "s" }
     );
 
     // Spotlight the EDGE-OF-COMPETENCE case that drove the gain: "Is the dragon a
@@ -1816,9 +2026,7 @@ fn demo_bench() {
     let sec_before = before.sections.iter().find(|s| s.section == "learned");
     let sec_after = after.sections.iter().find(|s| s.section == "learned");
     if let (Some(b), Some(a)) = (sec_before, sec_after) {
-        println!(
-            "\n  EDGE OF COMPETENCE — section 'learned' (\"Is the dragon a creature?\"):"
-        );
+        println!("\n  EDGE OF COMPETENCE — section 'learned' (\"Is the dragon a creature?\"):");
         println!(
             "    before study:  correct={} idk={} wrong={}   (base engine has no `creature_class` -> \"I don't know.\")",
             b.correct, b.idk, b.wrong
@@ -1838,9 +2046,17 @@ fn demo_bench() {
     }
 
     println!("\nEvery verdict came from a synthesized, verified program executed in-process.");
-    println!("The suite is SOUND ({}); learning over its misses is monotone, never unsound,",
-             if report.sound() { "WRONG = 0" } else { "SOUNDNESS VIOLATION — see above" });
-    println!("and STRICTLY HELPS — the dragon case flips from \"I don't know.\" to \"Yes\" after study.");
+    println!(
+        "The suite is SOUND ({}); learning over its misses is monotone, never unsound,",
+        if report.sound() {
+            "WRONG = 0"
+        } else {
+            "SOUNDNESS VIOLATION — see above"
+        }
+    );
+    println!(
+        "and STRICTLY HELPS — the dragon case flips from \"I don't know.\" to \"Yes\" after study."
+    );
 }
 
 // ===========================================================================
@@ -1878,8 +2094,7 @@ fn demo_grammar() {
     let pid = std::process::id();
     let constructions_path =
         std::env::temp_dir().join(format!("ncpu_grammar_demo_constructions_{pid}.jsonl"));
-    let journal_path =
-        std::env::temp_dir().join(format!("ncpu_grammar_demo_journal_{pid}.jsonl"));
+    let journal_path = std::env::temp_dir().join(format!("ncpu_grammar_demo_journal_{pid}.jsonl"));
     let _ = std::fs::remove_file(&constructions_path);
     let _ = std::fs::remove_file(&journal_path);
     // SAFETY: this binary is single-threaded; we set the env once at the top of the
@@ -1902,7 +2117,12 @@ fn demo_grammar() {
     // tuple is (sentence, agent_word, patient_word, predicate_lemma) — the learner
     // is told the ROLES, never the positions.
     let osv_examples: Vec<ConstructionExample> = vec![
-        ("the report the teacher writes", "teacher", "report", "write"),
+        (
+            "the report the teacher writes",
+            "teacher",
+            "report",
+            "write",
+        ),
         ("the book the student reads", "student", "book", "read"),
         ("the memo the doctor fixes", "doctor", "memo", "fix"),
     ];
@@ -1958,14 +2178,20 @@ fn demo_grammar() {
     println!("  {}", "=".repeat(72));
     let after = mind.understand(fronted);
     println!("     understand(\"{fronted}\")");
-    println!("        => {}   (teacher is the agent, report the patient)", show_meaning(&after));
+    println!(
+        "        => {}   (teacher is the agent, report the patient)",
+        show_meaning(&after)
+    );
 
     // Generalization: "letter" / "editor" / "read" never appeared TOGETHER in the
     // training set — only the SHAPE [det noun det noun verb] was learned.
     let unseen = "the letter the editor reads";
     let unseen_m = mind.understand(unseen);
     println!("     understand(\"{unseen}\")   (UNSEEN words)");
-    println!("        => {}   (generalized across the lexicon via the class skeleton)", show_meaning(&unseen_m));
+    println!(
+        "        => {}   (generalized across the lexicon via the class skeleton)",
+        show_meaning(&unseen_m)
+    );
 
     // Q&A: read a fronted clause into the world model, then ask about it.
     let mut qa_mind = Mind::new();
@@ -1987,7 +2213,11 @@ fn demo_grammar() {
     let restart = Mind::new();
     println!(
         "     restart.learned_constructions() = {:?}",
-        restart.learned_constructions().iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+        restart
+            .learned_constructions()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()
     );
     let restart_m = restart.understand(unseen);
     println!("     understand(\"{unseen}\")  (on the FRESH mind, no learning this run)");
@@ -2021,7 +2251,10 @@ fn demo_grammar() {
             Some(v) => unsafe { std::env::set_var("NCPU_CONSTRUCTIONS_PATH", v) },
             None => unsafe { std::env::remove_var("NCPU_CONSTRUCTIONS_PATH") },
         }
-        assert!(plain.learned_constructions().is_empty(), "no-grammar mind must have zero constructions");
+        assert!(
+            plain.learned_constructions().is_empty(),
+            "no-grammar mind must have zero constructions"
+        );
         plain.understand(svo)
     };
     let svo_learned = mind.understand(svo);
@@ -2036,7 +2269,9 @@ fn demo_grammar() {
     println!("The parser GREW a new construction: it could not read an object-fronted clause,");
     println!("LEARNED the object-subject-verb shape from labeled examples (synthesized + verified");
     println!("+ gated), and now parses it — even with unseen words — while leaving SVO untouched");
-    println!("and staying sound. The construction is durable: a fresh mind boots already knowing it.");
+    println!(
+        "and staying sound. The construction is durable: a fresh mind boots already knowing it."
+    );
 
     // Clean up + restore env so the demo leaves no trace.
     let _ = std::fs::remove_file(&constructions_path);
@@ -2052,7 +2287,13 @@ fn demo_grammar() {
 /// `explain_self` output under a demo section header.
 fn indent(text: &str, prefix: &str) -> String {
     text.lines()
-        .map(|l| if l.is_empty() { String::new() } else { format!("{prefix}{l}") })
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("{prefix}{l}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

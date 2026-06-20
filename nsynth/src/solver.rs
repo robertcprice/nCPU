@@ -174,20 +174,10 @@ fn post_enumerative_stage_order(problem: &Problem) -> Vec<PostEnumerativeStage> 
     if scalar_only_inputs && (!is_external || n_args <= 3) {
         stages.push(PostEnumerativeStage::BridgeGradient);
     }
-    if scalar_only_inputs && (!is_external || n_args <= 3) && !problem.reference_code.is_empty() {
-        stages.push(PostEnumerativeStage::ReferenceDistillation);
-    }
-    if scalar_only_inputs && !problem.reference_code.is_empty() {
-        stages.push(PostEnumerativeStage::NativeScalarTeacherDistillation);
-    }
-    if has_array_input && !problem.reference_code.is_empty() {
-        stages.push(PostEnumerativeStage::ArrayTeacherDistillation);
-    }
     stages.push(PostEnumerativeStage::ExprTemplates);
     if scalar_only_inputs && (!is_external || n_args <= 3) {
         stages.push(PostEnumerativeStage::ScalarTemplates);
     }
-    stages.push(PostEnumerativeStage::TemplateReference);
     if !(is_external && n_args > 3) {
         stages.push(PostEnumerativeStage::Search);
     }
@@ -195,19 +185,21 @@ fn post_enumerative_stage_order(problem: &Problem) -> Vec<PostEnumerativeStage> 
 }
 
 pub fn solve_problem_with_legacy_fallback(problem: &Problem) -> SolveResult {
-    let result = solve_problem_search_only(problem);
+    let synthesis_problem = problem.synthesis_view();
+    let result = search::solve_problem_search_only(&synthesis_problem);
     if result.success {
         return result;
     }
-    legacy_fallback::solve(problem)
+    legacy_fallback::solve(&synthesis_problem)
 }
 
 pub fn solve_problem_legacy_only(problem: &Problem) -> SolveResult {
-    legacy_fallback::solve(problem)
+    legacy_fallback::solve(&problem.synthesis_view())
 }
 
 pub fn solve_problem_differentiable_only(problem: &Problem) -> SolveResult {
-    let result = solve_problem_differentiable_bridge(problem);
+    let synthesis_problem = problem.synthesis_view();
+    let result = solve_problem_differentiable_bridge(&synthesis_problem);
     SolveResult {
         success: result.success,
         code: result.code,
@@ -218,26 +210,23 @@ pub fn solve_problem_differentiable_only(problem: &Problem) -> SolveResult {
 }
 
 pub fn solve_problem_prefer_differentiable(problem: &Problem) -> SolveResult {
-    post_enumerative::solve_problem_prefer_differentiable(problem)
+    post_enumerative::solve_problem_prefer_differentiable(&problem.synthesis_view())
 }
 
 pub fn solve_problem(problem: &Problem) -> SolveResult {
-    pipeline::solve_problem(problem)
+    pipeline::solve_problem(&problem.synthesis_view())
 }
 
 /// Build a whole-word string->string lookup-table program from single-arg
 /// examples (irregular inflection and similar arbitrary lexicons), or None if
 /// the mapping is not such a lexicon. Exposed so the `--problem-json` CLI shares
 /// the same lexicon recovery the in-process solver uses.
-pub fn string_lexicon_map_code(
-    train: &[(Vec<String>, String)],
-    fn_name: &str,
-) -> Option<String> {
+pub fn string_lexicon_map_code(train: &[(Vec<String>, String)], fn_name: &str) -> Option<String> {
     pipeline::string_lexicon_map_code(train, fn_name)
 }
 
 pub fn solve_problem_search_only(problem: &Problem) -> SolveResult {
-    search::solve_problem_search_only(problem)
+    search::solve_problem_search_only(&problem.synthesis_view())
 }
 
 /// Solve using the Phase 2 agentic orchestration layer.

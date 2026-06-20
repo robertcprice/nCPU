@@ -5,11 +5,9 @@ use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
-use crate::benchmark::{generated_holdouts, Example, Problem, Value};
+use crate::benchmark::{Example, Problem, Value};
 use crate::interactive_legacy::InteractiveTrace;
-use crate::runtime::{
-    execute_function_for_problem, verify_problem_code_strict, Value as RuntimeValue,
-};
+use crate::runtime::{execute_function_for_problem, verify_problem_code, Value as RuntimeValue};
 use crate::solver::solve_problem_search_only;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -113,7 +111,7 @@ fn scalar_examples(problem: &Problem) -> Option<Vec<BridgeExample>> {
 }
 
 fn scalar_counterexamples(problem: &Problem) -> Option<Vec<BridgeExample>> {
-    scalar_bridge_examples(&generated_holdouts(problem))
+    scalar_bridge_examples(&problem.examples).map(|_| Vec::new())
 }
 
 fn is_small_output_scalar_problem(problem: &Problem) -> bool {
@@ -141,16 +139,6 @@ fn dedupe_bridge_examples(examples: Vec<BridgeExample>) -> Vec<BridgeExample> {
 fn scalar_seed_inputs(problem: &Problem) -> Option<Vec<Vec<i64>>> {
     let mut seeds = Vec::new();
     for example in &problem.examples {
-        let mut row = Vec::with_capacity(example.inputs.len());
-        for value in &example.inputs {
-            let Value::Int(v) = value else {
-                return None;
-            };
-            row.push(*v);
-        }
-        seeds.push(row);
-    }
-    for example in generated_holdouts(problem) {
         let mut row = Vec::with_capacity(example.inputs.len());
         for value in &example.inputs {
             let Value::Int(v) = value else {
@@ -193,11 +181,7 @@ fn failure_focus_inputs(error: &str) -> Option<Vec<i64>> {
 
 fn mismatched_scalar_inputs(problem: &Problem, code: &str) -> Option<Vec<Vec<i64>>> {
     let mut failing = Vec::new();
-    for example in problem
-        .examples
-        .iter()
-        .chain(generated_holdouts(problem).iter())
-    {
+    for example in &problem.examples {
         let mut inputs = Vec::with_capacity(example.inputs.len());
         for value in &example.inputs {
             let Value::Int(v) = value else {
@@ -232,7 +216,7 @@ fn teacher_examples_from_code(
     if teacher_code.trim().is_empty() {
         return None;
     }
-    if verify_problem_code_strict(problem, teacher_code).is_err() {
+    if verify_problem_code(problem, teacher_code).is_err() {
         return None;
     }
 
@@ -459,7 +443,7 @@ fn run_bridge_request(
     }
 
     let code = response.code.unwrap_or_default();
-    if let Err(err) = verify_problem_code_strict(problem, &code) {
+    if let Err(err) = verify_problem_code(problem, &code) {
         return DifferentiableSolveResult {
             success: false,
             code,

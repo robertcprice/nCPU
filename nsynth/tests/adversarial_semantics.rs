@@ -85,7 +85,12 @@ fn disjunction_true_when_exactly_one_disjunct_holds() {
 fn disjunction_true_when_only_second_disjunct_holds() {
     // Order independence: truth of the SECOND disjunct must also surface.
     let mut w = World::new();
-    w.assert(&event("read", Some(ent("author")), Some(ent("book")), false));
+    w.assert(&event(
+        "read",
+        Some(ent("author")),
+        Some(ent("book")),
+        false,
+    ));
 
     let disj = Meaning::Or(vec![
         event("write", Some(ent("teacher")), Some(ent("report")), false),
@@ -98,7 +103,12 @@ fn disjunction_true_when_only_second_disjunct_holds() {
 fn disjunction_false_when_both_disjuncts_determined_false() {
     // World explicitly DENIES both disjuncts (negated facts) => disjunction false.
     let mut w = World::new();
-    w.assert(&event("write", Some(ent("teacher")), Some(ent("report")), true)); // teacher does NOT write report
+    w.assert(&event(
+        "write",
+        Some(ent("teacher")),
+        Some(ent("report")),
+        true,
+    )); // teacher does NOT write report
     w.assert(&event("read", Some(ent("author")), Some(ent("book")), true)); // author does NOT read book
 
     let disj = Meaning::Or(vec![
@@ -117,7 +127,12 @@ fn disjunction_unknown_when_no_disjunct_true_and_some_undetermined() {
     // One disjunct denied, the other simply unknown => open-world None,
     // NOT a spurious true or false. (Guards against over-claiming.)
     let mut w = World::new();
-    w.assert(&event("write", Some(ent("teacher")), Some(ent("report")), true)); // denied
+    w.assert(&event(
+        "write",
+        Some(ent("teacher")),
+        Some(ent("report")),
+        true,
+    )); // denied
 
     let disj = Meaning::Or(vec![
         event("write", Some(ent("teacher")), Some(ent("report")), false),
@@ -190,7 +205,12 @@ fn some_does_not_entail_every_at_world_truth_level() {
     // universal.
     let mut w = World::new();
     // Register two teachers via events so both are known members of "teacher".
-    w.assert(&event("write", Some(ent("teacher")), Some(ent("report")), false));
+    w.assert(&event(
+        "write",
+        Some(ent("teacher")),
+        Some(ent("report")),
+        false,
+    ));
     // Second teacher entity: give it a distinct head but same category. We use
     // a second agent noun present in the lexicon to be a teacher-category member
     // only if it shares the head; instead we assert a negated fact for a second
@@ -201,7 +221,12 @@ fn some_does_not_entail_every_at_world_truth_level() {
         category: "teacher".to_string(),
         negated: false,
     });
-    w.assert(&event("write", Some(ent("teacher2")), Some(ent("report")), true));
+    w.assert(&event(
+        "write",
+        Some(ent("teacher2")),
+        Some(ent("report")),
+        true,
+    ));
 
     let some = quantified(Quantifier::Some, "teacher");
     let every = quantified(Quantifier::Every, "teacher");
@@ -249,7 +274,10 @@ fn property_does_not_leak_across_entities_at_inference_level() {
         "UNSOUND: teacher's property must not entail editor's"
     );
     assert!(
-        matches!(relation(&teacher_careful, &editor_careful), Relation::Neutral),
+        matches!(
+            relation(&teacher_careful, &editor_careful),
+            Relation::Neutral
+        ),
         "different-entity properties should be Neutral"
     );
 }

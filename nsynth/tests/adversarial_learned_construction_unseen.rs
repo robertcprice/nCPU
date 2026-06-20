@@ -34,7 +34,12 @@ use mog_synth::understanding::semantics;
 /// told the ROLES, never the positions. Crucially, "author" never appears here.
 fn osv_training() -> Vec<ConstructionExample<'static>> {
     vec![
-        ("the report the teacher writes", "teacher", "report", "write"),
+        (
+            "the report the teacher writes",
+            "teacher",
+            "report",
+            "write",
+        ),
         ("the book the student reads", "student", "book", "read"),
         ("the memo the doctor fixes", "doctor", "memo", "fix"),
     ]
@@ -47,7 +52,11 @@ fn ent(s: &str) -> Option<Term> {
 /// Disable the durable construction + journal stores so this test never reads or
 /// writes the developer's real $HOME stores, then restore the prior values.
 fn with_stores_disabled<R>(f: impl FnOnce() -> R) -> R {
-    let keys = ["NCPU_CONSTRUCTIONS_PATH", "NCPU_COMPONENTS_PATH", "NCPU_JOURNAL_PATH"];
+    let keys = [
+        "NCPU_CONSTRUCTIONS_PATH",
+        "NCPU_COMPONENTS_PATH",
+        "NCPU_JOURNAL_PATH",
+    ];
     let prev: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
     for k in &keys {
         // SAFETY: this test is single-threaded for env access; it is the only one
@@ -111,8 +120,15 @@ fn learned_construction_parses_unseen_soundly() {
         // ---- (2)+(3)+(5)+(6) LEARN, then verify trained + unseen + soundness. ---
         let mut mind = Mind::new();
         let accepted = mind.learn_construction("object_fronting", &osv_training());
-        assert!(accepted, "a verified, gate-green OSV construction must be ACCEPTED");
-        assert_eq!(mind.learned_constructions().len(), 1, "exactly one construction adopted");
+        assert!(
+            accepted,
+            "a verified, gate-green OSV construction must be ACCEPTED"
+        );
+        assert_eq!(
+            mind.learned_constructions().len(),
+            1,
+            "exactly one construction adopted"
+        );
 
         // (2) The TRAINED sentence now flips Unknown -> the correct Event.
         let Meaning::Event(e) = mind.understand(trained_sentence) else {
@@ -125,8 +141,16 @@ fn learned_construction_parses_unseen_soundly() {
         assert_eq!(e.agent, ent("teacher"), "AGENT must be teacher");
         assert_eq!(e.patient, ent("report"), "PATIENT must be report");
         // (5) WRONG-ROLE guard: roles must NOT be swapped.
-        assert_ne!(e.agent, ent("report"), "agent must NOT be the fronted object");
-        assert_ne!(e.patient, ent("teacher"), "patient must NOT be the embedded subject");
+        assert_ne!(
+            e.agent,
+            ent("report"),
+            "agent must NOT be the fronted object"
+        );
+        assert_ne!(
+            e.patient,
+            ent("teacher"),
+            "patient must NOT be the embedded subject"
+        );
         assert_eq!(e.recipient, None, "a 2-place OSV clause has no recipient");
 
         // (3) The UNSEEN-WORD sentence parses to the correct Event. "author" is a
@@ -141,8 +165,16 @@ fn learned_construction_parses_unseen_soundly() {
         assert_eq!(u.agent, ent("author"), "unseen AGENT must be author");
         assert_eq!(u.patient, ent("book"), "unseen PATIENT must be book");
         // (5) WRONG-ROLE guard on the unseen sentence too.
-        assert_ne!(u.agent, ent("book"), "unseen agent must NOT be the fronted object");
-        assert_ne!(u.patient, ent("author"), "unseen patient must NOT be the embedded subject");
+        assert_ne!(
+            u.agent,
+            ent("book"),
+            "unseen agent must NOT be the fronted object"
+        );
+        assert_ne!(
+            u.patient,
+            ent("author"),
+            "unseen patient must NOT be the embedded subject"
+        );
         assert_eq!(u.recipient, None);
 
         // (6a) SOUNDNESS — no corruption of a base-parseable SVO clause: the learned
@@ -157,7 +189,10 @@ fn learned_construction_parses_unseen_soundly() {
         );
 
         // (6b) SOUNDNESS — gate still green after acquisition (monotone growth).
-        assert!(mind.self_check().ok(), "the mind must stay green after acquiring grammar");
+        assert!(
+            mind.self_check().ok(),
+            "the mind must stay green after acquiring grammar"
+        );
 
         // (6c) NO FALSE ENTAILMENT — reading the OSV clause affirms its event and
         // its CONVERSE is not affirmed.

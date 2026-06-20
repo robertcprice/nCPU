@@ -1,142 +1,12 @@
-# MASTER ROADMAP — Linguigenesis-Native nCPU Coding Agent
+# Linguigenesis-Native Coding Agent: Definitive Implementation Plan
 
-**Status:** Active execution; pre-MVP
-**Execution authority:** This file
-**Architecture companion:** [`nsynth/docs/LINGUIGENESIS_NATIVE_CODING_AGENT_PLAN.md`](nsynth/docs/LINGUIGENESIS_NATIVE_CODING_AGENT_PLAN.md)
-**Low-level runtime companion:** [`nsynth/docs/PHASE_2_4_EXECUTION_PLAN.md`](nsynth/docs/PHASE_2_4_EXECUTION_PLAN.md)
-**Scope:** `nCPU/nsynth` and required Rust work in sibling `../linguigenesis`
-**Core rule:** Linguigenesis is the native comprehension/reasoning layer. External LLMs are optional, untrusted proposers—not the agent core.
-**Implementation rule:** production orchestration is Rust. No simulated capability, stub success, benchmark theater, or hidden Python agent runtime.
+**Status:** architecture companion to the execution authority
+**Scope:** `nCPU/nsynth` plus the required upstream work in `../linguigenesis`
+**Execution language:** Rust
+**Core intelligence:** Linguigenesis; external LLMs are optional, untrusted proposal sources only
+**Execution authority:** root `MASTER_ROADMAP.md` owns package state, ordering, and completion gates.
+**Companion:** `PHASE_2_4_EXECUTION_PLAN.md` remains useful for lower-level agent/runtime work.
 
-> **Every agent must read Sections 0, 3, 6, 7, and the current phase card before editing code.**
-> This roadmap replaces historical “completed” checklists. A module existing does not mean the capability works.
-
-## 0. Agent Start Protocol
-
-Follow these steps in order at the beginning of every coding-agent session:
-
-1. Run `git status --short` and `git ls-files -u`. Never overwrite an unmerged or concurrently edited file without understanding all sides.
-2. Read this roadmap, then the current phase's referenced source/docs. Do not infer APIs from names.
-3. Check `graphify-out/GRAPH_REPORT.md` and `graphify-out/wiki/index.md` when present before architecture work.
-4. Confirm the current package and gate in the Execution Ledger below. Do not start a later package because it looks easier.
-5. Record the exact starting revision and dirty-tree state in the handoff. This repository often has concurrent work.
-6. Run the package's preflight commands before modifying code. A prior agent's green result is not transferable to a changed tree.
-7. Make the smallest coherent implementation that closes a real acceptance criterion.
-8. Add success, failure, adversarial, and no-false-success tests. Wiring-only tests do not prove capability.
-9. Run the package verification commands. Report exact counts and failures.
-10. Update this ledger and the current phase card. Do not mark a gate complete without executable evidence.
-11. Save architectural decisions and non-obvious discoveries to persistent memory.
-12. End with the Handoff Template in Appendix C so the next agent can continue without archaeology.
-
-### 0.1 Status vocabulary
-
-Use only these labels:
-
-- **ABSENT:** no implementation exists.
-- **SCAFFOLD:** types/modules exist, but the real boundary or workflow does not execute.
-- **EXPERIMENTAL:** executes real work but lacks full safety, determinism, or acceptance evidence.
-- **IMPLEMENTED:** passes the phase conformance suite, including failure and adversarial paths.
-- **VERIFIED:** implemented and demonstrated on isolated unseen tasks with saved artifacts.
-- **BLOCKED:** cannot proceed without a named prerequisite; include the reproducer and owner.
-
-Never use “done,” “complete,” or a checkmark for SCAFFOLD code.
-
-### 0.2 No-cheating contract
-
-An agent must not:
-
-- return success without a real acceptance oracle;
-- substitute metadata validation for benchmark execution;
-- hard-code expected benchmark patches or answers;
-- train, retrieve, or prompt from sealed evaluation solutions;
-- replace Linguigenesis with an external model call and call it native cognition;
-- use regex/keywords as the final semantic representation;
-- bypass policy through direct `std::fs`, shell, network, git, or database calls in production workflows;
-- write memory or credit before verification establishes what happened;
-- weaken/delete tests to make a patch pass;
-- suppress failures globally or omit a failing command from the report;
-- invent APIs, configuration fields, or benchmark results.
-
-### 0.3 Current truth snapshot — update after every package
-
-**Snapshot date:** 2026-06-20
-**Overall readiness:** roughly 25% of a complete repo coding agent
-**MVP target:** completion through Package H / Gate G5
-**Benchmark-readiness target:** completion through Package M / Gate G7
-
-| Package | Gate | State | Evidence / blocker | Next owner action |
-|---|---|---|---|---|
-| A — baseline truth | G0 | IN PROGRESS | merge conflict and stale `Problem` initializers resolved; debug/release checks pass; repo suite 16/16; search-only batch solves all 140 tasks; full serial suite remains unbounded and previously had 61 failures after 1,273 completed/ignored tests | cluster remaining baseline failures, bound the full-suite runtime, quarantine P0 stubs |
-| B — runtime contracts | G1 prerequisite | NOT STARTED | overlapping task/runtime types remain | begin only after G0 |
-| C — Linguigenesis coding semantics | G1 | NOT STARTED | core APIs exist; coding ontology/compositional coding intent incomplete | upstream Rust implementation after B contracts |
-| D — grounded bridge | G1 | NOT STARTED | bridge exists but is shallow; legacy NL has `NotImplemented` | implement only against C's tested API |
-| E — repository model | G2 | NOT STARTED | current hardness scan is global/shallow | deterministic index and retrieval benchmark |
-| F — secure tools | G3 | SCAFFOLD | fs/shell/git/http/db modules exist; containment and boundary security incomplete | deny-by-default typed runtime |
-| G — transactional edits | G4 | SCAFFOLD | lexical patch gate only | isolated apply/rollback engine |
-| H — closed repair loop | G5 | SCAFFOLD | `RepoAgent` aggregates helpers but has no `run` loop | implement after E–G |
-| I — workflows/supervision | G6 | SCAFFOLD | planning exists; some paths simulate completion | real typed workflows only |
-| J — durable memory/resume | G6 | SCAFFOLD | multiple in-memory representations | evidence-gated persistence |
-| K — project-scale generation/validation | G6 | SCAFFOLD | strong function synthesis; project/multilanguage claims exceed evidence | graduate each backend independently |
-| L — CLI/session/telemetry | G6 | NOT STARTED | no canonical coding-agent UX | build over one runtime API |
-| M — executable local benchmark | G7 | SCAFFOLD | 20 task manifests; no fixtures/runner/scoring | convert each to isolated executable task |
-| N — sealed external benchmarks | G8 | NOT STARTED | local harness not yet trustworthy | do not start before G7 |
-| O — evidence-driven self-improvement | G8 | EXPERIMENTAL PARTS | synthesis/meta components exist without repo-agent trace gate | mine only verified held-out traces |
-| P — CI/release/publication | G9 | NOT STARTED | no trustworthy release gate | last package |
-
-### 0.4 Immediate Package A work card
-
-**Objective:** create a stable, truthful, reproducible starting point. Do not add agent features during this package.
-
-**Prerequisites to read**
-
-- `nsynth/Cargo.toml` and workspace Cargo configuration.
-- `nsynth/src/lib.rs`, including Git index stages 1/2/3 when unmerged.
-- `nsynth/src/benchmark.rs::Problem` and all direct `Problem { ... }` initializers.
-- `nsynth/docs/PHASE_2_4_EXECUTION_PLAN.md` Phase 0.
-
-**Allowed existing patterns**
-
-- For a legacy single-function `Problem`, copy the `functions: vec![]` initialization used by `nsynth/src/benchmark.rs::problem`.
-- Resolve `nsynth/src/lib.rs` as the reviewed union of valid modules from both sides; do not choose ours/theirs wholesale.
-- Use Cargo's actual targets/features from `Cargo.toml`; do not invent package names.
-
-**Steps**
-
-1. Capture `git status --short`, `git ls-files -u`, and the module lists from all conflict stages.
-2. Verify the working `lib.rs` contains the required union without duplicate modules or conflict markers.
-3. Stage only `nsynth/src/lib.rs` to mark that reviewed conflict resolved.
-4. Add `functions: vec![]` to legacy single-function `Problem` initializers that fail compilation.
-5. Run `cargo check --lib`; repeat only for concrete compiler errors, not warnings.
-6. Run focused `cargo test 'agent::repo' --lib -- --test-threads=1`.
-7. Run the complete library suite serially and record every failure/abort. Fix only baseline integration defects with clear ownership; do not mask semantic failures.
-8. Run `cargo fmt --check`. If formatting drift is broad and concurrent, inventory it instead of mass-reformatting unrelated work.
-9. Scan production Rust for `todo!`, `unimplemented!`, `NotImplemented`, `simulate`, placeholder success, and dummy backends; classify every hit.
-10. Write/update the baseline artifact with commands, revision, counts, failures, and owners.
-
-**Verification**
-
-```bash
-cd nsynth
-cargo check --lib
-cargo test 'agent::repo' --lib -- --test-threads=1
-cargo test --lib -- --test-threads=1
-cargo fmt --check
-rg -n 'todo!|unimplemented!|NotImplemented|simulate_|placeholder|dummy' src
-cd ..
-git diff --check
-git ls-files -u
-```
-
-**Package A exit criteria**
-
-- no unmerged index entries;
-- debug and release library checks complete;
-- full library test process completes without stack overflow or hang;
-- all remaining failures have reproducible commands and owners;
-- stub audit exists and production-reachable hits are classified;
-- no capability status is inflated to hide baseline failures.
-
----
 ## 1. Product Definition
 
 The finished product accepts a natural-language software request, determines what the user means, inspects a real repository, plans bounded work, edits files transactionally, invokes real tools, verifies the result, learns only from verified evidence, and returns an auditable answer.
@@ -208,13 +78,12 @@ Overall: the architecture is substantially mapped, but only about one quarter of
 
 ### Point-in-time baseline blockers
 
-- The reviewed 47-module union in `nsynth/src/lib.rs` is now merged and the Git index has no unmerged entries.
-- All known legacy `Problem` initializers now include the required `functions` field; debug and release library checks pass.
-- The focused `agent::repo` suite passes all 16 tests. That verifies its unit wiring, not an end-to-end repair.
-- The search-only stack overflow and six temporal synthesis misses are fixed. The corresponding preemptive-route regression passes, and the search-only orchestrator batch solves all 140 tasks in about 3.36s.
-- The serial 2,112-test library run remains too slow and red: after roughly eleven minutes it had 1,211 passes, 61 failures, one ignored test, and was manually stopped inside the unbounded full-benchmark test.
-- `cargo fmt --check` reports 473 hunks across 34 files. This is inventoried rather than mass-formatted while semantic baseline work remains active.
-- Production-reachable simulation/placeholder code remains in the legacy agent orchestrator, planner, NL frontend, project transpilation, and several advertised library modules.
+- The reviewed 47-module `lib.rs` union is merged; debug and release library checks pass.
+- The focused repo-agent suite passes 16/16, and the search-only orchestrator batch solves all 140 tasks.
+- The serial 2,112-test library run remains too slow and red: a partial run observed 1,211 passes, 61 failures, and one ignored test before manual termination inside an unbounded full-benchmark test.
+- Formatting reports 473 hunks across 34 files.
+- Production-reachable simulation/placeholder paths remain in the legacy agent orchestrator, planner, NL frontend, project transpilation, and advertised library modules.
+- Exact evidence and cluster ownership live in `docs/PACKAGE_A_BASELINE.md`.
 
 These are Phase 0 blockers. Because the working tree is shared and changing, every implementation package must publish its revision and rerun its gates rather than inherit a previous agent's success claim.
 
@@ -720,79 +589,3 @@ The coding agent is fully functioning only when one clean install can:
 12. run sealed external benchmarks without task leakage.
 
 Until then, call it an experimental coding-agent stack—not a completed autonomous coding agent.
-
-## Appendix A — Documentation and API Discovery Index
-
-Agents must read implementations and tests, not merely this list.
-
-| Topic | Source of truth | Known valid entry points |
-|---|---|---|
-| Linguigenesis registry | `../linguigenesis/rust/linguigenesis-core/src/registry.rs` | `Registry::{new,from_json,from_json_auto,get_entity,get_by_lemma,query,get_by_type,get_related}` |
-| Linguigenesis comprehension | `../linguigenesis/rust/linguigenesis-core/src/comprehension.rs` | `Comprehension::{new,parse}` |
-| Belief and intent | `../linguigenesis/rust/linguigenesis-core/src/belief.rs` | `BeliefState`, `IntentBelief`, `IntentType`, `Constraint` |
-| Native reasoning | `../linguigenesis/rust/linguigenesis-core/src/reasoning.rs` | `AnalogyReasoner`, `MultiHopReasoner`, `KnowledgeQA` |
-| Linguigenesis dialogue | `../linguigenesis/rust/lg-communicator/src/` | use only tested `comprehend`, policy, and dialogue APIs; training/env parity is deferred |
-| nCPU synthesis | `nsynth/src/solver.rs`, `nsynth/src/solver/`, `nsynth/src/synthesis/` | `solve_problem` and verified solver routes |
-| Existing planning | `nsynth/src/agent/{planning,hierarchy,dependencies,executor}.rs` | migrate into canonical runtime; do not preserve simulated execution |
-| Repo scaffold | `nsynth/src/agent/repo/` | seams only until `RepoAgent::run` closes G5 |
-| Existing tools | `nsynth/src/agent/tools/` | scaffolds to migrate behind one policy-gated trait |
-| Existing validation | `nsynth/src/validation/`, `nsynth/src/testing/` | must become mandatory modifying-workflow gates |
-| Detailed closure plan | `nsynth/docs/LINGUIGENESIS_NATIVE_CODING_AGENT_PLAN.md` | architectural rationale and same phase ordering |
-
-## Appendix B — Required Evidence Artifact per Package
-
-Every package handoff must contain:
-
-1. starting and ending revision plus dirty/unmerged state;
-2. exact scope and files intentionally changed;
-3. APIs/documentation read before implementation;
-4. acceptance criteria and anti-pattern checks;
-5. exact commands and exit codes;
-6. test counts: passed, failed, ignored, filtered, aborted;
-7. known failures with shortest reproducer and assigned next package;
-8. security/adversarial results where applicable;
-9. capability-state changes with evidence links;
-10. next safe action and files that concurrent agents must avoid.
-
-Store machine-readable run evidence under a dedicated artifact directory once Package B defines the schema. Until then, record it in the session summary and the Execution Ledger.
-
-## Appendix C — Mandatory Agent Handoff Template
-
-```markdown
-## Package / Gate
-[package, gate, state before -> state after]
-
-## Objective
-[one concrete capability or blocker closed]
-
-## Starting State
-[revision, dirty files, unmerged entries, known failing command]
-
-## Documentation and APIs Read
-- [exact file and relevant symbol/section]
-
-## What Changed
-[behavior in plain English; do not provide a file-by-file changelog]
-
-## Verification
-- `[exact command]` -> [exit code, counts]
-
-## Anti-Pattern Audit
-- [forbidden patterns checked and results]
-
-## Remaining Risks
-- [specific reproducible issue]
-
-## Next Safe Action
-[one bounded next step, dependencies, and files to avoid]
-```
-
-## Appendix D — Roadmap Maintenance Rules
-
-- Only this file controls package/gate state.
-- Update the snapshot date and exact evidence whenever a package changes state.
-- Architecture changes require updating both this roadmap and the companion plan in the same patch.
-- Never remove a failed result; mark it superseded with the newer revision and evidence.
-- Estimated percentages are informational. Gates, tests, and artifacts decide readiness.
-- Benchmark readiness means G0–G7 all pass; it does not mean external benchmark success.
-- “Ultimate agent” research begins after the MVP loop is real, safe, and measured—not instead of it.

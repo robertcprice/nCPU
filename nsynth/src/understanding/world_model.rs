@@ -314,9 +314,7 @@ impl World {
             // A temporal ordering ("X writes before/after Y reads") records the
             // ordered event pair (canonicalized to Before) AND asserts both events
             // as facts — saying "X happens before Y" presupposes both happen.
-            Meaning::Temporal { rel, first, second } => {
-                self.assert_temporal(*rel, first, second)
-            }
+            Meaning::Temporal { rel, first, second } => self.assert_temporal(*rel, first, second),
             // A causal link ("E because C") records the directed cause->effect link
             // and ALSO asserts both the cause and the effect: asserting the link
             // presupposes both happened.
@@ -1912,7 +1910,8 @@ impl World {
     /// "no" (used where a boolean is needed, e.g. collecting members). For a
     /// three-valued answer use [`Self::entity_in_category_known`].
     fn entity_in_category(&self, head: &str, category: &str) -> bool {
-        self.entity_in_category_known(head, category).unwrap_or(false)
+        self.entity_in_category_known(head, category)
+            .unwrap_or(false)
     }
 
     /// Three-valued category membership: `Some(true)` if `head` provably belongs
@@ -2118,17 +2117,31 @@ fn meaning_polarity_flip(m: &Meaning) -> Option<Meaning> {
             e.negated = !e.negated;
             Some(Meaning::Event(e))
         }
-        Meaning::IsA { subject, category, negated } => Some(Meaning::IsA {
+        Meaning::IsA {
+            subject,
+            category,
+            negated,
+        } => Some(Meaning::IsA {
             subject: subject.clone(),
             category: category.clone(),
             negated: !negated,
         }),
-        Meaning::HasProperty { subject, property, negated } => Some(Meaning::HasProperty {
+        Meaning::HasProperty {
+            subject,
+            property,
+            negated,
+        } => Some(Meaning::HasProperty {
             subject: subject.clone(),
             property: property.clone(),
             negated: !negated,
         }),
-        Meaning::Comparison { subject, scale, more, than, negated } => Some(Meaning::Comparison {
+        Meaning::Comparison {
+            subject,
+            scale,
+            more,
+            than,
+            negated,
+        } => Some(Meaning::Comparison {
             subject: subject.clone(),
             scale: scale.clone(),
             more: *more,
@@ -2587,7 +2600,11 @@ mod tests {
         assert!(!derived.contains(&want("report", "agent")));
         // Every derived fact actually holds in the world (closure is sound).
         for m in &derived {
-            assert_eq!(w.holds(m), Some(true), "closure emitted a non-holding fact: {m:?}");
+            assert_eq!(
+                w.holds(m),
+                Some(true),
+                "closure emitted a non-holding fact: {m:?}"
+            );
         }
     }
 
@@ -2612,12 +2629,21 @@ mod tests {
         // "the report is longer than the book".
         w.assert(&cmp("report", "length", true, "book", false));
         // The exact query holds.
-        assert_eq!(w.holds(&cmp("report", "length", true, "book", false)), Some(true));
+        assert_eq!(
+            w.holds(&cmp("report", "length", true, "book", false)),
+            Some(true)
+        );
         // ASYMMETRY: the reverse "the book is longer than the report" is FALSE,
         // never silently true (we must not infer symmetry).
-        assert_eq!(w.holds(&cmp("book", "length", true, "report", false)), Some(false));
+        assert_eq!(
+            w.holds(&cmp("book", "length", true, "report", false)),
+            Some(false)
+        );
         // "the book is SHORTER than the report" is the same ordering -> true.
-        assert_eq!(w.holds(&cmp("book", "length", false, "report", false)), Some(true));
+        assert_eq!(
+            w.holds(&cmp("book", "length", false, "report", false)),
+            Some(true)
+        );
         // An unrelated scale is open-world unknown.
         assert_eq!(w.holds(&cmp("report", "weight", true, "book", false)), None);
     }
@@ -2629,11 +2655,20 @@ mod tests {
         w.assert(&cmp("report", "length", true, "essay", false));
         w.assert(&cmp("essay", "length", true, "book", false));
         // Transitivity: A > C.
-        assert_eq!(w.holds(&cmp("report", "length", true, "book", false)), Some(true));
+        assert_eq!(
+            w.holds(&cmp("report", "length", true, "book", false)),
+            Some(true)
+        );
         // ... and the reverse C > A is false by asymmetry of the proven order.
-        assert_eq!(w.holds(&cmp("book", "length", true, "report", false)), Some(false));
+        assert_eq!(
+            w.holds(&cmp("book", "length", true, "report", false)),
+            Some(false)
+        );
         // A pair with no path on the scale stays unknown.
-        assert_eq!(w.holds(&cmp("book", "length", true, "essay", false)), Some(false)); // essay>book known, so book>essay false
+        assert_eq!(
+            w.holds(&cmp("book", "length", true, "essay", false)),
+            Some(false)
+        ); // essay>book known, so book>essay false
         assert_eq!(w.holds(&cmp("memo", "length", true, "note", false)), None);
     }
 
@@ -2642,12 +2677,18 @@ mod tests {
         let mut w = World::new();
         w.assert(&cmp("report", "length", true, "book", false));
         // Query "is the report NOT longer than the book?" -> No (it IS longer).
-        assert_eq!(w.holds(&cmp("report", "length", true, "book", true)), Some(false));
+        assert_eq!(
+            w.holds(&cmp("report", "length", true, "book", true)),
+            Some(false)
+        );
         // An explicit denial makes the positive query false without inventing the
         // reverse ordering.
         let mut w2 = World::new();
         w2.assert(&cmp("memo", "length", true, "note", true)); // "memo is NOT longer than note"
-        assert_eq!(w2.holds(&cmp("memo", "length", true, "note", false)), Some(false));
+        assert_eq!(
+            w2.holds(&cmp("memo", "length", true, "note", false)),
+            Some(false)
+        );
         // But the reverse is NOT thereby asserted true (¬(X>Y) does not give Y>X).
         assert_eq!(w2.holds(&cmp("note", "length", true, "memo", false)), None);
     }
@@ -2733,7 +2774,7 @@ mod tests {
         let mut w = World::new();
         w.assert(&attitude("know", false)); // knows that the report is long
         w.assert(&attitude("believe", false)); // believes that the report is long
-        // Only knowledge is returned for verb "know" (beliefs excluded).
+                                               // Only knowledge is returned for verb "know" (beliefs excluded).
         let known = w.known_attitude_contents("teacher", "know");
         assert_eq!(known.len(), 1);
         assert_eq!(known[0], long_report());
@@ -2779,8 +2820,8 @@ mod tests {
         // NOT (a determined-false member, so it can never count).
         w.assert(&Meaning::Event(write_event("teacher", "report", false)));
         w.assert(&Meaning::Event(write_event("editor", "report", true))); // negated
-        // sat = 1, det_false = 1, total = 2, ceiling = 1.
-        // "at least 2 persons write a report" -> false (ceiling 1 < 2).
+                                                                          // sat = 1, det_false = 1, total = 2, ceiling = 1.
+                                                                          // "at least 2 persons write a report" -> false (ceiling 1 < 2).
         assert_eq!(w.holds(&cardinal(2, "person")), Some(false));
         // "at least 1" is already witnessed true.
         assert_eq!(w.holds(&cardinal(1, "person")), Some(true));
@@ -2816,7 +2857,7 @@ mod tests {
         w.assert(&Meaning::Event(write_event("teacher", "report", false)));
         w.assert(&Meaning::Event(write_event("editor", "report", false)));
         w.assert(&Meaning::Event(write_event("author", "book", false))); // wrong patient
-        // Only teacher and editor write a *report*.
+                                                                         // Only teacher and editor write a *report*.
         assert_eq!(w.count_satisfying("person", &quant_body("report")), 2);
         // A CountQuestion is never truth-evaluated.
         let cq = Meaning::CountQuestion {
@@ -2858,7 +2899,12 @@ mod tests {
             Tense::Present,
             Aspect::Progressive,
         )));
-        let simple = Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Simple));
+        let simple = Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+        ));
         assert_eq!(w.holds(&simple), Some(true));
 
         let mut w2 = World::new();
@@ -2882,9 +2928,18 @@ mod tests {
             Tense::Present,
             Aspect::Simple,
         )));
-        let prog =
-            Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Progressive));
-        let perf = Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Perfect));
+        let prog = Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Progressive,
+        ));
+        let perf = Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Perfect,
+        ));
         assert_eq!(w.holds(&prog), None);
         assert_eq!(w.holds(&perf), None);
     }
@@ -2899,8 +2954,12 @@ mod tests {
             Tense::Present,
             Aspect::Progressive,
         )));
-        let prog =
-            Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Progressive));
+        let prog = Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Progressive,
+        ));
         assert_eq!(w.holds(&prog), Some(true));
     }
 
@@ -2916,7 +2975,12 @@ mod tests {
             Aspect::Simple,
         )));
         let future = Meaning::Event(write_ta("teacher", "report", Tense::Future, Aspect::Simple));
-        let present = Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Simple));
+        let present = Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+        ));
         assert_eq!(w.holds(&future), Some(true));
         assert_eq!(w.holds(&present), None);
     }
@@ -2926,7 +2990,12 @@ mod tests {
     fn modal(modality: Modality, negated: bool) -> Meaning {
         Meaning::Modal {
             modality,
-            body: Box::new(write_ta("teacher", "report", Tense::Present, Aspect::Simple)),
+            body: Box::new(write_ta(
+                "teacher",
+                "report",
+                Tense::Present,
+                Aspect::Simple,
+            )),
             negated,
         }
     }
@@ -2954,7 +3023,12 @@ mod tests {
         // the writing actually happens.
         let mut w = World::new();
         w.assert(&modal(Modality::Can, false));
-        let actual = Meaning::Event(write_ta("teacher", "report", Tense::Present, Aspect::Simple));
+        let actual = Meaning::Event(write_ta(
+            "teacher",
+            "report",
+            Tense::Present,
+            Aspect::Simple,
+        ));
         assert_eq!(w.holds(&actual), None);
         // ...and "might" likewise.
         let mut w2 = World::new();
@@ -3006,7 +3080,12 @@ mod tests {
         )));
         let restricted = Term::Restricted {
             head: "teacher".to_string(),
-            clause: Box::new(write_ta("teacher", "report", Tense::Present, Aspect::Simple)),
+            clause: Box::new(write_ta(
+                "teacher",
+                "report",
+                Tense::Present,
+                Aspect::Simple,
+            )),
         };
         let read = Event {
             predicate: "read".to_string(),
@@ -3173,10 +3252,7 @@ mod tests {
         );
         // An unordered pair stays open.
         let d = read_event("author", "letter");
-        assert_eq!(
-            w.holds(&temporal(TemporalRel::Before, a, d)),
-            None
-        );
+        assert_eq!(w.holds(&temporal(TemporalRel::Before, a, d)), None);
     }
 
     #[test]
@@ -3353,7 +3429,10 @@ mod tests {
         assert_eq!(w.contradictions().len(), 1);
         // The logged conflict carries the incoming (negated) meaning.
         let c = &w.contradictions()[0];
-        assert_eq!(c.incoming, Meaning::Event(write_event("teacher", "report", true)));
+        assert_eq!(
+            c.incoming,
+            Meaning::Event(write_event("teacher", "report", true))
+        );
         assert!(!c.note.is_empty());
         // We FLAG but never RETRACT: the negated fact is still recorded, so the
         // most-recent assertion now makes the positive query Some(false).
@@ -3525,7 +3604,10 @@ mod tests {
             Meaning::Event(write_event("teacher", "report", true)),
             "the logged contradiction carries the conflicting incoming meaning"
         );
-        assert!(!c.note.is_empty(), "the contradiction carries a description");
+        assert!(
+            !c.note.is_empty(),
+            "the contradiction carries a description"
+        );
 
         // ---- Part B: a wholly consistent world reports ZERO. ----
         // A SEPARATE world built only from mutually compatible assertions: distinct
@@ -3594,8 +3676,16 @@ mod tests {
         let positive = Meaning::Event(write_event("teacher", "report", false));
         let negative = Meaning::Event(write_event("teacher", "report", true));
         // The SURVIVING live belief is NOT F (the most recent direct assertion).
-        assert_eq!(w.holds(&positive), Some(false), "world holds NOT F after revision");
-        assert_eq!(w.holds(&negative), Some(true), "the negation is the live belief");
+        assert_eq!(
+            w.holds(&positive),
+            Some(false),
+            "world holds NOT F after revision"
+        );
+        assert_eq!(
+            w.holds(&negative),
+            Some(true),
+            "the negation is the live belief"
+        );
 
         // Exactly one revision, and it supersedes F in favor of NOT F.
         assert_eq!(w.revisions().len(), 1, "exactly one revision recorded");
@@ -3613,12 +3703,16 @@ mod tests {
         let pos_facts = w
             .facts()
             .iter()
-            .filter(|f| same_event_content(f, &write_event("teacher", "report", false)) && !f.negated)
+            .filter(|f| {
+                same_event_content(f, &write_event("teacher", "report", false)) && !f.negated
+            })
             .count();
         let neg_facts = w
             .facts()
             .iter()
-            .filter(|f| same_event_content(f, &write_event("teacher", "report", false)) && f.negated)
+            .filter(|f| {
+                same_event_content(f, &write_event("teacher", "report", false)) && f.negated
+            })
             .count();
         assert_eq!(pos_facts, 0, "F was retracted: no positive fact remains");
         assert_eq!(neg_facts, 1, "exactly the surviving NOT F remains");
@@ -3637,7 +3731,11 @@ mod tests {
 
         // Direct assertion of NOT F supersedes the derived F.
         w.assert(&Meaning::Event(write_event("teacher", "report", true)));
-        assert_eq!(w.holds(&positive), Some(false), "direct NOT F supersedes derived F");
+        assert_eq!(
+            w.holds(&positive),
+            Some(false),
+            "direct NOT F supersedes derived F"
+        );
         assert_eq!(w.revisions().len(), 1, "exactly one revision");
         let r = &w.revisions()[0];
         assert_eq!(r.superseded.negated, false, "the derived F was superseded");
@@ -3666,10 +3764,17 @@ mod tests {
             Some(true),
             "the direct assertion is retained over a contradicting derived belief"
         );
-        assert_eq!(w.revisions().len(), 1, "the rejection is recorded as a revision");
+        assert_eq!(
+            w.revisions().len(),
+            1,
+            "the rejection is recorded as a revision"
+        );
         let r = &w.revisions()[0];
         assert_eq!(r.surviving.negated, false, "the direct F survives");
-        assert_eq!(r.superseded.negated, true, "the derived NOT F is superseded");
+        assert_eq!(
+            r.superseded.negated, true,
+            "the derived NOT F is superseded"
+        );
         assert!(
             r.reason.contains("rejected"),
             "reason names the derived-belief-rejected rule: {}",
@@ -3678,7 +3783,10 @@ mod tests {
 
         // COHERENCE: only the single direct F remains in the live store.
         let neg_facts = w.facts().iter().filter(|f| f.negated).count();
-        assert_eq!(neg_facts, 0, "the rejected derived NOT F was never installed");
+        assert_eq!(
+            neg_facts, 0,
+            "the rejected derived NOT F was never installed"
+        );
     }
 
     #[test]
@@ -3690,7 +3798,11 @@ mod tests {
         w.assert(&Meaning::Event(write_event("teacher", "report", false)));
         w.assert(&Meaning::Event(write_event("teacher", "report", false))); // idempotent
         w.assert(&Meaning::Event(write_event("editor", "memo", false))); // unrelated
-        assert_eq!(w.revisions().len(), 0, "no revision for consistent assertions");
+        assert_eq!(
+            w.revisions().len(),
+            0,
+            "no revision for consistent assertions"
+        );
         assert_eq!(w.contradictions().len(), 0, "no contradiction either");
         // Both live facts are still answerable and TRUE.
         assert_eq!(
@@ -3716,9 +3828,17 @@ mod tests {
         w.assert(&negative); // NOT F  (revision #1: F -> NOT F)
         assert_eq!(w.holds(&positive), Some(false));
         w.assert(&positive); // F again (revision #2: NOT F -> F)
-        assert_eq!(w.holds(&positive), Some(true), "final live belief is the most recent F");
+        assert_eq!(
+            w.holds(&positive),
+            Some(true),
+            "final live belief is the most recent F"
+        );
 
-        assert_eq!(w.revisions().len(), 2, "one revision per genuine polarity flip");
+        assert_eq!(
+            w.revisions().len(),
+            2,
+            "one revision per genuine polarity flip"
+        );
         // The live store never holds both polarities: exactly one fact of this
         // content remains, and it is positive.
         let matching: Vec<bool> = w
@@ -3727,7 +3847,11 @@ mod tests {
             .filter(|f| same_event_content(f, &write_event("teacher", "report", false)))
             .map(|f| f.negated)
             .collect();
-        assert_eq!(matching, vec![false], "exactly one coherent belief (F) survives");
+        assert_eq!(
+            matching,
+            vec![false],
+            "exactly one coherent belief (F) survives"
+        );
     }
 }
 

@@ -21,9 +21,16 @@ fn code_string_string_map(fn_name: &str, default: &str, branches: &[(String, Str
     let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
     let mut body = String::new();
     for (k, v) in branches {
-        body.push_str(&format!("    if s == {} {{\n        return {};\n    }}\n", q(k), q(v)));
+        body.push_str(&format!(
+            "    if s == {} {{\n        return {};\n    }}\n",
+            q(k),
+            q(v)
+        ));
     }
-    format!("fn {fn_name}(s: string) -> string {{\n{body}    return {};\n}}\n", q(default))
+    format!(
+        "fn {fn_name}(s: string) -> string {{\n{body}    return {};\n}}\n",
+        q(default)
+    )
 }
 
 /// Build a whole-word string->string lookup-table program from single-arg
@@ -79,7 +86,7 @@ fn solve_string_lexicon(
     fn_name: &str,
 ) -> Option<SolveResult> {
     let code = string_lexicon_map_code(train, fn_name)?;
-    crate::runtime::verify_problem_code_strict(problem, &code).ok()?;
+    crate::runtime::verify_problem_code(problem, &code).ok()?;
     Some(SolveResult {
         success: true,
         code,
@@ -121,7 +128,8 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
             .collect()
     };
     let train = to_rows(&problem.examples)?;
-    let holds = to_rows(&problem.holdouts).unwrap_or_default();
+    // Holdouts are evaluator-owned and must not influence rule selection.
+    let holds = Vec::new();
     let fn_name = problem.function_name();
     let single = train.iter().all(|(i, _)| i.len() == 1);
 
@@ -448,10 +456,13 @@ mod string_lexicon_tests {
             category: "comprehension",
             description: "",
             signature: "fn irregular_3sg(s: string) -> string",
-            examples: rows.iter().map(|(i, o)| Example {
-                inputs: vec![Value::Str((*i).to_string())],
-                expected: Value::Str((*o).to_string()),
-            }).collect(),
+            examples: rows
+                .iter()
+                .map(|(i, o)| Example {
+                    inputs: vec![Value::Str((*i).to_string())],
+                    expected: Value::Str((*o).to_string()),
+                })
+                .collect(),
             holdouts: vec![],
             reference_code: "",
             synthetic_args: Vec::new(),
@@ -459,6 +470,7 @@ mod string_lexicon_tests {
             recursive_allowed: false,
             tree_input: false,
             explicit_stack: false,
+            functions: vec![],
         }
     }
 
@@ -467,14 +479,24 @@ mod string_lexicon_tests {
     #[test]
     fn string_lexicon_recovers_irregular_inflection() {
         let problem = str_str_problem(&[
-            ("have", "has"), ("be", "is"), ("do", "does"), ("go", "goes"),
-            ("walk", "-"), ("read", "-"), ("write", "-"), ("help", "-"),
-            ("open", "-"), ("call", "-"),
+            ("have", "has"),
+            ("be", "is"),
+            ("do", "does"),
+            ("go", "goes"),
+            ("walk", "-"),
+            ("read", "-"),
+            ("write", "-"),
+            ("help", "-"),
+            ("open", "-"),
+            ("call", "-"),
         ]);
         let result = solve_problem(&problem);
         assert!(result.success, "failed to recover the irregular lexicon");
-        assert_eq!(result.method, "string_lexicon_map",
-                   "expected the string-lexicon teacher, got {}", result.method);
+        assert_eq!(
+            result.method, "string_lexicon_map",
+            "expected the string-lexicon teacher, got {}",
+            result.method
+        );
         assert!(result.code.contains("if s == \"have\""));
         assert!(result.code.contains("return \"has\";"));
         // The regular majority is the default sentinel, not an explicit branch.
