@@ -821,8 +821,15 @@ impl TaskDecomposer {
             .collect()
     }
 
-    /// Execute a task (simulated - in real system would call solver)
-    pub fn execute_task(&mut self, id: TaskId) -> Result<&Task, SolverError> {
+    /// Record the real result produced by a bound executor for a ready task.
+    ///
+    /// `TaskDecomposer` deliberately does not invent execution. Callers must run
+    /// an actual solver/tool and supply its evidence-bearing result here.
+    pub fn record_task_result(
+        &mut self,
+        id: TaskId,
+        result: TaskResult,
+    ) -> Result<&Task, SolverError> {
         let task = self
             .tasks
             .get_mut(&id)
@@ -844,24 +851,12 @@ impl TaskDecomposer {
 
         task.start();
 
-        // Simulate execution based on method hint
-        let result = match &task.method_hint {
-            Some(hint) if self.optimizations.contains(&TaskOptimization::Caching) => {
-                // Check cache
+        if result.success && self.optimizations.contains(&TaskOptimization::Caching) {
+            if let Some(hint) = &task.method_hint {
                 let cache_key = format!("{}:{}", hint, task.name);
-                if let Some(cached) = self.cache.get(&cache_key) {
-                    cached.clone()
-                } else {
-                    let result = Self::simulate_execution(&task.name, hint);
-                    self.cache.insert(cache_key, result.clone());
-                    result
-                }
+                self.cache.insert(cache_key, result.clone());
             }
-            Some(hint) => Self::simulate_execution(&task.name, hint),
-            None => {
-                TaskResult::success("Simulated completion".to_string(), TaskMetadata::default())
-            }
-        };
+        }
 
         if result.success {
             task.complete(result.clone());
@@ -873,16 +868,12 @@ impl TaskDecomposer {
         Ok(self.tasks.get(&id).unwrap())
     }
 
-    /// Simulate task execution (placeholder for actual solver integration)
-    fn simulate_execution(_name: &str, hint: &str) -> TaskResult {
-        // In real system, this would call the actual solver
-        let metadata = TaskMetadata {
-            method: hint.to_string(),
-            complexity: 10,
-            iterations: 1,
-            additional: HashMap::new(),
-        };
-        TaskResult::success(format!("Executed with method: {}", hint), metadata)
+    /// Reject the old no-executor API instead of fabricating task completion.
+    #[deprecated(note = "bind a real executor and call record_task_result")]
+    pub fn execute_task(&mut self, id: TaskId) -> Result<&Task, SolverError> {
+        Err(SolverError::ConfigurationError(format!(
+            "task {id} has no bound executor; call record_task_result with real execution evidence"
+        )))
     }
 
     /// Optimize the task graph by pruning unnecessary tasks
@@ -948,6 +939,7 @@ impl TaskDecomposer {
         // Invoke the existing solver exactly once. The decomposer is an orchestration
         // layer around the solver, not a replacement that fabricates a solution.
         let solve_result = solver_fn(problem);
+        self.record_integrated_solver_outcome(&task_ids, &solve_result)?;
         if !solve_result.success {
             return Err(SolverError::NoSolutionFound(
                 solve_result
@@ -957,52 +949,58 @@ impl TaskDecomposer {
             ));
         }
 
-        // Record successful completion of the planning graph in dependency order.
-        for task_id in task_ids {
-            self.execute_task_recursive(task_id)?;
-        }
-
         Ok(solve_result)
     }
 
-    /// Execute task and its dependencies recursively
-    fn execute_task_recursive(&mut self, task_id: TaskId) -> Result<(), SolverError> {
-        // First execute all dependencies - collect them to avoid borrow issues
-        let dependencies: Vec<TaskId> = {
-            let task = self.get_task(task_id).ok_or_else(|| {
-                SolverError::ConfigurationError(format!("Task {} not found", task_id))
-            })?;
-            task.dependencies.iter().copied().collect()
-        };
+    /// Attach one real solver outcome to the matching plan node and explicitly
+    /// skip every node that was not independently executed. This preserves an
+    /// honest trace instead of marking a decorative plan as completed.
+    fn record_integrated_solver_outcome(
+        &mut self,
+        task_ids: &[TaskId],
+        solve_result: &SolveResult,
+    ) -> Result<(), SolverError> {
+        let executed_id = task_ids
+            .iter()
+            .copied()
+            .find(|id| {
+                self.tasks.get(id).is_some_and(|task| {
+                    task.method_hint.as_deref() == Some(solve_result.method.as_str())
+                        || (task.method_hint.as_deref() == Some("search_teacher")
+                            && solve_result.method.starts_with("search_"))
+                })
+            })
+            .or_else(|| {
+                task_ids.iter().copied().find(|id| {
+                    self.tasks
+                        .get(id)
+                        .is_some_and(|task| task.name == "Synthesis Execution")
+                })
+            })
+            .or_else(|| task_ids.last().copied())
+            .ok_or_else(|| SolverError::ConfigurationError("empty task plan".to_string()))?;
 
-        for dep_id in dependencies {
-            if !self.completed_tasks.contains(&dep_id) {
-                self.execute_task_recursive(dep_id)?;
+        for id in task_ids {
+            let task = self
+                .tasks
+                .get_mut(id)
+                .ok_or_else(|| SolverError::ConfigurationError(format!("Task {} not found", id)))?;
+            if *id == executed_id {
+                task.start();
+                if solve_result.success {
+                    task.complete(TaskResult::from_solver_result(solve_result));
+                    self.completed_tasks.insert(*id);
+                } else {
+                    task.fail(
+                        solve_result
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "solver returned no solution".to_string()),
+                    );
+                }
+            } else {
+                task.skip("not independently executed by integrated solver".to_string());
             }
-        }
-
-        // Now execute this task if not already completed
-        if !self.completed_tasks.contains(&task_id) {
-            let task_mut = self.get_task_mut(task_id).unwrap();
-            task_mut.start();
-
-            // The real solver is invoked once by integrate_solver; individual
-            // planning nodes record orchestration completion here.
-            let result = TaskResult::success(
-                "Synthesis complete".to_string(),
-                TaskMetadata {
-                    method: task_mut
-                        .method_hint
-                        .clone()
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    complexity: 10,
-                    iterations: 1,
-                    additional: HashMap::new(),
-                },
-            );
-
-            task_mut.complete(result);
-            self.completed_tasks.insert(task_id);
         }
 
         Ok(())
@@ -1019,7 +1017,19 @@ impl TaskDecomposer {
     pub fn stats(&self) -> DecomposerStats {
         let total = self.tasks.len();
         let completed = self.completed_tasks.len();
-        let pending = total - completed;
+        let pending = self
+            .tasks
+            .values()
+            .filter(|task| {
+                matches!(
+                    task.status,
+                    TaskStatus::Pending
+                        | TaskStatus::Ready
+                        | TaskStatus::InProgress
+                        | TaskStatus::Blocked
+                )
+            })
+            .count();
         let failed = self
             .tasks
             .values()
@@ -1100,6 +1110,18 @@ mod tests {
             inputs: vec![Value::Array(input)],
             expected: Value::Int(output),
         }
+    }
+
+    fn observed_task_result(method: &str) -> TaskResult {
+        TaskResult::success(
+            "real executor evidence".to_string(),
+            TaskMetadata {
+                method: method.to_string(),
+                complexity: 1,
+                iterations: 1,
+                additional: HashMap::from([("evidence".to_string(), "test-run".to_string())]),
+            },
+        )
     }
 
     #[test]
@@ -1321,7 +1343,9 @@ mod tests {
 
         // After completing a task, dependents might become ready
         if let Some(&first_id) = ready.first() {
-            decomposer.execute_task(first_id).unwrap();
+            decomposer
+                .record_task_result(first_id, observed_task_result("test_executor"))
+                .unwrap();
 
             let new_ready = decomposer.ready_tasks();
             // Should have different ready tasks now
@@ -1341,7 +1365,9 @@ mod tests {
         // Mark some tasks as completed
         for _ in 0..2 {
             if let Some(task_id) = decomposer.ready_tasks().into_iter().next() {
-                decomposer.execute_task(task_id).unwrap();
+                decomposer
+                    .record_task_result(task_id, observed_task_result("test_executor"))
+                    .unwrap();
             }
         }
 
@@ -1391,7 +1417,9 @@ mod tests {
         let task_ids = decomposer.ready_tasks();
         if let Some(&first_id) = task_ids.first() {
             // Execute task (should cache result)
-            decomposer.execute_task(first_id).unwrap();
+            decomposer
+                .record_task_result(first_id, observed_task_result("test_executor"))
+                .unwrap();
 
             // Check cache has entries
             assert!(decomposer.cache.len() > 0);
@@ -1413,7 +1441,9 @@ mod tests {
         // Execute a task
         let ready = decomposer.ready_tasks();
         if let Some(&first_id) = ready.first() {
-            decomposer.execute_task(first_id).unwrap();
+            decomposer
+                .record_task_result(first_id, observed_task_result("test_executor"))
+                .unwrap();
 
             let new_stats = decomposer.stats();
             assert_eq!(new_stats.completed_tasks, 1);
@@ -1565,7 +1595,9 @@ mod tests {
         assert_eq!(result.method, "search_affine");
         assert!(result.code.contains("x * 2"));
         let stats = decomposer.stats();
-        assert_eq!(stats.completed_tasks, stats.total_tasks);
+        assert_eq!(stats.completed_tasks, 1);
+        assert_eq!(stats.skipped_tasks, stats.total_tasks - 1);
+        assert_eq!(stats.pending_tasks, 0);
     }
 
     #[test]
@@ -1587,5 +1619,24 @@ mod tests {
             matches!(error, SolverError::NoSolutionFound(message) if message == "portfolio exhausted")
         );
         assert_eq!(decomposer.stats().completed_tasks, 0);
+        assert_eq!(decomposer.stats().failed_tasks, 1);
+        assert_eq!(decomposer.stats().pending_tasks, 0);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn execute_task_without_executor_is_rejected() {
+        let mut decomposer = TaskDecomposer::adaptive();
+        let problem = create_test_problem("no_executor", vec![create_scalar_example(2, 4)]);
+        let task_id = decomposer.decompose(&problem).unwrap()[0];
+
+        let error = decomposer.execute_task(task_id).unwrap_err();
+        assert!(
+            matches!(error, SolverError::ConfigurationError(message) if message.contains("no bound executor"))
+        );
+        assert_eq!(
+            decomposer.get_task(task_id).unwrap().status,
+            TaskStatus::Pending
+        );
     }
 }

@@ -11,7 +11,10 @@
 - Legacy single-function problems conform to the new multi-function-capable `Problem` shape.
 - Debug and release libraries compile.
 - The repo-agent scaffold's focused unit tests pass.
-- The previous search-only stack overflow is removed and all 140 search-only benchmark tasks solve.
+- The previous search-only stack overflow is removed and all 140 search-only benchmark tasks solve. This was reverified after public solver/synthesis entrypoints began stripping holdouts and reference implementations, reference fallback routes were disabled, and the benchmark scorer's Python warmstart fallback was removed.
+- `search_output_is_invariant_to_evaluation_oracles` poisons both holdout outputs and reference code, proves synthesis returns byte-identical code/method, then proves the independent evaluator detects the poisoned oracle.
+- Planner and collaborative-orchestrator fake success paths are removed: tasks require a supplied real result, integrated plans mark unexecuted nodes skipped, collaborative proposals come from the Rust search solver, and reviews run runtime/call-graph/forbidden-construct checks.
+- `agent/debate.rs` remains quarantined as heuristic-only scaffold; its passing unit tests do not count as verified code-hardening capability.
 - The complete test and formatting baselines are not green, so Package A and G0 remain open.
 
 ## Commands and Results

@@ -59,6 +59,8 @@ An external model adapter may propose an intent, plan, or patch only when explic
 
 Production orchestration, tool execution, persistence, benchmark running, and reporting remain Rust. Python may not become a hidden agent runtime. If a benchmark distributes a Python harness, invoke it as an isolated external oracle and record that fact.
 
+Synthesis receives an oracle-free task view: evaluator holdouts and reference implementations may not enter generation, routing, ranking, acceptance, repair, memory, or credit. The current `Problem::synthesis_view()` boundary is defense in depth; the benchmark-ready harness must place sealed evaluation data in a separate process-owned type. External fallbacks must be reported separately and never counted as native nsynth solves.
+
 ## 3. Current-State Verdict (2026-06-20)
 
 | Area | Current reality | Readiness |
@@ -79,7 +81,8 @@ Overall: the architecture is substantially mapped, but only about one quarter of
 ### Point-in-time baseline blockers
 
 - The reviewed 47-module `lib.rs` union is merged; debug and release library checks pass.
-- The focused repo-agent suite passes 16/16, and the search-only orchestrator batch solves all 140 tasks.
+- The focused repo-agent suite passes 16/16, and the search-only orchestrator batch solves all 140 tasks after evaluator-oracle stripping; an oracle-poisoning invariance regression verifies the generated method/code cannot change when holdouts or reference code are altered.
+- The older planning/collaboration layer now fails closed without a bound executor, records only the real solver node as completed, skips decorative nodes, generates proposals with the native Rust search solver, and performs executable/static reviews instead of role-played approval.
 - The serial 2,112-test library run remains too slow and red: a partial run observed 1,211 passes, 61 failures, and one ignored test before manual termination inside an unbounded full-benchmark test.
 - Formatting reports 473 hunks across 34 files.
 - Production-reachable simulation/placeholder paths remain in the legacy agent orchestrator, planner, NL frontend, project transpilation, and advertised library modules.

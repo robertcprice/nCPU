@@ -2,6 +2,7 @@
 // Coordinates specialized agents through structured communication and voting
 
 use crate::agent::tools::{ToolCall, ToolRegistry};
+use crate::benchmark::{Example, Problem, Value};
 use crate::solver::SolverError;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -388,9 +389,10 @@ impl Orchestrator {
         examples: Vec<(Vec<serde_json::Value>, i64)>,
     ) -> Result<CollaborativeResult, SolverError> {
         let start_time = std::time::Instant::now();
+        let problem = Self::problem_from_json_examples(&examples)?;
 
         // Round 1: Initial synthesis
-        let initial_proposals = self.run_initial_synthesis(&examples).await?;
+        let initial_proposals = self.run_initial_synthesis(&problem).await?;
 
         if initial_proposals.is_empty() {
             return Err(SolverError::NoSolutionFound(
@@ -400,7 +402,7 @@ impl Orchestrator {
 
         // Round 2: Peer review and refinement
         let reviewed_proposals = if self.config.max_rounds >= 2 {
-            self.run_peer_review(initial_proposals).await?
+            self.run_peer_review(initial_proposals, &problem).await?
         } else {
             initial_proposals
         };
@@ -419,7 +421,13 @@ impl Orchestrator {
             (best.clone(), Vec::new())
         };
 
-        let consensus_score = self.calculate_consensus(&votes, &final_solution);
+        let selected_index = reviewed_proposals
+            .iter()
+            .position(|proposal| {
+                proposal.agent_id == final_solution.agent_id && proposal.code == final_solution.code
+            })
+            .unwrap_or(0);
+        let consensus_score = self.calculate_consensus(&votes, selected_index);
 
         Ok(CollaborativeResult {
             final_code: final_solution.code,
@@ -435,7 +443,7 @@ impl Orchestrator {
     /// Run initial synthesis round with parallel agents
     async fn run_initial_synthesis(
         &self,
-        examples: &[(Vec<serde_json::Value>, i64)],
+        problem: &Problem,
     ) -> Result<Vec<SolutionProposal>, SolverError> {
         let channel = self.communication_channel.read().await;
         let synthesizer = self
@@ -447,72 +455,102 @@ impl Orchestrator {
         // Broadcast task start
         channel
             .send(AgentMessage::TaskStart {
-                examples: examples.to_vec(),
+                examples: problem
+                    .examples
+                    .iter()
+                    .map(|example| {
+                        (
+                            example
+                                .inputs
+                                .iter()
+                                .map(|value| match value {
+                                    Value::Int(value) => serde_json::json!(value),
+                                    _ => serde_json::Value::Null,
+                                })
+                                .collect(),
+                            example.expected_int(),
+                        )
+                    })
+                    .collect(),
                 timeout_s: self.config.agent_timeout_s,
             })
             .await?;
 
-        // If parallel execution is enabled, spawn multiple synthesis attempts
-        if self.config.enable_parallel {
-            let mut proposals = Vec::new();
-
-            // Parallel synthesis with different strategies
-            let strategies = vec!["direct", "recursive", "iterative", "pattern_based"];
-
-            for (idx, strategy) in strategies.iter().enumerate() {
-                let proposal = self
-                    .simulate_agent_synthesis(synthesizer.id(), examples, strategy, idx as f64)
-                    .await?;
-                proposals.push(proposal);
-            }
-
-            Ok(proposals)
-        } else {
-            let proposal = self
-                .simulate_agent_synthesis(synthesizer.id(), examples, "default", 0.0)
-                .await?;
-            Ok(vec![proposal])
+        let result = crate::solver::solve_problem_search_only(problem);
+        if !result.success {
+            return Err(SolverError::NoSolutionFound(result.error.unwrap_or_else(
+                || "native synthesis portfolio exhausted".to_string(),
+            )));
         }
+        crate::runtime::verify_problem_code(problem, &result.code)
+            .map_err(SolverError::VerificationFailed)?;
+
+        Ok(vec![SolutionProposal {
+            agent_id: synthesizer.id(),
+            code: result.code,
+            confidence: 1.0,
+            metadata: serde_json::json!({
+                "method": result.method,
+                "examples_count": problem.examples.len(),
+                "verified": true,
+            }),
+            reviews: HashMap::new(),
+        }])
     }
 
-    /// Simulate an agent generating a solution proposal
-    async fn simulate_agent_synthesis(
-        &self,
-        agent_id: AgentId,
+    fn problem_from_json_examples(
         examples: &[(Vec<serde_json::Value>, i64)],
-        strategy: &str,
-        variance: f64,
-    ) -> Result<SolutionProposal, SolverError> {
-        // In a real implementation, this would call the actual synthesis engine
-        // For now, we simulate the structure
+    ) -> Result<Problem, SolverError> {
+        let arity = examples
+            .first()
+            .map(|(inputs, _)| inputs.len())
+            .ok_or_else(|| SolverError::ConfigurationError("no examples supplied".to_string()))?;
+        if examples.iter().any(|(inputs, _)| inputs.len() != arity) {
+            return Err(SolverError::ConfigurationError(
+                "example arity is inconsistent".to_string(),
+            ));
+        }
 
-        let base_confidence = 0.8 + (variance * 0.05);
-        let code = format!(
-            "// Solution generated by {} with strategy {}\n\
-             fn solve(input: &Input) -> Output {{\n\
-             // Implementation for {} examples\n\
-             // Strategy: {}\n\
-             todo!()\
-             }}",
-            agent_id,
-            strategy,
-            examples.len(),
-            strategy
-        );
+        let examples = examples
+            .iter()
+            .map(|(inputs, expected)| {
+                let inputs = inputs
+                    .iter()
+                    .map(|value| {
+                        value.as_i64().map(Value::Int).ok_or_else(|| {
+                            SolverError::ConfigurationError(
+                                "collaborative synthesis currently requires i64 inputs".to_string(),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Example {
+                    inputs,
+                    expected: Value::Int(*expected),
+                })
+            })
+            .collect::<Result<Vec<_>, SolverError>>()?;
+        let params = (0..arity)
+            .map(|index| format!("arg{index}: i64"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let signature: &'static str =
+            Box::leak(format!("fn solve({params}) -> i64").into_boxed_str());
 
-        let metadata = serde_json::json!({
-            "strategy": strategy,
-            "examples_count": examples.len(),
-            "variance": variance,
-            "timestamp": chrono::Utc::now().to_rfc3339()
-        });
-
-        Ok(SolutionProposal {
-            agent_id,
-            code,
-            confidence: base_confidence,
-            metadata,
-            reviews: HashMap::new(),
+        Ok(Problem {
+            name: "collaborative_solve".to_string(),
+            category: "agent",
+            description: "Synthesize a scalar function from observed examples.",
+            signature,
+            examples,
+            holdouts: Vec::new(),
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: Vec::new(),
         })
     }
 
@@ -520,6 +558,7 @@ impl Orchestrator {
     async fn run_peer_review(
         &self,
         proposals: Vec<SolutionProposal>,
+        problem: &Problem,
     ) -> Result<Vec<SolutionProposal>, SolverError> {
         let mut reviewed_proposals = proposals;
 
@@ -530,7 +569,7 @@ impl Orchestrator {
                     continue;
                 }
 
-                let feedback = self.simulate_agent_review(agent.id(), &proposal).await?;
+                let feedback = self.review_proposal(agent.id(), proposal, problem)?;
                 proposal.reviews.insert(agent.id(), feedback);
             }
         }
@@ -538,28 +577,42 @@ impl Orchestrator {
         Ok(reviewed_proposals)
     }
 
-    /// Simulate an agent reviewing a proposal
-    async fn simulate_agent_review(
+    /// Review a proposal with executable verification and concrete static checks.
+    fn review_proposal(
         &self,
         agent_id: AgentId,
         proposal: &SolutionProposal,
+        problem: &Problem,
     ) -> Result<ReviewFeedback, SolverError> {
-        // In a real implementation, this would run actual analysis
-        let (approved, score) = match agent_id {
-            AgentId::SecurityExpert => (true, 0.85),
-            AgentId::Debugger => (true, 0.9),
-            AgentId::Optimizer => (proposal.code.len() < 1000, 0.75),
-            AgentId::Tester => (true, 0.88),
-            AgentId::Documenter => (true, 0.82),
-            AgentId::Reviewer => (true, 0.87),
-            _ => (true, 0.8),
-        };
+        let runtime_result = crate::runtime::verify_problem_code(problem, &proposal.code);
+        let call_graph_result = crate::runtime::validate_call_graph(&proposal.code);
+        let forbidden = ["todo!", "unimplemented!", "unsafe {", "std::process"]
+            .iter()
+            .filter(|needle| proposal.code.contains(**needle))
+            .copied()
+            .collect::<Vec<_>>();
+        let mut issues = Vec::new();
+        if let Err(error) = runtime_result {
+            issues.push(format!("runtime verification failed: {error}"));
+        }
+        if let Err(error) = call_graph_result {
+            issues.push(format!("call-graph validation failed: {error}"));
+        }
+        if !forbidden.is_empty() {
+            issues.push(format!("forbidden constructs: {}", forbidden.join(", ")));
+        }
+        let approved = issues.is_empty();
+        let score = if approved { 1.0 } else { 0.0 };
 
         Ok(ReviewFeedback {
             approved,
-            feedback: format!("Reviewed by {}", agent_id),
+            feedback: if approved {
+                format!("{agent_id}: runtime and static checks passed")
+            } else {
+                format!("{agent_id}: {}", issues.join("; "))
+            },
             score,
-            issues_found: if approved { 0 } else { 1 },
+            issues_found: issues.len(),
         })
     }
 
@@ -622,14 +675,14 @@ impl Orchestrator {
     }
 
     /// Calculate consensus score from votes
-    fn calculate_consensus(&self, votes: &[SolutionVote], selected: &SolutionProposal) -> f64 {
+    fn calculate_consensus(&self, votes: &[SolutionVote], selected_index: usize) -> f64 {
         if votes.is_empty() {
             return 0.0;
         }
 
         let votes_for_selected = votes
             .iter()
-            .filter(|v| v.preferred_solution == selected.agent_id as usize)
+            .filter(|v| v.preferred_solution == selected_index)
             .count();
 
         votes_for_selected as f64 / votes.len() as f64
@@ -718,7 +771,22 @@ mod tests {
 
         let result = result.unwrap();
         assert!(!result.final_code.is_empty());
+        assert!(!result.final_code.contains("todo!"));
+        assert!(result
+            .proposals
+            .iter()
+            .all(|proposal| { proposal.reviews.values().all(|review| review.approved) }));
+        assert!(result.consensus_score >= 0.0 && result.consensus_score <= 1.0);
         assert_eq!(result.participating_agents.len(), 7);
+    }
+
+    #[tokio::test]
+    async fn collaborative_solving_rejects_non_integer_inputs() {
+        let orchestrator = Orchestrator::new();
+        let result = orchestrator
+            .solve_collaborative(vec![(vec![json!("not-an-int")], 1)])
+            .await;
+        assert!(matches!(result, Err(SolverError::ConfigurationError(_))));
     }
 
     #[tokio::test]

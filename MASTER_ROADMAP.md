@@ -49,6 +49,9 @@ An agent must not:
 - substitute metadata validation for benchmark execution;
 - hard-code expected benchmark patches or answers;
 - train, retrieve, or prompt from sealed evaluation solutions;
+- expose holdout outputs or reference implementations to candidate generation,
+  routing, ranking, acceptance, repair, memory, or credit assignment;
+- count an external Python/model fallback as an nsynth solve;
 - replace Linguigenesis with an external model call and call it native cognition;
 - use regex/keywords as the final semantic representation;
 - bypass policy through direct `std::fs`, shell, network, git, or database calls in production workflows;
@@ -74,7 +77,7 @@ An agent must not:
 | F — secure tools | G3 | SCAFFOLD | fs/shell/git/http/db modules exist; containment and boundary security incomplete | deny-by-default typed runtime |
 | G — transactional edits | G4 | SCAFFOLD | lexical patch gate only | isolated apply/rollback engine |
 | H — closed repair loop | G5 | SCAFFOLD | `RepoAgent` aggregates helpers but has no `run` loop | implement after E–G |
-| I — workflows/supervision | G6 | SCAFFOLD | planning exists; some paths simulate completion | real typed workflows only |
+| I — workflows/supervision | G6 | SCAFFOLD | planning records real executor results; no durable repo workflow supervisor | implement resumable typed workflows |
 | J — durable memory/resume | G6 | SCAFFOLD | multiple in-memory representations | evidence-gated persistence |
 | K — project-scale generation/validation | G6 | SCAFFOLD | strong function synthesis; project/multilanguage claims exceed evidence | graduate each backend independently |
 | L — CLI/session/telemetry | G6 | NOT STARTED | no canonical coding-agent UX | build over one runtime API |
@@ -195,7 +198,7 @@ Production orchestration, tool execution, persistence, benchmark running, and re
 |---|---|---:|
 | Function synthesis | Large, real solver portfolio with many tests | ~70% |
 | NLP-to-code | Linguigenesis bridge exists, but coding intent/spec grounding is shallow and the legacy NL path contains `NotImplemented` | ~30% |
-| Planning | Typed decomposition/dependencies exist; some execution paths still simulate completion | ~45% |
+| Planning | Typed decomposition/dependencies require real executor evidence; integrated solving records one real outcome and skips unexecuted nodes | ~55% |
 | Tool use | Rust tool modules exist; policy, isolation, timeouts, and real boundary semantics are incomplete | ~30% |
 | Repository understanding | Hardness scanner and knowledge structures exist; no canonical repository index/context engine | ~10–15% |
 | Repo repair loop | New typed scaffold exists, but no executing propose/apply/test/revise loop | ~10% |
@@ -211,10 +214,27 @@ Overall: the architecture is substantially mapped, but only about one quarter of
 - The reviewed 47-module union in `nsynth/src/lib.rs` is now merged and the Git index has no unmerged entries.
 - All known legacy `Problem` initializers now include the required `functions` field; debug and release library checks pass.
 - The focused `agent::repo` suite passes all 16 tests. That verifies its unit wiring, not an end-to-end repair.
-- The search-only stack overflow and six temporal synthesis misses are fixed. The corresponding preemptive-route regression passes, and the search-only orchestrator batch solves all 140 tasks in about 3.36s.
+- The search-only stack overflow and six temporal synthesis misses are fixed.
+  Public solver and exported synthesis entrypoints now strip evaluator holdouts
+  and reference implementations before synthesis; reference/template fallback
+  routes and the default benchmark's Python warmstart fallback are disabled.
+  An oracle-poisoning invariance regression passes, and the search-only
+  orchestrator still solves all 140 tasks in about 3.10s without seeing those
+  oracles.
 - The serial 2,112-test library run remains too slow and red: after roughly eleven minutes it had 1,211 passes, 61 failures, one ignored test, and was manually stopped inside the unbounded full-benchmark test.
 - `cargo fmt --check` reports 473 hunks across 34 files. This is inventoried rather than mass-formatted while semantic baseline work remains active.
-- Production-reachable simulation/placeholder code remains in the legacy agent orchestrator, planner, NL frontend, project transpilation, and several advertised library modules.
+- The legacy collaborative orchestrator and planner no longer fabricate proposals,
+  reviews, or task completion: synthesis uses the real Rust search solver, reviews
+  run executable/static checks, and executor-less tasks fail closed. Placeholder
+  behavior still remains in the NL frontend, project transpilation, and several
+  advertised library modules. `agent/debate.rs` is specifically heuristic-only
+  (keyword critiques, canned confidence, non-empty validation, prose claims) and
+  is excluded from capability claims until every proposal/critique is executed
+  and evidence-gated.
+- `Problem` still physically co-locates synthesis examples and evaluator fields;
+  `Problem::synthesis_view()` enforces the current boundary, but Package M must
+  split these into separate serialized task/evaluation types and run sealed
+  evaluation in a process that cannot expose answers to the agent.
 
 These are Phase 0 blockers. Because the working tree is shared and changing, every implementation package must publish its revision and rerun its gates rather than inherit a previous agent's success claim.
 
