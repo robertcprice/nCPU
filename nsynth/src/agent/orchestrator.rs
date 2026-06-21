@@ -371,10 +371,15 @@ impl Orchestrator {
             .invoke("fs", &write)
             .map_err(|e| SolverError::Other(format!("fs write failed: {e}")))?;
 
+        // Repo status is best-effort observability: persistence has already
+        // succeeded once the file is written. If the sandbox root is not a git
+        // repository (or git is unavailable), return an empty status rather than
+        // failing the whole persist.
         let status = tools
             .invoke("git", &ToolCall::new("status"))
-            .map_err(|e| SolverError::Other(format!("git status failed: {e}")))?;
-        Ok(status.content)
+            .map(|o| o.content)
+            .unwrap_or_default();
+        Ok(status)
     }
 
     /// Add a custom agent to the orchestrator
