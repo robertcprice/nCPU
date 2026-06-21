@@ -627,6 +627,20 @@ mod tests {
     }
 
     #[test]
+    fn session_synthesizes_unseen_op_from_inline_examples() {
+        // Full agent path: a function never named in the registry, demonstrated
+        // only by inline examples, must route to synthesis and succeed.
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("inline_synth");
+        fs::create_dir_all(&root).unwrap();
+        let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+        let result = session.handle_query("build wibble(1)=3, wibble(2)=6, wibble(4)=12");
+        assert_eq!(result.route, QueryRoute::SynthesizeFunction);
+        assert!(result.success, "response={}", result.response);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn session_exposes_all_tool_capabilities() {
         let _guard = SESSION_TEST_LOCK.lock().unwrap();
         let root = temp_root("caps");

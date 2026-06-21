@@ -612,6 +612,55 @@ mod tests {
         assert!(matches!(err, BridgeError::ClarificationNeeded { .. }));
     }
 
+    #[test]
+    fn inline_examples_synthesize_unseen_operation() {
+        // "quux" is not a registry operation. The agent should still synthesize
+        // it purely from the demonstrated I/O examples (here: multiply by 10),
+        // routing through the same typed solver as the verified benchmark.
+        let bridge = LinguigenesisBridge::new();
+        let req = bridge
+            .nl_to_requirement("implement quux(1)=10, quux(2)=20, quux(3)=30")
+            .expect("inline examples should yield a ready requirement");
+        assert_eq!(req.examples.len(), 3, "examples: {:?}", req.examples);
+        assert_eq!(req.function_name, "quux");
+        let result = bridge
+            .synthesize_from_requirement(&req, Some(&req.function_name))
+            .expect("synthesis call");
+        assert!(result.success, "failed to synthesize unseen op: {:?}", result.error);
+    }
+
+    #[test]
+    fn inline_examples_array_unseen_operation() {
+        let bridge = LinguigenesisBridge::new();
+        let req = bridge
+            .nl_to_requirement("a function mapping [1,2,3] -> [2,3,4] and [5,6] -> [6,7]")
+            .expect("inline array examples ready");
+        assert_eq!(req.examples.len(), 2);
+        let result = bridge
+            .synthesize_from_requirement(&req, Some(&req.function_name))
+            .expect("synthesis call");
+        assert!(result.success, "failed array synth: {:?}", result.error);
+    }
+
+    #[test]
+    fn inline_examples_contradiction_asks_for_clarification() {
+        // Same input, two different outputs describes no deterministic function.
+        // The agent must flag the conflict and ask the user — never silently
+        // emit a probabilistic sampler and call it a successful synthesis.
+        let bridge = LinguigenesisBridge::new();
+        match bridge.nl_to_requirement("define bad(1)=1, bad(1)=2") {
+            Err(BridgeError::ClarificationNeeded { partial, questions }) => {
+                assert!(
+                    partial.unresolved.iter().any(|u| u.starts_with("conflicting examples")),
+                    "unresolved={:?}",
+                    partial.unresolved
+                );
+                assert!(!questions.is_empty());
+            }
+            other => panic!("expected ClarificationNeeded for conflicting examples, got {other:?}"),
+        }
+    }
+
     /// Integrity gate: every operation declared in the coding registry (i.e.
     /// every function entity carrying `example_cases`) must actually synthesize
     /// through the real solver. This prevents the registry from advertising

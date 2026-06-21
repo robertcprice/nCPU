@@ -345,6 +345,50 @@ next goal-critical step (queue item 6) is **type/shape `Problem` targeting** —
 let NL with inline I/O examples synthesize *unseen* ops directly through the
 140-task engine, instead of only registry-named ops.
 
+### 0.9 Package D2 — inline-example type/shape targeting (2026-06-21 night)
+
+**This is the mouth→engine connection** (queue item 6 first cut): NL prompts
+that *demonstrate* behaviour with explicit I/O examples now synthesize **any**
+function — including operations with no registry entry — straight through the
+typed solver. The registry is no longer the ceiling on NL synthesis.
+
+**Done**
+
+| Change | Effect |
+|--------|--------|
+| `inline_examples.rs` (new, zero-dep parser) | parses `add(2,3)=5`, `f(2,3) -> 5`, `triple(4) returns 12`, `[1,2,3] -> [1,4,9]`, multi-example, negatives, arrays, bools; arity-consistency + dedup |
+| `coding_requirements::apply_inline_examples` | inline examples become authoritative evidence → workflow=Synthesize, name from call form, array/arith category, high confidence |
+| end-to-end (bridge) | unseen `quux(1)=10…` (×10) and unseen array map `[1,2,3]->[2,3,4]` both **synthesize successfully** |
+| conflict handling | contradictory examples (`bad(1)=1, bad(1)=2`) → **clarification, not a false success** (probabilistic sampler path was emitting a `rand` program and calling it solved) |
+
+**Latent defects fixed while getting it to "perfect":**
+
+- **Nondeterministic comprehension** — three score-only sorts (`reasoning.rs`
+  ×2, `entity_resolution.rs`, `coding_requirements::select_primary_operation`)
+  left ties to HashMap iteration order, so the same prompt could resolve to
+  different ops across runs. Added deterministic id tie-breaks. Verified stable
+  over repeated full-suite runs.
+- **Vague prompts over-resolving** — function words slipped past the stop-word
+  filter (the belief-entity loop in `collect_matched_entities` skipped it), and
+  `definition_overlap_score` gave "with" a 0.51 match to `add`'s definition, so
+  "help with something" silently became "synthesize add". Added a built-in
+  baseline function-word stop list and filtered it in both match loops; vague
+  prompts now correctly clarify.
+
+**Verification**
+
+```bash
+cd linguigenesis/rust && cargo test -p linguigenesis-core --lib   # 93/93, deterministic
+cd ncpu/nsynth
+cargo test --lib linguigenesis_bridge        # 13/13 (incl. integrity gate + 3 inline e2e)
+cargo test --lib agent::session              # 11/11 (incl. unseen-op-from-inline e2e)
+cargo test --lib agent::repo                 # 46/46
+```
+
+**Still open:** inline parser covers the common forms; tuple/struct/tree literal
+inputs and `f(x)=y where ...` natural phrasing are future work. `reduce`
+(array→scalar fold) remains the one vocabulary-only registry gap (§0.8).
+
 ---
 ## 1. Product Definition
 
