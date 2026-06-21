@@ -1,8 +1,8 @@
-//! LLM Integration Module for nCPU/nSynth
+//! QUARANTINED legacy LLM NL module.
 //!
-//! This module provides natural language processing capabilities through
-//! integration with Anthropic's Claude API for parsing problem requirements
-//! and generating synthesis specifications.
+//! Production NL routing is `linguigenesis_bridge` + `solve_from_description`.
+//! This module delegates synthesis to the registry-driven bridge; the old
+//! `ExampleSynthesizer` keyword path is not used.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -320,89 +320,20 @@ impl NLPipeline {
     /// It takes natural language input, generates examples, and
     /// synthesizes a program using the nCPU/nSynth solver.
     pub fn synthesize_from_nl(&self, input: &str) -> NLSynthesisResult {
-        use crate::benchmark::{Example, Problem, Value};
-        use crate::solver;
-
-        // Step 1: Generate examples from the natural language description
-        let synthesizer = synthesizer::ExampleSynthesizer::new()
-            .with_edge_cases(true)
-            .with_diverse(true);
-
-        let synthesis_result = synthesizer.generate_examples(input);
-
-        if synthesis_result.examples.is_empty() {
-            return NLSynthesisResult {
+        let bridge = crate::linguigenesis_bridge::LinguigenesisBridge::new();
+        match bridge.synthesize_from_description(input, None) {
+            Ok(result) => NLSynthesisResult {
+                code: result.code,
+                method: result.method,
+                success: result.success,
+                error: result.error,
+            },
+            Err(message) => NLSynthesisResult {
                 code: String::new(),
-                method: "example_generation_failed".to_string(),
+                method: "linguigenesis_bridge".to_string(),
                 success: false,
-                error: Some("Failed to generate examples from input".to_string()),
-            };
-        }
-
-        // Step 2: Convert NL examples to nCPU/nSynth examples
-        let examples: Vec<Example> = synthesis_result
-            .examples
-            .into_iter()
-            .filter_map(|ex| {
-                let inputs: Vec<Value> = ex
-                    .inputs
-                    .into_iter()
-                    .filter_map(|v| self.json_to_value(v))
-                    .collect();
-
-                let expected = self.json_to_value(ex.expected)?;
-
-                if inputs.is_empty() {
-                    return None;
-                }
-
-                Some(Example { inputs, expected })
-            })
-            .collect();
-
-        if examples.is_empty() {
-            return NLSynthesisResult {
-                code: String::new(),
-                method: "example_conversion_failed".to_string(),
-                success: false,
-                error: Some("Failed to convert examples to nCPU format".to_string()),
-            };
-        }
-
-        // Step 3: Infer function signature from examples
-        let signature = self.infer_signature(&examples);
-
-        // Step 4: Create a Problem for the solver
-        // Note: We leak signature and description to get &'static str lifetime.
-        // This is acceptable for synthesis results which are short-lived.
-        let name = format!("nl_{}", self.function_name_from_input(input));
-        let signature = Box::leak(signature.into_boxed_str());
-        let description = Box::leak(input.to_string().into_boxed_str());
-
-        let problem = Problem {
-            name,
-            category: "nl",
-            description,
-            signature,
-            examples: examples.clone(),
-            holdouts: vec![],
-            reference_code: "",
-            synthetic_args: vec![],
-            synthetic_values: vec![],
-            recursive_allowed: false,
-            tree_input: false,
-            explicit_stack: false,
-            functions: vec![],
-        };
-
-        // Step 5: Call the solver
-        let solve_result = solver::solve_problem(&problem);
-
-        NLSynthesisResult {
-            code: solve_result.code,
-            method: solve_result.method,
-            success: solve_result.success,
-            error: solve_result.error,
+                error: Some(message),
+            },
         }
     }
 

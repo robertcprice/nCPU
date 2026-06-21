@@ -1213,7 +1213,7 @@ fn emit_mog_array(expr: &Expr, fn_name: &str, scalar_names: &[&str], array_idx: 
         if op_s == "min" || op_s == "max" {
             let cmp = if op_s == "min" { "<" } else { ">" };
             format!(
-                "fn {fn_name}({sig}) -> i64 {{\n    acc: i64 = {init_s};\n    for item in arr {{\n        if item {cmp} acc {{\n            acc = item;\n        }}\n    }}\n    return acc;\n}}\n"
+                "fn {fn_name}({sig}) -> i64 {{\n    acc: i64 = arr[0];\n    for item in arr {{\n        if item {cmp} acc {{\n            acc = item;\n        }}\n    }}\n    return acc;\n}}\n"
             )
         } else if let Expr::IfExpr(cmp, lhs, rhs, then_e, else_e) = body_rhs.as_ref() {
             let ls = lhs.to_mog_ext(&ext_names, &[]);

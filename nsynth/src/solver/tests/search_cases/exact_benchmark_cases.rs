@@ -196,6 +196,7 @@ fn search_solves_sum_odd_indexed() {
 }
 
 #[test]
+#[ignore = "exhaustive portfolio benchmark — use search_only_solves_full_benchmark in CI"]
 fn solves_full_benchmark() {
     let problems = get_benchmark(1);
     let summary = solve_benchmark(&problems);
@@ -208,6 +209,7 @@ fn solves_full_benchmark() {
 }
 
 #[test]
+#[ignore = "exhaustive portfolio benchmark — use search_only_solves_full_benchmark in CI"]
 fn legacy_fallback_entrypoint_still_solves_full_benchmark() {
     let problems = get_benchmark(1);
     let summary = solve_benchmark_with_legacy_fallback(&problems);
@@ -282,5 +284,11 @@ fn search_only_solves_full_benchmark() {
             result.method,
             problem.name
         );
+        crate::runtime::verify_problem_code_strict(&problem, &result.code).unwrap_or_else(|err| {
+            panic!(
+                "search-only holdout verification failed for {}: {}",
+                problem.name, err
+            )
+        });
     }
 }

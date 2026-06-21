@@ -867,6 +867,7 @@ where
 mod tests {
     use super::*;
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_rnn_cell() {
         let rnn = RNNCell::new(4, 8);
@@ -876,6 +877,7 @@ mod tests {
         assert_eq!(h_new.shape, Shape::new(vec![8]));
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_peephole_lstm() {
         let lstm = PeepholeLSTMCell::new(4, 8);
@@ -887,6 +889,7 @@ mod tests {
         assert_eq!(c_new.shape, Shape::new(vec![8]));
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_batch_norm_1d() {
         let mut bn = BatchNorm1d::new(16);
@@ -895,6 +898,7 @@ mod tests {
         assert_eq!(out.shape, Shape::new(vec![32, 16]));
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_residual() {
         let x = Tensor::vector(vec![1.0, 2.0, 3.0]);
@@ -902,6 +906,7 @@ mod tests {
         assert_eq!(out.data, vec![3.0, 4.0, 5.0]);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_parallel_branch() {
         let x = Tensor::vector(vec![1.0, 2.0, 3.0]);

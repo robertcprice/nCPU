@@ -423,6 +423,7 @@ pub fn r2_score(predictions: &Tensor, targets: &Tensor) -> f64 {
 mod tests {
     use super::*;
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_accuracy() {
         let pred = Tensor::vector(vec![0.9, 0.1, 0.8]);

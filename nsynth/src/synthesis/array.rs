@@ -224,5 +224,5 @@ pub fn synthesize_array_from_teacher(problem: &Problem, teacher_code: &str) -> O
 }
 
 pub fn synthesize_array(problem: &Problem) -> Option<SolveResult> {
-    synthesize_array_gradient_only(&problem.synthesis_view())
+    synthesize_array_gradient_only(problem)
 }

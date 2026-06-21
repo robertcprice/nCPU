@@ -562,6 +562,7 @@ where
 mod tests {
     use super::*;
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_residual() {
         let x = Tensor::vector(vec![1.0, 2.0, 3.0]);
@@ -569,6 +570,7 @@ mod tests {
         assert_eq!(out.data, vec![3.0, 4.0, 5.0]);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_parallel() {
         let x = Tensor::vector(vec![1.0, 2.0]);

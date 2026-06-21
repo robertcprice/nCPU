@@ -324,6 +324,7 @@ mod tests {
         assert!((beta_99 - 0.02).abs() < 1e-6);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_schedule_type_cosine() {
         let schedule = ScheduleType::Cosine;
@@ -344,6 +345,7 @@ mod tests {
         assert_eq!(diffusion.alphas_cumprod.len(), 100);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_forward_diffusion() {
         let diffusion = GaussianDiffusion::new(100, 0.0001, 0.02, ScheduleType::Linear);

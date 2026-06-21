@@ -1,4 +1,7 @@
+use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{HardnessProfile, HardnessTier, RepoTaskKind, RepoTaskSpec};
+use super::nl_fixture_cargo_test_command;
+use crate::agent::runtime::CodeTaskSpec;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -225,19 +228,19 @@ pub fn standard_n_cpu_suite() -> Vec<LocalBenchmarkTask> {
             max_iterations: 6,
         },
         LocalBenchmarkTask {
-            id: "test_repo_agent".to_string(),
+            id: "test_repair_agent".to_string(),
             kind: RepoTaskKind::MissingTest,
-            issue: "Add repo-agent guardrail and patch-gate tests".to_string(),
-            test_command: "cargo test repo_agent".to_string(),
+            issue: "Add repair-agent guardrail and patch-gate tests".to_string(),
+            test_command: "cargo test repair_agent".to_string(),
             allowed_files: vec!["src/agent/repo/**".to_string(), "tests/**".to_string()],
             expected_tier_min: HardnessTier::FeatureWithTests,
             max_iterations: 4,
         },
         LocalBenchmarkTask {
-            id: "feature_repo_agent_loop".to_string(),
+            id: "feature_repair_agent_loop".to_string(),
             kind: RepoTaskKind::Feature,
-            issue: "Implement deterministic repo-agent loop skeleton".to_string(),
-            test_command: "cargo test repo_agent".to_string(),
+            issue: "Implement deterministic repair-agent loop skeleton".to_string(),
+            test_command: "cargo test repair_agent".to_string(),
             allowed_files: vec![
                 "src/agent/repo/**".to_string(),
                 "src/agent/mod.rs".to_string(),
@@ -348,6 +351,86 @@ pub fn standard_n_cpu_suite() -> Vec<LocalBenchmarkTask> {
             max_iterations: 6,
         },
     ]
+}
+
+/// Wrong `src/lib.rs` body for isolated NL fixture harnesses (Package H).
+pub fn nl_fixture_wrong_stub(fixture_id: &str) -> Option<&'static str> {
+    match fixture_id {
+        "nl_fixture_add" => Some("pub fn add_two(a: i64, b: i64) -> i64 { a - b }\n"),
+        "nl_fixture_subtract" => Some("pub fn subtract(a: i64, b: i64) -> i64 { a + b }\n"),
+        "nl_fixture_multiply" => Some("pub fn multiply(a: i64, b: i64) -> i64 { a / b }\n"),
+        "nl_fixture_divide" => Some("pub fn divide(a: i64, b: i64) -> i64 { a * b }\n"),
+        "nl_fixture_max" => {
+            Some("pub fn max_of(a: i64, b: i64) -> i64 { if a < b { a } else { b } }\n")
+        }
+        "nl_fixture_reverse" => Some("pub fn reverse(xs: &[i64]) -> Vec<i64> { xs.to_vec() }\n"),
+        _ => None,
+    }
+}
+
+// gcd uses write_gcd_fixture in harness (no single-file wrong stub).
+
+/// Isolated NL synthesis fixtures for repair-loop verification (Package H/M).
+pub fn nl_synthesis_fixture_suite() -> Vec<LocalBenchmarkTask> {
+    vec![
+        nl_fixture_task("nl_fixture_add", "synthesize: add two numbers"),
+        nl_fixture_task("nl_fixture_subtract", "synthesize: subtract two numbers"),
+        nl_fixture_task("nl_fixture_multiply", "synthesize: multiply two numbers"),
+        nl_fixture_task("nl_fixture_divide", "synthesize: divide two numbers"),
+        nl_fixture_task("nl_fixture_max", "synthesize: return the larger of two numbers"),
+        nl_fixture_task("nl_fixture_reverse", "synthesize: reverse array"),
+        nl_fixture_task(
+            "nl_fixture_multifile_multiply",
+            "synthesize: multiply two numbers",
+        ),
+        nl_fixture_task("nl_fixture_gcd", "synthesize: greatest common divisor"),
+    ]
+}
+
+fn nl_fixture_task(id: &str, issue: &str) -> LocalBenchmarkTask {
+    LocalBenchmarkTask {
+        id: id.to_string(),
+        kind: RepoTaskKind::Feature,
+        issue: issue.to_string(),
+        test_command: nl_fixture_cargo_test_command(id).expect("fixture cargo test command"),
+        allowed_files: vec!["src/**".to_string()],
+        expected_tier_min: HardnessTier::SingleFileBug,
+        max_iterations: 3,
+    }
+}
+
+/// Build canonical `CodeTaskSpec` list for NL fixture harnesses.
+pub fn nl_fixture_code_specs(root: impl AsRef<Path>) -> Vec<CodeTaskSpec> {
+    let root = root.as_ref();
+    nl_synthesis_fixture_suite()
+        .into_iter()
+        .map(|task| {
+            let nl = task
+                .issue
+                .strip_prefix("synthesize:")
+                .map(str::trim)
+                .unwrap_or(&task.issue);
+            let intent = CodingIntent::from_nl(nl).expect("fixture intent");
+            CodeTaskSpec::from_nl(
+                root.to_string_lossy(),
+                nl,
+                intent,
+                task.test_command,
+                task.allowed_files,
+                task.max_iterations,
+            )
+        })
+        .collect()
+}
+
+impl RepoBenchmark {
+    pub fn from_nl_fixture_suite(root: impl Into<PathBuf>) -> Self {
+        let mut benchmark = Self::new(root);
+        for task in nl_synthesis_fixture_suite() {
+            benchmark.add_task(task);
+        }
+        benchmark
+    }
 }
 
 #[cfg(test)]

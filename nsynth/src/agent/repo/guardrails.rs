@@ -14,6 +14,8 @@ pub struct GuardrailPolicy {
     immutable_patterns: Vec<String>,
     unsafe_commands: Vec<(String, String)>,
     secret_patterns: Vec<(String, String)>,
+    /// Host suffixes allowed for `http` tool invocations (e.g. `localhost`, `docs.rs`).
+    pub allowed_http_hosts: Vec<String>,
 }
 
 impl Default for GuardrailPolicy {
@@ -95,6 +97,13 @@ impl Default for GuardrailPolicy {
                     "private key".to_string(),
                 ),
             ],
+            allowed_http_hosts: vec![
+                "localhost".to_string(),
+                "127.0.0.1".to_string(),
+                "[::1]".to_string(),
+                "docs.rs".to_string(),
+                "raw.githubusercontent.com".to_string(),
+            ],
         }
     }
 }
@@ -114,6 +123,26 @@ impl GuardrailPolicy {
     ) -> Self {
         self.unsafe_commands.push((token.into(), reason.into()));
         self
+    }
+
+    pub fn with_allowed_http_host(mut self, host: impl Into<String>) -> Self {
+        self.allowed_http_hosts.push(host.into());
+        self
+    }
+
+    pub fn check_http_url(&self, url: &str) -> GuardrailDecision {
+        let host = extract_url_host(url);
+        if host.is_empty() {
+            return GuardrailDecision::Deny("http url has no host".to_string());
+        }
+        let allowed = self.allowed_http_hosts.iter().any(|pattern| {
+            host == *pattern || host.ends_with(&format!(".{pattern}"))
+        });
+        if allowed {
+            GuardrailDecision::Allow
+        } else {
+            GuardrailDecision::Deny(format!("http host not on allowlist: {host}"))
+        }
     }
 
     pub fn check_path(&self, path: impl AsRef<Path>, writable: bool) -> GuardrailDecision {
@@ -173,6 +202,24 @@ fn normalize_path(path: &Path) -> String {
         .to_string()
 }
 
+fn extract_url_host(url: &str) -> String {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    without_scheme
+        .split('/')
+        .next()
+        .unwrap_or(without_scheme)
+        .split('@')
+        .last()
+        .unwrap_or(without_scheme)
+        .split(':')
+        .next()
+        .unwrap_or(without_scheme)
+        .to_string()
+}
+
 fn pattern_matches(pattern: &str, path: &str) -> bool {
     let pattern = pattern.trim_start_matches("./").trim_end_matches('/');
     let path = path.trim_start_matches("./");
@@ -229,5 +276,18 @@ mod tests {
             policy.detect_secret("password = hunter2"),
             Some("password".to_string())
         );
+    }
+
+    #[test]
+    fn denies_disallowed_http_hosts() {
+        let policy = GuardrailPolicy::default();
+        assert!(matches!(
+            policy.check_http_url("https://evil.example/data"),
+            GuardrailDecision::Deny(_)
+        ));
+        assert!(matches!(
+            policy.check_http_url("http://localhost:8080/health"),
+            GuardrailDecision::Allow
+        ));
     }
 }

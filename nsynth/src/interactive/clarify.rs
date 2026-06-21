@@ -542,6 +542,7 @@ pub fn execute_interactive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::benchmark::Example;
 
     fn make_test_problem() -> Problem {
         Problem {
@@ -609,7 +610,16 @@ mod tests {
             category: "test",
             description: "test",
             signature: "fn test(x: Generic) -> Generic",
-            examples: vec![],
+            examples: vec![
+                Example {
+                    inputs: vec![Value::Int(1)],
+                    expected: Value::Int(2),
+                },
+                Example {
+                    inputs: vec![Value::Int(2)],
+                    expected: Value::Int(3),
+                },
+            ],
             holdouts: vec![],
             reference_code: "",
             synthetic_args: vec![],

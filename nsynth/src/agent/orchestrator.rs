@@ -1,7 +1,7 @@
 // Multi-Agent Orchestrator for Collaborative Synthesis
 // Coordinates specialized agents through structured communication and voting
 
-use crate::agent::tools::{ToolCall, ToolRegistry};
+use crate::agent::tools::{SecureToolRuntime, ToolCall};
 use crate::benchmark::{Example, Problem, Value};
 use crate::solver::SolverError;
 use std::collections::HashMap;
@@ -249,9 +249,8 @@ pub struct Orchestrator {
     agents: Vec<Agent>,
     communication_channel: Arc<RwLock<CommunicationChannel>>,
     config: OrchestratorConfig,
-    /// Optional real-world tool access (filesystem, git, shell, http, db) behind
-    /// the sandbox/allowlist boundaries. `None` = reasoning-only orchestrator.
-    tools: Option<ToolRegistry>,
+    /// Optional policy-gated tool runtime (filesystem, git, shell, http, db).
+    tools: Option<SecureToolRuntime>,
 }
 
 /// Orchestration configuration
@@ -341,12 +340,17 @@ impl Orchestrator {
     /// Attach a default tool registry sandboxed to `sandbox_root`, giving the
     /// orchestrator real filesystem/git/shell/http/db capabilities. Builder-style.
     pub fn with_tools(mut self, sandbox_root: impl Into<std::path::PathBuf>) -> Self {
-        self.tools = Some(ToolRegistry::with_defaults(sandbox_root));
+        self.tools = Some(
+            SecureToolRuntime::for_general_agent(
+                sandbox_root,
+                crate::agent::repo::GuardrailPolicy::default(),
+            ),
+        );
         self
     }
 
-    /// Borrow the tool registry, if one is attached.
-    pub fn tools(&self) -> Option<&ToolRegistry> {
+    /// Borrow the secure tool runtime, if one is attached.
+    pub fn tools(&self) -> Option<&SecureToolRuntime> {
         self.tools.as_ref()
     }
 

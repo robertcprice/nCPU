@@ -17,6 +17,7 @@ pub mod fs;
 pub mod git;
 pub mod http;
 pub mod registry;
+pub mod secure_runtime;
 pub mod shell;
 
 pub use database::DbTool;
@@ -24,6 +25,7 @@ pub use fs::FsTool;
 pub use git::GitTool;
 pub use http::HttpTool;
 pub use registry::{Tool, ToolCall, ToolError, ToolOutput, ToolRegistry};
+pub use secure_runtime::SecureToolRuntime;
 pub use shell::ShellTool;
 
 #[cfg(test)]

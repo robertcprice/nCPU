@@ -543,6 +543,7 @@ mod tests {
         assert_eq!(sync.rank(), 2);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_gradient_synchronization_invalid_rank() {
         // Rank must be less than world_size

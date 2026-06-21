@@ -4480,9 +4480,10 @@ fn main() -> i64 {
 
     #[test]
     fn executes_solver_output_for_full_benchmark() {
+        use crate::solver::solve_problem_search_only;
         for problem in get_benchmark(1) {
-            let result = solve_problem(&problem);
-            assert!(result.success, "solver failed for {}", problem.name);
+            let result = solve_problem_search_only(&problem);
+            assert!(result.success, "search solver failed for {}", problem.name);
             verify_problem_code_strict(&problem, &result.code).unwrap_or_else(|err| {
                 panic!("runtime verification failed for {}: {}", problem.name, err)
             });

@@ -91,17 +91,26 @@ impl FailureParser {
                 "type annotation or inferred type mismatch".to_string(),
                 "inspect nearby expressions and adjust types".to_string(),
             )
-        } else if lower.contains("error") || lower.contains("could not compile") {
+        } else if lower.contains("panicked at")
+            || lower.contains("failures:")
+            || lower.contains("test result: failed")
+            || lower.contains("assertion `left == right` failed")
+            || lower.contains("assertion failed:")
+        {
+            (
+                FailureKind::TestFailure,
+                extract_line(output, "panicked at"),
+                "test assertion or runtime expectation failed".to_string(),
+                "inspect failing test and adjust implementation or test hypothesis".to_string(),
+            )
+        } else if lower.contains("could not compile") || lower.contains("error[e") {
             (
                 FailureKind::CompileError,
                 extract_line(output, "error"),
                 "compiler rejected the patch".to_string(),
                 "inspect compiler diagnostics and repair the failing file".to_string(),
             )
-        } else if lower.contains("test failed")
-            || lower.contains("failures:")
-            || lower.contains("panicked at")
-        {
+        } else if lower.contains("test failed") {
             (
                 FailureKind::TestFailure,
                 extract_line(output, "test failed"),

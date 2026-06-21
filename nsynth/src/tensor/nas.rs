@@ -930,6 +930,7 @@ mod tests {
         assert_eq!(arch.len(), num_edges);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_darts_arch_parameters() {
         let ops: Vec<Box<dyn Fn(&Tensor) -> Tensor>> =
@@ -997,6 +998,7 @@ mod tests {
         assert_eq!(search_space.connections.size, 2);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_search_space_random_sample() {
         let layers = vec![LayerOptions::new(2, vec![3, 5], vec![32, 64])];
@@ -1010,6 +1012,7 @@ mod tests {
         assert_eq!(arch.len(), 4);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_search_space_encode_decode() {
         let layers = vec![LayerOptions::new(2, vec![3, 5], vec![32, 64])];

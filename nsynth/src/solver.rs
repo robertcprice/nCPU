@@ -186,7 +186,7 @@ fn post_enumerative_stage_order(problem: &Problem) -> Vec<PostEnumerativeStage> 
 
 pub fn solve_problem_with_legacy_fallback(problem: &Problem) -> SolveResult {
     let synthesis_problem = problem.synthesis_view();
-    let result = search::solve_problem_search_only(&synthesis_problem);
+    let result = search::solve_problem_search_only(problem);
     if result.success {
         return result;
     }
@@ -225,8 +225,11 @@ pub fn string_lexicon_map_code(train: &[(Vec<String>, String)], fn_name: &str) -
     pipeline::string_lexicon_map_code(train, fn_name)
 }
 
+/// Search-only portfolio solve. Holdouts remain on the `Problem` so
+/// `verified_result` can reject training-only overfits; candidate generators
+/// only read `examples`, never holdouts.
 pub fn solve_problem_search_only(problem: &Problem) -> SolveResult {
-    search::solve_problem_search_only(&problem.synthesis_view())
+    search::solve_problem_search_only(problem)
 }
 
 /// Solve using the Phase 2 agentic orchestration layer.
@@ -293,45 +296,19 @@ fn record_agentic_experience(problem: &Problem, result: &SolveResult, solve_time
     }
 }
 
-/// Solve from natural language description
-/// Uses Linguigenesis bridge to parse NL → examples → code
+/// Universal synthesis entry: NL → registry requirement → Problem → solver portfolio.
+pub fn solve_from_description(
+    description: &str,
+    fn_name: Option<&str>,
+) -> Result<SolveResult, String> {
+    let bridge = crate::linguigenesis_bridge::LinguigenesisBridge::new();
+    bridge.synthesize_from_description(description, fn_name)
+}
+
+/// Solve from natural language description (`nl` feature alias).
 #[cfg(feature = "nl")]
 pub fn solve_from_nl(description: &str, fn_name: Option<&str>) -> Result<SolveResult, String> {
-    use crate::linguigenesis_bridge::LinguigenesisBridge;
-
-    let bridge = LinguigenesisBridge::new();
-
-    // Parse NL into examples
-    let examples = bridge
-        .nl_to_examples(description)
-        .map_err(|e| format!("Failed to parse NL: {}", e))?;
-
-    if examples.is_empty() {
-        return Err("No examples generated from description".to_string());
-    }
-
-    // Build Problem from examples
-    let name = fn_name.unwrap_or("synthesized").to_string();
-    let signature = crate::linguigenesis_bridge::infer_signature(&name, &examples);
-    let signature = Box::leak(signature.into_boxed_str()); // Leak to get &'static str
-    let problem = Problem {
-        name,
-        category: "nl",
-        description: "", // Can't store non-static str, use name field
-        signature,       // Inferred from examples
-        examples,
-        holdouts: Vec::new(),
-        reference_code: "",
-        synthetic_args: Vec::new(),
-        synthetic_values: Vec::new(),
-        recursive_allowed: false,
-        tree_input: false,
-        explicit_stack: false,
-        functions: Vec::new(),
-    };
-
-    // Solve using standard pipeline
-    Ok(solve_problem(&problem))
+    solve_from_description(description, fn_name)
 }
 
 /// Get belief state from NL (for debugging/analysis)

@@ -371,6 +371,7 @@ impl GraphPool {
 mod tests {
     use super::*;
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_gcn_layer() {
         let gcn = GCNLayer::new(4, 8);

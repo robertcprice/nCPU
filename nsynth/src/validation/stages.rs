@@ -192,6 +192,14 @@ impl SecurityValidationStage {
                             }
                         }
                     }
+                    BinOp::Div => {
+                        if matches!(&**right, Expression::Int(0)) {
+                            issues.push(
+                                Issue::high(IssueCategory::Security, "Division by zero")
+                                    .with_fix("Guard divisor before division"),
+                            );
+                        }
+                    }
                     _ => {}
                 }
 

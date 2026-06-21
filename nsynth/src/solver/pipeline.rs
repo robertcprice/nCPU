@@ -1,4 +1,5 @@
 use super::*;
+use crate::synthesis;
 
 /// Returns true when at least one example input is a string, structured type,
 /// or pair. Scalar-only stages (enumerative expression search, scalar
@@ -220,6 +221,34 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
         }
         return result;
     }
+
+    // Array-output problems (`[i64] -> [i64]`): exact array_transform before scalar paths.
+    let array_io = problem.examples.first().is_some_and(|ex| {
+        ex.inputs.len() == 1
+            && matches!(ex.inputs[0], Value::Array(_))
+            && matches!(ex.expected, Value::Array(_))
+    });
+    if array_io {
+        let t_arr = std::time::Instant::now();
+        if let Some(result) = synthesis::synthesize_array(problem) {
+            if result.success {
+                eprintln!(
+                    "[solve] early array_output OK in {:.3}s — {}",
+                    t_arr.elapsed().as_secs_f32(),
+                    result.method
+                );
+                if recordable {
+                    crate::solved_cache::record(problem, &result.method, &result.code);
+                }
+                return result;
+            }
+        }
+        eprintln!(
+            "[solve] early array_output MISS in {:.3}s",
+            t_arr.elapsed().as_secs_f32()
+        );
+    }
+
     let result = solve_problem_inner(problem);
     if result.success && recordable {
         // Record every successful solve. De-duped inside the cache so reruns

@@ -961,7 +961,7 @@ pub(super) fn code_scalar_two_branch(
 #[cfg(test)]
 mod probe_tests {
     use super::*;
-    use crate::benchmark::{Example, Problem, Value};
+    use crate::benchmark::{get_benchmark, Example, Problem, Value};
 
     fn storage_problem() -> Problem {
         let rows = [
@@ -1282,6 +1282,23 @@ mod probe_tests {
         assert!(
             super::search_scalar_families::search_piecewise_affine(&p, "sq").is_none(),
             "piecewise must refuse a non-affine curve, not staircase-overfit it"
+        );
+    }
+
+    #[test]
+    fn piecewise_affine_refuses_cube_overfit() {
+        let problem = get_benchmark(1)
+            .into_iter()
+            .find(|p| p.name == "cube_v0")
+            .unwrap();
+        let piecewise = super::search_scalar_families::search_piecewise_affine(
+            &problem,
+            problem.function_name(),
+        );
+        println!("piecewise={:?}", piecewise.as_ref().map(|r| r.code.clone()));
+        assert!(
+            piecewise.is_none(),
+            "piecewise must not accept cube training without holdout generalization"
         );
     }
 }

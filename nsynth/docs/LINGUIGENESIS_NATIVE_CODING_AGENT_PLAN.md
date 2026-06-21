@@ -43,15 +43,19 @@ The default request path is:
 
 ```text
 user text
-  -> Linguigenesis comprehension and dialogue
-  -> typed CodingIntent + evidence + uncertainty
-  -> repository-grounded CodeTaskSpec
-  -> nsynth plan and synthesis
-  -> policy-gated tools
-  -> transactional patch
-  -> real verifier
-  -> verified memory and response
+  → tokenize + KVRM entity lookup (lemma, synonym, domain, entailment)
+  → BeliefState (comprehension, intent, constraints, evidence entity IDs)
+  → RequirementDeriver (registry graph walk — no Rust keyword tables)
+  → SynthesisRequirement (signature, examples, category, confidence, unresolved)
+  → CodingIntent + CodeTaskSpec (Package B/D)
+  → nsynth plan and synthesis
+  → policy-gated tools
+  → transactional patch
+  → real verifier
+  → verified memory and response
 ```
+
+**Emergent NL rule:** operation examples, workflow signals, and constraints live in `linguigenesis/data/coding_registry.json`. Rust parses and walks relations; it must not use `text.contains` or hard-coded examples in `linguigenesis_bridge.rs`. See root `MASTER_ROADMAP.md` §0.5 Package C work card.
 
 An external model adapter may propose an intent, plan, or patch only when explicitly enabled. Every proposal must be converted into native typed structures and pass the same policy, synthesis, and verification gates. The system must remain useful with all external-model features disabled.
 
@@ -230,36 +234,23 @@ Each phase is blocked by all earlier completion gates. Do not parallelize downst
 
 **Build in `../linguigenesis`**
 
-- Add a coding ontology: repository, file, symbol, dependency, diagnostic, behavior, constraint, workflow, acceptance oracle, and risk.
-- Extend comprehension from keyword intent to compositional coding requests, negation, scope, constraints, references, and follow-up resolution.
-- Add a typed coding dialogue state that preserves evidence spans and explicitly represents ambiguity.
-- Finish or isolate the deferred `lg-communicator` environment/training adapters; no deferred training API may be advertised as active capability.
-- Add coding utterance corpora with paraphrase, adversarial ambiguity, conflicting instructions, and multi-turn corrections.
+- Coding ontology in `data/coding_registry.json` (not Rust keyword tables).
+- `RequirementDeriver` + `CodingComprehension` → `SynthesisRequirement`.
+- Registry workflow entities for intent (`signal_lemmas`, `maps_to_intent`).
+- Compositional requests, negation, scope, dialogue ambiguity via `unresolved`.
+- Coding utterance corpora with paraphrase and adversarial cases.
 
-**Allowed existing APIs**
+**Verification:** paraphrase via synonym → identical `example_cases`; zero `text.contains` in comprehension production path.
 
-- `linguigenesis_core::Registry::{new,from_json_auto,get_by_lemma,query,get_related}`.
-- `Comprehension::{new,parse}` and `BeliefState`/`IntentType`.
-- `AnalogyReasoner`, `MultiHopReasoner`, and `KnowledgeQA` for grounded relations.
-- `lg-communicator` comprehension/policy/dialogue only after its environment contract is unified and tested.
-
-**Verification**
-
-- Frozen train/dev/test split with unseen vocabulary and paraphrases.
-- Exact or structural match for intent/spec; calibration error for confidence; clarification precision/recall.
-- Mutation tests for negation, file scope, version constraints, and “do not change” clauses.
-- A zero-network test proves the native path works without any model API.
-
-**Do not** replace understanding with regex routing, keyword-only classification, or an external-model call hidden behind an interface.
+**Do not** hard-code examples in Rust or use keyword-only classification.
 
 ### Phase 3 — Typed Linguigenesis-to-nsynth Bridge
 
 **Build**
 
-- Convert Linguigenesis beliefs into `CodingIntent`, then ground them against a `RepositorySnapshot` to produce `CodeTaskSpec`.
-- Reject unsupported or low-confidence conversions with typed clarification questions.
-- Preserve source text spans, registry entities, reasoning path, and conversion diagnostics.
-- Retire or quarantine `nl/mod.rs` paths that return `NotImplemented`; the canonical CLI must never select them.
+- `linguigenesis_bridge.rs` calls `CodingComprehension` only; delete `generate_examples_from_text`.
+- `SynthesisRequirement` → `Problem` / `CodingIntent` → `CodeTaskSpec`.
+- Quarantine `nl/mod.rs` from production.
 
 **References**
 

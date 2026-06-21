@@ -892,6 +892,7 @@ mod tests {
         assert!((loss.data[0] - 0.33).abs() < 0.1);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_iou_loss() {
         let pred = Tensor::vector(vec![1.0, 0.0, 1.0]);

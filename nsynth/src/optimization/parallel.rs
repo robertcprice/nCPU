@@ -160,7 +160,7 @@ impl Default for ParallelConfig {
     fn default() -> Self {
         Self {
             min_iterations: 1000,
-            min_body_complexity: 10,
+            min_body_complexity: 2,
             safety_threshold: 0.8,
             target_cores: num_cpus::get(),
             analyze_nested: true,
@@ -405,6 +405,11 @@ impl Parallelizer {
 
         let defined_vars = self.extract_defined_variables(loop_body);
         let used_vars = self.extract_used_variables(loop_body, language);
+        let mutation_candidates: HashSet<String> = defined_vars
+            .iter()
+            .chain(used_vars.iter())
+            .cloned()
+            .collect();
 
         // Check for accumulator patterns (dependencies)
         for line in loop_body {
@@ -432,7 +437,7 @@ impl Parallelizer {
             }
 
             // Check for shared mutable state
-            for var in &defined_vars {
+            for var in &mutation_candidates {
                 if line.contains(&format!("{} += ", var)) || line.contains(&format!("{} -= ", var))
                 {
                     dependencies.push(Dependency {

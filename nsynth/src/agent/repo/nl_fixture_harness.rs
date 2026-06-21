@@ -1,0 +1,259 @@
+//! Seeded mini-crate harness for NL synthesis fixtures (Package H).
+//!
+//! Each fixture is a real `cargo test` oracle instead of grep-on-source.
+
+use crate::agent::repo::nl_fixture_wrong_stub;
+use std::fs;
+use std::path::Path;
+
+const CARGO_TOML_TEMPLATE: &str = r#"[package]
+name = "{package_name}"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"#;
+
+fn fixture_package_name(fixture_id: &str) -> String {
+    fixture_id.replace('_', "-")
+}
+
+/// `cargo test` command for a fixture id (test name matches fixture id).
+pub fn nl_fixture_cargo_test_command(fixture_id: &str) -> Option<String> {
+    if !is_nl_fixture_id(fixture_id) {
+        return None;
+    }
+    Some(format!("cargo test {fixture_id} --lib"))
+}
+
+fn is_nl_fixture_id(fixture_id: &str) -> bool {
+    nl_fixture_wrong_stub(fixture_id).is_some()
+        || fixture_id == "nl_fixture_multifile_multiply"
+        || fixture_id == "nl_fixture_gcd"
+}
+
+/// Write a minimal Cargo project with a wrong implementation and embedded unit test.
+pub fn write_nl_fixture_crate(root: &Path, fixture_id: &str) -> Result<(), String> {
+    if fixture_id == "nl_fixture_multifile_multiply" {
+        return write_multifile_multiply_fixture(root);
+    }
+    if fixture_id == "nl_fixture_gcd" {
+        return write_gcd_fixture(root);
+    }
+    let stub = nl_fixture_wrong_stub(fixture_id)
+        .ok_or_else(|| format!("unknown nl fixture id: {fixture_id}"))?;
+    let tests = nl_fixture_test_module(fixture_id)?;
+    let cargo_toml = CARGO_TOML_TEMPLATE.replace(
+        "{package_name}",
+        &fixture_package_name(fixture_id),
+    );
+    fs::create_dir_all(root.join("src")).map_err(|e| e.to_string())?;
+    fs::write(root.join("Cargo.toml"), cargo_toml).map_err(|e| e.to_string())?;
+    fs::write(root.join("src/lib.rs"), format!("{stub}{tests}")).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn write_multifile_multiply_fixture(root: &Path) -> Result<(), String> {
+    let cargo_toml = CARGO_TOML_TEMPLATE.replace(
+        "{package_name}",
+        &fixture_package_name("nl_fixture_multifile_multiply"),
+    );
+    fs::create_dir_all(root.join("src")).map_err(|e| e.to_string())?;
+    fs::write(root.join("Cargo.toml"), cargo_toml).map_err(|e| e.to_string())?;
+    fs::write(
+        root.join("src/ops.rs"),
+        "pub fn multiply(a: i64, b: i64) -> i64 { a / b }\n",
+    )
+    .map_err(|e| e.to_string())?;
+    fs::write(
+        root.join("src/lib.rs"),
+        r#"mod ops;
+pub use ops::multiply;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_multifile_multiply() {
+        assert_eq!(multiply(3, 4), 12);
+    }
+}
+"#,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn write_gcd_fixture(root: &Path) -> Result<(), String> {
+    let cargo_toml = CARGO_TOML_TEMPLATE.replace(
+        "{package_name}",
+        &fixture_package_name("nl_fixture_gcd"),
+    );
+    fs::create_dir_all(root.join("src")).map_err(|e| e.to_string())?;
+    fs::write(root.join("Cargo.toml"), cargo_toml).map_err(|e| e.to_string())?;
+    fs::write(
+        root.join("src/lib.rs"),
+        r#"pub fn gcd(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_gcd() {
+        assert_eq!(gcd(12, 8), 4);
+        assert_eq!(gcd(17, 13), 1);
+    }
+}
+"#,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn nl_fixture_test_module(fixture_id: &str) -> Result<&'static str, String> {
+    match fixture_id {
+        "nl_fixture_add" => Ok(
+            r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_add() {
+        assert_eq!(add_two(2, 3), 5);
+        assert_eq!(add_two(-1, 1), 0);
+    }
+}
+"#,
+        ),
+        "nl_fixture_subtract" => Ok(
+            r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_subtract() {
+        assert_eq!(subtract(5, 3), 2);
+    }
+}
+"#,
+        ),
+        "nl_fixture_multiply" => Ok(
+            r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_multiply() {
+        assert_eq!(multiply(3, 4), 12);
+    }
+}
+"#,
+        ),
+        "nl_fixture_divide" => Ok(
+            r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_divide() {
+        assert_eq!(divide(12, 4), 3);
+    }
+}
+"#,
+        ),
+        "nl_fixture_max" => Ok(
+            r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_max() {
+        assert_eq!(max_of(3, 7), 7);
+        assert_eq!(max_of(9, 2), 9);
+    }
+}
+"#,
+        ),
+        "nl_fixture_reverse" => Ok(
+            r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_reverse() {
+        assert_eq!(reverse(&[1, 2, 3]), vec![3, 2, 1]);
+    }
+}
+"#,
+        ),
+        other => Err(format!("no test module for fixture {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::repo::{GuardrailPolicy, RepairVerifier};
+
+    #[test]
+    fn fast_patch_repairs_add_fixture() {
+        let root = std::env::temp_dir().join(format!("nsynth_nl_fast_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_nl_fixture_crate(&root, "nl_fixture_add").expect("write");
+        let context = crate::agent::repo::RepairContext::build(&root, &GuardrailPolicy::default())
+            .expect("context");
+        let task = crate::agent::repo::benchmark::nl_synthesis_fixture_suite()
+            .into_iter()
+            .find(|t| t.id == "nl_fixture_add")
+            .expect("fixture")
+            .to_task_spec(&root);
+        let verification = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify");
+        assert!(!verification.success);
+        let analysis =
+            crate::agent::repo::FailureParser::default().parse(&verification.failure_output());
+        let patch = crate::agent::synthesis_proposer::try_nl_repo_fast_patch(
+            &task,
+            &context,
+            "add two numbers",
+            Some(&analysis),
+        );
+        assert!(patch.is_some(), "fast patch should be produced");
+        let patch = patch.unwrap();
+        fs::write(
+            root.join(patch.edits[0].path.clone()),
+            patch.edits[0].new_text.clone(),
+        )
+        .expect("write patch");
+        let verification = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(verification.success, "stderr: {}", verification.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_cargo_test_fails_before_repair() {
+        let root = std::env::temp_dir().join(format!("nsynth_nl_harness_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_nl_fixture_crate(&root, "nl_fixture_multiply").expect("write");
+        let cmd = nl_fixture_cargo_test_command("nl_fixture_multiply").expect("cmd");
+        let verification = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&cmd)
+            .expect("verify");
+        assert!(!verification.success);
+        let _ = fs::remove_dir_all(root);
+    }
+}

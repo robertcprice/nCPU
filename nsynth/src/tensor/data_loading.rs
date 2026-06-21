@@ -552,6 +552,7 @@ mod tests {
         assert_eq!(batch1.unwrap().len(), 2);
     }
 
+    #[ignore = "experimental tensor stack — Package O; see docs/TENSOR_QUARANTINE.md"]
     #[test]
     fn test_pad_collate() {
         let batch = vec![

@@ -240,6 +240,12 @@ impl HardnessProfile {
         profile
     }
 
+    /// Lower localization difficulty when retrieval already narrowed candidate files.
+    pub fn apply_retrieval_localization(&mut self, localization_confidence: f64) {
+        self.localization =
+            (self.localization * localization_confidence.clamp(0.05, 1.0)).clamp(0.05, 1.0);
+    }
+
     pub fn score(&self) -> f64 {
         let total = self.localization
             + self.ambiguity

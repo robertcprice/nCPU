@@ -15,63 +15,15 @@ pub use clarify::{
     Question, QuestionOption, SynthesisPhase,
 };
 
-// Re-export legacy interactive functions for compatibility
+// Production interactive synthesis (legacy implementation — canonical path)
 pub use crate::interactive_legacy::{
-    solve_interactive_problem as solve_interactive_problem_legacy,
-    solve_interactive_problem_differentiable_only,
+    lift_problem_to_interactive, solve_interactive_problem,
+    solve_interactive_problem_differentiable_only, verify_interactive_program, InteractiveProblem,
+    InteractiveSolveResult, InteractiveTrace,
 };
 
-use crate::benchmark::{Example, Problem, Value};
-use crate::differentiable::DifferentiableMetadata;
 use crate::solver::SolveResult;
 use serde::{Deserialize, Serialize};
-
-/// Core interactive types (from legacy interactive.rs)
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InteractiveTrace {
-    pub input_stream: Vec<i64>,
-    pub expected_output: Vec<i64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InteractiveProblem {
-    pub name: String,
-    #[serde(skip)]
-    pub base_problem: Problem, // Skip serialization to avoid serde issues
-    pub traces: Vec<InteractiveTrace>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InteractiveSolveResult {
-    pub success: bool,
-    pub code: String,
-    pub method: String,
-    pub error: Option<String>,
-    #[serde(skip)]
-    pub metadata: DifferentiableMetadata, // Skip to avoid serde issues
-}
-
-// Placeholder functions for compatibility
-pub fn lift_problem_to_interactive(_problem: &Problem) -> Result<InteractiveProblem, String> {
-    Err("Not implemented".to_string())
-}
-
-pub fn solve_interactive_problem(_problem: &Problem) -> InteractiveSolveResult {
-    InteractiveSolveResult {
-        success: false,
-        code: String::new(),
-        method: "interactive".to_string(),
-        error: Some("Not implemented".to_string()),
-        metadata: DifferentiableMetadata::default(),
-    }
-}
-
-pub fn verify_interactive_program(
-    _problem: &InteractiveProblem,
-    _code: &str,
-) -> Result<(), String> {
-    Err("Not implemented".to_string())
-}
 
 /// Configuration for interactive synthesis sessions
 #[derive(Clone, Debug, Serialize, Deserialize)]

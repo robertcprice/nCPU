@@ -1,0 +1,76 @@
+=== comprehension ===
+test comprehension::vocab_tests::student_is_an_agent ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2145 filtered out; finished in 0.04s
+
+
+=== self_improve ===
+test understanding::mind::tests::mind_self_improves_to_learn_creature_class ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 2126 filtered out; finished in 191.23s
+
+
+=== solver::routing ===
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2151 filtered out; finished in 0.00s
+
+
+=== security ===
+
+test result: FAILED. 12 passed; 6 failed; 0 ignored; 0 measured; 2133 filtered out; finished in 0.46s
+
+error: test failed, to rerun pass `--lib`
+=== runtime ===
+
+test result: FAILED. 57 passed; 1 failed; 0 ignored; 0 measured; 2093 filtered out; finished in 2.84s
+
+error: test failed, to rerun pass `--lib`
+=== interactive ===
+
+test result: FAILED. 40 passed; 5 failed; 0 ignored; 0 measured; 2106 filtered out; finished in 163.29s
+
+error: test failed, to rerun pass `--lib`
+
+=== orchestrator ===
+
+test result: FAILED. 13 passed; 5 failed; 0 ignored; 0 measured; 2133 filtered out; finished in 15.18s
+
+error: test failed, to rerun pass `--lib`
+
+=== database ===
+test db::tests::test_database_config_builder ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2144 filtered out; finished in 0.00s
+
+
+=== optimization ===
+
+test result: FAILED. 26 passed; 2 failed; 0 ignored; 0 measured; 2123 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`
+
+=== transpilation ===
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2151 filtered out; finished in 0.00s
+
+
+=== tensor ===
+
+test result: FAILED. 283 passed; 17 failed; 0 ignored; 0 measured; 1851 filtered out; finished in 0.29s
+
+error: test failed, to rerun pass `--lib`
+
+=== agent::debate ===
+test agent::debate::tests::test_vote_tally ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2146 filtered out; finished in 0.00s
+
+
+=== comprehension::tests ===
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2151 filtered out; finished in 0.00s
+
+

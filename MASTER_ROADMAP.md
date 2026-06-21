@@ -8,7 +8,30 @@
 **Core rule:** Linguigenesis is the native comprehension/reasoning layer. External LLMs are optional, untrusted proposers—not the agent core.
 **Implementation rule:** production orchestration is Rust. No simulated capability, stub success, benchmark theater, or hidden Python agent runtime.
 
-> **Every agent must read Sections 0, 3, 6, 7, and the current phase card before editing code.**
+### 0.6 North Star — Universal program synthesis
+
+The finished **nsynth** layer must synthesize **any** program shape expressible as a typed `Problem` (examples + signature + verifier), then extend to multi-function modules and full repositories. Capability grows by:
+
+1. **KVRM data** (operations, constraints, workflows) — not Rust `if text.contains` or per-op tables;
+2. **Learned / evidence-ranked portfolios** (`method_router`, `search_family_router`) — not fixed category→stage tables;
+3. **UTBUS / structural composition** ([`nsynth/docs/SYNTHESIS_NEXT_STEPS.md`](nsynth/docs/SYNTHESIS_NEXT_STEPS.md) Part 2) — collapse scattered teachers into one typed bottom-up engine.
+
+**No hard-coded routing rule:** production paths must not select semantics or solver stages via keyword lists, factory name tables, or `category == "…"` dispatch. Allowed: (a) registry graph walks, (b) type/shape features of `Problem`, (c) learned routers fed only by verified outcomes.
+
+### 0.7 Impact-ordered execution queue (do in this order)
+
+| Priority | Package / work | Why it matters |
+|---:|---|---|
+| 1 | **C** — finish emergent NL → `SynthesisRequirement` | Unblocks all NL-driven synthesis without keyword tables |
+| 2 | **C** — expand `coding_registry.json`; remove `populate_code_entities` production fallback | Single data source for operations |
+| 3 | **D** — `Requirement` → `Problem` → `solve_problem` (universal entry) | Any registry-described op synthesizes through one API |
+| 4 | **A** — baseline truth (bounded tests, failure clusters) | Stops regressions from masking synthesis work |
+| 5 | **B** — `AgentRun`, `CodingIntent`, capability registry | One contract for agent + synthesis |
+| 6 | **Synthesis** — type-shape portfolio dispatch (replace category routing) | Universal solver path for unseen categories |
+| 7 | **E–H** — repo agent loop | Programs beyond isolated functions |
+| 8 | **UTBUS** — compositional structural synthesizer | True "any program" from typed composition |
+
+> **Every agent must read Sections 0, 0.6, 0.7, 3, 6, 7, and the current phase card before editing code.**
 > This roadmap replaces historical “completed” checklists. A module existing does not mean the capability works.
 
 ## 0. Agent Start Protocol
@@ -62,25 +85,26 @@ An agent must not:
 
 ### 0.3 Current truth snapshot — update after every package
 
-**Snapshot date:** 2026-06-20
-**Overall readiness:** roughly 25% of a complete repo coding agent
+**Snapshot date:** 2026-06-21 (evening)
+**Overall readiness:** roughly 42% of a complete repo coding agent
 **MVP target:** completion through Package H / Gate G5
 **Benchmark-readiness target:** completion through Package M / Gate G7
+**Active priority:** G5 sign-off; Package I durable workflows + CLI session resume
 
 | Package | Gate | State | Evidence / blocker | Next owner action |
 |---|---|---|---|---|
-| A — baseline truth | G0 | IN PROGRESS | merge conflict and stale `Problem` initializers resolved; debug/release checks pass; repo suite 16/16; search-only batch solves all 140 tasks; full serial suite remains unbounded and previously had 61 failures after 1,273 completed/ignored tests | cluster remaining baseline failures, bound the full-suite runtime, quarantine P0 stubs |
-| B — runtime contracts | G1 prerequisite | NOT STARTED | overlapping task/runtime types remain | begin only after G0 |
-| C — Linguigenesis coding semantics | G1 | NOT STARTED | core APIs exist; coding ontology/compositional coding intent incomplete | upstream Rust implementation after B contracts |
-| D — grounded bridge | G1 | NOT STARTED | bridge exists but is shallow; legacy NL has `NotImplemented` | implement only against C's tested API |
-| E — repository model | G2 | NOT STARTED | current hardness scan is global/shallow | deterministic index and retrieval benchmark |
-| F — secure tools | G3 | SCAFFOLD | fs/shell/git/http/db modules exist; containment and boundary security incomplete | deny-by-default typed runtime |
-| G — transactional edits | G4 | SCAFFOLD | lexical patch gate only | isolated apply/rollback engine |
-| H — closed repair loop | G5 | SCAFFOLD | `RepoAgent` aggregates helpers but has no `run` loop | implement after E–G |
-| I — workflows/supervision | G6 | SCAFFOLD | planning records real executor results; no durable repo workflow supervisor | implement resumable typed workflows |
-| J — durable memory/resume | G6 | SCAFFOLD | multiple in-memory representations | evidence-gated persistence |
+| A — baseline truth | G0 | IN PROGRESS (G0 largely closed) | compile-green; `agent::repo` 45/45; `agent::session` 7/7; `agent::tools` 32/32; `optimization::parallel` 23/23; search-only holdout verify green; `cargo fmt --check` green | G0 sign-off: full serial lib suite summary |
+| B — runtime contracts | G1 prerequisite | IMPLEMENTED | Phase 1 contracts + conformance suite — `docs/PACKAGE_B_GATE.md` | — |
+| C — Linguigenesis coding semantics | G1 | IMPLEMENTED | emergent NL + `coding_registry.json` (explain/review/greenfield workflows added) + negation + robustness corpus | expand registry ops as needed |
+| D — grounded bridge | G1 | IMPLEMENTED | `nl_to_requirement`, clarification (non-synthesis workflows exempt), `solve_from_description` | — |
+| E — repository model | G2 | IMPLEMENTED | `RepoIndex` + retrieval benchmark tests green | — |
+| F — secure tools | G3 | IMPLEMENTED | `SecureToolRuntime` deny-by-default + `for_general_agent` / `for_repo_repair`; HTTP host allowlist; verification cargo-only oracle | docs + HTTP CLI allowlist examples |
+| G — transactional edits | G4 | IMPLEMENTED | `IsolatedRepoSession` git worktree + temp-copy fallback; promote/discard; repair loop isolated | — |
+| H — closed repair loop | G5 | EXPERIMENTAL (near G5) | NL fixture suite (add/sub/mult/div/max/reverse/multifile/gcd); cargo-test oracles; `repo_agent_repairs_gcd_via_general_synthesis`; supervisor budget sync | G5 sign-off: broader unseen NL repair corpus |
+| I — workflows/supervision | G6 | EXPERIMENTAL | `RepoWorkflowRunner` + `run_query` session router; workflow JSON persist | durable typed workflow resume across sessions |
+| J — durable memory/resume | G6 | EXPERIMENTAL | `CodingAgentSession` + `.nsynth/sessions/` snapshots; clarify resume API | end-to-end CLI `--clarify` on real ambiguous synthesis |
 | K — project-scale generation/validation | G6 | SCAFFOLD | strong function synthesis; project/multilanguage claims exceed evidence | graduate each backend independently |
-| L — CLI/session/telemetry | G6 | NOT STARTED | no canonical coding-agent UX | build over one runtime API |
+| L — CLI/session/telemetry | G6 | EXPERIMENTAL | `coding_agent` binary builds; `--root`, `--session`, `--tool`, `--json`, `--clarify` | telemetry + primary entry vs legacy paths |
 | M — executable local benchmark | G7 | SCAFFOLD | 20 task manifests; no fixtures/runner/scoring | convert each to isolated executable task |
 | N — sealed external benchmarks | G8 | NOT STARTED | local harness not yet trustworthy | do not start before G7 |
 | O — evidence-driven self-improvement | G8 | EXPERIMENTAL PARTS | synthesis/meta components exist without repo-agent trace gate | mine only verified held-out traces |
@@ -139,6 +163,146 @@ git ls-files -u
 - stub audit exists and production-reachable hits are classified;
 - no capability status is inflated to hide baseline failures.
 
+### 0.5 Immediate Package C work card — emergent NL → nsynth requirements
+
+**Objective:** replace all keyword/hard-coded NL→example routing with registry-derived `SynthesisRequirement`. No new standalone plan documents; this card is authoritative.
+
+**Prerequisites**
+
+- `linguigenesis/rust/linguigenesis-core/src/registry.rs` (JSON relations loader).
+- `linguigenesis/rust/linguigenesis-core/src/coding_requirements.rs`.
+- `linguigenesis/data/coding_registry.json` (coding ontology seed).
+- `nsynth/src/linguigenesis_bridge.rs` (migration target).
+
+**Build (linguigenesis)**
+
+1. Extend `EntityType` with `Workflow` and `ConstraintMarker`.
+2. Load `relations` and typed `attributes` from registry JSON; support `merge_from_json`.
+3. Ship `coding_registry.json`: operations (`example_cases`, `arity`, `input_types`, `output_type`, `nsynth_category`), workflows (`signal_lemmas`, `maps_to_intent`, `coding_workflow`), constraint markers.
+4. Implement `RequirementDeriver::derive(BeliefState, text) -> SynthesisRequirement`.
+5. Implement `CodingComprehension` (parse + derive in one call).
+6. Replace `comprehension.rs` keyword `classify_intent` with workflow-entity matching from registry signals.
+7. Tests: paraphrase via synonym (`sum` → `add` examples); negation constraint; zero-network.
+
+**Build (nsynth bridge — Package D slice)**
+
+1. `nl_to_examples` / `nl_to_requirement` call `CodingComprehension` only.
+2. Delete `generate_examples_from_text` and migrate `populate_code_entities` knowledge into JSON.
+3. `solve_from_nl` uses emergent path when `nl` feature enabled.
+4. Map `SynthesisRequirement` → `Problem` with evidence entity IDs in metadata.
+
+**Verification**
+
+```bash
+cd ../linguigenesis/rust/linguigenesis-core
+cargo test coding_requirements --lib
+cargo test coding_comprehension --lib
+rg -n 'text\.contains|lower\.contains' src/comprehension.rs ../ncpu/nsynth/src/linguigenesis_bridge.rs
+
+cd ../../ncpu/nsynth
+cargo test linguigenesis_bridge --lib
+```
+
+**Package C exit criteria** — ✅ DONE (2026-06-21)
+
+- unseen paraphrase resolves to identical `example_cases` via synonym relations;
+- no hard-coded `Example { inputs: ... }` in bridge for NL routing;
+- `comprehension.rs` intent from workflow entities, not substring lists;
+- `coding_registry.json` is the sole source of operation examples for the native path.
+
+**Package D exit criteria (follows C)** — ✅ DONE (2026-06-21)
+
+- bridge produces `Problem` with provenance via `problem_from_requirement` / `synthesize_from_description`;
+- `solve_from_description` is the universal solver entry (no `nl` feature required);
+- low-confidence or non-empty `unresolved` triggers clarification via `CodingDialogue` / `BridgeError::ClarificationNeeded`;
+- quarantine `nl/mod.rs` from production (TODO — separate from emergent NL path).
+
+### 0.6 Package C2 — Truly emergent NL resolution (COMPLETE 2026-06-21)
+
+**Objective:** paraphrases not literally present in `coding_registry.json` still resolve via graph walks, morphology, fuzzy lemma match, definition overlap, and `AnalogyReasoner` — never via Rust keyword tables.
+
+**Architecture**
+
+```text
+surface token
+  → EntityResolver (direct → morphology → synonym/hypernym/similar/entailment hops
+                     → reverse relations → fuzzy lemma → definition overlap)
+  → matched Entity set
+  → RequirementDeriver::select_primary_operation
+       → if empty: infer_operation_from_text
+            → resolver per-token operation match
+            → AnalogyReasoner::find_analogies(anchor noun/domain entity)
+            → AnalogyReasoner::rank_operations_for_surface(token)
+  → canonical_operation (synonym walk to example_cases bearer)
+  → SynthesisRequirement (confidence, unresolved, evidence_entity_ids)
+  → if needs_clarification: CodingDialogue typed questions
+  → apply_clarification(answer) → updated requirement
+```
+
+**Implemented modules**
+
+| Module | Role |
+|--------|------|
+| `entity_resolution.rs` | Multi-hop KVRM surface→entity resolution |
+| `coding_dialogue.rs` | Typed clarification questions + `apply_clarification` |
+| `computing_knowledge_import.rs` | Merge `computing_knowledge.json` definitions/relations |
+| `reasoning.rs` | `rank_operations_for_surface` for unknown verbs |
+| `coding_registry.json` | `grammar_stop_words`, `combine`, `double`, `sub`, `fold` |
+
+**Registry scale**
+
+- `coding_registry.json` merged at bridge load (operations + workflows + grammar markers).
+- `computing_knowledge.json` merged for supplemental definitions (does not overwrite `example_cases`).
+
+**Verification gates**
+
+```bash
+cd ../linguigenesis/rust/linguigenesis-core
+cargo test entity_resolution coding_dialogue coding_comprehension coding_requirements computing_knowledge_import --lib
+rg -n 'text\.contains|lower\.contains' src/comprehension.rs src/coding_requirements.rs
+rg -n '"map" \| "filter"' src/comprehension.rs  # must be empty (no hard-coded op lists)
+
+cd ../../ncpu/nsynth
+cargo test linguigenesis_bridge --lib
+```
+
+**Exit criteria** — all satisfied:
+
+- `combine two numbers` → `add` `example_cases` (synonym + analogy path);
+- `double the array` → `map` `example_cases` (morphology + synonym);
+- `sum two integers` → `add` (synonym reverse walk);
+- gibberish → `ClarificationNeeded` with registry operation options, not guessed synthesis;
+- zero-network (no external APIs in NL path);
+- production NL path has no `text.contains` keyword routing.
+
+**Stretch (deferred — compositional NL)**
+
+- Multi-operation utterances → DAG of requirements (not needed for single-function synthesis entry).
+
+### 0.7 Package C3 — Open-ended emergent comprehension (IN PROGRESS 2026-06-21)
+
+**Objective:** vague or unseen NL surfaces resolve via analogy enrichment and ranked clarification — not blind tool explore or flat registry option lists.
+
+**Implemented**
+
+| Module | Role |
+|--------|------|
+| `emergent_nl.rs` | `rank_operation_options` — analogy-ranked clarification options |
+| `coding_requirements.rs` | `enrich_from_analogy`, matched-entity synonym walk in `infer_operation_from_text` |
+| `coding_comprehension.rs` | Analogy enrich pass before clarification gate |
+| `coding_dialogue.rs` | Emergent-ranked operation options in questions |
+| `session.rs` | `handle_explore` tries emergent comprehension before blind repo scan |
+| `coding_registry.json` | `invert`, `larger` surface lemmas linked to operations |
+
+**Verification**
+
+```bash
+cd ../linguigenesis/rust/linguigenesis-core
+cargo test emergent_nl nl_robustness coding_dialogue coding_comprehension --lib
+cd ../../ncpu/nsynth
+cargo test agent::session --lib -- --test-threads=1
+```
+
 ---
 ## 1. Product Definition
 
@@ -176,15 +340,19 @@ The default request path is:
 
 ```text
 user text
-  -> Linguigenesis comprehension and dialogue
-  -> typed CodingIntent + evidence + uncertainty
-  -> repository-grounded CodeTaskSpec
-  -> nsynth plan and synthesis
-  -> policy-gated tools
-  -> transactional patch
-  -> real verifier
-  -> verified memory and response
+  → tokenize + KVRM entity lookup (lemma, synonym, domain, entailment)
+  → BeliefState (comprehension, intent, constraints, evidence entity IDs)
+  → RequirementDeriver (registry graph walk — no Rust keyword tables)
+  → SynthesisRequirement (signature, examples, category, confidence, unresolved)
+  → CodingIntent + CodeTaskSpec (Package B/D)
+  → nsynth plan and synthesis
+  → policy-gated tools
+  → transactional patch
+  → real verifier
+  → verified memory and response
 ```
+
+**Emergent NL rule:** operation examples, workflow signals, intent mapping, and constraints must live in the KVRM registry (`linguigenesis/data/coding_registry.json` and merged registries). Rust may parse JSON and walk relations; it must not use `text.contains` or hard-coded `Example` values to decide what the user asked for. New capabilities are added by extending registry data, not by growing keyword branches in `comprehension.rs` or `linguigenesis_bridge.rs`.
 
 An external model adapter may propose an intent, plan, or patch only when explicitly enabled. Every proposal must be converted into native typed structures and pass the same policy, synthesis, and verification gates. The system must remain useful with all external-model features disabled.
 
@@ -378,33 +546,50 @@ Each phase is blocked by all earlier completion gates. Do not parallelize downst
 
 **Build in `../linguigenesis`**
 
-- Add a coding ontology: repository, file, symbol, dependency, diagnostic, behavior, constraint, workflow, acceptance oracle, and risk.
-- Extend comprehension from keyword intent to compositional coding requests, negation, scope, constraints, references, and follow-up resolution.
-- Add a typed coding dialogue state that preserves evidence spans and explicitly represents ambiguity.
+- Add a coding ontology in KVRM data (`data/coding_registry.json`): repository, file, symbol, dependency, diagnostic, behavior, constraint, workflow, acceptance oracle, and risk entities with relations—not Rust keyword tables.
+- Implement `RequirementDeriver` and `CodingComprehension`: BeliefState + registry graph → `SynthesisRequirement` (signature, `example_cases`, category, confidence, evidence IDs, `unresolved`).
+- Extend comprehension from keyword intent to registry workflow entities (`signal_lemmas`, `maps_to_intent`, `coding_workflow`) and compositional coding requests, negation, scope, constraints, references, and follow-up resolution.
+- Add a typed coding dialogue state that preserves evidence spans and explicitly represents ambiguity when `unresolved` is non-empty.
 - Finish or isolate the deferred `lg-communicator` environment/training adapters; no deferred training API may be advertised as active capability.
 - Add coding utterance corpora with paraphrase, adversarial ambiguity, conflicting instructions, and multi-turn corrections.
 
+**Registry schema (operations)**
+
+| Attribute | Purpose |
+|---|---|
+| `arity`, `input_types`, `output_type` | signature synthesis |
+| `example_cases` | JSON `[{inputs, expected}]` — sole source of synthesis examples |
+| `nsynth_category` | solver routing hint |
+| `signature_template` | `fn {name}({params}) -> {return}` |
+
+**Relations:** `synonym`, `domain`, `entailment`, `code_pattern`, `type_of`.
+
 **Allowed existing APIs**
 
-- `linguigenesis_core::Registry::{new,from_json_auto,get_by_lemma,query,get_related}`.
+- `linguigenesis_core::Registry::{new,from_json,from_json_auto,merge_from_json,get_by_lemma,query,get_related}`.
 - `Comprehension::{new,parse}` and `BeliefState`/`IntentType`.
+- `RequirementDeriver`, `CodingComprehension`, `SynthesisRequirement` (Package C).
 - `AnalogyReasoner`, `MultiHopReasoner`, and `KnowledgeQA` for grounded relations.
 - `lg-communicator` comprehension/policy/dialogue only after its environment contract is unified and tested.
 
 **Verification**
 
 - Frozen train/dev/test split with unseen vocabulary and paraphrases.
-- Exact or structural match for intent/spec; calibration error for confidence; clarification precision/recall.
+- Exact or structural match for `SynthesisRequirement`; paraphrase via synonym → identical examples.
+- Calibration error for confidence; clarification precision/recall when `unresolved` non-empty.
 - Mutation tests for negation, file scope, version constraints, and “do not change” clauses.
+- `rg` audit: zero `text.contains` semantic routing in `comprehension.rs` production path.
 - A zero-network test proves the native path works without any model API.
 
-**Do not** replace understanding with regex routing, keyword-only classification, or an external-model call hidden behind an interface.
+**Do not** replace understanding with regex routing, keyword-only classification, hard-coded examples in Rust, or an external-model call hidden behind an interface.
 
 ### Phase 3 — Typed Linguigenesis-to-nsynth Bridge
 
 **Build**
 
-- Convert Linguigenesis beliefs into `CodingIntent`, then ground them against a `RepositorySnapshot` to produce `CodeTaskSpec`.
+- Convert `SynthesisRequirement` into `CodingIntent`, then ground against `RepositorySnapshot` to produce `CodeTaskSpec`.
+- `linguigenesis_bridge.rs` must call `CodingComprehension` only; delete `generate_examples_from_text` and migrate `populate_code_entities` into registry JSON.
+- Map `SynthesisRequirement` → `Problem` / `ParsedRequirements` with evidence entity IDs and confidence.
 - Reject unsupported or low-confidence conversions with typed clarification questions.
 - Preserve source text spans, registry entities, reasoning path, and conversion diagnostics.
 - Retire or quarantine `nl/mod.rs` paths that return `NotImplemented`; the canonical CLI must never select them.
@@ -705,8 +890,8 @@ Use these as review-sized implementation blocks. A package closes only when its 
 |---|---|---|
 | A | 0 | reconciled tree, baseline, stub inventory |
 | B | 1 | canonical contracts/runtime/capabilities |
-| C | 2 | coding ontology and native comprehension upstream |
-| D | 3 | grounded bridge and clarification |
+| C | 2 | coding registry, `RequirementDeriver`, emergent NL comprehension |
+| D | 3 | bridge → `SynthesisRequirement` → `Problem`; quarantine legacy NL |
 | E | 4 | repository index/context benchmark |
 | F | 5 | secure tool runtime |
 | G | 6 | transaction/edit/rollback engine |
@@ -748,7 +933,9 @@ Agents must read implementations and tests, not merely this list.
 | Topic | Source of truth | Known valid entry points |
 |---|---|---|
 | Linguigenesis registry | `../linguigenesis/rust/linguigenesis-core/src/registry.rs` | `Registry::{new,from_json,from_json_auto,get_entity,get_by_lemma,query,get_by_type,get_related}` |
-| Linguigenesis comprehension | `../linguigenesis/rust/linguigenesis-core/src/comprehension.rs` | `Comprehension::{new,parse}` |
+| Linguigenesis coding requirements | `../linguigenesis/rust/linguigenesis-core/src/coding_requirements.rs` | `RequirementDeriver::{new,derive}`, `SynthesisRequirement`, `ExampleSpec` |
+| Linguigenesis coding registry | `../linguigenesis/data/coding_registry.json` | operations, workflows, constraints (data — not Rust keyword tables) |
+| Linguigenesis comprehension | `../linguigenesis/rust/linguigenesis-core/src/comprehension.rs` | `Comprehension::{new,parse}`; workflow-based intent only after Package C |
 | Belief and intent | `../linguigenesis/rust/linguigenesis-core/src/belief.rs` | `BeliefState`, `IntentBelief`, `IntentType`, `Constraint` |
 | Native reasoning | `../linguigenesis/rust/linguigenesis-core/src/reasoning.rs` | `AnalogyReasoner`, `MultiHopReasoner`, `KnowledgeQA` |
 | Linguigenesis dialogue | `../linguigenesis/rust/lg-communicator/src/` | use only tested `comprehend`, policy, and dialogue APIs; training/env parity is deferred |
