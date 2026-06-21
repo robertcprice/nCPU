@@ -95,7 +95,7 @@ An agent must not:
 |---|---|---|---|---|
 | A — baseline truth | G0 | IN PROGRESS (G0 largely closed) | compile-green; `agent::repo` 45/45; `agent::session` 7/7; `agent::tools` 32/32; `optimization::parallel` 23/23; search-only holdout verify green; `cargo fmt --check` green | G0 sign-off: full serial lib suite summary |
 | B — runtime contracts | G1 prerequisite | IMPLEMENTED | Phase 1 contracts + conformance suite — `docs/PACKAGE_B_GATE.md` | — |
-| C — Linguigenesis coding semantics | G1 | IMPLEMENTED | emergent NL + `coding_registry.json` (explain/review/greenfield workflows added) + negation + robustness corpus | expand registry ops as needed |
+| C — Linguigenesis coding semantics | G1 | IMPLEMENTED (breadth-limited; *universal* NL claim EXPERIMENTAL) | emergent NL + negation + robustness corpus; `coding_registry.json` = **25 proven ops** (integrity gate `every_registry_operation_is_synthesizable`), 1 vocabulary-only gap (`reduce`); registry now git-tracked. See §0.8 | type/shape `Problem` targeting for unseen ops (queue item 6) |
 | D — grounded bridge | G1 | IMPLEMENTED | `nl_to_requirement`, clarification (non-synthesis workflows exempt), `solve_from_description` | — |
 | E — repository model | G2 | IMPLEMENTED | `RepoIndex` + retrieval benchmark tests green | — |
 | F — secure tools | G3 | IMPLEMENTED | `SecureToolRuntime` deny-by-default + `for_general_agent` / `for_repo_repair`; HTTP host allowlist; verification cargo-only oracle | docs + HTTP CLI allowlist examples |
@@ -302,6 +302,48 @@ cargo test emergent_nl nl_robustness coding_dialogue coding_comprehension --lib
 cd ../../ncpu/nsynth
 cargo test agent::session --lib -- --test-threads=1
 ```
+
+### 0.8 Package C4 — Registry breadth + proven-capability gate (2026-06-21 evening)
+
+**Motivation (re-evaluation finding):** the synthesis engine is wide (~30 search
+families; `search_only_solves_full_benchmark` = 140 tasks with holdout verify),
+but the NL → agent path could only express **16** registry operations in 2
+categories. "Universal NL synthesis" was bottlenecked at the registry, not the
+solver. C3 polished the *front door* over a 16-word vocabulary.
+
+**Done**
+
+| Change | Effect |
+|--------|--------|
+| `coding_registry.json` +11 ops (increment, decrement, negate, square, bit_and/or/xor, length, first, last) | NL vocabulary 16 → **25 proven** ops across arithmetic/bitwise/array |
+| `SynthesisRequirement::from_operation_entity` (`coding_requirements.rs`) | reusable registry-seed → requirement path |
+| `linguigenesis_bridge::every_registry_operation_is_synthesizable` test | **integrity gate**: every declared op must solve through the real solver (declared == proven, per §0.2) |
+| force-added `data/coding_registry.json` to git | the sole NL data source was **gitignored/untracked** — now versioned |
+
+**Defects the gate surfaced (both pre-existing):**
+
+- `mod` — `default_fn_name: "mod"` collided with the Rust `mod` keyword and
+  emitted invalid code ("expected identifier, got Module"). Fixed → `modulo`.
+- `reduce` — array→scalar fold is **not synthesizable**: the router sends it to
+  the scalar differentiable path which rejects array input. Demoted to
+  `synthesis_status: vocabulary_only` (honest: array→array transforms map/filter/
+  sort/reverse work; array→scalar fold does not). **Open gap:** add a reduce/fold
+  search family and restore its `example_cases`.
+
+**Verification**
+
+```bash
+cd ncpu/nsynth
+cargo test --lib every_registry_operation_is_synthesizable   # 25 ops solve, 0.4s
+cargo test --lib agent::session linguigenesis_bridge          # 10/10 + 10/10
+cd ../../linguigenesis/rust && cargo test -p linguigenesis-core --lib   # 82/82
+```
+
+**Honest status correction:** Package C is breadth-limited; with a 25-op
+vocabulary the *universal* NL claim remains **EXPERIMENTAL**, not done. The
+next goal-critical step (queue item 6) is **type/shape `Problem` targeting** —
+let NL with inline I/O examples synthesize *unseen* ops directly through the
+140-task engine, instead of only registry-named ops.
 
 ---
 ## 1. Product Definition

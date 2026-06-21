@@ -611,4 +611,44 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, BridgeError::ClarificationNeeded { .. }));
     }
+
+    /// Integrity gate: every operation declared in the coding registry (i.e.
+    /// every function entity carrying `example_cases`) must actually synthesize
+    /// through the real solver. This prevents the registry from advertising
+    /// vocabulary the engine cannot deliver — declared capability == proven
+    /// capability, per the no-cheating contract.
+    #[test]
+    fn every_registry_operation_is_synthesizable() {
+        use linguigenesis_core::entity::EntityType;
+
+        let bridge = LinguigenesisBridge::new();
+        let registry = bridge.registry_clone().expect("registry clone");
+
+        let mut checked = 0usize;
+        let mut failures: Vec<String> = Vec::new();
+        for entity in registry.get_by_type(&EntityType::Function) {
+            let req = match SynthesisRequirement::from_operation_entity(&entity) {
+                Some(r) => r,
+                None => continue,
+            };
+            checked += 1;
+            match bridge.synthesize_from_requirement(&req, Some(&req.function_name)) {
+                Ok(result) if result.success => {}
+                Ok(result) => failures.push(format!(
+                    "{}: solver returned failure (method={}, err={:?})",
+                    entity.lemma, result.method, result.error
+                )),
+                Err(e) => failures.push(format!("{}: {}", entity.lemma, e)),
+            }
+        }
+
+        assert!(checked >= 20, "expected >=20 registry ops, checked {checked}");
+        assert!(
+            failures.is_empty(),
+            "{}/{} registry ops failed to synthesize:\n{}",
+            failures.len(),
+            checked,
+            failures.join("\n")
+        );
+    }
 }
