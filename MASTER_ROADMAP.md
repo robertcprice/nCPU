@@ -558,6 +558,76 @@ DOF. Tracked as the next deep slice.
 
 **Proof:** `cargo test --lib agent::synthesis_proposer` → **17/17**.
 
+### 1.0.4 Package C5 — registry breadth via verified, generalizing ops + quote-aware inline parser (2026-06-22)
+
+**Objective (widen the plain-English front door):** more bare NL prompts — *no*
+inline I/O examples, *no* hard-coded keyword routing — resolve to solvable,
+**holdout-verified** synthesis. Growth came from registry **data** + the existing
+emergent resolver, plus a robustness fix to the inline-example parser. Every op
+below was first run through the real solver (`solve_problem`) and its program
+**executed on holdout inputs absent from `example_cases`** (via
+`runtime::verify_problem_code`); only ops that *generalize* were registered.
+
+**Registry ops added / strengthened (`linguigenesis/data/coding_registry.json`)**
+
+| Op (default_fn_name) | Kind | Synthesis method (verified) | Generalization holdouts (not in examples) |
+|----------------------|------|-----------------------------|-------------------------------------------|
+| `triple` *(new)* | scalar ×3 | `search_polynomial_multi` | `triple(7)=21, triple(100)=300, triple(-50)=-150` |
+| `array_sum` *(new)* | `[i64]→i64` fold + | `enumerative-array` | `[100,1]=101, [-1,-2,-3]=-6, [5]=5` |
+| `array_max` *(new)* | `[i64]→i64` fold max | `enumerative-array` | `[100,2,50]=100, [5,5,5]=5, [1,2,3,4]=4` |
+| `array_min` *(new)* | `[i64]→i64` fold min | `search_min_element` | `[100,2,50]=2, [4,3,2,1]=1` |
+| `sum3` *(new)* | 3-arg affine `a+b+c` | `search_affine` | `(5,5,5)=15, (10,-3,1)=8, (100,1,1)=102` |
+| `abs` *(strengthened)* | predicate branch | `search_minmax_affine` | `abs(-50)=50, abs(42)=42, abs(-100)=100` |
+| `square` *(strengthened)* | nonlinear `x*x` | `search_polynomial_multi` | `square(7)=49, square(10)=100, square(9)=81` |
+| `negate` *(strengthened)* | single-arg affine | `search_polynomial_multi` | `negate(100)=-100, negate(13)=-13` |
+
+Each new op carries ≥ DOF+2 diverse `example_cases`; new natural-language
+surfaces (`absolute`, `magnitude`, `triple`/`treble`, `total`/`accumulate`,
+`largest`/`biggest`, `smallest`, `squared`, `add3`) are registry synonym entities
+that resolve to the canonical op through the existing relation walk — no Rust
+keyword branches were added.
+
+**`abs` overfit, defeated by data (not solver hacks):** with a thin/structured
+example set the predicate searcher locks onto a spurious modular split
+(`if x%4==0 {x} else {-x}` — fits 6 points, fails `abs(42)`). A **dense
+consecutive both-signs** set (−5..5 plus −7, 9) forces the honest
+`search_minmax_affine` solution that passes all holdouts.
+
+**Inline-example parser hardened (`linguigenesis-core/src/inline_examples.rs`)**
+
+- `split_top_level`, `find_arrow`, and `matching_paren` are now **quote-aware**:
+  a `,`, `->`, `(`, or `)` *inside* a string literal no longer breaks parsing.
+  Before: `count("hello, world")=12` → **0 examples** (comma split the arg);
+  after: → `[Str("hello, world")] -> 12`. `length("abc")=3` already parsed the
+  arg as a `Str` (not `Vec<i64>`); regression-locked with a test.
+- New tests: string args (simple, comma-, paren-, arrow-containing), multi
+  string args, whitespace-variant call form, inner-whitespace + negative arrays.
+
+**Deferred (NOT registered — would ship a wrong-but-passing program):**
+
+| Candidate | Why deferred | Evidence |
+|-----------|--------------|----------|
+| 2-var `min` / `max` (new variants) | `solve_multi_arg_affine` preempts with `search_affine_threshold`, which finds a spurious affine threshold fitting *all* training yet failing holdout (e.g. `min(50,60)→60`). Even a constant-threshold-defeating set (same-`a`/same-`b` pairs across the boundary) overfits. This is the documented solver-internal overfit (§1.0.3), the real #1 generality lever. | probe: 7- and 12-point diverse sets both fail holdout |
+| `sum3` *natural-language trigger* | solvable + generalizing (registered, gate-covered, holdout-tested) but plain English has no single-token trigger distinct from 2-arg `add`/`sum`; the inline-example path covers variable-arg sums. | `registry_sum3_synthesizes_and_generalizes` |
+
+Pre-existing registry `min`/`max` (1 example each) are **left untouched** to avoid
+regressions; they remain solver-overfit and are tracked under §1.0.3, not claimed
+as generalizing.
+
+**Resolver honesty note:** fuzzy matching can still misroute adversarial
+phrasings (`"find …"` ~ `fold`, `"…value"` overlaps `abs`'s definition). This is
+pre-existing emergent-resolver behavior; it was *not* worked around with keyword
+routing. Clean phrasings (`"compute the largest of an array"`) resolve correctly.
+
+**Verification**
+
+```bash
+cd linguigenesis/rust && cargo test -p linguigenesis-core --lib       # 108/108
+cd ncpu/nsynth
+CARGO_INCREMENTAL=0 cargo test --lib linguigenesis_bridge -- --test-threads=1   # 21/21
+#   incl. integrity gate over all registry ops + 8 NL holdout-generalization tests
+```
+
 ---
 ## 1. Product Definition
 

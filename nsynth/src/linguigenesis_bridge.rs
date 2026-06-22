@@ -661,6 +661,187 @@ mod tests {
         }
     }
 
+    // ---- Newly-registered ops: NL phrase (NO inline examples) must resolve,
+    // synthesize, AND generalize. Generalization is proven by executing the
+    // synthesized program on HOLDOUT inputs absent from the registry
+    // `example_cases`, so a green run rejects example overfit. ----
+
+    fn ex(inputs: Vec<Value>, expected: Value) -> Example {
+        Example { inputs, expected }
+    }
+
+    /// Resolve `phrase` from NL alone (no inline examples), synthesize, and
+    /// verify the synthesized program against holdout inputs.
+    fn assert_nl_synthesizes_and_generalizes(
+        phrase: &str,
+        fn_name: &str,
+        signature: &'static str,
+        holdouts: Vec<Example>,
+    ) {
+        let bridge = LinguigenesisBridge::new();
+        let result = bridge
+            .synthesize_from_description(phrase, None)
+            .unwrap_or_else(|e| panic!("{phrase:?}: NL did not resolve/synthesize: {e}"));
+        assert!(
+            result.success,
+            "{phrase:?}: solver returned failure (method={}, err={:?})",
+            result.method, result.error
+        );
+        let holdout_problem = Problem {
+            name: fn_name.to_string(),
+            category: "test",
+            description: "holdout generalization",
+            signature,
+            examples: holdouts,
+            ..Default::default()
+        };
+        crate::runtime::verify_problem_code(&holdout_problem, &result.code).unwrap_or_else(|e| {
+            panic!(
+                "{phrase:?}: OVERFIT — holdout generalization failed: {e}\nmethod={}\nCODE:\n{}",
+                result.method, result.code
+            )
+        });
+    }
+
+    #[test]
+    fn nl_abs_synthesizes_and_generalizes() {
+        assert_nl_synthesizes_and_generalizes(
+            "compute the absolute value of a number",
+            "abs",
+            "fn abs(a: i64) -> i64",
+            vec![
+                ex(vec![Value::Int(-50)], Value::Int(50)),
+                ex(vec![Value::Int(42)], Value::Int(42)),
+                ex(vec![Value::Int(-100)], Value::Int(100)),
+                ex(vec![Value::Int(7)], Value::Int(7)),
+                ex(vec![Value::Int(-6)], Value::Int(6)),
+            ],
+        );
+    }
+
+    #[test]
+    fn nl_triple_synthesizes_and_generalizes() {
+        assert_nl_synthesizes_and_generalizes(
+            "triple a number",
+            "triple",
+            "fn triple(a: i64) -> i64",
+            vec![
+                ex(vec![Value::Int(7)], Value::Int(21)),
+                ex(vec![Value::Int(100)], Value::Int(300)),
+                ex(vec![Value::Int(-50)], Value::Int(-150)),
+                ex(vec![Value::Int(8)], Value::Int(24)),
+            ],
+        );
+    }
+
+    #[test]
+    fn nl_square_synthesizes_and_generalizes() {
+        assert_nl_synthesizes_and_generalizes(
+            "square a number",
+            "square",
+            "fn square(a: i64) -> i64",
+            vec![
+                ex(vec![Value::Int(7)], Value::Int(49)),
+                ex(vec![Value::Int(10)], Value::Int(100)),
+                ex(vec![Value::Int(1)], Value::Int(1)),
+                ex(vec![Value::Int(9)], Value::Int(81)),
+            ],
+        );
+    }
+
+    #[test]
+    fn nl_negate_synthesizes_and_generalizes() {
+        assert_nl_synthesizes_and_generalizes(
+            "negate a number",
+            "negate",
+            "fn negate(a: i64) -> i64",
+            vec![
+                ex(vec![Value::Int(100)], Value::Int(-100)),
+                ex(vec![Value::Int(-50)], Value::Int(50)),
+                ex(vec![Value::Int(13)], Value::Int(-13)),
+            ],
+        );
+    }
+
+    #[test]
+    fn nl_array_sum_synthesizes_and_generalizes() {
+        assert_nl_synthesizes_and_generalizes(
+            "compute the total of an array",
+            "array_sum",
+            "fn array_sum(a: [i64]) -> i64",
+            vec![
+                ex(vec![Value::Array(vec![100, 1])], Value::Int(101)),
+                ex(vec![Value::Array(vec![4, 4, 4])], Value::Int(12)),
+                ex(vec![Value::Array(vec![-1, -2, -3])], Value::Int(-6)),
+                ex(vec![Value::Array(vec![5])], Value::Int(5)),
+            ],
+        );
+    }
+
+    #[test]
+    fn nl_array_max_synthesizes_and_generalizes() {
+        assert_nl_synthesizes_and_generalizes(
+            "compute the largest of an array",
+            "array_max",
+            "fn array_max(a: [i64]) -> i64",
+            vec![
+                ex(vec![Value::Array(vec![100, 2, 50])], Value::Int(100)),
+                ex(vec![Value::Array(vec![5, 5, 5])], Value::Int(5)),
+                ex(vec![Value::Array(vec![1, 2, 3, 4])], Value::Int(4)),
+            ],
+        );
+    }
+
+    #[test]
+    fn nl_array_min_synthesizes_and_generalizes() {
+        assert_nl_synthesizes_and_generalizes(
+            "compute the smallest of an array",
+            "array_min",
+            "fn array_min(a: [i64]) -> i64",
+            vec![
+                ex(vec![Value::Array(vec![100, 2, 50])], Value::Int(2)),
+                ex(vec![Value::Array(vec![5, 5, 5])], Value::Int(5)),
+                ex(vec![Value::Array(vec![4, 3, 2, 1])], Value::Int(1)),
+            ],
+        );
+    }
+
+    /// `sum3` is reachable as a proven registry op even though plain English has
+    /// no single-token trigger distinct from 2-arg `add` (see roadmap deferral
+    /// note). Drive it through the registry-seed requirement path and prove it
+    /// generalizes on holdouts.
+    #[test]
+    fn registry_sum3_synthesizes_and_generalizes() {
+        use linguigenesis_core::entity::EntityType;
+        let bridge = LinguigenesisBridge::new();
+        let registry = bridge.registry_clone().expect("registry clone");
+        let entity = registry
+            .get_by_type(&EntityType::Function)
+            .into_iter()
+            .find(|e| e.lemma == "sum3")
+            .expect("sum3 registered");
+        let req = SynthesisRequirement::from_operation_entity(&entity).expect("sum3 requirement");
+        let result = bridge
+            .synthesize_from_requirement(&req, Some(&req.function_name))
+            .expect("sum3 synthesis");
+        assert!(result.success, "sum3 failed: {:?}", result.error);
+        let holdout_problem = Problem {
+            name: "sum3".to_string(),
+            category: "test",
+            description: "holdout",
+            signature: "fn sum3(a: i64, b: i64, c: i64) -> i64",
+            examples: vec![
+                ex(vec![Value::Int(5), Value::Int(5), Value::Int(5)], Value::Int(15)),
+                ex(vec![Value::Int(10), Value::Int(-3), Value::Int(1)], Value::Int(8)),
+                ex(vec![Value::Int(0), Value::Int(0), Value::Int(7)], Value::Int(7)),
+                ex(vec![Value::Int(100), Value::Int(1), Value::Int(1)], Value::Int(102)),
+            ],
+            ..Default::default()
+        };
+        crate::runtime::verify_problem_code(&holdout_problem, &result.code)
+            .unwrap_or_else(|e| panic!("sum3 OVERFIT: {e}\nCODE:\n{}", result.code));
+    }
+
     /// Integrity gate: every operation declared in the coding registry (i.e.
     /// every function entity carrying `example_cases`) must actually synthesize
     /// through the real solver. This prevents the registry from advertising
