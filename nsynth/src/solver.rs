@@ -19,6 +19,17 @@ mod recovery;
 mod routing;
 mod scalar_search;
 mod search;
+// Salvaged from stale fork: difficulty-aware routing, curriculum/sequencing,
+// emergent method stats, allocation/portfolio, and the enhanced solver layer.
+pub mod allocation_strategy;
+mod curriculum;
+mod difficulty;
+pub mod enhanced_integration;
+pub mod method_stats;
+pub mod metrics;
+pub mod parallel_executor;
+pub mod portfolio_router;
+mod sequencing;
 mod search_affine;
 mod search_array_compose;
 mod search_bitwise;
@@ -64,6 +75,27 @@ use self::routing::{
 #[cfg(test)]
 use self::routing::{ROUTE_ARRAY_GRADIENT, ROUTE_SCALAR_GRADIENT, ROUTE_SEARCH_TEACHER};
 use self::search::solve_by_search;
+
+/// Error categories for better error handling and user feedback.
+///
+/// Ported from the stale fork's richer `SolveResult` model. The canonical
+/// `SolveResult` does not carry an `error_category` field, but several ported
+/// learning/observability modules (`metrics`, `method_stats`, `transfer_learning`)
+/// classify outcomes through this enum, so it is exposed here as a standalone
+/// public type they can share.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Transient errors that may succeed on retry (network, timeout, resource contention)
+    Transient { retry_after_ms: Option<u64> },
+    /// Permanent errors that won't change on retry (syntax, type errors, invalid input)
+    Permanent,
+    /// Partial success - some parts succeeded but not all
+    Partial { succeeded: usize, total: usize },
+    /// Resource exhaustion (out of memory, compute budget exceeded)
+    ResourceExhaustion,
+    /// Configuration errors (missing files, invalid settings)
+    Configuration,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SolveResult {
