@@ -1168,6 +1168,74 @@ mod tests {
         assert_real_synthesis_repairs("nl_fixture_multiply", "multiply two numbers", "mul");
     }
 
+    // Broadened unseen-NL corpus (G5 sign-off): each is described ONLY by inline
+    // I/O examples (no registry op, no keyword-table entry), so the repair can
+    // succeed *only* through genuine example-driven synthesis. The cargo-test
+    // oracle asserts holdout inputs to prove generalization, not example overfit.
+
+    #[test]
+    fn real_synthesis_repairs_square_nonlinear() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_square",
+            "a function where square(2)=4 and square(3)=9 and square(4)=16 and square(5)=25 and square(6)=36 and square(0)=0",
+            "sq",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_negate_affine() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_negate",
+            "a function where negate(5)=-5 and negate(-3)=3 and negate(0)=0 and negate(7)=-7 and negate(-12)=12",
+            "neg",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_abs_branch() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_abs",
+            "a function where absval(-3)=3 and absval(4)=4 and absval(-10)=10 and absval(0)=0 and absval(-1)=1 and absval(8)=8",
+            "abs",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_sum3_multiarg() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_sum3",
+            "a function where add3(1,2,3)=6 and add3(0,0,5)=5 and add3(2,2,2)=6 and add3(10,20,30)=60 and add3(-1,1,0)=0",
+            "sum3",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_array_sum_fold() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_arrsum",
+            "a function where total([1,2,3])=6 and total([4,5])=9 and total([10])=10 and total([2,2,2,2])=8 and total([7,3])=10",
+            "arrsum",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_array_max_fold() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_arrmax",
+            "a function where biggest([3,1,2])=3 and biggest([5,9,1])=9 and biggest([7])=7 and biggest([-1,-5,-2])=-1 and biggest([2,2,8,4])=8",
+            "arrmax",
+        );
+    }
+
+    #[test]
+    fn real_synthesis_repairs_array_len_fold() {
+        assert_real_synthesis_repairs(
+            "nl_fixture_arrlen",
+            "a function where howmany([3,1,2])=3 and howmany([5,9])=2 and howmany([7])=1 and howmany([1,2,3,4,5])=5 and howmany([6,6])=2",
+            "arrlen",
+        );
+    }
+
     #[test]
     fn real_synthesis_repairs_unseen_inline_example_op() {
         // `triple` is NOT in any keyword table; the only way to repair it is to

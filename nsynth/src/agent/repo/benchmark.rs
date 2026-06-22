@@ -368,6 +368,17 @@ pub fn nl_fixture_wrong_stub(fixture_id: &str) -> Option<&'static str> {
         // inline examples in the issue can repair this. Proves the closed loop
         // generalizes beyond the canned scalar vocabulary.
         "nl_fixture_triple" => Some("pub fn triple(a: i64) -> i64 { a + 1 }\n"),
+        // Broadened unseen-NL corpus (G5 sign-off): each repairs ONLY via real
+        // example-driven synthesis (no keyword-table entry exists), spanning
+        // distinct solver families — nonlinear scalar, multi-arg/single-arg
+        // affine, branch, and array fold reductions.
+        "nl_fixture_square" => Some("pub fn square(a: i64) -> i64 { a + a }\n"),
+        "nl_fixture_negate" => Some("pub fn negate(a: i64) -> i64 { a }\n"),
+        "nl_fixture_abs" => Some("pub fn absval(a: i64) -> i64 { a }\n"),
+        "nl_fixture_sum3" => Some("pub fn add3(a: i64, b: i64, c: i64) -> i64 { a + b }\n"),
+        "nl_fixture_arrsum" => Some("pub fn total(xs: Vec<i64>) -> i64 { 0 }\n"),
+        "nl_fixture_arrmax" => Some("pub fn biggest(xs: Vec<i64>) -> i64 { 0 }\n"),
+        "nl_fixture_arrlen" => Some("pub fn howmany(xs: Vec<i64>) -> i64 { 0 }\n"),
         _ => None,
     }
 }

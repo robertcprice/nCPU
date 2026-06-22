@@ -194,6 +194,94 @@ mod tests {
     }
 }
 "#),
+        // Holdout assertions below use inputs NOT in the synthesis examples, so a
+        // passing cargo-test proves the repair generalizes (no example overfit).
+        "nl_fixture_square" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_square() {
+        assert_eq!(square(7), 49);
+        assert_eq!(square(9), 81);
+        assert_eq!(square(10), 100);
+    }
+}
+"#),
+        "nl_fixture_negate" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_negate() {
+        assert_eq!(negate(100), -100);
+        assert_eq!(negate(-50), 50);
+    }
+}
+"#),
+        "nl_fixture_abs" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_abs() {
+        assert_eq!(absval(-100), 100);
+        assert_eq!(absval(55), 55);
+        assert_eq!(absval(-1), 1);
+    }
+}
+"#),
+        "nl_fixture_sum3" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_sum3() {
+        assert_eq!(add3(5, 5, 5), 15);
+        assert_eq!(add3(100, 1, 1), 102);
+    }
+}
+"#),
+        "nl_fixture_arrsum" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_arrsum() {
+        assert_eq!(total(vec![10, 20, 30]), 60);
+        assert_eq!(total(vec![]), 0);
+    }
+}
+"#),
+        "nl_fixture_arrmax" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_arrmax() {
+        assert_eq!(biggest(vec![100, 2, 50]), 100);
+        assert_eq!(biggest(vec![-3, -1, -2]), -1);
+    }
+}
+"#),
+        "nl_fixture_arrlen" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_arrlen() {
+        assert_eq!(howmany(vec![10, 20, 30, 40]), 4);
+        assert_eq!(howmany(vec![9]), 1);
+    }
+}
+"#),
         other => Err(format!("no test module for fixture {other}")),
     }
 }

@@ -489,6 +489,51 @@ cargo test --lib agent::repo -- --test-threads=1                 # 46/46
 Divide and multiply now flow through **real verified synthesis** instead of the
 keyword fallback — the last of the safe-div / multi-function theater is retired.
 
+### 1.0.2 Package H follow-up — broadened unseen-NL repair corpus (2026-06-21 night)
+
+**G5 sign-off item "widen the unseen NL repair corpus" — addressed.** Before
+adding fixtures, an empirical breadth probe ran each candidate shape through the
+real path (`CodingIntent::from_nl` → `to_problem` → `solve_problem` → lowering)
+and was read **skeptically** to avoid benchmark theater:
+
+| Shape | Probe result | Decision |
+|-------|--------------|----------|
+| square `x*x` | `enumerative` / `search_polynomial_multi`, correct | **added** |
+| negate `-x`, sum3 `a+b+c` | affine, correct | **added** |
+| abs `if a<0 {-a} else {a}` | `loop_template`, correct | **added** |
+| array sum / max / count | `enumerative-array` fold, correct | **added** |
+| min, modulo | `search_affine` **overfit** 3 pts (`-6a-7b+70`, `a/9`) — not the real op | **excluded** (honest: underdetermined affine) |
+| `[i64]->[i64]` map (double-each) | `diff_gradient_unsupported` | **excluded** |
+| string length | string arg misparsed as `Vec<i64>` | **excluded** |
+
+**Done (this slice)** — 7 new fixtures in `nl_fixture_wrong_stub` /
+`nl_fixture_test_module`, each described **only by inline I/O examples** (no
+registry op, no keyword-table entry), so repair can succeed *only* via genuine
+example-driven synthesis:
+
+| Fixture | Family exercised | Holdout asserts (not in examples) |
+|---------|------------------|-----------------------------------|
+| `nl_fixture_square` | nonlinear scalar (enumerative) | `square(7)=49, square(10)=100` |
+| `nl_fixture_negate` | single-arg affine | `negate(100)=-100` |
+| `nl_fixture_abs` | predicate branch | `absval(-100)=100` |
+| `nl_fixture_sum3` | 3-arg affine | `add3(5,5,5)=15` |
+| `nl_fixture_arrsum` | array fold-add | `total(vec![10,20,30])=60` |
+| `nl_fixture_arrmax` | array fold-max | `biggest(vec![100,2,50])=100` |
+| `nl_fixture_arrlen` | array fold-count | `howmany(vec![10,20,30,40])=4` |
+
+Every fixture's cargo test asserts **holdout inputs** absent from the synthesis
+examples, so a green run proves generalization rather than example overfit — in
+keeping with the no-cheating contract.
+
+**Proof:** `cargo test --lib agent::synthesis_proposer -- --test-threads=1` →
+**16/16** (9 prior + 7 new), each new test fails-before / cargo-green-after via
+`try_real_synthesis_patch` (`proposer=nl_real_synthesis`).
+
+**Honest gaps surfaced (tracked, not papered over):** underdetermined affine
+search overfits when examples are few (min/modulo) — needs holdout-aware
+acceptance or example sufficiency checks; `[i64]->[i64]` map and string
+transduction are not yet synthesizable through the repair path.
+
 ---
 ## 1. Product Definition
 
