@@ -135,10 +135,41 @@ pub fn try_real_synthesis_patch(
     )
 }
 
-/// Reshape synthesized Rust to fit the repo's existing function: keep the repo
-/// signature, swap in the synthesized body with params renamed positionally. If
-/// the repo has no such function yet, emit the synthesized function renamed.
+/// Reshape synthesized Rust to fit the repo's target function.
+///
+/// Single-function output: keep the repo signature and swap in the synthesized
+/// body with params renamed positionally (so a `&[i64]` repo signature is
+/// honoured even when the solver emits a by-value form).
+///
+/// Multi-function output (a main function plus helpers — e.g. the safe-division
+/// `helper_div` or the LCM `gcd_inner`): emit the helpers verbatim followed by
+/// the main function renamed to the repo function and made `pub`, replacing the
+/// repo function definition wholesale. The main is identified by name match to
+/// the repo function, else the last function defined.
 fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
+    let fns = split_top_level_functions(synthesized);
+
+    if fns.len() > 1 {
+        let main_idx = fns
+            .iter()
+            .position(|(name, _)| name == repo_fn)
+            .unwrap_or(fns.len() - 1);
+        let mut helpers = String::new();
+        for (k, (_, text)) in fns.iter().enumerate() {
+            if k != main_idx {
+                helpers.push_str(text.trim());
+                helpers.push_str("\n\n");
+            }
+        }
+        let main_renamed = ensure_pub_fn(&rename_first_fn(&fns[main_idx].1, repo_fn));
+        let new_impl = format!("{helpers}{}", main_renamed.trim());
+        return if old_text.contains(&format!("fn {repo_fn}")) {
+            replace_function_body(old_text, repo_fn, &new_impl).ok()
+        } else {
+            Some(format!("{}\n", new_impl.trim()))
+        };
+    }
+
     let synth_body = fn_body(synthesized)?;
     if !old_text.contains(&format!("fn {repo_fn}")) {
         let renamed = ensure_pub_fn(&rename_first_fn(synthesized, repo_fn));
@@ -159,6 +190,54 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
         }
     }
     replace_body_only(old_text, repo_fn, &body).ok()
+}
+
+/// Split a Rust source into top-level `(name, full_text)` function definitions,
+/// preserving any `pub` prefix and the complete `{ ... }` body.
+fn split_top_level_functions(code: &str) -> Vec<(String, String)> {
+    let bytes = code.as_bytes();
+    let mut fns = Vec::new();
+    let mut i = 0;
+    while i < code.len() {
+        let boundary = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+        if boundary && code[i..].starts_with("fn ") {
+            let mut start = i;
+            let before = code[..i].trim_end();
+            if before.ends_with("pub") {
+                start = before.len() - 3;
+            }
+            let name: String = code[i + 3..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if let Some(brace_off) = code[i..].find('{') {
+                let bstart = i + brace_off;
+                let mut depth = 0i32;
+                let mut end = None;
+                for j in bstart..bytes.len() {
+                    match bytes[j] {
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = Some(j);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(end) = end {
+                    fns.push((name, code[start..end + 1].to_string()));
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = code[i..].chars().next().unwrap();
+        i += ch.len_utf8();
+    }
+    fns
 }
 
 /// Heuristic: is this synthesized code directly compilable plain Rust (vs the
@@ -443,7 +522,12 @@ fn infer_default_fn_name(desc: &str) -> String {
 
 /// Normalize synthesized Mog or Rust into a Rust function body for repo repair.
 pub(crate) fn rust_code_for_repo_synthesis(synthesized: &str) -> String {
-    let trimmed = synthesized.trim();
+    // Lower the solver's Result-style IR toward plain Rust first: fold the
+    // boilerplate `match r { ok(v) => v, err(e) => CONST }` to `r.unwrap_or(CONST)`
+    // (the line-based transpiler can't handle a multi-line match), then map the
+    // `ok`/`err`/`Result` constructors 1:1 onto `Some`/`None`/`Option`.
+    let lowered = lower_result_tokens(&fold_result_match_idiom(synthesized));
+    let trimmed = lowered.trim();
     if trimmed.contains(":=") || (trimmed.contains("return ") && !trimmed.contains("pub fn ")) {
         let mog = mog_source_for_rust_transpile(trimmed);
         let rust = crate::mog_transpile::to_rust(&mog);
@@ -453,6 +537,132 @@ pub(crate) fn rust_code_for_repo_synthesis(synthesized: &str) -> String {
         return rust;
     }
     trimmed.to_string()
+}
+
+/// Map the solver's Result-style constructors onto Rust `Option`:
+/// `Result<T>` → `Option<T>`, `ok(X)` → `Some(X)`, `err(..)` → `None`. The
+/// mapping is faithful: the safe-division template uses `ok`/`err` exactly as
+/// `Some`/`None` and never inspects the error payload.
+fn lower_result_tokens(code: &str) -> String {
+    let mut s = code.replace("Result<", "Option<");
+    s = replace_call_token(&s, "ok", |inner| format!("Some({inner})"));
+    s = replace_call_token(&s, "err", |_| "None".to_string());
+    s
+}
+
+/// Replace whole-word `name(<balanced>)` calls using `f(inner)`. Skips matches
+/// where `name` is part of a larger identifier (e.g. `lookup(`), so only the
+/// bare constructor token is rewritten.
+fn replace_call_token(code: &str, name: &str, f: impl Fn(&str) -> String) -> String {
+    let bytes = code.as_bytes();
+    let needle = format!("{name}(");
+    let mut out = String::with_capacity(code.len());
+    let mut i = 0;
+    while i < code.len() {
+        if code[i..].starts_with(&needle) {
+            let prev_ok = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            if prev_ok {
+                let open = i + name.len();
+                let mut depth = 0i32;
+                let mut j = open;
+                let mut end = None;
+                while j < bytes.len() {
+                    match bytes[j] {
+                        b'(' => depth += 1,
+                        b')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = Some(j);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if let Some(end) = end {
+                    let inner = &code[open + 1..end];
+                    out.push_str(&f(inner));
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = code[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Fold the safe-result idiom `match VAR { ok(v) => v, err(e) => CONST }` into
+/// `VAR.unwrap_or(CONST)`. Only fires for the identity-ok / constant-err shape
+/// the solver emits; any other match is left untouched.
+fn fold_result_match_idiom(code: &str) -> String {
+    let Some(m) = code.find("match ") else {
+        return code.to_string();
+    };
+    let after = &code[m + "match ".len()..];
+    let brace_rel = match after.find('{') {
+        Some(b) => b,
+        None => return code.to_string(),
+    };
+    let scrutinee = after[..brace_rel].trim();
+    if scrutinee.is_empty() || scrutinee.contains(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        return code.to_string();
+    }
+    let body_start = m + "match ".len() + brace_rel;
+    let bytes = code.as_bytes();
+    let mut depth = 0i32;
+    let mut end = None;
+    for j in body_start..bytes.len() {
+        match bytes[j] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(j);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end) = end else {
+        return code.to_string();
+    };
+    let arms = &code[body_start + 1..end];
+    let mut ok_bind = None;
+    let mut ok_res = None;
+    let mut err_res = None;
+    for arm in arms.split(',') {
+        let arm = arm.trim();
+        if arm.is_empty() {
+            continue;
+        }
+        let Some((pat, res)) = arm.split_once("=>") else {
+            return code.to_string();
+        };
+        let (pat, res) = (pat.trim(), res.trim());
+        if let Some(bind) = pat.strip_prefix("ok(").and_then(|s| s.strip_suffix(')')) {
+            ok_bind = Some(bind.trim().to_string());
+            ok_res = Some(res.to_string());
+        } else if pat.starts_with("err(") {
+            err_res = Some(res.to_string());
+        } else {
+            return code.to_string();
+        }
+    }
+    match (ok_bind, ok_res, err_res) {
+        (Some(bind), Some(ok_res), Some(err_res)) if ok_res == bind => {
+            let mut out = String::with_capacity(code.len());
+            out.push_str(&code[..m]);
+            out.push_str(&format!("{scrutinee}.unwrap_or({err_res})"));
+            out.push_str(&code[end + 1..]);
+            out
+        }
+        _ => code.to_string(),
+    }
 }
 
 fn mog_source_for_rust_transpile(mog: &str) -> String {
@@ -466,7 +676,10 @@ fn mog_source_for_rust_transpile(mog: &str) -> String {
                     return line.to_string();
                 }
                 let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                return format!("{indent}{var}: i64 = {rhs};");
+                // Use type inference rather than a hard-coded `i64` annotation:
+                // the RHS may be a non-i64 value (e.g. an `Option<i64>` from a
+                // lowered Result helper), where `: i64` would be a type error.
+                return format!("{indent}let mut {var} = {rhs};");
             }
             line.to_string()
         })
@@ -907,6 +1120,52 @@ mod tests {
         assert!(after.success, "stderr: {}", after.stderr);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn assert_real_synthesis_repairs(fixture_id: &str, description: &str, tag: &str) {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_rs_{}_{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_nl_fixture_crate(&root, fixture_id).expect("write");
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let task = nl_task(&root, tag, fixture_id, &format!("synthesize: {description}"));
+
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "{fixture_id} should fail before repair");
+
+        let patch = try_real_synthesis_patch(&task, &context, description)
+            .unwrap_or_else(|| panic!("{fixture_id}: expected real-synthesis patch"));
+        fs::write(
+            root.join(patch.edits[0].path.clone()),
+            patch.edits[0].new_text.clone(),
+        )
+        .expect("write patch");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(
+            after.success,
+            "{fixture_id} real-synthesis repair failed:\nCODE:\n{}\nSTDERR:\n{}",
+            patch.edits[0].new_text, after.stderr
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn real_synthesis_repairs_divide_result_idiom() {
+        // Safe-division emits a 2-function Result/ok/err/match template; the
+        // lowering (ok->Some, err->None, match->unwrap_or) must produce
+        // compilable plain Rust that passes the cargo-test oracle.
+        assert_real_synthesis_repairs("nl_fixture_divide", "divide two numbers", "div");
+    }
+
+    #[test]
+    fn real_synthesis_repairs_multiply_multifunction() {
+        // multiply may synthesize via the LCM formula (gcd_inner + multiply);
+        // multi-function reshape must keep the helper and target the main fn.
+        assert_real_synthesis_repairs("nl_fixture_multiply", "multiply two numbers", "mul");
     }
 
     #[test]

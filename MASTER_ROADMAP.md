@@ -444,6 +444,51 @@ real fix is a faithful solver-IR → Rust lowering (handle Result wrappers and M
 assignment for concrete return types) so those ops also flow through real
 synthesis. Tracked for the next slice.
 
+### 1.0.1 Package H follow-up — solver-IR → Rust lowering + multi-function reshape (2026-06-21 night)
+
+**Closed the "still open" item above and fixed a latent multi-function
+correctness bug.** Cataloged the actual solver IR shapes the repair path
+receives (via a throwaway diag over divide/gcd/multiply/max):
+
+| Op | method | shape |
+|----|--------|-------|
+| divide | `search_safe_div_or_neg1_branch` | 2 fns: `helper_div -> Result<i64>` with `ok/err` + `fn divide` with multi-line `match r { ok(v)=>v, err(e)=>-1 }` and `:=` |
+| gcd | `search_gcd_loop` | 1 fn: `while` loop + `:=` (already lowered cleanly) |
+| multiply | `search_lcm_formula` | 2 fns: `gcd_inner` (loop, `:=`) + `multiply` calling it |
+| max | `search_max2_formula` | 1 fn: plain `if/else` |
+
+**Done (this slice)**
+
+| Change | Effect |
+|--------|--------|
+| `lower_result_tokens` | `Result<` → `Option<`, `ok(X)` → `Some(X)`, `err(..)` → `None` — the safe-result idiom maps 1:1 onto `Option` (the error payload is never inspected) |
+| `fold_result_match_idiom` | folds the boilerplate `match VAR { ok(v)=>v, err(e)=>CONST }` → `VAR.unwrap_or(CONST)`; the line-based mog transpiler can't handle a multi-line match, so this runs as a pre-pass. Only fires for the identity-ok / constant-err shape |
+| `mog_source_for_rust_transpile` `:=` fix | now emits `let mut x = rhs` (type **inference**) instead of a hard-coded `: i64` annotation, so an `Option<i64>` binding from a lowered Result helper type-checks |
+| `split_top_level_functions` + multi-function `reshape_to_repo_signature` | when the solver emits a main fn **plus helpers**, emit the helpers verbatim and the main fn renamed to the repo fn (`pub`), replacing the repo definition wholesale. The main is the name-matching fn (else the last). **Fixes a latent bug**: the old single-body reshape grabbed the *first* function (`gcd_inner`/`helper_div`) for multi-fn output, producing wrong code that only passed by luck of which method won |
+
+**Proof (cargo-test oracles, fail-before / cargo-green-after):**
+
+- `real_synthesis_repairs_divide_result_idiom`: the 2-fn `Result`/`match`
+  template lowers to compilable plain Rust; `divide(12,4)==3` passes after,
+  via `try_real_synthesis_patch` (no keyword fallback).
+- `real_synthesis_repairs_multiply_multifunction`: LCM-formula
+  (`gcd_inner` + `multiply`) repaired through multi-function reshape;
+  `multiply(3,4)==12` passes after.
+- `real_synthesis_repairs_unseen_inline_example_op`: `triple` still green.
+
+**Verification**
+
+```bash
+cd ncpu/nsynth
+cargo test --lib agent::synthesis_proposer -- --test-threads=1   # 9/9
+cargo test --lib mog_transpile -- --test-threads=1               # 15/15
+cargo test --lib agent::repo::run_supervisor -- --test-threads=1 # 10/10 (budget intact)
+cargo test --lib agent::repo -- --test-threads=1                 # 46/46
+```
+
+Divide and multiply now flow through **real verified synthesis** instead of the
+keyword fallback — the last of the safe-div / multi-function theater is retired.
+
 ---
 ## 1. Product Definition
 
