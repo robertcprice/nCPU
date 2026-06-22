@@ -24,6 +24,7 @@ pub mod method_router;
 pub mod mog_transpile;
 pub mod morph_transduce;
 pub mod multi;
+pub mod multi_objective;
 #[cfg(feature = "nl")]
 pub mod nl;
 pub mod optimization;
@@ -44,5 +45,6 @@ pub mod tensor;
 pub mod tensor_codegen;
 pub mod testing;
 pub mod time_codegen;
+pub mod transfer_learning;
 pub mod understanding;
 pub mod validation;
