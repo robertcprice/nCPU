@@ -27,7 +27,7 @@ The finished **nsynth** layer must synthesize **any** program shape expressible 
 | 3 | **D** — `Requirement` → `Problem` → `solve_problem` (universal entry) | Any registry-described op synthesizes through one API |
 | 4 | **A** — baseline truth (bounded tests, failure clusters) | Stops regressions from masking synthesis work |
 | 5 | **B** — `AgentRun`, `CodingIntent`, capability registry | One contract for agent + synthesis |
-| 6 | **Synthesis** — type-shape portfolio dispatch (replace category routing) | Universal solver path for unseen categories |
+| 6 | **Synthesis** — type-shape portfolio dispatch (replace category routing) | ✅ confirmed: solver dispatches by type/shape + learned `method_router`, not `category` strings (§1.0); repair proposer now uses real synthesis, not keyword tables |
 | 7 | **E–H** — repo agent loop | Programs beyond isolated functions |
 | 8 | **UTBUS** — compositional structural synthesizer | True "any program" from typed composition |
 
@@ -100,7 +100,7 @@ An agent must not:
 | E — repository model | G2 | IMPLEMENTED | `RepoIndex` + retrieval benchmark tests green | — |
 | F — secure tools | G3 | IMPLEMENTED | `SecureToolRuntime` deny-by-default + `for_general_agent` / `for_repo_repair`; HTTP host allowlist; verification cargo-only oracle | docs + HTTP CLI allowlist examples |
 | G — transactional edits | G4 | IMPLEMENTED | `IsolatedRepoSession` git worktree + temp-copy fallback; promote/discard; repair loop isolated | — |
-| H — closed repair loop | G5 | EXPERIMENTAL (near G5) | NL fixture suite (add/sub/mult/div/max/reverse/multifile/gcd); cargo-test oracles; `repo_agent_repairs_gcd_via_general_synthesis`; supervisor budget sync | G5 sign-off: broader unseen NL repair corpus |
+| H — closed repair loop | G5 | EXPERIMENTAL (near G5) | NL fixture suite (add/sub/mult/div/max/reverse/multifile/gcd + **unseen `triple` via inline examples**); cargo-test oracles; **real verified synthesis is now the primary repair path** (`try_real_synthesis_patch`, keyword table demoted to fallback) — see §1.0; budget-gated + plain-Rust validity gate; `repo_agent_repairs_gcd_via_general_synthesis`; supervisor budget sync | G5 sign-off: solver-IR→Rust lowering so safe-div/loop ops also use real synthesis; widen unseen corpus |
 | I — workflows/supervision | G6 | EXPERIMENTAL | `RepoWorkflowRunner` + `run_query` session router; workflow JSON persist | durable typed workflow resume across sessions |
 | J — durable memory/resume | G6 | EXPERIMENTAL | `CodingAgentSession` + `.nsynth/sessions/` snapshots; clarify resume API | end-to-end CLI `--clarify` on real ambiguous synthesis |
 | K — project-scale generation/validation | G6 | SCAFFOLD | strong function synthesis; project/multilanguage claims exceed evidence | graduate each backend independently |
@@ -388,6 +388,61 @@ cargo test --lib agent::repo                 # 46/46
 **Still open:** inline parser covers the common forms; tuple/struct/tree literal
 inputs and `f(x)=y where ...` natural phrasing are future work. `reduce`
 (array→scalar fold) remains the one vocabulary-only registry gap (§0.8).
+
+---
+
+### 1.0 Package H — real verified synthesis in the repair loop (2026-06-21 late)
+
+**Removed benchmark theater from a production path + closed-loop generalization
+(queue items 6 & 7).** Audit of the repo repair proposer found the common case
+was *not synthesis at all*: `synthesis_proposer::scalar_i64_body_for_nl` was a
+hard-coded keyword→canned-code table (`desc.contains("subtract") → "a - b"`) and
+`repo_rust_body_for_nl` hard-templated a 2-arg `i64` signature. This violated the
+North Star "no hard-coded routing" rule and the no-cheating contract, and capped
+repair at ~5 canned ops.
+
+**Queue item 6 — confirmed satisfied at the engine level (evidence):** the solver
+already dispatches by **type/shape**, not category strings. `solve_problem_inner`
+gates `search_float_affine` on `-> f64`, `solve_multi_arg_affine` on arg shape,
+branches on `has_non_scalar_input`, and uses the learned `method_router`
+(verified wins/misses) — never `category == "…"`. In the bridge,
+`problem_from_requirement` derives the signature from example **types**
+(`infer_signature`); `category` is metadata only, never a dispatch key.
+
+**Done (this slice)**
+
+| Change | Effect |
+|--------|--------|
+| `synthesis_proposer::try_real_synthesis_patch` (new) | NL/example description → `CodingIntent::from_nl` → `to_problem` → `solve_problem` → **verified** Rust; reshaped to preserve the repo function's exact signature (body swap + positional param rename) so the failing test's call convention holds |
+| wired as **primary** path in `nl_synthesis_proposer` and `nl_synthesis_proposer_with_run` | real synthesis precedes the keyword fast-patch; keyword table demoted to last-resort fallback |
+| plain-Rust validity gate (`is_plain_rust_body`) | declines when the solver emits abstract IR (`ok(..)`/`err(..)`, unlowered `:=`) that won't compile for the concrete signature → safe fallback (no non-compiling repairs written) |
+| synthesis-budget gating | real synthesis *is* a synthesis candidate: skipped when the persisted `AgentRun` budget is exhausted, and records a candidate when used (keeps `max_synthesis_candidates=0` rejection semantics intact) |
+| new fixture `nl_fixture_triple` (×3, unseen) | no keyword-table entry exists for it — the **only** way to repair it is to actually synthesize `a*3` from the inline examples in the issue |
+
+**Proof (cargo-test oracles, the acceptance contract):**
+
+- `real_synthesis_repairs_unseen_inline_example_op`: `triple` fixture **fails
+  before**, the proposer returns a patch tagged `proposer=nl_real_synthesis`, and
+  cargo test **passes after** — the closed repair loop now fixes an arbitrary
+  demonstrated function, not just the canned vocabulary.
+- existing add/divide repair tests converted to behavior-based oracles
+  (fail-before / cargo-green-after); divide correctly falls back (its solver
+  output uses Result-style wrappers) so no regression.
+
+**Verification**
+
+```bash
+cd ncpu/nsynth
+cargo test --lib agent::synthesis_proposer -- --test-threads=1   # 7/7
+cargo test --lib agent::repo::run_supervisor -- --test-threads=1 # 10/10 (budget semantics intact)
+cargo test --lib agent::repo -- --test-threads=1                 # full repair regression
+```
+
+**Still open (proper IR lowering):** ops whose solver output is non-plain Rust
+(safe-div `ok/err`, loop bodies with `:=`) still take the keyword fallback. The
+real fix is a faithful solver-IR → Rust lowering (handle Result wrappers and Mog
+assignment for concrete return types) so those ops also flow through real
+synthesis. Tracked for the next slice.
 
 ---
 ## 1. Product Definition

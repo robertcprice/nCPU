@@ -202,7 +202,8 @@ impl RepoRunSupervisor {
         task: &RepoTaskSpec,
         budget: &mut crate::agent::runtime::AgentRunBudget,
     ) -> Result<(), String> {
-        let description = nl_description_from_issue(&task.issue).unwrap_or_else(|| task.issue.clone());
+        let description =
+            nl_description_from_issue(&task.issue).unwrap_or_else(|| task.issue.clone());
         let mut run = if run_path.exists() {
             AgentRun::load(run_path)?
         } else {
@@ -223,6 +224,34 @@ pub fn nl_synthesis_proposer_with_run(
     analysis: Option<&crate::agent::repo::FailureAnalysis>,
 ) -> Result<crate::agent::repo::RepairPatch, String> {
     let description = nl_description_from_issue(&task.issue).unwrap_or_else(|| task.issue.clone());
+
+    // Primary path: genuine verified synthesis (bridge + solver), generalizing
+    // to any demonstrated function (registry op or inline I/O examples) rather
+    // than the canned keyword shapes. Real synthesis *is* a synthesis candidate,
+    // so it is gated by the persisted run budget: when exhausted we skip it and
+    // let the free keyword fast-patch (or the paid-synthesis rejection) govern.
+    // Falls through when the solver output is not directly compilable for the
+    // repo's concrete signature.
+    let budget_allows_synthesis = if run_path.exists() {
+        AgentRun::load(run_path)
+            .map(|run| !run.budget.exhausted())
+            .unwrap_or(true)
+    } else {
+        true
+    };
+    if budget_allows_synthesis {
+        if let Some(patch) =
+            crate::agent::synthesis_proposer::try_real_synthesis_patch(task, context, &description)
+        {
+            if run_path.exists() {
+                if let Ok(mut run) = AgentRun::load(run_path) {
+                    let _ = run.budget.record_synthesis_candidate();
+                    let _ = run.save(run_path);
+                }
+            }
+            return Ok(patch);
+        }
+    }
 
     if let Some(patch) = crate::agent::synthesis_proposer::try_nl_repo_fast_patch(
         task,
@@ -252,18 +281,18 @@ pub fn nl_synthesis_proposer_with_run(
     }
 
     if let Some(intent) = run.intent.as_ref() {
-        let target_hint = match crate::agent::synthesis_proposer::pick_target_path(
-            task,
-            context,
-            Some(intent),
+        let target_hint =
+            match crate::agent::synthesis_proposer::pick_target_path(task, context, Some(intent)) {
+                Ok(target) => {
+                    crate::agent::synthesis_proposer::read_relative_file(context, &target).ok()
+                }
+                Err(_) => None,
+            };
+        if let Some(rust_body) = crate::agent::synthesis_proposer::repo_rust_body_for_nl(
+            intent,
+            "",
+            target_hint.as_deref(),
         ) {
-            Ok(target) => crate::agent::synthesis_proposer::read_relative_file(context, &target)
-                .ok(),
-            Err(_) => None,
-        };
-        if let Some(rust_body) =
-            crate::agent::synthesis_proposer::repo_rust_body_for_nl(intent, "", target_hint.as_deref())
-        {
             let stub = crate::solver::SolveResult {
                 success: true,
                 code: rust_body,
@@ -313,8 +342,8 @@ fn sanitize_id(id: &str) -> String {
 mod tests {
     use super::*;
     use crate::agent::repo::{
-        HardnessProfile, HardnessTier, nl_fixture_cargo_test_command, nl_synthesis_fixture_suite,
-        write_nl_fixture_crate, RepairVerifier, RepoTaskKind,
+        nl_fixture_cargo_test_command, nl_synthesis_fixture_suite, write_nl_fixture_crate,
+        HardnessProfile, HardnessTier, RepairVerifier, RepoTaskKind,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -414,10 +443,7 @@ mod tests {
 
     #[test]
     fn supervisor_executes_multifile_multiply_fixture() {
-        run_supervisor_nl_fixture(
-            "nl_fixture_multifile_multiply",
-            "nl-mf-multiply-supervisor",
-        );
+        run_supervisor_nl_fixture("nl_fixture_multifile_multiply", "nl-mf-multiply-supervisor");
     }
 
     #[test]
@@ -444,7 +470,8 @@ mod tests {
     #[test]
     fn supervisor_rejects_exhausted_synthesis_budget_for_gcd() {
         let _guard = NL_SUPERVISOR_TEST_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("nsynth_super_gcd_budget_{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("nsynth_super_gcd_budget_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         write_nl_fixture_crate(&root, "nl_fixture_gcd").expect("write");
         let task = supervisor_task_from_fixture("nl_fixture_gcd", "nl-gcd-budget", &root);

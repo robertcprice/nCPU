@@ -6,7 +6,9 @@
 
 use crate::agent::agent_run::AgentRun;
 use crate::agent::coding_intent::CodingIntent;
-use crate::agent::repo::{FailureAnalysis, FailureKind, RepairContext, RepairEdit, RepairPatch, RepoTaskSpec};
+use crate::agent::repo::{
+    FailureAnalysis, FailureKind, RepairContext, RepairEdit, RepairPatch, RepoTaskSpec,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,6 +38,13 @@ pub fn nl_synthesis_proposer(
     analysis: Option<&FailureAnalysis>,
 ) -> Result<RepairPatch, String> {
     let description = nl_description_from_issue(&task.issue).unwrap_or_else(|| task.issue.clone());
+
+    // Primary path: genuine verified synthesis through the bridge + solver.
+    // Generalizes to any demonstrated function (registry op or inline examples),
+    // not just the canned scalar shapes the keyword fast-patch can express.
+    if let Some(patch) = try_real_synthesis_patch(task, context, &description) {
+        return Ok(patch);
+    }
 
     if let Some(patch) = try_nl_repo_fast_patch(task, context, &description, analysis) {
         return Ok(patch);
@@ -68,6 +77,254 @@ pub fn nl_synthesis_proposer(
     }
     let result = run.synthesize()?.clone();
     repair_patch_from_synthesis(task, context, intent.as_ref(), &result)
+}
+
+/// Real verified synthesis for repo repair (North Star path).
+///
+/// NL/example description → bridge `SynthesisRequirement` → solver `Problem` →
+/// verified Rust, reshaped to **preserve the repo function's exact signature**
+/// (so the failing test's call convention is honoured) by swapping only the
+/// body with the synthesized logic and renaming params positionally. This
+/// replaces keyword→canned-code matching with genuine synthesis and generalizes
+/// to *any* function the task demonstrates — registry op or inline I/O examples.
+pub fn try_real_synthesis_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+) -> Option<RepairPatch> {
+    let intent = CodingIntent::from_nl(description).ok()?;
+    if intent.examples.is_empty() {
+        return None;
+    }
+    let problem = intent.to_problem().ok()?;
+    let result = crate::solver::solve_problem(&problem);
+    if !result.success {
+        return None;
+    }
+    let target = pick_target_path(task, context, Some(&intent)).ok()?;
+    let old_text = read_relative_file(context, &target).ok()?;
+    let repo_fn = resolve_repo_fn_name(
+        intent
+            .function_name
+            .strip_prefix("nl_")
+            .unwrap_or(&intent.function_name),
+        Some(&old_text),
+    );
+    let synthesized = rust_code_for_repo_synthesis(&result.code);
+    // The solver sometimes emits an abstract IR (Result-style `ok(..)`/`err(..)`
+    // wrappers, unlowered `:=`) that is not plain Rust for the repo's concrete
+    // signature. Adopt real synthesis only when the output is directly
+    // compilable; otherwise decline and let the proven fallback handle it.
+    if !is_plain_rust_body(&synthesized) {
+        return None;
+    }
+    let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+    if new_text == old_text {
+        return None;
+    }
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                old_text,
+                new_text,
+                "nl real-synthesis proposer (bridge+solver, verified)",
+            ))
+            .with_metadata("proposer", "nl_real_synthesis")
+            .with_metadata("synthesis_method", result.method.clone()),
+    )
+}
+
+/// Reshape synthesized Rust to fit the repo's existing function: keep the repo
+/// signature, swap in the synthesized body with params renamed positionally. If
+/// the repo has no such function yet, emit the synthesized function renamed.
+fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
+    let synth_body = fn_body(synthesized)?;
+    if !old_text.contains(&format!("fn {repo_fn}")) {
+        let renamed = ensure_pub_fn(&rename_first_fn(synthesized, repo_fn));
+        return Some(format!("{}\n", renamed.trim()));
+    }
+    let synth_params = fn_header_params(synthesized, &first_fn_name_in_source(synthesized)?)
+        .map(|p| parse_param_idents(&p))
+        .unwrap_or_default();
+    let repo_params = fn_header_params(old_text, repo_fn)
+        .map(|p| parse_param_idents(&p))
+        .unwrap_or_default();
+    let mut body = synth_body;
+    if synth_params.len() == repo_params.len() {
+        for (from, to) in synth_params.iter().zip(repo_params.iter()) {
+            if from != to {
+                body = rename_ident(&body, from, to);
+            }
+        }
+    }
+    replace_body_only(old_text, repo_fn, &body).ok()
+}
+
+/// Heuristic: is this synthesized code directly compilable plain Rust (vs the
+/// solver's abstract IR)? Rejects Result-style `ok(..)`/`err(..)` wrappers and
+/// unlowered Mog assignment so we never write non-compiling repairs.
+fn is_plain_rust_body(code: &str) -> bool {
+    !(code.contains("ok(")
+        || code.contains("err(")
+        || code.contains(":=")
+        || code.contains("Result<"))
+}
+
+fn ensure_pub_fn(code: &str) -> String {
+    let trimmed = code.trim_start();
+    if trimmed.starts_with("pub ") {
+        code.to_string()
+    } else if trimmed.starts_with("fn ") {
+        format!("pub {trimmed}")
+    } else {
+        code.to_string()
+    }
+}
+
+fn rename_first_fn(code: &str, new_name: &str) -> String {
+    if let Some(old) = first_fn_name_in_source(code) {
+        let needle = format!("fn {old}");
+        if let Some(pos) = code.find(&needle) {
+            let mut out = String::with_capacity(code.len());
+            out.push_str(&code[..pos]);
+            out.push_str(&format!("fn {new_name}"));
+            out.push_str(&code[pos + needle.len()..]);
+            return out;
+        }
+    }
+    code.to_string()
+}
+
+/// Parameter list (raw text between parens) of `fn {name}(...)`.
+fn fn_header_params(code: &str, name: &str) -> Option<String> {
+    let start = code.find(&format!("fn {name}("))?;
+    let after = &code[start..];
+    let open = after.find('(')?;
+    let bytes = after.as_bytes();
+    let mut depth = 0i32;
+    let mut end = None;
+    for i in open..bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(after[open + 1..end?].to_string())
+}
+
+fn parse_param_idents(params: &str) -> Vec<String> {
+    params
+        .split(',')
+        .filter_map(|p| {
+            let p = p.trim();
+            if p.is_empty() {
+                return None;
+            }
+            let name = p.split(':').next()?.trim();
+            let name = name.trim_start_matches("mut ").trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .collect()
+}
+
+/// Inner text of the first `{ ... }` body in `code`.
+fn fn_body(code: &str) -> Option<String> {
+    let s = code.find("fn ")?;
+    let after = &code[s..];
+    let open = after.find('{')?;
+    let bytes = after.as_bytes();
+    let mut depth = 0i32;
+    let mut end = None;
+    for i in open..bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(after[open + 1..end?].trim().to_string())
+}
+
+/// Keep the repo function signature, replace only its `{ body }`.
+fn replace_body_only(source: &str, name: &str, new_body: &str) -> Result<String, String> {
+    let start = source
+        .find(&format!("pub fn {name}"))
+        .or_else(|| source.find(&format!("fn {name}")))
+        .ok_or_else(|| format!("function {name} not found"))?;
+    let after = &source[start..];
+    let open = after
+        .find('{')
+        .ok_or_else(|| format!("no opening brace for {name}"))?;
+    let bytes = after.as_bytes();
+    let mut depth = 0i32;
+    let mut end = None;
+    for i in open..bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end.ok_or_else(|| format!("unclosed body for {name}"))?;
+    let mut out = String::new();
+    out.push_str(&source[..start]);
+    out.push_str(&after[..open + 1]);
+    out.push_str("\n    ");
+    out.push_str(new_body.trim());
+    out.push('\n');
+    out.push_str(&after[end..]);
+    Ok(out)
+}
+
+fn rename_ident(text: &str, from: &str, to: &str) -> String {
+    if from.is_empty() || from == to {
+        return text.to_string();
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        if text[i..].starts_with(from) {
+            let before_ok =
+                i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            let after_idx = i + from.len();
+            let after_ok = after_idx >= text.len()
+                || !(bytes[after_idx].is_ascii_alphanumeric() || bytes[after_idx] == b'_');
+            if before_ok && after_ok {
+                out.push_str(to);
+                i = after_idx;
+                continue;
+            }
+        }
+        let ch = text[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 /// Fast NL repo patch from description and optional verification failure (Package H).
@@ -302,7 +559,10 @@ fn file_defines_function(text: &str, fn_name: &str) -> bool {
     text.contains(&format!("fn {fn_name}(")) || text.contains(&format!("fn {fn_name} "))
 }
 
-pub(crate) fn read_relative_file(context: &RepairContext, relative: &str) -> Result<String, String> {
+pub(crate) fn read_relative_file(
+    context: &RepairContext,
+    relative: &str,
+) -> Result<String, String> {
     let disk_path = Path::new(&context.root).join(relative);
     if disk_path.is_file() {
         return fs::read_to_string(&disk_path).map_err(|e| format!("read {}: {}", relative, e));
@@ -352,22 +612,13 @@ pub fn repo_rust_body_for_nl(
 }
 
 fn scalar_i64_body_for_nl(desc: &str, mog_code: &str) -> Option<&'static str> {
-    if desc.contains("subtract")
-        || desc.contains("minus")
-        || mog_code.contains("a - b")
-    {
+    if desc.contains("subtract") || desc.contains("minus") || mog_code.contains("a - b") {
         return Some("a - b");
     }
-    if desc.contains("multiply")
-        || desc.contains("product")
-        || mog_code.contains("a * b")
-    {
+    if desc.contains("multiply") || desc.contains("product") || mog_code.contains("a * b") {
         return Some("a * b");
     }
-    if desc.contains("divide")
-        || desc.contains("division")
-        || mog_code.contains("a / b")
-    {
+    if desc.contains("divide") || desc.contains("division") || mog_code.contains("a / b") {
         return Some("a / b");
     }
     if desc.contains("larger")
@@ -377,10 +628,7 @@ fn scalar_i64_body_for_nl(desc: &str, mog_code: &str) -> Option<&'static str> {
     {
         return Some("if a > b { a } else { b }");
     }
-    if desc.contains("add")
-        || desc.contains("sum")
-        || mog_code.contains("a + b")
-    {
+    if desc.contains("add") || desc.contains("sum") || mog_code.contains("a + b") {
         return Some("a + b");
     }
     None
@@ -503,8 +751,9 @@ fn replace_function_body(source: &str, fn_name: &str, new_impl: &str) -> Result<
 mod tests {
     use super::*;
     use crate::agent::repo::{
-        FailureParser, GuardrailPolicy, HardnessProfile, HardnessTier, nl_fixture_cargo_test_command,
-        RepairContext, RepairLoop, RepairVerifier, RepoTaskKind, RepoTaskSpec, write_nl_fixture_crate,
+        nl_fixture_cargo_test_command, write_nl_fixture_crate, FailureParser, GuardrailPolicy,
+        HardnessProfile, HardnessTier, RepairContext, RepairLoop, RepairVerifier, RepoTaskKind,
+        RepoTaskSpec,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -601,13 +850,24 @@ mod tests {
         let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
         let root = synthesis_fixture();
         let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let task = nl_task(&root, "nl-add", "nl_fixture_add", "synthesize: add two numbers");
+        let task = nl_task(
+            &root,
+            "nl-add",
+            "nl_fixture_add",
+            "synthesize: add two numbers",
+        );
 
         let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
         assert!(!patch.edits.is_empty());
-        assert_eq!(patch.metadata.iter().find(|(k, _)| k == "synthesis_method").map(|(_, v)| v.as_str()), Some("nl_description_repo_stub"));
         let new_content = patch.edits[0].new_text.clone();
         assert!(new_content.contains("add_two"));
+        // Acceptance is behavior-based (cargo test), independent of whether the
+        // real-synthesis primary or keyword fallback produced the patch.
+        fs::write(root.join(patch.edits[0].path.clone()), new_content).expect("write patch");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
 
         let _ = fs::remove_dir_all(root);
     }
@@ -619,7 +879,12 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         write_nl_fixture_crate(&root, "nl_fixture_divide").expect("write");
         let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let task = nl_task(&root, "nl-div-fail", "nl_fixture_divide", "synthesize: divide two numbers");
+        let task = nl_task(
+            &root,
+            "nl-div-fail",
+            "nl_fixture_divide",
+            "synthesize: divide two numbers",
+        );
         let verification = RepairVerifier::new(&root, GuardrailPolicy::default())
             .verify(&task.test_command)
             .expect("verify");
@@ -627,13 +892,69 @@ mod tests {
         let analysis = FailureParser::default().parse(&verification.failure_output());
         assert_eq!(analysis.kind, crate::agent::repo::FailureKind::TestFailure);
 
+        // divide's solver output uses Result-style wrappers, so real synthesis
+        // declines and the failure-aware keyword fallback repairs it. Acceptance
+        // is behavior-based (cargo test passes after the patch).
         let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("patch");
-        assert_eq!(
-            patch.metadata.iter().find(|(k, _)| k == "synthesis_method").map(|(_, v)| v.as_str()),
-            Some("nl_failure_aware_repo_stub")
-        );
-        assert!(patch.edits[0].new_text.contains("/ b"));
+        fs::write(
+            root.join(patch.edits[0].path.clone()),
+            patch.edits[0].new_text.clone(),
+        )
+        .expect("write patch");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn real_synthesis_repairs_unseen_inline_example_op() {
+        // `triple` is NOT in any keyword table; the only way to repair it is to
+        // actually synthesize x*3 from the inline examples in the issue. Proves
+        // the closed repair loop generalizes to arbitrary demonstrated functions.
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_nl_triple_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_nl_fixture_crate(&root, "nl_fixture_triple").expect("write");
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let task = nl_task(
+            &root,
+            "nl-triple",
+            "nl_fixture_triple",
+            "synthesize: a function where triple(2)=6 and triple(5)=15 and triple(3)=9",
+        );
+
+        // Fails before repair.
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success);
+
+        // The proposer must use the real-synthesis path (not a keyword stub).
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert_eq!(
+            patch
+                .metadata
+                .iter()
+                .find(|(k, _)| k == "proposer")
+                .map(|(_, v)| v.as_str()),
+            Some("nl_real_synthesis"),
+            "expected real synthesis, got metadata {:?}",
+            patch.metadata
+        );
+
+        // Apply and re-verify: cargo test is the acceptance oracle.
+        fs::write(
+            root.join(patch.edits[0].path.clone()),
+            patch.edits[0].new_text.clone(),
+        )
+        .expect("write patch");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -642,7 +963,12 @@ mod tests {
         let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
         let root = synthesis_fixture();
         let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let task = nl_task(&root, "nl-add-loop", "nl_fixture_add", "synthesize: add two numbers");
+        let task = nl_task(
+            &root,
+            "nl-add-loop",
+            "nl_fixture_add",
+            "synthesize: add two numbers",
+        );
         let mut loop_runner = RepairLoop::new(&root, GuardrailPolicy::default());
         let result = loop_runner
             .run_with_context(&task, &context, &nl_synthesis_proposer)

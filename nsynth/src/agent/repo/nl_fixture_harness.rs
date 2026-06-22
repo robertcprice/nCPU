@@ -44,10 +44,8 @@ pub fn write_nl_fixture_crate(root: &Path, fixture_id: &str) -> Result<(), Strin
     let stub = nl_fixture_wrong_stub(fixture_id)
         .ok_or_else(|| format!("unknown nl fixture id: {fixture_id}"))?;
     let tests = nl_fixture_test_module(fixture_id)?;
-    let cargo_toml = CARGO_TOML_TEMPLATE.replace(
-        "{package_name}",
-        &fixture_package_name(fixture_id),
-    );
+    let cargo_toml =
+        CARGO_TOML_TEMPLATE.replace("{package_name}", &fixture_package_name(fixture_id));
     fs::create_dir_all(root.join("src")).map_err(|e| e.to_string())?;
     fs::write(root.join("Cargo.toml"), cargo_toml).map_err(|e| e.to_string())?;
     fs::write(root.join("src/lib.rs"), format!("{stub}{tests}")).map_err(|e| e.to_string())?;
@@ -87,10 +85,8 @@ mod tests {
 }
 
 fn write_gcd_fixture(root: &Path) -> Result<(), String> {
-    let cargo_toml = CARGO_TOML_TEMPLATE.replace(
-        "{package_name}",
-        &fixture_package_name("nl_fixture_gcd"),
-    );
+    let cargo_toml =
+        CARGO_TOML_TEMPLATE.replace("{package_name}", &fixture_package_name("nl_fixture_gcd"));
     fs::create_dir_all(root.join("src")).map_err(|e| e.to_string())?;
     fs::write(root.join("Cargo.toml"), cargo_toml).map_err(|e| e.to_string())?;
     fs::write(
@@ -117,8 +113,7 @@ mod tests {
 
 fn nl_fixture_test_module(fixture_id: &str) -> Result<&'static str, String> {
     match fixture_id {
-        "nl_fixture_add" => Ok(
-            r#"
+        "nl_fixture_add" => Ok(r#"
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,10 +124,8 @@ mod tests {
         assert_eq!(add_two(-1, 1), 0);
     }
 }
-"#,
-        ),
-        "nl_fixture_subtract" => Ok(
-            r#"
+"#),
+        "nl_fixture_subtract" => Ok(r#"
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,10 +135,8 @@ mod tests {
         assert_eq!(subtract(5, 3), 2);
     }
 }
-"#,
-        ),
-        "nl_fixture_multiply" => Ok(
-            r#"
+"#),
+        "nl_fixture_multiply" => Ok(r#"
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,10 +146,8 @@ mod tests {
         assert_eq!(multiply(3, 4), 12);
     }
 }
-"#,
-        ),
-        "nl_fixture_divide" => Ok(
-            r#"
+"#),
+        "nl_fixture_divide" => Ok(r#"
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,10 +157,8 @@ mod tests {
         assert_eq!(divide(12, 4), 3);
     }
 }
-"#,
-        ),
-        "nl_fixture_max" => Ok(
-            r#"
+"#),
+        "nl_fixture_max" => Ok(r#"
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,10 +169,8 @@ mod tests {
         assert_eq!(max_of(9, 2), 9);
     }
 }
-"#,
-        ),
-        "nl_fixture_reverse" => Ok(
-            r#"
+"#),
+        "nl_fixture_reverse" => Ok(r#"
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,8 +180,20 @@ mod tests {
         assert_eq!(reverse(&[1, 2, 3]), vec![3, 2, 1]);
     }
 }
-"#,
-        ),
+"#),
+        "nl_fixture_triple" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_triple() {
+        assert_eq!(triple(2), 6);
+        assert_eq!(triple(5), 15);
+        assert_eq!(triple(3), 9);
+    }
+}
+"#),
         other => Err(format!("no test module for fixture {other}")),
     }
 }

@@ -1,6 +1,6 @@
+use super::nl_fixture_cargo_test_command;
 use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{HardnessProfile, HardnessTier, RepoTaskKind, RepoTaskSpec};
-use super::nl_fixture_cargo_test_command;
 use crate::agent::runtime::CodeTaskSpec;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -364,6 +364,10 @@ pub fn nl_fixture_wrong_stub(fixture_id: &str) -> Option<&'static str> {
             Some("pub fn max_of(a: i64, b: i64) -> i64 { if a < b { a } else { b } }\n")
         }
         "nl_fixture_reverse" => Some("pub fn reverse(xs: &[i64]) -> Vec<i64> { xs.to_vec() }\n"),
+        // Unseen op (no keyword-table entry): only real synthesis from the
+        // inline examples in the issue can repair this. Proves the closed loop
+        // generalizes beyond the canned scalar vocabulary.
+        "nl_fixture_triple" => Some("pub fn triple(a: i64) -> i64 { a + 1 }\n"),
         _ => None,
     }
 }
@@ -377,13 +381,20 @@ pub fn nl_synthesis_fixture_suite() -> Vec<LocalBenchmarkTask> {
         nl_fixture_task("nl_fixture_subtract", "synthesize: subtract two numbers"),
         nl_fixture_task("nl_fixture_multiply", "synthesize: multiply two numbers"),
         nl_fixture_task("nl_fixture_divide", "synthesize: divide two numbers"),
-        nl_fixture_task("nl_fixture_max", "synthesize: return the larger of two numbers"),
+        nl_fixture_task(
+            "nl_fixture_max",
+            "synthesize: return the larger of two numbers",
+        ),
         nl_fixture_task("nl_fixture_reverse", "synthesize: reverse array"),
         nl_fixture_task(
             "nl_fixture_multifile_multiply",
             "synthesize: multiply two numbers",
         ),
         nl_fixture_task("nl_fixture_gcd", "synthesize: greatest common divisor"),
+        nl_fixture_task(
+            "nl_fixture_triple",
+            "synthesize: a function where triple(2)=6 and triple(5)=15 and triple(3)=9",
+        ),
     ]
 }
 
