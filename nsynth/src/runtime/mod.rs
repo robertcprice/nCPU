@@ -843,14 +843,102 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
         (Value::Bool(a), BV::Int(b)) => i64::from(*a) == *b,
         (Value::Bool(a), BV::Bool(b)) => a == b,
         (Value::Str(a), BV::Str(b)) => a == b,
+        // Arrays compare element-wise and recurse on EVERY element. The wire
+        // type (`benchmark::Value::Array`) is `Vec<i64>` today, so each expected
+        // element is an i64 scalar and we bridge it to the runtime element via
+        // `scalar_matches` (which reuses the Int/Bool/Float bridges above). The
+        // recursion is the part that future-proofs this: once the wire array
+        // widens to `Vec<Value>` (see the scoped flag in the task report), the
+        // element arm becomes a recursive `output_matches` call and nested /
+        // typed arrays verify with no further change here.
         (Value::Array(a), BV::Array(b)) => {
             a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .all(|(x, y)| matches!(x, Value::Int(xi) if xi == y))
+                && a.iter().zip(b.iter()).all(|(x, y)| scalar_matches(x, *y))
         }
+        // Pair: the runtime can carry a pair either as the dedicated `Pair`
+        // value or (when it flows through struct-of-state) as a 2-field
+        // `Struct`. Both must match the `(a, b)` wire pair exactly.
+        (Value::Pair(a, b), BV::Pair(c, d)) => a == c && b == d,
+        (Value::Struct { fields, .. }, BV::Pair(c, d)) => {
+            struct_fields_match(fields, &[*c, *d])
+        }
+        // Quad: same idea — dedicated `Quad` value or a 4-field `Struct`.
+        (Value::Quad(a, b, c, d), BV::Quad(e, f, g, h)) => {
+            a == e && b == f && c == g && d == h
+        }
+        (Value::Struct { fields, .. }, BV::Quad(e, f, g, h)) => {
+            struct_fields_match(fields, &[*e, *f, *g, *h])
+        }
+        // Tree: the runtime has no dedicated tree value; a tree is the
+        // `Struct { name: "Tree", fields: { "nodes": Array[TreeNode structs] } }`
+        // that `runtime_value_from_problem` builds and the tree codegen reads
+        // (`tree.nodes[i].value/.left/.right`). Compare structurally, node by
+        // node, against the expected `Vec<TreeNode>`.
+        (Value::Struct { fields, .. }, BV::Tree(nodes)) => tree_struct_matches(fields, nodes),
         _ => false,
     }
+}
+
+/// Compare a runtime array/struct element against a single wire scalar (`i64`).
+///
+/// This is the leaf of `output_matches`'s array recursion. It honours the same
+/// Int/Bool/Float bridges the top-level oracle uses, so an array element emitted
+/// as `1`/`true`/`1.0` all match the wire `1` — but nothing looser (a string or
+/// a struct element never matches a scalar).
+fn scalar_matches(actual: &Value, expected: i64) -> bool {
+    match actual {
+        Value::Int(a) => *a == expected,
+        Value::Bool(a) => i64::from(*a) == expected,
+        Value::Float(a) => *a == expected as f64,
+        _ => false,
+    }
+}
+
+/// Strictly compare the int payloads of a runtime `Struct`'s fields against an
+/// ordered list of expected scalars (used for `Pair`/`Quad` outputs). Requires
+/// the exact arity and that every field is an int matching its expected slot.
+/// Order-independent over field *names* (struct fields are a `HashMap`) but every
+/// expected value must be present exactly once — so it stays a strict equality
+/// check, not a subset match.
+fn struct_fields_match(fields: &HashMap<String, Value>, expected: &[i64]) -> bool {
+    if fields.len() != expected.len() {
+        return false;
+    }
+    // Multiset equality of the int payloads: every expected scalar must be
+    // consumed by a distinct field. Equal-arity + multiset match == exact match.
+    let mut remaining: Vec<i64> = expected.to_vec();
+    for value in fields.values() {
+        let Value::Int(v) = value else {
+            return false;
+        };
+        if let Some(pos) = remaining.iter().position(|e| e == v) {
+            remaining.swap_remove(pos);
+        } else {
+            return false;
+        }
+    }
+    remaining.is_empty()
+}
+
+/// Structurally compare a runtime tree `Struct` against an expected
+/// `Vec<TreeNode>`. The runtime tree is `{ nodes: [ { value, left, right }, .. ] }`
+/// (negative `left`/`right` mean null). Every node must match value, left and
+/// right exactly and the node count must be identical.
+fn tree_struct_matches(fields: &HashMap<String, Value>, nodes: &[crate::benchmark::TreeNode]) -> bool {
+    let Some(Value::Array(items)) = fields.get("nodes") else {
+        return false;
+    };
+    if items.len() != nodes.len() {
+        return false;
+    }
+    items.iter().zip(nodes.iter()).all(|(item, node)| {
+        let Value::Struct { fields, .. } = item else {
+            return false;
+        };
+        matches!(fields.get("value"), Some(Value::Int(v)) if *v == node.value)
+            && matches!(fields.get("left"), Some(Value::Int(l)) if *l == node.left as i64)
+            && matches!(fields.get("right"), Some(Value::Int(r)) if *r == node.right as i64)
+    })
 }
 
 pub fn verify_problem_code(problem: &Problem, code: &str) -> Result<(), String> {
@@ -907,14 +995,17 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
         )),
         BenchmarkValue::Quad(a, b, c, d) => Ok(Value::Quad(*a, *b, *c, *d)),
         BenchmarkValue::Pair(a, b) => {
+            // Known structural pairs keep their domain names/fields so the
+            // generated code's `p.x`/`r.width` field accesses resolve. Any
+            // other pair still converts (as a generic 2-field struct) instead
+            // of hard-erroring, which is the cheap generalization beyond the
+            // hardcoded Point/Rectangle match.
             let (name, lhs, rhs) = if problem_name.starts_with("point_sum") {
                 ("Point", "x", "y")
             } else if problem_name.starts_with("rectangle_area") {
                 ("Rectangle", "width", "height")
             } else {
-                return Err(format!(
-                    "unsupported pair argument for problem {problem_name}"
-                ));
+                ("Pair", "first", "second")
             };
             let mut fields = HashMap::new();
             fields.insert(lhs.to_string(), Value::Int(*a));
@@ -924,9 +1015,38 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
                 fields,
             })
         }
-        BenchmarkValue::Tree(_) => Err(format!(
-            "tree argument conversion not yet implemented for problem {problem_name}"
-        )),
+        BenchmarkValue::Tree(nodes) => Ok(tree_to_runtime_value(nodes)),
+    }
+}
+
+/// Build the canonical runtime tree value from a wire `Vec<TreeNode>`.
+///
+/// The runtime has no dedicated tree value, so a tree is represented as the
+/// struct the tree codegen consumes:
+/// `Struct { name: "Tree", fields: { "nodes": Array[ Struct { name: "TreeNode",
+/// fields: { value, left, right } }, .. ] } }`. `left`/`right` are widened from
+/// the wire `i32` to the runtime's `i64` (negative still means null). This
+/// round-trips: `tree_struct_matches` (the equality oracle's `Tree` arm) reads
+/// back exactly these field names and the same node ordering.
+fn tree_to_runtime_value(nodes: &[crate::benchmark::TreeNode]) -> Value {
+    let node_values: Vec<Value> = nodes
+        .iter()
+        .map(|node| {
+            let mut fields = HashMap::new();
+            fields.insert("value".to_string(), Value::Int(node.value));
+            fields.insert("left".to_string(), Value::Int(node.left as i64));
+            fields.insert("right".to_string(), Value::Int(node.right as i64));
+            Value::Struct {
+                name: "TreeNode".to_string(),
+                fields,
+            }
+        })
+        .collect();
+    let mut fields = HashMap::new();
+    fields.insert("nodes".to_string(), Value::Array(node_values));
+    Value::Struct {
+        name: "Tree".to_string(),
+        fields,
     }
 }
 
@@ -936,15 +1056,15 @@ fn runtime_value_from_problem_meta(
 ) -> Result<Value, String> {
     match value {
         BenchmarkValue::Pair(a, b) => {
+            // Prefer the signature-named struct (so `p.x` / `r.width` resolve);
+            // otherwise fall back to a generic 2-field pair struct rather than
+            // refusing the conversion.
             let (name, lhs, rhs) = if problem.signature.contains("Point") {
                 ("Point", "x", "y")
             } else if problem.signature.contains("Rectangle") {
                 ("Rectangle", "width", "height")
             } else {
-                return Err(format!(
-                    "unsupported pair argument for {} with signature {}",
-                    problem.name, problem.signature
-                ));
+                ("Pair", "first", "second")
             };
             let mut fields = HashMap::new();
             fields.insert(lhs.to_string(), Value::Int(*a));
@@ -4869,5 +4989,158 @@ fn main() -> i64 {
         );
         let program = result.unwrap();
         assert_eq!(program.modules["api"].exports.len(), 3);
+    }
+
+    // ------------------------------------------------------------------
+    // Verification I/O contract: equality oracle + input conversion.
+    // ------------------------------------------------------------------
+
+    fn tnode(value: i64, left: i32, right: i32) -> crate::benchmark::TreeNode {
+        crate::benchmark::TreeNode { value, left, right }
+    }
+
+    fn struct_value(name: &str, fields: &[(&str, Value)]) -> Value {
+        Value::Struct {
+            name: name.to_string(),
+            fields: fields
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn output_matches_arrays_recurse_elementwise() {
+        // Equal int arrays match; differing length or element does not.
+        let actual = Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        assert!(output_matches(&actual, &BmValue::Array(vec![1, 2, 3])));
+        assert!(!output_matches(&actual, &BmValue::Array(vec![1, 2])));
+        assert!(!output_matches(&actual, &BmValue::Array(vec![1, 2, 4])));
+        // Bool/float array elements bridge to the wire i64 (no loosening past 0/1).
+        let bridged = Value::Array(vec![Value::Bool(true), Value::Float(0.0)]);
+        assert!(output_matches(&bridged, &BmValue::Array(vec![1, 0])));
+        assert!(!output_matches(&bridged, &BmValue::Array(vec![1, 1])));
+        // A non-scalar element never matches a scalar slot (strictness).
+        let nested = Value::Array(vec![Value::Str("x".to_string())]);
+        assert!(!output_matches(&nested, &BmValue::Array(vec![0])));
+    }
+
+    #[test]
+    fn output_matches_pair_value_and_struct() {
+        // Dedicated Pair value matches exactly.
+        assert!(output_matches(&Value::Pair(3, 4), &BmValue::Pair(3, 4)));
+        assert!(!output_matches(&Value::Pair(3, 4), &BmValue::Pair(4, 3)));
+        // A 2-field struct (how a pair flows through struct-of-state) also matches.
+        let pt = struct_value("Point", &[("x", Value::Int(3)), ("y", Value::Int(4))]);
+        assert!(output_matches(&pt, &BmValue::Pair(3, 4)));
+        assert!(output_matches(&pt, &BmValue::Pair(4, 3))); // multiset of payloads
+        assert!(!output_matches(&pt, &BmValue::Pair(3, 5)));
+        // Wrong arity is rejected.
+        let one = struct_value("One", &[("x", Value::Int(3))]);
+        assert!(!output_matches(&one, &BmValue::Pair(3, 4)));
+    }
+
+    #[test]
+    fn output_matches_quad_value_and_struct() {
+        assert!(output_matches(&Value::Quad(1, 2, 3, 4), &BmValue::Quad(1, 2, 3, 4)));
+        assert!(!output_matches(&Value::Quad(1, 2, 3, 4), &BmValue::Quad(1, 2, 3, 5)));
+        let s = struct_value(
+            "DualTally",
+            &[
+                ("pos_count", Value::Int(1)),
+                ("neg_count", Value::Int(2)),
+                ("zero_count", Value::Int(3)),
+                ("total", Value::Int(4)),
+            ],
+        );
+        assert!(output_matches(&s, &BmValue::Quad(1, 2, 3, 4)));
+        assert!(!output_matches(&s, &BmValue::Quad(1, 2, 3, 5)));
+    }
+
+    #[test]
+    fn output_matches_tree_struct_strict() {
+        let nodes = vec![tnode(1, 1, 2), tnode(2, -1, -1), tnode(3, -1, -1)];
+        let tree = runtime_value_from_problem(&BmValue::Tree(nodes.clone()), "any")
+            .expect("tree converts");
+        // The converted runtime tree matches its own wire tree.
+        assert!(output_matches(&tree, &BmValue::Tree(nodes.clone())));
+        // A different node value fails.
+        let wrong_value = vec![tnode(9, 1, 2), tnode(2, -1, -1), tnode(3, -1, -1)];
+        assert!(!output_matches(&tree, &BmValue::Tree(wrong_value)));
+        // A different child index fails (structure is checked, not just values).
+        let wrong_edge = vec![tnode(1, 2, 1), tnode(2, -1, -1), tnode(3, -1, -1)];
+        assert!(!output_matches(&tree, &BmValue::Tree(wrong_edge)));
+        // A different node count fails.
+        let shorter = vec![tnode(1, 1, 2), tnode(2, -1, -1)];
+        assert!(!output_matches(&tree, &BmValue::Tree(shorter)));
+        // An empty tree matches an empty tree.
+        let empty = runtime_value_from_problem(&BmValue::Tree(vec![]), "any").unwrap();
+        assert!(output_matches(&empty, &BmValue::Tree(vec![])));
+        assert!(!output_matches(&empty, &BmValue::Tree(vec![tnode(0, -1, -1)])));
+    }
+
+    #[test]
+    fn output_matches_rejects_type_mismatches() {
+        // Cross-type comparisons that should never be true.
+        assert!(!output_matches(&Value::Str("3".to_string()), &BmValue::Int(3)));
+        assert!(!output_matches(&Value::Int(3), &BmValue::Str("3".to_string())));
+        assert!(!output_matches(&Value::Array(vec![Value::Int(1)]), &BmValue::Int(1)));
+        assert!(!output_matches(&Value::Pair(1, 2), &BmValue::Quad(1, 2, 0, 0)));
+    }
+
+    #[test]
+    fn runtime_value_tree_converts_and_round_trips() {
+        // A tree input converts without error into the canonical Struct shape
+        // and round-trips through the equality oracle.
+        let nodes = vec![tnode(10, 1, 2), tnode(5, -1, -1), tnode(15, -1, -1)];
+        let value = runtime_value_from_problem(&BmValue::Tree(nodes.clone()), "tree_sum_v1")
+            .expect("tree argument should convert");
+
+        // Shape: Struct { name: "Tree", fields: { nodes: Array[TreeNode structs] } }.
+        let Value::Struct { name, fields } = &value else {
+            panic!("expected a Tree struct, got {value:?}");
+        };
+        assert_eq!(name, "Tree");
+        let Some(Value::Array(items)) = fields.get("nodes") else {
+            panic!("expected a `nodes` array field");
+        };
+        assert_eq!(items.len(), 3);
+        // First node carries value=10, left=1, right=2 as runtime ints.
+        // (`Value` derives no `PartialEq`, so assert via `matches!`.)
+        let Value::Struct { name: nn, fields: nf } = &items[0] else {
+            panic!("expected a TreeNode struct");
+        };
+        assert_eq!(nn, "TreeNode");
+        assert!(matches!(nf.get("value"), Some(Value::Int(10))));
+        assert!(matches!(nf.get("left"), Some(Value::Int(1))));
+        assert!(matches!(nf.get("right"), Some(Value::Int(2))));
+
+        // Round-trip: the converted value matches the wire tree it came from.
+        assert!(output_matches(&value, &BmValue::Tree(nodes)));
+    }
+
+    #[test]
+    fn runtime_value_pair_generalizes_beyond_named_structs() {
+        // Known names keep their domain field names. (`Value` has no
+        // `PartialEq`, so assert structurally via `matches!`.)
+        let pt = runtime_value_from_problem(&BmValue::Pair(2, 3), "point_sum_v1").unwrap();
+        let Value::Struct { name, fields } = &pt else {
+            panic!("expected a struct, got {pt:?}");
+        };
+        assert_eq!(name, "Point");
+        assert!(matches!(fields.get("x"), Some(Value::Int(2))));
+        assert!(matches!(fields.get("y"), Some(Value::Int(3))));
+
+        // An unknown problem name no longer errors — it yields a generic pair.
+        let generic = runtime_value_from_problem(&BmValue::Pair(2, 3), "mystery_v1")
+            .expect("generic pair should convert");
+        let Value::Struct { name, fields } = &generic else {
+            panic!("expected a struct, got {generic:?}");
+        };
+        assert_eq!(name, "Pair");
+        assert!(matches!(fields.get("first"), Some(Value::Int(2))));
+        assert!(matches!(fields.get("second"), Some(Value::Int(3))));
+        // And it round-trips through the equality oracle as a pair.
+        assert!(output_matches(&generic, &BmValue::Pair(2, 3)));
     }
 }
