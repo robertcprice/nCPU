@@ -1,12 +1,20 @@
 # MASTER ROADMAP — Linguigenesis-Native nCPU Coding Agent
 
 **Status:** Active execution; pre-MVP
-**Execution authority:** This file
-**Architecture companion:** [`nsynth/docs/LINGUIGENESIS_NATIVE_CODING_AGENT_PLAN.md`](nsynth/docs/LINGUIGENESIS_NATIVE_CODING_AGENT_PLAN.md)
-**Low-level runtime companion:** [`nsynth/docs/PHASE_2_4_EXECUTION_PLAN.md`](nsynth/docs/PHASE_2_4_EXECUTION_PLAN.md)
+**THIS IS THE SINGLE AUTHORITATIVE PLAN.** There are no other roadmap/plan files. All prior plan/roadmap/next-steps/stage docs (ROADMAP.md, ULTIMATE_ROADMAP*.md, SYNTHESIS_NEXT_STEPS.md, *_PLAN.md, STAGE*_*.md, etc.) were consolidated into this file and deleted on 2026-06-22. Do NOT create new plan/roadmap `.md` files — edit this one. Every agent reads §0.05 first.
 **Scope:** `nCPU/nsynth` and required Rust work in sibling `../linguigenesis`
 **Core rule:** Linguigenesis is the native comprehension/reasoning layer. External LLMs are optional, untrusted proposers—not the agent core.
 **Implementation rule:** production orchestration is Rust. No simulated capability, stub success, benchmark theater, or hidden Python agent runtime.
+
+### 0.01 AGENT OPERATING RULES (hard constraints — violating these is the #1 cause of wasted work; read before anything)
+
+1. **CANONICAL TREE = `nCPU/nsynth`** (pkg `mog_synth`, path-deps `../linguigenesis`). It is the ONLY tree you edit, build, or audit. **`nCPU/ncpu-learned-parser/` is a STALE, gitignored, SEPARATE git repo** (Jun-19 fork; 244 vs 322 `.rs` files; 54 files exist only there pending salvage). DO NOT read it as current state, edit it, or build it. Any memory/doc calling `ncpu-learned-parser` the "active crate" is WRONG (stale, 2026-06-20).
+2. **ONE PLAN = this file.** No new roadmap/plan/`*.md`. Edit here. (20 competing plan docs were deleted 2026-06-22.)
+3. **READ-MANIFEST-FIRST.** Before any audit or change, enumerate the COMPLETE file set (`find nsynth/src -name '*.rs' | wc -l` = N) and partition all N. An audit is NOT done until every file is accounted for against that count. Never scope by ad-hoc discovery — that is exactly why files get skipped.
+4. **VERIFY, DON'T ASSUME.** Cite `file:line`. Read the code, not priors or marketing names. "X exists" needs a path; "X works" needs a test you actually ran. Do not reason about capability from a module's name.
+5. **NO DUPLICATE WORK.** Before building anything, grep for an existing impl and check §0.05 + memory for in-flight/parked work. The engine is large; most capabilities already exist partially (see §0.05).
+6. **ISOLATE WRITES.** Any code change goes in a dedicated git worktree; verify `git rev-parse --show-toplevel` is your worktree before editing. A concurrent agent may hold the main checkout.
+7. **ONE OWNER PER FILE.** Do not edit a file another agent is actively changing (check `git status` + the in-flight list before writing).
 
 ### 0.6 North Star — Universal program synthesis
 
@@ -14,7 +22,7 @@ The finished **nsynth** layer must synthesize **any** program shape expressible 
 
 1. **KVRM data** (operations, constraints, workflows) — not Rust `if text.contains` or per-op tables;
 2. **Learned / evidence-ranked portfolios** (`method_router`, `search_family_router`) — not fixed category→stage tables;
-3. **UTBUS / structural composition** ([`nsynth/docs/SYNTHESIS_NEXT_STEPS.md`](nsynth/docs/SYNTHESIS_NEXT_STEPS.md) Part 2) — collapse scattered teachers into one typed bottom-up engine.
+3. **UTBUS / structural composition** (see §0.05) — collapse scattered teachers into one typed bottom-up engine.
 
 **No hard-coded routing rule:** production paths must not select semantics or solver stages via keyword lists, factory name tables, or `category == "…"` dispatch. Allowed: (a) registry graph walks, (b) type/shape features of `Problem`, (c) learned routers fed only by verified outcomes.
 
@@ -31,8 +39,51 @@ The finished **nsynth** layer must synthesize **any** program shape expressible 
 | 7 | **E–H** — repo agent loop | Programs beyond isolated functions |
 | 8 | **UTBUS** — compositional structural synthesizer | True "any program" from typed composition |
 
-> **Every agent must read Sections 0, 0.6, 0.7, 3, 6, 7, and the current phase card before editing code.**
+> **Every agent must read Sections 0.05, 0, 0.6, 0.7, 3, 6, 7, and the current phase card before editing code.**
 > This roadmap replaces historical “completed” checklists. A module existing does not mean the capability works.
+
+### 0.05 OPEN-ENDED UNIVERSAL SYNTHESIS — verified state, the 4 gaps, and UTBUS phases (READ FIRST)
+
+**The goal, stated correctly.** "Universal / infinite" synthesis here is NOT the undecidable fantasy of deciding every program. Undecidability is a non-issue: we *search* for a program that fits examples + passes verification, and *bound each candidate's execution* (fuel/timeout) so non-halting candidates are discarded — search + bounded execution, never "decide." "Infinite" = **reach grows without bound at runtime** because two things compound: (a) an *anytime, unbounded, resumable* search that never returns "impossible," and (b) a *library that mines new abstractions from every solve* and folds them back as productions. The frontier recedes forever. The inversion is: turn every CLOSED dimension into an OPEN/self-growing one.
+
+**Verified synthesis-stack state (audited twice, 2026-06-22).** One pipeline (`solver::solve_problem` → `solver/pipeline.rs`), one universal acceptance oracle (`runtime::verify_problem_code_strict` — runs candidate on examples + holdouts; every engine certifies through it). Engines:
+| Engine | File | Status | Reach |
+|---|---|---|---|
+| UTBUS (typed bottom-up, Phase A) | `synthesis/utbus.rs` | BUILT, gated `NSYNTH_UTBUS=1`, parity unproven | array→scalar slice |
+| Enumerative bottom-up + library | `enumerative.rs` | LIVE | i64/array, ~6–9 AST nodes, `dream()` seeds (15 fixed) |
+| Differentiable scalar zoo | `synthesis/core_impl.rs` (8147) | LIVE | scalar-int, 13 bespoke architectures |
+| Differentiable register machine | `synthesis/register_machine.rs` | LIVE | scalar, ≤6 straight-line, NO loops |
+| `SoftUniversalProgram` | `synthesis/universal.rs` | PARKED (benchmark-only) | scalar, DOES loops (factorial verified) |
+| `SoftArrayRegisterMachine` | `register_machine.rs:340` | DEAD CODE | loop+array capable, no caller |
+| String bottom-up | `string_synth.rs` | LIVE | string exprs, no loops |
+~165 hand-written `search_*` teachers (`solver/search*.rs`) for the rest. **Reusable spine (don't rebuild):** verify oracle; differentiable core (`synthesis/common.rs`); solve-corpus (`solved_cache`) → learned ranker (`meta_learner`, 32-dim) → regression-gated component store (`self_improve`); overfit guards (`solver/generalization.rs`); scalar expr enumerator toolkit (`solver/scalar_search.rs`).
+
+**Open-ended scaffold is ~half-built already (do NOT greenfield):**
+| Dimension | Exists? | Where | ~Done |
+|---|---|---|---|
+| Library that grows from solves | partial | `enumerative.rs` `ComponentLibrary`+`dream()`; `self_improve/store.rs` | 50% |
+| Self-generated problems/curriculum | substantial | `bin/gen_meta_data.rs`, `program_trace.rs`, large generated corpora in `data/*.jsonl` | 60% |
+| Cross-run building-block reuse | yes | `solved_cache` + `CachedTeachers` (`bin/self_improve.rs` demos it) | 70% |
+| Recursive self-improvement loop | scoped | `meta/recursive.rs` (Phase 5.1, strict-superset gate) + `bin/meta_rsi`, `bin/bootstrap_train`; ranker-weights only | 45% |
+| Open type universe | partial | interpreter has Struct/Enum/Tree/Result; UTBUS `Utype` lattice | 30% |
+| Anytime/unbounded deepening search | mostly missing | no never-give-up iterative deepening / persistent frontier | 30% |
+| Type-driven verification (the ceiling) | mostly missing | `output_matches` fixed to int/float/bool/string/[i64]; tree input unimplemented | 15% |
+
+**The 4 real gaps (finish-not-rebuild):**
+1. **Real abstraction mining** — replace `dream()`'s 15 seeds with genuine subtree mining/anti-unification. ALREADY BUILT on branch `emergent-library-compression` (commit `fe8007d`, verified 10/10), UNMERGED. Merge it.
+2. **Abstractions → typed grammar productions** — feed mined abstractions into UTBUS as productions (not just enumeration seed-atoms) so they compound compositionally. = UTBUS Phase B wiring.
+3. **RSI that grows library/grammar, not just ranker weights** — extend `meta/recursive.rs`'s proven strict-superset safety gate (snapshot/restore/budget) to accept new abstractions/productions.
+4. **The two ceilings** — (a) anytime unbounded deepening search (never returns "impossible"; persistent frontier in `solved_cache`); (b) type-driven verification (generate equality+holdouts from the type universe so any type incl. recursive ADTs is checkable). Plus real (fuzz/property/reference-differential) holdout generation — today `generated_holdouts` just clones the 2–3 hand-authored ones, so "strict" can rubber-stamp overfit.
+
+**UTBUS phases (the documented unifier; folded from deleted SYNTHESIS_NEXT_STEPS.md).** UTBUS = Unified Typed Bottom-Up Structural Synthesizer: typed grammar `G[τ]` indexed by output type, bottom-up enumeration by AST size, observational-equivalence pruning, proof-carrying acceptance via the shared oracle. It exists to collapse the ~165 siloed teachers into one engine.
+- **Phase A** — typed core (type lattice + OE table + size-bounded enumerator + verify hook); re-derive `array_transform` + scalar leaf enumerator on it. Gate: parity with siloed engines on the 140-task benchmark. *(BUILT in `utbus.rs`; parity not yet proven.)*
+- **Phase B** — higher-order combinators `map/filter/fold/scan/zipWith` whose **λ-bodies are recursively synthesized by the same engine** on derived sub-examples. *This is where new programs appear.* Reuse `scalar_search.rs` for λ-bodies, `generalization.rs` as accept policy.
+- **Phase C** — cross-type: array→scalar via fold; string↔array via split/join; struct/tree (needs gap 4b). One engine spans every shape.
+- **Phase D** — learned cost model: order productions by prior solve success via `meta_learner`/`method_router`.
+- **Phase E** — release/benchmark harness.
+
+**Execution order (do in this sequence):** (1) gap 4 — open verification contract + real holdouts + anytime unbounded search (the literal ceiling removal, everything compounds on it); (2) UTBUS Phase A parity gate; (3) merge gap 1 (real mining) + gap 3 (RSI grows the library) → the growth loop actually compounds; (4) UTBUS Phase B (gap 2, compositional reach); (5) Phase C cross-type; (6) recursion schemes / un-park `SoftUniversalProgram` for the loop lane; (7) Phase D + kill the `python3`/torch dependency in `differentiable.rs`/`prior_gen.rs` (Rust-only rule, §2.3). Each step REUSES the spine above — nothing greenfield.
+
 
 ## 0. Agent Start Protocol
 
