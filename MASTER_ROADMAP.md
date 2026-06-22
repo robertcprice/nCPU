@@ -534,6 +534,30 @@ search overfits when examples are few (min/modulo) — needs holdout-aware
 acceptance or example sufficiency checks; `[i64]->[i64]` map and string
 transduction are not yet synthesizable through the repair path.
 
+### 1.0.3 Branch-family probe + `min3` (2026-06-21 night)
+
+Added the genuinely-correct member of the comparison/branch family and, just as
+importantly, **documented two more overfits rather than shipping them**:
+
+| Shape | Probe (rich examples) | Decision |
+|-------|------------------------|----------|
+| `min3` 3-way minimum | `synth_gradient` → nested `min(min(a,b),c)`, correct | **added** (`nl_fixture_min3`, holdouts `smallest(10,5,20)=5` etc.) |
+| 2-var `min`/`max` from inline examples | `search_affine_threshold` returns `if a<=3 {a} else {b}` — the `3` is the **first example literal**; fits all 7 training points, fails holdout `min(5,100)` | **excluded** (solver-internal overfit) |
+| `clamp` to a range | `diff_gradient_failed` | **excluded** |
+
+**Key honest finding:** 2-variable `min`/`max` driven by *inline examples* overfit
+through `search_affine_threshold`, even with 7 diverse examples — it locks onto a
+constant threshold from the data. (The registry `max` op is unaffected: it routes
+to `search_max2_formula`, a correct template.) This is the clearest evidence that
+the **#1 generality lever is solver-internal overfit-resistance** — the
+affine/affine-threshold searchers must validate beyond the given examples (auto
+holdout sampling / hypothesis consensus / example-sufficiency relative to model
+DOF) before a fit is accepted. A boundary-level guard is insufficient because
+linear, threshold, and polynomial fits share method names yet have different true
+DOF. Tracked as the next deep slice.
+
+**Proof:** `cargo test --lib agent::synthesis_proposer` → **17/17**.
+
 ---
 ## 1. Product Definition
 

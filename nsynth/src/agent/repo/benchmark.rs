@@ -379,6 +379,7 @@ pub fn nl_fixture_wrong_stub(fixture_id: &str) -> Option<&'static str> {
         "nl_fixture_arrsum" => Some("pub fn total(xs: Vec<i64>) -> i64 { 0 }\n"),
         "nl_fixture_arrmax" => Some("pub fn biggest(xs: Vec<i64>) -> i64 { 0 }\n"),
         "nl_fixture_arrlen" => Some("pub fn howmany(xs: Vec<i64>) -> i64 { 0 }\n"),
+        "nl_fixture_min3" => Some("pub fn smallest(a: i64, b: i64, c: i64) -> i64 { a }\n"),
         _ => None,
     }
 }

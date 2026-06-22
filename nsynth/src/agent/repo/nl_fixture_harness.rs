@@ -282,6 +282,19 @@ mod tests {
     }
 }
 "#),
+        "nl_fixture_min3" => Ok(r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nl_fixture_min3() {
+        assert_eq!(smallest(10, 5, 20), 5);
+        assert_eq!(smallest(100, 2, 50), 2);
+        assert_eq!(smallest(7, 7, 3), 3);
+    }
+}
+"#),
         other => Err(format!("no test module for fixture {other}")),
     }
 }

@@ -1237,6 +1237,17 @@ mod tests {
     }
 
     #[test]
+    fn real_synthesis_repairs_min3_nested_branch() {
+        // 3-way minimum: synthesized as nested comparison branches (synth_gradient),
+        // not a constant-threshold overfit. Holdouts prove real min logic.
+        assert_real_synthesis_repairs(
+            "nl_fixture_min3",
+            "a function where smallest(3,7,5)=3 and smallest(9,2,8)=2 and smallest(1,4,1)=1 and smallest(5,5,2)=2 and smallest(-1,0,3)=-1 and smallest(8,8,8)=8 and smallest(4,1,9)=1",
+            "min3",
+        );
+    }
+
+    #[test]
     fn real_synthesis_repairs_unseen_inline_example_op() {
         // `triple` is NOT in any keyword table; the only way to repair it is to
         // actually synthesize x*3 from the inline examples in the issue. Proves
