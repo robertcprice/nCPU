@@ -4,8 +4,9 @@ use super::scalar_search::{
     cond_selection_on_mask, expr_matches_subset, expr_matches_target, extract_scalar_examples,
     mine_scalar_constants, render_scalar_expr, scalar_expr_complexity, scalar_search_context,
     score_single_branch_candidate, score_two_branch_candidate, simulate_unary_range_loop,
-    RangeAccumOp, RangeLoopCmp, RangeLoopTerm, ScalarBinOp, ScalarExpr,
+    ExprCandidate, RangeAccumOp, RangeLoopCmp, RangeLoopTerm, ScalarBinOp, ScalarExpr,
 };
+use super::generalization::{over_determined, problem_over_determined, scalar_probe_inputs};
 use super::search_codegen::{code_quadratic_search, verified_result};
 use super::signature::{scalar_param_names, scalar_params_decl};
 use super::*;
@@ -178,7 +179,19 @@ pub(super) fn search_piecewise_affine(problem: &Problem, fn_name: &str) -> Optio
         return None;
     }
     let segs = segment_affine(&pts)?;
-    if segs.len() < 2 || segs.len() > 6 || segs.iter().any(|s| s.points < 2) {
+    if segs.len() < 2 || segs.len() > 6 {
+        return None;
+    }
+    // OVERFIT GUARD (universal DOF-sufficiency): a single-argument affine tier
+    // has 2 parameters (slope + intercept). Require each tier to strictly over-
+    // determine its line (≥ 3 colinear points, not a 2-point square fit through
+    // which any line passes), and require the spec to over-determine the whole
+    // tiered model — `(#tiers − 1)` breakpoints plus `2 · #tiers` coefficients.
+    if segs.iter().any(|s| !over_determined(s.points, 2)) {
+        return None;
+    }
+    let model_params = segs.len().saturating_sub(1) + 2 * segs.len();
+    if !problem_over_determined(problem, model_params) {
         return None;
     }
     let bps = piecewise_breakpoints(&segs);
@@ -203,6 +216,67 @@ pub(super) fn search_scalar_expr(problem: &Problem, fn_name: &str) -> Option<Sol
         .collect();
 
     let constants = mine_scalar_constants(&examples, &target);
+
+    // OVERFIT GUARD (universal hypothesis disagreement, approach 1): the open-
+    // ended expression search has no fixed parameter count, so the affine family's
+    // DOF gate does not apply. Instead we detect underdetermination directly — if
+    // a SECOND, equally-parsimonious expression reproduces every example yet
+    // disagrees with the chosen one on a fresh in-domain input, the spec does not
+    // pin the answer down and we decline. Two expressions that agree on every
+    // example but differ on a probe must survive as DISTINCT candidates, and the
+    // candidate pool dedupes by behaviour — so the pool is built ONCE over the
+    // examples EXTENDED with deterministic probe inputs (the probe columns make
+    // those rivals behaviourally distinct). This single enumeration both selects
+    // the program and powers the disagreement check. Applied to single-argument
+    // expressions; multi-argument expression overfits are caught upstream by the
+    // affine family's DOF gate and the composed-feature relevance/consensus guard.
+    if arity == 1 {
+        let probes = scalar_probe_inputs(&examples);
+        let n = examples.len();
+        let mut combined: Vec<Vec<i64>> = examples.clone();
+        combined.extend(probes.iter().cloned());
+        let mut candidates = build_deep_expr_candidates(arity, &combined, &constants);
+        candidates.sort_by_key(|c| {
+            (
+                scalar_expr_complexity(&c.expr),
+                render_scalar_expr(&c.expr, &param_names),
+            )
+        });
+        let fits_examples = |c: &ExprCandidate| {
+            c.outputs
+                .iter()
+                .take(n)
+                .zip(target.iter())
+                .all(|(out, t)| *out == Some(*t))
+        };
+        let chosen = candidates.iter().find(|c| fits_examples(c))?;
+        if !probes.is_empty() {
+            let chosen_complexity = scalar_expr_complexity(&chosen.expr);
+            let chosen_probe: Vec<Option<i64>> = (0..probes.len())
+                .map(|i| chosen.outputs.get(n + i).copied().flatten())
+                .collect();
+            for c in &candidates {
+                // Only an equally- (or more-) parsimonious program is a genuine
+                // rival: Occam already prefers the simpler chosen form, so a more
+                // complex program disagreeing downstream is expected and must not
+                // veto a well-determined answer like `3*x`.
+                if scalar_expr_complexity(&c.expr) > chosen_complexity || !fits_examples(c) {
+                    continue;
+                }
+                for (i, want) in chosen_probe.iter().enumerate() {
+                    let got = c.outputs.get(n + i).copied().flatten();
+                    if let (Some(a), Some(b)) = (want, got) {
+                        if *a != b {
+                            return None; // ambiguous in-domain ⇒ decline
+                        }
+                    }
+                }
+            }
+        }
+        let code = code_scalar_return_expr(fn_name, &param_names, &chosen.expr);
+        return verified_result(problem, code, "search_scalar_expr");
+    }
+
     let mut candidates = build_deep_expr_candidates(arity, &examples, &constants);
     candidates.sort_by_key(|c| {
         (
@@ -210,7 +284,6 @@ pub(super) fn search_scalar_expr(problem: &Problem, fn_name: &str) -> Option<Sol
             render_scalar_expr(&c.expr, &param_names),
         )
     });
-
     let candidate = candidates
         .iter()
         .find(|c| expr_matches_target(&c.outputs, &target))?;

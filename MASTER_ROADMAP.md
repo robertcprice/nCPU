@@ -629,6 +629,105 @@ CARGO_INCREMENTAL=0 cargo test --lib linguigenesis_bridge -- --test-threads=1   
 ```
 
 ---
+
+### 1.0.5 Solver-internal overfit-resistance — the #1 generality lever (2026-06-22)
+
+**Closes the open issue from §1.0.3 / §1.0.4:** the exact-fit search families
+returned *wrong-but-passing* programs whenever the inline examples
+under-determined the function. For an inline-NL `Problem` the holdout list is
+empty, so any candidate that merely *fits* the supplied points passes
+`verified_result`. Verified failure shapes:
+
+- `min(a,b)` from 3 examples → `search_affine` solves the 3×3 system `-6a-7b+70`.
+- `min(a,b)` from 7 examples → `search_affine_threshold` emits `if a<=3 {a} else {b}`
+  (the `3` copied from the first example); fits all 7, fails `min(5,100)`.
+- `min(a,b)` from 7 examples → `search_composed_features` emits
+  `(b%7) + (-2*(b/10))` — an integer combination that **ignores `a`**.
+- `n % k` from 3 examples → `search_scalar_expr` emits `a/9`.
+
+**Approach chosen — two universal, oracle-free guards (no per-op logic):**
+
+1. **DOF-sufficiency gate (approach 2), example-only.** Every exact-fit family
+   knows the parameter count of the model it fit (affine over *k* vars = `k+1`;
+   single-breakpoint threshold = `1 + 2(k+1)`; separable degree-2 = `1 + 2k`;
+   piecewise = `(tiers-1) + tiers·(k+1)`). A fit is accepted only when the
+   **examples strictly over-determine** it (`#examples ≥ params + 1`). A square
+   (`#points == params`) system fits *any* target and proves nothing. The gate
+   counts **examples only, never holdouts** — holdouts are the evaluation oracle
+   and search must stay invariant to them (`search_output_is_invariant_to_evaluation_oracles`).
+   Wired into `search_affine`, `search_affine_threshold`, `search_polynomial_multi`,
+   `search_affine_piecewise`, `search_clamp_affine`, and the 1-arg
+   `search_piecewise_affine`.
+2. **Hypothesis-disagreement / consensus (approach 1) for the open-ended searches**
+   where "free parameters" is not a fixed count:
+   - `search_scalar_expr` (1-arg): if a second expression that is **equally or
+     more parsimonious** (`scalar_expr_complexity ≤` the chosen) reproduces every
+     example yet disagrees on a deterministic in-domain probe, the spec is
+     ambiguous and the engine declines. The parsimony bound is essential — a
+     strictly more complex disagreer is expected under Occam and must not veto.
+   - `search_composed_features`: the feature basis is rich, so the *choice* of
+     `k` features out of it is extra, unmeasured search freedom on top of the
+     `k+1` fitted coefficients — a bare margin-1 system fits by coincidence
+     (feature-selection overfitting). Two guards: (i) **double over-determination**,
+     a `k`-feature subset is fit only when `#examples ≥ 2(k+1)`, which refuses a
+     thin high-feature fit (the 7-point `min` was a spurious 3-feature combination,
+     `2·4 = 8 > 7`) while genuine composed rules — which arrive with plenty of
+     examples — still land; (ii) a **relevance prior** — a multi-argument composed
+     rule must reference *every* argument (the `min` overfit dropped `a`). A pure
+     same-tier consensus probe was prototyped here but **removed**: a correct cross-
+     term rule (`a·b + 2a + 3`) can have an equally-small coincidental rival on the
+     sample, so consensus produced false declines; the DOF margin is the robust gate.
+
+   Probes are generated deterministically (FNV-1a–seeded LCG over the example
+   values, plus structural edges `0,±1,lo,hi,lo-1,hi+1`) in
+   `solver/generalization.rs::scalar_probe_inputs`, so detection is reproducible
+   across runs/machines and never consults an external oracle.
+
+**Why it's universal (not per-operation):** neither guard knows what `min`,
+`max`, or `modulo` *are*. The DOF gate is pure counting against each family's own
+parameter arity; the disagreement gate is pure self-consistency of the grammar
+under fresh inputs. Both improve generalization for *arbitrary* tasks.
+
+**Before → after (evidence):**
+
+| Spec | Before | After |
+|------|--------|-------|
+| 3-point `min(a,b)` | `search_affine` returns `-6a-7b+70` | declined (square system) |
+| 7-point `min(a,b)` | `search_affine_threshold` → `if a<=3 …`; `search_composed_features` → `(b%7)-2*(b/10)` | declined (DOF + relevance + `2(k+1)` margin); `solve_multi_arg_affine` returns `None` |
+| sparse `n%k` | `search_scalar_expr` → `a/9` | declines or returns the *correct* `x%5` (consensus) |
+| well-determined `a+b+c` (6 ex), `3*x` (6 ex), `a·b+2a+3` (10 ex), `3(x%7)+1` (14 ex) | solved | **still solved** (gates are not over-eager) |
+
+**Remaining gaps:** (a) `search_minmax_affine` needs `≥ 2(arity+2)` examples, so
+2-var `min`/`max` is only *recovered* (vs. declined) when enough diverse points
+are given — fewer points correctly decline. (b) The `search_scalar_expr` consensus
+probe pool is bounded to arity = 1; composed features cover arity ≤ 3 via the DOF
+margin. (c) Four solver tests are **red on `widen-nl-front-door` independent of
+this work** — `search_output_is_invariant_to_evaluation_oracles`,
+`recovery::tests::test_recovery_plan_max_attempts`, `solve_problem_handles_string_output`,
+and `string_benchmark_full_coverage` (the last two from the in-progress string-output
+widening; `reverse_str` is not yet synthesized). **Verified pre-existing by stashing
+only the overfit files and rebuilding: all four fail identically on the baseline.**
+None are introduced by this work.
+
+**Verification**
+
+```bash
+cd ncpu/nsynth
+CARGO_INCREMENTAL=0 cargo test --lib solver -- --test-threads=1
+CARGO_INCREMENTAL=0 cargo test --lib agent::synthesis_proposer -- --test-threads=1
+CARGO_INCREMENTAL=0 cargo test --lib agent::repo -- --test-threads=1
+# New focused tests: affine_declines_underdetermined_three_point_min,
+# affine_threshold_declines_underdetermined_min, affine_family_declines_or_generalizes_on_min,
+# affine_solves_well_determined_sum3, scalar_expr_declines_or_generalizes_on_sparse_modulo,
+# scalar_expr_solves_well_determined_triple, composed_recovers_cross_term
+```
+
+**Results (2026-06-22):** `solver` 330 passed / 4 failed (all 4 pre-existing on the
+branch, see gap (c)); `agent::synthesis_proposer` + `agent::repo` 63 passed / 0 failed.
+All new focused overfit tests pass; the full benchmark coverage tests
+(`search_only_solves_full_benchmark`) remain green — the gates are not over-eager.
+
+---
 ## 1. Product Definition
 
 The finished product accepts a natural-language software request, determines what the user means, inspects a real repository, plans bounded work, edits files transactionally, invokes real tools, verifies the result, learns only from verified evidence, and returns an auditable answer.

@@ -283,7 +283,7 @@ pub(super) fn score_two_branch_candidate(
     )
 }
 
-fn eval_scalar_expr(expr: &ScalarExpr, args: &[i64]) -> Option<i64> {
+pub(super) fn eval_scalar_expr(expr: &ScalarExpr, args: &[i64]) -> Option<i64> {
     match expr {
         ScalarExpr::Var(index) => args.get(*index).copied(),
         ScalarExpr::Const(value) => Some(*value),
@@ -1300,5 +1300,41 @@ mod probe_tests {
             piecewise.is_none(),
             "piecewise must not accept cube training without holdout generalization"
         );
+    }
+
+    // OVERFIT RESISTANCE (hypothesis disagreement): a sparse 3-point modulo spec
+    // is underdetermined — several distinct expressions fit the 3 points yet
+    // disagree elsewhere (this is the `n % k → a / 9` overfit class). The
+    // disagreement guard must make search_scalar_expr DECLINE, or — if it does
+    // return something — that program must generalize to unseen points. Never a
+    // wrong-but-passing fit.
+    #[test]
+    fn scalar_expr_declines_or_generalizes_on_sparse_modulo() {
+        let f = |n: i64| n.rem_euclid(5);
+        let rows: Vec<(i64, i64)> = [0i64, 7, 13].iter().map(|&n| (n, f(n))).collect();
+        let p = scalar_problem("f", &rows);
+        match super::search_scalar_families::search_scalar_expr(&p, "f") {
+            None => {}
+            Some(r) => {
+                let check = scalar_problem("f", &[(5, f(5)), (11, f(11)), (24, f(24)), (100, f(100))]);
+                crate::runtime::verify_problem_code_strict(&check, &r.code)
+                    .expect("a returned modulo program must generalize to unseen points");
+            }
+        }
+    }
+
+    // The disagreement guard is not over-eager: a well-determined single-argument
+    // linear rule `3x` with several diverse examples is still recovered by
+    // search_scalar_expr and generalizes to unseen points.
+    #[test]
+    fn scalar_expr_solves_well_determined_triple() {
+        let f = |x: i64| 3 * x;
+        let rows: Vec<(i64, i64)> = [0i64, 1, 2, 3, 5, 8].iter().map(|&x| (x, f(x))).collect();
+        let p = scalar_problem("f", &rows);
+        let r = super::search_scalar_families::search_scalar_expr(&p, "f")
+            .expect("well-determined triple must still solve");
+        let check = scalar_problem("f", &[(13, f(13)), (40, f(40)), (100, f(100))]);
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("triple must be exact on unseen points");
     }
 }

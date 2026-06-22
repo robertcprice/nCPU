@@ -12,6 +12,7 @@
 //! Both are exact (the candidate is always verified against every example before
 //! it is returned), so they generalize by construction rather than by fitting.
 
+use super::generalization::{over_determined, problem_over_determined};
 use super::scalar_search::{render_scalar_expr, ScalarBinOp, ScalarExpr};
 use super::search_codegen::verified_result;
 use super::signature::{scalar_param_names, scalar_params_decl};
@@ -156,6 +157,14 @@ fn affine_expr(coeffs: &[i64]) -> ScalarExpr {
 
 pub(super) fn search_affine(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let (examples, targets, arity) = multi_arg_examples(problem)?;
+    // OVERFIT GUARD (universal DOF-sufficiency): an affine over `arity` inputs
+    // has `arity + 1` free parameters; an exactly-determined system through that
+    // many points fits ANY target, so refuse unless the spec strictly over-
+    // determines it (examples + holdouts > params). This is what turns the
+    // 3-point `min(a,b)` overfit `(-6a)+(-7b)+70` into an honest decline.
+    if !problem_over_determined(problem, arity + 1) {
+        return None;
+    }
     let coeffs = solve_affine(&examples, &targets, arity)?;
     let param_names = scalar_param_names(arity);
     let params = scalar_params_decl(&param_names);
@@ -248,6 +257,13 @@ pub(super) fn search_polynomial_multi(problem: &Problem, fn_name: &str) -> Optio
     }
     let m = 1 + 2 * arity;
     if examples.len() < m {
+        return None;
+    }
+    // OVERFIT GUARD (universal DOF-sufficiency): the separable degree-2 model
+    // has `m = 1 + 2·arity` free parameters; require the spec to strictly over-
+    // determine it (examples + holdouts > m), so a square monomial fit through
+    // exactly `m` points — which interpolates any target — is refused.
+    if !problem_over_determined(problem, m) {
         return None;
     }
     // Feature rows phi = [1, x_1, x_1², …, x_n, x_n²]. x² is computed in i128 so
@@ -409,6 +425,34 @@ fn compose_features(examples: &[Vec<i64>], arity: usize) -> Vec<Feature> {
 /// `c0` plus the chosen features → the expression `c0 + Σ c_k·feature_k`,
 /// dropping zero coefficients and rendering `1·feature` as the feature itself.
 /// Reuses `affine_expr`'s constant rule.
+/// True iff `expr` references EVERY argument index `0..arity`. A composed-feature
+/// rule for a multi-argument problem that silently drops an input is almost
+/// always feature-selection overfitting: it reproduced the examples using a
+/// proper subset of the inputs by coincidence (the `min(a, b)` fit
+/// `(b % 7) + (-2·(b / 10))` ignored `a` entirely and so failed `min(5, 100)`).
+/// A rule that truly ignores an argument is, by definition, lower-arity and is
+/// recovered by the single-argument search instead — so requiring full argument
+/// coverage here is a universal relevance prior, not a per-operation rule.
+fn expr_uses_all_args(expr: &ScalarExpr, arity: usize) -> bool {
+    fn walk(e: &ScalarExpr, seen: &mut [bool]) {
+        match e {
+            ScalarExpr::Var(i) => {
+                if let Some(slot) = seen.get_mut(*i) {
+                    *slot = true;
+                }
+            }
+            ScalarExpr::Const(_) => {}
+            ScalarExpr::Bin(lhs, _, rhs) => {
+                walk(lhs, seen);
+                walk(rhs, seen);
+            }
+        }
+    }
+    let mut seen = vec![false; arity];
+    walk(expr, &mut seen);
+    seen.iter().all(|&s| s)
+}
+
 fn composed_expr(c0: i64, picks: &[(&Feature, i64)]) -> ScalarExpr {
     let mut terms: Vec<ScalarExpr> = Vec::new();
     for &(feat, c) in picks {
@@ -559,8 +603,9 @@ fn recover_body(
 ///     which is the one that generalises. A 3-feature fit is only reached when
 ///     nothing simpler is exact.
 ///   * OVER-DETERMINED: a k-feature fit is attempted only when there are at
-///     least `k + 1 + MARGIN` examples, so the system is never square (which
-///     would fit anything).
+///     least `2·(k + 1)` examples — double over-determination, because choosing
+///     the k features from a rich basis is extra search freedom on top of the
+///     k+1 coefficients, and a square (or barely-over) system fits anything.
 ///   * EXACT INTEGER + FULL VERIFY: `solve_linear_features` rounds to integers
 ///     and rejects non-integral solutions; `composed_predicts` then requires the
 ///     fit to reproduce EVERY example before it is even rendered; finally
@@ -569,7 +614,6 @@ fn recover_body(
 ///     `search_affine` (it runs first); composition only claims genuinely
 ///     nonlinear/derived rules.
 pub(super) fn search_composed_features(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
-    const MARGIN: usize = 2;
     let examples = super::scalar_search::extract_scalar_examples(problem)?;
     let arity = examples.first()?.len();
     if !(1..=3).contains(&arity) || examples.iter().any(|row| row.len() != arity) {
@@ -595,11 +639,20 @@ pub(super) fn search_composed_features(problem: &Problem, fn_name: &str) -> Opti
     // not a raw variable — pure-affine combinations belong to search_affine.
     let is_raw = |f: &Feature| matches!(f.expr, ScalarExpr::Var(_));
 
-    // Solve for [c0, c_1, …, c_k] over the chosen feature columns and, if it is
-    // an exact integer fit reproducing every example, render + verify it.
+    // Try a feature subset: solve for [c0, c_1, …, c_k] over the chosen feature
+    // columns and, if it is an exact integer fit reproducing every example that
+    // also clears the over-determination and relevance guards, render + verify it.
     let try_subset = |idxs: &[usize]| -> Option<SolveResult> {
         let k = idxs.len();
-        if n < k + 1 + MARGIN {
+        // OVERFIT GUARD (degrees of freedom). A k-feature fit has k+1 free
+        // coefficients, but the *choice* of those k features from a rich basis is
+        // additional, unmeasured search freedom — so a bare margin-1 over-
+        // determination proves little (a 7-point `min(a, b)` was reproduced by a
+        // spurious 3-feature integer combination `b - 2·(b/10) + 7·(a/6) - 7`).
+        // Require DOUBLE over-determination, `n >= 2·(k+1)`: a coincidental high-
+        // feature fit on thin data is refused, while genuine composed rules (which
+        // arrive with plenty of examples) still land.
+        if n < 2 * (k + 1) {
             return None;
         }
         if idxs.iter().all(|&fi| is_raw(&feats[fi])) {
@@ -625,7 +678,16 @@ pub(super) fn search_composed_features(problem: &Problem, fn_name: &str) -> Opti
         if !composed_predicts(w[0], &picks, &targets) {
             return None;
         }
-        let body = render_scalar_expr(&composed_expr(w[0], &picks), &param_names);
+        let expr = composed_expr(w[0], &picks);
+        // Relevance prior: a multi-argument composed rule must depend on EVERY
+        // argument. One that silently drops an input reproduced the examples by
+        // that input's omission (the `min` overfit `(b%7) - 2·(b/10)` ignored `a`)
+        // and does not generalize; a rule that truly ignores an argument is lower-
+        // arity and is recovered by the single-argument search instead.
+        if arity >= 2 && !expr_uses_all_args(&expr, arity) {
+            return None;
+        }
+        let body = render_scalar_expr(&expr, &param_names);
         let code = format!("fn {fn_name}({params}) -> i64 {{\n    return {body};\n}}\n");
         verified_result(problem, code, "search_composed_features")
     };
@@ -725,7 +787,11 @@ pub(super) fn search_clamp_affine(problem: &Problem, fn_name: &str) -> Option<So
                 ys.push(t);
             }
         }
-        if xs.len() < m {
+        // OVERFIT GUARD: the inner affine has `m = arity + 1` parameters; the
+        // band interior must strictly over-determine it (> m points), not merely
+        // fill a square system — otherwise the recovered line is an interpolation
+        // of the interior samples, not a generalizing fit.
+        if !over_determined(xs.len(), m) {
             return None;
         }
         let coeffs = solve_affine(&xs, &ys, arity)?;
@@ -783,6 +849,16 @@ pub(super) fn search_clamp_affine(problem: &Problem, fn_name: &str) -> Option<So
 
 pub(super) fn search_affine_threshold(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let (examples, targets, arity) = multi_arg_examples(problem)?;
+    // OVERFIT GUARD (universal DOF-sufficiency): a single-breakpoint two-piece
+    // rule has `1 + 2·(arity + 1)` free parameters (the threshold plus an affine
+    // on each side). Unless the spec strictly over-determines that whole model,
+    // the breakpoint is a coincidental cut through too-few points — which is
+    // precisely how `min(a,b)` overfit to `if a <= 3 { a } else { b }`. Refusing
+    // here makes that case decline (or fall through to the value-envelope solver
+    // when there are enough diverse examples to recover the true `min`).
+    if !problem_over_determined(problem, 1 + 2 * (arity + 1)) {
+        return None;
+    }
     let param_names = scalar_param_names(arity);
     let params = scalar_params_decl(&param_names);
     // Try each argument as the thresholded one, against every distinct value it
@@ -806,7 +882,10 @@ pub(super) fn search_affine_threshold(problem: &Problem, fn_name: &str) -> Optio
                     hi_y.push(t);
                 }
             }
-            if lo_x.len() < arity + 1 || hi_x.len() < arity + 1 {
+            // Each side's affine has `arity + 1` parameters; require each side to
+            // strictly over-determine its piece (not merely fill a square system),
+            // so neither half is a free interpolation of its own samples.
+            if !over_determined(lo_x.len(), arity + 1) || !over_determined(hi_x.len(), arity + 1) {
                 continue;
             }
             let Some(lo) = solve_affine(&lo_x, &lo_y, arity) else {
@@ -906,7 +985,20 @@ pub(super) fn search_affine_piecewise(problem: &Problem, fn_name: &str) -> Optio
         let Some(segs) = segment_multiarg(&sorted, arity, ti) else {
             continue;
         };
-        if !(2..=5).contains(&segs.len()) || segs.iter().any(|s| s.points < arity + 1) {
+        if !(2..=5).contains(&segs.len()) {
+            continue;
+        }
+        // OVERFIT GUARD (universal DOF-sufficiency): every tier's affine has
+        // `arity + 1` parameters, so require each tier to strictly over-determine
+        // its piece (> arity + 1 points, not a square fit), AND require the spec
+        // to over-determine the whole tiered model — `(#tiers − 1)` breakpoints
+        // plus `#tiers · (arity + 1)` affine coefficients. A tier resting on
+        // exactly its parameter count is an interpolation, not a recovered tier.
+        if segs.iter().any(|s| !over_determined(s.points, arity + 1)) {
+            continue;
+        }
+        let model_params = (segs.len() - 1) + segs.len() * (arity + 1);
+        if !problem_over_determined(problem, model_params) {
             continue;
         }
         // Place each breakpoint at the value of `ti` where the two adjoining
@@ -2169,6 +2261,132 @@ mod tests {
             search_composed_features(&p, "f").is_none(),
             "composition must refuse data with no exact feature explanation"
         );
+    }
+
+    // OVERFIT RESISTANCE: a 3-point `min(a,b)` spec under-determines the affine
+    // model (3 unknowns through 3 points = a square system that fits ANY target),
+    // so search_affine must DECLINE rather than emit the exact-but-wrong fit
+    // `(-6a)+(-7b)+70` it used to return. This is the universal DOF-sufficiency
+    // gate at work — no `min`-specific logic.
+    #[test]
+    fn affine_declines_underdetermined_three_point_min() {
+        let f = |a: i64, b: i64| a.min(b);
+        let rows: Vec<((i64, i64), i64)> = [(2, 5), (8, 3), (4, 4)]
+            .iter()
+            .map(|&(a, b)| ((a, b), f(a, b)))
+            .collect();
+        let p = p2(&rows);
+        assert!(
+            search_affine(&p, "f").is_none(),
+            "a 3-point (square) affine fit is underdetermined and must be declined"
+        );
+    }
+
+    // OVERFIT RESISTANCE: a 7-point `min(a,b)` spec does not over-determine the
+    // single-breakpoint two-piece model (1 + 2·3 = 7 parameters), so
+    // search_affine_threshold must DECLINE rather than emit the overfit
+    // `if a <= 3 { a } else { b }` (the `3` copied from the first example) it used
+    // to return — which failed the holdout `min(5,100)`.
+    #[test]
+    fn affine_threshold_declines_underdetermined_min() {
+        let f = |a: i64, b: i64| a.min(b);
+        let rows: Vec<((i64, i64), i64)> = [
+            (2, 9),
+            (7, 3),
+            (1, 8),
+            (10, 4),
+            (6, 6),
+            (3, 12),
+            (9, 2),
+        ]
+        .iter()
+        .map(|&(a, b)| ((a, b), f(a, b)))
+        .collect();
+        let p = p2(&rows);
+        assert!(
+            search_affine_threshold(&p, "f").is_none(),
+            "a 7-point min spec under-determines the threshold model and must be declined"
+        );
+    }
+
+    // OVERFIT RESISTANCE (end-to-end through the affine router): whatever the
+    // affine family returns for an underdetermined `min(a,b)` spec, it must be
+    // correct on UNSEEN points — never a wrong-but-passing fit. Declining (None)
+    // is the acceptable honest outcome; returning a program that fails
+    // `min(5,100)` is not.
+    #[test]
+    fn affine_family_declines_or_generalizes_on_min() {
+        let f = |a: i64, b: i64| a.min(b);
+        let raw = [(2, 9), (7, 3), (1, 8), (10, 4), (6, 6), (3, 12), (9, 2)];
+        let rows: Vec<((i64, i64), i64)> = raw.iter().map(|&(a, b)| ((a, b), f(a, b))).collect();
+        let p = p2(&rows);
+        match super::super::search::solve_multi_arg_affine(&p) {
+            None => {}
+            Some(r) => {
+                let check = p2(&[
+                    ((5, 100), f(5, 100)),
+                    ((100, 5), f(100, 5)),
+                    ((50, 3), f(50, 3)),
+                    ((0, 7), f(0, 7)),
+                ]);
+                crate::runtime::verify_problem_code_strict(&check, &r.code).unwrap_or_else(|e| {
+                    panic!(
+                        "a returned min program must generalize, not overfit (method={}, code={:?}): {}",
+                        r.method, r.code, e
+                    )
+                });
+            }
+        }
+    }
+
+    // The DOF gate is not over-eager: a genuinely well-determined 3-argument
+    // affine `a + b + c` with more examples than parameters (4 unknowns, 6
+    // points) is still recovered exactly and generalizes to unseen points.
+    #[test]
+    fn affine_solves_well_determined_sum3() {
+        let f = |a: i64, b: i64, c: i64| a + b + c;
+        let raw = [
+            (0, 0, 0),
+            (1, 2, 3),
+            (5, 0, 1),
+            (2, 7, 4),
+            (10, 3, 8),
+            (4, 4, 9),
+        ];
+        let p = Problem {
+            name: "sum3".to_string(),
+            category: "external",
+            description: "",
+            signature: "fn f(a: i64, b: i64, c: i64) -> i64",
+            examples: raw
+                .iter()
+                .map(|&(a, b, c)| Example {
+                    inputs: vec![Value::Int(a), Value::Int(b), Value::Int(c)],
+                    expected: Value::Int(f(a, b, c)),
+                })
+                .collect(),
+            holdouts: vec![],
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        };
+        let r = search_affine(&p, "f").expect("well-determined sum3 must still solve");
+        let check = Problem {
+            examples: [(13, 4, 9), (99, 50, 7), (1, 1, 1)]
+                .iter()
+                .map(|&(a, b, c)| Example {
+                    inputs: vec![Value::Int(a), Value::Int(b), Value::Int(c)],
+                    expected: Value::Int(f(a, b, c)),
+                })
+                .collect(),
+            ..p.clone()
+        };
+        crate::runtime::verify_problem_code_strict(&check, &r.code)
+            .expect("sum3 must be exact on unseen points");
     }
 
     // A pure-linear single-argument rule `3x + 1` (all quadratic coeffs zero) is

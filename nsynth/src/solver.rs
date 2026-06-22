@@ -8,6 +8,7 @@ use crate::method_router;
 mod analogy;
 mod benchmarking;
 mod experience_advisor;
+mod generalization;
 mod helpers;
 mod hierarchical;
 mod legacy_fallback;
