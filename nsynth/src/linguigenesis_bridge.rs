@@ -13,6 +13,7 @@ use linguigenesis_core::{
     },
     coding_requirements::{LiteralValue, SynthesisRequirement},
     comprehension::Comprehension,
+    entity_resolution::EntityResolver,
     computing_knowledge_import::merge_computing_knowledge,
     reasoning::{AnalogyReasoner, KnowledgeQA},
     registry::Registry,
@@ -278,6 +279,19 @@ impl LinguigenesisBridge {
                 });
             }
         }
+        // SOUNDNESS GATE (P0-NL fail-closed): a registry NL match whose only
+        // evidence is the op's canned example(s) must NOT be reported as a
+        // confident solve when STRUCTURAL signals show the request was not
+        // actually understood. All signals are computed from `req` + the raw
+        // request — no phrase blocklist, no request->refuse map.
+        if let Some(reason) = unsound_confident_solve(input, &req, coding.registry()) {
+            let mut partial = req;
+            // Reuse the existing "no operation" clarification path so the
+            // downgrade flows through build_clarifications unchanged.
+            partial.unresolved.push(reason);
+            let questions = build_clarifications(&partial, coding.registry());
+            return Err(BridgeError::ClarificationNeeded { partial, questions });
+        }
         Ok(req)
     }
 
@@ -438,6 +452,137 @@ pub struct BridgeBeliefState {
     pub confidence: f64,
 }
 
+/// Structural soundness gate for a *registry-derived* confident match.
+///
+/// Returns `Some(reason)` (a marker pushed into `unresolved`, NOT a user-facing
+/// blocklist string) when the requirement should be DOWNGRADED to
+/// ClarificationNeeded instead of declared solved. Every signal is computed from
+/// the parse the bridge already holds — never a hardcoded bad-phrase list:
+///
+///   1. **Discrimination floor** — registry NL matches carry no reference impl,
+///      so the only generalization evidence is the canned `example_cases`. Fewer
+///      than two examples cannot discriminate the intended function from
+///      alternatives (e.g. one (`[1,2,3]->[3,2,1]`) pair is consistent with
+///      reverse, rotate, sort-desc, ...). Require >=2.
+///   2. **Request/signature TYPE mismatch** — the request names a value type
+///      (string / array / list) absent from the resolved op's signature
+///      (e.g. "reverse a STRING" resolving to `fn reverse(a: Vec<i64>)`).
+///   3. **Operation not named by the request** — none of the request's content
+///      words corresponds to the resolved op's identity (function name /
+///      description / category). The op was guessed from leftover tokens while
+///      the actual content words ("parse", "csv", "file") were dropped.
+///
+/// Inline-example requests (the user supplied their own I/O) are exempt: their
+/// evidence is the demonstrated behaviour, not a registry guess. We detect that
+/// the same way the comprehension layer does — a non-generic function name with
+/// the user's own examples is treated as user-specified.
+fn unsound_confident_solve(
+    input: &str,
+    req: &SynthesisRequirement,
+    registry: &Registry,
+) -> Option<String> {
+    use linguigenesis_core::nl_tokens::tokenize_lower;
+
+    // Inline-example requests carry the user's OWN demonstrated I/O pairs as the
+    // spec (registry comprehension is bypassed by `apply_inline_examples`), so
+    // there is no registry-misresolution to guard against — exempt them. Detected
+    // structurally with the SAME parser the comprehension uses, not a phrase
+    // heuristic. (The separate "is a single-canned-example registry op actually
+    // proven against FRESH holdouts?" concern is P2's job, deliberately NOT folded
+    // in here — this gate only catches confident-WRONG resolution.)
+    if !linguigenesis_core::inline_examples::parse_inline_examples(input).is_empty() {
+        return None;
+    }
+
+    let req_tokens: Vec<String> = tokenize_lower(input);
+    let sig_lower = req.signature.to_lowercase();
+
+    // (2) Request value-type vs resolved-signature value-type mismatch.
+    // Map each request type-noun to the signature fragment that must be present.
+    let type_mentions: &[(&[&str], &[&str])] = &[
+        // request says "string"/"text"/"char" -> sig must carry a string type
+        (&["string", "char", "text"], &["string", "str", "&str"]),
+        // request says "array"/"list"/"vector" -> sig must carry an array/vec type
+        (&["array", "list", "vector", "arrays", "lists"], &["[", "vec<"]),
+    ];
+    for (request_words, sig_needles) in type_mentions {
+        let mentioned = req_tokens.iter().any(|t| request_words.contains(&t.as_str()));
+        if mentioned {
+            let satisfied = sig_needles.iter().any(|n| sig_lower.contains(n));
+            if !satisfied {
+                return Some(format!(
+                    "no operation confidently resolved: request mentions a '{}' value but \
+                     resolved op '{}' has signature '{}' (type mismatch)",
+                    request_words[0], req.function_name, req.signature
+                ));
+            }
+        }
+    }
+
+    // (3) Operation identity, via the RESOLVER (handles synonyms + morphology the
+    // same way comprehension did — e.g. "absolute"->abs, "maximum"->array_max,
+    // "combine"->add). For each request content word that resolves to an
+    // operation: if it resolves to the SAME op the request was assigned, the op
+    // was genuinely named; if it resolves to a DIFFERENT op, that op was silently
+    // dropped (a compositional request like "sum of squares" -> array_sum dropping
+    // "squares"->square) and we fail closed. If NO content word names the resolved
+    // op, it was not actually understood. All registry-driven — no phrase list,
+    // and `req.description` (the request echoed back) is deliberately NOT used as
+    // op identity. Generic operand/value words are filtered first; they resolve to
+    // no operation. Inline requests already returned above.
+    const VALUE_NOUNS: &[&str] = &[
+        "number", "numbers", "integer", "integers", "value", "values", "int",
+        "ints", "array", "arrays", "list", "lists", "string", "strings", "char",
+        "chars", "text", "element", "elements", "item", "items", "two", "three",
+        "a", "an", "the", "of", "to", "from", "in", "on", "and", "or",
+    ];
+    let content_words: Vec<&String> = req_tokens
+        .iter()
+        .filter(|t| !VALUE_NOUNS.contains(&t.as_str()))
+        .collect();
+    if !content_words.is_empty() {
+        let resolver = EntityResolver::new(registry.clone());
+        let mut names_resolved_op = false;
+        for word in &content_words {
+            if let Some(resolved) = resolver.resolve_operation_surface(word) {
+                // Only HIGH-CONFIDENCE resolution methods count as genuinely naming
+                // an operation. Coincidental fuzzy-edit-distance ("file" ~ "filter")
+                // and definition-overlap matches are exactly HOW the request got
+                // MIS-resolved in the first place, so they must NOT be treated as
+                // evidence the op was understood. direct/morphology/synonym/relation
+                // are genuine; fuzzy_lemma/definition_overlap are not.
+                let m = resolved.evidence.method;
+                if m == "fuzzy_lemma" || m == "definition_overlap" {
+                    continue;
+                }
+                let fname = resolved
+                    .entity
+                    .get_property("default_fn_name")
+                    .cloned()
+                    .unwrap_or_else(|| resolved.entity.lemma.clone());
+                if fname == req.function_name {
+                    names_resolved_op = true;
+                } else {
+                    return Some(format!(
+                        "request also names operation '{}' (resolves to '{}'), dropped in favor \
+                         of '{}' — compositional request not yet supported",
+                        word, fname, req.function_name
+                    ));
+                }
+            }
+        }
+        if !names_resolved_op {
+            return Some(format!(
+                "no operation confidently resolved: request content words {:?} do not name the \
+                 resolved op '{}'",
+                content_words, req.function_name
+            ));
+        }
+    }
+
+    None
+}
+
 fn synthesis_requirement_to_examples(
     req: &SynthesisRequirement,
 ) -> Result<Vec<Example>, BridgeError> {
@@ -527,6 +672,65 @@ fn param_names(idx: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P0-NL ACCEPT (fail-closed): requests that the registry SILENTLY
+    /// MIS-RESOLVES (returned a confident-wrong, strict-"verified" WRONG program
+    /// before this gate) must now be REFUSED via ClarificationNeeded — caught by
+    /// the STRUCTURAL signals (type-mismatch / operation-not-named), never a
+    /// phrase blocklist. A confidently-wrong coding agent is worse than one that
+    /// asks. Empirically these resolved to: sum-of-squares->add (array vs scalar
+    /// sig + content words don't name 'add'), reverse-a-string->reverse(Vec)
+    /// (string vs Vec sig), parse-a-CSV->filter (content words don't name
+    /// 'filter').
+    #[test]
+    fn nl_failclosed_refuses_confident_wrong_resolution() {
+        let bridge = LinguigenesisBridge::new();
+        for phrase in [
+            "return the sum of squares of an array",
+            "reverse a string",
+            "parse a CSV file",
+        ] {
+            match bridge.nl_to_requirement(phrase) {
+                Err(BridgeError::ClarificationNeeded { .. }) => {}
+                other => panic!(
+                    "request {phrase:?} must fail closed (ClarificationNeeded), \
+                     got {other:?} — confident-wrong resolution leaked"
+                ),
+            }
+        }
+    }
+
+    /// P0-NL must NOT over-refuse: genuine in-vocab single-op requests whose
+    /// content word actually names the resolved op, with no type mismatch, still
+    /// resolve to a Requirement (and synthesize). Proves the gate keys on
+    /// structural signals, not on "any registry match is suspect".
+    #[test]
+    fn nl_failclosed_keeps_genuine_in_vocab_ops() {
+        let bridge = LinguigenesisBridge::new();
+        // Resolve cleanly (guard does not fire).
+        for phrase in ["add two numbers", "square a number"] {
+            bridge.nl_to_requirement(phrase).unwrap_or_else(|e| {
+                panic!("genuine request {phrase:?} must still resolve, got {e:?}")
+            });
+        }
+        // And still synthesize end-to-end.
+        let result = bridge
+            .synthesize_from_description("add two numbers", Some("add"))
+            .expect("genuine op must still synthesize");
+        assert!(result.success, "add must still solve: {:?}", result.error);
+    }
+
+    /// P0-NL must EXEMPT inline-example requests: the user supplied the spec
+    /// directly (comprehension bypassed), so the operation-not-named signal must
+    /// not gate them even though the demonstrated op has no registry identity.
+    #[test]
+    fn nl_failclosed_exempts_inline_example_requests() {
+        let bridge = LinguigenesisBridge::new();
+        let req = bridge
+            .nl_to_requirement("a function mapping [1,2,3] -> [2,3,4] and [5,6] -> [6,7]")
+            .expect("inline-example request must be exempt from the fail-closed gate");
+        assert_eq!(req.examples.len(), 2);
+    }
 
     #[test]
     fn test_bridge_creation() {
