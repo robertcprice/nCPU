@@ -125,7 +125,14 @@ Driver = the main loop (re-invoked on each workflow completion). **Per iteration
 1. **Pick** the lowest-numbered unfinished U-phase whose deps are merged (ledger in §0.055 table).
 2. **Isolate:** run its workflow in a fresh git worktree off the latest canonical `widen-nl-front-door` (branch `uN-<slug>`). Never edit canonical directly. Never edit `mog_transpile.rs` (Cursor) or anything under `../linguigenesis` (ML agent).
 3. **Workflow** = understand→implement→adversarial-verify, build-green gated internally.
-4. **Independent re-verify (do NOT trust self-report):** driver runs `HOME=/tmp/uN cargo build --lib` + the phase's accept-gate tests + a full-lib regression. Green → commit code-only (never the `data/*.jsonl` LFS corpus), merge to canonical, build-verify post-merge, mark the §0.055 row DONE + memory note. **Red → do NOT merge; keep the worktree for inspection; log the failure; skip to the next independent phase.**
+4. **THOROUGH independent review (do NOT trust self-report — the user explicitly requires this on every phase).** Before any merge the driver must, in order:
+   a. **Read the whole diff** (`git -C <wt> diff HEAD`), not just the summary. Confirm the change actually does the phase goal, end to end.
+   b. **Hunt for fake-green:** grep the diff for `#[ignore]`, commented-out asserts, `return Ok` short-circuits, `unwrap_or(true)`, weakened/deleted tests, or feature-gating that hides the work. A green build over a disabled test is a FAIL.
+   c. **Hunt for hardcoding / unsound shortcuts:** no new closed keyword/type/constant tables where the phase demanded an open mechanism; no verifier weakened to admit a candidate (false-accept); spot-read the actual changed functions, not their names.
+   d. **Boundary check:** `git -C <wt> diff --name-only HEAD` touches ONLY this phase's owned files — zero edits to `excludes`, `mog_transpile.rs`, `../linguigenesis`, or `data/*.jsonl`.
+   e. **Re-run from scratch:** `HOME=/tmp/uN cargo build --lib` (0 errors) + the phase accept-gate tests + a full-lib regression — driver runs these itself, ignoring the workflow's reported numbers.
+   f. **Weigh the adversarial verdicts:** any `broken` verdict, or ≥2 `suspect`, blocks the merge until resolved.
+   Only if a–f all pass → commit code-only (never `data/*.jsonl`), merge to canonical, build-verify post-merge, mark the §0.055 row DONE with the commit SHA + a one-line review note. **Any failure → do NOT merge; keep the worktree for inspection; log exactly what failed; skip to the next independent phase** (or, if the user-facing summary needs it, the blocked reason verbatim).
 5. **Hygiene:** `cargo clean` / remove the worktree's target between phases (disk ~20Gi headroom). Arm a fallback `ScheduleWakeup` (≥1200s) so a hung/silent workflow doesn't stall the loop.
 6. **Stop** when the queue is exhausted or every remaining phase is blocked; write a wake-up summary ledger (landed vs blocked vs remaining) for the user.
 
