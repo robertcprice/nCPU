@@ -1040,21 +1040,6 @@ fn __FN__(x: i64) -> i64 {
     )
 }
 
-pub(super) fn code_closure_map_sum(fn_name: &str) -> String {
-    templ(
-        r#"fn __FN__(arr: [i64]) -> i64 {
-    doubled := arr.map(fn(x: i64) -> i64 { x * 2 });
-    total: i64 = 0;
-    for item in doubled {
-        total = total + item;
-    }
-    return total;
-}
-"#,
-        fn_name,
-    )
-}
-
 pub(super) fn code_count_positive(fn_name: &str) -> String {
     templ(
         r#"fn __FN__(arr: [i64]) -> i64 {

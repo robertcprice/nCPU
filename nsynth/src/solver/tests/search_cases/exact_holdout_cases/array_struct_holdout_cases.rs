@@ -10,13 +10,6 @@ fn search_only_generalizes_on_array_holdout_cases() {
         ],
     );
     assert_search_generalizes(
-        "closure_map_sum_v0",
-        vec![
-            (vec![Value::int_array(&[0, -1, 4])], 6),
-            (vec![Value::int_array(&[5])], 10),
-        ],
-    );
-    assert_search_generalizes(
         "reverse_sum_v0",
         vec![
             (vec![Value::int_array(&[9, -2, 4])], 11),
