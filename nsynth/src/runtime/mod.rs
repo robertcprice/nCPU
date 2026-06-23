@@ -6073,6 +6073,150 @@ fn main() -> i64 {
             .expect("array identity reference must pass its generated holdouts");
     }
 
+    // ── GATE-0: widened generalization probe closes the holdout hole ───────
+
+    /// A `square` problem with a NON-EMPTY reference (`a * a`). Its visible
+    /// examples and hand-authored holdouts ALL lie inside the OLD narrow probe
+    /// window `[-12, 24]`, so a candidate that only agrees with the reference on
+    /// that window passes the old (narrow) checks. The widened probe
+    /// (`[-64, 64]`) is what must catch a divergence outside the window.
+    fn widened_square_problem() -> Problem {
+        Problem {
+            name: "gate0_square_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn gate0_square_v0(a: i64) -> i64",
+            // Visible examples — all within the OLD [-12,24] window.
+            examples: vec![
+                Example { inputs: vec![BmValue::Int(3)], expected: BmValue::Int(9) },
+                Example { inputs: vec![BmValue::Int(-2)], expected: BmValue::Int(4) },
+                Example { inputs: vec![BmValue::Int(10)], expected: BmValue::Int(100) },
+            ],
+            // Hand-authored holdouts — ALSO all within the OLD [-12,24] window,
+            // so under the old narrow probe the windowed candidate passed.
+            holdouts: vec![
+                Example { inputs: vec![BmValue::Int(5)], expected: BmValue::Int(25) },
+                Example { inputs: vec![BmValue::Int(-1)], expected: BmValue::Int(1) },
+                Example { inputs: vec![BmValue::Int(24)], expected: BmValue::Int(576) },
+            ],
+            reference_code: "fn gate0_square_v0(a: i64) -> i64 { return a * a; }",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        }
+    }
+
+    /// Precondition for the differential accept-test: the WIDENED probe must
+    /// actually sample at least one input OUTSIDE the old `[-12, 24]` window
+    /// (and the holdout source must be `Generated`, not `HandFallback`).
+    /// Without this, "rejected outside the old window" would be vacuous.
+    #[test]
+    fn widened_holdout_probe_reaches_beyond_old_window() {
+        let problem = widened_square_problem();
+        let (holdouts, source) =
+            crate::benchmark::generated_holdouts_with_source(&problem);
+        assert_eq!(
+            source,
+            crate::benchmark::HoldoutSource::Generated,
+            "a non-empty reference must yield Generated holdouts, not a hand fallback"
+        );
+        let reaches_outside_old_window = holdouts.iter().any(|ex| {
+            matches!(ex.inputs.as_slice(), [BmValue::Int(a)] if *a < -12 || *a > 24)
+        });
+        assert!(
+            reaches_outside_old_window,
+            "the widened probe must sample at least one input outside the old \
+             [-12,24] window, else the differential test is vacuous; got: {:?}",
+            holdouts.iter().map(|e| &e.inputs).collect::<Vec<_>>()
+        );
+    }
+
+    /// THE accept-test for GATE-0. A candidate that computes `a * a` correctly
+    /// ONLY inside the old narrow window `[-12, 24]` and returns a WRONG value
+    /// outside it:
+    ///   - passes the visible examples (all in-window),
+    ///   - passes the OLD hand-authored holdouts (all in-window),
+    ///   - BUT is REJECTED by `verify_problem_code_strict` because the widened
+    ///     probe reaches a value only the wider range can express.
+    /// This demonstrates the degradation is CLOSED — not merely that a constant
+    /// changed. The reference is NON-EMPTY (`a * a`), so the holdouts are a true
+    /// differential oracle.
+    #[test]
+    fn widened_holdout_rejects_window_overfit_candidate() {
+        let problem = widened_square_problem();
+
+        // The window-overfit candidate: correct square in [-12,24], wrong (off
+        // by one) outside it. It is NOT the reference and NOT a fixed template.
+        let windowed = "fn gate0_square_v0(a: i64) -> i64 { \
+            if a >= -12 { if a <= 24 { return a * a; } } \
+            return a * a + 1; }";
+
+        // 1. It satisfies every visible example (all in [-12,24]).
+        verify_problem_code(&problem, windowed)
+            .expect("window-overfit candidate must satisfy the in-window examples");
+
+        // 2. It satisfies the OLD hand-authored holdouts (all in [-12,24]) —
+        //    i.e. under the OLD narrow behavior it would have passed strict.
+        for ex in &problem.holdouts {
+            let got = execute_function_for_problem(
+                windowed,
+                problem.function_name(),
+                &ex.inputs,
+                &problem,
+            )
+            .expect("window-overfit candidate must run on the hand holdouts");
+            assert!(
+                output_matches(&got, &ex.expected),
+                "window-overfit candidate must MATCH each old hand holdout \
+                 {:?} -> {} (got {:?})",
+                ex.inputs,
+                ex.expected,
+                got
+            );
+        }
+
+        // 3. The widened strict verifier REJECTS it — the divergence outside the
+        //    old window is caught by the reference-derived generalization probe.
+        let strict = verify_problem_code_strict(&problem, windowed);
+        assert!(
+            strict.is_err(),
+            "widened generalization probe must REJECT the window-overfit \
+             candidate, but strict verify accepted it: {strict:?}"
+        );
+
+        // 4. Sanity: the true reference still passes its own widened holdouts
+        //    (the wider probe is not spuriously strict / does not overflow).
+        verify_problem_code_strict(&problem, problem.reference_code)
+            .expect("the a*a reference must pass its own widened generated holdouts");
+    }
+
+    /// The `HoldoutSource` tag is honest: an EMPTY reference degrades to
+    /// `HandFallback` (so a strict pass over it must NOT be counted as
+    /// verified-by-generalization), while a non-empty reference yields
+    /// `Generated`. Fallback stays keyed on `reference_code.is_empty()`.
+    #[test]
+    fn holdout_source_tag_distinguishes_generated_from_hand_fallback() {
+        let mut problem = widened_square_problem();
+        let (_g, gen_src) = crate::benchmark::generated_holdouts_with_source(&problem);
+        assert_eq!(gen_src, crate::benchmark::HoldoutSource::Generated);
+
+        problem.reference_code = "";
+        let (hand, hand_src) =
+            crate::benchmark::generated_holdouts_with_source(&problem);
+        assert_eq!(
+            hand_src,
+            crate::benchmark::HoldoutSource::HandFallback,
+            "empty reference must report HandFallback, not Generated"
+        );
+        assert_eq!(
+            hand, problem.holdouts,
+            "hand-fallback holdouts must equal the hand-authored set"
+        );
+    }
+
     // ====================================================================
     // GAP 1 — BOUND LOOPS: ForTo / ForInRange / ForParallel must not hang.
     // ====================================================================

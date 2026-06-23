@@ -658,13 +658,17 @@ impl HoldoutRng {
     }
 }
 
-/// How many fresh holdout points to attempt per problem.
-const HOLDOUT_SAMPLES: usize = 12;
-/// Input scalar range — kept modest so the reference rarely overflows.
-const HOLDOUT_MIN: i64 = -12;
-const HOLDOUT_MAX: i64 = 24;
-/// Max sampled array length.
-const HOLDOUT_ARRAY_MAX_LEN: usize = 6;
+/// How many fresh holdout points to attempt per problem. Widened (was 12) so the
+/// generalization probe actually reaches into the wider input range below.
+const HOLDOUT_SAMPLES: usize = 24;
+/// Input scalar range — widened (was [-12,24]) so a candidate that only agrees
+/// with the reference on the narrow old window is exercised on values it has not
+/// seen. Kept small enough that quadratic reference math (`x*x`) cannot overflow
+/// i64: 64*64 = 4096, comfortably within range.
+const HOLDOUT_MIN: i64 = -64;
+const HOLDOUT_MAX: i64 = 64;
+/// Max sampled array length (was 6).
+const HOLDOUT_ARRAY_MAX_LEN: usize = 10;
 
 /// Salt XOR'd into the seed used by [`problem_from_reference`] when sampling the
 /// *visible* seed examples. `generated_holdouts` seeds from `holdout_seed(name)`
@@ -732,18 +736,45 @@ fn sample_holdout_inputs(rng: &mut HoldoutRng, param_types: &[HoldoutParamType])
 ///   - if NO point survives sampling → hand holdouts (keeps the per-problem
 ///     "holdouts are non-empty" invariant the benchmark relies on).
 pub fn generated_holdouts(problem: &Problem) -> Vec<Example> {
+    generated_holdouts_with_source(problem).0
+}
+
+/// Where a problem's strict-verify holdouts came from.
+///
+/// `Generated` means the points were sampled fresh and labelled by RUNNING the
+/// problem's runnable `reference_code` — a true generalization probe on inputs
+/// the candidate has not seen. `HandFallback` means we degraded to the
+/// hand-authored `problem.holdouts` (no reference, an unsampleable signature, or
+/// nothing survived sampling); those are NOT differential generalization
+/// evidence, so a "verified by generalization" metric must EXCLUDE them. A pass
+/// over `HandFallback` holdouts is still a valid example-style pass — it just
+/// must not be counted as strict-by-generalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoldoutSource {
+    /// Points labelled by running the reference over freshly sampled inputs.
+    Generated,
+    /// Degraded to the hand-authored holdouts (keyed on `reference_code.is_empty()`
+    /// or an unsampleable signature / empty sampling result).
+    HandFallback,
+}
+
+/// Like [`generated_holdouts`] but also reports the [`HoldoutSource`] so callers
+/// can avoid silently counting a hand-fallback pass as a generalization pass.
+/// The fallback stays keyed on `reference_code.is_empty()` (and the existing
+/// unsampleable-signature guards); no input-type-based logic is introduced.
+pub fn generated_holdouts_with_source(problem: &Problem) -> (Vec<Example>, HoldoutSource) {
     // No oracle to run → keep the hand-authored holdouts.
     if problem.reference_code.is_empty() {
-        return problem.holdouts.clone();
+        return (problem.holdouts.clone(), HoldoutSource::HandFallback);
     }
     let param_types = holdout_param_types(problem.signature);
     // Zero-arg functions or any unsampleable parameter → fall back.
     if param_types.is_empty() || param_types.contains(&HoldoutParamType::Other) {
-        return problem.holdouts.clone();
+        return (problem.holdouts.clone(), HoldoutSource::HandFallback);
     }
     let fn_name = problem.function_name();
     if fn_name.is_empty() {
-        return problem.holdouts.clone();
+        return (problem.holdouts.clone(), HoldoutSource::HandFallback);
     }
 
     let mut rng = HoldoutRng::new(holdout_seed(&problem.name));
@@ -751,7 +782,7 @@ pub fn generated_holdouts(problem: &Problem) -> Vec<Example> {
     for _ in 0..HOLDOUT_SAMPLES {
         let Some(inputs) = sample_holdout_inputs(&mut rng, &param_types) else {
             // Should not happen (Other already filtered), but stay safe.
-            return problem.holdouts.clone();
+            return (problem.holdouts.clone(), HoldoutSource::HandFallback);
         };
         // Run the REFERENCE — the ONLY source of expected values here.
         let out = match crate::runtime::execute_function_for_problem(
@@ -775,9 +806,9 @@ pub fn generated_holdouts(problem: &Problem) -> Vec<Example> {
     // If sampling produced nothing runnable, fall back so the invariant that
     // every problem yields non-empty holdouts is preserved.
     if generated.is_empty() {
-        return problem.holdouts.clone();
+        return (problem.holdouts.clone(), HoldoutSource::HandFallback);
     }
-    generated
+    (generated, HoldoutSource::Generated)
 }
 
 /// REFERENCE-IMPLEMENTATION front door: build a solvable [`Problem`] from a
