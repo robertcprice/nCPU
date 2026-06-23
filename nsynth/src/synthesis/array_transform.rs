@@ -12,6 +12,156 @@
 //! timed out on `[i64] -> [i64]` problems with no array-output path).
 
 use super::*;
+use crate::enumerative::{BinOp, CmpOp, Expr};
+
+// ── Searched per-element body / predicate enumeration (U5ab) ───────────────
+// REUSE of the PROVEN fold-body grammar (enumerative.rs:2536-2587 for the map
+// body, enumerative.rs:2593-2630 for the predicate). The map body here is a
+// per-element map (no acc / no ForFold wrapper); the predicate slot reuses the
+// CmpOp-over-{item,i,consts,item%k} construction. We restrict body BinOps to
+// {Add,Sub,Mul,Mod} — exactly the ops whose `Expr::to_mog` rendering is
+// faithful to `Expr::eval` (Add/Sub/Mul/Mod render to `+ - * %`), so the
+// `eval` pre-screen never disagrees with the emitted Mog the strict verifier
+// runs. `Var(0)` = item, `Var(1)` = i. Enumeration is size-bounded (atoms, then
+// one atom OP atom level — the same single-level shape as the fold enumerator).
+
+/// Atoms for the element grammar: {item, i} ∪ a small constant set. Bounded.
+fn element_atoms() -> Vec<Expr> {
+    let mut atoms: Vec<Expr> = vec![Expr::Var(0), Expr::Var(1)];
+    for &c in &[0i64, 1, -1, 2, 3] {
+        atoms.push(Expr::Const(c));
+    }
+    atoms
+}
+
+/// Body operators whose `to_mog` rendering is exact w.r.t. `eval` (no bitwise
+/// approximations leak in). Mirrors the fold body's {Add,Sub,Mul} plus Mod.
+const ELEM_BODY_OPS: [BinOp; 4] = [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Mod];
+
+/// Enumerate per-element body expressions over {item, i, consts}: every atom,
+/// plus every `atom OP atom` for OP in {Add,Sub,Mul,Mod}, and one extra level
+/// `(atom OP atom) OP atom` so cubics like `item*item*item` are reachable.
+/// Size-bounded: atoms (≈7) + one binop level (≈7·7·4) + a guarded third level.
+fn element_bodies() -> Vec<Expr> {
+    let atoms = element_atoms();
+    let mut out: Vec<Expr> = atoms.clone();
+    let mut level1: Vec<Expr> = Vec::new();
+    for l in &atoms {
+        for r in &atoms {
+            for &op in &ELEM_BODY_OPS {
+                level1.push(Expr::BinOp(op, Box::new(l.clone()), Box::new(r.clone())));
+            }
+        }
+    }
+    // Third level: (level1) OP atom — only Add/Sub/Mul (Mod-on-product is rare
+    // and Mod is already covered at level 1 for the item%k case). This is what
+    // reaches item*item*item without an unbounded grammar.
+    for l in &level1 {
+        for r in &atoms {
+            for &op in &[BinOp::Add, BinOp::Sub, BinOp::Mul] {
+                out.push(Expr::BinOp(op, Box::new(l.clone()), Box::new(r.clone())));
+            }
+        }
+    }
+    out.extend(level1);
+    out
+}
+
+/// Enumerate boolean guard predicates `lhs CMP rhs` over {item, i, consts} plus
+/// the `item % k` family — a direct reuse of the cond_pairs construction in
+/// enumerative.rs:2593-2630. Returned as (rendered-cond-string, eval-closure-input).
+/// We keep the structure (CmpOp, lhs:Expr, rhs:Expr) so it both renders and
+/// pre-screens via `eval`.
+fn element_predicates() -> Vec<(CmpOp, Expr, Expr)> {
+    let mut preds: Vec<(CmpOp, Expr, Expr)> = Vec::new();
+    let item = Expr::Var(0);
+    let cmps = [
+        CmpOp::Eq,
+        CmpOp::Ne,
+        CmpOp::Lt,
+        CmpOp::Le,
+        CmpOp::Gt,
+        CmpOp::Ge,
+    ];
+    // item CMP const
+    for &cmp in &cmps {
+        for &c in &[0i64, 1, -1, 2, 3] {
+            preds.push((cmp, item.clone(), Expr::Const(c)));
+        }
+    }
+    // item % k CMP r  (k ∈ {2,3,4,5}, r ∈ 0..k) — reaches item%3 == 1 etc.
+    for &k in &[2i64, 3, 4, 5] {
+        for r in 0..k {
+            let modexpr = Expr::BinOp(BinOp::Mod, Box::new(item.clone()), Box::new(Expr::Const(k)));
+            preds.push((CmpOp::Eq, modexpr.clone(), Expr::Const(r)));
+            preds.push((CmpOp::Ne, modexpr, Expr::Const(r)));
+        }
+    }
+    preds
+}
+
+/// Render a comparison operator to its Mog symbol.
+fn cmp_symbol(cmp: CmpOp) -> &'static str {
+    match cmp {
+        CmpOp::Lt => "<",
+        CmpOp::Le => "<=",
+        CmpOp::Eq => "==",
+        CmpOp::Ge => ">=",
+        CmpOp::Gt => ">",
+        CmpOp::Ne => "!=",
+    }
+}
+
+/// Pre-screen a per-element body against the data with checked `eval` so we only
+/// emit Mog for bodies that already reproduce every (input,output) pair. This is
+/// an optimization; the binding accept gate remains `verify_problem_code_strict`.
+fn body_fits(body: &Expr, rows: &[(Vec<i64>, Vec<i64>)]) -> bool {
+    for (input, output) in rows {
+        if input.len() != output.len() {
+            return false;
+        }
+        for (i, (&item, &expected)) in input.iter().zip(output.iter()).enumerate() {
+            match body.eval(&[item, i as i64]) {
+                Some(v) if v == expected => {}
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
+/// Pre-screen a guard predicate against the filter data: keeping exactly the
+/// elements for which `lhs CMP rhs` is true must reproduce every output row.
+fn predicate_fits(cmp: CmpOp, lhs: &Expr, rhs: &Expr, rows: &[(Vec<i64>, Vec<i64>)]) -> bool {
+    for (input, output) in rows {
+        let mut kept: Vec<i64> = Vec::new();
+        for (i, &item) in input.iter().enumerate() {
+            let l = match lhs.eval(&[item, i as i64]) {
+                Some(v) => v,
+                None => return false,
+            };
+            let r = match rhs.eval(&[item, i as i64]) {
+                Some(v) => v,
+                None => return false,
+            };
+            let keep = match cmp {
+                CmpOp::Lt => l < r,
+                CmpOp::Le => l <= r,
+                CmpOp::Eq => l == r,
+                CmpOp::Ge => l >= r,
+                CmpOp::Gt => l > r,
+                CmpOp::Ne => l != r,
+            };
+            if keep {
+                kept.push(item);
+            }
+        }
+        if &kept != output {
+            return false;
+        }
+    }
+    true
+}
 
 /// Single-array-input rows `(input, expected_output)` when the problem is a
 /// `fn f(arr: [i64]) -> [i64]` shape. Returns None for any other signature so
@@ -339,6 +489,24 @@ fn candidates(problem: &Problem, rows: &[(Vec<i64>, Vec<i64>)]) -> Vec<(&'static
                 "fn {fn_name}(arr: [i64]) -> [i64] {{\n    result: [i64] = [];\n    acc: i64 = 0;\n    for item in arr {{\n        acc = acc + item;\n        result.push(acc);\n    }}\n    return result;\n}}\n"
             ),
         ));
+
+        // (U5a) SEARCHED per-element map. Enumerate bodies over {item, i, consts}
+        // from the proven fold-body grammar, pre-screen with checked `eval`, and
+        // emit each surviving body through the existing `to_mog` + `map_program`.
+        // Appended AFTER the fixed Identity/Affine/Abs/Square/quadratic menu, so
+        // those verify-and-win first in ms; this only reaches bodies they miss
+        // (e.g. item*item*item, item%3). The strict verifier is the accept gate.
+        for body in element_bodies() {
+            if !body_fits(&body, rows) {
+                continue;
+            }
+            let body_src = body.to_mog(&["item", "i"]);
+            let push_body = format!("        result.push({body_src});\n");
+            out.push((
+                "array_transform_map_searched_body",
+                map_program(fn_name, &push_body),
+            ));
+        }
     }
 
     // Predicate filter (length may change). Thresholds derived from the data.
@@ -358,6 +526,28 @@ fn candidates(problem: &Problem, rows: &[(Vec<i64>, Vec<i64>)]) -> Vec<(&'static
     for (method, pred) in preds {
         out.push((
             method,
+            map_program(
+                fn_name,
+                &format!("        if {pred} {{\n            result.push(item);\n        }}\n"),
+            ),
+        ));
+    }
+
+    // (U5b) SEARCHED filter predicate. Enumerate `lhs CMP rhs` guards over
+    // {item, i, consts, item%k} from the proven cond_pairs grammar, pre-screen
+    // with checked `eval`, and emit each surviving guard into the SAME guarded
+    // push skeleton. Appended AFTER the cheap fixed predicates (which win first),
+    // so this only reaches guards they miss (e.g. item % 3 == 1). The strict
+    // verifier is the accept gate.
+    for (cmp, lhs, rhs) in element_predicates() {
+        if !predicate_fits(cmp, &lhs, &rhs, rows) {
+            continue;
+        }
+        let ls = lhs.to_mog(&["item", "i"]);
+        let rs = rhs.to_mog(&["item", "i"]);
+        let pred = format!("{ls} {} {rs}", cmp_symbol(cmp));
+        out.push((
+            "array_transform_filter_searched",
             map_program(
                 fn_name,
                 &format!("        if {pred} {{\n            result.push(item);\n        }}\n"),
@@ -583,7 +773,12 @@ mod tests {
     fn synthesize_fixed_only(problem: &Problem) -> Option<SolveResult> {
         let rows = array_rows(problem)?;
         for (method, code) in candidates(problem, &rows) {
-            if method == "array_transform_map_searched_quadratic" {
+            // Exclude ALL searched entries (quadratic AND the U5a element-map
+            // body, which is strictly more general and also solves quadratics):
+            // "fixed menu only" must mean no searched candidate at all.
+            if method == "array_transform_map_searched_quadratic"
+                || method == "array_transform_map_searched_body"
+            {
                 continue;
             }
             if verify_problem_code_strict(problem, &code).is_ok() {
@@ -690,6 +885,125 @@ mod tests {
         assert!(
             synthesize_array_transform(&problem).is_none(),
             "must reject when a holdout violates the fitted quadratic"
+        );
+    }
+
+    // ---- (U5ab) Searched element-map + searched filter-predicate ----
+
+    /// Run candidates EXCLUDING the searched element-map AND the searched
+    /// quadratic (the only non-fixed map entries), mirroring
+    /// `synthesize_array_transform` exactly. Proves a transform is genuinely
+    /// unsolvable by the fixed map menu alone.
+    fn synthesize_fixed_map_only(problem: &Problem) -> Option<SolveResult> {
+        let rows = array_rows(problem)?;
+        for (method, code) in candidates(problem, &rows) {
+            if method == "array_transform_map_searched_body"
+                || method == "array_transform_map_searched_quadratic"
+            {
+                continue;
+            }
+            if verify_problem_code_strict(problem, &code).is_ok() {
+                return Some(SolveResult {
+                    success: true,
+                    code,
+                    method: method.to_string(),
+                    error: None,
+                    metadata: DifferentiableMetadata::default(),
+                });
+            }
+        }
+        None
+    }
+
+    /// Run candidates EXCLUDING the searched filter predicate, mirroring
+    /// `synthesize_array_transform`. Proves a predicate is genuinely unsolvable
+    /// by the fixed predicate set alone.
+    fn synthesize_fixed_filter_only(problem: &Problem) -> Option<SolveResult> {
+        let rows = array_rows(problem)?;
+        for (method, code) in candidates(problem, &rows) {
+            if method == "array_transform_filter_searched" {
+                continue;
+            }
+            if verify_problem_code_strict(problem, &code).is_ok() {
+                return Some(SolveResult {
+                    success: true,
+                    code,
+                    method: method.to_string(),
+                    error: None,
+                    metadata: DifferentiableMetadata::default(),
+                });
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn solves_searched_cube_via_search() {
+        // y = item*item*item — OUTSIDE {Identity, Affine, Abs, Square, quadratic}.
+        // Last two rows are holdouts (per pa()), so success means the searched
+        // body passed verify_problem_code_strict on examples AND holdouts.
+        let rows: &[(&[i64], &[i64])] = &[
+            (&[0, 1, 2], &[0, 1, 8]),
+            (&[3], &[27]),
+            (&[4, 5], &[64, 125]),
+            (&[6], &[216]),
+        ];
+        // Winning method is the SEARCHED body, not a fixed template.
+        assert_eq!(solve_method(rows), "array_transform_map_searched_body");
+        // The fixed map menu ALONE cannot solve it (un-gameable: prior path None).
+        assert!(
+            synthesize_fixed_map_only(&pa(rows)).is_none(),
+            "fixed map menu must NOT solve item*item*item"
+        );
+    }
+
+    #[test]
+    fn solves_searched_mod_map_via_search() {
+        // y = item % 3 — OUTSIDE the fixed map menu (no closed-form fitter for it).
+        let rows: &[(&[i64], &[i64])] = &[
+            (&[0, 1, 2], &[0, 1, 2]),
+            (&[3, 4, 5], &[0, 1, 2]),
+            (&[6, 7], &[0, 1]),
+            (&[8, 9], &[2, 0]),
+        ];
+        assert_eq!(solve_method(rows), "array_transform_map_searched_body");
+        assert!(
+            synthesize_fixed_map_only(&pa(rows)).is_none(),
+            "fixed map menu must NOT solve item % 3"
+        );
+    }
+
+    #[test]
+    fn solves_searched_mod_filter_via_search() {
+        // filter(item % 3 == 1) — OUTSIDE the fixed predicate set (evens/odds/
+        // sign/threshold). Must synthesize via the searched predicate, and the
+        // fixed-predicate-only path must return None (un-gameable).
+        let rows: &[(&[i64], &[i64])] = &[
+            (&[0, 1, 2, 3, 4], &[1, 4]),
+            (&[5, 6, 7], &[7]),
+            (&[1, 2, 10], &[1, 10]),
+            (&[3, 9, 13], &[13]),
+        ];
+        assert_eq!(solve_method(rows), "array_transform_filter_searched");
+        assert!(
+            synthesize_fixed_filter_only(&pa(rows)).is_none(),
+            "fixed predicate set must NOT solve item % 3 == 1"
+        );
+    }
+
+    #[test]
+    fn searched_map_rejects_unlearnable_via_holdout() {
+        // Examples fit item*item*item but a holdout breaks it: the searched body
+        // path must reject on the holdout (no examples-only accept).
+        let problem = pa(&[
+            (&[0, 1, 2], &[0, 1, 8]),
+            (&[3, 4], &[27, 64]),
+            (&[5], &[125]),
+            (&[6], &[999]), // 6^3 = 216, inconsistent
+        ]);
+        assert!(
+            synthesize_array_transform(&problem).is_none(),
+            "must reject when a holdout violates the searched cube"
         );
     }
 }
