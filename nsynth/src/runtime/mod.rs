@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -7,6 +7,43 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::benchmark::{generated_holdouts, Problem, Value as BenchmarkValue};
+
+/// Maximum number of iterations any single loop may execute before the
+/// interpreter aborts with an error. This bounds the verify path: a candidate
+/// `for i in 0..n` with an attacker-controlled `n` cannot spin the process
+/// forever — it returns `Err` once the cap is exceeded. Single-sourced so all
+/// loop arms (`While`, `ForTo`, `ForInRange`, `ForIn`, `ForParallel`) agree.
+const MAX_LOOP_ITERS: usize = 100_000;
+
+/// Absolute tolerance for float equality in `output_matches`. Used together
+/// with `FLOAT_REL_EPS` so very small and very large magnitudes both compare
+/// sensibly instead of with exact bit equality.
+const FLOAT_ABS_EPS: f64 = 1e-9;
+/// Relative tolerance for float equality in `output_matches`.
+const FLOAT_REL_EPS: f64 = 1e-9;
+
+/// Total, NaN-aware, relative+absolute epsilon float comparison used by the
+/// acceptance oracle. NaN policy: two NaNs are considered equal; a NaN vs a
+/// non-NaN is never equal. Otherwise accept when the difference is within the
+/// absolute epsilon OR within the relative epsilon scaled by the larger
+/// magnitude. This replaces exact `==`, which mis-rejects rounding-equal
+/// floats and has no defined NaN behavior.
+fn float_eq(a: f64, b: f64) -> bool {
+    if a.is_nan() || b.is_nan() {
+        return a.is_nan() && b.is_nan();
+    }
+    let diff = (a - b).abs();
+    diff <= FLOAT_ABS_EPS || diff <= FLOAT_REL_EPS * a.abs().max(b.abs())
+}
+
+/// True when float `f` represents an integer that round-trips exactly through
+/// `i64` and equals `i`. This is the SOUND float<->int bridge: it rejects
+/// non-integral floats and rejects integers that lose precision in `f64`
+/// (e.g. 2^53+1, whose `f64` collapses onto 2^53), so the oracle never
+/// false-accepts via a lossy widen.
+fn float_matches_int(f: f64, i: i64) -> bool {
+    f.fract() == 0.0 && (f as i64) as f64 == f && (f as i64) == i
+}
 
 // System/FFI modules
 pub mod extern_;
@@ -768,6 +805,36 @@ pub fn execute_function(
     runtime.call_function(function_name, args)
 }
 
+/// Install (exactly once, process-wide) a no-op panic hook so a panic caught by
+/// `catch_unwind` on the verify path does not spam stderr with a backtrace.
+/// This keeps the verify output deterministic and quiet; the `Result` returned
+/// by `catch_unwind` is deterministic regardless of the hook.
+fn install_silent_panic_hook_once() {
+    use std::sync::Once;
+    static HOOK: Once = Once::new();
+    HOOK.call_once(|| {
+        std::panic::set_hook(Box::new(|_| {}));
+    });
+}
+
+/// Run a candidate-executing closure under `catch_unwind`, converting a caught
+/// panic into a clean `Err` so a candidate that panics during verification
+/// rejects the candidate instead of aborting the whole process.
+///
+/// `AssertUnwindSafe` is required because `Runtime` holds `RefCell`/`JoinHandle`/
+/// `mpsc` channels (not `UnwindSafe`); the verify path discards the `Runtime`
+/// after the call, so asserting unwind safety is sound here.
+fn run_isolated<F>(f: F) -> Result<Value, String>
+where
+    F: FnOnce() -> Result<Value, String>,
+{
+    install_silent_panic_hook_once();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(_) => Err("candidate panicked during verification".to_string()),
+    }
+}
+
 pub fn execute_function_for_problem(
     code: &str,
     function_name: &str,
@@ -776,11 +843,12 @@ pub fn execute_function_for_problem(
 ) -> Result<Value, String> {
     let program = parse_program(code)?;
     let runtime = Runtime::new(program);
+    runtime.set_verify_mode(true);
     let args = args
         .iter()
         .map(|value| runtime_value_from_problem_meta(value, problem))
         .collect::<Result<Vec<_>, _>>()?;
-    runtime.call_function(function_name, args)
+    run_isolated(|| runtime.call_function(function_name, args))
 }
 
 /// Execute a single-string-argument function and return its raw `Value`.
@@ -827,13 +895,16 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
     use crate::benchmark::Value as BV;
     match (actual, expected) {
         (Value::Int(a), BV::Int(b)) => a == b,
-        // Float bridge: a float output matches an int expected when the
-        // float rounds back to that int (so the float-regression lane
-        // is interchangeable with the int lane on the wire). The
-        // reverse direction widens an int to f64 for comparison.
-        (Value::Float(a), BV::Int(b)) => *a == *b as f64,
-        (Value::Int(a), BV::Float(b)) => *a as f64 == f64::from_bits(*b),
-        (Value::Float(a), BV::Float(b)) => *a == f64::from_bits(*b),
+        // Float bridge: a float output matches an int expected ONLY when the
+        // float is integral AND round-trips exactly through i64. A naive
+        // `*a == *b as f64` widen is lossy for |b| > 2^53 and false-accepts
+        // (e.g. 2^53+1 collapses onto 2^53 in f64), so we use the sound
+        // `float_matches_int` predicate instead.
+        (Value::Float(a), BV::Int(b)) => float_matches_int(*a, *b),
+        (Value::Int(a), BV::Float(b)) => float_matches_int(f64::from_bits(*b), *a),
+        // Float/Float: relative+absolute epsilon with a defined NaN policy,
+        // never exact bit equality.
+        (Value::Float(a), BV::Float(b)) => float_eq(*a, f64::from_bits(*b)),
         // Predicate bridge: an i64 0/1 output matches a bool expected
         // (so a solver that emits `return 1;` still verifies against
         // `expected: true`), and a bool output matches an i64 0/1
@@ -954,9 +1025,24 @@ pub fn verify_problem_code_strict(problem: &Problem, code: &str) -> Result<(), S
     Ok(())
 }
 
+/// Run a wrapped candidate's `main()` on the verify path: filesystem builtins
+/// are denied and a panic is isolated into a clean `Err` (never a process
+/// abort). Distinct from the public `execute_program`, which must keep FS
+/// access for legitimate non-verify callers.
+fn execute_program_verified(code: &str) -> Result<ExecutionResult, String> {
+    let program = parse_program(code)?;
+    let runtime = Runtime::with_input(program, Vec::new());
+    runtime.set_verify_mode(true);
+    install_silent_panic_hook_once();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.run_main())) {
+        Ok(result) => result,
+        Err(_) => Err("candidate panicked during verification".to_string()),
+    }
+}
+
 pub fn verify_problem_code_via_main(problem: &Problem, code: &str) -> Result<(), String> {
     let program = problem.wrap_program(code)?;
-    let result = execute_program(&program)?;
+    let result = execute_program_verified(&program)?;
     if result.output != problem.expected_stdout() {
         return Err(format!(
             "stdout mismatch for {}: expected {:?}, got {:?}",
@@ -2549,6 +2635,11 @@ struct Runtime {
     next_thread_id: RefCell<i64>,
     monomorphized_functions: RefCell<HashMap<String, Function>>,
     type_inference_cache: RefCell<HashMap<String, Vec<String>>>,
+    /// When true, filesystem builtins (`open_file`/`read_file`/`write_file`)
+    /// are denied with an error. Set on the verify path so a candidate cannot
+    /// touch the real filesystem (nondeterminism + host damage) during
+    /// acceptance checking. Defaults to false so normal execution is unaffected.
+    verify_mode: Cell<bool>,
 }
 
 struct MutexChannel {
@@ -2718,7 +2809,14 @@ impl Runtime {
             next_thread_id: RefCell::new(1),
             monomorphized_functions: RefCell::new(HashMap::new()),
             type_inference_cache: RefCell::new(HashMap::new()),
+            verify_mode: Cell::new(false),
         }
+    }
+
+    /// Enable/disable verification mode. When enabled, filesystem builtins are
+    /// denied so the verify path cannot touch the real filesystem.
+    fn set_verify_mode(&self, on: bool) {
+        self.verify_mode.set(on);
     }
 
     fn run_main(&self) -> Result<ExecutionResult, String> {
@@ -2975,7 +3073,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 while truthy(&self.eval_expr(condition, env.clone())?) {
                     iters += 1;
-                    if iters > 100_000 {
+                    if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
                     match self.exec_block_with_label(body, env.child(), current_label)? {
@@ -3005,7 +3103,12 @@ impl Runtime {
             } => {
                 let start = expect_int(&self.eval_expr(start, env.clone())?)?;
                 let end = expect_int(&self.eval_expr(end, env.clone())?)?;
+                let mut iters = 0usize;
                 for item in start..end {
+                    iters += 1;
+                    if iters > MAX_LOOP_ITERS {
+                        return Err("loop exceeded iteration limit".to_string());
+                    }
                     let scope = env.child();
                     scope.define(var_name, Value::Int(item));
                     match self.exec_block_with_label(body, scope, current_label)? {
@@ -3034,7 +3137,12 @@ impl Runtime {
             } => {
                 let start = expect_int(&self.eval_expr(start, env.clone())?)?;
                 let end = expect_int(&self.eval_expr(end, env.clone())?)?;
+                let mut iters = 0usize;
                 for item in start..end {
+                    iters += 1;
+                    if iters > MAX_LOOP_ITERS {
+                        return Err("loop exceeded iteration limit".to_string());
+                    }
                     let scope = env.child();
                     scope.define(var_name, Value::Int(item));
                     match self.exec_block_with_label(body, scope, current_label)? {
@@ -3065,7 +3173,12 @@ impl Runtime {
                     Value::Array(items) => items,
                     other => return Err(format!("cannot iterate over {:?}", other)),
                 };
+                let mut iters = 0usize;
                 for item in items {
+                    iters += 1;
+                    if iters > MAX_LOOP_ITERS {
+                        return Err("loop exceeded iteration limit".to_string());
+                    }
                     let scope = env.child();
                     scope.define(var_name, item);
                     match self.exec_block_with_label(body, scope, current_label)? {
@@ -3094,12 +3207,23 @@ impl Runtime {
             } => {
                 let start_val = expect_int(&self.eval_expr(start, env.clone())?)?;
                 let end_val = expect_int(&self.eval_expr(end, env.clone())?)?;
+                // Bound the range span BEFORE materializing it: `(start..end).collect()`
+                // would eagerly allocate the entire i64 range, so a huge `end` OOMs the
+                // process before any per-iteration cap could fire. Reject up front.
+                if end_val.saturating_sub(start_val) > MAX_LOOP_ITERS as i64 {
+                    return Err("loop exceeded iteration limit".to_string());
+                }
                 let range: Vec<i64> = (start_val..end_val).collect();
 
                 // For now, implement parallel for sequentially
                 // Full thread safety requires major refactoring of Value and Env
                 let mut results = Vec::new();
+                let mut iters = 0usize;
                 for item in range {
+                    iters += 1;
+                    if iters > MAX_LOOP_ITERS {
+                        return Err("loop exceeded iteration limit".to_string());
+                    }
                     let scope = env.child();
                     scope.define(var_name, Value::Int(item));
                     let scope_clone = scope.clone();
@@ -3951,7 +4075,13 @@ impl Runtime {
                 let value = args
                     .first()
                     .ok_or_else(|| "abs requires one argument".to_string())?;
-                Ok(Value::Int(expect_int(value)?.abs()))
+                // `i64::abs()` PANICS on i64::MIN (its negation overflows).
+                // Use checked_abs -> None -> Err, matching the checked_add/sub/mul
+                // overflow policy.
+                expect_int(value)?
+                    .checked_abs()
+                    .map(Value::Int)
+                    .ok_or_else(|| "integer overflow in abs".to_string())
             }
             Builtin::Min => {
                 if args.len() != 2 {
@@ -3969,11 +4099,22 @@ impl Runtime {
                 if args.len() != 2 {
                     return Err("pow requires two arguments".to_string());
                 }
-                Ok(Value::Int(
-                    expect_int(&args[0])?.pow(expect_int(&args[1])? as u32),
-                ))
+                let base = expect_int(&args[0])?;
+                let exp = expect_int(&args[1])?;
+                // Two bugs in the old `.pow(exp as u32)`: (1) a negative or
+                // >u32::MAX exponent silently wrapped into a huge u32; (2)
+                // i64::pow PANICS on overflow. Reject out-of-range exponents
+                // and use checked_pow -> None -> Err for overflow.
+                let exp_u32 = u32::try_from(exp)
+                    .map_err(|_| "pow exponent out of range".to_string())?;
+                base.checked_pow(exp_u32)
+                    .map(Value::Int)
+                    .ok_or_else(|| "integer overflow in pow".to_string())
             }
             Builtin::OpenFile => {
+                if self.verify_mode.get() {
+                    return Err("file I/O denied during verification".to_string());
+                }
                 let path = args
                     .first()
                     .ok_or_else(|| "open_file requires path argument".to_string())?;
@@ -4019,6 +4160,9 @@ impl Runtime {
                 Ok(Value::FileHandle(file_id))
             }
             Builtin::ReadFile => {
+                if self.verify_mode.get() {
+                    return Err("file I/O denied during verification".to_string());
+                }
                 let handle_value = args
                     .first()
                     .ok_or_else(|| "read_file requires file handle argument".to_string())?;
@@ -4040,6 +4184,9 @@ impl Runtime {
                 Ok(Value::Str(content))
             }
             Builtin::WriteFile => {
+                if self.verify_mode.get() {
+                    return Err("file I/O denied during verification".to_string());
+                }
                 if args.len() != 2 {
                     return Err("write_file requires handle and content arguments".to_string());
                 }
@@ -5567,5 +5714,301 @@ fn main() -> i64 {
         // The identity reference passes its own generated holdouts.
         verify_problem_code_strict(&problem, problem.reference_code)
             .expect("array identity reference must pass its generated holdouts");
+    }
+
+    // ====================================================================
+    // GAP 1 — BOUND LOOPS: ForTo / ForInRange / ForParallel must not hang.
+    // ====================================================================
+
+    /// A small int->int problem used to drive candidate code through the
+    /// verify-path executor (`execute_function_for_problem`), which sets
+    /// verification mode and isolates panics.
+    fn ident_problem(name: &str) -> Problem {
+        Problem {
+            name: name.to_string(),
+            category: "test",
+            description: "test",
+            // function_name() derives from the signature's fn name
+            signature: Box::leak(format!("fn {name}(a: i64) -> i64").into_boxed_str()),
+            examples: vec![Example {
+                inputs: vec![BmValue::Int(0)],
+                expected: BmValue::Int(0),
+            }],
+            holdouts: vec![],
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        }
+    }
+
+    #[test]
+    fn forto_loop_is_capped() {
+        // `for i in 0..n` with a huge n must return Err (cap), not spin forever.
+        let problem = ident_problem("forto_cap_v0");
+        let code = "fn forto_cap_v0(a: i64) -> i64 {\n    s := 0;\n    for i := 0 to 1000000000 {\n        s = s + 1;\n    }\n    return s;\n}\n";
+        let result =
+            execute_function_for_problem(code, "forto_cap_v0", &[BmValue::Int(0)], &problem);
+        assert!(
+            result.is_err(),
+            "huge ForTo loop must hit the iteration cap, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("iteration limit"),
+            "error should mention the iteration limit"
+        );
+    }
+
+    #[test]
+    fn forinrange_loop_is_capped() {
+        // `for i in 0..n` (range form) with a huge n must return Err (cap).
+        let problem = ident_problem("forinrange_cap_v0");
+        let code = "fn forinrange_cap_v0(a: i64) -> i64 {\n    s := 0;\n    for i in 0..1000000000 {\n        s = s + 1;\n    }\n    return s;\n}\n";
+        let result = execute_function_for_problem(
+            code,
+            "forinrange_cap_v0",
+            &[BmValue::Int(0)],
+            &problem,
+        );
+        assert!(
+            result.is_err(),
+            "huge ForInRange loop must hit the iteration cap, got {result:?}"
+        );
+        assert!(result.unwrap_err().contains("iteration limit"));
+    }
+
+    #[test]
+    fn small_forto_loop_still_runs() {
+        // A loop UNDER the cap must still execute normally (no regression).
+        let problem = ident_problem("forto_small_v0");
+        let code = "fn forto_small_v0(a: i64) -> i64 {\n    s := 0;\n    for i := 0 to 10 {\n        s = s + 1;\n    }\n    return s;\n}\n";
+        let value =
+            execute_function_for_problem(code, "forto_small_v0", &[BmValue::Int(0)], &problem)
+                .expect("small loop must run");
+        assert!(
+            matches!(value, Value::Int(10)),
+            "small loop should sum to 10, got {value:?}"
+        );
+    }
+
+    // ====================================================================
+    // GAP 2 — PANIC ISOLATION: a panic on the verify path becomes Err, not
+    // a process SIGABRT.
+    // ====================================================================
+
+    #[test]
+    fn run_isolated_converts_panic_to_err() {
+        // The catch_unwind chokepoint must turn a panic into a clean Err so the
+        // process survives. If this aborted the process the test binary would
+        // crash instead of asserting.
+        let result = run_isolated(|| panic!("boom in candidate"));
+        assert!(
+            result.is_err(),
+            "a panicking candidate closure must yield Err, not abort"
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            "candidate panicked during verification"
+        );
+    }
+
+    #[test]
+    fn run_isolated_passes_through_ok() {
+        // A non-panicking closure returns its value unchanged.
+        let result = run_isolated(|| Ok(Value::Int(42)));
+        assert!(matches!(result, Ok(Value::Int(42))));
+    }
+
+    // ====================================================================
+    // GAP 3 — CHECKED ARITHMETIC: pow / abs reject overflow instead of
+    // panicking.
+    // ====================================================================
+
+    #[test]
+    fn pow_overflow_is_err() {
+        // 2^100 overflows i64; must return Err, not panic.
+        let code = "fn main() -> i64 {\n    return pow(2, 100);\n}\n";
+        let result = execute_program(code);
+        assert!(result.is_err(), "pow overflow must be Err, got {result:?}");
+        assert!(result.unwrap_err().contains("overflow"));
+    }
+
+    #[test]
+    fn pow_negative_exponent_is_err() {
+        // A negative exponent previously wrapped via `as u32` into a huge value;
+        // now it must be rejected.
+        let code = "fn main() -> i64 {\n    return pow(2, -1);\n}\n";
+        let result = execute_program(code);
+        assert!(
+            result.is_err(),
+            "negative pow exponent must be Err, got {result:?}"
+        );
+        assert!(result.unwrap_err().contains("out of range"));
+    }
+
+    #[test]
+    fn pow_small_still_works() {
+        // pow within range must still compute correctly.
+        let code = "fn main() -> i64 {\n    return pow(2, 10);\n}\n";
+        let result = execute_program(code).expect("pow(2,10) must run");
+        assert_eq!(result.return_value, Some(1024));
+    }
+
+    #[test]
+    fn abs_i64_min_is_err() {
+        // abs(i64::MIN) overflows (its negation is unrepresentable); must be Err,
+        // not a panic. -9223372036854775808 is i64::MIN.
+        let code =
+            "fn main() -> i64 {\n    return abs(0 - 9223372036854775807 - 1);\n}\n";
+        let result = execute_program(code);
+        assert!(
+            result.is_err(),
+            "abs(i64::MIN) must be Err, got {result:?}"
+        );
+        assert!(result.unwrap_err().contains("overflow"));
+    }
+
+    #[test]
+    fn abs_normal_still_works() {
+        let code = "fn main() -> i64 {\n    return abs(0 - 7);\n}\n";
+        let result = execute_program(code).expect("abs(-7) must run");
+        assert_eq!(result.return_value, Some(7));
+    }
+
+    // ====================================================================
+    // GAP 4 — DENY FS IN VERIFY: file builtins are denied on the verify path
+    // but still work for normal execution.
+    // ====================================================================
+
+    #[test]
+    fn verify_denies_open_file() {
+        // A candidate that opens a file during verification must be rejected.
+        let problem = ident_problem("fs_open_v0");
+        let code = "fn fs_open_v0(a: i64) -> i64 {\n    f := open_file(\"/tmp/ncpu_verify_should_not_exist\", \"w\");\n    return 0;\n}\n";
+        let result =
+            execute_function_for_problem(code, "fs_open_v0", &[BmValue::Int(0)], &problem);
+        assert!(
+            result.is_err(),
+            "open_file during verification must be denied, got {result:?}"
+        );
+        assert!(result.unwrap_err().contains("denied during verification"));
+        // And the file must not have been created on the real FS.
+        assert!(
+            !std::path::Path::new("/tmp/ncpu_verify_should_not_exist").exists(),
+            "verify-mode open_file must not touch the real filesystem"
+        );
+    }
+
+    #[test]
+    fn verify_denies_write_file() {
+        let problem = ident_problem("fs_write_v0");
+        let code = "fn fs_write_v0(a: i64) -> i64 {\n    f := open_file(\"/tmp/ncpu_verify_write\", \"w\");\n    write_file(f, \"x\");\n    return 0;\n}\n";
+        let result =
+            execute_function_for_problem(code, "fs_write_v0", &[BmValue::Int(0)], &problem);
+        assert!(
+            result.is_err(),
+            "write_file during verification must be denied"
+        );
+    }
+
+    #[test]
+    fn normal_execution_allows_file_io() {
+        // The SAME builtins must still work outside verification mode, proving
+        // the deny is scoped to the verify path, not a global disable.
+        let path = std::env::temp_dir().join("ncpu_normal_io_test.txt");
+        let path_str = path.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&path);
+        let code = format!(
+            "fn main() -> i64 {{\n    f := open_file(\"{path_str}\", \"w\");\n    write_file(f, \"hello\");\n    close_file(f);\n    return 0;\n}}\n"
+        );
+        let result = execute_program(&code);
+        assert!(
+            result.is_ok(),
+            "normal (non-verify) file I/O must still work, got {result:?}"
+        );
+        let contents = std::fs::read_to_string(&path).expect("file should have been written");
+        assert_eq!(contents, "hello");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ====================================================================
+    // GAP 5 — FLOAT COMPARISON: epsilon compare, NaN policy, no false-accept.
+    // ====================================================================
+
+    #[test]
+    fn output_matches_float_float_epsilon() {
+        // Rounding-equal floats within epsilon must match (exact == would fail).
+        assert!(output_matches(
+            &Value::Float(1.0),
+            &crate::benchmark::Value::Float((1.0_f64 + 1e-12).to_bits())
+        ));
+        // 0.1 + 0.2 != 0.3 exactly, but is within epsilon.
+        assert!(output_matches(
+            &Value::Float(0.1 + 0.2),
+            &crate::benchmark::Value::Float(0.3_f64.to_bits())
+        ));
+        // Genuinely different floats must NOT match.
+        assert!(!output_matches(
+            &Value::Float(1.0),
+            &crate::benchmark::Value::Float(2.0_f64.to_bits())
+        ));
+    }
+
+    #[test]
+    fn output_matches_nan_equals_nan() {
+        // NaN policy: two NaNs are equal; NaN vs non-NaN is not.
+        assert!(output_matches(
+            &Value::Float(f64::NAN),
+            &crate::benchmark::Value::Float(f64::NAN.to_bits())
+        ));
+        assert!(!output_matches(
+            &Value::Float(f64::NAN),
+            &crate::benchmark::Value::Float(1.0_f64.to_bits())
+        ));
+        assert!(!output_matches(
+            &Value::Float(1.0),
+            &crate::benchmark::Value::Float(f64::NAN.to_bits())
+        ));
+    }
+
+    #[test]
+    fn output_matches_float_int_rejects_2pow53_plus_1() {
+        // The mandated false-accept guard: a float 2^53 must NOT match the int
+        // 2^53+1, because the int does not round-trip exactly through f64.
+        let two_pow_53 = 9007199254740992.0_f64; // == 2^53
+        assert!(!output_matches(
+            &Value::Float(two_pow_53),
+            &crate::benchmark::Value::Int(9007199254740993) // 2^53 + 1
+        ));
+        // Symmetric direction: Int actual vs Float expected.
+        assert!(!output_matches(
+            &Value::Int(9007199254740993),
+            &crate::benchmark::Value::Float(two_pow_53.to_bits())
+        ));
+        // But an integral float that DOES round-trip exactly matches its int.
+        assert!(output_matches(
+            &Value::Float(42.0),
+            &crate::benchmark::Value::Int(42)
+        ));
+        assert!(output_matches(
+            &Value::Int(42),
+            &crate::benchmark::Value::Float(42.0_f64.to_bits())
+        ));
+    }
+
+    #[test]
+    fn output_matches_float_rejects_nonintegral_vs_int() {
+        // A non-integral float must never match an int expected.
+        assert!(!output_matches(
+            &Value::Float(1.5),
+            &crate::benchmark::Value::Int(1)
+        ));
+        assert!(!output_matches(
+            &Value::Float(1.5),
+            &crate::benchmark::Value::Int(2)
+        ));
     }
 }
