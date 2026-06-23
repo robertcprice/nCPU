@@ -195,19 +195,19 @@ fn search_stateful_reducer_solves_state_plus_array_sum() {
         signature: "fn stateful_reducer_v0(state: i64, arr: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![BmValue::Int(0), BmValue::Array(vec![1, 2, 3])],
+                inputs: vec![BmValue::Int(0), BmValue::int_array(&[1, 2, 3])],
                 expected: BmValue::Int(6),
             },
             Example {
-                inputs: vec![BmValue::Int(10), BmValue::Array(vec![5, 0, 0])],
+                inputs: vec![BmValue::Int(10), BmValue::int_array(&[5, 0, 0])],
                 expected: BmValue::Int(15),
             },
             Example {
-                inputs: vec![BmValue::Int(-5), BmValue::Array(vec![2, 9, 1])],
+                inputs: vec![BmValue::Int(-5), BmValue::int_array(&[2, 9, 1])],
                 expected: BmValue::Int(7),
             },
             Example {
-                inputs: vec![BmValue::Int(100), BmValue::Array(vec![-1, 0, 0])],
+                inputs: vec![BmValue::Int(100), BmValue::int_array(&[-1, 0, 0])],
                 expected: BmValue::Int(99),
             },
         ],
@@ -336,24 +336,24 @@ fn search_stateful_reducer_dual_solves_delta_accumulator() {
             Example {
                 inputs: vec![
                     BmValue::Int(0),
-                    BmValue::Array(vec![1, 2, 3]),
-                    BmValue::Array(vec![1, 0, 0]),
+                    BmValue::int_array(&[1, 2, 3]),
+                    BmValue::int_array(&[1, 0, 0]),
                 ],
                 expected: BmValue::Int(5),
             },
             Example {
                 inputs: vec![
                     BmValue::Int(10),
-                    BmValue::Array(vec![5, 5]),
-                    BmValue::Array(vec![2, 3]),
+                    BmValue::int_array(&[5, 5]),
+                    BmValue::int_array(&[2, 3]),
                 ],
                 expected: BmValue::Int(15),
             },
             Example {
                 inputs: vec![
                     BmValue::Int(-5),
-                    BmValue::Array(vec![3, 3, 3]),
-                    BmValue::Array(vec![1, 1, 1]),
+                    BmValue::int_array(&[3, 3, 3]),
+                    BmValue::int_array(&[1, 1, 1]),
                 ],
                 expected: BmValue::Int(1),
             },
@@ -409,19 +409,19 @@ fn search_stateful_replace_solves_flip_on_positive() {
         signature: "fn flip_on_positive_v0(state: i64, arr: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![BmValue::Int(1), BmValue::Array(vec![3, 7, 1])],
+                inputs: vec![BmValue::Int(1), BmValue::int_array(&[3, 7, 1])],
                 expected: BmValue::Int(-1),
             },
             Example {
-                inputs: vec![BmValue::Int(5), BmValue::Array(vec![-1, -2])],
+                inputs: vec![BmValue::Int(5), BmValue::int_array(&[-1, -2])],
                 expected: BmValue::Int(5),
             },
             Example {
-                inputs: vec![BmValue::Int(0), BmValue::Array(vec![-3])],
+                inputs: vec![BmValue::Int(0), BmValue::int_array(&[-3])],
                 expected: BmValue::Int(0),
             },
             Example {
-                inputs: vec![BmValue::Int(-7), BmValue::Array(vec![0, 0, 1])],
+                inputs: vec![BmValue::Int(-7), BmValue::int_array(&[0, 0, 1])],
                 expected: BmValue::Int(7),
             },
         ],
@@ -481,7 +481,7 @@ fn search_stateful_reducer_event_solves_event_modulated_sum() {
                 inputs: vec![
                     BmValue::Int(0),
                     BmValue::Int(3),
-                    BmValue::Array(vec![1, 2, 3]),
+                    BmValue::int_array(&[1, 2, 3]),
                 ],
                 expected: BmValue::Int(18),
             },
@@ -490,13 +490,13 @@ fn search_stateful_reducer_event_solves_event_modulated_sum() {
                 inputs: vec![
                     BmValue::Int(10),
                     BmValue::Int(2),
-                    BmValue::Array(vec![1, 4]),
+                    BmValue::int_array(&[1, 4]),
                 ],
                 expected: BmValue::Int(20),
             },
             // state=5, event=0, sum=4 -> 5 + 0*4 = 5  (event gates off)
             Example {
-                inputs: vec![BmValue::Int(5), BmValue::Int(0), BmValue::Array(vec![1, 3])],
+                inputs: vec![BmValue::Int(5), BmValue::Int(0), BmValue::int_array(&[1, 3])],
                 expected: BmValue::Int(5),
             },
             // state=-3, event=-2, sum=4 -> -3 + -2*4 = -11
@@ -504,7 +504,7 @@ fn search_stateful_reducer_event_solves_event_modulated_sum() {
                 inputs: vec![
                     BmValue::Int(-3),
                     BmValue::Int(-2),
-                    BmValue::Array(vec![1, 3]),
+                    BmValue::int_array(&[1, 3]),
                 ],
                 expected: BmValue::Int(-11),
             },
@@ -548,7 +548,7 @@ fn search_stateful_reducer_event_solves_gated_contribution() {
                 inputs: vec![
                     BmValue::Int(0),
                     BmValue::Int(1),
-                    BmValue::Array(vec![1, 2, 3]),
+                    BmValue::int_array(&[1, 2, 3]),
                 ],
                 expected: BmValue::Int(6),
             },
@@ -557,7 +557,7 @@ fn search_stateful_reducer_event_solves_gated_contribution() {
                 inputs: vec![
                     BmValue::Int(7),
                     BmValue::Int(0),
-                    BmValue::Array(vec![1, 2, 3]),
+                    BmValue::int_array(&[1, 2, 3]),
                 ],
                 expected: BmValue::Int(7),
             },
@@ -566,13 +566,13 @@ fn search_stateful_reducer_event_solves_gated_contribution() {
                 inputs: vec![
                     BmValue::Int(-2),
                     BmValue::Int(-1),
-                    BmValue::Array(vec![10, 20]),
+                    BmValue::int_array(&[10, 20]),
                 ],
                 expected: BmValue::Int(-2),
             },
             // event=5, sum=9 -> 4 + 9 = 13
             Example {
-                inputs: vec![BmValue::Int(4), BmValue::Int(5), BmValue::Array(vec![4, 5])],
+                inputs: vec![BmValue::Int(4), BmValue::Int(5), BmValue::int_array(&[4, 5])],
                 expected: BmValue::Int(13),
             },
         ],
@@ -632,7 +632,7 @@ fn search_stateful_reducer_temporal_solves_aging_state() {
                 inputs: vec![
                     BmValue::Int(0),
                     BmValue::Int(5),
-                    BmValue::Array(vec![1, 2, 3]),
+                    BmValue::int_array(&[1, 2, 3]),
                 ],
                 expected: BmValue::Int(5),
             },
@@ -640,7 +640,7 @@ fn search_stateful_reducer_temporal_solves_aging_state() {
                 inputs: vec![
                     BmValue::Int(10),
                     BmValue::Int(3),
-                    BmValue::Array(vec![1, 1, 1]),
+                    BmValue::int_array(&[1, 1, 1]),
                 ],
                 expected: BmValue::Int(13),
             },
@@ -648,7 +648,7 @@ fn search_stateful_reducer_temporal_solves_aging_state() {
                 inputs: vec![
                     BmValue::Int(-5),
                     BmValue::Int(7),
-                    BmValue::Array(vec![4, 4]),
+                    BmValue::int_array(&[4, 4]),
                 ],
                 expected: BmValue::Int(2),
             },
@@ -694,7 +694,7 @@ fn search_stateful_reducer_temporal_solves_rate_accumulator() {
                 inputs: vec![
                     BmValue::Int(0),
                     BmValue::Int(2),
-                    BmValue::Array(vec![1, 2, 3]),
+                    BmValue::int_array(&[1, 2, 3]),
                 ],
                 expected: BmValue::Int(12),
             },
@@ -702,7 +702,7 @@ fn search_stateful_reducer_temporal_solves_rate_accumulator() {
                 inputs: vec![
                     BmValue::Int(10),
                     BmValue::Int(3),
-                    BmValue::Array(vec![1, 1, 1]),
+                    BmValue::int_array(&[1, 1, 1]),
                 ],
                 expected: BmValue::Int(19),
             },
@@ -710,7 +710,7 @@ fn search_stateful_reducer_temporal_solves_rate_accumulator() {
                 inputs: vec![
                     BmValue::Int(-5),
                     BmValue::Int(4),
-                    BmValue::Array(vec![4, 4]),
+                    BmValue::int_array(&[4, 4]),
                 ],
                 expected: BmValue::Int(27),
             },
@@ -760,7 +760,7 @@ fn search_stateful_reducer_temporal_solves_tick_every_2() {
                 inputs: vec![
                     BmValue::Int(0),
                     BmValue::Int(2),
-                    BmValue::Array(vec![1, 2, 3]),
+                    BmValue::int_array(&[1, 2, 3]),
                 ],
                 expected: BmValue::Int(6),
             },
@@ -768,7 +768,7 @@ fn search_stateful_reducer_temporal_solves_tick_every_2() {
                 inputs: vec![
                     BmValue::Int(10),
                     BmValue::Int(4),
-                    BmValue::Array(vec![1, 1, 1]),
+                    BmValue::int_array(&[1, 1, 1]),
                 ],
                 expected: BmValue::Int(13),
             },
@@ -776,7 +776,7 @@ fn search_stateful_reducer_temporal_solves_tick_every_2() {
                 inputs: vec![
                     BmValue::Int(-5),
                     BmValue::Int(3),
-                    BmValue::Array(vec![4, 4]),
+                    BmValue::int_array(&[4, 4]),
                 ],
                 expected: BmValue::Int(-5),
             },

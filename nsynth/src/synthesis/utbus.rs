@@ -400,9 +400,9 @@ fn enumerate_array_programs() -> Vec<ArrayProgram> {
 fn array_inputs(problem: &Problem) -> Option<Vec<Vec<i64>>> {
     let mut inputs = Vec::new();
     for example in &problem.examples {
-        let arr = match example.inputs.first()? {
-            Value::Array(values) => values.clone(),
-            _ => return None,
+        let arr = match example.inputs.first()?.as_i64_slice() {
+            Some(values) => values,
+            None => return None,
         };
         // Extra scalar args are tolerated (the reducer ignores them) but any
         // non-scalar extra argument falls outside this slice.
@@ -497,7 +497,7 @@ mod tests {
         oracle: impl Fn(&[i64]) -> i64,
     ) -> Problem {
         let mk = |arr: &&[i64]| Example {
-            inputs: vec![Value::Array(arr.to_vec())],
+            inputs: vec![Value::int_array(arr)],
             expected: Value::Int(oracle(arr)),
         };
         Problem {

@@ -434,8 +434,12 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
                 return result;
             }
         }
+        // A MISS here means the enumerator exhausted THIS call's time budget,
+        // not that the problem is impossible: its search frontier is persisted
+        // (keyed by the examples fingerprint), so a later solve of the same
+        // problem resumes deeper rather than restarting from size 1.
         eprintln!(
-            "[solve] enumerative MISS in {:.1}s",
+            "[solve] enumerative MISS (budget exhausted, frontier persisted) in {:.1}s",
             t_enum.elapsed().as_secs_f32()
         );
         method_router::record_miss(problem, ROUTE_ENUMERATIVE);

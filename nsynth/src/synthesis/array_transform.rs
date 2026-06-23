@@ -23,8 +23,16 @@ fn array_rows(problem: &Problem) -> Option<Vec<(Vec<i64>, Vec<i64>)>> {
     problem
         .examples
         .iter()
-        .map(|ex| match (ex.inputs.as_slice(), &ex.expected) {
-            ([Value::Array(input)], Value::Array(output)) => Some((input.clone(), output.clone())),
+        .map(|ex| match ex.inputs.as_slice() {
+            [input @ Value::Array(_)] => {
+                // Both the single array input and the array output must be all-int
+                // for this numeric-transform path; a typed/nested array yields
+                // `None` and the caller falls through to the array machinery.
+                match (input.as_i64_slice(), ex.expected.as_i64_slice()) {
+                    (Some(i), Some(o)) => Some((i, o)),
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .collect()
@@ -236,8 +244,8 @@ mod tests {
     /// holdouts so the strict verifier exercises generalization, not just fit.
     fn pa(rows: &[(&[i64], &[i64])]) -> Problem {
         let to_ex = |(input, output): &(&[i64], &[i64])| Example {
-            inputs: vec![Value::Array(input.to_vec())],
-            expected: Value::Array(output.to_vec()),
+            inputs: vec![Value::int_array(input)],
+            expected: Value::int_array(output),
         };
         let split = rows.len().saturating_sub(2);
         Problem {
@@ -412,7 +420,7 @@ mod tests {
         let problem = Problem {
             signature: "fn f(arr: [i64]) -> i64",
             examples: vec![Example {
-                inputs: vec![Value::Array(vec![1, 2, 3])],
+                inputs: vec![Value::int_array(&[1, 2, 3])],
                 expected: Value::Int(6),
             }],
             ..pa(&[(&[1], &[1])])

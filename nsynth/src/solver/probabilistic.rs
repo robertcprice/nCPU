@@ -417,11 +417,11 @@ mod tests {
     fn test_array_variance_does_not_count_as_conflict() {
         let examples = vec![
             Example {
-                inputs: vec![Value::Array(vec![1, 2, 3])],
+                inputs: vec![Value::int_array(&[1, 2, 3])],
                 expected: Value::Int(3),
             },
             Example {
-                inputs: vec![Value::Array(vec![-5])],
+                inputs: vec![Value::int_array(&[-5])],
                 expected: Value::Int(0),
             },
         ];

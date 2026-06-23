@@ -844,16 +844,15 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
         (Value::Bool(a), BV::Bool(b)) => a == b,
         (Value::Str(a), BV::Str(b)) => a == b,
         // Arrays compare element-wise and recurse on EVERY element. The wire
-        // type (`benchmark::Value::Array`) is `Vec<i64>` today, so each expected
-        // element is an i64 scalar and we bridge it to the runtime element via
-        // `scalar_matches` (which reuses the Int/Bool/Float bridges above). The
-        // recursion is the part that future-proofs this: once the wire array
-        // widens to `Vec<Value>` (see the scoped flag in the task report), the
-        // element arm becomes a recursive `output_matches` call and nested /
-        // typed arrays verify with no further change here.
+        // type (`benchmark::Value::Array`) is now `Vec<Value>`, so each expected
+        // element is itself a full `benchmark::Value` and the comparison recurses
+        // through `output_matches`. This is what lets nested arrays
+        // (`[[1,2],[3]]`), typed arrays (`["a","b"]`, `[1.0,2.0]`), and arrays of
+        // struct elements verify with the SAME strict bridges the top-level
+        // oracle uses (an int element still matches `0/1`<->bool and int<->float,
+        // but nothing looser). Length must match exactly; no padding/truncation.
         (Value::Array(a), BV::Array(b)) => {
-            a.len() == b.len()
-                && a.iter().zip(b.iter()).all(|(x, y)| scalar_matches(x, *y))
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| output_matches(x, y))
         }
         // Pair: the runtime can carry a pair either as the dedicated `Pair`
         // value or (when it flows through struct-of-state) as a 2-field
@@ -875,21 +874,6 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
         // (`tree.nodes[i].value/.left/.right`). Compare structurally, node by
         // node, against the expected `Vec<TreeNode>`.
         (Value::Struct { fields, .. }, BV::Tree(nodes)) => tree_struct_matches(fields, nodes),
-        _ => false,
-    }
-}
-
-/// Compare a runtime array/struct element against a single wire scalar (`i64`).
-///
-/// This is the leaf of `output_matches`'s array recursion. It honours the same
-/// Int/Bool/Float bridges the top-level oracle uses, so an array element emitted
-/// as `1`/`true`/`1.0` all match the wire `1` — but nothing looser (a string or
-/// a struct element never matches a scalar).
-fn scalar_matches(actual: &Value, expected: i64) -> bool {
-    match actual {
-        Value::Int(a) => *a == expected,
-        Value::Bool(a) => i64::from(*a) == expected,
-        Value::Float(a) => *a == expected as f64,
         _ => false,
     }
 }
@@ -990,9 +974,17 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
         BenchmarkValue::Float(b) => Ok(Value::Float(f64::from_bits(*b))),
         BenchmarkValue::Bool(b) => Ok(Value::Bool(*b)),
         BenchmarkValue::Str(v) => Ok(Value::Str(v.clone())),
-        BenchmarkValue::Array(values) => Ok(Value::Array(
-            values.iter().copied().map(Value::Int).collect::<Vec<_>>(),
-        )),
+        BenchmarkValue::Array(values) => {
+            // The wire array now carries `Vec<BenchmarkValue>`, so each element
+            // converts recursively to its runtime `Value` (an int element still
+            // becomes `Value::Int`, but a string/float/nested-array element now
+            // converts correctly instead of being forced through `Value::Int`).
+            let elems = values
+                .iter()
+                .map(|v| runtime_value_from_problem(v, problem_name))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Value::Array(elems))
+        }
         BenchmarkValue::Quad(a, b, c, d) => Ok(Value::Quad(*a, *b, *c, *d)),
         BenchmarkValue::Pair(a, b) => {
             // Known structural pairs keep their domain names/fields so the
@@ -1047,6 +1039,97 @@ fn tree_to_runtime_value(nodes: &[crate::benchmark::TreeNode]) -> Value {
     Value::Struct {
         name: "Tree".to_string(),
         fields,
+    }
+}
+
+/// Convert a runtime result `Value` back to the wire `benchmark::Value`, so a
+/// REFERENCE execution's output can become a holdout `Example.expected`.
+///
+/// This is the inverse of `runtime_value_from_problem` for the value shapes a
+/// benchmark function can return, and it is deliberately STRICT: a shape we
+/// cannot faithfully represent on the wire (e.g. an enum/optional/function, or a
+/// struct whose fields are not all ints) returns `Err` so the caller falls back
+/// to hand-authored holdouts rather than fabricating an expected value.
+///
+/// The mapping mirrors the equality oracle (`output_matches`) so a holdout built
+/// here is exactly as strict as the existing example checks:
+///   - Int/Float/Bool/Str/Array map directly (arrays recurse element-wise).
+///   - A 2-int struct -> `Pair`, a 4-int struct -> `Quad` (multiset over field
+///     names, matching `struct_fields_match`); a `Tree` struct -> `Tree`.
+///   - `Pair`/`Quad` runtime values pass straight through.
+///
+/// Determinism: struct fields live in a `HashMap`, so the converter never relies
+/// on iteration order — it sorts the int payloads before packing a `Pair`/`Quad`
+/// (the oracle compares pairs/quads as a multiset, so a fixed canonical order is
+/// both deterministic and equivalent).
+pub(crate) fn benchmark_value_from_runtime(value: &Value) -> Result<BenchmarkValue, String> {
+    match value {
+        Value::Int(v) => Ok(BenchmarkValue::Int(*v)),
+        Value::Float(v) => Ok(BenchmarkValue::Float(v.to_bits())),
+        Value::Bool(b) => Ok(BenchmarkValue::Bool(*b)),
+        Value::Str(s) => Ok(BenchmarkValue::Str(s.clone())),
+        Value::Array(items) => {
+            let elems = items
+                .iter()
+                .map(benchmark_value_from_runtime)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(BenchmarkValue::Array(elems))
+        }
+        Value::Pair(a, b) => Ok(BenchmarkValue::Pair(*a, *b)),
+        Value::Quad(a, b, c, d) => Ok(BenchmarkValue::Quad(*a, *b, *c, *d)),
+        Value::Struct { name, fields } => {
+            // Tree struct: { nodes: [ { value, left, right }, .. ] }.
+            if name == "Tree" || fields.contains_key("nodes") {
+                let Some(Value::Array(items)) = fields.get("nodes") else {
+                    return Err("tree struct missing `nodes` array".to_string());
+                };
+                let mut nodes = Vec::with_capacity(items.len());
+                for item in items {
+                    let Value::Struct { fields, .. } = item else {
+                        return Err("tree node is not a struct".to_string());
+                    };
+                    let value = match fields.get("value") {
+                        Some(Value::Int(v)) => *v,
+                        _ => return Err("tree node missing int `value`".to_string()),
+                    };
+                    let left = match fields.get("left") {
+                        Some(Value::Int(v)) => *v as i32,
+                        _ => return Err("tree node missing int `left`".to_string()),
+                    };
+                    let right = match fields.get("right") {
+                        Some(Value::Int(v)) => *v as i32,
+                        _ => return Err("tree node missing int `right`".to_string()),
+                    };
+                    nodes.push(crate::benchmark::TreeNode { value, left, right });
+                }
+                return Ok(BenchmarkValue::Tree(nodes));
+            }
+            // Plain struct: must be all-int fields to land on Pair/Quad. Pack in
+            // a canonical (sorted) order — the oracle matches pairs/quads as a
+            // multiset, so order is irrelevant to correctness and sorting keeps
+            // the result deterministic despite HashMap iteration order.
+            let mut ints: Vec<i64> = Vec::with_capacity(fields.len());
+            for v in fields.values() {
+                match v {
+                    Value::Int(i) => ints.push(*i),
+                    _ => {
+                        return Err(format!(
+                            "struct field is not an int; cannot map to wire pair/quad: {v:?}"
+                        ))
+                    }
+                }
+            }
+            ints.sort_unstable();
+            match ints.as_slice() {
+                [a, b] => Ok(BenchmarkValue::Pair(*a, *b)),
+                [a, b, c, d] => Ok(BenchmarkValue::Quad(*a, *b, *c, *d)),
+                other => Err(format!(
+                    "struct with {} int fields has no wire representation",
+                    other.len()
+                )),
+            }
+        }
+        other => Err(format!("no wire representation for runtime value: {other:?}")),
     }
 }
 
@@ -5013,16 +5096,236 @@ fn main() -> i64 {
     fn output_matches_arrays_recurse_elementwise() {
         // Equal int arrays match; differing length or element does not.
         let actual = Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
-        assert!(output_matches(&actual, &BmValue::Array(vec![1, 2, 3])));
-        assert!(!output_matches(&actual, &BmValue::Array(vec![1, 2])));
-        assert!(!output_matches(&actual, &BmValue::Array(vec![1, 2, 4])));
+        assert!(output_matches(&actual, &BmValue::int_array(&[1, 2, 3])));
+        assert!(!output_matches(&actual, &BmValue::int_array(&[1, 2])));
+        assert!(!output_matches(&actual, &BmValue::int_array(&[1, 2, 4])));
         // Bool/float array elements bridge to the wire i64 (no loosening past 0/1).
         let bridged = Value::Array(vec![Value::Bool(true), Value::Float(0.0)]);
-        assert!(output_matches(&bridged, &BmValue::Array(vec![1, 0])));
-        assert!(!output_matches(&bridged, &BmValue::Array(vec![1, 1])));
+        assert!(output_matches(&bridged, &BmValue::int_array(&[1, 0])));
+        assert!(!output_matches(&bridged, &BmValue::int_array(&[1, 1])));
         // A non-scalar element never matches a scalar slot (strictness).
         let nested = Value::Array(vec![Value::Str("x".to_string())]);
-        assert!(!output_matches(&nested, &BmValue::Array(vec![0])));
+        assert!(!output_matches(&nested, &BmValue::int_array(&[0])));
+    }
+
+    #[test]
+    fn output_matches_typed_and_nested_arrays_strict() {
+        // The widened wire array (`Vec<Value>`) lets the oracle recurse on each
+        // element through `output_matches`, so STRING, FLOAT, and NESTED arrays
+        // verify with the same strict bridges as scalars — nothing looser.
+
+        // String-element array: matches the same strings, rejects a different one.
+        let strs = Value::Array(vec![
+            Value::Str("a".to_string()),
+            Value::Str("b".to_string()),
+        ]);
+        let want_strs = BmValue::array_of(vec![
+            BmValue::Str("a".to_string()),
+            BmValue::Str("b".to_string()),
+        ]);
+        assert!(output_matches(&strs, &want_strs));
+        let other_strs = BmValue::array_of(vec![
+            BmValue::Str("a".to_string()),
+            BmValue::Str("c".to_string()),
+        ]);
+        assert!(!output_matches(&strs, &other_strs));
+        // A string element NEVER matches an int element (strict, no coercion).
+        assert!(!output_matches(&strs, &BmValue::array_of(vec![BmValue::Str("a".to_string()), BmValue::Int(0)])));
+
+        // Float-element array: a runtime float matches a wire float (exact bits
+        // via the existing float bridge) and bridges to the equal-valued int.
+        let floats = Value::Array(vec![Value::Float(1.5), Value::Float(2.0)]);
+        let want_floats = BmValue::array_of(vec![
+            BmValue::Float(1.5_f64.to_bits()),
+            BmValue::Float(2.0_f64.to_bits()),
+        ]);
+        assert!(output_matches(&floats, &want_floats));
+        // 2.0 (whole) still bridges to int 2 elementwise; 1.5 does NOT bridge to 1.
+        assert!(!output_matches(&floats, &BmValue::array_of(vec![BmValue::Int(1), BmValue::Int(2)])));
+
+        // Nested array (array-of-arrays): each inner array recurses.
+        let nested = Value::Array(vec![
+            Value::Array(vec![Value::Int(1), Value::Int(2)]),
+            Value::Array(vec![Value::Int(3)]),
+        ]);
+        let want_nested = BmValue::array_of(vec![
+            BmValue::int_array(&[1, 2]),
+            BmValue::int_array(&[3]),
+        ]);
+        assert!(output_matches(&nested, &want_nested));
+        // A different inner element fails; a different inner shape fails.
+        assert!(!output_matches(&nested, &BmValue::array_of(vec![BmValue::int_array(&[1, 9]), BmValue::int_array(&[3])])));
+        assert!(!output_matches(&nested, &BmValue::array_of(vec![BmValue::int_array(&[1, 2]), BmValue::int_array(&[3, 4])])));
+        // Outer length mismatch fails.
+        assert!(!output_matches(&nested, &BmValue::array_of(vec![BmValue::int_array(&[1, 2])])));
+    }
+
+    #[test]
+    fn verify_problem_code_strict_array_output_through_widened_wire() {
+        // End-to-end: a problem whose I/O is an ARRAY verifies through the full
+        // strict path (`verify_problem_code_via_main` stdout check + holdouts via
+        // `output_matches`) with the expected arrays built on the widened wire
+        // type (`array_of` of `Value`s). The Mog reference returns an array
+        // literal `[x, x * 2]`.
+        let problem = Problem {
+            name: "double_pair_array_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn double_pair_array_v0(x: i64) -> [i64]",
+            examples: vec![
+                Example {
+                    inputs: vec![BmValue::Int(3)],
+                    expected: BmValue::array_of(vec![BmValue::Int(3), BmValue::Int(6)]),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(0)],
+                    expected: BmValue::array_of(vec![BmValue::Int(0), BmValue::Int(0)]),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(-4)],
+                    expected: BmValue::array_of(vec![BmValue::Int(-4), BmValue::Int(-8)]),
+                },
+            ],
+            holdouts: vec![
+                Example {
+                    inputs: vec![BmValue::Int(7)],
+                    expected: BmValue::array_of(vec![BmValue::Int(7), BmValue::Int(14)]),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(-1)],
+                    expected: BmValue::array_of(vec![BmValue::Int(-1), BmValue::Int(-2)]),
+                },
+            ],
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        };
+        let code =
+            "fn double_pair_array_v0(x: i64) -> [i64] {\n    return [x, x * 2];\n}\n";
+        verify_problem_code_strict(&problem, code)
+            .unwrap_or_else(|err| panic!("array-output strict verify failed: {err}"));
+
+        // STRICTNESS guard: a reference that returns the WRONG array must fail
+        // verification (no loosened array equality).
+        let wrong = "fn double_pair_array_v0(x: i64) -> [i64] {\n    return [x, x * 3];\n}\n";
+        assert!(
+            verify_problem_code_strict(&problem, wrong).is_err(),
+            "a wrong array output must not verify"
+        );
+    }
+
+    #[test]
+    fn verify_problem_code_strict_typed_string_array_through_widened_wire() {
+        // End-to-end on the WIDENED element type: a problem whose output is a
+        // STRING array (`-> [str]`) verifies through the full strict path. The
+        // wrapper prints the returned array with `println` (array-capable), the
+        // runtime's `display_value` renders it as `[a, b]`, and that must equal
+        // the expected stdout that `benchmark::render_expected` produces from the
+        // `array_of([Str, Str])` wire value. Holdouts then recurse element-wise
+        // through `output_matches` on the string elements. This is the path that
+        // could NOT have worked before the array element type was `Vec<i64>`.
+        let str_pair = |a: &str, b: &str| {
+            BmValue::array_of(vec![BmValue::Str(a.to_string()), BmValue::Str(b.to_string())])
+        };
+        let problem = Problem {
+            name: "tag_pair_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn tag_pair_v0(flag: i64) -> [str]",
+            examples: vec![
+                Example {
+                    inputs: vec![BmValue::Int(1)],
+                    expected: str_pair("on", "yes"),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(0)],
+                    expected: str_pair("off", "no"),
+                },
+            ],
+            holdouts: vec![Example {
+                inputs: vec![BmValue::Int(5)],
+                expected: str_pair("on", "yes"),
+            }],
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        };
+        let code = "fn tag_pair_v0(flag: i64) -> [str] {\n    if flag == 0 {\n        return [\"off\", \"no\"];\n    } else {\n        return [\"on\", \"yes\"];\n    }\n}\n";
+        verify_problem_code_strict(&problem, code)
+            .unwrap_or_else(|err| panic!("string-array strict verify failed: {err}"));
+
+        // STRICTNESS: a reference returning a DIFFERENT string element must not
+        // verify (no loosened string-array equality through the widened wire).
+        let wrong = "fn tag_pair_v0(flag: i64) -> [str] {\n    if flag == 0 {\n        return [\"off\", \"no\"];\n    } else {\n        return [\"on\", \"YES\"];\n    }\n}\n";
+        assert!(
+            verify_problem_code_strict(&problem, wrong).is_err(),
+            "a wrong string-array element must not verify"
+        );
+    }
+
+    #[test]
+    fn verify_problem_code_strict_nested_array_through_widened_wire() {
+        // End-to-end on the NESTED element type: a problem whose output is an
+        // array-of-arrays (`-> [[i64]]`) verifies through the full strict path.
+        // Each inner array is itself a `Value::Array`, so `display_value` renders
+        // `[[a, b], [c]]` and the expected stdout from `array_of([int_array, ..])`
+        // must match exactly. Holdouts recurse twice through `output_matches`
+        // (outer array, then inner arrays) — only possible once the array element
+        // type became `Value` rather than `i64`.
+        let problem = Problem {
+            name: "split_first_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn split_first_v0(x: i64) -> [[i64]]",
+            examples: vec![
+                Example {
+                    inputs: vec![BmValue::Int(3)],
+                    expected: BmValue::array_of(vec![
+                        BmValue::int_array(&[3]),
+                        BmValue::int_array(&[6, 9]),
+                    ]),
+                },
+                Example {
+                    inputs: vec![BmValue::Int(0)],
+                    expected: BmValue::array_of(vec![
+                        BmValue::int_array(&[0]),
+                        BmValue::int_array(&[0, 0]),
+                    ]),
+                },
+            ],
+            holdouts: vec![Example {
+                inputs: vec![BmValue::Int(-2)],
+                expected: BmValue::array_of(vec![
+                    BmValue::int_array(&[-2]),
+                    BmValue::int_array(&[-4, -6]),
+                ]),
+            }],
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        };
+        let code = "fn split_first_v0(x: i64) -> [[i64]] {\n    return [[x], [x * 2, x * 3]];\n}\n";
+        verify_problem_code_strict(&problem, code)
+            .unwrap_or_else(|err| panic!("nested-array strict verify failed: {err}"));
+
+        // STRICTNESS: a wrong inner element must not verify.
+        let wrong = "fn split_first_v0(x: i64) -> [[i64]] {\n    return [[x], [x * 2, x * 4]];\n}\n";
+        assert!(
+            verify_problem_code_strict(&problem, wrong).is_err(),
+            "a wrong nested-array element must not verify"
+        );
     }
 
     #[test]
@@ -5142,5 +5445,127 @@ fn main() -> i64 {
         assert!(matches!(fields.get("second"), Some(Value::Int(3))));
         // And it round-trips through the equality oracle as a pair.
         assert!(output_matches(&generic, &BmValue::Pair(2, 3)));
+    }
+
+    // ── Reference-driven generated holdouts (Part B) ───────────────────────
+
+    /// A 1-arg `add_one` problem whose ONLY visible example (and ONLY
+    /// hand-authored holdout) is `f(1) == 2` — the single point where the
+    /// reference `a + 1` and a deliberately-overfit candidate `a * 2` agree.
+    /// Used to prove a fresh reference-derived holdout catches the overfit.
+    fn overfit_holdout_problem() -> Problem {
+        Problem {
+            name: "add_one_overfit_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn add_one_overfit_v0(a: i64) -> i64",
+            examples: vec![Example {
+                inputs: vec![BmValue::Int(1)],
+                expected: BmValue::Int(2),
+            }],
+            // Hand-authored holdout is ALSO the collision point, so under the
+            // OLD clone-of-hand-holdouts behavior the overfit candidate passed.
+            holdouts: vec![Example {
+                inputs: vec![BmValue::Int(1)],
+                expected: BmValue::Int(2),
+            }],
+            reference_code: "fn add_one_overfit_v0(a: i64) -> i64 { return a + 1; }",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        }
+    }
+
+    /// Generated holdouts are deterministic: the same problem yields byte-
+    /// identical holdout INPUTS (and outputs) across calls — seeded only from
+    /// the problem name, with no clock/RNG.
+    #[test]
+    fn generated_holdouts_are_deterministic() {
+        let problem = overfit_holdout_problem();
+        let a = generated_holdouts(&problem);
+        let b = generated_holdouts(&problem);
+        assert!(!a.is_empty(), "reference-driven holdouts must be non-empty");
+        assert_eq!(a, b, "holdouts must be reproducible across calls");
+    }
+
+    /// Generated holdouts come from the REFERENCE, not the candidate: an
+    /// overfit-to-the-visible-example candidate passes the example check but
+    /// now FAILS the strict verifier because a fresh reference-derived holdout
+    /// (e.g. `f(5)`: reference 6, candidate 10) catches the divergence.
+    #[test]
+    fn generated_holdout_catches_overfit_candidate() {
+        let problem = overfit_holdout_problem();
+
+        // The candidate is genuinely overfit: it MATCHES the visible example...
+        let overfit = "fn add_one_overfit_v0(a: i64) -> i64 { return a * 2; }";
+        verify_problem_code(&problem, overfit)
+            .expect("overfit candidate must satisfy the visible example (a=1 -> 2)");
+
+        // ...but a reference-derived holdout catches it under strict verify.
+        let strict = verify_problem_code_strict(&problem, overfit);
+        assert!(
+            strict.is_err(),
+            "a generated holdout from the reference must reject the overfit \
+             candidate, but strict verify accepted it: {strict:?}"
+        );
+
+        // Sanity: the reference itself passes strict verify (its own holdouts
+        // are self-consistent — the new oracle is not spuriously strict).
+        let reference = problem.reference_code;
+        verify_problem_code_strict(&problem, reference)
+            .expect("the reference implementation must pass its own generated holdouts");
+    }
+
+    /// Soundness fallback: an EMPTY reference_code degrades to the hand-authored
+    /// holdouts (never fabricates, never trusts the candidate), preserving the
+    /// "every problem yields non-empty holdouts" invariant.
+    #[test]
+    fn generated_holdouts_fall_back_without_reference() {
+        let mut problem = overfit_holdout_problem();
+        problem.reference_code = "";
+        let holdouts = generated_holdouts(&problem);
+        assert_eq!(
+            holdouts, problem.holdouts,
+            "with no reference, holdouts must equal the hand-authored set"
+        );
+    }
+
+    /// The reference-derived holdouts exercise array outputs too: an identity
+    /// `f([i64]) -> [i64]` reference round-trips through the runtime->wire
+    /// converter, and a candidate that drops the first element is caught.
+    #[test]
+    fn generated_holdouts_handle_array_outputs() {
+        let problem = Problem {
+            name: "arr_identity_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn arr_identity_v0(a: [i64]) -> [i64]",
+            examples: vec![Example {
+                inputs: vec![BmValue::Array(vec![BmValue::Int(1), BmValue::Int(2)])],
+                expected: BmValue::Array(vec![BmValue::Int(1), BmValue::Int(2)]),
+            }],
+            holdouts: vec![Example {
+                inputs: vec![BmValue::Array(vec![BmValue::Int(1), BmValue::Int(2)])],
+                expected: BmValue::Array(vec![BmValue::Int(1), BmValue::Int(2)]),
+            }],
+            reference_code: "fn arr_identity_v0(a: [i64]) -> [i64] { return a; }",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        };
+        let holdouts = generated_holdouts(&problem);
+        assert!(
+            !holdouts.is_empty(),
+            "array-output reference must yield generated holdouts"
+        );
+        // The identity reference passes its own generated holdouts.
+        verify_problem_code_strict(&problem, problem.reference_code)
+            .expect("array identity reference must pass its generated holdouts");
     }
 }

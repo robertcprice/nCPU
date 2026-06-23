@@ -183,9 +183,10 @@ pub fn string(v: &str) -> Value {
     Value::Str(v.to_string())
 }
 
-/// Helper to create array value
+/// Helper to create an integer array value. Signature unchanged (`&[i64]`); the
+/// widening to `Vec<Value>` is absorbed by wrapping each element as `Value::Int`.
 pub fn array(v: &[i64]) -> Value {
-    Value::Array(v.to_vec())
+    Value::int_array(v)
 }
 
 /// Helper to create pair value

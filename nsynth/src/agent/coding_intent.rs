@@ -125,7 +125,7 @@ fn coding_value_to_benchmark(v: &CodingValue) -> Result<Value, String> {
         CodingValue::Float(f) => Value::Float(f.to_bits()),
         CodingValue::Str(s) => Value::Str(s.clone()),
         CodingValue::Bool(b) => Value::Bool(*b),
-        CodingValue::Array(a) => Value::Array(a.clone()),
+        CodingValue::Array(a) => Value::int_array(a),
         CodingValue::Pair(a, b) => Value::Pair(*a, *b),
     })
 }

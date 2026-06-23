@@ -804,9 +804,9 @@ pub fn eval_fallback_direct(names: &[String]) -> Vec<serde_json::Value> {
         let mut examples = Vec::new();
         let mut ok = true;
         for ex in &problem.examples {
-            let arr = match &ex.inputs[0] {
-                crate::benchmark::Value::Array(a) => a.clone(),
-                _ => {
+            let arr = match ex.inputs[0].as_i64_slice() {
+                Some(a) => a,
+                None => {
                     ok = false;
                     break;
                 }
@@ -969,7 +969,7 @@ mod tests {
         reset_prior_server();
 
         let mk = |arr: &[i64], expected: i64| crate::benchmark::Example {
-            inputs: vec![crate::benchmark::Value::Array(arr.to_vec())],
+            inputs: vec![crate::benchmark::Value::int_array(arr)],
             expected: crate::benchmark::Value::Int(expected),
         };
         let problem = Problem {
@@ -1001,9 +1001,9 @@ mod tests {
             .examples
             .iter()
             .map(|ex| {
-                let arr = match &ex.inputs[0] {
-                    crate::benchmark::Value::Array(a) => a.clone(),
-                    _ => unreachable!(),
+                let arr = match ex.inputs[0].as_i64_slice() {
+                    Some(a) => a,
+                    None => unreachable!(),
                 };
                 let mut padded = vec![0f32; MAX_ARR];
                 for (i, v) in arr.iter().enumerate() {

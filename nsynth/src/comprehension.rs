@@ -265,7 +265,7 @@ fn ex_str_str(a: &str, b: &str) -> Example {
 }
 fn ex_arr_int(a: &[i64], n: i64) -> Example {
     Example {
-        inputs: vec![Value::Array(a.to_vec())],
+        inputs: vec![Value::int_array(a)],
         expected: Value::Int(n),
     }
 }

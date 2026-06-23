@@ -161,7 +161,7 @@ fn verify_slot_program(
         .iter()
         .zip(targets.iter())
         .map(|(sk, idx)| Example {
-            inputs: vec![Value::Array(sk.clone())],
+            inputs: vec![Value::int_array(sk)],
             expected: Value::Int(*idx as i64),
         })
         .collect();

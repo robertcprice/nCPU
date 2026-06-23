@@ -67,22 +67,22 @@ fn search_only_generalizes_on_holdout_cases() {
     assert_search_generalizes(
         "array_sum_v0",
         vec![
-            (vec![Value::Array(vec![10, -5, 2])], 7),
-            (vec![Value::Array(vec![1, 2, 3, 4])], 10),
+            (vec![Value::int_array(&[10, -5, 2])], 7),
+            (vec![Value::int_array(&[1, 2, 3, 4])], 10),
         ],
     );
     assert_search_generalizes(
         "count_positive_v0",
         vec![
-            (vec![Value::Array(vec![0, 1, -1, 3])], 2),
-            (vec![Value::Array(vec![-5, -2, 0])], 0),
+            (vec![Value::int_array(&[0, 1, -1, 3])], 2),
+            (vec![Value::int_array(&[-5, -2, 0])], 0),
         ],
     );
     assert_search_generalizes(
         "count_occurrences_v0",
         vec![
-            (vec![Value::Array(vec![4, 1, 4, 4]), Value::Int(4)], 3),
-            (vec![Value::Array(vec![2, 3]), Value::Int(5)], 0),
+            (vec![Value::int_array(&[4, 1, 4, 4]), Value::Int(4)], 3),
+            (vec![Value::int_array(&[2, 3]), Value::Int(5)], 0),
         ],
     );
     assert_search_generalizes(

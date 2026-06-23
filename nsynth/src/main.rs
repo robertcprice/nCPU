@@ -61,7 +61,7 @@ fn run_emitted_on_input(
                             .ok_or_else(|| "--run: array element not i64".to_string())
                     })
                     .collect();
-                Ok(mog_synth::benchmark::Value::Array(ints?))
+                Ok(mog_synth::benchmark::Value::int_array(&ints?))
             }
             serde_json::Value::String(s) => Ok(mog_synth::benchmark::Value::Str(s.clone())),
             other => Err(format!("--run: unsupported input type {other:?}")),
@@ -185,7 +185,7 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
                 inputs.push(Value::Bool(b));
             } else if let Some(arr) = inp.as_array() {
                 let vals: Vec<i64> = arr.iter().filter_map(|x| x.as_i64()).collect();
-                inputs.push(Value::Array(vals));
+                inputs.push(Value::int_array(&vals));
             } else if let Some(s) = inp.as_str() {
                 inputs.push(Value::Str(s.to_string()));
             } else {
@@ -209,7 +209,7 @@ fn parse_problem_json(json_str: &str) -> Result<Problem, String> {
         } else if let Some(s) = exp.as_str() {
             Value::Str(s.to_string())
         } else if let Some(arr) = exp.as_array() {
-            Value::Array(arr.iter().filter_map(|x| x.as_i64()).collect())
+            Value::int_array(&arr.iter().filter_map(|x| x.as_i64()).collect::<Vec<i64>>())
         } else {
             return Err("missing/unsupported expected".to_string());
         };

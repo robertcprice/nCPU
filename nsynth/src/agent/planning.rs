@@ -1107,7 +1107,7 @@ mod tests {
 
     fn create_array_example(input: Vec<i64>, output: i64) -> Example {
         Example {
-            inputs: vec![Value::Array(input)],
+            inputs: vec![Value::int_array(&input)],
             expected: Value::Int(output),
         }
     }

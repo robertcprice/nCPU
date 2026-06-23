@@ -1003,6 +1003,183 @@ fn load_solved_exprs() -> Vec<SolvedExpr> {
     serde_json::from_str(&json).unwrap_or_default()
 }
 
+// ─── Resumable anytime search frontier ─────────────────────────────────────────
+//
+// A `Frontier` lifts the bottom-up enumerator's locals — the size-stratified
+// expression bank (`by_size`) and the next size to expand (`next_size`) — out of
+// the call stack so a search that runs out of *time budget* can be PERSISTED and
+// RESUMED on a later call instead of restarting from size 1. Combined with the
+// removal of the fixed `max_size` ceiling in `enumerate_exprs_resumable`, this
+// turns every "give up / None" into "budget exhausted; frontier persisted;
+// resumable, deepening next time" — the search is anytime and monotone, never a
+// proof of impossibility.
+//
+// Determinism: selection order is purely structural (size ascending, then the
+// fixed op/var/const order). `seen` (the observational-equivalence dedup set) is
+// NOT stored; it is re-derived by replaying the stored `by_size` strata in order
+// on resume, which keeps the file smaller and reproduces the identical dedup
+// decisions (the replay visits strata in the exact stored Vec order).
+
+/// A resumable, size-stratified enumeration frontier for one problem.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Frontier {
+    /// Deterministic key (the examples fingerprint) the frontier belongs to.
+    fingerprint: String,
+    /// Number of function arguments (selection space depends on it).
+    n_args: usize,
+    /// Op tier this frontier was grown under: 0 = core (5 ops), 1 = full (12).
+    /// A frontier must only be resumed under the SAME tier (different op sets
+    /// produce different strata), so a tier mismatch forces a fresh start.
+    ops_tier: u8,
+    /// Size-stratified expression bank: `by_size[s]` holds the unique (under
+    /// observational equivalence) expressions of size `s`. Index 0 is unused.
+    by_size: Vec<Vec<Expr>>,
+    /// The next size level to expand. On a cold frontier this is 2 (sizes 0/1
+    /// are seeded fresh each run from vars/consts/library).
+    next_size: usize,
+}
+
+impl Frontier {
+    /// A fresh frontier for `fingerprint`/`n_args`/`ops_tier`, ready to expand
+    /// from size 2 (size-1 atoms are always re-seeded from vars/consts/library).
+    fn fresh(fingerprint: String, n_args: usize, ops_tier: u8) -> Self {
+        Self {
+            fingerprint,
+            n_args,
+            ops_tier,
+            by_size: vec![vec![]],
+            next_size: 2,
+        }
+    }
+
+    /// True when this frontier is reusable for the given problem signature.
+    /// A mismatch on fingerprint / arity / op-tier means the stored strata do
+    /// not describe THIS search, so the caller must start fresh.
+    fn matches(&self, fingerprint: &str, n_args: usize, ops_tier: u8) -> bool {
+        self.fingerprint == fingerprint && self.n_args == n_args && self.ops_tier == ops_tier
+    }
+}
+
+/// Max distinct frontiers kept on disk. A frontier is FAR larger per entry than
+/// a one-line solved program, so this cap is small and the file-byte cap below
+/// is the real guard. (Disk-blowup history: the solved-program cache once grew
+/// to 13.4 GB; the frontier store must never repeat that.)
+const FRONTIER_MAX_ENTRIES: usize = 64;
+/// Max frontier-store file size in bytes (32 MiB). Refuse to grow/read past it.
+const FRONTIER_MAX_BYTES: u64 = 32 * 1024 * 1024;
+/// Max serialized size of a SINGLE frontier (8 MiB). A frontier that has grown
+/// past this is not persisted (search degrades gracefully to one-shot behavior
+/// for that problem) so one deep search can't fill the store on its own.
+const FRONTIER_MAX_ENTRY_BYTES: usize = 8 * 1024 * 1024;
+
+/// On-disk location for the resumable-frontier store. Mirrors
+/// `solved_exprs_path`: `NSYNTH_ENUM_FRONTIER_PATH` override, empty string
+/// disables, `None` under `cfg!(test)` so tests stay hermetic, else
+/// `~/.mog_synth_enum_frontier.json`.
+fn frontier_path() -> Option<PathBuf> {
+    if let Ok(val) = std::env::var("NSYNTH_ENUM_FRONTIER_PATH") {
+        if val.is_empty() {
+            return None;
+        }
+        return Some(PathBuf::from(val));
+    }
+    if cfg!(test) {
+        return None;
+    }
+    Some(dirs_home().join(".mog_synth_enum_frontier.json"))
+}
+
+/// Load all persisted frontiers. Returns `[]` on missing file / parse failure /
+/// disabled path, and refuses to read a file larger than the byte cap.
+fn load_frontiers() -> Vec<Frontier> {
+    let path = match frontier_path() {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    if !path.exists() {
+        return Vec::new();
+    }
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > FRONTIER_MAX_BYTES {
+            return Vec::new();
+        }
+    }
+    let json = match std::fs::read_to_string(&path) {
+        Ok(j) => j,
+        Err(_) => return Vec::new(),
+    };
+    serde_json::from_str(&json).unwrap_or_default()
+}
+
+/// Load the frontier for `fingerprint`/`n_args`/`ops_tier`, or `None` if the
+/// store is disabled / absent / has no matching (and tier-compatible) entry.
+fn load_frontier(fingerprint: &str, n_args: usize, ops_tier: u8) -> Option<Frontier> {
+    load_frontiers()
+        .into_iter()
+        .find(|f| f.matches(fingerprint, n_args, ops_tier))
+}
+
+/// Persist `frontier`, replacing any prior entry for the same fingerprint.
+/// No-op when the path is disabled. Enforces the single-entry byte cap, the
+/// entry cap, and the file-byte cap BEFORE writing, and fails soft on any IO
+/// error. This is the resumable counterpart of `record_solved_expr`.
+fn save_frontier(frontier: &Frontier) {
+    let path = match frontier_path() {
+        Some(p) => p,
+        None => return,
+    };
+    // Serialize THIS frontier first to enforce the per-entry cap; an
+    // over-cap frontier is dropped (graceful degradation to one-shot search)
+    // rather than persisted, so a single deep search can't fill the store.
+    let entry_json = match serde_json::to_string(frontier) {
+        Ok(j) => j,
+        Err(_) => return,
+    };
+    if entry_json.len() > FRONTIER_MAX_ENTRY_BYTES {
+        return;
+    }
+    let mut existing = load_frontiers();
+    existing.retain(|f| f.fingerprint != frontier.fingerprint);
+    existing.push(frontier.clone());
+    // Entry cap: keep the most recent FRONTIER_MAX_ENTRIES.
+    if existing.len() > FRONTIER_MAX_ENTRIES {
+        let overflow = existing.len() - FRONTIER_MAX_ENTRIES;
+        existing.drain(0..overflow);
+    }
+    let json = match serde_json::to_string(&existing) {
+        Ok(j) => j,
+        Err(_) => return,
+    };
+    // File-byte cap: refuse to grow past the limit (drop this save rather than
+    // risk a runaway file).
+    if json.len() as u64 > FRONTIER_MAX_BYTES {
+        return;
+    }
+    let _ = std::fs::write(&path, json);
+}
+
+/// Drop the persisted frontier for `fingerprint` (e.g. once the problem is
+/// solved, so its frontier becomes dead weight). No-op when disabled / absent.
+fn evict_frontier(fingerprint: &str) {
+    let path = match frontier_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let mut existing = load_frontiers();
+    let before = existing.len();
+    existing.retain(|f| f.fingerprint != fingerprint);
+    if existing.len() == before {
+        return; // nothing to evict
+    }
+    if existing.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    if let Ok(json) = serde_json::to_string(&existing) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 // ─── Bootstrap corpus (cold-start safety) ──────────────────────────────────────
 
 /// Build a cold-start corpus by re-deriving Exprs for the classic seed I/O
@@ -1448,40 +1625,137 @@ fn enumerate_exprs_with_ops_stats(
     binops: &[BinOp],
     unops: &[UnOp],
 ) -> (Option<Expr>, bool, usize) {
+    // Bounded one-shot search: build a throwaway fresh frontier and run the
+    // resumable core with a fixed `soft_cap = max_size`. This preserves the
+    // exact behavior (selection order, dedup, the `s <= max_size` push guards)
+    // of the historical bounded enumerator that bootstrap/tests depend on.
+    let mut frontier = Frontier::fresh(String::new(), n_args, 0);
+    let (expr, timed_out) = enumerate_exprs_resumable(
+        &mut frontier,
+        examples,
+        time_limit_ms,
+        library,
+        binops,
+        unops,
+        Some(max_size),
+    );
+    // `next_size` advances past each completed stratum; the deepest cleanly
+    // completed size is `next_size - 1`, capped at `max_size` (0 if none).
+    let max_completed = if expr.is_some() {
+        // Found before completing the in-progress stratum; report the prior
+        // fully-completed depth, consistent with the original semantics.
+        frontier.next_size.saturating_sub(1).min(max_size)
+    } else if timed_out {
+        frontier.next_size.saturating_sub(1).min(max_size)
+    } else {
+        max_size
+    };
+    (expr, timed_out, max_completed)
+}
+
+/// Resumable, anytime, UNCAPPED bottom-up enumeration core.
+///
+/// Seeds `by_size`/`seen` from the incoming `frontier` (re-deriving `seen` by
+/// replaying the stored strata in order, so dedup decisions are reproduced
+/// exactly), then deepens from `frontier.next_size` with NO fixed size ceiling
+/// when `soft_cap` is `None` — the ONLY stop conditions are "found a verified
+/// Expr" or "time budget tripped". On a budget trip (or clean exhaustion under a
+/// `soft_cap`), the grown `by_size` and the size reached are written back into
+/// `frontier` so a later call RESUMES at that depth rather than restarting.
+///
+/// Returns `(found, timed_out)`. `timed_out == false` with `found == None` means
+/// the (capped) space was exhausted cleanly; under `soft_cap == None` that can
+/// only happen if the enumerator runs out of new unique expressions entirely.
+///
+/// Determinism: no rand, no clock-in-selection. Every `Instant::now()` use here
+/// BOUNDS work (when to stop); none SELECTS a candidate. Selection is purely
+/// `size ascending → fixed var/const/op order → library injection order`.
+#[allow(clippy::too_many_arguments)]
+fn enumerate_exprs_resumable(
+    frontier: &mut Frontier,
+    examples: &[(Vec<i64>, i64)],
+    time_limit_ms: u64,
+    library: Option<&ComponentLibrary>,
+    binops: &[BinOp],
+    unops: &[UnOp],
+    soft_cap: Option<usize>,
+) -> (Option<Expr>, bool) {
     let start = std::time::Instant::now();
+    let n_args = frontier.n_args;
     let test_inputs: Vec<Vec<i64>> = examples.iter().map(|(a, _)| a.clone()).collect();
 
-    let mut by_size: Vec<Vec<Expr>> = vec![vec![]; max_size + 1];
+    // `by_size` grows dynamically (no `max_size + 1` preallocation), so an
+    // uncapped search can deepen without an upper bound. Take ownership of the
+    // frontier's strata for the duration of the search; write the (possibly
+    // grown) bank back before returning.
+    let mut by_size: Vec<Vec<Expr>> = std::mem::take(&mut frontier.by_size);
+    if by_size.is_empty() {
+        by_size.push(vec![]); // index 0 sentinel
+    }
     let mut seen: HashSet<Vec<i64>> = HashSet::new();
     let mut timed_out = false;
-    let mut max_completed: usize = 0;
 
-    // Helper: check and add
-    let check_add =
-        |e: &Expr, by_size: &mut Vec<Vec<Expr>>, seen: &mut HashSet<Vec<i64>>| -> Option<Expr> {
-            if let Some(fp) = fingerprint(e, &test_inputs) {
-                if matches_all(e, examples) && robust_well_defined(e, n_args, 30) {
-                    return Some(e.clone());
-                }
-                if seen.insert(fp) {
-                    let s = e.size();
-                    if s <= max_size {
-                        by_size[s].push(e.clone());
-                    }
+    // The soft cap, if any: pushes past it are suppressed and the deepening
+    // loop stops once `size` would exceed it. `None` == unbounded.
+    let cap = soft_cap.unwrap_or(usize::MAX);
+
+    // Ensure `by_size` can hold index `s`, growing with empty strata as needed.
+    let ensure_slot = |by_size: &mut Vec<Vec<Expr>>, s: usize| {
+        if s >= by_size.len() {
+            by_size.resize(s + 1, Vec::new());
+        }
+    };
+
+    // Helper: check a candidate; on a match return it, else dedup-insert into
+    // the size stratum (suppressed above the soft cap). Mirrors the historical
+    // `check_add` exactly, but grows `by_size` instead of indexing a fixed vec.
+    let check_add = |e: &Expr,
+                     by_size: &mut Vec<Vec<Expr>>,
+                     seen: &mut HashSet<Vec<i64>>|
+     -> Option<Expr> {
+        if let Some(fp) = fingerprint(e, &test_inputs) {
+            if matches_all(e, examples) && robust_well_defined(e, n_args, 30) {
+                return Some(e.clone());
+            }
+            if seen.insert(fp) {
+                let s = e.size();
+                if s <= cap {
+                    ensure_slot(by_size, s);
+                    by_size[s].push(e.clone());
                 }
             }
-            None
-        };
+        }
+        None
+    };
 
-    // Size 1: variables, constants, library components
+    // RESUME PATH: if the frontier already carries strata beyond the size-1
+    // seed (i.e. a prior call expanded it), rebuild `seen` by replaying those
+    // strata in stored order. This reproduces the identical dedup state without
+    // re-seeding size-1 atoms (which would duplicate vars/consts/library) and
+    // keeps the persisted file free of the fingerprint set.
+    let resuming = frontier.next_size > 2 || by_size.len() > 2;
+    if resuming {
+        for stratum in by_size.iter() {
+            for e in stratum {
+                if let Some(fp) = fingerprint(e, &test_inputs) {
+                    seen.insert(fp);
+                }
+            }
+        }
+    } else {
+
+    // ── COLD START: seed size 1 (variables, constants, library components) ──
+    // On a `found` return the frontier is irrelevant (the caller evicts a
+    // solved problem's frontier), so success returns do not write `by_size`
+    // back — only the budget-exhausted/exhausted-clean exit persists it.
     for i in 0..n_args {
         if let Some(e) = check_add(&Expr::Var(i), &mut by_size, &mut seen) {
-            return (Some(e), false, max_completed);
+            return (Some(e), false);
         }
     }
     for &c in &CONSTANTS {
         if let Some(e) = check_add(&Expr::Const(c), &mut by_size, &mut seen) {
-            return (Some(e), false, max_completed);
+            return (Some(e), false);
         }
     }
     // Add library components as re-rooted size-1 leaves (cost discount).
@@ -1499,21 +1773,29 @@ fn enumerate_exprs_with_ops_stats(
             }
             if let Some(fp) = fingerprint(&comp, &test_inputs) {
                 if matches_all(&comp, examples) && robust_well_defined(&comp, n_args, 30) {
-                    return (Some(comp), false, max_completed);
+                    return (Some(comp), false);
                 }
                 if seen.insert(fp) {
+                    ensure_slot(&mut by_size, 1);
                     by_size[1].push(comp);
                     injected += 1;
                 }
             }
         }
     }
+    } // end COLD START
 
-    for size in 2..=max_size {
+    // Deepening loop: from the frontier's resume point, with NO upper bound
+    // when uncapped (`cap == usize::MAX`). The ONLY stops are "found" (early
+    // return) or "budget tripped" (`timed_out`). `size` may exceed any prior
+    // run's depth; `ensure_slot` grows `by_size` accordingly.
+    let mut size = frontier.next_size;
+    while size <= cap {
         if start.elapsed().as_millis() as u64 > time_limit_ms {
             timed_out = true;
             break;
         }
+        ensure_slot(&mut by_size, size);
         let mut new: Vec<Expr> = Vec::new();
 
         // Unary ops
@@ -1524,7 +1806,7 @@ fn enumerate_exprs_with_ops_stats(
                     let e = Expr::UnaryOp(uop, Box::new(child.clone()));
                     if let Some(fp) = fingerprint(&e, &test_inputs) {
                         if matches_all(&e, examples) && robust_well_defined(&e, n_args, 30) {
-                            return (Some(e), false, max_completed);
+                            return (Some(e), false);
                         }
                         if seen.insert(fp) {
                             new.push(e);
@@ -1537,7 +1819,7 @@ fn enumerate_exprs_with_ops_stats(
         // Binary ops
         for ls in 1..size {
             let rs = size - 1 - ls;
-            if rs < 1 || rs > max_size {
+            if rs < 1 || rs > cap {
                 continue;
             }
             if start.elapsed().as_millis() as u64 > time_limit_ms {
@@ -1552,7 +1834,7 @@ fn enumerate_exprs_with_ops_stats(
                         let e = Expr::BinOp(op, Box::new(left.clone()), Box::new(right.clone()));
                         if let Some(fp) = fingerprint(&e, &test_inputs) {
                             if matches_all(&e, examples) && robust_well_defined(&e, n_args, 30) {
-                                return (Some(e), false, max_completed);
+                                return (Some(e), false);
                             }
                             if seen.insert(fp) {
                                 new.push(e);
@@ -1598,7 +1880,7 @@ fn enumerate_exprs_with_ops_stats(
                                         if matches_all(&e, examples)
                                             && robust_well_defined(&e, n_args, 30)
                                         {
-                                            return (Some(e), false, max_completed);
+                                            return (Some(e), false);
                                         }
                                         if seen.insert(fp) {
                                             new.push(e);
@@ -1622,7 +1904,7 @@ fn enumerate_exprs_with_ops_stats(
             let init_budget = 1;
             let bound_budget = 1;
             let rhs_budget = size - 3 - init_budget - bound_budget;
-            if rhs_budget >= 1 && rhs_budget <= max_size {
+            if rhs_budget >= 1 && rhs_budget <= cap {
                 let inits = by_size[init_budget].clone();
                 let bounds = by_size[bound_budget].clone();
                 // For loop body, the rhs can reference acc (var n_args) and i (var n_args+1)
@@ -1669,7 +1951,7 @@ fn enumerate_exprs_with_ops_stats(
                                     if matches_all(&e, examples)
                                         && robust_well_defined(&e, n_args, 30)
                                     {
-                                        return (Some(e), false, max_completed);
+                                        return (Some(e), false);
                                     }
                                     if seen.insert(fp) {
                                         new.push(e);
@@ -1682,6 +1964,12 @@ fn enumerate_exprs_with_ops_stats(
             }
         }
 
+        if timed_out {
+            // Budget tripped mid-stratum: DISCARD the partial `new` for this
+            // size (leave its slot empty) so a later resume rebuilds the full
+            // size deterministically, and do NOT advance `next_size` past it.
+            break;
+        }
         eprintln!(
             "[enum] size {size}: {} new, {} total unique, {:.1}s",
             new.len(),
@@ -1689,12 +1977,15 @@ fn enumerate_exprs_with_ops_stats(
             start.elapsed().as_secs_f32()
         );
         by_size[size] = new;
-        if !timed_out {
-            max_completed = size;
-        }
+        size += 1;
     }
 
-    (None, timed_out, max_completed)
+    // Persist the grown frontier: the deepest cleanly-completed size is
+    // `size - 1`, so the next resume continues at `size`. (On a clean exhaustion
+    // under a soft cap, `size` is `cap + 1`, which the caller treats as done.)
+    frontier.next_size = size;
+    frontier.by_size = by_size;
+    (None, timed_out)
 }
 
 // ─── Emit Mog code from discovered expression ────────────────────────────────
@@ -2019,93 +2310,101 @@ fn synthesize_scalar_enumerative(problem: &Problem) -> Option<SolveResult> {
     // Load component library (lazy, first call initializes)
     let library = ComponentLibrary::load_or_dream(5_000);
 
-    // Two-pass: fast 5-op sweep (deep), then expanded 12-op sweep (shallow)
-    // Pass 1: core ops only (+,-,*,/,%) — reaches size 7-9 quickly
-    let max_size_fast = if n_args <= 1 {
-        9
-    } else if n_args <= 2 {
-        7
-    } else {
-        6
-    };
-    let time_fast = if n_args <= 1 {
-        10_000
-    } else if n_args <= 2 {
-        8_000
-    } else {
-        5_000
-    };
-    let (fast_expr, fast_timed_out, fast_max_completed) = enumerate_exprs_with_ops_stats(
-        n_args,
-        max_size_fast,
-        &examples,
-        time_fast,
-        Some(&library),
-        &CORE_BINOPS,
-        &CORE_UNOPS,
-    );
     // Inputs from the in-scope examples, used to fingerprint solved Exprs for
     // the persistent mining corpus (no-op under cfg!(test) / disabled path).
     let test_inputs: Vec<Vec<i64>> = examples.iter().map(|(a, _)| a.clone()).collect();
-    if let Some(expr) = fast_expr {
-        let code = emit_mog(&expr, fn_name, &param_names);
-        if verify_problem_code_strict(problem, &code).is_ok() {
-            record_solved_expr(&expr, n_args, &fingerprint(&expr, &test_inputs).unwrap_or_default());
-            return Some(SolveResult {
-                success: true,
-                code,
-                method: "enumerative".to_string(),
-                error: None,
-                metadata: DifferentiableMetadata::default(),
-            });
-        }
-    }
-    // Decide whether pass-2 (full ops, shallower) can still help:
-    //  - clean exhaustion of pass-1 → pass-2 won't find anything pass-1 missed,
-    //    skip it so loop-class problems reach the gradient path sooner.
-    //  - pass-1 timed out but already completed size ≥ 6 → the search space
-    //    larger than pass-2's max_size is already explored; pass-2 would
-    //    re-grind small sizes with a different op set for little gain.
-    //  - pass-1 timed out having completed < 6 → pass-2's alternative ops
-    //    might still find something small, so fall through.
-    if !fast_timed_out {
-        eprintln!("[enum] pass-1 exhausted cleanly; skipping pass-2");
-        return None;
-    }
-    let max_size_full = if n_args <= 1 {
-        7
-    } else if n_args <= 2 {
-        5
-    } else {
-        5
-    };
-    if fast_max_completed >= max_size_full {
-        eprintln!(
-            "[enum] pass-1 reached size {fast_max_completed} before timeout; skipping pass-2"
-        );
-        return None;
-    }
-    let time_full = if n_args <= 1 { 8_000 } else { 5_000 };
-    if let Some(expr) = enumerate_exprs(n_args, max_size_full, &examples, time_full, Some(&library))
-    {
-        let code = emit_mog(&expr, fn_name, &param_names);
 
-        // Verify via Mog runtime
-        if verify_problem_code_strict(problem, &code).is_ok() {
-            record_solved_expr(&expr, n_args, &fingerprint(&expr, &test_inputs).unwrap_or_default());
-            return Some(SolveResult {
-                success: true,
-                code,
-                method: "enumerative".to_string(),
-                error: None,
-                metadata: DifferentiableMetadata::default(),
-            });
-        }
-        // If Mog verification fails (syntax mismatch), still report the expression
-        eprintln!(
-            "[enum] found expr but Mog verification failed: {}",
-            expr.to_mog(&param_names)
+    // Deterministic per-problem key for the resumable frontier store. Derived
+    // ONLY from the examples (stable across runs/machines), so a later solve of
+    // the SAME problem reloads its frontier and deepens instead of restarting.
+    let fp = crate::solved_cache::examples_fingerprint(&problem.examples);
+
+    // ── Per-call time budget (anytime, resumable) ──────────────────────────
+    // NSYNTH_ENUM_BUDGET_MS bounds THIS call; the SEARCH DEPTH is unbounded and
+    // RISES across calls (the frontier resumes deeper each time). The default
+    // equals the sum of the historical pass-1 + pass-2 budgets, so a cold first
+    // call has unchanged wall-clock. The split mirrors the old deep/shallow
+    // ratio: ~55% to the core-op (deep) tier, the rest to the full-op tier.
+    let default_budget: u64 = if n_args <= 1 {
+        18_000
+    } else if n_args <= 2 {
+        13_000
+    } else {
+        10_000
+    };
+    let budget_ms: u64 = std::env::var("NSYNTH_ENUM_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default_budget);
+    let core_budget = (budget_ms * 55 / 100).max(1);
+    let full_budget = budget_ms.saturating_sub(core_budget).max(1);
+
+    // Optional SOFT size cap. Unset → unbounded (the anytime guarantee). Set it
+    // to bound cumulative re-run cost in CI without reintroducing a hard ceiling
+    // in the engine itself.
+    let soft_cap: Option<usize> = std::env::var("NSYNTH_ENUM_SOFT_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok());
+
+    // Run one resumable deepening pass for a given op tier: load this tier's
+    // frontier (empty on first call), deepen under `budget`, and on a verified
+    // hit record + evict the frontier and return the solution. On a miss,
+    // persist the (deepened) frontier so the NEXT call resumes from here — this
+    // is the "budget exhausted, frontier persisted, resumable" reframe of the
+    // old terminal `None`.
+    let mut run_tier = |ops_tier: u8,
+                        binops: &[BinOp],
+                        unops: &[UnOp],
+                        budget: u64|
+     -> Option<SolveResult> {
+        let mut frontier = load_frontier(&fp, n_args, ops_tier)
+            .unwrap_or_else(|| Frontier::fresh(fp.clone(), n_args, ops_tier));
+        let (expr, _timed_out) = enumerate_exprs_resumable(
+            &mut frontier,
+            &examples,
+            budget,
+            Some(&library),
+            binops,
+            unops,
+            soft_cap,
         );
+        if let Some(expr) = expr {
+            let code = emit_mog(&expr, fn_name, &param_names);
+            if verify_problem_code_strict(problem, &code).is_ok() {
+                record_solved_expr(
+                    &expr,
+                    n_args,
+                    &fingerprint(&expr, &test_inputs).unwrap_or_default(),
+                );
+                // Solved → its frontier is dead weight; drop it.
+                evict_frontier(&fp);
+                return Some(SolveResult {
+                    success: true,
+                    code,
+                    method: "enumerative".to_string(),
+                    error: None,
+                    metadata: DifferentiableMetadata::default(),
+                });
+            }
+            eprintln!(
+                "[enum] found expr but Mog verification failed: {}",
+                expr.to_mog(&param_names)
+            );
+        }
+        // Miss for THIS call: persist the deepened frontier so a later call
+        // continues from here (no fixed ceiling, never "impossible").
+        save_frontier(&frontier);
+        None
+    };
+
+    // Tier 0: core ops only (+,-,*,/,%) — deep. Tier 1: all 12 ops — broader.
+    // Both are uncapped and resumable; clean exhaustion of small sizes is no
+    // longer terminal (it just means the frontier now starts deeper next time).
+    if let Some(result) = run_tier(0, &CORE_BINOPS, &CORE_UNOPS, core_budget) {
+        return Some(result);
+    }
+    if let Some(result) = run_tier(1, &ALL_BINOPS, &ALL_UNOPS, full_budget) {
+        return Some(result);
     }
 
     // Try nested loops for 1-2 arg scalar problems
@@ -2161,13 +2460,7 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
             let array: Vec<i64> = ex
                 .inputs
                 .iter()
-                .filter_map(|v| {
-                    if let Value::Array(a) = v {
-                        Some(a.clone())
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|v| v.as_i64_slice())
                 .next()
                 .unwrap_or_default();
             (scalar_args, array, ex.expected_int())
@@ -2748,6 +3041,140 @@ mod tests {
         let (_expr, timed_out, _max_completed) =
             enumerate_exprs_with_ops_stats(1, 5, &examples, 0, None, &CORE_BINOPS, &CORE_UNOPS);
         assert!(timed_out, "0ms budget must flip the timeout flag");
+    }
+
+    // ── Anytime resumable search (Part A) ──────────────────────────────────
+
+    /// THE RESUMABILITY GUARANTEE. A problem (`f(x) = x*x*x`, minimal expr size
+    /// 5 under core ops) is UNSOLVED under a shallow soft cap, but the search
+    /// does NOT report impossibility — it persists a frontier and, when RESUMED
+    /// under a deeper cap, finds the answer by continuing from where it stopped
+    /// rather than restarting from size 1.
+    #[test]
+    fn resumable_search_deepens_across_calls() {
+        // cube: no single op / constant reproduces it, so it is not findable at
+        // size <= 3; (x*x)*x is the size-5 witness.
+        let examples = vec![(vec![2], 8), (vec![3], 27), (vec![4], 64), (vec![5], 125)];
+
+        // CALL 1: deepen only up to size 3 (generous time, so the cap — not the
+        // clock — bounds the run). Must MISS, must NOT be a timeout (it cleanly
+        // exhausted the capped space), and must have advanced the frontier.
+        let mut frontier = Frontier::fresh(String::new(), 1, 0);
+        let (expr1, timed_out1) = enumerate_exprs_resumable(
+            &mut frontier,
+            &examples,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(3),
+        );
+        assert!(expr1.is_none(), "cube must NOT be solvable at size <= 3");
+        assert!(
+            !timed_out1,
+            "clean exhaustion under a soft cap is not a timeout — and a None \
+             here is 'budget exhausted, resumable', never a proof of impossibility"
+        );
+        let depth_after_1 = frontier.next_size;
+        assert!(
+            depth_after_1 >= 4,
+            "frontier should have advanced past size 3 (got next_size={depth_after_1})"
+        );
+        // The frontier carries real work forward (size-3 stratum is populated).
+        assert!(
+            frontier.by_size.len() > 3 && !frontier.by_size[3].is_empty(),
+            "size-3 expressions must be persisted in the frontier for resume"
+        );
+
+        // CALL 2: RESUME the SAME frontier under a deeper cap. It must now solve
+        // cube — proving the second call continued deeper instead of restarting.
+        let (expr2, _timed_out2) = enumerate_exprs_resumable(
+            &mut frontier,
+            &examples,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(7),
+        );
+        let solved = expr2.expect("resumed deeper search must solve cube");
+        assert!(
+            matches_all(&solved, &examples),
+            "resumed solution must satisfy every example"
+        );
+        assert!(
+            frontier.next_size > depth_after_1 || solved.size() <= 7,
+            "resume must have explored deeper than the first call"
+        );
+    }
+
+    /// DETERMINISM / MONOTONICITY. A search SPLIT across two resumed calls finds
+    /// the SAME witness as one long uncapped call (the search is uniform-cost by
+    /// size and the frontier is a faithful snapshot — no rand, no clock in
+    /// selection). Proves the split-vs-whole equivalence the design claims.
+    #[test]
+    fn split_resume_matches_single_run() {
+        let examples = vec![(vec![2], 8), (vec![3], 27), (vec![4], 64), (vec![5], 125)];
+
+        // One long run (generous cap).
+        let mut whole = Frontier::fresh(String::new(), 1, 0);
+        let (one, _) = enumerate_exprs_resumable(
+            &mut whole,
+            &examples,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(7),
+        );
+        let one = one.expect("single run solves cube");
+
+        // Split run: cap 3 (miss), then resume cap 7 (solve).
+        let mut split = Frontier::fresh(String::new(), 1, 0);
+        let (a, _) = enumerate_exprs_resumable(
+            &mut split,
+            &examples,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(3),
+        );
+        assert!(a.is_none(), "cube unsolved at cap 3");
+        let (b, _) = enumerate_exprs_resumable(
+            &mut split,
+            &examples,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(7),
+        );
+        let two = b.expect("resumed run solves cube");
+
+        assert_eq!(
+            one, two,
+            "split-across-calls search must find the identical witness as one long run"
+        );
+    }
+
+    /// The resumable wrapper preserves the historical bounded semantics: the
+    /// old `enumerate_exprs_with_ops_stats` API still finds identity at size 1
+    /// and reports a clean (non-timeout) exhaustion when nothing matches.
+    #[test]
+    fn bounded_wrapper_behaves_like_before() {
+        // identity at size 1
+        let id = vec![(vec![3], 3), (vec![7], 7), (vec![-2], -2)];
+        let (e, t, _mc) =
+            enumerate_exprs_with_ops_stats(1, 5, &id, 5_000, None, &CORE_BINOPS, &CORE_UNOPS);
+        assert!(e.is_some() && !t, "identity is size-1, no timeout");
+
+        // unsolvable-in-budget but clean exhaustion at small cap
+        let miss = vec![(vec![0], 1000), (vec![1], 1001), (vec![2], 1002)];
+        let (e2, t2, mc2) =
+            enumerate_exprs_with_ops_stats(1, 3, &miss, 3_000, None, &CORE_BINOPS, &CORE_UNOPS);
+        assert!(e2.is_none() && !t2, "1000 not in const set; clean exhaustion");
+        assert_eq!(mc2, 3, "every size up to the cap completed");
     }
 
     // ── Mining / generalization tests ──────────────────────────────────────

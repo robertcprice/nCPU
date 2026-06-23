@@ -538,7 +538,7 @@ mod tests {
             description: "sum an array",
             signature: "fn array_sum(xs: Vec<i64>) -> i64",
             examples: vec![Example {
-                inputs: vec![Value::Array(vec![1, 2, 3])],
+                inputs: vec![Value::int_array(&[1, 2, 3])],
                 expected: Value::Int(6),
             }],
             holdouts: vec![],
@@ -639,7 +639,7 @@ mod tests {
             description: "arr",
             signature: "fn f(xs: Vec<i64>) -> i64",
             examples: vec![Example {
-                inputs: vec![Value::Array(vec![1, 2])],
+                inputs: vec![Value::int_array(&[1, 2])],
                 expected: Value::Int(3),
             }],
             holdouts: vec![],

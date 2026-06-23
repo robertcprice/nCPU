@@ -1167,7 +1167,7 @@ mod json_conversion_tests {
         let result = pipeline.json_to_value(json_val);
 
         assert!(result.is_some());
-        assert_eq!(result, Some(Value::Array(vec![1, 2, 3])));
+        assert_eq!(result, Some(Value::int_array(&[1, 2, 3])));
     }
 
     #[test]
@@ -1248,7 +1248,7 @@ mod signature_inference_tests {
     fn test_infer_signature_list_input() {
         let pipeline = NLPipeline::new();
         let examples = vec![Example {
-            inputs: vec![Value::Array(vec![1, 2, 3])],
+            inputs: vec![Value::int_array(&[1, 2, 3])],
             expected: Value::Int(3),
         }];
         let sig = pipeline.infer_signature(&examples);
@@ -1259,8 +1259,8 @@ mod signature_inference_tests {
     fn test_infer_signature_list_output() {
         let pipeline = NLPipeline::new();
         let examples = vec![Example {
-            inputs: vec![Value::Array(vec![3, 2, 1])],
-            expected: Value::Array(vec![1, 2, 3]),
+            inputs: vec![Value::int_array(&[3, 2, 1])],
+            expected: Value::int_array(&[1, 2, 3]),
         }];
         let sig = pipeline.infer_signature(&examples);
         assert_eq!(sig, "fn f(x0: [i64]) -> [i64]");
@@ -1270,8 +1270,8 @@ mod signature_inference_tests {
     fn test_infer_signature_mixed_types() {
         let pipeline = NLPipeline::new();
         let examples = vec![Example {
-            inputs: vec![Value::Array(vec![1, 2]), Value::Int(3)],
-            expected: Value::Array(vec![1, 2, 3]),
+            inputs: vec![Value::int_array(&[1, 2]), Value::Int(3)],
+            expected: Value::int_array(&[1, 2, 3]),
         }];
         let sig = pipeline.infer_signature(&examples);
         assert_eq!(sig, "fn f(x0: [i64], x1: i64) -> [i64]");

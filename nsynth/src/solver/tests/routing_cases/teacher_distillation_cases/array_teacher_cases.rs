@@ -9,29 +9,29 @@ fn array_teacher_distillation_solves_count_positive() {
         signature: "fn count_positive_teacher(arr: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![Value::Array(vec![1, 2, 3, 4])],
+                inputs: vec![Value::int_array(&[1, 2, 3, 4])],
                 expected: Value::Int(4),
             },
             Example {
-                inputs: vec![Value::Array(vec![4, -3, 2, -1])],
+                inputs: vec![Value::int_array(&[4, -3, 2, -1])],
                 expected: Value::Int(2),
             },
             Example {
-                inputs: vec![Value::Array(vec![-5])],
+                inputs: vec![Value::int_array(&[-5])],
                 expected: Value::Int(0),
             },
             Example {
-                inputs: vec![Value::Array(vec![0, 0, 0])],
+                inputs: vec![Value::int_array(&[0, 0, 0])],
                 expected: Value::Int(0),
             },
         ],
         holdouts: vec![
             Example {
-                inputs: vec![Value::Array(vec![3, 0, -2, 1])],
+                inputs: vec![Value::int_array(&[3, 0, -2, 1])],
                 expected: Value::Int(2),
             },
             Example {
-                inputs: vec![Value::Array(vec![-1, -2, -3])],
+                inputs: vec![Value::int_array(&[-1, -2, -3])],
                 expected: Value::Int(0),
             },
         ],

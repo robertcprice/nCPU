@@ -16,7 +16,13 @@ pub enum Value {
     Float(u64),
     Str(String),
     Bool(bool),
-    Array(Vec<i64>),
+    /// A heterogeneous array. Historically the wire array was `Vec<i64>`; it now
+    /// carries `Vec<Value>` so typed (string/float/bool), nested (array-of-array),
+    /// and struct-element arrays can be expressed and verified end-to-end. The
+    /// overwhelmingly common int-array case is built via the `array(&[i64])`
+    /// helper (each element wrapped as `Value::Int`) so existing call sites and
+    /// their rendered output are unchanged; typed/nested arrays use `array_of`.
+    Array(Vec<Value>),
     Pair(i64, i64),
     /// 4-field struct for struct-of-state benchmarks (e.g., {a, b, c, d}).
     Quad(i64, i64, i64, i64),
@@ -52,6 +58,51 @@ impl std::fmt::Display for Value {
                 write!(f, "]")
             }
         }
+    }
+}
+
+impl Value {
+    /// Back-compat accessor for the numeric solvers, which only operate on
+    /// integer arrays. Returns an owned `Vec<i64>` iff *every* element is a
+    /// `Value::Int` (it cannot borrow `&[i64]` out of a `Vec<Value>`). A typed,
+    /// nested, or otherwise non-integer array yields `None`, so a numeric solver
+    /// cleanly refuses rather than fabricating values from the wrong shape.
+    pub fn as_i64_slice(&self) -> Option<Vec<i64>> {
+        match self {
+            Value::Array(elems) => elems
+                .iter()
+                .map(|e| match e {
+                    Value::Int(v) => Some(*v),
+                    _ => None,
+                })
+                .collect(),
+            _ => None,
+        }
+    }
+
+    /// Borrow the element vector of an array value (`Vec<Value>`), or `None` for
+    /// a non-array. Lets consumers that genuinely handle heterogeneous/nested
+    /// arrays inspect the wire elements without copying.
+    pub fn as_value_slice(&self) -> Option<&[Value]> {
+        match self {
+            Value::Array(elems) => Some(elems.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// Construct an integer array value from a slice of `i64` (each wrapped as
+    /// `Value::Int`). The companion of the module-private `array` helper for use
+    /// outside this module.
+    pub fn int_array(values: &[i64]) -> Value {
+        Value::Array(values.iter().copied().map(Value::Int).collect())
+    }
+
+    /// Construct an array value from already-typed elements: typed scalars
+    /// (`Str`/`Float`/`Bool`), nested arrays (`Array`), or struct/pair elements.
+    /// This is the constructor for the typed/nested arrays the widened wire type
+    /// now supports (the integer case has the dedicated [`Value::int_array`]).
+    pub fn array_of(values: Vec<Value>) -> Value {
+        Value::Array(values)
     }
 }
 
@@ -290,8 +341,11 @@ fn string(v: &str) -> Value {
     Value::Str(v.to_string())
 }
 
+/// Build an integer array value. Signature is unchanged (`&[i64] -> Value`) so
+/// the ~hundreds of in-module call sites are untouched; the widening to
+/// `Vec<Value>` is absorbed here by wrapping each element as `Value::Int`.
 fn array(v: &[i64]) -> Value {
-    Value::Array(v.to_vec())
+    Value::Array(v.iter().copied().map(Value::Int).collect())
 }
 
 fn pair(a: i64, b: i64) -> Value {
@@ -462,8 +516,195 @@ pub fn get_string_benchmark(variants_per_factory: usize) -> Vec<Problem> {
     problems
 }
 
+/// Parameter type for holdout input sampling. A local, minimal mirror of
+/// `solver::signature::ParamType` (which is `pub(super)` and unreachable here);
+/// duplicating these ~20 lines keeps `benchmark` decoupled from the solver's
+/// private API rather than widening that API's surface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HoldoutParamType {
+    I64,
+    F64,
+    ArrayI64,
+    String,
+    /// A type we cannot yet sample faithfully — forces a fallback to the
+    /// hand-authored holdouts rather than emitting wrong inputs.
+    Other,
+}
+
+/// Parse the comma-separated parameter types out of a `fn name(a: T, b: U) -> R`
+/// signature. Mirrors `solver::signature::parse_param_types` for the four
+/// sampleable types; everything else is `Other`.
+fn holdout_param_types(signature: &str) -> Vec<HoldoutParamType> {
+    let params = signature
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(params, _)| params)
+        .unwrap_or("")
+        .trim();
+    if params.is_empty() {
+        return Vec::new();
+    }
+    params
+        .split(',')
+        .map(|param| {
+            let ty = param
+                .split_once(':')
+                .map(|(_, ty)| ty.trim())
+                .unwrap_or_default();
+            match ty {
+                "i64" => HoldoutParamType::I64,
+                "f64" => HoldoutParamType::F64,
+                "[i64]" => HoldoutParamType::ArrayI64,
+                "string" => HoldoutParamType::String,
+                _ => HoldoutParamType::Other,
+            }
+        })
+        .collect()
+}
+
+/// Deterministic 64-bit seed from a problem name (FNV-1a). Stable across runs
+/// and machines — the whole point is reproducible holdout inputs with no clock
+/// and no RNG. A non-zero offset avoids an all-zero seed for the empty string.
+fn holdout_seed(name: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in name.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash ^ 0x9e3779b97f4a7c15
+}
+
+/// Tiny deterministic LCG used to sample holdout inputs (same constants as
+/// `program_trace::InputSampler`, kept local to avoid a benchmark<->program_trace
+/// module cycle). No `std::time`, no `rand`.
+struct HoldoutRng {
+    state: u64,
+}
+
+impl HoldoutRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.state >> 33
+    }
+    /// Next i64 in the inclusive range `[min, max]`.
+    fn next_in(&mut self, min: i64, max: i64) -> i64 {
+        let span = (max as i128 - min as i128 + 1).max(1) as u128;
+        min + (self.next_u64() as u128 % span) as i64
+    }
+}
+
+/// How many fresh holdout points to attempt per problem.
+const HOLDOUT_SAMPLES: usize = 12;
+/// Input scalar range — kept modest so the reference rarely overflows.
+const HOLDOUT_MIN: i64 = -12;
+const HOLDOUT_MAX: i64 = 24;
+/// Max sampled array length.
+const HOLDOUT_ARRAY_MAX_LEN: usize = 6;
+
+/// Build one sampled input vector matching `param_types`, or `None` if any
+/// param is a type we cannot sample (caller then falls back to hand holdouts).
+fn sample_holdout_inputs(rng: &mut HoldoutRng, param_types: &[HoldoutParamType]) -> Option<Vec<Value>> {
+    let mut inputs = Vec::with_capacity(param_types.len());
+    for ty in param_types {
+        match ty {
+            HoldoutParamType::I64 => inputs.push(Value::Int(rng.next_in(HOLDOUT_MIN, HOLDOUT_MAX))),
+            HoldoutParamType::F64 => {
+                // Sample a small rational so reference float math stays sane.
+                let num = rng.next_in(HOLDOUT_MIN, HOLDOUT_MAX) as f64;
+                inputs.push(Value::Float((num).to_bits()));
+            }
+            HoldoutParamType::ArrayI64 => {
+                let len = rng.next_in(0, HOLDOUT_ARRAY_MAX_LEN as i64) as usize;
+                let elems: Vec<Value> = (0..len)
+                    .map(|_| Value::Int(rng.next_in(HOLDOUT_MIN, HOLDOUT_MAX)))
+                    .collect();
+                inputs.push(Value::Array(elems));
+            }
+            HoldoutParamType::String => {
+                // Deterministic lowercase string of length 1..=5.
+                let len = rng.next_in(1, 5) as usize;
+                let s: String = (0..len)
+                    .map(|_| (b'a' + (rng.next_in(0, 25) as u8)) as char)
+                    .collect();
+                inputs.push(Value::Str(s));
+            }
+            HoldoutParamType::Other => return None,
+        }
+    }
+    Some(inputs)
+}
+
+/// Holdout examples for `problem`, used by the STRICT verifier to catch
+/// candidates that overfit the visible examples.
+///
+/// Historically this returned `problem.holdouts.clone()` — a fixed handful of
+/// hand-authored points, so a candidate that merely matched those passed. Now,
+/// when the problem ships a runnable `reference_code`, we deterministically
+/// sample FRESH inputs of the signature's types, run the REFERENCE over them,
+/// and use the reference's outputs as the expected values. The candidate is
+/// NEVER consulted here, so these are true generalization probes the candidate
+/// has not seen.
+///
+/// Soundness fallbacks (never fabricate, never trust the candidate):
+///   - empty `reference_code` → hand-authored holdouts (current behavior).
+///   - a signature with an unsampleable (`Other`) parameter → hand holdouts.
+///   - the reference erroring / returning an unrepresentable value on a sample
+///     → that point is skipped (a reference error is NOT a candidate failure).
+///   - if NO point survives sampling → hand holdouts (keeps the per-problem
+///     "holdouts are non-empty" invariant the benchmark relies on).
 pub fn generated_holdouts(problem: &Problem) -> Vec<Example> {
-    problem.holdouts.clone()
+    // No oracle to run → keep the hand-authored holdouts.
+    if problem.reference_code.is_empty() {
+        return problem.holdouts.clone();
+    }
+    let param_types = holdout_param_types(problem.signature);
+    // Zero-arg functions or any unsampleable parameter → fall back.
+    if param_types.is_empty() || param_types.contains(&HoldoutParamType::Other) {
+        return problem.holdouts.clone();
+    }
+    let fn_name = problem.function_name();
+    if fn_name.is_empty() {
+        return problem.holdouts.clone();
+    }
+
+    let mut rng = HoldoutRng::new(holdout_seed(&problem.name));
+    let mut generated = Vec::with_capacity(HOLDOUT_SAMPLES);
+    for _ in 0..HOLDOUT_SAMPLES {
+        let Some(inputs) = sample_holdout_inputs(&mut rng, &param_types) else {
+            // Should not happen (Other already filtered), but stay safe.
+            return problem.holdouts.clone();
+        };
+        // Run the REFERENCE — the ONLY source of expected values here.
+        let out = match crate::runtime::execute_function_for_problem(
+            problem.reference_code,
+            fn_name,
+            &inputs,
+            problem,
+        ) {
+            Ok(v) => v,
+            // A reference error on this input (e.g. arr[0] on an empty array) is
+            // not a candidate failure — skip the point.
+            Err(_) => continue,
+        };
+        let expected = match crate::runtime::benchmark_value_from_runtime(&out) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        generated.push(Example { inputs, expected });
+    }
+
+    // If sampling produced nothing runnable, fall back so the invariant that
+    // every problem yields non-empty holdouts is preserved.
+    if generated.is_empty() {
+        return problem.holdouts.clone();
+    }
+    generated
 }
 
 fn make_add_two(variant: usize) -> Problem {

@@ -487,7 +487,9 @@ fn try_post_enumerative_route(
                     code: String::new(),
                     method: "none".to_string(),
                     error: Some(format!(
-                        "no synthesis method solved this {}-arg problem",
+                        "search budget exhausted for this {}-arg problem; \
+                         enumerative frontier persisted and resumable (not a \
+                         proof of impossibility)",
                         ctx.n_args
                     )),
                     metadata: DifferentiableMetadata::default(),
@@ -568,8 +570,16 @@ pub(super) fn solve_problem_after_enumeration(
     SolveResult {
         success: false,
         code: String::new(),
+        // The portfolio did not solve this problem WITHIN THIS CALL's budget.
+        // The enumerative search frontier is persisted (keyed by the examples
+        // fingerprint), so a re-invocation resumes deeper rather than restarting
+        // from size 1 — this is NOT a proof that no program exists.
         method: "none".to_string(),
-        error: Some("no synthesis method solved this problem".to_string()),
+        error: Some(
+            "search budget exhausted; enumerative frontier persisted and \
+             resumable (not a proof of impossibility)"
+                .to_string(),
+        ),
         metadata: DifferentiableMetadata::default(),
     }
 }

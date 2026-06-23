@@ -18,11 +18,15 @@ pub(super) fn str_value(value: &Value) -> Option<&str> {
     }
 }
 
-pub(super) fn array_value(value: &Value) -> Option<&[i64]> {
-    match value {
-        Value::Array(v) => Some(v.as_slice()),
-        _ => None,
-    }
+/// Extract the integer payload of an array value for the numeric solvers.
+///
+/// Now that `Value::Array` carries `Vec<Value>`, this returns an *owned*
+/// `Vec<i64>` (it cannot borrow `&[i64]` out of the element vector) and yields
+/// `None` unless every element is a `Value::Int`. Numeric solvers therefore
+/// keep seeing exactly the integer arrays they did before; typed/nested arrays
+/// produce `None` and are routed to the typed-array path instead.
+pub(super) fn array_value(value: &Value) -> Option<Vec<i64>> {
+    value.as_i64_slice()
 }
 
 pub(super) fn pair_value(value: &Value) -> Option<(i64, i64)> {
@@ -101,7 +105,7 @@ where
     problem.examples.iter().all(|ex| {
         ex.inputs.len() == 1
             && array_value(&ex.inputs[0])
-                .map(|arr| func(arr) == ex.expected_int())
+                .map(|arr| func(&arr) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -114,7 +118,7 @@ where
         ex.inputs.len() == 2
             && array_value(&ex.inputs[0])
                 .zip(int_value(&ex.inputs[1]))
-                .map(|(arr, target)| func(arr, target) == ex.expected_int())
+                .map(|(arr, target)| func(&arr, target) == ex.expected_int())
                 .unwrap_or(false)
     })
 }
@@ -151,7 +155,7 @@ where
         ex.inputs.len() == 2
             && array_value(&ex.inputs[0])
                 .zip(array_value(&ex.inputs[1]))
-                .map(|(a, b)| func(a, b) == ex.expected_int())
+                .map(|(a, b)| func(&a, &b) == ex.expected_int())
                 .unwrap_or(false)
     })
 }

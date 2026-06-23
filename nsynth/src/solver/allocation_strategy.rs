@@ -503,8 +503,8 @@ mod tests {
             description: "Array test",
             signature: "fn test(arr: Vec<i64>) -> Vec<i64>",
             examples: vec![Example {
-                inputs: vec![Value::Array(vec![1, 2, 3])],
-                expected: Value::Array(vec![2, 4, 6]),
+                inputs: vec![Value::int_array(&[1, 2, 3])],
+                expected: Value::int_array(&[2, 4, 6]),
             }],
             holdouts: vec![],
             reference_code: "",

@@ -141,7 +141,14 @@ impl From<BenchmarkValue> for InputValue {
             BenchmarkValue::Float(f) => InputValue::Float(f64::from_bits(f)),
             BenchmarkValue::Bool(b) => InputValue::Bool(b),
             BenchmarkValue::Str(s) => InputValue::String(s),
-            BenchmarkValue::Array(arr) => InputValue::IntArray(arr),
+            // This sandbox input type only models integer arrays. An all-int
+            // array converts directly; a typed/nested array has no `InputValue`
+            // representation, so fall through to the unsupported fallback rather
+            // than silently dropping element data.
+            ref v @ BenchmarkValue::Array(_) => match v.as_i64_slice() {
+                Some(ints) => InputValue::IntArray(ints),
+                None => InputValue::Int(0),
+            },
             _ => InputValue::Int(0), // Fallback for unsupported types
         }
     }

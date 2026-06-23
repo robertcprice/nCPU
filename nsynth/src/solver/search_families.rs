@@ -404,9 +404,9 @@ pub(super) fn search_stateful_reducer(problem: &Problem, fn_name: &str) -> Optio
                     Value::Int(v) => *v,
                     _ => return false,
                 };
-                let arr = match &ex.inputs[1] {
-                    Value::Array(v) => v.clone(),
-                    _ => return false,
+                let arr = match ex.inputs[1].as_i64_slice() {
+                    Some(v) => v,
+                    None => return false,
                 };
                 let r = reducer_fn(&arr);
                 let got = match *op {
@@ -474,13 +474,13 @@ pub(super) fn search_stateful_reducer_dual(
                 Value::Int(v) => *v,
                 _ => return false,
             };
-            let arr_a = match &ex.inputs[1] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let arr_a = match ex.inputs[1].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
-            let arr_b = match &ex.inputs[2] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let arr_b = match ex.inputs[2].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
             let ra = red_a_fn(&arr_a);
             let rb = red_b_fn(&arr_b);
@@ -593,9 +593,9 @@ pub(super) fn search_stateful_reducer_event(
                 Value::Int(v) => *v,
                 _ => return false,
             };
-            let arr = match &ex.inputs[2] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let arr = match ex.inputs[2].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
             let r = reducer_fn(&arr);
             // Combined value (without gate)
@@ -681,9 +681,9 @@ pub(super) fn search_stateful_reducer_event(
                 Value::Int(v) => *v,
                 _ => return false,
             };
-            let arr = match &ex.inputs[2] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let arr = match ex.inputs[2].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
             let ra = red_a_fn(&arr);
             let rb = red_b_fn(&arr);
@@ -791,9 +791,9 @@ pub(super) fn search_stateful_replace(problem: &Problem, fn_name: &str) -> Optio
                     break;
                 }
             };
-            let arr = match &ex.inputs[1] {
-                Value::Array(v) => v.clone(),
-                _ => {
+            let arr = match ex.inputs[1].as_i64_slice() {
+                Some(v) => v,
+                None => {
                     all_pass = false;
                     break;
                 }
@@ -1580,9 +1580,9 @@ pub(super) fn search_broadcast_pattern(problem: &Problem, fn_name: &str) -> Opti
             _ => return None,
         };
 
-        let output_arr = match &ex.expected {
-            Value::Array(v) => v.as_slice(),
-            _ => return None,
+        let output_arr = match ex.expected.as_i64_slice() {
+            Some(v) => v,
+            None => return None,
         };
 
         // All output elements must equal the input scalar.
@@ -1616,14 +1616,14 @@ pub(super) fn search_dot_product_search(problem: &Problem, fn_name: &str) -> Opt
             return None;
         }
 
-        let a = match &ex.inputs[0] {
-            Value::Array(v) => v.as_slice(),
-            _ => return None,
+        let a = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return None,
         };
 
-        let b = match &ex.inputs[1] {
-            Value::Array(v) => v.as_slice(),
-            _ => return None,
+        let b = match ex.inputs[1].as_i64_slice() {
+            Some(v) => v,
+            None => return None,
         };
 
         // Arrays must have equal length for dot product.
@@ -1672,19 +1672,19 @@ pub(super) fn search_matmul_template(problem: &Problem, fn_name: &str) -> Option
             return None;
         }
 
-        let a = match &ex.inputs[0] {
-            Value::Array(v) => v.as_slice(),
-            _ => return None,
+        let a = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return None,
         };
 
-        let b = match &ex.inputs[1] {
-            Value::Array(v) => v.as_slice(),
-            _ => return None,
+        let b = match ex.inputs[1].as_i64_slice() {
+            Some(v) => v,
+            None => return None,
         };
 
-        let c = match &ex.expected {
-            Value::Array(v) => v.as_slice(),
-            _ => return None,
+        let c = match ex.expected.as_i64_slice() {
+            Some(v) => v,
+            None => return None,
         };
 
         // Heuristic: try small N, M, K values (up to 10) that satisfy matmul shape.
@@ -1798,9 +1798,9 @@ pub(super) fn search_stateful_reducer_temporal(
                         Value::Int(v) => *v,
                         _ => return false,
                     };
-                    let arr = match &ex.inputs[2] {
-                        Value::Array(v) => v.clone(),
-                        _ => return false,
+                    let arr = match ex.inputs[2].as_i64_slice() {
+                        Some(v) => v,
+                        None => return false,
                     };
                     let r = reducer_fn(&arr);
                     let time_expr: i64 = match time_kind {
@@ -1903,9 +1903,9 @@ pub(super) fn search_stateful_reducer_temporal(
                     Value::Int(v) => *v,
                     _ => return false,
                 };
-                let _arr = match &ex.inputs[2] {
-                    Value::Array(v) => v.clone(),
-                    _ => return false,
+                let _arr = match ex.inputs[2].as_i64_slice() {
+                    Some(v) => v,
+                    None => return false,
                 };
                 let time_expr: i64 = match time_kind {
                     "identity" => t,
@@ -2374,9 +2374,9 @@ pub(super) fn search_quickselect(problem: &Problem, fn_name: &str) -> Option<Sol
         if ex.inputs.len() != 2 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         let k = match &ex.inputs[1] {
             Value::Int(v) => *v,
@@ -2411,13 +2411,13 @@ pub(super) fn search_merge_sort(problem: &Problem, fn_name: &str) -> Option<Solv
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
-        let expected_arr = match &ex.expected {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let expected_arr = match ex.expected.as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
 
         let mut sorted = arr.clone();
@@ -2986,9 +2986,9 @@ pub(super) fn search_array_mean(problem: &Problem, fn_name: &str) -> Option<Solv
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         if arr.is_empty() {
             return ex.expected_int() == 0;
@@ -3019,9 +3019,9 @@ pub(super) fn search_array_median(problem: &Problem, fn_name: &str) -> Option<So
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         if arr.is_empty() {
             return ex.expected_int() == 0;
@@ -3054,9 +3054,9 @@ pub(super) fn search_array_mode(problem: &Problem, fn_name: &str) -> Option<Solv
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         if arr.is_empty() {
             return ex.expected_int() == 0;
@@ -3097,9 +3097,9 @@ pub(super) fn search_array_variance(problem: &Problem, fn_name: &str) -> Option<
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         if arr.is_empty() {
             return ex.expected_int() == 0;
@@ -3139,9 +3139,9 @@ pub(super) fn search_array_stddev(problem: &Problem, fn_name: &str) -> Option<So
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         if arr.is_empty() {
             return ex.expected_int() == 0;
@@ -3193,9 +3193,9 @@ pub(super) fn search_array_percentile(problem: &Problem, fn_name: &str) -> Optio
             if ex.inputs.len() != 1 {
                 return false;
             }
-            let arr = match &ex.inputs[0] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let arr = match ex.inputs[0].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
             if arr.is_empty() {
                 return ex.expected_int() == 0;
@@ -3238,9 +3238,9 @@ pub(super) fn search_array_coefficient_variation(
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         if arr.is_empty() {
             return ex.expected_int() == 0;
@@ -3295,9 +3295,9 @@ pub(super) fn search_array_zscore_outlier(problem: &Problem, fn_name: &str) -> O
             if ex.inputs.len() != 2 {
                 return false;
             }
-            let arr = match &ex.inputs[0] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let arr = match ex.inputs[0].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
             let value = match &ex.inputs[1] {
                 Value::Int(v) => *v,
@@ -3356,9 +3356,9 @@ pub(super) fn search_array_iqr_outlier(problem: &Problem, fn_name: &str) -> Opti
         if ex.inputs.len() != 2 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         let value = match &ex.inputs[1] {
             Value::Int(v) => *v,
@@ -3407,9 +3407,9 @@ pub(super) fn search_array_skewness(problem: &Problem, fn_name: &str) -> Option<
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
         if arr.is_empty() {
             return ex.expected_int() == 0;
@@ -3480,8 +3480,8 @@ pub(super) fn search_knapsack_01(problem: &Problem, fn_name: &str) -> Option<Sol
     let mut capacities = HashSet::new();
     for ex in &problem.examples {
         if ex.inputs.len() >= 1 {
-            if let Value::Array(arr) = &ex.inputs[0] {
-                for &val in arr {
+            if let Some(arr) = ex.inputs[0].as_i64_slice() {
+                for &val in &arr {
                     if val > 0 && val <= 100 {
                         capacities.insert(val);
                     }
@@ -3495,13 +3495,13 @@ pub(super) fn search_knapsack_01(problem: &Problem, fn_name: &str) -> Option<Sol
             if ex.inputs.len() < 2 {
                 return false;
             }
-            let weights = match &ex.inputs[0] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let weights = match ex.inputs[0].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
-            let values = match &ex.inputs[1] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let values = match ex.inputs[1].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
 
             if weights.len() != values.len() || weights.is_empty() {
@@ -3547,8 +3547,8 @@ pub(super) fn search_knapsack_unbounded(problem: &Problem, fn_name: &str) -> Opt
     let mut capacities = HashSet::new();
     for ex in &problem.examples {
         if ex.inputs.len() >= 1 {
-            if let Value::Array(arr) = &ex.inputs[0] {
-                for &val in arr {
+            if let Some(arr) = ex.inputs[0].as_i64_slice() {
+                for &val in &arr {
                     if val > 0 && val <= 100 {
                         capacities.insert(val);
                     }
@@ -3562,13 +3562,13 @@ pub(super) fn search_knapsack_unbounded(problem: &Problem, fn_name: &str) -> Opt
             if ex.inputs.len() < 2 {
                 return false;
             }
-            let weights = match &ex.inputs[0] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let weights = match ex.inputs[0].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
-            let values = match &ex.inputs[1] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let values = match ex.inputs[1].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
 
             if weights.len() != values.len() || weights.is_empty() {
@@ -3614,9 +3614,9 @@ pub(super) fn search_lis(problem: &Problem, fn_name: &str) -> Option<SolveResult
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
 
         if arr.is_empty() {
@@ -3660,9 +3660,9 @@ pub(super) fn search_lds(problem: &Problem, fn_name: &str) -> Option<SolveResult
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
 
         if arr.is_empty() {
@@ -3722,9 +3722,9 @@ pub(super) fn search_coin_change_min(problem: &Problem, fn_name: &str) -> Option
             if ex.inputs.len() != 1 {
                 return false;
             }
-            let coins = match &ex.inputs[0] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let coins = match ex.inputs[0].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
 
             if coins.is_empty() || coins.iter().any(|&c| c <= 0) {
@@ -3788,9 +3788,9 @@ pub(super) fn search_coin_change_count(problem: &Problem, fn_name: &str) -> Opti
             if ex.inputs.len() != 1 {
                 return false;
             }
-            let coins = match &ex.inputs[0] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let coins = match ex.inputs[0].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
 
             if coins.is_empty() || coins.iter().any(|&c| c <= 0) {
@@ -3834,7 +3834,7 @@ pub(super) fn search_subset_sum(problem: &Problem, fn_name: &str) -> Option<Solv
     let mut targets = HashSet::new();
     for ex in &problem.examples {
         if ex.inputs.len() >= 1 {
-            if let Value::Array(arr) = &ex.inputs[0] {
+            if let Some(arr) = ex.inputs[0].as_i64_slice() {
                 let total: i64 = arr.iter().sum();
                 if total > 0 && total <= 200 {
                     targets.insert(total / 2);
@@ -3849,9 +3849,9 @@ pub(super) fn search_subset_sum(problem: &Problem, fn_name: &str) -> Option<Solv
             if ex.inputs.len() != 1 {
                 return false;
             }
-            let arr = match &ex.inputs[0] {
-                Value::Array(v) => v.clone(),
-                _ => return false,
+            let arr = match ex.inputs[0].as_i64_slice() {
+                Some(v) => v,
+                None => return false,
             };
 
             if arr.is_empty() {
@@ -3901,9 +3901,9 @@ pub(super) fn search_partition_equal_sum(problem: &Problem, fn_name: &str) -> Op
         if ex.inputs.len() != 1 {
             return false;
         }
-        let arr = match &ex.inputs[0] {
-            Value::Array(v) => v.clone(),
-            _ => return false,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(v) => v,
+            None => return false,
         };
 
         if arr.is_empty() {

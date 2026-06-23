@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 fn array_seed_inputs(problem: &Problem) -> Option<Vec<(Vec<i64>, Vec<i64>)>> {
     let mut seeds = Vec::new();
     for example in &problem.examples {
-        let arr = match example.inputs.first()? {
-            Value::Array(values) => values.clone(),
-            _ => return None,
+        let arr = match example.inputs.first()?.as_i64_slice() {
+            Some(values) => values,
+            None => return None,
         };
         let mut scalar_args = Vec::with_capacity(example.inputs.len().saturating_sub(1));
         for value in &example.inputs[1..] {
@@ -158,7 +158,7 @@ fn array_teacher_examples_from_code(problem: &Problem, teacher_code: &str) -> Op
     let mut distilled = Vec::new();
     for (arr, scalar_args) in candidates.into_iter().take(18) {
         let mut inputs = Vec::with_capacity(1 + scalar_args.len());
-        inputs.push(Value::Array(arr));
+        inputs.push(Value::int_array(&arr));
         inputs.extend(scalar_args.into_iter().map(Value::Int));
         let actual = match execute_function_for_problem(
             teacher_code,

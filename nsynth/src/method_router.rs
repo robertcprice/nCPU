@@ -413,7 +413,7 @@ mod tests {
     fn features_separate_scalar_and_array_shapes() {
         let scalar = scalar_problem("arithmetic", 2);
         let mut array = scalar_problem("arrays", 1);
-        array.examples[0].inputs = vec![Value::Array(vec![1, 2, 3])];
+        array.examples[0].inputs = vec![Value::int_array(&[1, 2, 3])];
         let a = ProblemFeatures::of(&scalar);
         let b = ProblemFeatures::of(&array);
         assert!(!a.has_array);
@@ -475,7 +475,7 @@ mod tests {
         with_scratch_router(|| {
             let scalar = scalar_problem("arithmetic", 1);
             let mut array = scalar_problem("arrays", 1);
-            array.examples[0].inputs = vec![Value::Array(vec![1])];
+            array.examples[0].inputs = vec![Value::int_array(&[1])];
             record_win(&scalar, "enumerative");
             record_win(&scalar, "enumerative");
             record_win(&array, "univ_arr_gradient");

@@ -352,7 +352,7 @@ impl NLPipeline {
             }
             serde_json::Value::Array(arr) => {
                 let ints: Vec<i64> = arr.into_iter().filter_map(|v| v.as_i64()).collect();
-                Some(Value::Array(ints))
+                Some(Value::int_array(&ints))
             }
             serde_json::Value::String(s) => Some(Value::Str(s)),
             serde_json::Value::Bool(b) => Some(Value::Bool(b)),

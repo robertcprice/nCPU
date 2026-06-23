@@ -462,7 +462,7 @@ fn literal_to_value(lit: &LiteralValue) -> Result<Value, BridgeError> {
         LiteralValue::Float(v) => Value::Float(v.to_bits()),
         LiteralValue::Str(s) => Value::Str(s.clone()),
         LiteralValue::Bool(b) => Value::Bool(*b),
-        LiteralValue::Array(a) => Value::Array(a.clone()),
+        LiteralValue::Array(a) => Value::int_array(a),
         LiteralValue::Pair(a, b) => Value::Pair(*a, *b),
     })
 }
@@ -544,7 +544,7 @@ mod tests {
         let bridge = LinguigenesisBridge::new();
         let examples = bridge.nl_to_examples("map the array").unwrap();
         assert!(!examples.is_empty());
-        assert_eq!(examples[0].expected, Value::Array(vec![2, 4, 6]));
+        assert_eq!(examples[0].expected, Value::int_array(&[2, 4, 6]));
     }
 
     #[test]
@@ -770,10 +770,10 @@ mod tests {
             "array_sum",
             "fn array_sum(a: [i64]) -> i64",
             vec![
-                ex(vec![Value::Array(vec![100, 1])], Value::Int(101)),
-                ex(vec![Value::Array(vec![4, 4, 4])], Value::Int(12)),
-                ex(vec![Value::Array(vec![-1, -2, -3])], Value::Int(-6)),
-                ex(vec![Value::Array(vec![5])], Value::Int(5)),
+                ex(vec![Value::int_array(&[100, 1])], Value::Int(101)),
+                ex(vec![Value::int_array(&[4, 4, 4])], Value::Int(12)),
+                ex(vec![Value::int_array(&[-1, -2, -3])], Value::Int(-6)),
+                ex(vec![Value::int_array(&[5])], Value::Int(5)),
             ],
         );
     }
@@ -785,9 +785,9 @@ mod tests {
             "array_max",
             "fn array_max(a: [i64]) -> i64",
             vec![
-                ex(vec![Value::Array(vec![100, 2, 50])], Value::Int(100)),
-                ex(vec![Value::Array(vec![5, 5, 5])], Value::Int(5)),
-                ex(vec![Value::Array(vec![1, 2, 3, 4])], Value::Int(4)),
+                ex(vec![Value::int_array(&[100, 2, 50])], Value::Int(100)),
+                ex(vec![Value::int_array(&[5, 5, 5])], Value::Int(5)),
+                ex(vec![Value::int_array(&[1, 2, 3, 4])], Value::Int(4)),
             ],
         );
     }
@@ -799,9 +799,9 @@ mod tests {
             "array_min",
             "fn array_min(a: [i64]) -> i64",
             vec![
-                ex(vec![Value::Array(vec![100, 2, 50])], Value::Int(2)),
-                ex(vec![Value::Array(vec![5, 5, 5])], Value::Int(5)),
-                ex(vec![Value::Array(vec![4, 3, 2, 1])], Value::Int(1)),
+                ex(vec![Value::int_array(&[100, 2, 50])], Value::Int(2)),
+                ex(vec![Value::int_array(&[5, 5, 5])], Value::Int(5)),
+                ex(vec![Value::int_array(&[4, 3, 2, 1])], Value::Int(1)),
             ],
         );
     }

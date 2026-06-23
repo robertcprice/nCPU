@@ -403,7 +403,7 @@ fn arr_class_problem(
         examples: rows
             .iter()
             .map(|(arr, label)| Example {
-                inputs: vec![Value::Array(arr.to_vec())],
+                inputs: vec![Value::int_array(arr)],
                 expected: Value::Int(*label),
             })
             .collect(),
@@ -468,11 +468,11 @@ fn search_array_member_class_learns_inflection_membership() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![111, 4, 999, 104])], 1),
-            (vec![Value::Array(vec![111, 4, 888, 101])], 1),
-            (vec![Value::Array(vec![111, 4, 999])], 0),
-            (vec![Value::Array(vec![111, 4, 888, 106])], 0), // over-split <+s>
-            (vec![Value::Array(vec![111, 4, 777, 107])], 0), // wrong <+d>
+            (vec![Value::int_array(&[111, 4, 999, 104])], 1),
+            (vec![Value::int_array(&[111, 4, 888, 101])], 1),
+            (vec![Value::int_array(&[111, 4, 999])], 0),
+            (vec![Value::int_array(&[111, 4, 888, 106])], 0), // over-split <+s>
+            (vec![Value::int_array(&[111, 4, 777, 107])], 0), // wrong <+d>
         ],
     );
 }
@@ -516,9 +516,9 @@ fn search_array_conjunction_learns_auxiliary_agreement() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![111, 4, 109, 999, 103])], 1), // is + ing
-            (vec![Value::Array(vec![111, 4, 999, 103])], 0),      // missing is
-            (vec![Value::Array(vec![111, 4, 109, 999])], 0),      // missing ing
+            (vec![Value::int_array(&[111, 4, 109, 999, 103])], 1), // is + ing
+            (vec![Value::int_array(&[111, 4, 999, 103])], 0),      // missing is
+            (vec![Value::int_array(&[111, 4, 109, 999])], 0),      // missing ing
         ],
     );
 }
@@ -558,9 +558,9 @@ fn search_array_sequence_learns_order_constraint() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![111, 109, 999, 103])], 1), // 109 before 103
-            (vec![Value::Array(vec![111, 103, 999, 109])], 0), // 103 before 109
-            (vec![Value::Array(vec![111, 109, 999])], 0),      // missing 103
+            (vec![Value::int_array(&[111, 109, 999, 103])], 1), // 109 before 103
+            (vec![Value::int_array(&[111, 103, 999, 109])], 0), // 103 before 109
+            (vec![Value::int_array(&[111, 109, 999])], 0),      // missing 103
         ],
     );
 }
@@ -598,10 +598,10 @@ fn search_array_feature_dnf_learns_count_and_run_features() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![7, 3, 7, 6])], 1),
-            (vec![Value::Array(vec![7, 7, 7, 9])], 0),
-            (vec![Value::Array(vec![5, 4, 4, 4])], 1),
-            (vec![Value::Array(vec![10, 4, 4])], 0),
+            (vec![Value::int_array(&[7, 3, 7, 6])], 1),
+            (vec![Value::int_array(&[7, 7, 7, 9])], 0),
+            (vec![Value::int_array(&[5, 4, 4, 4])], 1),
+            (vec![Value::int_array(&[10, 4, 4])], 0),
         ],
     );
 }
@@ -683,7 +683,7 @@ fn search_array_dnf_learns_inference_validity() {
             .iter()
             .take(16)
             .map(|(a, l)| Example {
-                inputs: vec![Value::Array(a.clone())],
+                inputs: vec![Value::int_array(&a)],
                 expected: Value::Int(*l),
             })
             .collect(),
@@ -713,10 +713,10 @@ fn search_array_dnf_learns_inference_validity() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![77, 1, 5])], 1),       // MP
-            (vec![Value::Array(vec![77, 2, 3, 4, 6])], 1), // MT
-            (vec![Value::Array(vec![77, 2, 4])], 0),       // AC
-            (vec![Value::Array(vec![77, 1, 3, 5, 6])], 0), // DA
+            (vec![Value::int_array(&[77, 1, 5])], 1),       // MP
+            (vec![Value::int_array(&[77, 2, 3, 4, 6])], 1), // MT
+            (vec![Value::int_array(&[77, 2, 4])], 0),       // AC
+            (vec![Value::int_array(&[77, 1, 3, 5, 6])], 0), // DA
         ],
     );
 }
@@ -764,10 +764,10 @@ fn search_strictly_increasing_learns_strict_inequality() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![100, 200])], 1),
-            (vec![Value::Array(vec![1, 1])], 0),
-            (vec![Value::Array(vec![1, 2, 1])], 0),
-            (vec![Value::Array(vec![0, 0, 1])], 0),
+            (vec![Value::int_array(&[100, 200])], 1),
+            (vec![Value::int_array(&[1, 1])], 0),
+            (vec![Value::int_array(&[1, 2, 1])], 0),
+            (vec![Value::int_array(&[0, 0, 1])], 0),
         ],
     );
 }
@@ -826,7 +826,7 @@ fn search_first_index_of_learns_target_value() {
             examples: rows
                 .iter()
                 .map(|(arr, label)| Example {
-                    inputs: vec![Value::Array(arr.to_vec())],
+                    inputs: vec![Value::int_array(arr)],
                     expected: Value::Int(*label),
                 })
                 .collect(),
@@ -890,10 +890,10 @@ fn search_first_index_of_learns_target_value() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![2, 5, 8])], 1),
-            (vec![Value::Array(vec![5, 5])], 0),
-            (vec![Value::Array(vec![1, 2, 3])], -1),
-            (vec![Value::Array(vec![5])], 0),
+            (vec![Value::int_array(&[2, 5, 8])], 1),
+            (vec![Value::int_array(&[5, 5])], 0),
+            (vec![Value::int_array(&[1, 2, 3])], -1),
+            (vec![Value::int_array(&[5])], 0),
         ],
     );
 }
@@ -915,7 +915,7 @@ fn search_last_index_of_learns_target_value() {
             examples: rows
                 .iter()
                 .map(|(arr, label)| Example {
-                    inputs: vec![Value::Array(arr.to_vec())],
+                    inputs: vec![Value::int_array(arr)],
                     expected: Value::Int(*label),
                 })
                 .collect(),
@@ -974,10 +974,10 @@ fn search_last_index_of_learns_target_value() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![2, 5, 8])], 1),
-            (vec![Value::Array(vec![5, 5])], 1),
-            (vec![Value::Array(vec![1, 2, 3])], -1),
-            (vec![Value::Array(vec![5, 1, 5, 2])], 2),
+            (vec![Value::int_array(&[2, 5, 8])], 1),
+            (vec![Value::int_array(&[5, 5])], 1),
+            (vec![Value::int_array(&[1, 2, 3])], -1),
+            (vec![Value::int_array(&[5, 1, 5, 2])], 2),
         ],
     );
 }
@@ -1014,10 +1014,10 @@ fn search_count_distinct_learns_distinct_count() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![42])], 1),
-            (vec![Value::Array(vec![1, 1, 1, 1])], 1),
-            (vec![Value::Array(vec![1, 2, 3, 4, 5])], 5),
-            (vec![Value::Array(vec![])], 0),
+            (vec![Value::int_array(&[42])], 1),
+            (vec![Value::int_array(&[1, 1, 1, 1])], 1),
+            (vec![Value::int_array(&[1, 2, 3, 4, 5])], 5),
+            (vec![Value::int_array(&[])], 0),
         ],
     );
 }
@@ -1040,7 +1040,7 @@ fn search_is_anagram_learns_permutation_equivalence() {
             examples: rows
                 .iter()
                 .map(|(a, b, label)| Example {
-                    inputs: vec![Value::Array(a.to_vec()), Value::Array(b.to_vec())],
+                    inputs: vec![Value::int_array(a), Value::int_array(b)],
                     expected: Value::Int(*label),
                 })
                 .collect(),
@@ -1088,11 +1088,11 @@ fn search_is_anagram_learns_permutation_equivalence() {
         problem,
         vec![
             (
-                vec![Value::Array(vec![4, 5, 6]), Value::Array(vec![6, 4, 5])],
+                vec![Value::int_array(&[4, 5, 6]), Value::int_array(&[6, 4, 5])],
                 1,
             ),
             (
-                vec![Value::Array(vec![1, 2]), Value::Array(vec![2, 1, 1])],
+                vec![Value::int_array(&[1, 2]), Value::int_array(&[2, 1, 1])],
                 0,
             ),
         ],
@@ -1135,9 +1135,9 @@ fn search_longest_run_learns_target_run_length() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![])], 0),
-            (vec![Value::Array(vec![5, 5, 5, 5, 5, 5])], 6),
-            (vec![Value::Array(vec![1, 2, 3])], 0),
+            (vec![Value::int_array(&[])], 0),
+            (vec![Value::int_array(&[5, 5, 5, 5, 5, 5])], 6),
+            (vec![Value::int_array(&[1, 2, 3])], 0),
         ],
     );
 }
@@ -1160,7 +1160,7 @@ fn search_intersects_learns_set_membership() {
             examples: rows
                 .iter()
                 .map(|(a, b, label)| Example {
-                    inputs: vec![Value::Array(a.to_vec()), Value::Array(b.to_vec())],
+                    inputs: vec![Value::int_array(a), Value::int_array(b)],
                     expected: Value::Int(*label),
                 })
                 .collect(),
@@ -1210,12 +1210,12 @@ fn search_intersects_learns_set_membership() {
         vec![
             (
                 vec![
-                    Value::Array(vec![10, 20, 30]),
-                    Value::Array(vec![40, 50, 30]),
+                    Value::int_array(&[10, 20, 30]),
+                    Value::int_array(&[40, 50, 30]),
                 ],
                 1,
             ),
-            (vec![Value::Array(vec![1]), Value::Array(vec![2])], 0),
+            (vec![Value::int_array(&[1]), Value::int_array(&[2])], 0),
         ],
     );
 }
@@ -1328,9 +1328,9 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![])], 1),  // holdout
-            (vec![Value::Array(vec![7])], 1), // single
-            (vec![Value::Array(vec![1, 1, 1, 1])], 0),
+            (vec![Value::int_array(&[])], 1),  // holdout
+            (vec![Value::int_array(&[7])], 1), // single
+            (vec![Value::int_array(&[1, 1, 1, 1])], 0),
         ],
     );
 
@@ -1348,7 +1348,7 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
             examples: rows
                 .iter()
                 .map(|(arr, label)| Example {
-                    inputs: vec![Value::Array(arr.to_vec())],
+                    inputs: vec![Value::int_array(arr)],
                     expected: Value::Int(*label),
                 })
                 .collect(),
@@ -1388,9 +1388,9 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![])], -1), // holdout
-            (vec![Value::Array(vec![5, 5])], 0),
-            (vec![Value::Array(vec![0, 0, 0])], -1),
+            (vec![Value::int_array(&[])], -1), // holdout
+            (vec![Value::int_array(&[5, 5])], 0),
+            (vec![Value::int_array(&[0, 0, 0])], -1),
         ],
     );
 
@@ -1420,9 +1420,9 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![])], -1), // holdout
-            (vec![Value::Array(vec![5, 5, 5])], 2),
-            (vec![Value::Array(vec![1, 5, 1])], 1),
+            (vec![Value::int_array(&[])], -1), // holdout
+            (vec![Value::int_array(&[5, 5, 5])], 2),
+            (vec![Value::int_array(&[1, 5, 1])], 1),
         ],
     );
 
@@ -1451,9 +1451,9 @@ fn new_teacher_edge_cases_handle_empty_and_single_element() {
     assert_search_generalizes_problem(
         problem,
         vec![
-            (vec![Value::Array(vec![])], 0), // holdout
-            (vec![Value::Array(vec![1])], 1),
-            (vec![Value::Array(vec![5, 5, 5])], 1),
+            (vec![Value::int_array(&[])], 0), // holdout
+            (vec![Value::int_array(&[1])], 1),
+            (vec![Value::int_array(&[5, 5, 5])], 1),
         ],
     );
 }

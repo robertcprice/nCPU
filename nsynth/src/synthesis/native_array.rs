@@ -26,9 +26,9 @@ fn extract_arr_examples(problem: &Problem) -> Option<(Vec<ArrExample>, usize)> {
     let n_scalar = first.inputs.len().saturating_sub(1);
     let mut examples = Vec::with_capacity(problem.examples.len());
     for ex in &problem.examples {
-        let arr = match &ex.inputs[0] {
-            Value::Array(a) => a.clone(),
-            _ => return None,
+        let arr = match ex.inputs[0].as_i64_slice() {
+            Some(a) => a,
+            None => return None,
         };
         // arr_len must not exceed the padded buffer width, or the soft-array
         // gradient loops index past MAX_ARR (panic). Arrays longer than MAX_ARR

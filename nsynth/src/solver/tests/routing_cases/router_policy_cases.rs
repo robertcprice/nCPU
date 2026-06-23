@@ -57,19 +57,19 @@ fn solve_problem_prefers_array_gradient_before_array_templates() {
         signature: "fn count_positive_custom(arr: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![Value::Array(vec![1, 2, 3, 4])],
+                inputs: vec![Value::int_array(&[1, 2, 3, 4])],
                 expected: Value::Int(4),
             },
             Example {
-                inputs: vec![Value::Array(vec![4, -3, 2, -1])],
+                inputs: vec![Value::int_array(&[4, -3, 2, -1])],
                 expected: Value::Int(2),
             },
             Example {
-                inputs: vec![Value::Array(vec![-5])],
+                inputs: vec![Value::int_array(&[-5])],
                 expected: Value::Int(0),
             },
             Example {
-                inputs: vec![Value::Array(vec![0, 0, 0])],
+                inputs: vec![Value::int_array(&[0, 0, 0])],
                 expected: Value::Int(0),
             },
         ],
@@ -157,11 +157,11 @@ fn method_router_normalizes_legacy_array_method_names() {
             signature: "fn router_array_custom(arr: [i64]) -> i64",
             examples: vec![
                 Example {
-                    inputs: vec![Value::Array(vec![1, 2, 3])],
+                    inputs: vec![Value::int_array(&[1, 2, 3])],
                     expected: Value::Int(6),
                 },
                 Example {
-                    inputs: vec![Value::Array(vec![-5, 5])],
+                    inputs: vec![Value::int_array(&[-5, 5])],
                     expected: Value::Int(0),
                 },
             ],
@@ -284,11 +284,11 @@ fn method_router_keeps_enumerative_when_top_route_is_slow_array_gradient() {
             signature: "fn router_slow_route_keep_enum(arr: [i64]) -> i64",
             examples: vec![
                 Example {
-                    inputs: vec![Value::Array(vec![1, 2, 3])],
+                    inputs: vec![Value::int_array(&[1, 2, 3])],
                     expected: Value::Int(6),
                 },
                 Example {
-                    inputs: vec![Value::Array(vec![-5, 5])],
+                    inputs: vec![Value::int_array(&[-5, 5])],
                     expected: Value::Int(0),
                 },
             ],
@@ -333,11 +333,11 @@ fn method_router_keeps_enumerative_when_enum_has_the_bucket() {
             signature: "fn router_keep_enum_custom(arr: [i64]) -> i64",
             examples: vec![
                 Example {
-                    inputs: vec![Value::Array(vec![1, 2, 3])],
+                    inputs: vec![Value::int_array(&[1, 2, 3])],
                     expected: Value::Int(6),
                 },
                 Example {
-                    inputs: vec![Value::Array(vec![-5, 5])],
+                    inputs: vec![Value::int_array(&[-5, 5])],
                     expected: Value::Int(0),
                 },
             ],
@@ -442,15 +442,15 @@ fn solve_problem_can_bypass_cache_and_upgrade_to_router_preferred_route() {
             signature: "fn router_cache_upgrade_custom(arr: [i64]) -> i64",
             examples: vec![
                 Example {
-                    inputs: vec![Value::Array(vec![1, 2, 3])],
+                    inputs: vec![Value::int_array(&[1, 2, 3])],
                     expected: Value::Int(6),
                 },
                 Example {
-                    inputs: vec![Value::Array(vec![4, -1, 2])],
+                    inputs: vec![Value::int_array(&[4, -1, 2])],
                     expected: Value::Int(5),
                 },
                 Example {
-                    inputs: vec![Value::Array(vec![-5, 5])],
+                    inputs: vec![Value::int_array(&[-5, 5])],
                     expected: Value::Int(0),
                 },
             ],
@@ -510,19 +510,19 @@ fn solve_problem_uses_array_gradient_for_simple_sum_fold() {
         signature: "fn array_sum_custom(arr: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![Value::Array(vec![1, 2, 3])],
+                inputs: vec![Value::int_array(&[1, 2, 3])],
                 expected: Value::Int(6),
             },
             Example {
-                inputs: vec![Value::Array(vec![4, -1, 2])],
+                inputs: vec![Value::int_array(&[4, -1, 2])],
                 expected: Value::Int(5),
             },
             Example {
-                inputs: vec![Value::Array(vec![-5, 5])],
+                inputs: vec![Value::int_array(&[-5, 5])],
                 expected: Value::Int(0),
             },
             Example {
-                inputs: vec![Value::Array(vec![])],
+                inputs: vec![Value::int_array(&[])],
                 expected: Value::Int(0),
             },
         ],

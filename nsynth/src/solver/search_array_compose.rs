@@ -538,7 +538,7 @@ mod tests {
             examples: rows
                 .iter()
                 .map(|(arr, y)| Example {
-                    inputs: vec![Value::Array(arr.to_vec())],
+                    inputs: vec![Value::int_array(arr)],
                     expected: Value::Int(*y),
                 })
                 .collect(),
@@ -569,7 +569,7 @@ mod tests {
             examples: rows
                 .iter()
                 .map(|(arr, k, y)| Example {
-                    inputs: vec![Value::Array(arr.to_vec()), Value::Int(*k)],
+                    inputs: vec![Value::int_array(arr), Value::Int(*k)],
                     expected: Value::Int(*y),
                 })
                 .collect(),

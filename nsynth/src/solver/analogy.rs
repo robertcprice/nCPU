@@ -296,11 +296,16 @@ fn perturb_value(v: &Value) -> Vec<Value> {
             ]
         }
         Value::Array(a) => {
+            // Perturb element-wise on the now-heterogeneous `Vec<Value>`:
+            // reverse, grow by duplicating the first element, and shrink by one.
+            // Works for typed/nested arrays too (the grow fallback uses
+            // `Value::Int(0)` only for an empty array, where there is no element
+            // to duplicate).
             let mut rev = a.clone();
             rev.reverse();
             let mut grown = a.clone();
-            grown.push(a.first().copied().unwrap_or(0));
-            let shrunk: Vec<i64> = if a.len() > 1 {
+            grown.push(a.first().cloned().unwrap_or(Value::Int(0)));
+            let shrunk: Vec<Value> = if a.len() > 1 {
                 a[..a.len() - 1].to_vec()
             } else {
                 a.clone()
@@ -409,7 +414,7 @@ fn runtime_to_bench(v: &crate::runtime::Value) -> Option<Value> {
                     _ => None,
                 })
                 .collect();
-            ints.map(Value::Array)
+            ints.map(|v| Value::int_array(&v))
         }
         _ => None,
     }
@@ -713,7 +718,7 @@ mod tests {
             );
             let array_problem = Problem {
                 examples: vec![Example {
-                    inputs: vec![Value::Array(vec![1, 2, 3])],
+                    inputs: vec![Value::int_array(&[1, 2, 3])],
                     expected: Value::Int(6),
                 }],
                 ..scalar_problem("arr_sum", "fn arr_sum(arr: [i64]) -> i64", vec![], vec![])
@@ -724,7 +729,7 @@ mod tests {
 
     fn arr_ex(xs: &[i64], o: i64) -> Example {
         Example {
-            inputs: vec![Value::Array(xs.to_vec())],
+            inputs: vec![Value::int_array(xs)],
             expected: Value::Int(o),
         }
     }
@@ -776,9 +781,9 @@ mod tests {
     fn perturb_value_is_type_aware() {
         assert!(perturb_value(&Value::Int(5)).contains(&Value::Int(6)));
         assert_eq!(perturb_value(&Value::Bool(true)), vec![Value::Bool(false)]);
-        let arr = perturb_value(&Value::Array(vec![1, 2, 3]));
+        let arr = perturb_value(&Value::int_array(&[1, 2, 3]));
         assert!(
-            arr.contains(&Value::Array(vec![3, 2, 1])),
+            arr.contains(&Value::int_array(&[3, 2, 1])),
             "reversed variant"
         );
         assert!(perturb_value(&Value::Str("ab".into())).contains(&Value::Str("abab".into())));
@@ -793,7 +798,7 @@ mod tests {
         assert_eq!(runtime_to_bench(&R::Bool(true)), Some(Value::Bool(true)));
         assert_eq!(
             runtime_to_bench(&R::Array(vec![R::Int(1), R::Int(2)])),
-            Some(Value::Array(vec![1, 2]))
+            Some(Value::int_array(&[1, 2]))
         );
         // Heterogeneous / unsupported → None (skips the sample, never panics).
         assert_eq!(runtime_to_bench(&R::Array(vec![R::Bool(true)])), None);

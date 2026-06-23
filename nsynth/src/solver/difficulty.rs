@@ -281,10 +281,13 @@ impl DifficultyClassifier {
         1 + left.max(right)
     }
 
-    /// Helper to estimate depth of array element values.
-    fn estimate_value_depth(&self, _value: &i64) -> u8 {
-        // For scalar array elements, depth is 0
-        0
+    /// Helper to estimate depth of an array element value.
+    ///
+    /// Now that array elements are full `Value`s, a nested array element
+    /// contributes its own depth (recursively), so an array-of-arrays reports a
+    /// depth greater than a flat int array. Scalar elements still report 0.
+    fn estimate_value_depth(&self, value: &BenchmarkValue) -> u8 {
+        self.estimate_input_depth(value)
     }
 
     /// Computes confidence in the difficulty classification.

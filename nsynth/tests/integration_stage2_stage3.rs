@@ -24,16 +24,16 @@ fn stage2_broadcast_vector() -> Problem {
         examples: vec![
             Example {
                 inputs: vec![Value::Int(5)],
-                expected: Value::Array(vec![5, 5, 5, 5]),
+                expected: Value::int_array(&[5, 5, 5, 5]),
             },
             Example {
                 inputs: vec![Value::Int(3)],
-                expected: Value::Array(vec![3, 3, 3, 3]),
+                expected: Value::int_array(&[3, 3, 3, 3]),
             },
         ],
         holdouts: vec![Example {
             inputs: vec![Value::Int(7)],
-            expected: Value::Array(vec![7, 7, 7, 7]),
+            expected: Value::int_array(&[7, 7, 7, 7]),
         }],
         reference_code: "fn broadcast_vec(x: i64) -> [i64] { [x, x, x, x] }",
         ..Default::default()
@@ -48,16 +48,16 @@ fn stage2_dot_product() -> Problem {
         signature: "fn dot(a: [i64], b: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![Value::Array(vec![1, 2, 3]), Value::Array(vec![4, 5, 6])],
+                inputs: vec![Value::int_array(&[1, 2, 3]), Value::int_array(&[4, 5, 6])],
                 expected: Value::Int(1 * 4 + 2 * 5 + 3 * 6), // 32
             },
             Example {
-                inputs: vec![Value::Array(vec![2, 3]), Value::Array(vec![4, 5])],
+                inputs: vec![Value::int_array(&[2, 3]), Value::int_array(&[4, 5])],
                 expected: Value::Int(2 * 4 + 3 * 5), // 23
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Array(vec![1, 1, 1]), Value::Array(vec![2, 2, 2])],
+            inputs: vec![Value::int_array(&[1, 1, 1]), Value::int_array(&[2, 2, 2])],
             expected: Value::Int(6),
         }],
         reference_code: "fn dot(a: [i64], b: [i64]) -> i64 { sum(zip(a, b, |x, y| x * y)) }",
@@ -74,16 +74,16 @@ fn stage2_matrix_row_sum() -> Problem {
         examples: vec![
             Example {
                 // Flat array [1, 2, 3, 4, 5, 6] with implicit shape 2x3
-                inputs: vec![Value::Array(vec![1, 2, 3, 4, 5, 6])],
+                inputs: vec![Value::int_array(&[1, 2, 3, 4, 5, 6])],
                 expected: Value::Int(1 + 2 + 3), // 6
             },
             Example {
-                inputs: vec![Value::Array(vec![10, 20, 30, 40, 50, 60])],
+                inputs: vec![Value::int_array(&[10, 20, 30, 40, 50, 60])],
                 expected: Value::Int(10 + 20 + 30), // 60
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Array(vec![5, 5, 5, 5, 5, 5])],
+            inputs: vec![Value::int_array(&[5, 5, 5, 5, 5, 5])],
             expected: Value::Int(15),
         }],
         reference_code:
@@ -100,17 +100,17 @@ fn stage2_vector_add() -> Problem {
         signature: "fn vec_add(a: [i64], b: [i64]) -> [i64]",
         examples: vec![
             Example {
-                inputs: vec![Value::Array(vec![1, 2, 3]), Value::Array(vec![4, 5, 6])],
-                expected: Value::Array(vec![5, 7, 9]),
+                inputs: vec![Value::int_array(&[1, 2, 3]), Value::int_array(&[4, 5, 6])],
+                expected: Value::int_array(&[5, 7, 9]),
             },
             Example {
-                inputs: vec![Value::Array(vec![10, 20]), Value::Array(vec![1, 2])],
-                expected: Value::Array(vec![11, 22]),
+                inputs: vec![Value::int_array(&[10, 20]), Value::int_array(&[1, 2])],
+                expected: Value::int_array(&[11, 22]),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Array(vec![3, 3, 3]), Value::Array(vec![1, 1, 1])],
-            expected: Value::Array(vec![4, 4, 4]),
+            inputs: vec![Value::int_array(&[3, 3, 3]), Value::int_array(&[1, 1, 1])],
+            expected: Value::int_array(&[4, 4, 4]),
         }],
         reference_code:
             "fn vec_add(a: [i64], b: [i64]) -> [i64] { [a[0]+b[0], a[1]+b[1], a[2]+b[2]] }",
@@ -126,17 +126,17 @@ fn stage2_scalar_times_vector() -> Problem {
         signature: "fn scalar_mul(x: i64, v: [i64]) -> [i64]",
         examples: vec![
             Example {
-                inputs: vec![Value::Int(3), Value::Array(vec![1, 2, 3])],
-                expected: Value::Array(vec![3, 6, 9]),
+                inputs: vec![Value::Int(3), Value::int_array(&[1, 2, 3])],
+                expected: Value::int_array(&[3, 6, 9]),
             },
             Example {
-                inputs: vec![Value::Int(2), Value::Array(vec![5, 10])],
-                expected: Value::Array(vec![10, 20]),
+                inputs: vec![Value::Int(2), Value::int_array(&[5, 10])],
+                expected: Value::int_array(&[10, 20]),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Int(4), Value::Array(vec![1, 1, 1])],
-            expected: Value::Array(vec![4, 4, 4]),
+            inputs: vec![Value::Int(4), Value::int_array(&[1, 1, 1])],
+            expected: Value::int_array(&[4, 4, 4]),
         }],
         reference_code: "fn scalar_mul(x: i64, v: [i64]) -> [i64] { [x*v[0], x*v[1], x*v[2]] }",
         ..Default::default()
@@ -151,16 +151,16 @@ fn stage2_vector_max() -> Problem {
         signature: "fn vec_max(v: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![Value::Array(vec![3, 1, 4, 1, 5])],
+                inputs: vec![Value::int_array(&[3, 1, 4, 1, 5])],
                 expected: Value::Int(5),
             },
             Example {
-                inputs: vec![Value::Array(vec![10, 2, 7])],
+                inputs: vec![Value::int_array(&[10, 2, 7])],
                 expected: Value::Int(10),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Array(vec![2, 8, 1, 9])],
+            inputs: vec![Value::int_array(&[2, 8, 1, 9])],
             expected: Value::Int(9),
         }],
         reference_code:
@@ -177,16 +177,16 @@ fn stage2_vector_norm_squared() -> Problem {
         signature: "fn norm_sq(v: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![Value::Array(vec![3, 4])],
+                inputs: vec![Value::int_array(&[3, 4])],
                 expected: Value::Int(9 + 16), // 25
             },
             Example {
-                inputs: vec![Value::Array(vec![1, 1, 1])],
+                inputs: vec![Value::int_array(&[1, 1, 1])],
                 expected: Value::Int(3),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Array(vec![2, 2, 1])],
+            inputs: vec![Value::int_array(&[2, 2, 1])],
             expected: Value::Int(9),
         }],
         reference_code: "fn norm_sq(v: [i64]) -> i64 { v[0]*v[0] + v[1]*v[1] + v[2]*v[2] }",
@@ -202,16 +202,16 @@ fn stage2_pairwise_distances() -> Problem {
         signature: "fn vec_dist(a: [i64], b: [i64]) -> i64",
         examples: vec![
             Example {
-                inputs: vec![Value::Array(vec![1, 2]), Value::Array(vec![4, 6])],
+                inputs: vec![Value::int_array(&[1, 2]), Value::int_array(&[4, 6])],
                 expected: Value::Int((4i64 - 1i64).abs() + (6i64 - 2i64).abs()), // 7
             },
             Example {
-                inputs: vec![Value::Array(vec![0, 0, 0]), Value::Array(vec![3, 4, 0])],
+                inputs: vec![Value::int_array(&[0, 0, 0]), Value::int_array(&[3, 4, 0])],
                 expected: Value::Int(7),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Array(vec![1, 1]), Value::Array(vec![3, 3])],
+            inputs: vec![Value::int_array(&[1, 1]), Value::int_array(&[3, 3])],
             expected: Value::Int(4),
         }],
         reference_code:
@@ -232,16 +232,16 @@ fn stage3_struct_sum_count() -> Problem {
         signature: "fn aggregate(state: (i64, i64), arr: [i64]) -> (i64, i64)",
         examples: vec![
             Example {
-                inputs: vec![Value::Pair(0, 0), Value::Array(vec![1, 2, 3])],
+                inputs: vec![Value::Pair(0, 0), Value::int_array(&[1, 2, 3])],
                 expected: Value::Pair(6, 3),
             },
             Example {
-                inputs: vec![Value::Pair(10, 5), Value::Array(vec![4, 6])],
+                inputs: vec![Value::Pair(10, 5), Value::int_array(&[4, 6])],
                 expected: Value::Pair(20, 7),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Pair(0, 0), Value::Array(vec![2, 2, 2])],
+            inputs: vec![Value::Pair(0, 0), Value::int_array(&[2, 2, 2])],
             expected: Value::Pair(6, 3),
         }],
         reference_code: "fn aggregate(state: (i64, i64), arr: [i64]) -> (i64, i64) { (state.0 + sum(arr), state.1 + len(arr)) }",
@@ -257,16 +257,16 @@ fn stage3_struct_max_min() -> Problem {
         signature: "fn track_bounds(state: (i64, i64), arr: [i64]) -> (i64, i64)",
         examples: vec![
             Example {
-                inputs: vec![Value::Pair(0, 100), Value::Array(vec![5, 15, 3])],
+                inputs: vec![Value::Pair(0, 100), Value::int_array(&[5, 15, 3])],
                 expected: Value::Pair(15, 3),
             },
             Example {
-                inputs: vec![Value::Pair(10, 50), Value::Array(vec![20, 30])],
+                inputs: vec![Value::Pair(10, 50), Value::int_array(&[20, 30])],
                 expected: Value::Pair(30, 20),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Pair(-100, 100), Value::Array(vec![1, 2, 3])],
+            inputs: vec![Value::Pair(-100, 100), Value::int_array(&[1, 2, 3])],
             expected: Value::Pair(3, 1),
         }],
         reference_code: "fn track_bounds(state: (i64, i64), arr: [i64]) -> (i64, i64) { (max(state.0, max(arr)), min(state.1, min(arr))) }",
@@ -282,16 +282,16 @@ fn stage3_struct_weighted_sum() -> Problem {
         signature: "fn weighted(state: (i64, i64), arr: [i64]) -> (i64, i64)",
         examples: vec![
             Example {
-                inputs: vec![Value::Pair(0, 0), Value::Array(vec![2, 4, 6])],
+                inputs: vec![Value::Pair(0, 0), Value::int_array(&[2, 4, 6])],
                 expected: Value::Pair(12, 3),
             },
             Example {
-                inputs: vec![Value::Pair(10, 2), Value::Array(vec![5, 5])],
+                inputs: vec![Value::Pair(10, 2), Value::int_array(&[5, 5])],
                 expected: Value::Pair(20, 4),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Pair(0, 0), Value::Array(vec![1, 1, 1])],
+            inputs: vec![Value::Pair(0, 0), Value::int_array(&[1, 1, 1])],
             expected: Value::Pair(3, 3),
         }],
         reference_code: "fn weighted(state: (i64, i64), arr: [i64]) -> (i64, i64) { (state.0 + sum(arr), state.1 + len(arr)) }",
@@ -307,16 +307,16 @@ fn stage3_struct_quad_state() -> Problem {
         signature: "fn quad_agg(state: (i64, i64, i64, i64), arr: [i64]) -> (i64, i64, i64, i64)",
         examples: vec![
             Example {
-                inputs: vec![Value::Quad(0, 0, -100, 100), Value::Array(vec![1, 5, 3])],
+                inputs: vec![Value::Quad(0, 0, -100, 100), Value::int_array(&[1, 5, 3])],
                 expected: Value::Quad(9, 3, 5, 1),
             },
             Example {
-                inputs: vec![Value::Quad(10, 2, 20, 0), Value::Array(vec![15, 25])],
+                inputs: vec![Value::Quad(10, 2, 20, 0), Value::int_array(&[15, 25])],
                 expected: Value::Quad(50, 4, 25, 0),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Quad(0, 0, -1000, 1000), Value::Array(vec![2, 2, 2])],
+            inputs: vec![Value::Quad(0, 0, -1000, 1000), Value::int_array(&[2, 2, 2])],
             expected: Value::Quad(6, 3, 2, 2),
         }],
         reference_code: "fn quad_agg(state: (i64, i64, i64, i64), arr: [i64]) -> (i64, i64, i64, i64) { (state.0 + sum(arr), state.1 + len(arr), max(state.2, max(arr)), min(state.3, min(arr))) }",
@@ -332,16 +332,16 @@ fn stage3_struct_conditional() -> Problem {
         signature: "fn cond_count(state: (i64, i64), arr: [i64]) -> (i64, i64)",
         examples: vec![
             Example {
-                inputs: vec![Value::Pair(0, 0), Value::Array(vec![1, -2, 3, -4, 5])],
+                inputs: vec![Value::Pair(0, 0), Value::int_array(&[1, -2, 3, -4, 5])],
                 expected: Value::Pair(3, 5), // 3 positive, 5 total
             },
             Example {
-                inputs: vec![Value::Pair(2, 0), Value::Array(vec![10, -5])],
+                inputs: vec![Value::Pair(2, 0), Value::int_array(&[10, -5])],
                 expected: Value::Pair(3, 2),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Pair(0, 0), Value::Array(vec![1, 2, 3])],
+            inputs: vec![Value::Pair(0, 0), Value::int_array(&[1, 2, 3])],
             expected: Value::Pair(3, 3),
         }],
         reference_code: "fn cond_count(state: (i64, i64), arr: [i64]) -> (i64, i64) { (state.0 + count_positive(arr), state.1 + len(arr)) }",
@@ -357,16 +357,16 @@ fn stage3_struct_cross_field() -> Problem {
         signature: "fn delta_agg(state: (i64, i64), arr: [i64]) -> (i64, i64)",
         examples: vec![
             Example {
-                inputs: vec![Value::Pair(0, 0), Value::Array(vec![2, 4, 6])],
+                inputs: vec![Value::Pair(0, 0), Value::int_array(&[2, 4, 6])],
                 expected: Value::Pair(12, 3), // sum = 12, len = 3, implicit delta maintained
             },
             Example {
-                inputs: vec![Value::Pair(10, 5), Value::Array(vec![1, 1])],
+                inputs: vec![Value::Pair(10, 5), Value::int_array(&[1, 1])],
                 expected: Value::Pair(12, 7),
             },
         ],
         holdouts: vec![Example {
-            inputs: vec![Value::Pair(0, 0), Value::Array(vec![5, 5])],
+            inputs: vec![Value::Pair(0, 0), Value::int_array(&[5, 5])],
             expected: Value::Pair(10, 2),
         }],
         reference_code: "fn delta_agg(state: (i64, i64), arr: [i64]) -> (i64, i64) { (state.0 + sum(arr), state.1 + len(arr)) }",

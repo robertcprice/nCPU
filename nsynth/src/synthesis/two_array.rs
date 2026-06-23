@@ -21,8 +21,8 @@ fn extract_two_array_examples(problem: &Problem) -> Option<Vec<TwoArrayExample>>
 
     let mut examples = Vec::with_capacity(problem.examples.len());
     for ex in &problem.examples {
-        let (a, b) = match (&ex.inputs[0], &ex.inputs[1]) {
-            (Value::Array(a), Value::Array(b)) if a.len() == b.len() => (a, b),
+        let (a, b) = match (ex.inputs[0].as_i64_slice(), ex.inputs[1].as_i64_slice()) {
+            (Some(a), Some(b)) if a.len() == b.len() => (a, b),
             _ => return None,
         };
         let len = a.len() as f32;

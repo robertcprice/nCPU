@@ -73,7 +73,7 @@ fn value_from_json(v: &serde_json::Value) -> Option<Value> {
     if let Some(arr) = v.as_array() {
         let ints: Option<Vec<i64>> = arr.iter().map(|x| x.as_i64()).collect();
         if let Some(ints) = ints {
-            return Some(Value::Array(ints));
+            return Some(Value::int_array(&ints));
         }
     }
     if let Some(obj) = v.as_object() {

@@ -21,7 +21,8 @@ impl StructuredArrayKernel {
     fn predict(self, example: &Example) -> Option<i64> {
         match self {
             StructuredArrayKernel::KthSmallest => match example.inputs.as_slice() {
-                [Value::Array(arr), Value::Int(k)] => {
+                [arr_val @ Value::Array(_), Value::Int(k)] => {
+                    let arr = arr_val.as_i64_slice()?;
                     if *k < 1 || *k as usize > arr.len() {
                         None
                     } else {
@@ -33,7 +34,8 @@ impl StructuredArrayKernel {
                 _ => None,
             },
             StructuredArrayKernel::TwoSumExists => match example.inputs.as_slice() {
-                [Value::Array(arr), Value::Int(target)] => {
+                [arr_val @ Value::Array(_), Value::Int(target)] => {
+                    let arr = arr_val.as_i64_slice()?;
                     for i in 0..arr.len() {
                         for j in (i + 1)..arr.len() {
                             if arr[i] + arr[j] == *target {
@@ -46,8 +48,8 @@ impl StructuredArrayKernel {
                 _ => None,
             },
             StructuredArrayKernel::CountDistinct => match example.inputs.as_slice() {
-                [Value::Array(arr)] => {
-                    let mut values = arr.clone();
+                [arr_val @ Value::Array(_)] => {
+                    let mut values = arr_val.as_i64_slice()?;
                     values.sort_unstable();
                     values.dedup();
                     Some(values.len() as i64)
@@ -55,7 +57,8 @@ impl StructuredArrayKernel {
                 _ => None,
             },
             StructuredArrayKernel::BinarySearch => match example.inputs.as_slice() {
-                [Value::Array(arr), Value::Int(target)] => {
+                [arr_val @ Value::Array(_), Value::Int(target)] => {
+                    let arr = arr_val.as_i64_slice()?;
                     let mut lo = 0i64;
                     let mut hi = arr.len() as i64 - 1;
                     while lo <= hi {
