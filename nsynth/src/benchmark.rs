@@ -666,6 +666,20 @@ const HOLDOUT_MAX: i64 = 24;
 /// Max sampled array length.
 const HOLDOUT_ARRAY_MAX_LEN: usize = 6;
 
+/// Salt XOR'd into the seed used by [`problem_from_reference`] when sampling the
+/// *visible* seed examples. `generated_holdouts` seeds from `holdout_seed(name)`
+/// un-salted, so without a distinct salt the strict verifier's holdout probes
+/// would draw the SAME inputs as the visible examples — proving nothing about
+/// generalization. This makes the seed-example draws disjoint from the holdout
+/// draws so the differential oracle is exercised on inputs the candidate has not
+/// seen.
+const SEED_EXAMPLE_SALT: u64 = 0x517cc1b727220a95;
+
+/// Salt for the input draws used by [`verify_code_against_property`]. Distinct
+/// from both `SEED_EXAMPLE_SALT` and the un-salted holdout seed so a property
+/// candidate is probed on its own fresh inputs.
+const PROPERTY_SAMPLE_SALT: u64 = 0x2545f4914f6cdd1d;
+
 /// Build one sampled input vector matching `param_types`, or `None` if any
 /// param is a type we cannot sample (caller then falls back to hand holdouts).
 fn sample_holdout_inputs(rng: &mut HoldoutRng, param_types: &[HoldoutParamType]) -> Option<Vec<Value>> {
@@ -764,6 +778,237 @@ pub fn generated_holdouts(problem: &Problem) -> Vec<Example> {
         return problem.holdouts.clone();
     }
     generated
+}
+
+/// REFERENCE-IMPLEMENTATION front door: build a solvable [`Problem`] from a
+/// runnable reference implementation alone — no hand-authored I/O examples.
+///
+/// This closes the "examples-only spec front door" root cause: previously every
+/// spec had to arrive as literal I/O examples or it failed. Here the caller
+/// supplies a reference whose behavior IS the specification ("synthesize a
+/// function equivalent to THIS code"). We:
+///   1. parse the signature's parameter types (must all be sampleable);
+///   2. deterministically sample a handful of inputs and RUN the reference over
+///      them via the U1 safe execute path
+///      ([`crate::runtime::execute_function_for_problem`], which sets
+///      `verify_mode` + `run_isolated`) to manufacture the seed `io_examples`;
+///   3. KEEP `reference_code` set on the returned problem so the existing strict
+///      verifier ([`crate::runtime::verify_problem_code_strict`]) then runs
+///      [`generated_holdouts`] for differential testing against the reference.
+///
+/// The seed examples drive `solve_problem`/`build_wrapper` exactly like
+/// hand-authored examples, so the whole solve+verify pipeline works unchanged.
+///
+/// `signature` and `reference_code` are `&'static str`. Callers holding owned
+/// `String`s should `Box::leak` them at the front door (the existing pattern in
+/// `agent::coding_intent::CodingIntent::problem_from_reference`).
+///
+/// Errors (never fabricate a "solved" spec from an unrunnable reference):
+///   - the signature has zero parameters or any unsampleable (`Other`) type;
+///   - the function name cannot be parsed from the signature;
+///   - the reference errors / returns unrepresentable values on *every* sample
+///     (zero seed examples survive).
+pub fn problem_from_reference(
+    name: &str,
+    signature: &'static str,
+    reference_code: &'static str,
+) -> Result<Problem, String> {
+    let param_types = holdout_param_types(signature);
+    if param_types.is_empty() {
+        return Err(format!(
+            "cannot sample a reference with zero parameters (signature: {signature:?})"
+        ));
+    }
+    if param_types.contains(&HoldoutParamType::Other) {
+        return Err(format!(
+            "signature has an unsampleable parameter type, cannot manufacture seed examples \
+             (signature: {signature:?})"
+        ));
+    }
+
+    // Build a temporary problem so `execute_function_for_problem` carries the
+    // right signature/reference metadata. `reference_code` is set here AND on
+    // the returned problem (it is the verifier-owned oracle).
+    let mut problem = Problem {
+        name: name.to_string(),
+        category: "reference",
+        description: "synthesize a function equivalent to the provided reference implementation",
+        signature,
+        examples: Vec::new(),
+        holdouts: Vec::new(),
+        reference_code,
+        ..Default::default()
+    };
+
+    let fn_name = problem.function_name();
+    if fn_name.is_empty() {
+        return Err(format!(
+            "cannot parse function name from signature {signature:?}"
+        ));
+    }
+    // `fn_name` borrows `problem.signature` ('static), so it outlives the
+    // mutable borrow below — copy to a `&str` independent of `problem` to push
+    // examples while `fn_name` is still alive.
+    let fn_name: &str = fn_name;
+
+    // Seed the visible-example RNG with a salt distinct from `generated_holdouts`
+    // (which uses `holdout_seed(name)` un-salted) so the strict verifier's
+    // holdout probes don't coincide with these visible examples.
+    let mut rng = HoldoutRng::new(holdout_seed(name) ^ SEED_EXAMPLE_SALT);
+    let mut examples = Vec::with_capacity(HOLDOUT_SAMPLES);
+    for _ in 0..HOLDOUT_SAMPLES {
+        let Some(inputs) = sample_holdout_inputs(&mut rng, &param_types) else {
+            // `Other` already filtered above; stay safe.
+            break;
+        };
+        // Run the REFERENCE on the safe verify path to get the expected output.
+        let out = match crate::runtime::execute_function_for_problem(
+            reference_code,
+            fn_name,
+            &inputs,
+            &problem,
+        ) {
+            Ok(v) => v,
+            // A reference error on this input (e.g. `arr[0]` on an empty array)
+            // is not a usable seed — skip the point.
+            Err(_) => continue,
+        };
+        let expected = match crate::runtime::benchmark_value_from_runtime(&out) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        examples.push(Example { inputs, expected });
+    }
+
+    if examples.is_empty() {
+        return Err(format!(
+            "reference produced no representable outputs over {HOLDOUT_SAMPLES} sampled inputs; \
+             cannot manufacture seed examples for {name}"
+        ));
+    }
+
+    problem.examples = examples;
+    Ok(problem)
+}
+
+/// PROPERTY front door: verify a candidate against a Mog PREDICATE oracle
+/// instead of fixed I/O examples.
+///
+/// This is the third spec front door (alongside hand examples and
+/// [`problem_from_reference`]): the specification is a *predicate* the output
+/// must satisfy, not a table of expected outputs. Concretely "synthesize a
+/// function whose result satisfies THIS property" — e.g. a sort whose output
+/// `is_sorted`, where no single expected output is pinned down.
+///
+/// The predicate is an ordinary Mog function whose parameters are the
+/// candidate's parameters FOLLOWED BY one trailing parameter bound to the
+/// candidate's output, returning a truthy `i64` (`0`/`1`) or `bool`. We:
+///   1. parse the candidate signature's parameter types (must all be sampleable);
+///   2. deterministically sample inputs (own salt → disjoint from example /
+///      holdout draws) and RUN the candidate over them via the U1 safe execute
+///      path ([`crate::runtime::execute_function_for_problem`]);
+///   3. RUN the predicate on `(inputs.., output)` and require it to hold on
+///      every sample.
+///
+/// A candidate is accepted iff the predicate holds on all sampled inputs; the
+/// first violation (or a candidate/predicate error) is an `Err`. This is the
+/// "Mog predicate as verify oracle" — the property arm's verification ceiling.
+/// (It is a *verifier*; property-driven *search* — enumerating candidates to
+/// satisfy the predicate — is a separate, larger step and is out of scope here.)
+///
+/// `candidate_signature` and `predicate_signature` are `&'static str` because
+/// they are stored on the temporary [`Problem`]s used for argument coercion;
+/// callers holding owned `String`s should `Box::leak` at the front door (the
+/// existing pattern in `agent::coding_intent`).
+pub fn verify_code_against_property(
+    candidate_name: &str,
+    candidate_signature: &'static str,
+    candidate_code: &str,
+    predicate_name: &str,
+    predicate_signature: &'static str,
+    predicate_code: &str,
+) -> Result<(), String> {
+    let param_types = holdout_param_types(candidate_signature);
+    if param_types.is_empty() {
+        return Err(format!(
+            "cannot sample a property spec with zero candidate parameters \
+             (signature: {candidate_signature:?})"
+        ));
+    }
+    if param_types.contains(&HoldoutParamType::Other) {
+        return Err(format!(
+            "candidate signature has an unsampleable parameter type \
+             (signature: {candidate_signature:?})"
+        ));
+    }
+
+    // Temporary problems carry the signatures so argument coercion
+    // (`runtime_value_from_problem_meta`) sees the right parameter types.
+    let cand_problem = Problem {
+        name: candidate_name.to_string(),
+        category: "property",
+        description: "candidate under a property predicate",
+        signature: candidate_signature,
+        ..Default::default()
+    };
+    let pred_problem = Problem {
+        name: predicate_name.to_string(),
+        category: "property",
+        description: "property predicate oracle",
+        signature: predicate_signature,
+        ..Default::default()
+    };
+
+    let mut rng = HoldoutRng::new(holdout_seed(candidate_name) ^ PROPERTY_SAMPLE_SALT);
+    let mut checked = 0usize;
+    for _ in 0..HOLDOUT_SAMPLES {
+        let Some(inputs) = sample_holdout_inputs(&mut rng, &param_types) else {
+            break;
+        };
+        let out = crate::runtime::execute_function_for_problem(
+            candidate_code,
+            candidate_name,
+            &inputs,
+            &cand_problem,
+        )
+        .map_err(|e| format!("candidate errored on a sampled input: {e}"))?;
+        let out_bench = crate::runtime::benchmark_value_from_runtime(&out)
+            .map_err(|e| format!("candidate output not representable: {e}"))?;
+
+        // Predicate sees the candidate's inputs followed by its output.
+        let mut pred_inputs = inputs.clone();
+        pred_inputs.push(out_bench);
+        let verdict = crate::runtime::execute_function_for_problem(
+            predicate_code,
+            predicate_name,
+            &pred_inputs,
+            &pred_problem,
+        )
+        .map_err(|e| format!("property predicate errored: {e}"))?;
+
+        let holds = match verdict {
+            crate::runtime::Value::Int(n) => n != 0,
+            crate::runtime::Value::Bool(b) => b,
+            other => {
+                return Err(format!(
+                    "property predicate returned a non-boolean value: {other:?}"
+                ))
+            }
+        };
+        if !holds {
+            return Err(format!(
+                "candidate violates the property on sampled input {inputs:?} (output {out:?})"
+            ));
+        }
+        checked += 1;
+    }
+
+    if checked == 0 {
+        return Err(format!(
+            "no property samples could be drawn for {candidate_name}"
+        ));
+    }
+    Ok(())
 }
 
 fn make_add_two(variant: usize) -> Problem {
@@ -4566,6 +4811,135 @@ fn make_convolution_1d_sum(variant: usize) -> Problem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn problem_from_reference_double_synthesizes_and_verifies() {
+        // A spec given ONLY a reference implementation (no hand examples).
+        let problem = problem_from_reference(
+            "double",
+            "fn double(x: i64) -> i64",
+            "fn double(x: i64) -> i64 {\n    return x * 2;\n}\n",
+        )
+        .expect("reference intake should build a problem");
+
+        // Seed examples were MANUFACTURED by running the reference, not hand
+        // authored: every expected == 2 * input proves they came from execution.
+        assert!(
+            !problem.examples.is_empty(),
+            "seed examples should be generated by running the reference"
+        );
+        for example in &problem.examples {
+            let Value::Int(input) = example.inputs[0] else {
+                panic!("expected an int input, got {:?}", example.inputs[0]);
+            };
+            assert_eq!(
+                example.expected,
+                Value::Int(input * 2),
+                "seed example must equal the reference's output for {input}"
+            );
+        }
+
+        // The reference oracle is retained so generated_holdouts does
+        // differential testing in the strict verifier.
+        assert!(
+            !problem.reference_code.is_empty(),
+            "reference_code must stay set as the verifier-owned oracle"
+        );
+
+        // An equivalent candidate (x + x) must pass solve+verify — exercising
+        // the unchanged verify_problem_code_strict pipeline AND the differential
+        // holdouts against the reference.
+        let equivalent = "fn double(x: i64) -> i64 { return x + x; }";
+        crate::runtime::verify_problem_code_strict(&problem, equivalent)
+            .expect("an equivalent candidate must verify against the reference");
+
+        // A non-equivalent candidate (x + 1) must be REJECTED — proving the
+        // differential oracle actually fires rather than rubber-stamping.
+        let wrong = "fn double(x: i64) -> i64 { return x + 1; }";
+        assert!(
+            crate::runtime::verify_problem_code_strict(&problem, wrong).is_err(),
+            "a non-equivalent candidate must be rejected by differential testing"
+        );
+    }
+
+    #[test]
+    fn problem_from_reference_rejects_unsampleable_signature() {
+        // Zero-parameter signatures cannot be sampled → Err, not a fake spec.
+        assert!(problem_from_reference(
+            "noop",
+            "fn noop() -> i64",
+            "fn noop() -> i64 { return 0; }",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn property_scalar_predicate_accepts_only_satisfying_candidates() {
+        // A PROPERTY-ONLY spec: no expected outputs, just a predicate the result
+        // must satisfy — here "the output is strictly greater than the input".
+        let predicate_sig = "fn gt(x: i64, out: i64) -> i64";
+        let predicate = "fn gt(x: i64, out: i64) -> i64 { if out > x { return 1; } return 0; }";
+
+        // A candidate that satisfies the property (x + 1 > x) verifies.
+        verify_code_against_property(
+            "inc",
+            "fn inc(x: i64) -> i64",
+            "fn inc(x: i64) -> i64 { return x + 1; }",
+            "gt",
+            predicate_sig,
+            predicate,
+        )
+        .expect("a candidate satisfying the property must verify");
+
+        // A candidate that violates it (x - 1 < x) is rejected — proves the
+        // predicate oracle actually fires.
+        assert!(
+            verify_code_against_property(
+                "inc",
+                "fn inc(x: i64) -> i64",
+                "fn inc(x: i64) -> i64 { return x - 1; }",
+                "gt",
+                predicate_sig,
+                predicate,
+            )
+            .is_err(),
+            "a candidate violating the property must be rejected"
+        );
+    }
+
+    #[test]
+    fn property_is_sorted_accepts_sort_rejects_identity() {
+        // The roadmap's named property-only spec: synthesize a function whose
+        // output `is_sorted`, with the predicate (not examples) as the oracle.
+        let predicate_sig = "fn is_sorted_prop(arr: [i64], out: [i64]) -> i64";
+        let predicate = "fn is_sorted_prop(arr: [i64], out: [i64]) -> i64 {\n    i: i64 = 1;\n    while i < out.len {\n        if out[i] < out[i - 1] { return 0; }\n        i = i + 1;\n    }\n    return 1;\n}\n";
+
+        // A real sort satisfies `is_sorted` on every sampled input.
+        verify_code_against_property(
+            "sortf",
+            "fn sortf(arr: [i64]) -> [i64]",
+            "fn sortf(arr: [i64]) -> [i64] { s: [i64] = arr; s.sort(); return s; }",
+            "is_sorted_prop",
+            predicate_sig,
+            predicate,
+        )
+        .expect("a real sort must satisfy the is_sorted property");
+
+        // Identity leaves unsorted inputs unsorted → rejected on the first
+        // unsorted sample.
+        assert!(
+            verify_code_against_property(
+                "sortf",
+                "fn sortf(arr: [i64]) -> [i64]",
+                "fn sortf(arr: [i64]) -> [i64] { return arr; }",
+                "is_sorted_prop",
+                predicate_sig,
+                predicate,
+            )
+            .is_err(),
+            "identity must be rejected by the is_sorted property"
+        );
+    }
 
     #[test]
     fn test_tree_node_creation() {

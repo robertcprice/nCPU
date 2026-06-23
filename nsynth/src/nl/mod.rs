@@ -337,6 +337,43 @@ impl NLPipeline {
         }
     }
 
+    /// Synthesize a program from a REFERENCE IMPLEMENTATION (no hand examples).
+    ///
+    /// User-facing reference-implementation intake: "synthesize a function
+    /// equivalent to THIS code". Delegates to
+    /// [`crate::benchmark::problem_from_reference`] to manufacture the seed I/O
+    /// examples by running the reference, then drives the standard
+    /// [`crate::solver::solve_problem`] pipeline. The solver only ever sees the
+    /// manufactured examples (it strips `reference_code` via
+    /// `Problem::synthesis_view`); the reference is retained on the problem so
+    /// the strict verifier can do differential testing against it.
+    pub fn synthesize_from_reference(
+        &self,
+        name: &str,
+        signature: &'static str,
+        reference_code: &'static str,
+    ) -> NLSynthesisResult {
+        let problem = match crate::benchmark::problem_from_reference(name, signature, reference_code)
+        {
+            Ok(problem) => problem,
+            Err(message) => {
+                return NLSynthesisResult {
+                    code: String::new(),
+                    method: "reference".to_string(),
+                    success: false,
+                    error: Some(message),
+                };
+            }
+        };
+        let result = crate::solver::solve_problem(&problem);
+        NLSynthesisResult {
+            code: result.code,
+            method: format!("reference+{}", result.method),
+            success: result.success,
+            error: result.error,
+        }
+    }
+
     /// Convert JSON value to nCPU/nSynth Value
     fn json_to_value(&self, json: serde_json::Value) -> Option<crate::benchmark::Value> {
         use crate::benchmark::Value;

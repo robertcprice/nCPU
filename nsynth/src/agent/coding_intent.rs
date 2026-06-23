@@ -69,6 +69,32 @@ impl CodingIntent {
         Ok(Self::from_requirement(&req))
     }
 
+    /// REFERENCE-IMPLEMENTATION front door: build a solver `Problem` from a
+    /// runnable reference alone — no hand-authored examples required.
+    ///
+    /// This is the agent-facing sibling of [`Self::to_problem`]: where
+    /// `to_problem` hard-fails on empty examples, this manufactures the seed
+    /// I/O examples by running the reference (via
+    /// [`crate::benchmark::problem_from_reference`], which owns the holdout
+    /// sampling machinery) and keeps `reference_code` set so the strict verifier
+    /// does differential testing against the reference. A spec given ONLY a
+    /// reference now synthesizes + verifies.
+    ///
+    /// `to_problem` is intentionally left unchanged — this is additive.
+    pub fn problem_from_reference(
+        name: &str,
+        signature: &str,
+        reference_code: &str,
+    ) -> Result<Problem, String> {
+        // Problem fields are `&'static str`; leak the user input at the front
+        // door (the existing pattern in `to_problem` for signature/category/
+        // description). Bounded, per-spec — acceptable for a front-door ctor.
+        let signature: &'static str = Box::leak(signature.to_string().into_boxed_str());
+        let reference_code: &'static str =
+            Box::leak(reference_code.to_string().into_boxed_str());
+        crate::benchmark::problem_from_reference(name, signature, reference_code)
+    }
+
     /// Convert to solver `Problem` when examples are present.
     pub fn to_problem(&self) -> Result<Problem, String> {
         if self.examples.is_empty() {
@@ -130,6 +156,96 @@ fn coding_value_to_benchmark(v: &CodingValue) -> Result<Value, String> {
     })
 }
 
+/// Unified spec front door — the four ways a synthesis task can be specified.
+///
+/// Collapses the previously-scattered intake paths into one sum type so a caller
+/// holds "a spec" without committing to how it was expressed:
+///   - [`Spec::Examples`] — classic PBE: input/output pairs (the existing path).
+///   - [`Spec::Reference`] — a runnable reference whose behavior IS the spec;
+///     seed examples are manufactured by running it
+///     ([`crate::benchmark::problem_from_reference`]).
+///   - [`Spec::Property`] — a predicate the output must satisfy, used as the
+///     verify oracle ([`crate::benchmark::verify_code_against_property`]).
+///   - [`Spec::Nl`] — a natural-language description, resolved via the bridge.
+///
+/// `Examples`/`Reference`/`Nl` reduce to a solver [`Problem`] via
+/// [`Spec::to_problem`]; `Property` is a *verification* spec (no fixed outputs to
+/// search toward) so it exposes [`Spec::verify`] instead.
+#[derive(Debug, Clone)]
+pub enum Spec {
+    Examples(CodingIntent),
+    Reference {
+        name: String,
+        signature: String,
+        code: String,
+    },
+    Property {
+        candidate_name: String,
+        candidate_signature: String,
+        predicate_name: String,
+        predicate_signature: String,
+        predicate_code: String,
+    },
+    Nl(String),
+}
+
+impl Spec {
+    /// Reduce a spec to a solver `Problem`, for the arms that pin down outputs
+    /// (Examples / Reference / NL). `Property` returns `Err` — it is verified,
+    /// not solved-toward (use [`Spec::verify`]).
+    pub fn to_problem(&self) -> Result<Problem, String> {
+        match self {
+            Spec::Examples(intent) => intent.to_problem(),
+            Spec::Reference {
+                name,
+                signature,
+                code,
+            } => CodingIntent::problem_from_reference(name, signature, code),
+            Spec::Nl(text) => {
+                let intent = CodingIntent::from_nl(text).map_err(|e| e.to_string())?;
+                intent.to_problem()
+            }
+            Spec::Property { .. } => Err(
+                "a property spec has no fixed outputs to synthesize toward; use Spec::verify"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Verify a candidate against a `Property` spec's predicate oracle. Only
+    /// meaningful for [`Spec::Property`]; the other arms verify through
+    /// example/reference matching inside the solver pipeline and return `Err`.
+    pub fn verify(&self, candidate_code: &str) -> Result<(), String> {
+        match self {
+            Spec::Property {
+                candidate_name,
+                candidate_signature,
+                predicate_name,
+                predicate_signature,
+                predicate_code,
+            } => {
+                // `verify_code_against_property` stores the signatures on
+                // temporary problems for arg coercion, so they must be 'static.
+                // Leak at the front door (bounded, per-spec) — the existing
+                // pattern in `problem_from_reference`.
+                let candidate_signature: &'static str =
+                    Box::leak(candidate_signature.clone().into_boxed_str());
+                let predicate_signature: &'static str =
+                    Box::leak(predicate_signature.clone().into_boxed_str());
+                crate::benchmark::verify_code_against_property(
+                    candidate_name,
+                    candidate_signature,
+                    candidate_code,
+                    predicate_name,
+                    predicate_signature,
+                    predicate_code,
+                )
+            }
+            _ => Err("Spec::verify is only meaningful for a Property spec".to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +255,79 @@ mod tests {
         let intent = CodingIntent::from_nl("add two numbers").expect("add");
         assert!(!intent.examples.is_empty());
         assert_eq!(intent.examples[0].expected, CodingValue::Int(5));
+    }
+
+    #[test]
+    fn problem_from_reference_no_hand_examples_synthesizes_and_verifies() {
+        // Reference-only spec: NO hand examples supplied.
+        let problem = CodingIntent::problem_from_reference(
+            "double",
+            "fn double(x: i64) -> i64",
+            "fn double(x: i64) -> i64 { return x * 2; }",
+        )
+        .expect("reference intake should build a problem");
+
+        // Seeds were manufactured by running the reference.
+        assert!(!problem.examples.is_empty());
+        for example in &problem.examples {
+            let Value::Int(input) = example.inputs[0] else {
+                panic!("expected int input");
+            };
+            assert_eq!(example.expected, Value::Int(input * 2));
+        }
+        assert!(!problem.reference_code.is_empty());
+
+        // Equivalent candidate verifies; non-equivalent is rejected.
+        assert!(crate::runtime::verify_problem_code_strict(
+            &problem,
+            "fn double(x: i64) -> i64 { return x + x; }",
+        )
+        .is_ok());
+        assert!(crate::runtime::verify_problem_code_strict(
+            &problem,
+            "fn double(x: i64) -> i64 { return x + 1; }",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn spec_reference_arm_reduces_to_problem() {
+        let spec = Spec::Reference {
+            name: "double".into(),
+            signature: "fn double(x: i64) -> i64".into(),
+            code: "fn double(x: i64) -> i64 { return x * 2; }".into(),
+        };
+        let problem = spec
+            .to_problem()
+            .expect("a reference spec must reduce to a problem");
+        assert!(!problem.examples.is_empty());
+        // A property spec has no fixed outputs, so to_problem must refuse.
+        let property = Spec::Property {
+            candidate_name: "inc".into(),
+            candidate_signature: "fn inc(x: i64) -> i64".into(),
+            predicate_name: "gt".into(),
+            predicate_signature: "fn gt(x: i64, out: i64) -> i64".into(),
+            predicate_code: "fn gt(x: i64, out: i64) -> i64 { if out > x { return 1; } return 0; }"
+                .into(),
+        };
+        assert!(property.to_problem().is_err());
+    }
+
+    #[test]
+    fn spec_property_arm_verifies_via_predicate_oracle() {
+        let spec = Spec::Property {
+            candidate_name: "inc".into(),
+            candidate_signature: "fn inc(x: i64) -> i64".into(),
+            predicate_name: "gt".into(),
+            predicate_signature: "fn gt(x: i64, out: i64) -> i64".into(),
+            predicate_code: "fn gt(x: i64, out: i64) -> i64 { if out > x { return 1; } return 0; }"
+                .into(),
+        };
+        // Satisfying candidate verifies; violating candidate is rejected.
+        spec.verify("fn inc(x: i64) -> i64 { return x + 1; }")
+            .expect("a satisfying candidate must verify against the property");
+        assert!(spec
+            .verify("fn inc(x: i64) -> i64 { return x - 1; }")
+            .is_err());
     }
 }
