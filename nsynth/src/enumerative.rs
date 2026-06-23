@@ -1415,6 +1415,14 @@ fn mine_from_corpus(corpus_in: &[SolvedExpr]) -> ComponentLibrary {
 pub struct ComponentLibrary {
     /// Reusable sub-expressions with their semantic descriptions
     components: Vec<(Expr, String)>, // (expr, description)
+    /// Size of the solved-expression corpus this library was last mined from.
+    /// Used by [`Self::load_or_dream`] to re-mine when the corpus has GROWN
+    /// since the cached library was built — without this watermark the library
+    /// was mined exactly once (at cold start) and every later solve, though
+    /// recorded into the corpus, never became a new abstraction. `#[serde(default)]`
+    /// so libraries written before this field load as `0` (forcing one re-mine).
+    #[serde(default)]
+    mined_corpus_len: usize,
 }
 
 /// Path for persistent library storage
@@ -1432,7 +1440,25 @@ impl ComponentLibrary {
     pub fn new() -> Self {
         Self {
             components: Vec::new(),
+            mined_corpus_len: 0,
         }
+    }
+
+    /// Mine `corpus` and fold any NEW components into this library (dedup by
+    /// description via [`Self::add`]). Returns how many components were added.
+    ///
+    /// This is the disk-free core of "the library keeps mining as the solve
+    /// corpus grows." Mining is whole-corpus and frequency-gated, so re-mining
+    /// a grown corpus yields the previously-mined patterns plus any new ones;
+    /// merging (rather than replacing) guarantees a previously-mined component
+    /// is never lost if a later, larger corpus shifts a pattern below threshold.
+    pub fn merge_from_corpus(&mut self, corpus: &[SolvedExpr]) -> usize {
+        let fresh = mine_from_corpus(corpus);
+        let before = self.components.len();
+        for (expr, desc) in fresh.components {
+            self.add(expr, desc);
+        }
+        self.components.len() - before
     }
 
     /// Add a discovered component to the library
@@ -1487,22 +1513,49 @@ impl ComponentLibrary {
         }
     }
 
-    /// Load or create via dream mode if no library exists
+    /// Load the library, re-mining when the solve corpus has grown — or create
+    /// it via dream mode if none exists.
+    ///
+    /// Previously this returned the cached `library.json` unconditionally, so
+    /// the library was mined exactly once and the `record_solved_expr` corpus,
+    /// though it grew with every solve, never produced new abstractions. Now we
+    /// compare the current corpus size against the watermark stored in the
+    /// cached library and, when it has grown, mine the larger corpus and fold
+    /// the new components in. This is the link that makes the library actually
+    /// compound across runs ("writes its own teachers").
     pub fn load_or_dream(dream_budget_ms: u64) -> Self {
         let path = library_path();
+        let corpus = load_solved_exprs();
+        let corpus_len = corpus.len();
         if path.exists() {
-            let lib = Self::load();
+            let mut lib = Self::load();
             if !lib.components.is_empty() {
-                eprintln!(
-                    "[library] loaded {} components from {}",
-                    lib.len(),
-                    path.display()
-                );
+                if corpus_len > lib.mined_corpus_len {
+                    let mined_at = lib.mined_corpus_len;
+                    let added = lib.merge_from_corpus(&corpus);
+                    lib.mined_corpus_len = corpus_len;
+                    eprintln!(
+                        "[library] corpus grew {mined_at}->{corpus_len}; re-mined +{added} \
+                         components -> {} total",
+                        lib.len()
+                    );
+                    let _ = lib.save();
+                } else {
+                    eprintln!(
+                        "[library] loaded {} components from {} (corpus {corpus_len}, no growth)",
+                        lib.len(),
+                        path.display()
+                    );
+                }
                 return lib;
             }
         }
         eprintln!("[library] no library found, running dream mode...");
-        let lib = dream(dream_budget_ms);
+        let mut lib = dream(dream_budget_ms);
+        // Watermark the corpus this library was mined from. When dream() had to
+        // bootstrap (empty on-disk corpus), `corpus_len` is 0, so the first real
+        // solve triggers a re-mine.
+        lib.mined_corpus_len = corpus_len;
         let _ = lib.save();
         lib
     }
@@ -3189,6 +3242,43 @@ mod tests {
     }
     fn add(a: Expr, b: Expr) -> Expr {
         Expr::BinOp(BinOp::Add, Box::new(a), Box::new(b))
+    }
+
+    /// REGRESSION (Bug B): the library must keep mining as the solve corpus
+    /// GROWS — not freeze at its cold-start snapshot. Before the fix,
+    /// `load_or_dream` returned the cached library unconditionally, so solves
+    /// recorded into the corpus never became new abstractions. Here we mine a
+    /// small corpus, then fold in a grown corpus carrying a NEW repeated pattern
+    /// and assert a component is added (compounding) and that re-merging an
+    /// unchanged corpus adds nothing (idempotent dedup).
+    #[test]
+    fn library_remines_as_corpus_grows() {
+        // Small corpus: the square pattern a*a (support 2).
+        let small = vec![
+            solved(mul(Expr::Var(0), Expr::Var(0)), 1), // a*a
+            solved(add(mul(Expr::Var(0), Expr::Var(0)), Expr::Var(1)), 2), // a*a + b
+        ];
+        let mut lib = mine_from_corpus(&small);
+        let n_small = lib.len();
+        assert!(n_small >= 1, "small corpus must mine at least the square pattern");
+
+        // Grown corpus: small PLUS two trees carrying a NEW repeated pattern a+a.
+        let mut grown = small.clone();
+        grown.push(solved(add(Expr::Var(0), Expr::Var(0)), 1)); // a+a
+        grown.push(solved(add(add(Expr::Var(0), Expr::Var(0)), Expr::Var(1)), 2)); // (a+a)+b
+
+        let added = lib.merge_from_corpus(&grown);
+        assert!(
+            added >= 1,
+            "growing the corpus with a new repeated pattern must fold in a component; \
+             added={added}, names={:?}",
+            lib.components.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>()
+        );
+        assert!(lib.len() > n_small, "library must grow with the corpus");
+
+        // Re-merging an unchanged corpus must add nothing (dedup by description).
+        let again = lib.merge_from_corpus(&grown);
+        assert_eq!(again, 0, "re-merging an unchanged corpus must add no components");
     }
 
     /// THE GENERALIZATION LEVER. A mined `?0*?0` abstraction, re-rooted onto

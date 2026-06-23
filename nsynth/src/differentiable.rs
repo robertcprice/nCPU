@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::benchmark::{Example, Problem, Value};
 use crate::interactive_legacy::InteractiveTrace;
-use crate::runtime::{execute_function_for_problem, verify_problem_code, Value as RuntimeValue};
+use crate::runtime::{
+    execute_function_for_problem, verify_problem_code, verify_problem_code_strict,
+    Value as RuntimeValue,
+};
 use crate::solver::solve_problem_search_only;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -500,7 +503,14 @@ fn run_bridge_request(
     }
 
     let code = response.code.unwrap_or_default();
-    if let Err(err) = verify_problem_code(problem, &code) {
+    // STRICT verification on first solve: run the candidate on examples AND
+    // freshly-generated holdouts (and the reference oracle, when present). The
+    // loose `verify_problem_code` checks visible examples only, which lets an
+    // overfit gradient candidate be returned as `success: true` — a false
+    // accept. This now matches the strict re-check the orchestrator already
+    // applies on cache retrieval (`orchestrator.rs`), and the "strict
+    // verification" wording in the error branch below is now accurate.
+    if let Err(err) = verify_problem_code_strict(problem, &code) {
         return DifferentiableSolveResult {
             success: false,
             code,
@@ -932,5 +942,62 @@ mod tests {
         if let Some(v) = saved {
             std::env::set_var("NSYNTH_DIFF_BRIDGE", v);
         }
+    }
+
+    /// REGRESSION (Bug A): the differentiable solve path now verifies the
+    /// candidate with `verify_problem_code_strict` (examples + fresh holdouts +
+    /// reference oracle), not the loose `verify_problem_code` (examples only).
+    /// This guards the gate the fix relies on: a candidate that reproduces the
+    /// visible examples but is otherwise overfit must be REJECTED by strict
+    /// verification even though loose verification accepts it. (We exercise the
+    /// verifiers directly — invoking the gradient solver would require the
+    /// gated torch bridge.)
+    #[test]
+    fn strict_verify_rejects_example_overfit_that_loose_accepts() {
+        // Reference: f(x) = x*x. The strict verifier samples fresh holdouts by
+        // running this reference, so it probes inputs beyond the examples.
+        let problem = Problem {
+            name: "square_overfit_v0".to_string(),
+            category: "test",
+            description: "Return x squared.",
+            signature: "fn f(x: i64) -> i64",
+            examples: vec![
+                Example { inputs: vec![Value::Int(0)], expected: Value::Int(0) },
+                Example { inputs: vec![Value::Int(1)], expected: Value::Int(1) },
+                Example { inputs: vec![Value::Int(2)], expected: Value::Int(4) },
+                Example { inputs: vec![Value::Int(3)], expected: Value::Int(9) },
+            ],
+            holdouts: vec![],
+            reference_code: "fn f(x: i64) -> i64 { return x * x; }",
+            ..Default::default()
+        };
+
+        // An overfit candidate: a lookup matching ONLY the four example inputs,
+        // wrong (returns 0) everywhere else.
+        let overfit = "fn f(x: i64) -> i64 { \
+            if x == 0 { return 0; } \
+            if x == 1 { return 1; } \
+            if x == 2 { return 4; } \
+            if x == 3 { return 9; } \
+            return 0; \
+        }";
+
+        // Loose verification (examples only) ACCEPTS the overfit — this is the
+        // rubber-stamp the old code shipped.
+        assert!(
+            verify_problem_code(&problem, overfit).is_ok(),
+            "loose verify should accept an example-overfit (that is the bug)"
+        );
+        // Strict verification REJECTS it via fresh reference-derived holdouts.
+        assert!(
+            verify_problem_code_strict(&problem, overfit).is_err(),
+            "strict verify must reject an example-overfit candidate"
+        );
+
+        // And a genuinely correct candidate still passes strict verification.
+        assert!(
+            verify_problem_code_strict(&problem, "fn f(x: i64) -> i64 { return x * x; }").is_ok(),
+            "a correct candidate must still verify strictly"
+        );
     }
 }
