@@ -96,6 +96,10 @@ fn is_differentiable_only_capability_gap(error: &str) -> bool {
 }
 
 fn solve_problem_differentiable_only_or_skip(problem: &Problem) -> Option<SolveResult> {
+    // These tests exercise the opt-in python3 differentiable bridge route; opt
+    // into it explicitly (Rust-only invariant keeps it off by default). The
+    // guard serializes against the default-off gate test.
+    let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
     let result = solve_problem_differentiable_only(problem);
     if result.success {
         return Some(result);

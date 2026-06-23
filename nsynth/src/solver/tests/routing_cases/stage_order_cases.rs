@@ -239,6 +239,9 @@ fn differentiable_bridge_runs_without_reference_fallbacks() {
 
 #[test]
 fn differentiable_teacher_distillation_solves_abs_diff() {
+    // Opt into the python3 bridge route this test exercises (Rust-only default
+    // keeps it off); the guard serializes against the default-off gate test.
+    let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
     let bridge_script =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../egdc/mog_gradient_bridge.py");
     if !bridge_script.exists() {

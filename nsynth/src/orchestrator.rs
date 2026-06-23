@@ -410,6 +410,9 @@ mod tests {
 
     #[test]
     fn orchestrator_default_prefers_differentiable_when_supported() {
+        // Opt into the python3 bridge route (Rust-only default keeps it off);
+        // the guard serializes against the default-off gate test.
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let root = temp_root("prefer_differentiable_default");
         let problem = get_benchmark(1)
             .into_iter()

@@ -412,18 +412,20 @@ fn program_from_description(desc: &UArrDescription) -> SoftUniversalArrayProgram
 
 // ── Tier-0 proposer wiring (stage A3; v1 persistent server + gate) ───────────
 
-/// Master switch for the prior-net tier-0 proposer. The proposer is now
-/// opportunistic: if the script/model assets are present it can warm-start the
-/// universal-array solver by default; set `NSYNTH_PRIOR_NET=0` to force the old
-/// byte-identical no-prior path.
+/// Master switch for the prior-net tier-0 proposer. The proposer is OPT-IN to
+/// honor the Rust-only invariant (MASTER_ROADMAP 2.3): it stays OFF (never
+/// spawns `python3`) unless `NSYNTH_PRIOR_NET == "1"`, in which case it
+/// warm-starts the universal-array solver when the script/model assets are
+/// present. With the flag unset, behavior is byte-identical to the old
+/// no-prior path.
 pub(in crate::synthesis) fn prior_net_enabled() -> bool {
     if std::env::var("NSYNTH_PRIOR_NET")
-        .map(|v| v == "0")
+        .map(|v| v == "1")
         .unwrap_or(false)
     {
-        return false;
+        return find_prior_net_assets().is_some();
     }
-    find_prior_net_assets().is_some()
+    false
 }
 
 /// Default confidence gate (Phase A v1). Calibrated on the 10k held-out
@@ -870,6 +872,42 @@ pub fn eval_fallback_direct(names: &[String]) -> Vec<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rust-only invariant: with NO `NSYNTH_PRIOR_NET` env set, the prior-net
+    /// tier-0 proposer must be OFF (never spawns `python3`) even when the
+    /// script/model assets are faked. Opt-in only via `NSYNTH_PRIOR_NET=1`.
+    /// Env is process-global and cargo runs tests multi-threaded, so we
+    /// save/clear the relevant vars on entry and restore on exit.
+    #[test]
+    fn prior_net_disabled_by_default() {
+        let saved = std::env::var("NSYNTH_PRIOR_NET").ok();
+        let saved_script = std::env::var("NSYNTH_PRIOR_NET_SCRIPT").ok();
+        let saved_model = std::env::var("NSYNTH_PRIOR_NET_MODEL").ok();
+
+        std::env::remove_var("NSYNTH_PRIOR_NET");
+        // Fake the assets so we prove the gate, not asset-absence, is what
+        // keeps the proposer off.
+        std::env::set_var("NSYNTH_PRIOR_NET_SCRIPT", "/tmp/fake_propose.py");
+        std::env::set_var("NSYNTH_PRIOR_NET_MODEL", "/tmp/fake_model.pt");
+
+        assert!(
+            !prior_net_enabled(),
+            "prior_net_enabled() must be false with NSYNTH_PRIOR_NET unset (Rust-only default)"
+        );
+
+        // Restore env to avoid cross-test contamination.
+        std::env::remove_var("NSYNTH_PRIOR_NET_SCRIPT");
+        std::env::remove_var("NSYNTH_PRIOR_NET_MODEL");
+        if let Some(v) = saved {
+            std::env::set_var("NSYNTH_PRIOR_NET", v);
+        }
+        if let Some(v) = saved_script {
+            std::env::set_var("NSYNTH_PRIOR_NET_SCRIPT", v);
+        }
+        if let Some(v) = saved_model {
+            std::env::set_var("NSYNTH_PRIOR_NET_MODEL", v);
+        }
+    }
 
     #[test]
     fn describe_from_description_roundtrip_random() {

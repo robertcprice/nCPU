@@ -463,6 +463,7 @@ mod tests {
 
     #[test]
     fn solves_native_interactive_running_sum_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![1, 2, 3],
@@ -490,6 +491,7 @@ mod tests {
 
     #[test]
     fn solves_native_interactive_counter_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![9, 8, 7],
@@ -522,6 +524,7 @@ mod tests {
 
     #[test]
     fn solves_native_interactive_passthrough_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![3, -2, 7],
@@ -549,6 +552,7 @@ mod tests {
 
     #[test]
     fn solves_native_interactive_running_max_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![-5, -2, -7, 4],
@@ -576,6 +580,7 @@ mod tests {
 
     #[test]
     fn solves_native_interactive_running_min_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![5, 7, 2, 9],
@@ -603,6 +608,7 @@ mod tests {
 
     #[test]
     fn solves_native_positive_running_sum_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![-2, 5, -1, 4, -10, 3],
@@ -637,6 +643,7 @@ mod tests {
 
     #[test]
     fn solves_native_positive_input_counter_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![-1, 5, 0, 2],
@@ -671,6 +678,7 @@ mod tests {
 
     #[test]
     fn solves_native_running_average_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![2, 4, 6],
@@ -698,6 +706,7 @@ mod tests {
 
     #[test]
     fn solves_native_positive_running_average_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![2, -2, 4, 6, -4],
@@ -734,6 +743,7 @@ mod tests {
 
     #[test]
     fn solves_native_running_average_change_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![2, 2, 2, -3, -3],
@@ -768,6 +778,7 @@ mod tests {
 
     #[test]
     fn solves_native_running_average_crosses_threshold_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![2, 4, 8, 8],
@@ -806,6 +817,7 @@ mod tests {
 
     #[test]
     fn solves_native_running_sum_exceeds_count_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![2, 0, 0, 0, 2],
@@ -868,6 +880,7 @@ mod tests {
 
     #[test]
     fn solves_native_running_sum_crosses_count_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![5, 0],
@@ -909,6 +922,7 @@ mod tests {
 
     #[test]
     fn solves_native_running_sum_minus_count_threshold_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![0, 5],
@@ -948,6 +962,7 @@ mod tests {
 
     #[test]
     fn solves_native_output_crosses_count_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![0, 5, 0, 0, 5, 0],
@@ -985,6 +1000,7 @@ mod tests {
 
     #[test]
     fn solves_native_output_minus_count_threshold_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![0, 5, 0, 0, 5, 0],
@@ -1021,6 +1037,7 @@ mod tests {
 
     #[test]
     fn solves_native_pairwise_add_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![3, 4, -2, 9],
@@ -1054,6 +1071,7 @@ mod tests {
 
     #[test]
     fn solves_native_pairwise_abs_diff_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![10, 3, -4, 9],
@@ -1086,6 +1104,7 @@ mod tests {
 
     #[test]
     fn solves_native_pairwise_max_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![3, 9, -2, -5],
@@ -1118,6 +1137,7 @@ mod tests {
 
     #[test]
     fn solves_native_grouped_digit_sum_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![123, 1002, 999],
@@ -1142,6 +1162,7 @@ mod tests {
 
     #[test]
     fn solves_native_filter_positive_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![3, -1, 0, 5, 8],
@@ -1174,6 +1195,7 @@ mod tests {
 
     #[test]
     fn solves_native_filter_even_stream_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let traces = vec![
             InteractiveTrace {
                 input_stream: vec![1, 2, 3, 4, 6],
@@ -1206,6 +1228,7 @@ mod tests {
 
     #[test]
     fn solves_interactive_add_two_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let problem = get_benchmark(1)
             .into_iter()
             .find(|problem| problem.name == "add_two_v0")
@@ -1230,6 +1253,7 @@ mod tests {
 
     #[test]
     fn solves_interactive_abs_diff_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let problem = get_benchmark(1)
             .into_iter()
             .find(|problem| problem.name == "abs_diff_v0")
@@ -1252,6 +1276,7 @@ mod tests {
 
     #[test]
     fn solves_interactive_digit_sum_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let problem = get_benchmark(1)
             .into_iter()
             .find(|problem| problem.name == "digit_sum_v0")
@@ -1269,6 +1294,7 @@ mod tests {
 
     #[test]
     fn solves_interactive_reverse_digits_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let problem = get_benchmark(1)
             .into_iter()
             .find(|problem| problem.name == "reverse_digits_v0")
@@ -1286,6 +1312,7 @@ mod tests {
 
     #[test]
     fn solves_interactive_count_even_digits_with_differentiable_only() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let problem = get_benchmark(1)
             .into_iter()
             .find(|problem| problem.name == "count_even_digits_v0")
@@ -1346,6 +1373,7 @@ mod tests {
 
     #[test]
     fn default_interactive_solver_is_always_differentiable() {
+        let _bridge = crate::differentiable::enable_diff_bridge_for_tests();
         let problem = get_benchmark(1)
             .into_iter()
             .find(|problem| problem.name == "add_two_v0")

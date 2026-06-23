@@ -84,6 +84,42 @@ fn repo_root() -> PathBuf {
     path
 }
 
+/// Opt-in gate for the differentiable `python3` bridge. To honor the Rust-only
+/// invariant (MASTER_ROADMAP 2.3), the bridge stays OFF by default and is only
+/// enabled when `NSYNTH_DIFF_BRIDGE == "1"`. When unset, the differentiable
+/// route declines cleanly (returns a `success: false` /
+/// `diff_gradient_unsupported` result that the cascade treats as a terminal
+/// MISS) instead of spawning `python3` or erroring.
+fn diff_bridge_enabled() -> bool {
+    std::env::var("NSYNTH_DIFF_BRIDGE")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+/// Shared serializing lock for `NSYNTH_DIFF_BRIDGE` in tests. Env vars are
+/// process-global and cargo runs `--lib` tests multi-threaded, so any test
+/// that toggles the bridge gate must hold this lock for its whole body to
+/// avoid racing with the default-off gate test and with each other.
+#[cfg(test)]
+pub(crate) fn bridge_env_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+/// Test seam: opt into the python3 differentiable bridge for the duration of
+/// the returned guard. Bridge-route integration tests (which assert a real
+/// `diff_gradient_*` solve) call this as their first line so they self-declare
+/// their dependency on the opt-in python path without weakening any assertion.
+/// Holding the guard serializes against the default-off gate test.
+#[cfg(test)]
+pub(crate) fn enable_diff_bridge_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    let guard = bridge_env_test_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    std::env::set_var("NSYNTH_DIFF_BRIDGE", "1");
+    guard
+}
+
 fn bridge_script() -> PathBuf {
     repo_root().join("egdc").join("mog_gradient_bridge.py")
 }
@@ -296,6 +332,27 @@ fn unsupported_scalar_result() -> DifferentiableSolveResult {
 }
 
 fn execute_bridge_payload(raw: &[u8]) -> Result<BridgeResponse, DifferentiableSolveResult> {
+    // Rust-only invariant: the python3 bridge is opt-in. This is the single
+    // chokepoint that spawns python3 (reached by both run_bridge_request and
+    // run_interactive_bridge_request), so gating here covers every caller.
+    // When unset, decline cleanly (success: false) so the cascade treats it
+    // as a terminal MISS and falls through. The error string is purely
+    // informational — post_enumerative only checks `success` — and lets the
+    // test harness recognize this as a bridge-unavailable capability gap.
+    if !diff_bridge_enabled() {
+        return Err(DifferentiableSolveResult {
+            success: false,
+            code: String::new(),
+            method: "diff_gradient_unsupported".to_string(),
+            error: Some(
+                "differentiable python bridge disabled (set NSYNTH_DIFF_BRIDGE=1 to enable; \
+                 Rust-only by default)"
+                    .to_string(),
+            ),
+            metadata: DifferentiableMetadata::default(),
+        });
+    }
+
     let script = bridge_script();
     if !script.exists() {
         return Err(DifferentiableSolveResult {
@@ -837,5 +894,43 @@ mod tests {
         assert!(examples
             .iter()
             .any(|example| example.inputs == vec![4, 3] && example.expected == 1));
+    }
+
+    /// Rust-only invariant: with NO `NSYNTH_DIFF_BRIDGE` env set, the
+    /// differentiable python bridge must be OFF and the route must decline
+    /// cleanly WITHOUT spawning python3. We assert the gate is false and that
+    /// `execute_bridge_payload` returns the gate `Err` (success == false,
+    /// method == "diff_gradient_unsupported", NOT a diff_gradient_error)
+    /// BEFORE reaching `bridge_script()` / `Command::new("python3")`. Env is
+    /// process-global and cargo runs tests multi-threaded, so we serialize
+    /// through the shared bridge-env lock and save/clear/restore.
+    #[test]
+    fn differentiable_bridge_disabled_by_default() {
+        let _guard = bridge_env_test_lock().lock().unwrap();
+        let saved = std::env::var("NSYNTH_DIFF_BRIDGE").ok();
+        std::env::remove_var("NSYNTH_DIFF_BRIDGE");
+
+        assert!(
+            !diff_bridge_enabled(),
+            "diff_bridge_enabled() must be false with NSYNTH_DIFF_BRIDGE unset (Rust-only default)"
+        );
+
+        let result = execute_bridge_payload(b"{}");
+        match result {
+            Err(decline) => {
+                assert!(!decline.success, "disabled bridge must not report success");
+                assert_eq!(
+                    decline.method, "diff_gradient_unsupported",
+                    "disabled bridge must decline as diff_gradient_unsupported, not error"
+                );
+                // It is a clean decline, never a reported launch/run failure.
+                assert_ne!(decline.method, "diff_gradient_error");
+            }
+            Ok(_) => panic!("execute_bridge_payload must decline (Err) when bridge is disabled"),
+        }
+
+        if let Some(v) = saved {
+            std::env::set_var("NSYNTH_DIFF_BRIDGE", v);
+        }
     }
 }
