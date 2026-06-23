@@ -42,6 +42,50 @@ fn default_solver_prefers_discovery_for_count_positive() {
     );
 }
 
+/// DEL-CHEAT accept-test: the hardcoded `search_closure_map_sum` oracle (which
+/// hardcoded `arr.iter().map(|x| x * 2).sum()`) was deleted. The map-then-SUM
+/// benchmark `closure_map_sum_v0` must now be solved by the GENERAL searched
+/// fold-body enumerator (`enumerative-array`), which independently discovers
+/// `acc + item*2`, and NOT by any recognizer.
+#[test]
+fn closure_map_sum_solved_by_searched_fold_not_recognizer() {
+    let problem = get_benchmark(1)
+        .into_iter()
+        .find(|p| p.name == "closure_map_sum_v0")
+        .unwrap();
+
+    // 1) The deleted recognizer path is gone: search-only mode no longer has a
+    //    candidate for this problem, so it cannot win via the removed oracle.
+    let search_only = solve_problem_search_only(&problem);
+    assert_ne!(
+        search_only.method, "search_closure_map_sum",
+        "deleted recognizer must not resurface: {:?}",
+        search_only
+    );
+    assert!(
+        !search_only.success,
+        "search-only must NOT solve closure_map_sum after oracle deletion; \
+         got method {} — a recognizer was re-added",
+        search_only.method
+    );
+
+    // 2) The full solver still solves it, via the general searched fold body.
+    let result = solve_problem(&problem);
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(
+        result.method, "enumerative-array",
+        "must be solved by the general searched fold enumerator, not a recognizer: {:?}",
+        result
+    );
+    // The searched solution is a fold accumulating `acc + item*2`, not the
+    // deleted `.map(|x| x*2)` closure template.
+    assert!(
+        !result.code.contains(".map("),
+        "searched solution must not be the deleted map-closure template: {}",
+        result.code
+    );
+}
+
 #[test]
 fn default_solver_uses_gradient_for_dot_product() {
     let problem = get_benchmark(1)

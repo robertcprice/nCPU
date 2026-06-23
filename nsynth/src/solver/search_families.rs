@@ -262,21 +262,6 @@ pub(super) fn is_array_output(signature: &str) -> bool {
     signature.replace(' ', "").contains("->[")
 }
 
-pub(super) fn search_closure_map_sum(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
-    let param_types = parse_param_types(problem.signature);
-    if param_types != [ParamType::ArrayI64] {
-        return None;
-    }
-    if !validate_unary_array(problem, |arr| arr.iter().map(|x| x * 2).sum()) {
-        return None;
-    }
-    verified_result(
-        problem,
-        code_closure_map_sum(fn_name),
-        "search_closure_map_sum",
-    )
-}
-
 pub(super) fn search_max_pair_diff(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::ArrayI64] {

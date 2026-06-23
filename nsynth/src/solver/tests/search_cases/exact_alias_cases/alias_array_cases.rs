@@ -49,22 +49,6 @@ fn search_solves_aliased_count_occurrences_without_family_name() {
 }
 
 #[test]
-fn search_solves_aliased_closure_map_sum_without_family_name() {
-    let problem = aliased_problem(
-        "closure_map_sum",
-        "mystery_map_sum_v0",
-        "fn mystery_map_sum(arr: [i64]) -> i64",
-        "array_search",
-        "Double each array element and return the sum of the doubled values.",
-    );
-    let result = solve_problem_search_only(&problem);
-    assert!(result.success);
-    assert_eq!(result.method, "search_closure_map_sum");
-    assert!(result.code.contains("arr.map"));
-    assert!(result.code.contains("fn mystery_map_sum"));
-}
-
-#[test]
 fn search_solves_aliased_max_pair_diff_without_family_name() {
     let problem = aliased_problem(
         "max_pair_diff",

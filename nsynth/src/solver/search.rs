@@ -365,10 +365,6 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_count_zeros,
     },
     SearchCandidate {
-        key: "search_closure_map_sum",
-        func: search_closure_map_sum,
-    },
-    SearchCandidate {
         key: "search_max_pair_diff",
         func: search_max_pair_diff,
     },
