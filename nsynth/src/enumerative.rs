@@ -367,11 +367,14 @@ impl Expr {
                     BinOp::Mod => format!("{ls} % {rs}"),
                     BinOp::Min => format!("if {ls} < {rs} {{ {ls} }} else {{ {rs} }}"),
                     BinOp::Max => format!("if {ls} > {rs} {{ {ls} }} else {{ {rs} }}"),
-                    BinOp::BitAnd => format!("{ls} % {rs}"), // Mog doesn't have &, approximate
-                    BinOp::BitOr => format!("{ls} + {rs}"),  // approximate
-                    BinOp::BitXor => format!("{ls} - {rs}"), // approximate
-                    BinOp::Shl => format!("{ls} * 2"),       // approximate
-                    BinOp::Shr => format!("{ls} / 2"),       // approximate
+                    // Mog supports native bitwise ops in lexer/parser/interpreter
+                    // (runtime/mod.rs: Token::Amp/Caret/Pipe/Shl/Shr; eval BitAnd/
+                    // BitOr/BitXor/Shl/Shr) — emit them faithfully, not approximations.
+                    BinOp::BitAnd => format!("({ls}) & ({rs})"),
+                    BinOp::BitOr => format!("({ls}) | ({rs})"),
+                    BinOp::BitXor => format!("({ls}) ^ ({rs})"),
+                    BinOp::Shl => format!("({ls}) << ({rs})"),
+                    BinOp::Shr => format!("({ls}) >> ({rs})"),
                 }
             }
             Expr::UnaryOp(op, e) => {
@@ -401,6 +404,15 @@ impl Expr {
                 let es = else_e.to_mog_ext(param_names, extra_names);
                 format!("if {ls} {cs} {rs} {{ {ts} }} else {{ {es} }}")
             }
+            // Loop nodes (WhileAccum/ForFold/NestedWhile/WhileCond) are never
+            // legitimate SUB-expressions — Mog has no expression-level loop, so
+            // the enumerators only ever construct them as the TOP-LEVEL program,
+            // which `emit_mog`/`emit_mog_array` render as full `fn` bodies (with
+            // correct accumulator ops via `fold_op_mog`). Reaching these arms
+            // means a loop node was nested inside another Expr, which would be a
+            // synthesis bug; render an explicit, non-runnable marker carrying the
+            // correct operator (via `fold_op_mog`) instead of the old approximate
+            // `-` so the marker never claims wrong semantics.
             Expr::WhileAccum {
                 init,
                 bound,
@@ -410,25 +422,19 @@ impl Expr {
                 let ext_names = &["acc", "i"];
                 let init_s = init.to_mog_ext(param_names, &[]);
                 let bound_s = bound.to_mog_ext(param_names, &[]);
-                let op_s = match body_op {
-                    BinOp::Add => "+",
-                    BinOp::Sub => "-",
-                    BinOp::Mul => "*",
-                    BinOp::BitXor => "-", // approximate
-                    _ => "+",
-                };
+                let op_s = fold_op_mog(body_op);
                 let rhs_s = body_rhs.to_mog_ext(param_names, ext_names);
-                format!("/* loop */ {init_s}; /* while i < {bound_s}: acc = acc {op_s} {rhs_s} */")
+                format!("/* UNSUPPORTED nested loop: while i < {bound_s} {{ acc = acc {op_s} {rhs_s} }} from {init_s} */")
             }
             Expr::ForFold { .. } => {
-                // Handled by emit_mog directly
-                format!("/* for-fold */")
+                // Rendered as a top-level fn by emit_mog/emit_mog_array.
+                "/* UNSUPPORTED nested for-fold */".to_string()
             }
             Expr::NestedWhile { .. } => {
-                format!("/* nested-while */")
+                "/* UNSUPPORTED nested nested-while */".to_string()
             }
             Expr::WhileCond { .. } => {
-                format!("/* while-cond */")
+                "/* UNSUPPORTED nested while-cond */".to_string()
             }
         }
     }
@@ -2043,6 +2049,30 @@ fn enumerate_exprs_resumable(
 
 // ─── Emit Mog code from discovered expression ────────────────────────────────
 
+/// Map a fold/accumulator `BinOp` to the Mog infix operator used in
+/// `acc = acc OP rhs`. Mog natively supports `+ - * % & | ^` as infix operators
+/// (runtime/mod.rs lexer+parser+eval), so a bitwise accumulator (e.g. XOR-fold)
+/// must render to `^`, NOT the old `_ => "+"` fallback which silently dropped
+/// bitwise/mod semantics and produced source that diverged from `Expr::eval`.
+/// `Min`/`Max` are handled by their own conditional-update emission and are not
+/// routed through this helper.
+fn fold_op_mog(op: &BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Mod => "%",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
+        BinOp::BitXor => "^",
+        // Min/Max never reach here (emitted via conditional update); Shl/Shr are
+        // not used as accumulator ops by the loop synthesizers. Keep `+` as a
+        // last-resort default only for those unreachable cases.
+        BinOp::Min | BinOp::Max | BinOp::Shl | BinOp::Shr => "+",
+    }
+}
+
 fn emit_mog(expr: &Expr, fn_name: &str, param_names: &[&str]) -> String {
     let sig = param_names
         .iter()
@@ -2059,12 +2089,7 @@ fn emit_mog(expr: &Expr, fn_name: &str, param_names: &[&str]) -> String {
         } => {
             let init_s = init.to_mog(param_names);
             let bound_s = bound.to_mog(param_names);
-            let op_s = match body_op {
-                BinOp::Add => "+",
-                BinOp::Sub => "-",
-                BinOp::Mul => "*",
-                _ => "+",
-            };
+            let op_s = fold_op_mog(body_op);
             let ext_names: Vec<&str> = {
                 let mut v: Vec<&str> = param_names.to_vec();
                 v.push("acc");
@@ -2083,12 +2108,9 @@ fn emit_mog(expr: &Expr, fn_name: &str, param_names: &[&str]) -> String {
         } => {
             let init_s = init.to_mog(param_names);
             let op_s = match body_op {
-                BinOp::Add => "+",
-                BinOp::Sub => "-",
-                BinOp::Mul => "*",
                 BinOp::Min => "min",
                 BinOp::Max => "max",
-                _ => "+",
+                other => fold_op_mog(other),
             };
             // Body rhs namespace: scalar_params + [item, i, acc]
             let ext_names: Vec<&str> = {
@@ -2152,20 +2174,10 @@ fn emit_mog(expr: &Expr, fn_name: &str, param_names: &[&str]) -> String {
         } => {
             let oinit_s = outer_init.to_mog(param_names);
             let obound_s = outer_bound.to_mog(param_names);
-            let oop_s = match outer_body_op {
-                BinOp::Add => "+",
-                BinOp::Sub => "-",
-                BinOp::Mul => "*",
-                _ => "+",
-            };
+            let oop_s = fold_op_mog(outer_body_op);
             let iinit_s = inner_init.to_mog(param_names);
             let ibound_s = inner_bound.to_mog(param_names);
-            let iop_s = match inner_body_op {
-                BinOp::Add => "+",
-                BinOp::Sub => "-",
-                BinOp::Mul => "*",
-                _ => "+",
-            };
+            let iop_s = fold_op_mog(inner_body_op);
             let ext_names: Vec<&str> = {
                 let mut v: Vec<&str> = param_names.to_vec();
                 v.push("outer_acc");
@@ -2191,12 +2203,7 @@ fn emit_mog(expr: &Expr, fn_name: &str, param_names: &[&str]) -> String {
             let init_s = init.to_mog(param_names);
             let state_init_s = state_init.to_mog(param_names);
             let cv_s = cond_val.to_mog(param_names);
-            let op_s = match body_op {
-                BinOp::Add => "+",
-                BinOp::Sub => "-",
-                BinOp::Mul => "*",
-                _ => "+",
-            };
+            let op_s = fold_op_mog(body_op);
             let cmp_s = match cond_cmp {
                 CmpOp::Lt => "<",
                 CmpOp::Le => "<=",
@@ -2256,12 +2263,9 @@ fn emit_mog_array(expr: &Expr, fn_name: &str, scalar_names: &[&str], array_idx: 
     {
         let init_s = init.to_mog(scalar_names);
         let op_s = match body_op {
-            BinOp::Add => "+",
-            BinOp::Sub => "-",
-            BinOp::Mul => "*",
             BinOp::Min => "min",
             BinOp::Max => "max",
-            _ => "+",
+            other => fold_op_mog(other),
         };
         // Body rhs namespace: scalar_params + [item, i, acc]
         let ext_names: Vec<&str> = {
@@ -4258,5 +4262,218 @@ mod tests {
         .expect("the injected cube library item must enable a cap-4 solve");
         verify_problem_code_strict(&problem, &lib_res.code)
             .expect("library-assisted solve must pass strict differential verification");
+    }
+
+    // ── U7: emitter correctness for bitwise / loop nodes ───────────────────────
+    //
+    // These tests prove the FIX is REAL: a synthesized program using a node that
+    // the old emitters rendered with approximate ops (`+`/`-`/`%`/`*2`) now
+    // renders to Mog SOURCE that, when parsed + run through the Mog interpreter,
+    // matches `Expr::eval*` on inputs WHERE THE OLD RENDERING WOULD DIVERGE. The
+    // tests assert the divergence-witness property explicitly (true result !=
+    // what the old op would have produced), so they would FAIL under the old
+    // emitters and cannot pass by coincidence.
+
+    /// Helper: run a rendered Mog `fn` against scalar i64 args, returning the i64.
+    fn run_mog_i64(code: &str, fn_name: &str, args: &[i64]) -> i64 {
+        let bargs: Vec<Value> = args.iter().map(|&v| Value::Int(v)).collect();
+        match crate::runtime::execute_function(code, fn_name, &bargs, fn_name)
+            .expect("rendered Mog source must parse and run")
+        {
+            crate::runtime::Value::Int(n) => n,
+            other => panic!("expected Int return, got {other:?}"),
+        }
+    }
+
+    /// Helper: run a rendered Mog fold against (scalar args, array), returning i64.
+    fn run_mog_fold_i64(code: &str, fn_name: &str, arr: &[i64]) -> i64 {
+        let bargs = vec![Value::Array(arr.iter().map(|&v| Value::Int(v)).collect())];
+        match crate::runtime::execute_function(code, fn_name, &bargs, fn_name)
+            .expect("rendered Mog fold source must parse and run")
+        {
+            crate::runtime::Value::Int(n) => n,
+            other => panic!("expected Int return, got {other:?}"),
+        }
+    }
+
+    /// XOR-fold over an array: `acc = 0; for item in arr { acc = acc ^ item }`.
+    /// OLD emitter rendered the accumulator op as `+` (the `_ => "+"` fallback),
+    /// so the rendered source computed a SUM. We pick an array where XOR != SUM,
+    /// then assert the rendered+run result equals `Expr::eval_array` (true XOR)
+    /// AND differs from the sum the old `+` rendering would have produced.
+    #[test]
+    fn u7_xor_fold_renders_to_correct_mog() {
+        let fold = Expr::ForFold {
+            init: Box::new(Expr::Const(0)),
+            body_op: BinOp::BitXor,
+            body_rhs: Box::new(Expr::Var(0)), // item (namespace: [item, i, acc])
+        };
+        let code = emit_mog_array(&fold, "xor_fold", &[], 0);
+
+        // Sanity: the fix actually emits the `^` operator, not the old `+`.
+        assert!(
+            code.contains("acc = acc ^ item"),
+            "XOR-fold must render with native `^`, got:\n{code}"
+        );
+
+        // Divergence witnesses: arrays where XOR-fold != SUM-fold.
+        for arr in [
+            vec![1i64, 2, 3],     // xor=0, sum=6
+            vec![5, 5, 7],        // xor=7, sum=17
+            vec![13, 6, 9, 2],    // xor=4, sum=30
+            vec![1024, 1, 1024],  // xor=1, sum=2049
+        ] {
+            let true_val = fold
+                .eval_array(&[], &arr)
+                .expect("Expr::eval_array must succeed");
+            let sum_val: i64 = arr.iter().sum(); // what the OLD `+` rendering gave
+            assert_ne!(
+                true_val, sum_val,
+                "test input must be a divergence witness (XOR != SUM) for arr={arr:?}"
+            );
+            let mog_val = run_mog_fold_i64(&code, "xor_fold", &arr);
+            assert_eq!(
+                mog_val, true_val,
+                "rendered Mog XOR-fold must match Expr::eval_array for arr={arr:?}"
+            );
+            // And it must NOT equal the old broken `+` rendering's result.
+            assert_ne!(
+                mog_val, sum_val,
+                "rendered Mog must NOT compute the old SUM semantics for arr={arr:?}"
+            );
+        }
+    }
+
+    /// OR-fold over an array: `acc = 0; for item in arr { acc = acc | item }`.
+    /// Old `+` rendering diverges whenever OR != SUM (overlapping set bits).
+    #[test]
+    fn u7_or_fold_renders_to_correct_mog() {
+        let fold = Expr::ForFold {
+            init: Box::new(Expr::Const(0)),
+            body_op: BinOp::BitOr,
+            body_rhs: Box::new(Expr::Var(0)),
+        };
+        let code = emit_mog_array(&fold, "or_fold", &[], 0);
+        assert!(
+            code.contains("acc = acc | item"),
+            "OR-fold must render with native `|`, got:\n{code}"
+        );
+        for arr in [vec![3i64, 1, 2], vec![6, 3, 5], vec![7, 7, 7]] {
+            let true_val = fold.eval_array(&[], &arr).unwrap();
+            let sum_val: i64 = arr.iter().sum();
+            assert_ne!(true_val, sum_val, "must be OR!=SUM witness for {arr:?}");
+            let mog_val = run_mog_fold_i64(&code, "or_fold", &arr);
+            assert_eq!(mog_val, true_val, "OR-fold mismatch for {arr:?}");
+            assert_ne!(mog_val, sum_val, "must not be old SUM for {arr:?}");
+        }
+    }
+
+    /// Scalar bitwise expressions through the per-Expr `to_mog` -> `emit_mog`
+    /// path. Old emitters rendered BitXor->`-`, BitAnd->`%`, BitOr->`+`,
+    /// Shl->`*2`, Shr->`/2`. We render `f(a,b) = (a ^ b) & (a << 1)` and run it,
+    /// matching `Expr::eval` on inputs where every old approximation diverges.
+    #[test]
+    fn u7_scalar_bitwise_renders_to_correct_mog() {
+        // (a ^ b) & (a << b)
+        let expr = Expr::BinOp(
+            BinOp::BitAnd,
+            Box::new(Expr::BinOp(
+                BinOp::BitXor,
+                Box::new(Expr::Var(0)),
+                Box::new(Expr::Var(1)),
+            )),
+            Box::new(Expr::BinOp(
+                BinOp::Shl,
+                Box::new(Expr::Var(0)),
+                Box::new(Expr::Var(1)),
+            )),
+        );
+        let code = emit_mog(&expr, "bw", &["a", "b"]);
+        // Native ops must appear; the old approximate glyphs ("acc = acc -",
+        // "* 2", "/ 2") must not stand in for these.
+        assert!(code.contains('^') && code.contains('&') && code.contains("<<"),
+            "scalar bitwise must render native ^, &, <<; got:\n{code}");
+
+        for (a, b) in [(6i64, 3), (12, 1), (5, 2), (255, 4)] {
+            let true_val = expr.eval(&[a, b]).expect("Expr::eval must succeed");
+            // What the OLD emitter would have computed: (a - b) % (a * 2)
+            let old_lhs = a - b;
+            let old_rhs = a * 2;
+            let old_val = if old_rhs != 0 { old_lhs % old_rhs } else { old_lhs };
+            assert_ne!(
+                true_val, old_val,
+                "input (a={a},b={b}) must be a divergence witness vs old ops"
+            );
+            let mog_val = run_mog_i64(&code, "bw", &[a, b]);
+            assert_eq!(
+                mog_val, true_val,
+                "rendered Mog scalar bitwise must match Expr::eval for (a={a},b={b})"
+            );
+            assert_ne!(
+                mog_val, old_val,
+                "rendered Mog must NOT reproduce old approximate semantics (a={a},b={b})"
+            );
+        }
+    }
+
+    /// End-to-end: a XOR-fold synthesis problem now renders to Mog that passes
+    /// strict differential verification. Under the OLD `+` emitter the rendered
+    /// source computed a SUM, which would FAIL `verify_problem_code_strict`
+    /// against XOR holdouts — so this proves the fix end-to-end on the loop path.
+    #[test]
+    fn u7_xor_fold_passes_strict_verify() {
+        use crate::benchmark::Example;
+        let fold = Expr::ForFold {
+            init: Box::new(Expr::Const(0)),
+            body_op: BinOp::BitXor,
+            body_rhs: Box::new(Expr::Var(0)),
+        };
+        let code = emit_mog_array(&fold, "xor_reduce", &[], 0);
+
+        // Build a problem whose examples are the TRUE XOR-fold (computed via
+        // Expr::eval_array, not via the rendered code) over divergence-witness
+        // arrays. The XOR `reference_code` drives differential holdout sampling,
+        // so the holdouts are XOR-truth — a SUM renderer (the old bug) cannot
+        // satisfy them. This makes the end-to-end accept un-gameable.
+        let arrays: [&[i64]; 5] = [
+            &[1, 2, 3],
+            &[5, 5, 7],
+            &[8, 8, 8],
+            &[13, 6, 9, 2],
+            &[100, 28, 7],
+        ];
+        let examples: Vec<Example> = arrays
+            .iter()
+            .map(|arr| {
+                let out = fold.eval_array(&[], arr).unwrap();
+                Example {
+                    inputs: vec![Value::int_array(arr)],
+                    expected: Value::Int(out),
+                }
+            })
+            .collect();
+        let problem = Problem {
+            name: "xor_reduce".to_string(),
+            category: "arrays",
+            description: "XOR of all elements.",
+            signature: "fn xor_reduce(arr: [i64]) -> i64",
+            examples,
+            holdouts: vec![],
+            reference_code:
+                "fn xor_reduce(arr: [i64]) -> i64 {\n    acc: i64 = 0;\n    for item in arr {\n        acc = acc ^ item;\n    }\n    return acc;\n}\n",
+            ..Default::default()
+        };
+
+        // The fixed rendering must pass strict differential verification.
+        verify_problem_code_strict(&problem, &code)
+            .expect("fixed XOR-fold rendering must pass strict verify");
+
+        // Prove the OLD rendering would have FAILED: build the SUM-renderer
+        // source by hand and assert strict verify rejects it.
+        let old_code = code.replace("acc = acc ^ item", "acc = acc + item");
+        assert!(
+            verify_problem_code_strict(&problem, &old_code).is_err(),
+            "the old `+` (SUM) rendering MUST fail strict verify on XOR holdouts"
+        );
     }
 }
