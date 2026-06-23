@@ -487,6 +487,8 @@ pub fn infer_signature(fn_name: &str, examples: &[Example]) -> String {
             Value::Pair(_, _) => "(i64, i64)",
             Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}",
             Value::Tree(_) => "Tree",
+            Value::Tuple(_) => "Tuple",
+            Value::Struct(_) => "Struct",
         };
         param_idx += 1;
         param_types.push(format!("{}: {}", param_names(param_idx), type_str));
@@ -501,6 +503,8 @@ pub fn infer_signature(fn_name: &str, examples: &[Example]) -> String {
         Value::Pair(_, _) => "(i64, i64)",
         Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}",
         Value::Tree(_) => "Tree",
+        Value::Tuple(_) => "Tuple",
+        Value::Struct(_) => "Struct",
     };
 
     format!(

@@ -1196,13 +1196,57 @@ mod json_conversion_tests {
         let json_val = json!([1, "two", 3]);
         let result = pipeline.json_to_value(json_val);
 
-        // Should only extract integers
-        assert!(result.is_some());
-        if let Some(Value::Array(arr)) = result {
-            assert_eq!(arr, vec![1, 3]);
-        } else {
-            panic!("Expected Array value");
-        }
+        // New contract: json_to_value recurses on EVERY element and preserves
+        // both nesting and element types (the old behavior silently dropped the
+        // string and kept only `[1, 3]`). All three elements survive with their
+        // correct wire types.
+        assert_eq!(
+            result,
+            Some(Value::array_of(vec![
+                Value::Int(1),
+                Value::Str("two".to_string()),
+                Value::Int(3),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_json_to_value_nested_int_array() {
+        let pipeline = NLPipeline::new();
+        // `[[1,2],[3]]` must survive as a nested array, not flatten to `[]`.
+        let json_val = json!([[1, 2], [3]]);
+        let result = pipeline.json_to_value(json_val);
+        assert_eq!(
+            result,
+            Some(Value::array_of(vec![
+                Value::int_array(&[1, 2]),
+                Value::int_array(&[3]),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_json_to_value_string_array() {
+        let pipeline = NLPipeline::new();
+        // `["a","b"]` must survive as a string array, not flatten to `[]`.
+        let json_val = json!(["a", "b"]);
+        let result = pipeline.json_to_value(json_val);
+        assert_eq!(
+            result,
+            Some(Value::array_of(vec![
+                Value::Str("a".to_string()),
+                Value::Str("b".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_json_to_value_all_int_array_unchanged() {
+        let pipeline = NLPipeline::new();
+        // The common all-int case is byte-identical to the old `int_array` path.
+        let json_val = json!([1, 2, 3]);
+        let result = pipeline.json_to_value(json_val);
+        assert_eq!(result, Some(Value::int_array(&[1, 2, 3])));
     }
 }
 
@@ -1275,6 +1319,37 @@ mod signature_inference_tests {
         }];
         let sig = pipeline.infer_signature(&examples);
         assert_eq!(sig, "fn f(x0: [i64], x1: i64) -> [i64]");
+    }
+
+    #[test]
+    fn test_infer_signature_nested_array() {
+        let pipeline = NLPipeline::new();
+        // A nested array input must derive `[[i64]]`, not collapse to `[i64]`.
+        let examples = vec![Example {
+            inputs: vec![Value::array_of(vec![
+                Value::int_array(&[1, 2]),
+                Value::int_array(&[3]),
+            ])],
+            expected: Value::Int(6),
+        }];
+        let sig = pipeline.infer_signature(&examples);
+        assert_eq!(sig, "fn f(x0: [[i64]]) -> i64");
+    }
+
+    #[test]
+    fn test_infer_signature_string_array() {
+        let pipeline = NLPipeline::new();
+        // A string array must derive `[string]`, not `[i64]`.
+        let examples = vec![Example {
+            inputs: vec![Value::array_of(vec![
+                Value::Str("a".to_string()),
+                Value::Str("b".to_string()),
+            ])],
+            expected: Value::int_array(&[]),
+        }];
+        let sig = pipeline.infer_signature(&examples);
+        // Empty array return defaults its element type to i64.
+        assert_eq!(sig, "fn f(x0: [string]) -> [i64]");
     }
 }
 

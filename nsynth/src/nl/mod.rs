@@ -351,8 +351,19 @@ impl NLPipeline {
                 }
             }
             serde_json::Value::Array(arr) => {
-                let ints: Vec<i64> = arr.into_iter().filter_map(|v| v.as_i64()).collect();
-                Some(Value::int_array(&ints))
+                // Recurse on EVERY element instead of the old lossy
+                // `filter_map(as_i64)` flatten (which turned `[[1,2],[3]]` into
+                // `[]`, `["a","b"]` into `[]`, and silently dropped non-int
+                // elements). Each element converts through `json_to_value`, so
+                // nesting and element types survive; if any element is
+                // unrepresentable, the whole array is `None` (all-or-nothing,
+                // never a silent drop). All-int arrays are byte-identical to the
+                // old `int_array` path since each number becomes `Value::Int`.
+                let elems: Vec<Value> = arr
+                    .into_iter()
+                    .map(|v| self.json_to_value(v))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Value::array_of(elems))
             }
             serde_json::Value::String(s) => Some(Value::Str(s)),
             serde_json::Value::Bool(b) => Some(Value::Bool(b)),
@@ -369,35 +380,60 @@ impl NLPipeline {
 
         let first = &examples[0];
 
-        // Infer parameter types
+        // Infer parameter types from the ACTUAL values (recursing into arrays so
+        // `[[i64]]`/`[string]` survive instead of always collapsing to `[i64]`).
         let mut params = Vec::new();
         for (i, input) in first.inputs.iter().enumerate() {
-            let param_type = match input {
-                Value::Int(_) => "i64",
-                Value::Float(_) => "f64",
-                Value::Str(_) => "string",
-                Value::Array(_) => "[i64]",
-                Value::Bool(_) => "bool",
-                Value::Pair(_, _) => "(i64, i64)",
-                Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}",
-                Value::Tree(_) => "Tree",
-            };
-            params.push(format!("x{}: {}", i, param_type));
+            params.push(format!("x{}: {}", i, Self::value_type_str(input)));
         }
 
-        // Infer return type
-        let return_type = match &first.expected {
-            Value::Int(_) => "i64",
-            Value::Float(_) => "f64",
-            Value::Str(_) => "string",
-            Value::Array(_) => "[i64]",
-            Value::Bool(_) => "bool",
-            Value::Pair(_, _) => "(i64, i64)",
-            Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}",
-            Value::Tree(_) => "Tree",
-        };
+        // Infer return type the same way.
+        let return_type = Self::value_type_str(&first.expected);
 
         format!("fn f({}) -> {}", params.join(", "), return_type)
+    }
+
+    /// Derive the signature type string for a value, recursing into arrays so the
+    /// element/nested type is reflected accurately (`[i64]`, `[[i64]]`,
+    /// `[string]`, …) rather than the old hard-coded `[i64]`. An empty array
+    /// defaults its element type to `i64` (the historical default). Scalars and
+    /// the structural shapes (`Pair`/`Quad`/`Tree`) keep their existing strings.
+    fn value_type_str(value: &crate::benchmark::Value) -> String {
+        use crate::benchmark::Value;
+        match value {
+            Value::Int(_) => "i64".to_string(),
+            Value::Float(_) => "f64".to_string(),
+            Value::Str(_) => "string".to_string(),
+            Value::Bool(_) => "bool".to_string(),
+            Value::Array(elems) => {
+                let inner = elems
+                    .first()
+                    .map(Self::value_type_str)
+                    .unwrap_or_else(|| "i64".to_string());
+                format!("[{inner}]")
+            }
+            Value::Pair(_, _) => "(i64, i64)".to_string(),
+            Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}".to_string(),
+            Value::Tree(_) => "Tree".to_string(),
+            // A positional tuple renders its element types: `(T0, T1, ...)`.
+            Value::Tuple(elems) => format!(
+                "({})",
+                elems
+                    .iter()
+                    .map(Self::value_type_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            // A named struct renders `{name: T, ...}` from its own field names.
+            Value::Struct(fields) => format!(
+                "{{{}}}",
+                fields
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {}", Self::value_type_str(v)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
     }
 
     /// Generate a function name from input text

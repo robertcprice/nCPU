@@ -117,6 +117,10 @@ fn value_to_type(value: &crate::benchmark::Value) -> Type {
             Type::Tuple(vec![Type::Int, Type::Int, Type::Int, Type::Int])
         }
         crate::benchmark::Value::Tree(_) => Type::Named("Tree".to_string()),
+        crate::benchmark::Value::Tuple(elems) => {
+            Type::Tuple(elems.iter().map(value_to_type).collect())
+        }
+        crate::benchmark::Value::Struct(_) => Type::Named("Struct".to_string()),
     }
 }
 

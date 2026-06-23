@@ -521,6 +521,12 @@ impl TaskDecomposer {
                     Value::Tree(_) => {
                         input_types.insert("tree");
                     }
+                    Value::Tuple(_) => {
+                        input_types.insert("tuple");
+                    }
+                    Value::Struct(_) => {
+                        input_types.insert("struct");
+                    }
                 }
             }
             match &ex.expected {
@@ -547,6 +553,12 @@ impl TaskDecomposer {
                 }
                 Value::Tree(_) => {
                     output_types.insert("tree");
+                }
+                Value::Tuple(_) => {
+                    output_types.insert("tuple");
+                }
+                Value::Struct(_) => {
+                    output_types.insert("struct");
                 }
             }
         }

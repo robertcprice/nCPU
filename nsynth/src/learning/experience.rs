@@ -552,6 +552,8 @@ impl ProblemSnapshot {
                         Value::Pair(_, _) => 'P',
                         Value::Quad(_, _, _, _) => 'Q',
                         Value::Tree(_) => 'T',
+                        Value::Tuple(_) => 'U',
+                        Value::Struct(_) => 'C',
                     })
                     .collect()
             })
@@ -566,6 +568,8 @@ impl ProblemSnapshot {
             Some(Value::Pair(_, _)) => "Pair",
             Some(Value::Quad(_, _, _, _)) => "Quad",
             Some(Value::Tree(_)) => "Tree",
+            Some(Value::Tuple(_)) => "Tuple",
+            Some(Value::Struct(_)) => "Struct",
             None => "Unknown",
         }
         .to_string();

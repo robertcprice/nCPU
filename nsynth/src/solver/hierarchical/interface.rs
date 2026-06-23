@@ -59,6 +59,8 @@ fn infer_signature_from_examples(examples: &[Example]) -> String {
             crate::benchmark::Value::Pair(_, _) => "(i64, i64)",
             crate::benchmark::Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}",
             crate::benchmark::Value::Tree(_) => "Tree",
+            crate::benchmark::Value::Tuple(_) => "Tuple",
+            crate::benchmark::Value::Struct(_) => "Struct",
         };
         param_idx += 1;
         param_types.push(format!("{}: {}", param_name(param_idx), type_str));
@@ -73,6 +75,8 @@ fn infer_signature_from_examples(examples: &[Example]) -> String {
         crate::benchmark::Value::Pair(_, _) => "(i64, i64)",
         crate::benchmark::Value::Quad(_, _, _, _) => "{a: i64, b: i64, c: i64, d: i64}",
         crate::benchmark::Value::Tree(_) => "Tree",
+        crate::benchmark::Value::Tuple(_) => "Tuple",
+        crate::benchmark::Value::Struct(_) => "Struct",
     };
 
     format!(
@@ -139,6 +143,8 @@ fn value_to_type(value: &crate::benchmark::Value) -> Option<String> {
         crate::benchmark::Value::Pair(_, _) => "(i64, i64)".to_string(),
         crate::benchmark::Value::Quad(_, _, _, _) => "Quad".to_string(),
         crate::benchmark::Value::Tree(_) => "Tree".to_string(),
+        crate::benchmark::Value::Tuple(_) => "Tuple".to_string(),
+        crate::benchmark::Value::Struct(_) => "Struct".to_string(),
     })
 }
 

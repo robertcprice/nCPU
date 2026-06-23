@@ -57,6 +57,17 @@ fn fingerprint_value(v: &Value) -> String {
                 .collect();
             format!("t:[{}]", node_strs.join(";"))
         }
+        Value::Tuple(xs) => {
+            let joined: Vec<String> = xs.iter().map(fingerprint_value).collect();
+            format!("tu:({})", joined.join(","))
+        }
+        Value::Struct(fields) => {
+            let joined: Vec<String> = fields
+                .iter()
+                .map(|(k, x)| format!("{k}={}", fingerprint_value(x)))
+                .collect();
+            format!("st:{{{}}}", joined.join(","))
+        }
     }
 }
 

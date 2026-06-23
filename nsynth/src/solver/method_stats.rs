@@ -119,6 +119,8 @@ impl TypeClass {
             Value::Pair(_, _) => TypeClass::Pair,
             Value::Quad(_, _, _, _) => TypeClass::Struct,
             Value::Tree(_) => TypeClass::Tree,
+            Value::Tuple(_) => TypeClass::Struct,
+            Value::Struct(_) => TypeClass::Struct,
         }
     }
 }

@@ -945,8 +945,92 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
         // (`tree.nodes[i].value/.left/.right`). Compare structurally, node by
         // node, against the expected `Vec<TreeNode>`.
         (Value::Struct { fields, .. }, BV::Tree(nodes)) => tree_struct_matches(fields, nodes),
+        // Tuple: a runtime composite verifies against a wire `Tuple` element-wise.
+        // A runtime `Array`/`Pair`/`Quad`/`Unit` can all carry a positional tuple
+        // (these are the shapes `runtime_value_from_problem` produces for a wire
+        // `Tuple`), so each compares against the tuple's elements with the SAME
+        // recursive `output_matches` bridges.
+        (Value::Array(a), BV::Tuple(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| output_matches(x, y))
+        }
+        (Value::Pair(a, b), BV::Tuple(t)) => {
+            t.len() == 2
+                && output_matches(&Value::Int(*a), &t[0])
+                && output_matches(&Value::Int(*b), &t[1])
+        }
+        (Value::Quad(a, b, c, d), BV::Tuple(t)) => {
+            t.len() == 4
+                && output_matches(&Value::Int(*a), &t[0])
+                && output_matches(&Value::Int(*b), &t[1])
+                && output_matches(&Value::Int(*c), &t[2])
+                && output_matches(&Value::Int(*d), &t[3])
+        }
+        (Value::Unit, BV::Tuple(t)) => t.is_empty(),
+        // Struct: a runtime struct verifies against a wire `Struct` by key,
+        // recursing on each field value (HashMap order is not significant). The
+        // runtime struct NAME is intentionally ignored here — the wire form has no
+        // name carrier and the oracle compares structurally, exactly as
+        // `benchmark_value_from_runtime` lowers it.
+        (Value::Struct { fields, .. }, BV::Struct(expected)) => {
+            fields.len() == expected.len()
+                && expected
+                    .iter()
+                    .all(|(k, v)| fields.get(k).is_some_and(|actual| output_matches(actual, v)))
+        }
+        // Optional/Result/Enum verify against their tagged wire `Struct` encodings
+        // (the same tags `benchmark_value_from_runtime` emits), so a round-tripped
+        // expected value actually matches the runtime value it came from.
+        (Value::Optional { is_some, value }, BV::Struct(expected)) => {
+            wire_field(expected, "__some") == Some(&BV::Bool(*is_some))
+                && match wire_field(expected, "__value") {
+                    Some(v) => {
+                        if *is_some {
+                            output_matches(value, v)
+                        } else {
+                            matches!(v, BV::Tuple(t) if t.is_empty())
+                        }
+                    }
+                    None => false,
+                }
+        }
+        (Value::Result { is_ok, value }, BV::Struct(expected)) => {
+            wire_field(expected, "__ok") == Some(&BV::Bool(*is_ok))
+                && match wire_field(expected, "__value") {
+                    Some(v) => output_matches(value, v),
+                    None => false,
+                }
+        }
+        (
+            Value::Enum {
+                type_name,
+                variant,
+                fields,
+            },
+            BV::Struct(expected),
+        ) => {
+            wire_field(expected, "__enum") == Some(&BV::Str(type_name.clone()))
+                && wire_field(expected, "__variant") == Some(&BV::Str(variant.clone()))
+                && match wire_field(expected, "__fields") {
+                    Some(BV::Tuple(payload)) => {
+                        fields.len() == payload.len()
+                            && fields
+                                .iter()
+                                .zip(payload.iter())
+                                .all(|(x, y)| output_matches(x, y))
+                    }
+                    _ => false,
+                }
+        }
         _ => false,
     }
+}
+
+/// Look up a field value by key in a wire `Struct`'s ordered (name, value) pairs.
+fn wire_field<'a>(
+    fields: &'a [(String, crate::benchmark::Value)],
+    key: &str,
+) -> Option<&'a crate::benchmark::Value> {
+    fields.iter().find(|(k, _)| k == key).map(|(_, v)| v)
 }
 
 /// Strictly compare the int payloads of a runtime `Struct`'s fields against an
@@ -1094,6 +1178,89 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
             })
         }
         BenchmarkValue::Tree(nodes) => Ok(tree_to_runtime_value(nodes)),
+        // A positional tuple maps to the closest runtime carrier: a 2-int tuple is
+        // a `Pair`, a 4-int tuple is a `Quad` (matching the Pair/Quad encoding used
+        // elsewhere), and any other arity/type becomes a runtime `Array` so it
+        // still round-trips structurally.
+        BenchmarkValue::Tuple(values) => {
+            let elems = values
+                .iter()
+                .map(|v| runtime_value_from_problem(v, problem_name))
+                .collect::<Result<Vec<_>, _>>()?;
+            let all_ints: Option<Vec<i64>> = elems
+                .iter()
+                .map(|v| match v {
+                    Value::Int(i) => Some(*i),
+                    _ => None,
+                })
+                .collect();
+            if let Some(ints) = all_ints {
+                match ints.as_slice() {
+                    [a, b] => return Ok(Value::Pair(*a, *b)),
+                    [a, b, c, d] => return Ok(Value::Quad(*a, *b, *c, *d)),
+                    _ => {}
+                }
+            }
+            Ok(Value::Array(elems))
+        }
+        // A wire struct reverses the tagged encodings produced by
+        // `benchmark_value_from_runtime` so Optional/Result/Enum round-trip to the
+        // SAME runtime shape (`value_eq` then compares them structurally). A plain
+        // named struct (no tag keys) rebuilds a runtime `Struct` with a synthetic
+        // name (the wire form drops the name; equality compares fields, and the
+        // round-trip uses a stable placeholder so re-lowering is idempotent).
+        BenchmarkValue::Struct(fields) => {
+            let get = |key: &str| fields.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+            // Optional: { __some: bool, __value: v }
+            if let (Some(BenchmarkValue::Bool(is_some)), Some(value)) =
+                (get("__some"), get("__value"))
+            {
+                let inner = if *is_some {
+                    runtime_value_from_problem(value, problem_name)?
+                } else {
+                    Value::Unit
+                };
+                return Ok(Value::Optional {
+                    is_some: *is_some,
+                    value: Box::new(inner),
+                });
+            }
+            // Result: { __ok: bool, __value: v }
+            if let (Some(BenchmarkValue::Bool(is_ok)), Some(value)) =
+                (get("__ok"), get("__value"))
+            {
+                return Ok(Value::Result {
+                    is_ok: *is_ok,
+                    value: Box::new(runtime_value_from_problem(value, problem_name)?),
+                });
+            }
+            // Enum: { __enum: name, __variant: variant, __fields: tuple }
+            if let (
+                Some(BenchmarkValue::Str(type_name)),
+                Some(BenchmarkValue::Str(variant)),
+                Some(BenchmarkValue::Tuple(payload)),
+            ) = (get("__enum"), get("__variant"), get("__fields"))
+            {
+                let fields = payload
+                    .iter()
+                    .map(|v| runtime_value_from_problem(v, problem_name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(Value::Enum {
+                    type_name: type_name.clone(),
+                    variant: variant.clone(),
+                    fields,
+                });
+            }
+            // Plain named struct.
+            let mut runtime_fields = HashMap::new();
+            for (k, v) in fields {
+                runtime_fields.insert(k.clone(), runtime_value_from_problem(v, problem_name)?);
+            }
+            Ok(Value::Struct {
+                name: "Struct".to_string(),
+                fields: runtime_fields,
+            })
+        }
     }
 }
 
@@ -1190,31 +1357,87 @@ pub(crate) fn benchmark_value_from_runtime(value: &Value) -> Result<BenchmarkVal
                 }
                 return Ok(BenchmarkValue::Tree(nodes));
             }
-            // Plain struct: must be all-int fields to land on Pair/Quad. Pack in
-            // a canonical (sorted) order — the oracle matches pairs/quads as a
-            // multiset, so order is irrelevant to correctness and sorting keeps
-            // the result deterministic despite HashMap iteration order.
-            let mut ints: Vec<i64> = Vec::with_capacity(fields.len());
-            for v in fields.values() {
-                match v {
-                    Value::Int(i) => ints.push(*i),
-                    _ => {
-                        return Err(format!(
-                            "struct field is not an int; cannot map to wire pair/quad: {v:?}"
-                        ))
-                    }
+            // All-int 2-/4-field struct keeps its historical Pair/Quad wire
+            // encoding (so the ~hundreds of struct-of-state benchmarks and their
+            // holdouts, which expect Pair/Quad, stay green). Pack the int payloads
+            // in a canonical (sorted) order — the oracle matches pairs/quads as a
+            // multiset, so order is irrelevant and sorting keeps it deterministic
+            // despite HashMap iteration order.
+            let all_int_ints: Option<Vec<i64>> = fields
+                .values()
+                .map(|v| match v {
+                    Value::Int(i) => Some(*i),
+                    _ => None,
+                })
+                .collect();
+            if let Some(mut ints) = all_int_ints {
+                if ints.len() == 2 || ints.len() == 4 {
+                    ints.sort_unstable();
+                    return match ints.as_slice() {
+                        [a, b] => Ok(BenchmarkValue::Pair(*a, *b)),
+                        [a, b, c, d] => Ok(BenchmarkValue::Quad(*a, *b, *c, *d)),
+                        _ => unreachable!("len checked above"),
+                    };
                 }
             }
-            ints.sort_unstable();
-            match ints.as_slice() {
-                [a, b] => Ok(BenchmarkValue::Pair(*a, *b)),
-                [a, b, c, d] => Ok(BenchmarkValue::Quad(*a, *b, *c, *d)),
-                other => Err(format!(
-                    "struct with {} int fields has no wire representation",
-                    other.len()
-                )),
+            // Any other struct (non-int fields, named fields, or non-2/4 arity)
+            // lowers STRUCTURALLY to the wire `Struct` variant instead of erroring,
+            // recursing on each field value. Fields are emitted in a canonical
+            // (name-sorted) order so the wire value is deterministic and equality
+            // (`output_matches`) can compare by key without depending on HashMap
+            // iteration order. The struct name is intentionally dropped: it has no
+            // wire carrier and the oracle compares structurally on fields. This is
+            // what makes `benchmark_value_from_runtime` total for structs.
+            let mut wire_fields: Vec<(String, BenchmarkValue)> = Vec::with_capacity(fields.len());
+            for (k, v) in fields {
+                wire_fields.push((k.clone(), benchmark_value_from_runtime(v)?));
             }
+            wire_fields.sort_by(|a, b| a.0.cmp(&b.0));
+            Ok(BenchmarkValue::Struct(wire_fields))
         }
+        // Enum lowers to a wire `Struct` tagged with the variant name and its
+        // positional payload as an ordered `Tuple`, so it round-trips structurally
+        // rather than being rejected. `type_name`/`variant` become field keys.
+        Value::Enum {
+            type_name,
+            variant,
+            fields,
+        } => {
+            let payload = fields
+                .iter()
+                .map(benchmark_value_from_runtime)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(BenchmarkValue::Struct(vec![
+                ("__enum".to_string(), BenchmarkValue::Str(type_name.clone())),
+                (
+                    "__variant".to_string(),
+                    BenchmarkValue::Str(variant.clone()),
+                ),
+                ("__fields".to_string(), BenchmarkValue::Tuple(payload)),
+            ]))
+        }
+        // Optional lowers to a tagged wire `Struct`: `{ __some: bool, __value: v }`
+        // (None carries `Unit` -> empty tuple). Recurses on the inner value.
+        Value::Optional { is_some, value } => {
+            let inner = if *is_some {
+                benchmark_value_from_runtime(value)?
+            } else {
+                BenchmarkValue::Tuple(Vec::new())
+            };
+            Ok(BenchmarkValue::Struct(vec![
+                ("__some".to_string(), BenchmarkValue::Bool(*is_some)),
+                ("__value".to_string(), inner),
+            ]))
+        }
+        // Result lowers to a tagged wire `Struct`: `{ __ok: bool, __value: v }`,
+        // recursing on the carried value.
+        Value::Result { is_ok, value } => Ok(BenchmarkValue::Struct(vec![
+            ("__ok".to_string(), BenchmarkValue::Bool(*is_ok)),
+            ("__value".to_string(), benchmark_value_from_runtime(value)?),
+        ])),
+        Value::Unit => Ok(BenchmarkValue::Tuple(Vec::new())),
+        // Opaque handles (functions/builtins/closures/file/channel/mutex/thread)
+        // genuinely have no wire representation and still error.
         other => Err(format!("no wire representation for runtime value: {other:?}")),
     }
 }
@@ -4477,11 +4700,50 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
+/// Structural, fully recursive equality over EVERY `runtime::Value` variant.
+///
+/// This is the `==` semantics a synthesized program sees, so it must descend
+/// into composites instead of bailing to `false`: an `==` on `[1,2]`/`[1,2]`,
+/// `Some(x)`/`Some(x)`, or two structs has to compute the right answer, not
+/// silently mis-compare. Policy:
+///   - `Float` reuses [`float_eq`] (the SAME eps+NaN policy `output_matches`
+///     uses) — never bit-exact, never a divergent duplicate.
+///   - `Array`/`Pair`/`Quad`/`Enum`/`Optional`/`Result` recurse element/field-wise
+///     with exact arity.
+///   - `Struct` compares by name then field set, matching by KEY not iteration
+///     order (fields live in a `HashMap`), recursing on each value.
+///   - `Unit`/`Unit` is equal.
+///   - Opaque handles (`Function`/`Builtin`/`Closure`/`FileHandle`/`Channel`/
+///     `Mutex`/`ThreadHandle`) and any cross-type pair are not equal.
 fn value_eq(lhs: &Value, rhs: &Value) -> bool {
     match (lhs, rhs) {
         (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => float_eq(*a, *b),
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Str(a), Value::Str(b)) => a == b,
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| value_eq(x, y))
+        }
+        (Value::Pair(a, b), Value::Pair(c, d)) => a == c && b == d,
+        (Value::Quad(a, b, c, d), Value::Quad(e, f, g, h)) => {
+            a == e && b == f && c == g && d == h
+        }
+        (
+            Value::Struct {
+                name: na,
+                fields: fa,
+            },
+            Value::Struct {
+                name: nb,
+                fields: fb,
+            },
+        ) => {
+            na == nb
+                && fa.len() == fb.len()
+                && fa
+                    .iter()
+                    .all(|(k, v)| fb.get(k).is_some_and(|w| value_eq(v, w)))
+        }
         (
             Value::Enum {
                 type_name: a,
@@ -4499,6 +4761,27 @@ fn value_eq(lhs: &Value, rhs: &Value) -> bool {
                 && fa.len() == fb.len()
                 && fa.iter().zip(fb.iter()).all(|(x, y)| value_eq(x, y))
         }
+        (
+            Value::Optional {
+                is_some: sa,
+                value: va,
+            },
+            Value::Optional {
+                is_some: sb,
+                value: vb,
+            },
+        ) => sa == sb && (!sa || value_eq(va, vb)),
+        (
+            Value::Result {
+                is_ok: oa,
+                value: va,
+            },
+            Value::Result {
+                is_ok: ob,
+                value: vb,
+            },
+        ) => oa == ob && value_eq(va, vb),
+        (Value::Unit, Value::Unit) => true,
         _ => false,
     }
 }
@@ -6010,5 +6293,195 @@ fn main() -> i64 {
             &Value::Float(1.5),
             &crate::benchmark::Value::Int(2)
         ));
+    }
+
+    // ---- value_eq: recursive structural equality over every Value variant ----
+
+    #[test]
+    fn value_eq_arrays_recurse() {
+        // `[1,2] == [1,2]` is true; differing element or length is false. This is
+        // the case the old partial `value_eq` got WRONG (it returned false for
+        // every array, so a synthesized `[1,2] == [1,2]` computed `false`).
+        let a = Value::Array(vec![Value::Int(1), Value::Int(2)]);
+        let b = Value::Array(vec![Value::Int(1), Value::Int(2)]);
+        let c = Value::Array(vec![Value::Int(1), Value::Int(3)]);
+        let d = Value::Array(vec![Value::Int(1)]);
+        assert!(value_eq(&a, &b));
+        assert!(!value_eq(&a, &c));
+        assert!(!value_eq(&a, &d));
+        // Nested arrays recurse all the way down.
+        let na = Value::Array(vec![a.clone(), d.clone()]);
+        let nb = Value::Array(vec![b.clone(), d.clone()]);
+        assert!(value_eq(&na, &nb));
+    }
+
+    #[test]
+    fn value_eq_struct_by_key_not_order() {
+        // Structs compare by name + field set, matched by KEY (HashMap order is
+        // not significant), recursing on each value.
+        let mut fa = HashMap::new();
+        fa.insert("x".to_string(), Value::Int(1));
+        fa.insert("y".to_string(), Value::Int(2));
+        let mut fb = HashMap::new();
+        // Insert in the opposite order to prove order-independence.
+        fb.insert("y".to_string(), Value::Int(2));
+        fb.insert("x".to_string(), Value::Int(1));
+        let sa = Value::Struct {
+            name: "P".to_string(),
+            fields: fa,
+        };
+        let sb = Value::Struct {
+            name: "P".to_string(),
+            fields: fb,
+        };
+        assert!(value_eq(&sa, &sb));
+        // Different field value -> not equal.
+        let mut fc = HashMap::new();
+        fc.insert("x".to_string(), Value::Int(1));
+        fc.insert("y".to_string(), Value::Int(9));
+        let sc = Value::Struct {
+            name: "P".to_string(),
+            fields: fc,
+        };
+        assert!(!value_eq(&sa, &sc));
+        // Different struct name -> not equal.
+        let mut fd = HashMap::new();
+        fd.insert("x".to_string(), Value::Int(1));
+        fd.insert("y".to_string(), Value::Int(2));
+        let sd = Value::Struct {
+            name: "Q".to_string(),
+            fields: fd,
+        };
+        assert!(!value_eq(&sa, &sd));
+    }
+
+    #[test]
+    fn value_eq_optional_and_result_recurse() {
+        // Some(x) == Some(x); Some(x) != None; None == None; Some(x) != Some(y).
+        let some1 = Value::Optional {
+            is_some: true,
+            value: Box::new(Value::Int(7)),
+        };
+        let some1b = Value::Optional {
+            is_some: true,
+            value: Box::new(Value::Int(7)),
+        };
+        let some2 = Value::Optional {
+            is_some: true,
+            value: Box::new(Value::Int(8)),
+        };
+        let none = Value::Optional {
+            is_some: false,
+            value: Box::new(Value::Unit),
+        };
+        let none_other = Value::Optional {
+            is_some: false,
+            value: Box::new(Value::Int(99)),
+        };
+        assert!(value_eq(&some1, &some1b));
+        assert!(!value_eq(&some1, &some2));
+        assert!(!value_eq(&some1, &none));
+        // None ignores the carried value (both are None).
+        assert!(value_eq(&none, &none_other));
+
+        // Result: Ok(x) == Ok(x); Ok(x) != Err(x); Ok(x) != Ok(y).
+        let ok1 = Value::Result {
+            is_ok: true,
+            value: Box::new(Value::Int(1)),
+        };
+        let ok1b = Value::Result {
+            is_ok: true,
+            value: Box::new(Value::Int(1)),
+        };
+        let err1 = Value::Result {
+            is_ok: false,
+            value: Box::new(Value::Int(1)),
+        };
+        assert!(value_eq(&ok1, &ok1b));
+        assert!(!value_eq(&ok1, &err1));
+    }
+
+    #[test]
+    fn value_eq_float_uses_epsilon_policy() {
+        // Float equality reuses `float_eq`, so rounding-equal floats compare
+        // equal (not bit-exact) and the NaN policy holds (two NaNs are equal).
+        assert!(value_eq(&Value::Float(0.1 + 0.2), &Value::Float(0.3)));
+        assert!(value_eq(&Value::Float(f64::NAN), &Value::Float(f64::NAN)));
+        assert!(!value_eq(&Value::Float(1.0), &Value::Float(2.0)));
+        // Pair/Quad and Unit.
+        assert!(value_eq(&Value::Pair(1, 2), &Value::Pair(1, 2)));
+        assert!(!value_eq(&Value::Pair(1, 2), &Value::Pair(2, 1)));
+        assert!(value_eq(&Value::Quad(1, 2, 3, 4), &Value::Quad(1, 2, 3, 4)));
+        assert!(value_eq(&Value::Unit, &Value::Unit));
+        // Cross-type pairs are never equal.
+        assert!(!value_eq(&Value::Int(0), &Value::Bool(false)));
+    }
+
+    // ---- benchmark_value_from_runtime: runtime->wire round-trips ----
+
+    #[test]
+    fn benchmark_value_from_runtime_optional_some_round_trips() {
+        // Optional Some/None now lower to the wire instead of erroring, and
+        // round-trip back to the same runtime shape via runtime_value_from_problem.
+        let some = Value::Optional {
+            is_some: true,
+            value: Box::new(Value::Int(5)),
+        };
+        let wire = benchmark_value_from_runtime(&some).expect("Some lowers to wire");
+        let back = runtime_value_from_problem(&wire, "round_trip").expect("wire -> runtime");
+        assert!(value_eq(&some, &back), "Some round-trip: {back:?}");
+
+        let none = Value::Optional {
+            is_some: false,
+            value: Box::new(Value::Unit),
+        };
+        let wire_none = benchmark_value_from_runtime(&none).expect("None lowers to wire");
+        let back_none =
+            runtime_value_from_problem(&wire_none, "round_trip").expect("wire -> runtime");
+        assert!(value_eq(&none, &back_none), "None round-trip: {back_none:?}");
+    }
+
+    #[test]
+    fn benchmark_value_from_runtime_named_struct_round_trips() {
+        // A struct with arbitrary (non-2/4-int) fields, named fields, and a
+        // string value now lowers structurally instead of hard-erroring. The wire
+        // form drops the runtime struct NAME (it has no carrier) and the oracle
+        // compares structurally on fields, so we verify via `output_matches` (the
+        // real acceptance oracle) rather than name equality.
+        let mut fields = HashMap::new();
+        fields.insert("label".to_string(), Value::Str("origin".to_string()));
+        fields.insert("a".to_string(), Value::Int(1));
+        fields.insert("b".to_string(), Value::Int(2));
+        let s = Value::Struct {
+            name: "Point3".to_string(),
+            fields,
+        };
+        let wire = benchmark_value_from_runtime(&s).expect("named struct lowers to wire");
+        // The lowered wire value verifies against the runtime value it came from.
+        assert!(output_matches(&s, &wire), "struct should verify: {wire:?}");
+        // And re-lowering the wire->runtime round-trip is idempotent (same fields).
+        let back = runtime_value_from_problem(&wire, "round_trip").expect("wire -> runtime");
+        let back_wire = benchmark_value_from_runtime(&back).expect("re-lower");
+        assert_eq!(wire, back_wire, "struct wire round-trip is idempotent");
+    }
+
+    #[test]
+    fn benchmark_value_from_runtime_result_round_trips() {
+        // Result Ok/Err lower to the wire and verify against the runtime value.
+        let ok = Value::Result {
+            is_ok: true,
+            value: Box::new(Value::Int(3)),
+        };
+        let wire = benchmark_value_from_runtime(&ok).expect("Ok lowers to wire");
+        assert!(output_matches(&ok, &wire), "Ok should verify: {wire:?}");
+        let back = runtime_value_from_problem(&wire, "round_trip").expect("wire -> runtime");
+        assert!(value_eq(&ok, &back), "Ok round-trip: {back:?}");
+
+        let err = Value::Result {
+            is_ok: false,
+            value: Box::new(Value::Str("boom".to_string())),
+        };
+        let wire_err = benchmark_value_from_runtime(&err).expect("Err lowers to wire");
+        assert!(output_matches(&err, &wire_err), "Err should verify");
     }
 }

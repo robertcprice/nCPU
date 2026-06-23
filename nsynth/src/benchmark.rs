@@ -28,6 +28,17 @@ pub enum Value {
     Quad(i64, i64, i64, i64),
     /// Binary tree for Stage 5 tree synthesis (index 0 is root, negative indices mean null).
     Tree(Vec<TreeNode>),
+    /// A heterogeneous, arbitrary-arity tuple of values. Generalizes `Pair`/`Quad`
+    /// beyond the 2-/4-int special cases so any positional composite (e.g. a
+    /// `Some(x)` tag, a non-int pair, a 3-tuple) round-trips on the wire. `Pair`
+    /// and `Quad` are kept as-is for the existing call sites; new structural
+    /// shapes that don't fit them use `Tuple`.
+    Tuple(Vec<Value>),
+    /// A named struct with named, arbitrarily-typed fields, stored as
+    /// (name, value) pairs in a CANONICAL (name-sorted) order so equality and
+    /// serialization are deterministic. Generalizes the 2-/4-int struct cases
+    /// that previously had to collapse onto `Pair`/`Quad`.
+    Struct(Vec<(String, Value)>),
 }
 
 impl std::fmt::Display for Value {
@@ -57,6 +68,23 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, "]")
             }
+            Value::Tuple(vs) => write!(
+                f,
+                "({})",
+                vs.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Value::Struct(fields) => write!(
+                f,
+                "{{{}}}",
+                fields
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 }
@@ -330,6 +358,21 @@ fn render_expected(value: &Value) -> String {
                 .collect();
             format!("Tree[{}]", node_strs.join(";"))
         }
+        Value::Tuple(vs) => format!(
+            "({})",
+            vs.iter()
+                .map(render_expected)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Struct(fields) => format!(
+            "{{{}}}",
+            fields
+                .iter()
+                .map(|(k, v)| format!("{k}: {}", render_expected(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -459,6 +502,22 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
             "tree rendering not yet implemented for {}",
             problem.name
         )),
+        // A positional tuple has no field names and no signature mapping, so we
+        // cannot reconstruct a struct-literal the wrapper would print — mirror the
+        // Pair/Quad "no known signature" path and the Tree arm by erroring.
+        Value::Tuple(_) => Err(format!(
+            "cannot render tuple literal for {} with signature {}",
+            problem.name, problem.signature
+        )),
+        // A named struct carries its own field names, so render it generically as
+        // `{ field: v, ... }` (the field values render recursively).
+        Value::Struct(fields) => {
+            let rendered = fields
+                .iter()
+                .map(|(k, v)| render_value(problem, v).map(|s| format!("{k}: {s}")))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(format!("{{ {} }}", rendered.join(", ")))
+        }
     }
 }
 
