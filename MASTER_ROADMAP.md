@@ -90,6 +90,12 @@ The finished **nsynth** layer must synthesize **any** program shape expressible 
 
 ### 0.055 UNIVERSALITY EXECUTION PLAN — 7 root causes → U-phases (AUTHORITATIVE; 2026-06-23 full-pipeline audit)
 
+**LEDGER (overnight ultracode loop, 2026-06-23):**
+- **U0 gap4** — DONE, canonical `bac9c5c` (wider wire types + anytime resumable search + fuzz holdouts; full 2389-test suite green).
+- **U1 safe-oracle** — DONE, canonical `b89c977`. Bounded loops, panic-isolation (catch_unwind), checked pow/abs, FS-deny in verify, float-ε compare + sound float↔int bridge. 17 new tests; independent re-verify 100 pass / 1 fail. Review caught a workflow-agent `git stash apply` that polluted 31 files — discarded, kept only verified `runtime/mod.rs`.
+- **KNOWN PRE-EXISTING FAILURE (track, NOT U-phase-caused):** `runtime::tests::executes_solver_output_for_full_benchmark` fails on clean `e0caaaf` (count_distinct_v0, environment/solver-sensitive). Verify against this baseline, don't attribute to a phase.
+- **Loop hygiene:** the full suite needs `--test-threads=1` for the heavy `agent::synthesis_proposer` module (cache contention hangs it in parallel); per-phase gates use scoped `cargo test --lib -- <module>::` not the full suite.
+
 **Provenance.** Six parallel read-only audits swept all 333 `src/*.rs` files (~270k lines) across value/type, operator-basis, search/solver, spec front-door, verification, and output/transpile. Findings cited to `file:line`; several confirmed by executing the code. This supersedes the "4 gaps" list in §0.05 — it keeps that framing but adds what it never captured: verification *safety*, the wire/runtime value split, transpiler correctness, and the Python-bridge defaults. **The headline: the interpreter is ~Turing-complete but the *synthesizer* can target only a tiny fraction of it. A rich runtime no search path can reach is not universal — closing that asymmetry is the whole game.**
 
 **The 7 root causes (each = a closed dimension to open; full gap detail in memory `universal-synthesis-stack-map` + git note):**
