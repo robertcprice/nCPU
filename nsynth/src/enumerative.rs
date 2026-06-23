@@ -2479,6 +2479,299 @@ fn synthesize_scalar_enumerative(problem: &Problem) -> Option<SolveResult> {
 
 // ─── Array enumeration ─────────────────────────────────────────────────────
 
+/// Number of distinct (init, body_op) wrappings to try per candidate body in
+/// the resumable array search. Bounded so the per-body verify cost stays small.
+const FOLD_WRAP_INITS: [i64; 2] = [0, 1];
+const FOLD_WRAP_OPS: [BinOp; 4] = [BinOp::Add, BinOp::Mul, BinOp::Min, BinOp::Max];
+
+/// Try to ACCEPT a candidate fold body: wrap it in each (init, body_op) pairing,
+/// gate cheaply via [`check_fold_examples`], then — and only then — gate STRICTLY
+/// via [`verify_problem_code_strict`] (the un-gameable acceptance, identical to
+/// the scalar path). Returns the verified `SolveResult` on the first wrapping
+/// that passes BOTH gates, else `None`.
+///
+/// This is the array-path counterpart of the scalar enumerator's inline
+/// `matches_all(e) && robust_well_defined(e)` accept check, kept as a single
+/// closure so every array hit — from the warm-up strategies OR the deepening
+/// frontier — flows through the SAME strict verifier.
+#[allow(clippy::too_many_arguments)]
+fn try_accept_fold_body(
+    body: &Expr,
+    array_examples: &[(Vec<i64>, Vec<i64>, i64)],
+    problem: &Problem,
+    fn_name: &str,
+    scalar_param_names: &[&str],
+    array_idx: usize,
+) -> Option<SolveResult> {
+    for &init in &FOLD_WRAP_INITS {
+        for &bop in &FOLD_WRAP_OPS {
+            let fold_expr = Expr::ForFold {
+                init: Box::new(Expr::Const(init)),
+                body_op: bop,
+                body_rhs: Box::new(body.clone()),
+            };
+            if !check_fold_examples(&fold_expr, array_examples) {
+                continue;
+            }
+            let code = emit_mog_array(&fold_expr, fn_name, scalar_param_names, array_idx);
+            // STRICT gate: never accept on check_fold_examples alone.
+            if verify_problem_code_strict(problem, &code).is_ok() {
+                eprintln!(
+                    "[enum-array] FOUND (frontier) init={init} op={bop:?} body={body:?}"
+                );
+                return Some(SolveResult {
+                    success: true,
+                    code,
+                    method: "enumerative-array".to_string(),
+                    error: None,
+                    metadata: DifferentiableMetadata::default(),
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Resumable, size-stratified deepening search for a fold BODY expression,
+/// reusing the SCALAR [`Frontier`] struct as its persistent store. This is the
+/// array analogue of [`enumerate_exprs_resumable`]: it grows `frontier.by_size`
+/// of body sub-expressions (over the fold namespace
+/// `[scalar_args.., item, i, acc]`), and for every newly minted body wraps it
+/// into a `ForFold` and runs it through [`try_accept_fold_body`] (cheap fold gate
+/// THEN the strict verifier). On a hit it returns the verified result WITHOUT
+/// writing the frontier back (the caller evicts a solved problem's frontier); on
+/// a miss it writes the deepened bank back so the NEXT call resumes deeper.
+///
+/// Library participation: `library` components are instantiated onto the fold
+/// namespace and injected as size-1 leaves (the documented injection lever), so
+/// a mined abstraction can take part in — and shorten — an array solve exactly
+/// as it does on the scalar path.
+#[allow(clippy::too_many_arguments)]
+fn deepen_fold_frontier(
+    frontier: &mut Frontier,
+    array_examples: &[(Vec<i64>, Vec<i64>, i64)],
+    problem: &Problem,
+    fn_name: &str,
+    scalar_param_names: &[&str],
+    array_idx: usize,
+    time_limit_ms: u64,
+    library: Option<&ComponentLibrary>,
+    binops: &[BinOp],
+    unops: &[UnOp],
+    soft_cap: Option<usize>,
+) -> Option<SolveResult> {
+    let start = std::time::Instant::now();
+    let fold_n_args = frontier.n_args; // = n_scalar_args + 3 (item, i, acc)
+    // Probe vectors for OBSERVATIONAL dedup of bodies (mirrors the scalar
+    // `fingerprint` dedup). Bodies that agree on all probes collapse to one.
+    let probes = probe_inputs(fold_n_args, 8);
+
+    let mut by_size: Vec<Vec<Expr>> = std::mem::take(&mut frontier.by_size);
+    if by_size.is_empty() {
+        by_size.push(vec![]); // index-0 sentinel
+    }
+    let mut seen: HashSet<Vec<i64>> = HashSet::new();
+    let mut timed_out = false;
+    let cap = soft_cap.unwrap_or(usize::MAX);
+
+    let ensure_slot = |by_size: &mut Vec<Vec<Expr>>, s: usize| {
+        if s >= by_size.len() {
+            by_size.resize(s + 1, Vec::new());
+        }
+    };
+
+    // RESUME: replay stored strata to rebuild `seen` deterministically (no
+    // re-seed of size-1 atoms), identical to the scalar resume path.
+    let resuming = frontier.next_size > 2 || by_size.len() > 2;
+    if resuming {
+        for stratum in by_size.iter() {
+            for e in stratum {
+                if let Some(fp) = fingerprint(e, &probes) {
+                    seen.insert(fp);
+                }
+            }
+        }
+    } else {
+        // COLD START: seed size-1 atoms (all fold-namespace vars + constants),
+        // each tried as a body immediately.
+        for v in 0..fold_n_args {
+            let atom = Expr::Var(v);
+            if let Some(r) =
+                try_accept_fold_body(&atom, array_examples, problem, fn_name, scalar_param_names, array_idx)
+            {
+                return Some(r);
+            }
+            if let Some(fp) = fingerprint(&atom, &probes) {
+                if seen.insert(fp) {
+                    ensure_slot(&mut by_size, 1);
+                    by_size[1].push(atom);
+                }
+            }
+        }
+        for &c in &CONSTANTS {
+            let atom = Expr::Const(c);
+            if let Some(fp) = fingerprint(&atom, &probes) {
+                if seen.insert(fp) {
+                    ensure_slot(&mut by_size, 1);
+                    by_size[1].push(atom);
+                }
+            }
+        }
+        // Library injection at size 1 (the participation lever): instantiate
+        // each mined component onto the fold namespace and add as a leaf.
+        if let Some(lib) = library {
+            let mut injected = 0usize;
+            for comp in lib.get_for_args(fold_n_args) {
+                if injected >= MAX_SIZE1_INJECTIONS {
+                    break;
+                }
+                if let Some(r) = try_accept_fold_body(
+                    &comp,
+                    array_examples,
+                    problem,
+                    fn_name,
+                    scalar_param_names,
+                    array_idx,
+                ) {
+                    return Some(r);
+                }
+                if let Some(fp) = fingerprint(&comp, &probes) {
+                    if seen.insert(fp) {
+                        ensure_slot(&mut by_size, 1);
+                        by_size[1].push(comp);
+                        injected += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Deepening loop (uniform-cost by size). Each newly minted body is tried as
+    // a fold body before being banked. Comparisons are realized as `if c CMP d
+    // { then } else { else }` bodies (size >= 5), mirroring the scalar IfExpr
+    // construction, so conditional folds (count/sum-when) are reachable.
+    let mut size = frontier.next_size;
+    while size <= cap {
+        if start.elapsed().as_millis() as u64 > time_limit_ms {
+            timed_out = true;
+            break;
+        }
+        ensure_slot(&mut by_size, size);
+        let mut new: Vec<Expr> = Vec::new();
+
+        // helper to try+bank one candidate body
+        macro_rules! offer {
+            ($e:expr) => {{
+                let e = $e;
+                if let Some(fp) = fingerprint(&e, &probes) {
+                    if let Some(r) = try_accept_fold_body(
+                        &e,
+                        array_examples,
+                        problem,
+                        fn_name,
+                        scalar_param_names,
+                        array_idx,
+                    ) {
+                        // Found: do NOT write frontier back (caller evicts).
+                        return Some(r);
+                    }
+                    if seen.insert(fp) {
+                        new.push(e);
+                    }
+                }
+            }};
+        }
+
+        // Unary ops
+        if size >= 2 {
+            let children = by_size[size - 1].clone();
+            for child in &children {
+                for &uop in unops {
+                    offer!(Expr::UnaryOp(uop, Box::new(child.clone())));
+                }
+            }
+        }
+
+        // Binary ops
+        for ls in 1..size {
+            let rs = size - 1 - ls;
+            if rs < 1 || rs > cap {
+                continue;
+            }
+            if start.elapsed().as_millis() as u64 > time_limit_ms {
+                timed_out = true;
+                break;
+            }
+            let lefts = by_size[ls].clone();
+            let rights = by_size[rs].clone();
+            for left in &lefts {
+                for right in &rights {
+                    for &op in binops {
+                        offer!(Expr::BinOp(op, Box::new(left.clone()), Box::new(right.clone())));
+                    }
+                }
+            }
+        }
+
+        // If-then-else bodies (size >= 5): if cl CMP cr { then } else { else }
+        if size >= 5 {
+            let atoms = by_size[1].clone();
+            for &cmp in &ALL_CMPS {
+                if start.elapsed().as_millis() as u64 > time_limit_ms {
+                    timed_out = true;
+                    break;
+                }
+                for cl in &atoms {
+                    for cr in &atoms {
+                        let budget = size - 3;
+                        for ts in 1..budget {
+                            let es = budget - ts;
+                            if es < 1 {
+                                continue;
+                            }
+                            let then_es = by_size[ts].clone();
+                            let else_es = by_size[es].clone();
+                            for te in &then_es {
+                                for ee in &else_es {
+                                    offer!(Expr::IfExpr(
+                                        cmp,
+                                        Box::new(cl.clone()),
+                                        Box::new(cr.clone()),
+                                        Box::new(te.clone()),
+                                        Box::new(ee.clone()),
+                                    ));
+                                }
+                                if start.elapsed().as_millis() as u64 > time_limit_ms {
+                                    timed_out = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if timed_out {
+            // Discard partial stratum so a later resume rebuilds it cleanly.
+            break;
+        }
+        eprintln!(
+            "[enum-array] frontier size {size}: {} new bodies, {} unique, {:.1}s",
+            new.len(),
+            seen.len(),
+            start.elapsed().as_secs_f32()
+        );
+        by_size[size] = new;
+        size += 1;
+    }
+
+    // Miss: persist the deepened frontier for the next call.
+    frontier.next_size = size;
+    frontier.by_size = by_size;
+    None
+}
+
 /// Enumerate fold bodies for array problems.
 /// Most array problems are folds: acc = init; for item in arr { acc = acc OP body(item, i, acc) }
 fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
@@ -2529,7 +2822,12 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
     let init_candidates: Vec<Expr> = vec![Expr::Const(0), Expr::Const(1)];
 
     let start = std::time::Instant::now();
-    let time_limit_ms: u64 = 15_000;
+    // The hardcoded strategies below are a CHEAP warm-up sweep (no deep
+    // enumeration). They are bounded by a short wall so that, on a miss, the
+    // resumable deepening frontier (added at the end of this fn) always gets to
+    // run instead of the old terminal 15s → None. The real anytime budget lives
+    // in the frontier tiers below.
+    let time_limit_ms: u64 = 3_000;
 
     // ── Strategy 1: Simple folds (acc = acc OP rhs, no condition) ──────────
     // Handles: array_sum, reverse_sum, interactive_sum, arr_sum_squares, closure_map_sum
@@ -2556,7 +2854,7 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
         for init in &init_candidates {
             for &bop in &[BinOp::Add, BinOp::Mul] {
                 if start.elapsed().as_millis() as u64 > time_limit_ms {
-                    return None;
+                    break; // warm-up budget spent → fall through to the frontier
                 }
                 for rhs in &body_exprs {
                     let fold_expr = Expr::ForFold {
@@ -2631,7 +2929,7 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
 
         for (cmp, lhs, rhs) in &cond_pairs {
             if start.elapsed().as_millis() as u64 > time_limit_ms {
-                return None;
+                break; // warm-up budget spent → fall through to the frontier
             }
             // fold: acc = acc + if lhs CMP rhs { 1 } else { 0 }
             let cond_body = Expr::IfExpr(
@@ -2674,7 +2972,7 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
 
         for (cmp, lhs, rhs) in &cond_pairs {
             if start.elapsed().as_millis() as u64 > time_limit_ms {
-                return None;
+                break; // warm-up budget spent → fall through to the frontier
             }
             // fold: acc = acc + if lhs CMP rhs { item } else { 0 }
             let cond_body = Expr::IfExpr(
@@ -2745,7 +3043,7 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
         for &bop in &[BinOp::Min, BinOp::Max] {
             for init in &[Expr::Const(0), Expr::Const(1), Expr::Const(-1)] {
                 if start.elapsed().as_millis() as u64 > time_limit_ms {
-                    return None;
+                    break; // warm-up budget spent → fall through to the frontier
                 }
                 // For max: if item > acc { acc = item }
                 // For min: if item < acc { acc = item }
@@ -2814,8 +3112,67 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
         }
     }
 
+    // ── Resumable deepening frontier (replaces the old fixed-15s → None) ──────
+    // The hardcoded warm-up strategies above are a cheap first sweep. If they
+    // miss, we DO NOT return a terminal None: we deepen a PERSISTENT, anytime
+    // frontier of fold bodies — keyed by the examples fingerprint and shared
+    // with the scalar `Frontier` store — so a later invocation RESUMES deeper
+    // (and consumes the growing mined library) instead of restarting.
+    let fold_n_args = n_scalar_args + 3; // scalar args + item + i + acc
+    let fp = crate::solved_cache::examples_fingerprint(&problem.examples);
+
+    // Per-call budget (anytime). Default mirrors the old 15s wall, but it now
+    // bounds THIS call only; depth rises across calls via the persisted frontier.
+    let budget_ms: u64 = std::env::var("NSYNTH_ENUM_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(15_000);
+    let soft_cap: Option<usize> = std::env::var("NSYNTH_ENUM_SOFT_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok());
+
+    // Library: lazily loaded/mined, fed in so abstractions participate in the
+    // array search exactly as on the scalar path.
+    let library = ComponentLibrary::load_or_dream(5_000);
+
+    let core_budget = (budget_ms * 55 / 100).max(1);
+    let full_budget = budget_ms.saturating_sub(core_budget).max(1);
+
+    let mut run_tier = |ops_tier: u8, binops: &[BinOp], unops: &[UnOp], budget: u64| {
+        let mut frontier = load_frontier(&fp, fold_n_args, ops_tier)
+            .unwrap_or_else(|| Frontier::fresh(fp.clone(), fold_n_args, ops_tier));
+        let hit = deepen_fold_frontier(
+            &mut frontier,
+            &array_examples,
+            problem,
+            fn_name,
+            &scalar_param_names,
+            array_idx,
+            budget,
+            Some(&library),
+            binops,
+            unops,
+            soft_cap,
+        );
+        if hit.is_some() {
+            // Solved → its frontier is dead weight; drop it.
+            evict_frontier(&fp);
+        } else {
+            // Miss: persist the deepened frontier so a later call resumes deeper.
+            save_frontier(&frontier);
+        }
+        hit
+    };
+
+    if let Some(result) = run_tier(0, &CORE_BINOPS, &CORE_UNOPS, core_budget) {
+        return Some(result);
+    }
+    if let Some(result) = run_tier(1, &ALL_BINOPS, &ALL_UNOPS, full_budget) {
+        return Some(result);
+    }
+
     eprintln!(
-        "[enum-array] no fold found in {:.1}s",
+        "[enum-array] no fold found (frontier persisted, resumable) in {:.1}s",
         start.elapsed().as_secs_f32()
     );
     None
@@ -3571,5 +3928,335 @@ mod tests {
         // Cleanup.
         std::env::remove_var("NSYNTH_SOLVED_EXPRS_PATH");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ── Array-frontier resumability + library participation (ARRAY-FRONTIER) ──
+
+    /// Build a real `sum_of_cubes` array problem. `reference_code` is SET, so
+    /// `verify_problem_code_strict` runs DIFFERENTIAL holdouts sampled against
+    /// the reference (not examples-only): the accept gate is un-gameable.
+    fn sum_of_cubes_problem() -> Problem {
+        use crate::benchmark::Example;
+        // Minimal fold body is (item*item)*item = size 5, beyond the warm-up's
+        // atom-OP-atom (size 3) sweep AND beyond a size-3 frontier cap.
+        Problem {
+            name: "sum_of_cubes".to_string(),
+            category: "arrays",
+            description: "Sum of the cubes of all elements.",
+            signature: "fn sum_of_cubes(arr: [i64]) -> i64",
+            examples: vec![
+                Example {
+                    inputs: vec![Value::int_array(&[1, 2, 3])],
+                    expected: Value::Int(36), // 1 + 8 + 27
+                },
+                Example {
+                    inputs: vec![Value::int_array(&[2])],
+                    expected: Value::Int(8),
+                },
+                Example {
+                    inputs: vec![Value::int_array(&[1, 1, 1, 1])],
+                    expected: Value::Int(4),
+                },
+                Example {
+                    inputs: vec![Value::int_array(&[0, 3])],
+                    expected: Value::Int(27),
+                },
+            ],
+            holdouts: vec![],
+            reference_code:
+                "fn sum_of_cubes(arr: [i64]) -> i64 {\n    acc: i64 = 0;\n    for item in arr {\n        acc = acc + item * item * item;\n    }\n    return acc;\n}\n",
+            ..Default::default()
+        }
+    }
+
+    /// Extract `(scalar_args, array, expected)` triples the way
+    /// `synthesize_array_enumerative` does, so the test drives the same data.
+    fn array_examples_of(problem: &Problem) -> Vec<(Vec<i64>, Vec<i64>, i64)> {
+        problem
+            .examples
+            .iter()
+            .map(|ex| {
+                let array: Vec<i64> = ex
+                    .inputs
+                    .iter()
+                    .filter_map(|v| v.as_i64_slice())
+                    .next()
+                    .unwrap_or_default();
+                (Vec::new(), array, ex.expected_int())
+            })
+            .collect()
+    }
+
+    /// THE UN-GAMEABLE RESUMABILITY TEST.
+    ///
+    /// A HARDER array problem (sum_of_cubes; minimal fold body size 5) is UNSOLVED
+    /// by a single first-shot run under a shallow cap — `deepen_fold_frontier`
+    /// returns None and the warm-up cannot reach it. The frontier persists work;
+    /// a SECOND invocation that RESUMES the SAME frontier under a deeper cap
+    /// solves it by continuing deeper instead of restarting. Every hit is gated
+    /// by `verify_problem_code_strict` (differential holdouts vs the reference).
+    #[test]
+    fn array_frontier_resumes_deeper_to_solve_harder_problem() {
+        let problem = sum_of_cubes_problem();
+        let array_examples = array_examples_of(&problem);
+        let scalar_names: Vec<&str> = vec![];
+        let fold_n_args = 3; // item, i, acc (0 scalar args)
+
+        // PRIOR/FIXED-PATH PROOF: a single first-shot run from a FRESH frontier
+        // under the shallow cap (size 3) MUST return None. This is the
+        // "single-shot under the old budget returns None" half of the criterion.
+        let mut fresh_shallow = Frontier::fresh(String::new(), fold_n_args, 0);
+        let first_shot = deepen_fold_frontier(
+            &mut fresh_shallow,
+            &array_examples,
+            &problem,
+            "sum_of_cubes",
+            &scalar_names,
+            0,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(3),
+        );
+        assert!(
+            first_shot.is_none(),
+            "sum_of_cubes MUST be unsolved by a single shallow (cap-3) first shot"
+        );
+
+        // CALL 1 (the persisted frontier): same shallow cap, MISS, but the
+        // frontier deepens and banks real work.
+        let mut frontier = Frontier::fresh(String::new(), fold_n_args, 0);
+        let miss = deepen_fold_frontier(
+            &mut frontier,
+            &array_examples,
+            &problem,
+            "sum_of_cubes",
+            &scalar_names,
+            0,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(3),
+        );
+        assert!(miss.is_none(), "cap-3 frontier must miss sum_of_cubes");
+        let depth_after_1 = frontier.next_size;
+        assert!(
+            depth_after_1 >= 4,
+            "frontier must have advanced past size 3 (next_size={depth_after_1})"
+        );
+        assert!(
+            frontier.by_size.len() > 3 && !frontier.by_size[3].is_empty(),
+            "size-3 bodies must be banked in the frontier for resume"
+        );
+
+        // CALL 2 (RESUME): deeper cap on the SAME frontier. Must now SOLVE — the
+        // second call continued from the banked strata, not from scratch.
+        let solved = deepen_fold_frontier(
+            &mut frontier,
+            &array_examples,
+            &problem,
+            "sum_of_cubes",
+            &scalar_names,
+            0,
+            10_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(7),
+        )
+        .expect("resumed deeper frontier must solve sum_of_cubes");
+
+        assert_eq!(solved.method, "enumerative-array");
+        // Re-assert the STRICT gate independently (differential holdouts vs the
+        // reference): the accepted code is sound, not just example-fitting.
+        verify_problem_code_strict(&problem, &solved.code)
+            .expect("accepted array code must pass strict differential verification");
+    }
+
+    /// REAL DISK PERSISTENCE: write the deepened frontier to a test-local file
+    /// and read it back into a FRESH `Frontier` struct, then resume to a solve —
+    /// proving the resumable store carries array work across a real on-disk
+    /// round-trip. The round-trip uses the IDENTICAL serde serialization that
+    /// `save_frontier`/`load_frontier` rely on (the SCALAR machinery reused
+    /// unchanged), but writes to a private pid-unique path WITHOUT touching the
+    /// process-global `NSYNTH_ENUM_FRONTIER_PATH` env var — so the test is
+    /// hermetic and cannot race other tests' frontier I/O under the parallel
+    /// runner (the documented serial-test hazard).
+    #[test]
+    fn array_frontier_persists_and_reloads_from_disk() {
+        let problem = sum_of_cubes_problem();
+        let array_examples = array_examples_of(&problem);
+        let scalar_names: Vec<&str> = vec![];
+        let fold_n_args = 3;
+        let fp = crate::solved_cache::examples_fingerprint(&problem.examples);
+
+        let path = std::env::temp_dir().join(format!(
+            "mog_synth_test_array_frontier_{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        // CALL 1: fresh, shallow cap, MISS → write the deepened frontier to disk
+        // via the same serde encoding `save_frontier` uses.
+        let mut f1 = Frontier::fresh(fp.clone(), fold_n_args, 0);
+        let miss = deepen_fold_frontier(
+            &mut f1,
+            &array_examples,
+            &problem,
+            "sum_of_cubes",
+            &scalar_names,
+            0,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(3),
+        );
+        assert!(miss.is_none());
+        std::fs::write(&path, serde_json::to_string(&f1).unwrap()).unwrap();
+        assert!(path.exists(), "frontier file must be written on miss");
+
+        // CALL 2: READ a FRESH struct back from disk, resume deeper → SOLVE.
+        let json = std::fs::read_to_string(&path).unwrap();
+        let mut f2: Frontier = serde_json::from_str(&json).unwrap();
+        assert!(
+            f2.matches(&fp, fold_n_args, 0),
+            "reloaded frontier must match the problem signature"
+        );
+        assert!(
+            f2.next_size >= 4 && f2.by_size.len() > 3 && !f2.by_size[3].is_empty(),
+            "reloaded frontier must carry the banked size-3 work for a real resume"
+        );
+        let solved = deepen_fold_frontier(
+            &mut f2,
+            &array_examples,
+            &problem,
+            "sum_of_cubes",
+            &scalar_names,
+            0,
+            10_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(7),
+        )
+        .expect("frontier reloaded from disk must resume to a solve");
+        verify_problem_code_strict(&problem, &solved.code)
+            .expect("disk-resumed solve must pass strict differential verification");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// REGRESSION GUARD (bounded): the FULL `synthesize_array_enumerative`
+    /// entry still solves an easy array problem (array_sum) via the cheap
+    /// warm-up sweep — i.e. wiring the frontier in did not break the fast path.
+    /// Bounded: array_sum is found by the warm-up in milliseconds.
+    #[test]
+    fn array_enumerative_still_solves_array_sum_via_warmup() {
+        use crate::benchmark::Example;
+        let problem = Problem {
+            name: "array_sum".to_string(),
+            category: "arrays",
+            description: "Sum of all elements.",
+            signature: "fn array_sum(arr: [i64]) -> i64",
+            examples: vec![
+                Example {
+                    inputs: vec![Value::int_array(&[1, 2, 3])],
+                    expected: Value::Int(6),
+                },
+                Example {
+                    inputs: vec![Value::int_array(&[5])],
+                    expected: Value::Int(5),
+                },
+                Example {
+                    inputs: vec![Value::int_array(&[4, 4])],
+                    expected: Value::Int(8),
+                },
+                Example {
+                    inputs: vec![Value::int_array(&[2, 7, 1, 0])],
+                    expected: Value::Int(10),
+                },
+            ],
+            holdouts: vec![],
+            reference_code:
+                "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n",
+            ..Default::default()
+        };
+        // array_sum is found by the cheap warm-up (size-1 body `item`), so the
+        // resumable frontier is never reached and no env/disk state is touched —
+        // the test is hermetic under cfg!(test) (frontier_path() == None).
+        let res = synthesize_array_enumerative(&problem)
+            .expect("array_sum must still be solved by the array entry point");
+        verify_problem_code_strict(&problem, &res.code)
+            .expect("array_sum solution must pass strict differential verification");
+    }
+
+    /// MINED-LIBRARY PARTICIPATION: a from-scratch frontier under a TIGHT cap
+    /// CANNOT reach the size-5 cube body, so it misses. The SAME tight cap, but
+    /// with a library that contributes the cube abstraction (`?0*?0*?0`), SOLVES
+    /// — the injected component takes part in (and shortens) the array search.
+    /// Acceptance is still the strict differential verifier.
+    #[test]
+    fn mined_library_item_participates_in_array_solve() {
+        let problem = sum_of_cubes_problem();
+        let array_examples = array_examples_of(&problem);
+        let scalar_names: Vec<&str> = vec![];
+        let fold_n_args = 3;
+
+        // BASELINE (no library), tight cap 4 → cube body (size 5) unreachable.
+        let mut bare = Frontier::fresh(String::new(), fold_n_args, 0);
+        let bare_res = deepen_fold_frontier(
+            &mut bare,
+            &array_examples,
+            &problem,
+            "sum_of_cubes",
+            &scalar_names,
+            0,
+            5_000,
+            None,
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(4),
+        );
+        assert!(
+            bare_res.is_none(),
+            "without the library, a cap-4 frontier cannot reach the size-5 cube body"
+        );
+
+        // WITH a library carrying the cube abstraction. The component is a
+        // single-slot pattern `(?0 * ?0) * ?0`; instantiated onto the fold
+        // namespace it becomes a size-1 leaf, so the SAME cap-4 search now finds
+        // it. (`?0` = Var(0); instantiate_component re-roots it onto each arg.)
+        let cube = Expr::BinOp(
+            BinOp::Mul,
+            Box::new(Expr::BinOp(
+                BinOp::Mul,
+                Box::new(Expr::Var(0)),
+                Box::new(Expr::Var(0)),
+            )),
+            Box::new(Expr::Var(0)),
+        );
+        let mut lib = ComponentLibrary::new();
+        lib.add(cube, "cube(?0)".to_string());
+
+        let mut with_lib = Frontier::fresh(String::new(), fold_n_args, 0);
+        let lib_res = deepen_fold_frontier(
+            &mut with_lib,
+            &array_examples,
+            &problem,
+            "sum_of_cubes",
+            &scalar_names,
+            0,
+            5_000,
+            Some(&lib),
+            &CORE_BINOPS,
+            &CORE_UNOPS,
+            Some(4),
+        )
+        .expect("the injected cube library item must enable a cap-4 solve");
+        verify_problem_code_strict(&problem, &lib_res.code)
+            .expect("library-assisted solve must pass strict differential verification");
     }
 }
