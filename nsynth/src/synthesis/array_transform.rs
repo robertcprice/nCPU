@@ -937,22 +937,60 @@ mod tests {
         None
     }
 
+    /// Build the same `fn f(arr: [i64]) -> [i64]` problem as `pa()` but ship a
+    /// NON-EMPTY, independent `reference_code` oracle. This flips the strict
+    /// verifier off the hand-fallback holdouts onto GATE-0's *differential*
+    /// holdouts: `generated_holdouts_with_source` samples FRESH inputs across the
+    /// widened `[-64, 64]` range and labels them by RUNNING the reference, so the
+    /// searched body must generalize, not merely fit the visible rows. The
+    /// reference is an independent push-loop implementation of the transform — it
+    /// is NOT derived from the candidate, so it is a sound oracle.
+    fn pa_ref(rows: &[(&[i64], &[i64])], reference_code: &'static str) -> Problem {
+        let mut problem = pa(rows);
+        problem.reference_code = reference_code;
+        problem
+    }
+
+    /// Assert the problem's strict-verify holdouts are GATE-0 *differential*
+    /// (`Generated`): freshly sampled inputs labelled by running the reference,
+    /// not the degraded hand-authored fallback. Proves the searched body was
+    /// gated on generalization, not just example fit.
+    fn assert_differential(problem: &Problem) {
+        let (_holdouts, source) = crate::benchmark::generated_holdouts_with_source(problem);
+        assert_eq!(
+            source,
+            crate::benchmark::HoldoutSource::Generated,
+            "holdouts must be GATE-0 differential (Generated), not the hand fallback"
+        );
+    }
+
     #[test]
     fn solves_searched_cube_via_search() {
         // y = item*item*item — OUTSIDE {Identity, Affine, Abs, Square, quadratic}.
-        // Last two rows are holdouts (per pa()), so success means the searched
-        // body passed verify_problem_code_strict on examples AND holdouts.
+        // The reference runs under GATE-0 differential holdouts (fresh [-64,64]
+        // inputs, incl. negatives), so success means the searched body passed
+        // verify_problem_code_strict on the examples AND a generalization probe.
         let rows: &[(&[i64], &[i64])] = &[
             (&[0, 1, 2], &[0, 1, 8]),
             (&[3], &[27]),
             (&[4, 5], &[64, 125]),
             (&[6], &[216]),
         ];
+        // Independent oracle: cube via a push loop (NOT derived from the candidate).
+        let reference = "fn f(arr: [i64]) -> [i64] {\n    result: [i64] = [];\n    for item in arr {\n        result.push(item * item * item);\n    }\n    return result;\n}\n";
+        let problem = pa_ref(rows, reference);
+        // GATE-0 differential regime is exercised (fresh inputs, reference-labelled).
+        assert_differential(&problem);
         // Winning method is the SEARCHED body, not a fixed template.
-        assert_eq!(solve_method(rows), "array_transform_map_searched_body");
+        assert_eq!(
+            synthesize_array_transform(&problem)
+                .expect("expected a solution")
+                .method,
+            "array_transform_map_searched_body"
+        );
         // The fixed map menu ALONE cannot solve it (un-gameable: prior path None).
         assert!(
-            synthesize_fixed_map_only(&pa(rows)).is_none(),
+            synthesize_fixed_map_only(&problem).is_none(),
             "fixed map menu must NOT solve item*item*item"
         );
     }
@@ -966,9 +1004,19 @@ mod tests {
             (&[6, 7], &[0, 1]),
             (&[8, 9], &[2, 0]),
         ];
-        assert_eq!(solve_method(rows), "array_transform_map_searched_body");
+        // Independent oracle: item % 3 via a push loop (matches the runtime's `%`
+        // on negatives because reference AND candidate render the same `item % 3`).
+        let reference = "fn f(arr: [i64]) -> [i64] {\n    result: [i64] = [];\n    for item in arr {\n        result.push(item % 3);\n    }\n    return result;\n}\n";
+        let problem = pa_ref(rows, reference);
+        assert_differential(&problem);
+        assert_eq!(
+            synthesize_array_transform(&problem)
+                .expect("expected a solution")
+                .method,
+            "array_transform_map_searched_body"
+        );
         assert!(
-            synthesize_fixed_map_only(&pa(rows)).is_none(),
+            synthesize_fixed_map_only(&problem).is_none(),
             "fixed map menu must NOT solve item % 3"
         );
     }
@@ -984,9 +1032,18 @@ mod tests {
             (&[1, 2, 10], &[1, 10]),
             (&[3, 9, 13], &[13]),
         ];
-        assert_eq!(solve_method(rows), "array_transform_filter_searched");
+        // Independent oracle: keep elements where item % 3 == 1, via a push loop.
+        let reference = "fn f(arr: [i64]) -> [i64] {\n    result: [i64] = [];\n    for item in arr {\n        if item % 3 == 1 {\n            result.push(item);\n        }\n    }\n    return result;\n}\n";
+        let problem = pa_ref(rows, reference);
+        assert_differential(&problem);
+        assert_eq!(
+            synthesize_array_transform(&problem)
+                .expect("expected a solution")
+                .method,
+            "array_transform_filter_searched"
+        );
         assert!(
-            synthesize_fixed_filter_only(&pa(rows)).is_none(),
+            synthesize_fixed_filter_only(&problem).is_none(),
             "fixed predicate set must NOT solve item % 3 == 1"
         );
     }
