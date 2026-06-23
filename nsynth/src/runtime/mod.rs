@@ -15,6 +15,27 @@ use crate::benchmark::{generated_holdouts, Problem, Value as BenchmarkValue};
 /// loop arms (`While`, `ForTo`, `ForInRange`, `ForIn`, `ForParallel`) agree.
 const MAX_LOOP_ITERS: usize = 100_000;
 
+/// Max nested user-function-call recursion depth before a candidate is rejected.
+/// Without this, a non-terminating recursive candidate overflows the native
+/// stack and ABORTS the process — a stack overflow is NOT recoverable via
+/// `catch_unwind`, so it kills the whole synthesizer mid-verify instead of being
+/// cleanly rejected.
+///
+/// Each interpreted Mog call consumes a deep chain of native frames
+/// (`call_decl`→`exec_block`→`exec_stmt`→`eval_expr`→`call_function`→…) measured
+/// at ~16 KiB/level — and DEEPER for candidates with nested bodies. Caps of 512
+/// and 128 BOTH overflowed cargo's ~2 MiB test-thread stack before the guard
+/// fired. 32 keeps the worst case to ~0.5 MiB even at 2–3× that frame size,
+/// firing well before overflow, while staying far deeper than any recursion the
+/// current engine synthesizes (shallow template recursion only).
+///
+/// NOTE: this trades recursion REACH for abort-safety. The proper fix for deep
+/// recursive synthesis is to run the verifier on a thread with an explicitly
+/// large stack (e.g. 256 MiB) and raise this cap accordingly; blocked today by
+/// `Runtime` not being `Send` (its `RefCell`/`Cell`/file-handle fields), so the
+/// big-stack thread would have to construct the `Runtime` inside itself.
+const MAX_CALL_DEPTH: u32 = 32;
+
 /// Absolute tolerance for float equality in `output_matches`. Used together
 /// with `FLOAT_REL_EPS` so very small and very large magnitudes both compare
 /// sensibly instead of with exact bit equality.
@@ -2863,6 +2884,10 @@ struct Runtime {
     /// touch the real filesystem (nondeterminism + host damage) during
     /// acceptance checking. Defaults to false so normal execution is unaffected.
     verify_mode: Cell<bool>,
+    /// Current user-function-call recursion depth, bounded by [`MAX_CALL_DEPTH`]
+    /// so a non-terminating recursive candidate is rejected (Err) rather than
+    /// allowed to stack-overflow and abort the process during verification.
+    call_depth: Cell<u32>,
 }
 
 struct MutexChannel {
@@ -3033,6 +3058,7 @@ impl Runtime {
             monomorphized_functions: RefCell::new(HashMap::new()),
             type_inference_cache: RefCell::new(HashMap::new()),
             verify_mode: Cell::new(false),
+            call_depth: Cell::new(0),
         }
     }
 
@@ -3204,17 +3230,34 @@ impl Runtime {
     }
 
     fn call_decl(&self, function: &Function, args: Vec<Value>, env: Env) -> Result<Value, String> {
-        let local = env.child();
-        for (idx, param) in function.params.iter().enumerate() {
-            let value = args.get(idx).cloned().unwrap_or(Value::Unit);
-            local.define(param, value);
+        // Bound recursion depth so a non-terminating recursive candidate is
+        // rejected rather than overflowing the native stack and aborting the
+        // process (which catch_unwind cannot recover). Increment on entry,
+        // always decrement on exit so the counter is correct across error paths.
+        let depth = self.call_depth.get() + 1;
+        if depth > MAX_CALL_DEPTH {
+            return Err(format!(
+                "recursion depth exceeded {MAX_CALL_DEPTH} (likely non-terminating candidate)"
+            ));
         }
-        match self.exec_block(&function.body, local)? {
-            Control::Return(value) => Ok(value),
-            Control::Next => Ok(Value::Unit),
-            Control::Break(_) => Err("break outside loop".to_string()),
-            Control::Continue(_) => Err("continue outside loop".to_string()),
-        }
+        self.call_depth.set(depth);
+
+        let result = (|| {
+            let local = env.child();
+            for (idx, param) in function.params.iter().enumerate() {
+                let value = args.get(idx).cloned().unwrap_or(Value::Unit);
+                local.define(param, value);
+            }
+            match self.exec_block(&function.body, local)? {
+                Control::Return(value) => Ok(value),
+                Control::Next => Ok(Value::Unit),
+                Control::Break(_) => Err("break outside loop".to_string()),
+                Control::Continue(_) => Err("continue outside loop".to_string()),
+            }
+        })();
+
+        self.call_depth.set(self.call_depth.get() - 1);
+        result
     }
 
     fn exec_block(&self, stmts: &[Stmt], env: Env) -> Result<Control, String> {
@@ -4858,6 +4901,37 @@ mod tests {
         let result = execute_program(code)
             .unwrap_or_else(|err| panic!("program execution failed: {err}\n\n{code}"));
         assert_eq!(result.output, expected);
+    }
+
+    /// REGRESSION (soundness Hole 1): a non-terminating recursive candidate must
+    /// be rejected with an Err at the depth cap, NOT overflow the native stack
+    /// and abort the process (catch_unwind cannot recover a stack overflow, so
+    /// that would kill the whole synthesizer mid-verification). If the cap were
+    /// too high for this thread's stack, this test would itself abort — so it
+    /// also guards that MAX_CALL_DEPTH is safe.
+    #[test]
+    fn unbounded_recursion_rejected_not_process_abort() {
+        let code = "fn spin(x: i64) -> i64 { return spin(x + 1); }\nfn main() { spin(0); }\n";
+        let result = execute_program(code);
+        assert!(
+            result.is_err(),
+            "unbounded recursion must return an error, not abort the process"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("recursion depth"),
+            "error should cite the recursion-depth cap; got: {msg}"
+        );
+    }
+
+    /// Bounded recursion well within the cap must still work (the guard must not
+    /// reject legitimate recursive programs).
+    #[test]
+    fn bounded_recursion_still_succeeds() {
+        let code = "fn sum_to(n: i64) -> i64 { if n <= 0 { return 0; } return n + sum_to(n - 1); }\n\
+                    fn main() { println_i64(sum_to(10)); }\n";
+        let result = execute_program(code).expect("bounded recursion must run");
+        assert_eq!(result.output, "55");
     }
 
     #[test]
