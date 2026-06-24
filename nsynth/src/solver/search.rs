@@ -82,6 +82,13 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         key: "search_tree_leaf_count",
         func: search_tree_leaf_count,
     },
+    // U5c: SEARCHED linear recursion — routed BEFORE the fixed factorial/fib
+    // recognisers so genuine enumeration (not shape recognition) claims the win
+    // for problems it can solve.
+    SearchCandidate {
+        key: "search_linear_recursion",
+        func: search_linear_recursion,
+    },
     // Recursion/iteration teachers (Stage 5)
     SearchCandidate {
         key: "search_recursive_factorial",

@@ -1972,6 +1972,120 @@ pub(super) fn search_stateful_reducer_temporal(
     None
 }
 
+/// U5c: SEARCHED linear-recursion synthesis.
+///
+/// Scheme: `f(n) = (n <= k) ? base : combine(n, f(n-1))`, where the base
+/// threshold `k`, the base-case value `base`, and the binary `combine(n, acc)`
+/// expression are ENUMERATED over a small grammar and accepted only when the
+/// resulting REAL recursive program reproduces every visible example AND
+/// strict-verifies on fresh reference-derived holdouts. Unlike
+/// [`search_recursive_factorial`] / [`search_recursive_fibonacci`] (which
+/// recognise a fixed numeric shape in Rust and emit a hand-written iterative
+/// body), this family discovers the recurrence by search and emits a genuine
+/// self-recursive Mog `Decl` executed under the H1 depth guard.
+///
+/// This is intentionally ONE scheme (linear, single-arg, single recursive
+/// call). No cata/para/histo/mutual/multi-arg recursion, no list folds.
+pub(super) fn search_linear_recursion(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    // Recursion must be permitted by the problem (mirrors the recogniser gate).
+    if !problem.recursive_allowed && !problem.explicit_stack {
+        return None;
+    }
+
+    // Single i64 parameter, i64 return only (the linear-recursion scheme is
+    // defined over one integer argument).
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+
+    // Collect (n, expected) pairs from the visible examples.
+    let mut points: Vec<(i64, i64)> = Vec::with_capacity(problem.examples.len());
+    for ex in &problem.examples {
+        if ex.inputs.len() != 1 {
+            return None;
+        }
+        let n = match &ex.inputs[0] {
+            Value::Int(v) => *v,
+            _ => return None,
+        };
+        points.push((n, ex.expected_int()));
+    }
+    if points.is_empty() {
+        return None;
+    }
+
+    // Candidate grammar for `combine(n, acc)`. The constant-stepped variants
+    // are bounded to a tiny window so the search stays cheap and cannot overfit
+    // by fishing a large magic constant.
+    let mut combine_ops: Vec<LinearCombineOp> = vec![
+        LinearCombineOp::MulN,
+        LinearCombineOp::AddN,
+        LinearCombineOp::AddNSquared,
+    ];
+    for c in -3..=3 {
+        if c != 0 {
+            combine_ops.push(LinearCombineOp::AddConst(c));
+        }
+    }
+    for c in 2..=3 {
+        combine_ops.push(LinearCombineOp::MulConst(c));
+    }
+
+    // Enumerate base threshold k, base value, and combine op. Thresholds and
+    // base values are kept small (the natural base cases for factorial/sum).
+    for threshold in 0..=2i64 {
+        for base in -1..=2i64 {
+            for &combine in &combine_ops {
+                let scheme = LinearRecursionScheme {
+                    threshold,
+                    base,
+                    combine,
+                };
+                if linear_recursion_matches(&points, scheme) {
+                    let code = code_linear_recursion(fn_name, "n", scheme);
+                    // Accept ONLY through the strict verifier (fresh
+                    // reference-derived holdouts). The search NEVER consults
+                    // holdouts/reference directly — verified_result does.
+                    if let Some(result) =
+                        verified_result(problem, code, "search_linear_recursion")
+                    {
+                        return Some(result);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Simulate `f(n) = (n <= k) ? base : combine(n, f(n-1))` over the example
+/// inputs, with the SAME depth + overflow guards the interpreter enforces, and
+/// report whether every example matches. Returning `false` (rather than
+/// matching) on a depth/overflow abort mirrors the runtime rejecting that
+/// candidate — the search never accepts a program the interpreter would reject.
+fn linear_recursion_matches(points: &[(i64, i64)], scheme: LinearRecursionScheme) -> bool {
+    fn eval(n: i64, scheme: LinearRecursionScheme, depth: u32) -> Option<i64> {
+        // Mirror H1: the interpreter aborts a self-call past MAX_CALL_DEPTH=32.
+        // Each recursive frame consumes one unit of depth; bail identically.
+        if depth > 32 {
+            return None;
+        }
+        if n <= scheme.threshold {
+            return Some(scheme.base);
+        }
+        let acc = eval(n - 1, scheme, depth + 1)?;
+        scheme.combine.eval(n, acc)
+    }
+
+    points.iter().all(|&(n, expected)| {
+        // The recurrence only descends toward the base case for n above the
+        // threshold; an example below it must equal `base`.
+        eval(n, scheme, 1) == Some(expected)
+    })
+}
+
 /// Stage 5: Factorial pattern recognition (explicit-stack iteration).
 pub(super) fn search_recursive_factorial(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     if !problem.recursive_allowed && !problem.explicit_stack {

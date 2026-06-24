@@ -204,7 +204,14 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         // construction and preempt the slow gradient path.
         | "search_struct_field_reduction"
         | "search_struct_coupled_fields"
-        | "search_struct_conditional_fields" => true,
+        | "search_struct_conditional_fields"
+        // U5c: SEARCHED linear recursion `f(n)=(n<=k)?base:combine(n,f(n-1))`.
+        // The base threshold, base value, and combine op are enumerated over a
+        // small grammar and the resulting REAL recursive program is verified on
+        // every example AND on fresh reference-derived holdouts (strict verify),
+        // so it generalizes by construction and is returned directly instead of
+        // being distilled by the slow native-gradient path.
+        | "search_linear_recursion" => true,
         "search_unary_range_loop" => {
             result.code.contains("acc = acc + i;") || result.code.contains("acc = acc * i;")
         }

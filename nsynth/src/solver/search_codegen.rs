@@ -2216,6 +2216,94 @@ pub(super) fn code_stateful_reducer_temporal_no_reducer(
     )
 }
 
+/// U5c: binary combine operator for the SEARCHED linear-recursion scheme
+/// `f(n) = (n <= k) ? base : combine(n, f(n-1))`. `acc` denotes the recursive
+/// result `f(n-1)`. Each variant maps to a concrete Mog expression emitted by
+/// [`code_linear_recursion`]. The set is intentionally minimal (the
+/// anti-over-engineering bound): products/sums of `n`, `n*n`, and `acc`, plus
+/// small constant affine steps. NO general recursion-scheme zoo.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LinearCombineOp {
+    /// `n * acc`  (factorial: base=1, k=1)
+    MulN,
+    /// `n + acc`  (triangular / sum-to-n: base=0, k=0)
+    AddN,
+    /// `n*n + acc`  (sum of first n squares: base=0, k=0)
+    AddNSquared,
+    /// `acc + c`  (linear accumulation by a discovered constant)
+    AddConst(i64),
+    /// `acc * c`  (geometric accumulation by a discovered constant)
+    MulConst(i64),
+}
+
+impl LinearCombineOp {
+    /// Evaluate `combine(n, acc)` with the SAME checked overflow semantics the
+    /// interpreter enforces (`checked_*` -> `None` on overflow). Returning
+    /// `None` lets the search treat an overflowing combination exactly as the
+    /// runtime would: a rejected (non-matching) candidate, never a silent wrap.
+    pub(super) fn eval(self, n: i64, acc: i64) -> Option<i64> {
+        match self {
+            LinearCombineOp::MulN => n.checked_mul(acc),
+            LinearCombineOp::AddN => n.checked_add(acc),
+            LinearCombineOp::AddNSquared => n.checked_mul(n)?.checked_add(acc),
+            LinearCombineOp::AddConst(c) => acc.checked_add(c),
+            LinearCombineOp::MulConst(c) => acc.checked_mul(c),
+        }
+    }
+
+    /// The Mog source expression for this op, over identifiers `n` and `acc`.
+    fn expr(self) -> String {
+        match self {
+            LinearCombineOp::MulN => "n * acc".to_string(),
+            LinearCombineOp::AddN => "n + acc".to_string(),
+            LinearCombineOp::AddNSquared => "n * n + acc".to_string(),
+            LinearCombineOp::AddConst(c) => format!("acc + {c}"),
+            LinearCombineOp::MulConst(c) => format!("acc * {c}"),
+        }
+    }
+}
+
+/// U5c: the discovered linear-recursion program: base threshold `k`, base-case
+/// value `base`, and the searched `combine` op. Carried from the search so the
+/// codegen and the accept-tests can both inspect the discovered combine body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct LinearRecursionScheme {
+    pub(super) threshold: i64,
+    pub(super) base: i64,
+    pub(super) combine: LinearCombineOp,
+}
+
+/// U5c: emit a REAL recursive Mog `Decl` for the SEARCHED linear-recursion
+/// scheme `f(n) = (n <= k) ? base : combine(n, f(n-1))`. The self-call
+/// `{fn_name}(n - 1)` is executed by the interpreter's `call_decl` path under
+/// the H1 `MAX_CALL_DEPTH` guard — this is genuine recursion, not an iterative
+/// emit like [`code_explicit_stack_factorial`].
+pub(super) fn code_linear_recursion(
+    fn_name: &str,
+    arg: &str,
+    scheme: LinearRecursionScheme,
+) -> String {
+    let LinearRecursionScheme {
+        threshold,
+        base,
+        combine,
+    } = scheme;
+    // `acc` binds the recursive result so the combine expression reads exactly
+    // as discovered (e.g. `n * acc`, `n + acc`).
+    let combine_expr = combine.expr();
+    format!(
+        "fn {fn_name}({arg}: i64) -> i64 {{\n    \
+         if {arg} <= {threshold} {{ return {base}; }}\n    \
+         acc: i64 = {fn_name}({arg} - 1);\n    \
+         return {combine_expr};\n}}\n",
+        fn_name = fn_name,
+        arg = arg,
+        threshold = threshold,
+        base = base,
+        combine_expr = combine_expr,
+    )
+}
+
 /// Stage 5: Explicit-stack factorial recursion (iterative with explicit stack frame).
 /// Input: n (i64), Output: n! (i64). Uses loop + stack frames instead of call stack.
 pub(super) fn code_explicit_stack_factorial(fn_name: &str, arg: &str) -> String {
