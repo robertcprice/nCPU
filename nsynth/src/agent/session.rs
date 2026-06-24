@@ -246,6 +246,20 @@ impl CodingAgentSession {
     fn run_synthesis(&mut self, query: &str, req: &SynthesisRequirement) -> AgentQueryResult {
         let bridge = LinguigenesisBridge::new();
         let intent = CodingIntent::from_requirement(req);
+
+        // MULTI-FILE front door (NL-MULTIFILE-PROGRAM): if linguigenesis-core
+        // splits the request into >=2 independent component functions, synthesize
+        // each and write a real multi-file crate (src/<module>.rs per component +
+        // src/lib.rs + Cargo.toml) to the sandbox root. Single-function (and
+        // single-pipeline) requests yield a 1-component plan here, so this branch
+        // is skipped and behaviour is unchanged. The split is structural
+        // (comprehend_project), not a phrase→file table.
+        if let Ok((solved, skipped)) = bridge.synthesize_project(query) {
+            if solved.len() >= 2 {
+                return self.write_multifile_program(req, solved, skipped);
+            }
+        }
+
         // COMPOSITIONAL front door FIRST: if linguigenesis-core comprehends this
         // request as a multi-op array pipeline (req.pipeline populated), build and
         // strict-verify it through the existing pipeline machinery — mirroring
@@ -310,6 +324,68 @@ impl CodingAgentSession {
             synthesis_method: Some(synthesis.method.clone()),
             repo_result: None,
             tool_trace,
+        }
+    }
+
+    /// Write a synthesized multi-component program to disk and report the paths.
+    fn write_multifile_program(
+        &mut self,
+        req: &SynthesisRequirement,
+        solved: Vec<(String, crate::solver::SolveResult)>,
+        skipped: Vec<String>,
+    ) -> AgentQueryResult {
+        let methods: Vec<String> = solved.iter().map(|(_, r)| r.method.clone()).collect();
+        let components: Vec<(String, String)> = solved
+            .into_iter()
+            .map(|(name, r)| (name, r.code))
+            .collect();
+        let pkg = req
+            .function_name
+            .is_empty()
+            .then(|| "generated".to_string())
+            .unwrap_or_else(|| req.function_name.clone());
+        match crate::agent::repo::write_synthesized_project(&self.root, &pkg, &components) {
+            Ok(written) => {
+                let tool_trace: Vec<(String, String)> = written
+                    .iter()
+                    .map(|p| (format!("fs.write:{p}"), "ok".to_string()))
+                    .collect();
+                let mut response = format!(
+                    "wrote {}-component multi-file program:\n{}",
+                    components.len(),
+                    written
+                        .iter()
+                        .map(|p| format!("  {p}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+                if !skipped.is_empty() {
+                    response.push_str("\nskipped:\n");
+                    for s in &skipped {
+                        response.push_str(&format!("  {s}\n"));
+                    }
+                }
+                AgentQueryResult {
+                    route: QueryRoute::GreenfieldProject,
+                    success: true,
+                    response,
+                    workflow: workflow_label(&req.workflow),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some(methods.join("+")),
+                    repo_result: None,
+                    tool_trace,
+                }
+            }
+            Err(error) => AgentQueryResult {
+                route: QueryRoute::GreenfieldProject,
+                success: false,
+                response: format!("multi-file write failed: {error}"),
+                workflow: workflow_label(&req.workflow),
+                clarification_questions: Vec::new(),
+                synthesis_method: None,
+                repo_result: None,
+                tool_trace: Vec::new(),
+            },
         }
     }
 

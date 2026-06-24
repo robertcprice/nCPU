@@ -17,7 +17,7 @@ pub use benchmark::{
     LocalBenchmarkTask, RepoBenchmark,
 };
 pub use nl_fixture_harness::{
-    nl_fixture_cargo_test_command, write_nl_fixture_crate,
+    nl_fixture_cargo_test_command, write_nl_fixture_crate, write_synthesized_project,
 };
 
 pub use agent::RepairAgent;
