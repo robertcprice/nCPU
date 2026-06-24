@@ -435,6 +435,37 @@ fn candidates(problem: &Problem, rows: &[(Vec<i64>, Vec<i64>)]) -> Vec<(&'static
     ));
 
     if length_preserving {
+        // EXACT named structural transforms FIRST. These reorder the array but do
+        // not regress an element function, so a 1-example affine fit must never win
+        // over them in the accept-first-pass loop: a request like "reverse a list"
+        // with a single example can be spuriously matched by an affine that happens
+        // to fit those few element pairs. Pushing the exact named transforms ahead
+        // of the affine/quadratic regression candidates makes an exact structural
+        // match win. (verify_problem_code_strict still gates each on fresh
+        // holdouts, so a wrong structural guess is rejected, not blindly accepted.)
+
+        // Sort ascending.
+        out.push((
+            "array_transform_sort",
+            format!("fn {fn_name}(arr: [i64]) -> [i64] {{\n    arr.sort();\n    return arr;\n}}\n"),
+        ));
+
+        // Reverse.
+        out.push((
+            "array_transform_reverse",
+            format!(
+                "fn {fn_name}(arr: [i64]) -> [i64] {{\n    result: [i64] = [];\n    i: i64 = arr.len - 1;\n    while i >= 0 {{\n        result.push(arr[i]);\n        i = i - 1;\n    }}\n    return result;\n}}\n"
+            ),
+        ));
+
+        // Sort descending (sort then reverse).
+        out.push((
+            "array_transform_sort_desc",
+            format!(
+                "fn {fn_name}(arr: [i64]) -> [i64] {{\n    arr.sort();\n    result: [i64] = [];\n    i: i64 = arr.len - 1;\n    while i >= 0 {{\n        result.push(arr[i]);\n        i = i - 1;\n    }}\n    return result;\n}}\n"
+            ),
+        ));
+
         // Elementwise affine map (covers double, +c, -c, negate, scale, const).
         let pairs: Vec<(i64, i64)> = rows
             .iter()
@@ -515,28 +546,6 @@ fn candidates(problem: &Problem, rows: &[(Vec<i64>, Vec<i64>)]) -> Vec<(&'static
                 ),
             ));
         }
-
-        // Sort ascending.
-        out.push((
-            "array_transform_sort",
-            format!("fn {fn_name}(arr: [i64]) -> [i64] {{\n    arr.sort();\n    return arr;\n}}\n"),
-        ));
-
-        // Reverse.
-        out.push((
-            "array_transform_reverse",
-            format!(
-                "fn {fn_name}(arr: [i64]) -> [i64] {{\n    result: [i64] = [];\n    i: i64 = arr.len - 1;\n    while i >= 0 {{\n        result.push(arr[i]);\n        i = i - 1;\n    }}\n    return result;\n}}\n"
-            ),
-        ));
-
-        // Sort descending (sort then reverse).
-        out.push((
-            "array_transform_sort_desc",
-            format!(
-                "fn {fn_name}(arr: [i64]) -> [i64] {{\n    arr.sort();\n    result: [i64] = [];\n    i: i64 = arr.len - 1;\n    while i >= 0 {{\n        result.push(arr[i]);\n        i = i - 1;\n    }}\n    return result;\n}}\n"
-            ),
-        ));
 
         // Prefix-sum (running scan).
         out.push((
@@ -779,6 +788,59 @@ mod tests {
                 (&[8, 9], &[9, 8])
             ]),
             "array_transform_reverse"
+        );
+    }
+
+    /// UN-GAMEABLE overfit guard (bug #2). A reverse whose ONLY example is
+    /// `[1,2,3] -> [3,2,1]` is element-pair AMBIGUOUS with the affine `y = 4 - x`
+    /// (pairs (1,3),(2,2),(3,1) all satisfy it). Before the reorder, the affine
+    /// candidate was emitted ahead of the reverse candidate and won the
+    /// accept-first-pass on examples-fit + a colluding holdout, producing the
+    /// `push((0-item)+4)` overfit the CLI demo showed. This test pins that the
+    /// EXACT structural reverse now wins, AND proves it is not coincidence by
+    /// showing the affine `y = 4 - x` program is genuinely WRONG on a DIFFERENT
+    /// holdout array — so the reorder is load-bearing, not luck.
+    #[test]
+    fn reverse_beats_affine_overfit_on_single_ambiguous_example() {
+        // One example (affine-ambiguous: pairs of [1,2,3]->[3,2,1] all satisfy
+        // y=4-x) + TWO differential holdout arrays the affine y=4-x does NOT
+        // satisfy (4-5 = -1 != 8). `pa` reserves the last two rows as holdouts,
+        // so examples = {[1,2,3]->[3,2,1]} only.
+        let rows: &[(&[i64], &[i64])] = &[
+            (&[1, 2, 3], &[3, 2, 1]),
+            (&[5, 6, 7, 8], &[8, 7, 6, 5]),
+            (&[9, 1], &[1, 9]),
+        ];
+        let problem = pa(rows);
+
+        // FIX: exact reverse wins over the 1-example affine fit.
+        assert_eq!(
+            synthesize_array_transform(&problem)
+                .expect("reverse must solve this")
+                .method,
+            "array_transform_reverse",
+            "exact reverse must beat the 1-example affine fit"
+        );
+
+        // UN-GAMEABLE: the affine `y = 4 - x` candidate that previously won is
+        // genuinely WRONG here — it must FAIL strict verification on the holdout.
+        // (4 - 5 = -1, but the reverse of [5,6,7,8] is [8,7,6,5].) This proves the
+        // reorder is what makes reverse win, not a coincidental first-pass.
+        let affine_4_minus_x = map_program(
+            problem.function_name(),
+            &format!("        result.push({});\n", affine_expr(-1, 4)),
+        );
+        assert!(
+            verify_problem_code_strict(&problem, &affine_4_minus_x).is_err(),
+            "the prior affine y=4-x overfit MUST be rejected on the differential holdout"
+        );
+
+        // And the produced reverse is correct on BOTH distinct arrays (the CLI
+        // anti-cheat: [1,2,3]->[3,2,1] AND [5,6,7,8]->[8,7,6,5]).
+        let reverse_code = synthesize_array_transform(&problem).unwrap().code;
+        assert!(
+            verify_problem_code_strict(&problem, &reverse_code).is_ok(),
+            "the synthesized reverse must verify on both distinct arrays"
         );
     }
 
