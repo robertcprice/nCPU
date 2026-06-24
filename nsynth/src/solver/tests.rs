@@ -1526,3 +1526,5 @@ mod exact_cases;
 mod gradient_cases;
 #[path = "tests/routing_cases.rs"]
 mod routing_cases;
+#[path = "tests/linear_recursion_cases.rs"]
+mod linear_recursion_cases;
