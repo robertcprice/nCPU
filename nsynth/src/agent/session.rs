@@ -246,9 +246,15 @@ impl CodingAgentSession {
     fn run_synthesis(&mut self, query: &str, req: &SynthesisRequirement) -> AgentQueryResult {
         let bridge = LinguigenesisBridge::new();
         let intent = CodingIntent::from_requirement(req);
-        let synthesis = match bridge.synthesize_from_requirement(req, Some(&intent.function_name)) {
-            Ok(result) => result,
-            Err(error) => {
+        // COMPOSITIONAL front door FIRST: if linguigenesis-core comprehends this
+        // request as a multi-op array pipeline (req.pipeline populated), build and
+        // strict-verify it through the existing pipeline machinery — mirroring
+        // synthesize_from_description's pipeline-first precedence
+        // (linguigenesis_bridge.rs:511). Returns None for single-op requests, so
+        // single-op behaviour is unchanged.
+        let synthesis = match bridge.try_compose_pipeline(query) {
+            Some(Ok(outcome)) => outcome.into_solve_result(),
+            Some(Err(error)) => {
                 return AgentQueryResult {
                     route: QueryRoute::SynthesizeFunction,
                     success: false,
@@ -260,6 +266,21 @@ impl CodingAgentSession {
                     tool_trace: Vec::new(),
                 };
             }
+            None => match bridge.synthesize_from_requirement(req, Some(&intent.function_name)) {
+                Ok(result) => result,
+                Err(error) => {
+                    return AgentQueryResult {
+                        route: QueryRoute::SynthesizeFunction,
+                        success: false,
+                        response: error,
+                        workflow: workflow_label(&req.workflow),
+                        clarification_questions: Vec::new(),
+                        synthesis_method: None,
+                        repo_result: None,
+                        tool_trace: Vec::new(),
+                    };
+                }
+            },
         };
         let mut tool_trace = Vec::new();
         if synthesis.success {

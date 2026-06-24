@@ -1367,7 +1367,7 @@ impl PipelineOutcome {
         self.map_fns.len()
     }
 
-    fn into_solve_result(self) -> crate::solver::SolveResult {
+    pub(crate) fn into_solve_result(self) -> crate::solver::SolveResult {
         crate::solver::SolveResult {
             success: true,
             code: self.code,
