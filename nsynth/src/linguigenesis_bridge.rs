@@ -12,7 +12,7 @@ use linguigenesis_core::{
         needs_clarification, ClarificationField, ClarificationQuestion,
     },
     coding_requirements::{
-        CompositionPlan, LiteralValue, OpRef, OpRole, SynthesisRequirement,
+        CompositionPlan, LiteralValue, OpRef, OpRole, ProjectPlan, SynthesisRequirement,
     },
     comprehension::Comprehension,
     entity_resolution::EntityResolver,
@@ -764,6 +764,64 @@ impl LinguigenesisBridge {
             .problem_from_requirement(req, fn_name)
             .map_err(|e| e.to_string())?;
         Ok(crate::solver::solve_problem(&problem))
+    }
+
+    /// Comprehend a (possibly multi-component) request into a `ProjectPlan` and
+    /// synthesize each component INDEPENDENTLY through the existing single-op
+    /// door (`problem_from_requirement` + `solve_problem`, via
+    /// `synthesize_from_requirement`). A single-function request yields a
+    /// 1-element vector — identical to today's single-file path. Components
+    /// whose requirement carries no examples (did not comprehend) are SKIPPED
+    /// and reported in the returned skip list rather than fabricated.
+    ///
+    /// Returns `(Vec<(fn_name, SolveResult)>, Vec<skipped_reason>)`. The split
+    /// itself lives in linguigenesis-core (`comprehend_project`); the bridge only
+    /// loops + solves. No new synthesis path.
+    pub fn synthesize_project(
+        &self,
+        text: &str,
+    ) -> Result<(Vec<(String, crate::solver::SolveResult)>, Vec<String>), String> {
+        let registry = self.registry_clone().map_err(|e| e.to_string())?;
+        let mut coding = CodingComprehension::new(registry);
+        let plan: ProjectPlan = coding.comprehend_project(text);
+
+        let mut solved = Vec::with_capacity(plan.components.len());
+        let mut skipped = Vec::new();
+        let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for req in &plan.components {
+            if req.examples.is_empty() {
+                skipped.push(format!(
+                    "component '{}' did not comprehend (no examples derived)",
+                    req.description
+                ));
+                continue;
+            }
+            // Stable per-component fn name; de-duplicate sibling collisions
+            // (e.g. two unnamed map components) so each writes a distinct file.
+            let base = if req.function_name.is_empty() {
+                "f".to_string()
+            } else {
+                req.function_name.clone()
+            };
+            let mut name = base.clone();
+            let mut n = 2;
+            while used_names.contains(&name) {
+                name = format!("{base}{n}");
+                n += 1;
+            }
+            used_names.insert(name.clone());
+
+            match self.synthesize_from_requirement(req, Some(&name)) {
+                Ok(result) if result.success => solved.push((name, result)),
+                Ok(result) => skipped.push(format!(
+                    "component '{}' failed to synthesize: {}",
+                    name,
+                    result.error.unwrap_or_else(|| "no solution".to_string())
+                )),
+                Err(e) => skipped.push(format!("component '{name}' error: {e}")),
+            }
+        }
+        Ok((solved, skipped))
     }
 
     /// TEST-SUPPORT: resolve a single surface word to its highest-confidence

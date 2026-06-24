@@ -3,6 +3,8 @@
 //! Each fixture is a real `cargo test` oracle instead of grep-on-source.
 
 use crate::agent::repo::nl_fixture_wrong_stub;
+use crate::agent::tools::{FsTool, Tool, ToolCall};
+use crate::mog_transpile::to_rust;
 use std::fs;
 use std::path::Path;
 
@@ -50,6 +52,108 @@ pub fn write_nl_fixture_crate(root: &Path, fixture_id: &str) -> Result<(), Strin
     fs::write(root.join("Cargo.toml"), cargo_toml).map_err(|e| e.to_string())?;
     fs::write(root.join("src/lib.rs"), format!("{stub}{tests}")).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// PRODUCT writer: given solved components `(module_name, mog_code)` and a sandbox
+/// `root`, transpile each component's Mog `code` to Rust via [`to_rust`] and write
+/// a minimal multi-file crate:
+///   * `src/<module>.rs` — the component's synthesized fn(s),
+///   * `src/lib.rs`      — `mod <module>; pub use <module>::*;` per component,
+///   * `Cargo.toml`      — a minimal library manifest.
+///
+/// All writes go through the sandboxed, traversal-guarded [`FsTool`] (paths are
+/// relative to `root`; `..`/absolute paths are rejected). Module names are
+/// sanitized to valid Rust identifiers. Returns the relative paths written, in
+/// write order. Sibling components are INDEPENDENT (no inter-fn wiring).
+pub fn write_synthesized_project(
+    root: &Path,
+    package_name: &str,
+    components: &[(String, String)],
+) -> Result<Vec<String>, String> {
+    if components.is_empty() {
+        return Err("no synthesized components to write".to_string());
+    }
+    let fs_tool = FsTool::new(root.to_path_buf());
+    let write = |rel: &str, content: &str| -> Result<(), String> {
+        fs_tool
+            .invoke(&ToolCall::new("write").arg("path", rel).arg("content", content))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    };
+
+    let mut written = Vec::new();
+    let mut modules = Vec::with_capacity(components.len());
+    for (name, mog_code) in components {
+        let module = sanitize_module_name(name);
+        let rust = to_rust(mog_code);
+        // Make every top-level fn `pub` so `pub use module::*` in lib.rs actually
+        // re-exports it (the transpiler emits bare `fn`, which is private and would
+        // make the crate fail to compile / re-export nothing).
+        let rust = publicize_fns(&rust);
+        // Each module re-exports its own fn(s) via lib.rs `pub use module::*`.
+        let body = format!("//! Synthesized component `{module}`.\n\n{}\n", rust.trim_end());
+        let rel = format!("src/{module}.rs");
+        write(&rel, &body)?;
+        written.push(rel);
+        modules.push(module);
+    }
+
+    let mut lib = String::from("//! Generated multi-file program (independent sibling components).\n\n");
+    for m in &modules {
+        lib.push_str(&format!("mod {m};\npub use {m}::*;\n"));
+    }
+    write("src/lib.rs", &lib)?;
+    written.push("src/lib.rs".to_string());
+
+    let pkg = if package_name.trim().is_empty() {
+        "generated".to_string()
+    } else {
+        fixture_package_name(&sanitize_module_name(package_name))
+    };
+    let cargo_toml = CARGO_TOML_TEMPLATE.replace("{package_name}", &pkg);
+    write("Cargo.toml", &cargo_toml)?;
+    written.push("Cargo.toml".to_string());
+
+    Ok(written)
+}
+
+/// Make every top-level `fn` declaration `pub` so it is re-exportable via
+/// `pub use module::*`. Also normalizes the transpiler's empty-array literal
+/// `: Vec<i64> = [];` to `: Vec<i64> = Vec::new();` so array-output components
+/// (e.g. an element-doubling map) compile as a real crate. These are fixups to
+/// the GENERATED file only — the transpiler is untouched.
+fn publicize_fns(rust: &str) -> String {
+    rust.lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let indent = &line[..line.len() - trimmed.len()];
+            if trimmed.starts_with("fn ") {
+                format!("{indent}pub {trimmed}")
+            } else if let Some(pos) = line.find(": Vec<i64> = [];") {
+                format!("{}: Vec<i64> = Vec::new();", &line[..pos])
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Reduce an arbitrary fn/module name to a valid Rust identifier (alnum +
+/// underscore, non-leading-digit). Empty ⇒ `component`.
+fn sanitize_module_name(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    s = s.trim_matches('_').to_string();
+    if s.is_empty() {
+        return "component".to_string();
+    }
+    if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        s.insert(0, '_');
+    }
+    s.to_lowercase()
 }
 
 fn write_multifile_multiply_fixture(root: &Path) -> Result<(), String> {
