@@ -442,33 +442,45 @@ impl LinguigenesisBridge {
         plan: &CompositionPlan,
     ) -> Result<PipelineOutcome, String> {
         // 1. Synthesize each primitive through the EXISTING solver from its
-        //    registry example_cases. The reduce primitive defines the fold; the
-        //    optional map primitive defines the element transform.
-        let reduce_code = self.synthesize_primitive(&plan.reduce)?;
-        let map_code = match &plan.map {
-            Some(m) => Some((m.fn_name.clone(), self.synthesize_primitive(m)?)),
+        //    registry example_cases. Each map op in the CHAIN defines one element
+        //    transform; the optional reduce primitive defines the fold.
+        //    `map_chain` is in REQUEST ORDER (outer→inner).
+        let mut map_chain: Vec<(String, String)> = Vec::with_capacity(plan.maps.len());
+        for m in &plan.maps {
+            map_chain.push((m.fn_name.clone(), self.synthesize_primitive(m)?));
+        }
+
+        // 2. Classify the reduce fold (if any) by EXECUTING the synthesized reduce
+        //    code on probe inputs (behaviour-driven; never keyed on the op's name).
+        //    An ArrayReduce is probed with arrays; a BinaryFoldSeed (e.g. add) with
+        //    scalar pairs — the shape comes from its emergent `op_role`.
+        let fold = match &plan.reduce {
+            Some(r) => {
+                let reduce_code = self.synthesize_primitive(r)?;
+                let fk = match op_role(r) {
+                    OpRole::ArrayReduce => classify_array_fold(&reduce_code, &r.fn_name),
+                    OpRole::BinaryFoldSeed => classify_binary_fold(&reduce_code, &r.fn_name),
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!("could not classify fold for reduce op '{}'", r.fn_name)
+                })?;
+                Some(fk)
+            }
             None => None,
         };
 
-        // 2. Classify the reduce fold by EXECUTING the synthesized reduce code on
-        //    probe inputs (behaviour-driven; never keyed on the op's name). An
-        //    ArrayReduce is probed with arrays; a BinaryFoldSeed (e.g. add) with
-        //    scalar pairs — the shape comes from its emergent `op_role`.
-        let fold = match op_role(&plan.reduce) {
-            OpRole::ArrayReduce => classify_array_fold(&reduce_code, &plan.reduce.fn_name),
-            OpRole::BinaryFoldSeed => classify_binary_fold(&reduce_code, &plan.reduce.fn_name),
-            _ => None,
-        }
-        .ok_or_else(|| format!("could not classify fold for reduce op '{}'", plan.reduce.fn_name))?;
-
-        // 3. Emit the composed REFERENCE: the map fn body (if any) plus a fused
-        //    driver loop applying `fold` over `map(arr[i])`. This is an INDEPENDENT
-        //    implementation of the pipeline, used only to LABEL fresh holdouts.
+        // 3. Emit the composed REFERENCE: the map fn bodies (chained) plus either a
+        //    fused fold driver (shape a, scalar out) or an array-builder loop
+        //    (shape b, array out). This is an INDEPENDENT implementation of the
+        //    pipeline, used only to LABEL fresh holdouts.
         let composed_name = pipeline_fn_name(plan);
-        let reference = emit_pipeline_reference(&composed_name, fold, map_code.as_ref());
+        let reference = emit_pipeline_reference(&composed_name, fold, &map_chain);
         let reference: &'static str = Box::leak(reference.into_boxed_str());
+        // Scalar output when a reduce is present; array output for a pure map chain.
+        let ret = if fold.is_some() { "i64" } else { "[i64]" };
         let signature: &'static str =
-            Box::leak(format!("fn {}(a: [i64]) -> i64", composed_name).into_boxed_str());
+            Box::leak(format!("fn {}(a: [i64]) -> {}", composed_name, ret).into_boxed_str());
 
         // 4. Build a Problem whose reference IS the composition, so the existing
         //    strict verifier samples FRESH arrays and labels them by RUNNING the
@@ -481,16 +493,17 @@ impl LinguigenesisBridge {
         .map_err(|e| format!("pipeline reference unrunnable: {e}"))?;
         let category: &'static str = Box::leak("nl-compose".to_string().into_boxed_str());
         let descr: &'static str =
-            Box::leak(format!("two-op pipeline for: {description}").into_boxed_str());
+            Box::leak(format!("transform-chain pipeline for: {description}").into_boxed_str());
         problem.category = category;
         problem.description = descr;
 
         // 5. Synthesize the WHOLE pipeline through the existing solver from the
-        //    seed examples (the array engine handles map/reduce per U5a/U5b).
+        //    seed examples (the array engine handles map/reduce per U5a/U5b and
+        //    array→array transforms per array_transform).
         let solved = crate::solver::solve_problem(&problem);
         if !solved.success {
             return Err(format!(
-                "two-op pipeline recognised ({}) but solver could not synthesize it (method={}, err={:?})",
+                "transform-chain pipeline recognised ({}) but solver could not synthesize it (method={}, err={:?})",
                 describe_plan(plan),
                 solved.method,
                 solved.error
@@ -501,7 +514,7 @@ impl LinguigenesisBridge {
         //    program must match the independent composition on unseen arrays.
         crate::runtime::verify_problem_code_strict(&problem, &solved.code).map_err(|e| {
             format!(
-                "two-op pipeline OVERFIT — strict holdout verification failed: {e}\nCODE:\n{}",
+                "transform-chain pipeline OVERFIT — strict holdout verification failed: {e}\nCODE:\n{}",
                 solved.code
             )
         })?;
@@ -509,11 +522,11 @@ impl LinguigenesisBridge {
         Ok(PipelineOutcome {
             description: description.to_string(),
             fn_name: composed_name.clone(),
-            map_fn: plan.map.as_ref().map(|m| m.fn_name.clone()),
-            reduce_fn: plan.reduce.fn_name.clone(),
+            map_fns: plan.maps.iter().map(|m| m.fn_name.clone()).collect(),
+            reduce_fn: plan.reduce.as_ref().map(|r| r.fn_name.clone()),
             fold,
             code: solved.code,
-            method: format!("nl-compose-2op:{}", solved.method),
+            method: format!("nl-compose-chain:{}", solved.method),
         })
     }
 
@@ -864,52 +877,80 @@ fn op_role(op: &ResolvedContentOp) -> OpRole {
 }
 
 /// A buildable array pipeline derived purely from the emergently-resolved ops.
+///
+/// `maps` is the ordered element-transform CHAIN in REQUEST ORDER (the earlier a
+/// map word appears, the OUTER it is applied: "negated squares" → maps=[negate,
+/// square] applied as `negate(square(x))`). `reduce` is the optional aggregate:
+///   * `Some(_)` ⇒ shape (a) `reduce(mapchain(arr)) -> scalar`,
+///   * `None`    ⇒ shape (b) `mapchain(arr) -> [i64]` (no aggregate).
 #[derive(Clone, Debug)]
 struct CompositionPlan {
-    /// Optional element-wise map op (`fn map(a:i64)->i64`). `None` ⇒ reduce-only.
-    map: Option<ResolvedContentOp>,
-    /// The aggregate over the (possibly-mapped) array.
-    reduce: ResolvedContentOp,
+    /// Ordered element-wise map chain (`fn map(a:i64)->i64`), request order =
+    /// outer→inner. Empty ⇒ reduce-only.
+    maps: Vec<ResolvedContentOp>,
+    /// The aggregate over the (mapped) array. `None` ⇒ array-output map chain.
+    reduce: Option<ResolvedContentOp>,
 }
 
 /// Decide whether the resolved-op set forms a supported array pipeline:
-///   * exactly one reduce (ArrayReduce or BinaryFoldSeed) + at most one ScalarMap,
+///   * at most one reduce (ArrayReduce or BinaryFoldSeed) + a CHAIN of >=0 maps,
 ///   * and the request is NOT a plain single-op request (which the normal path
 ///     already handles — that case returns `None`).
 ///
-/// Returns the plan when the shape is `reduce(map(arr))`, `reduce(arr)` (reduce-only
-/// where the request *also* names a non-array reduce on an implicit array, e.g.
-/// "sum of the values"), or rejects (`None`). All from op ROLES, no phrase table.
+/// Returns the plan for two shapes (all from op ROLES, no phrase table):
+///   * (a) `reduce(mapchain(arr)) -> scalar` — >=1 map + exactly one reduce, e.g.
+///         "sum of the negated squares", or reduce-only on an implicit array
+///         where the reduce is named but is NOT the requirement op;
+///   * (b) `mapchain(arr) -> [i64]` — >=1 map and NO reduce (array output), e.g.
+///         "the negated squares of the array". A single map that IS the resolved
+///         requirement op (plain "square a number") is the ordinary single-op
+///         request and returns `None`.
 fn classify_pipeline(req: &SynthesisRequirement, ops: &[ResolvedContentOp]) -> Option<CompositionPlan> {
-    let mut maps: Vec<&ResolvedContentOp> = Vec::new();
+    let mut maps: Vec<ResolvedContentOp> = Vec::new();
     let mut reduces: Vec<&ResolvedContentOp> = Vec::new();
     let mut other = false;
     for op in ops {
         match op_role(op) {
-            OpRole::ScalarMap => maps.push(op),
+            // Preserve REQUEST ORDER (outer→inner) for the fused transform.
+            OpRole::ScalarMap => maps.push(op.clone()),
             OpRole::ArrayReduce | OpRole::BinaryFoldSeed => reduces.push(op),
             OpRole::Other => other = true,
         }
     }
-    // Supported shape: exactly one reduce + at most one map. Anything richer
-    // (3-op, two maps, an unclassifiable op) is left to a documented follow-on.
-    if other || reduces.len() != 1 || maps.len() > 1 {
+    // At most one reduce. Two reduces / an unclassifiable op is a documented
+    // follow-on (no 3rd op kind, no multi-reduce).
+    if other || reduces.len() > 1 {
         return None;
     }
-    let reduce = reduces[0].clone();
-    let map = maps.first().map(|m| (*m).clone());
+    let reduce = reduces.first().map(|r| (*r).clone());
 
-    // A *single* op that is itself the resolved requirement op is NOT a pipeline —
-    // it is the ordinary single-op request, handled unchanged by the normal path.
-    if map.is_none() && reduce.fn_name == req.function_name {
-        // Reduce-only AND the reduce IS the requirement op: this is just the plain
-        // op (e.g. "compute the total of an array" → array_sum). Not compositional.
-        return None;
+    match &reduce {
+        // ── Shape (a): reduce present. ────────────────────────────────────────
+        Some(r) => {
+            // A reduce with NO maps that IS the resolved requirement op is the
+            // ordinary single-op request (e.g. "compute the total of an array" →
+            // array_sum), handled unchanged by the normal path.
+            if maps.is_empty() && r.fn_name == req.function_name {
+                return None;
+            }
+            Some(CompositionPlan { maps, reduce })
+        }
+        // ── Shape (b): no reduce → array-output map chain. ────────────────────
+        None => {
+            // Need at least one map to have an array transform at all.
+            if maps.is_empty() {
+                return None;
+            }
+            // A SINGLE map that is itself the resolved requirement op is a plain
+            // scalar op (e.g. "square a number" → square), NOT an array pipeline.
+            // A chain of >=2 maps (or a single map that is NOT the req op) is a
+            // genuine array→array transform.
+            if maps.len() == 1 && maps[0].fn_name == req.function_name {
+                return None;
+            }
+            Some(CompositionPlan { maps, reduce: None })
+        }
     }
-    // A bare scalar map with no reduce is not an array pipeline either; require a
-    // reduce to anchor the aggregate. (Pure "square a number" never reaches here:
-    // it has a ScalarMap but no reduce, so `reduces.len() != 1` already returned.)
-    Some(CompositionPlan { map, reduce })
 }
 
 /// EMERGENT value-type mention: find the first request token that resolves
@@ -1011,31 +1052,43 @@ pub enum FoldKind {
     Min,
 }
 
-/// Accepted, strict-verified two-op pipeline result.
+/// Accepted, strict-verified transform-chain pipeline result.
 #[derive(Clone, Debug)]
 pub struct PipelineOutcome {
     /// The original NL request.
     pub description: String,
     /// The synthesized pipeline's own function name (call this to run `code`).
     pub fn_name: String,
-    /// Element map op function name, if the pipeline has a map stage.
-    pub map_fn: Option<String>,
-    /// Aggregate (reduce) op function name.
-    pub reduce_fn: String,
-    /// The fold kind the reduce computes (behaviour-classified).
-    pub fold: FoldKind,
+    /// Element map op function names in REQUEST ORDER (outer→inner). Empty for a
+    /// reduce-only pipeline.
+    pub map_fns: Vec<String>,
+    /// Aggregate (reduce) op function name, if the pipeline has a reduce stage
+    /// (shape a). `None` for an array-output map chain (shape b).
+    pub reduce_fn: Option<String>,
+    /// The fold kind the reduce computes (behaviour-classified). `None` for an
+    /// array-output map chain (no reduce).
+    pub fold: Option<FoldKind>,
     /// The solver-synthesized program for the whole pipeline.
     pub code: String,
-    /// `nl-compose-2op:<inner-solver-method>`.
+    /// `nl-compose-chain:<inner-solver-method>`.
     pub method: String,
 }
 
 impl PipelineOutcome {
-    /// True iff this is a genuine TWO-stage pipeline (map + reduce), not a
-    /// degenerate reduce-only match. Used by the accept-test to reject a
-    /// coincidental single-op solve masquerading as a composition.
+    /// True iff this is a genuine multi-stage pipeline (>=1 map and a reduce, or
+    /// a chain of >=2 maps) rather than a coincidental single-op solve. Used by
+    /// the accept-test to reject a single-op match masquerading as a composition.
     pub fn is_two_stage(&self) -> bool {
-        self.map_fn.is_some()
+        // Any reduce-bearing pipeline (shape a — including reduce-on-implicit-
+        // array) or a chain of >=2 maps (shape b array output) is genuinely
+        // multi-stage. A lone single map with no reduce never reaches acceptance
+        // (classify_pipeline returns None for the plain single op).
+        self.reduce_fn.is_some() || self.map_fns.len() >= 2
+    }
+
+    /// Length of the element-transform chain (number of composed ScalarMaps).
+    pub fn map_chain_len(&self) -> usize {
+        self.map_fns.len()
     }
 
     fn into_solve_result(self) -> crate::solver::SolveResult {
@@ -1052,16 +1105,30 @@ impl PipelineOutcome {
 /// Deterministic function name for a pipeline, so the strict verifier's holdout
 /// seed (which hashes `problem.name`) is stable.
 fn pipeline_fn_name(plan: &CompositionPlan) -> String {
-    match &plan.map {
-        Some(m) => format!("compose_{}_{}", plan.reduce.fn_name, m.fn_name),
-        None => format!("compose_{}", plan.reduce.fn_name),
+    let mut name = String::from("compose");
+    if let Some(r) = &plan.reduce {
+        name.push('_');
+        name.push_str(&r.fn_name);
+    } else {
+        name.push_str("_maps");
     }
+    for m in &plan.maps {
+        name.push('_');
+        name.push_str(&m.fn_name);
+    }
+    name
 }
 
 fn describe_plan(plan: &CompositionPlan) -> String {
-    match &plan.map {
-        Some(m) => format!("reduce={} ∘ map={}", plan.reduce.fn_name, m.fn_name),
-        None => format!("reduce={} (reduce-only)", plan.reduce.fn_name),
+    let maps: Vec<&str> = plan.maps.iter().map(|m| m.fn_name.as_str()).collect();
+    let chain = if maps.is_empty() {
+        "(no map)".to_string()
+    } else {
+        maps.join(" ∘ ")
+    };
+    match &plan.reduce {
+        Some(r) => format!("reduce={} ∘ mapchain=[{}]", r.fn_name, chain),
+        None => format!("mapchain=[{}] -> array (no reduce)", chain),
     }
 }
 
@@ -1153,32 +1220,49 @@ fn classify_binary_fold(reduce_code: &str, reduce_fn: &str) -> Option<FoldKind> 
 }
 
 /// Emit an INDEPENDENT reference implementation of the pipeline in the runtime
-/// DSL: the optional map fn body verbatim, plus a driver that folds `map(arr[i])`
-/// (or `arr[i]` when there is no map) with the classified combiner. This is used
-/// only to LABEL fresh holdouts; the accepted program is what the solver finds.
+/// DSL. The map chain's fn bodies (verified single-op synthesis) go first so the
+/// driver can call them; the element expression nests the chain in REQUEST ORDER
+/// (`maps[0](maps[1](...maps[n-1](arr[i])))`, outer→inner). When `fold` is set
+/// (shape a) the driver folds that element expression to a scalar; otherwise
+/// (shape b) it builds the mapped array. Used only to LABEL fresh holdouts; the
+/// accepted program is what the solver finds.
 fn emit_pipeline_reference(
     composed_name: &str,
-    fold: FoldKind,
-    map: Option<&(String, String)>,
+    fold: Option<FoldKind>,
+    map_chain: &[(String, String)],
 ) -> String {
     let mut out = String::new();
-    // Map fn body (verified single-op synthesis) goes first so the driver can call it.
-    let elem = if let Some((map_fn, map_code)) = map {
+    // Emit each distinct map fn body once (the chain may legitimately repeat an
+    // op, but the body only needs to appear a single time).
+    let mut emitted: Vec<&str> = Vec::new();
+    for (map_fn, map_code) in map_chain {
+        if emitted.contains(&map_fn.as_str()) {
+            continue;
+        }
+        emitted.push(map_fn.as_str());
         out.push_str(map_code);
         if !out.ends_with('\n') {
             out.push('\n');
         }
         out.push('\n');
-        format!("{}(arr[i])", map_fn)
-    } else {
-        "arr[i]".to_string()
+    }
+
+    // Nest the chain outer→inner around the element: maps[0]( ... maps[n-1](inner) ).
+    let elem = |inner: &str| -> String {
+        let mut expr = inner.to_string();
+        for (map_fn, _) in map_chain.iter().rev() {
+            expr = format!("{}({})", map_fn, expr);
+        }
+        expr
     };
 
     match fold {
-        FoldKind::Sum | FoldKind::Product => {
+        // ── Shape (a): reduce present → fold the mapped element to a scalar. ──
+        Some(FoldKind::Sum) | Some(FoldKind::Product) => {
+            let elem = elem("arr[i]");
             let (init, op) = match fold {
-                FoldKind::Sum => (0, "+"),
-                FoldKind::Product => (1, "*"),
+                Some(FoldKind::Sum) => (0, "+"),
+                Some(FoldKind::Product) => (1, "*"),
                 _ => unreachable!(),
             };
             out.push_str(&format!(
@@ -1195,8 +1279,9 @@ fn emit_pipeline_reference(
                 elem = elem,
             ));
         }
-        FoldKind::Max | FoldKind::Min => {
-            let cmp = if fold == FoldKind::Max { ">" } else { "<" };
+        Some(FoldKind::Max) | Some(FoldKind::Min) => {
+            let elem = elem("arr[i]");
+            let cmp = if fold == Some(FoldKind::Max) { ">" } else { "<" };
             out.push_str(&format!(
                 "fn {name}(arr: [i64]) -> i64 {{\n    \
                  i: i64 = 0;\n    \
@@ -1210,6 +1295,19 @@ fn emit_pipeline_reference(
                 name = composed_name,
                 elem = elem,
                 cmp = cmp,
+            ));
+        }
+        // ── Shape (b): no reduce → build the mapped array (array output). ─────
+        None => {
+            let elem = elem("item");
+            out.push_str(&format!(
+                "fn {name}(arr: [i64]) -> [i64] {{\n    \
+                 result: [i64] = [];\n    \
+                 for item in arr {{\n        \
+                 result.push({elem});\n    }}\n    \
+                 return result;\n}}\n",
+                name = composed_name,
+                elem = elem,
             ));
         }
     }
