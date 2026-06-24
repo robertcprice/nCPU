@@ -2,11 +2,46 @@
 //!
 //! Each fixture is a real `cargo test` oracle instead of grep-on-source.
 
+use crate::agent::repo::gencode_normalize::{escape_module_name, normalize_component};
 use crate::agent::repo::nl_fixture_wrong_stub;
-use crate::agent::tools::{FsTool, Tool, ToolCall};
+use crate::agent::repo::GuardrailPolicy;
+use crate::agent::tools::{FsTool, SecureToolRuntime, Tool, ToolCall};
 use crate::mog_transpile::to_rust;
 use std::fs;
 use std::path::Path;
+
+/// Result of the post-write compile gate on a generated crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompileStatus {
+    /// `cargo check` ran and the crate compiled clean.
+    Ok,
+    /// `cargo check` ran and the crate FAILED to compile; carries the compiler error.
+    Failed(String),
+    /// cargo was unavailable / could not be run — NOT a success.
+    Unverified(String),
+}
+
+impl CompileStatus {
+    pub fn is_ok(&self) -> bool {
+        matches!(self, CompileStatus::Ok)
+    }
+}
+
+/// Outcome of writing a synthesized multi-file project.
+#[derive(Debug, Clone)]
+pub struct WriteOutcome {
+    /// Relative paths written, in write order.
+    pub written: Vec<String>,
+    /// Whether the generated crate compiles (the gate).
+    pub compile: CompileStatus,
+}
+
+impl WriteOutcome {
+    /// The writer reports overall success ONLY when the compile gate is clean.
+    pub fn succeeded(&self) -> bool {
+        self.compile.is_ok()
+    }
+}
 
 const CARGO_TOML_TEMPLATE: &str = r#"[package]
 name = "{package_name}"
@@ -69,7 +104,7 @@ pub fn write_synthesized_project(
     root: &Path,
     package_name: &str,
     components: &[(String, String)],
-) -> Result<Vec<String>, String> {
+) -> Result<WriteOutcome, String> {
     if components.is_empty() {
         return Err("no synthesized components to write".to_string());
     }
@@ -82,15 +117,21 @@ pub fn write_synthesized_project(
     };
 
     let mut written = Vec::new();
-    let mut modules = Vec::with_capacity(components.len());
+    let mut modules: Vec<String> = Vec::with_capacity(components.len());
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (name, mog_code) in components {
-        let module = sanitize_module_name(name);
+        // (B) MODULE NAMING: sanitize -> keyword-escape -> dedup on the FINAL
+        // module name (so addTwo/add_two don't both become `mod add_two`, and a
+        // component named `loop` doesn't emit an illegal `mod loop;`). The file
+        // name and the `mod`/`pub use` name all stay in sync via `module`.
+        let base = escape_module_name(&sanitize_module_name(name));
+        let module = dedup_module_name(base, &mut used);
+
         let rust = to_rust(mog_code);
-        // Make every top-level fn `pub` so `pub use module::*` in lib.rs actually
-        // re-exports it (the transpiler emits bare `fn`, which is private and would
-        // make the crate fail to compile / re-export nothing).
-        let rust = publicize_fns(&rust);
-        // Each module re-exports its own fn(s) via lib.rs `pub use module::*`.
+        // (A) Robust Rust-normalization pass (replaces brittle publicize_fns):
+        // pub-fns, `.len`->`.len()`, i64 index cast, mutated-Vec-param `mut`,
+        // empty-array literal -> Vec::new(). GENERATED file only; transpiler untouched.
+        let rust = normalize_component(&rust);
         let body = format!("//! Synthesized component `{module}`.\n\n{}\n", rust.trim_end());
         let rel = format!("src/{module}.rs");
         write(&rel, &body)?;
@@ -114,29 +155,47 @@ pub fn write_synthesized_project(
     write("Cargo.toml", &cargo_toml)?;
     written.push("Cargo.toml".to_string());
 
-    Ok(written)
+    // (C) COMPILE GATE: `cargo check` the generated crate via the secure runtime.
+    let compile = compile_gate(root);
+    Ok(WriteOutcome { written, compile })
 }
 
-/// Make every top-level `fn` declaration `pub` so it is re-exportable via
-/// `pub use module::*`. Also normalizes the transpiler's empty-array literal
-/// `: Vec<i64> = [];` to `: Vec<i64> = Vec::new();` so array-output components
-/// (e.g. an element-doubling map) compile as a real crate. These are fixups to
-/// the GENERATED file only — the transpiler is untouched.
-fn publicize_fns(rust: &str) -> String {
-    rust.lines()
-        .map(|line| {
-            let trimmed = line.trim_start();
-            let indent = &line[..line.len() - trimmed.len()];
-            if trimmed.starts_with("fn ") {
-                format!("{indent}pub {trimmed}")
-            } else if let Some(pos) = line.find(": Vec<i64> = [];") {
-                format!("{}: Vec<i64> = Vec::new();", &line[..pos])
+/// Pick a unique module name: if `base` is already used, suffix `_2`, `_3`, …
+fn dedup_module_name(base: String, used: &mut std::collections::HashSet<String>) -> String {
+    if used.insert(base.clone()) {
+        return base;
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base}_{n}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// (C) Run a sandboxed `cargo check` on the generated crate. Reuses the
+/// secure_runtime cargo-check capability (allowlist + guardrails). Returns
+/// [`CompileStatus::Unverified`] (NOT success) if cargo cannot be run at all.
+fn compile_gate(root: &Path) -> CompileStatus {
+    let runtime = SecureToolRuntime::for_repo_repair(root.to_path_buf(), GuardrailPolicy::default());
+    match runtime.run_verification_command("cargo check") {
+        Ok(v) => {
+            if v.success {
+                CompileStatus::Ok
             } else {
-                line.to_string()
+                // Surface the compiler error (stderr carries the E-codes).
+                let err = if v.stderr.trim().is_empty() {
+                    v.stdout
+                } else {
+                    v.stderr
+                };
+                CompileStatus::Failed(err)
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        }
+        Err(e) => CompileStatus::Unverified(e),
+    }
 }
 
 /// Reduce an arbitrary fn/module name to a valid Rust identifier (alnum +
@@ -456,6 +515,110 @@ mod tests {
             .verify(&cmd)
             .expect("verify");
         assert!(!verification.success);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn fresh(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "nsynth_gate_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// Two components whose names SANITIZE to the same module must NOT both
+    /// become `mod add_two;` (E0428). Dedup is on the FINAL module name, so the
+    /// second gets a `_2` suffix; the crate compiles clean through the gate.
+    #[test]
+    fn name_collision_dedups_module_and_compiles() {
+        let root = fresh("collide");
+        // `add-two` (non-alnum `-` -> `_`) and `add_two` BOTH sanitize to the
+        // module name `add_two`; without dedup that is two `mod add_two;` (E0428).
+        let components = vec![
+            ("add-two".to_string(), "fn addtwoa(a: i64, b: i64) -> i64 {\n    return (a + b);\n}\n".to_string()),
+            ("add_two".to_string(), "fn addtwob(a: i64, b: i64) -> i64 {\n    return (a + b);\n}\n".to_string()),
+        ];
+        let outcome = write_synthesized_project(&root, "collide", &components).expect("write");
+        // Both sanitize to `add_two`; second must be renamed (no duplicate `mod`).
+        let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("mod add_two;"), "lib: {lib}");
+        assert!(lib.contains("mod add_two_2;"), "second module deduped: {lib}");
+        assert!(
+            outcome.compile.is_ok(),
+            "collision crate must compile clean: {:?}",
+            outcome.compile
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A component whose sanitized name is a Rust keyword must NOT emit
+    /// `mod loop;` (a syntax error). The module name is keyword-escaped and the
+    /// crate compiles through the gate.
+    #[test]
+    fn keyword_named_component_escaped_and_compiles() {
+        let root = fresh("keyword");
+        let components = vec![(
+            "loop".to_string(),
+            "fn loopfn(x: i64) -> i64 {\n    return (x + 1);\n}\n".to_string(),
+        )];
+        let outcome = write_synthesized_project(&root, "kw", &components).expect("write");
+        let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(!lib.contains("mod loop;"), "must not emit `mod loop;`: {lib}");
+        assert!(lib.contains("mod loop_m;"), "keyword escaped to loop_m: {lib}");
+        assert!(root.join("src/loop_m.rs").is_file(), "file name matches module");
+        assert!(
+            outcome.compile.is_ok(),
+            "keyword crate must compile clean: {:?}",
+            outcome.compile
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// PROVE THE GATE GATES: feed a component whose transpiled body does NOT
+    /// compile (references an undefined symbol). The writer must return
+    /// CompileStatus::Failed and surface the compiler error — NOT success.
+    #[test]
+    fn compile_gate_rejects_broken_component() {
+        let root = fresh("broken");
+        // Deliberately-broken Mog body: references an undefined variable `nope`.
+        let bad = "fn broken(x: i64) -> i64 {\n    return (x + nope);\n}\n".to_string();
+        let components = vec![("broken".to_string(), bad)];
+        let outcome = write_synthesized_project(&root, "broken", &components).expect("write");
+        match &outcome.compile {
+            CompileStatus::Failed(err) => {
+                // Compiler error must be surfaced (E0425: cannot find value `nope`).
+                assert!(
+                    err.contains("cannot find value") || err.contains("E0425"),
+                    "compiler error surfaced: {err}"
+                );
+            }
+            other => panic!("gate must FAIL on broken component, got {other:?}"),
+        }
+        assert!(!outcome.succeeded(), "writer must NOT report success on broken crate");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Positive control for the gate: a well-formed two-component request
+    /// compiles clean and the outcome reports success.
+    #[test]
+    fn compile_gate_accepts_good_components() {
+        let root = fresh("good");
+        let components = vec![
+            ("negate".to_string(), "fn negate(x: i64) -> i64 {\n    return (-1 * x);\n}\n".to_string()),
+            ("triple".to_string(), "fn triple(x: i64) -> i64 {\n    return (3 * x);\n}\n".to_string()),
+        ];
+        let outcome = write_synthesized_project(&root, "good", &components).expect("write");
+        assert!(
+            outcome.succeeded(),
+            "good crate must pass the gate: {:?}",
+            outcome.compile
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

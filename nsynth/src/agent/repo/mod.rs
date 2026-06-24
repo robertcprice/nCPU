@@ -2,6 +2,7 @@ pub mod agent;
 pub mod benchmark;
 pub mod credit;
 pub mod failure_parser;
+pub mod gencode_normalize;
 pub mod guardrails;
 pub mod hardness;
 pub mod nl_fixture_harness;
@@ -17,7 +18,8 @@ pub use benchmark::{
     LocalBenchmarkTask, RepoBenchmark,
 };
 pub use nl_fixture_harness::{
-    nl_fixture_cargo_test_command, write_nl_fixture_crate, write_synthesized_project,
+    nl_fixture_cargo_test_command, write_nl_fixture_crate, write_synthesized_project, CompileStatus,
+    WriteOutcome,
 };
 
 pub use agent::RepairAgent;

@@ -345,15 +345,32 @@ impl CodingAgentSession {
             .then(|| "generated".to_string())
             .unwrap_or_else(|| req.function_name.clone());
         match crate::agent::repo::write_synthesized_project(&self.root, &pkg, &components) {
-            Ok(written) => {
-                let tool_trace: Vec<(String, String)> = written
+            Ok(outcome) => {
+                let mut tool_trace: Vec<(String, String)> = outcome
+                    .written
                     .iter()
                     .map(|p| (format!("fs.write:{p}"), "ok".to_string()))
                     .collect();
+                // (D) Report success:true ONLY when the compile gate is clean.
+                let (success, gate_note) = match &outcome.compile {
+                    crate::agent::repo::CompileStatus::Ok => {
+                        tool_trace.push(("cargo.check".to_string(), "ok".to_string()));
+                        (true, String::new())
+                    }
+                    crate::agent::repo::CompileStatus::Failed(err) => {
+                        tool_trace.push(("cargo.check".to_string(), "failed".to_string()));
+                        (false, format!("\ncompile gate FAILED:\n{err}"))
+                    }
+                    crate::agent::repo::CompileStatus::Unverified(why) => {
+                        tool_trace.push(("cargo.check".to_string(), "unverified".to_string()));
+                        (false, format!("\ncompile gate UNVERIFIED (cargo unavailable): {why}"))
+                    }
+                };
                 let mut response = format!(
                     "wrote {}-component multi-file program:\n{}",
                     components.len(),
-                    written
+                    outcome
+                        .written
                         .iter()
                         .map(|p| format!("  {p}"))
                         .collect::<Vec<_>>()
@@ -365,9 +382,10 @@ impl CodingAgentSession {
                         response.push_str(&format!("  {s}\n"));
                     }
                 }
+                response.push_str(&gate_note);
                 AgentQueryResult {
                     route: QueryRoute::GreenfieldProject,
-                    success: true,
+                    success,
                     response,
                     workflow: workflow_label(&req.workflow),
                     clarification_questions: Vec::new(),
