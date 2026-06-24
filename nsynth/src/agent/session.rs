@@ -167,7 +167,10 @@ impl CodingAgentSession {
         }
 
         self.pending = None;
-        let result = self.dispatch(&pending.query, &partial);
+        // gate=false: the user has explicitly disambiguated via clarification, so
+        // the fail-closed gate must NOT re-judge the (often gibberish) original
+        // query — that would refuse a user-confirmed op.
+        let result = self.dispatch(&pending.query, &partial, false);
         self.record_result(&pending.query, &result);
         Ok(result)
     }
@@ -194,7 +197,7 @@ impl CodingAgentSession {
     pub fn handle_query(&mut self, query: &str) -> AgentQueryResult {
         let bridge = LinguigenesisBridge::new();
         let result = match bridge.comprehend_outcome(query) {
-            Ok(ComprehensionOutcome::Ready(req)) => self.dispatch(query, &req),
+            Ok(ComprehensionOutcome::Ready(req)) => self.dispatch(query, &req, true),
             Ok(ComprehensionOutcome::NeedsClarification(req, questions)) => {
                 self.pending = Some(PendingQuery {
                     query: query.to_string(),
@@ -231,21 +234,51 @@ impl CodingAgentSession {
             .map_err(|e| e.to_string())
     }
 
-    fn dispatch(&mut self, query: &str, req: &SynthesisRequirement) -> AgentQueryResult {
+    /// `gate` selects whether the emergent fail-closed gate (FIX C) is consulted
+    /// on the single-op synthesis path. It is TRUE for an INITIAL `handle_query`
+    /// (the raw request may have mis-resolved, so domain/type/identity must be
+    /// checked against it) and FALSE for a clarify-continuation, where the user
+    /// has EXPLICITLY disambiguated the operation through dialogue — re-running
+    /// the gate against the original (often gibberish) query would wrongly refuse
+    /// the user-confirmed op.
+    fn dispatch(&mut self, query: &str, req: &SynthesisRequirement, gate: bool) -> AgentQueryResult {
         let route = route_from_workflow(&req.workflow);
         match route {
-            QueryRoute::SynthesizeFunction => self.run_synthesis(query, req),
+            QueryRoute::SynthesizeFunction => self.run_synthesis(query, req, gate),
             QueryRoute::RepoRepair => self.run_repo_repair(query, req),
             QueryRoute::ExplainCode | QueryRoute::CodeReview => self.run_explain(query, req),
-            QueryRoute::GreenfieldProject => self.run_greenfield(query, req),
+            QueryRoute::GreenfieldProject => self.run_greenfield(query, req, gate),
             QueryRoute::ToolExplore => self.handle_explore(query),
             QueryRoute::Clarification => self.handle_explore(query),
         }
     }
 
-    fn run_synthesis(&mut self, query: &str, req: &SynthesisRequirement) -> AgentQueryResult {
+    fn run_synthesis(
+        &mut self,
+        query: &str,
+        req: &SynthesisRequirement,
+        gate: bool,
+    ) -> AgentQueryResult {
         let bridge = LinguigenesisBridge::new();
         let intent = CodingIntent::from_requirement(req);
+
+        // FIX A (portability): if the coding registry failed to load (location-
+        // independent probing exhausted), the agent has zero operations and would
+        // otherwise silently report every request as "unknown / clarification".
+        // Surface the load failure EXPLICITLY instead of pretending the op is
+        // simply not understood.
+        if let Some(load_err) = bridge.registry_load_error() {
+            return AgentQueryResult {
+                route: QueryRoute::SynthesizeFunction,
+                success: false,
+                response: format!("registry load error: {load_err}"),
+                workflow: workflow_label(&req.workflow),
+                clarification_questions: Vec::new(),
+                synthesis_method: None,
+                repo_result: None,
+                tool_trace: Vec::new(),
+            };
+        }
 
         // MULTI-FILE front door (NL-MULTIFILE-PROGRAM): if linguigenesis-core
         // splits the request into >=2 independent component functions, synthesize
@@ -280,21 +313,49 @@ impl CodingAgentSession {
                     tool_trace: Vec::new(),
                 };
             }
-            None => match bridge.synthesize_from_requirement(req, Some(&intent.function_name)) {
-                Ok(result) => result,
-                Err(error) => {
+            None => {
+                // FIX C (must-refuse): SINGLE-OP path. `handle_query` reached here
+                // via `comprehend_outcome`, which BYPASSES the emergent fail-closed
+                // gate baked into `nl_to_requirement`. Consult that same gate now
+                // (domain / type / operation-identity + the >=2-example floor —
+                // resolver score & registry signatures, NOT a phrase blocklist). If
+                // it fires, REFUSE with a clarification instead of synthesizing
+                // out-of-domain / signature-mismatched / thinly-specified code.
+                // Pipeline & inline-example requests were exempted upstream (handled
+                // by `try_compose_pipeline` above / inside the gate), so genuine
+                // compositions and demonstrated I/O are untouched.
+                if gate {
+                if let Some(reason) = bridge.fail_closed_reason(query, req) {
                     return AgentQueryResult {
-                        route: QueryRoute::SynthesizeFunction,
+                        route: QueryRoute::Clarification,
                         success: false,
-                        response: error,
+                        response: format!(
+                            "cannot synthesize confidently (fail-closed): {reason}"
+                        ),
                         workflow: workflow_label(&req.workflow),
-                        clarification_questions: Vec::new(),
+                        clarification_questions: vec![reason],
                         synthesis_method: None,
                         repo_result: None,
                         tool_trace: Vec::new(),
                     };
                 }
-            },
+                }
+                match bridge.synthesize_from_requirement(req, Some(&intent.function_name)) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        return AgentQueryResult {
+                            route: QueryRoute::SynthesizeFunction,
+                            success: false,
+                            response: error,
+                            workflow: workflow_label(&req.workflow),
+                            clarification_questions: Vec::new(),
+                            synthesis_method: None,
+                            repo_result: None,
+                            tool_trace: Vec::new(),
+                        };
+                    }
+                }
+            }
         };
         let mut tool_trace = Vec::new();
         if synthesis.success {
@@ -504,8 +565,13 @@ impl CodingAgentSession {
         }
     }
 
-    fn run_greenfield(&mut self, query: &str, req: &SynthesisRequirement) -> AgentQueryResult {
-        let synthesis = self.run_synthesis(query, req);
+    fn run_greenfield(
+        &mut self,
+        query: &str,
+        req: &SynthesisRequirement,
+        gate: bool,
+    ) -> AgentQueryResult {
+        let synthesis = self.run_synthesis(query, req, gate);
         if !synthesis.success {
             return synthesis;
         }
@@ -538,7 +604,7 @@ impl CodingAgentSession {
         if let Ok(outcome) = bridge.comprehend_outcome(query) {
             match outcome {
                 ComprehensionOutcome::Ready(req) if req.workflow != CodingWorkflow::Unknown => {
-                    return self.dispatch(query, &req);
+                    return self.dispatch(query, &req, true);
                 }
                 ComprehensionOutcome::Ready(req) => {
                     if let Ok(registry) = bridge.registry_clone() {
