@@ -41,6 +41,68 @@ pub struct LinguigenesisBridge {
 }
 
 impl LinguigenesisBridge {
+    /// Resolve a Linguigenesis data file by name in a LOCATION-INDEPENDENT way.
+    ///
+    /// The previous path-finders (`find_*_path`) resolved only against the
+    /// process CWD and `$HOME`, so launching the agent from any directory
+    /// outside `nsynth/` (or under a non-default `HOME`) failed to locate the
+    /// registry and the agent silently degraded to "everything is unknown".
+    ///
+    /// We now probe, in order:
+    ///   1. A COMPILE-TIME ABSOLUTE base derived from this crate's
+    ///      `CARGO_MANIFEST_DIR`. nSynth lives at `<root>/nsynth`, the data at
+    ///      `<root>/../linguigenesis/data` relative to it, i.e.
+    ///      `<MANIFEST_DIR>/../../linguigenesis/data/<file>`. This is fixed at
+    ///      build time and does not depend on CWD/HOME at all.
+    ///   2. The directory of the running executable (`current_exe`), walking up
+    ///      to find a sibling `linguigenesis/data` — covers relocated binaries
+    ///      whose source tree moved but kept the `linguigenesis` sibling.
+    ///   3. The legacy CWD-relative and `$HOME`-relative paths as fallback (so
+    ///      nothing that worked before stops working).
+    ///
+    /// Returns the first existing path, or `None` if the file is nowhere.
+    fn locate_data_file(file_name: &str) -> Option<PathBuf> {
+        // (1) compile-time absolute base — cwd/HOME-independent.
+        let manifest_base = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../linguigenesis/data")
+            .join(file_name);
+        if manifest_base.exists() {
+            return Some(manifest_base);
+        }
+
+        // (2) executable-relative: walk up from the binary looking for a
+        //     sibling `linguigenesis/data/<file>`.
+        if let Ok(exe) = std::env::current_exe() {
+            let mut dir = exe.parent();
+            while let Some(d) = dir {
+                let candidate = d.join("linguigenesis/data").join(file_name);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+                dir = d.parent();
+            }
+        }
+
+        // (3) legacy fallbacks: CWD-relative then $HOME-relative.
+        let relative = PathBuf::from("../../linguigenesis/data").join(file_name);
+        if relative.exists() {
+            return Some(relative);
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(home)
+                .join("projects/linguigenesis/data")
+                .join(file_name);
+            if home_path.exists() {
+                return Some(home_path);
+            }
+        }
+        let current = PathBuf::from("linguigenesis/data").join(file_name);
+        if current.exists() {
+            return Some(current);
+        }
+        None
+    }
+
     /// Create new bridge with auto-loading from Linguigenesis registry
     pub fn new() -> Self {
         // Try to load from Linguigenesis data directory
@@ -66,29 +128,10 @@ impl LinguigenesisBridge {
         }
     }
 
-    /// Find Linguigenesis registry path
+    /// Find Linguigenesis registry path (location-independent; see
+    /// [`locate_data_file`]).
     fn find_registry_path() -> Option<PathBuf> {
-        // Check relative path first (for nCPU project structure)
-        let relative = PathBuf::from("../../linguigenesis/data/registry.json");
-        if relative.exists() {
-            return Some(relative);
-        }
-
-        // Check home directory
-        if let Ok(home) = std::env::var("HOME") {
-            let home_path = PathBuf::from(home).join("projects/linguigenesis/data/registry.json");
-            if home_path.exists() {
-                return Some(home_path);
-            }
-        }
-
-        // Check current directory
-        let current = PathBuf::from("linguigenesis/data/registry.json");
-        if current.exists() {
-            return Some(current);
-        }
-
-        None
+        Self::locate_data_file("registry.json")
     }
 
     /// TEST-ONLY constructor: identical to [`new`] but WITHOUT the WordNet
@@ -155,66 +198,52 @@ impl LinguigenesisBridge {
     }
 
     fn find_coding_registry_path() -> Option<PathBuf> {
-        let relative = PathBuf::from("../../linguigenesis/data/coding_registry.json");
-        if relative.exists() {
-            return Some(relative);
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            let home_path =
-                PathBuf::from(home).join("projects/linguigenesis/data/coding_registry.json");
-            if home_path.exists() {
-                return Some(home_path);
-            }
-        }
-        let current = PathBuf::from("linguigenesis/data/coding_registry.json");
-        if current.exists() {
-            return Some(current);
-        }
-        None
+        Self::locate_data_file("coding_registry.json")
     }
 
     fn find_computing_knowledge_path() -> Option<PathBuf> {
-        let relative = PathBuf::from("../../linguigenesis/data/computing_knowledge.json");
-        if relative.exists() {
-            return Some(relative);
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            let home_path =
-                PathBuf::from(home).join("projects/linguigenesis/data/computing_knowledge.json");
-            if home_path.exists() {
-                return Some(home_path);
-            }
-        }
-        let current = PathBuf::from("linguigenesis/data/computing_knowledge.json");
-        if current.exists() {
-            return Some(current);
-        }
-        None
+        Self::locate_data_file("computing_knowledge.json")
     }
 
     /// Find the WordNet coding-edges file (additive synonym/similar closure for
-    /// existing ops). Mirrors [`find_coding_registry_path`] path probing.
+    /// existing ops). Resolved location-independently via [`locate_data_file`].
     fn find_wordnet_edges_path() -> Option<PathBuf> {
-        let relative = PathBuf::from("../../linguigenesis/data/wordnet_coding_edges.json");
-        if relative.exists() {
-            return Some(relative);
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            let home_path =
-                PathBuf::from(home).join("projects/linguigenesis/data/wordnet_coding_edges.json");
-            if home_path.exists() {
-                return Some(home_path);
-            }
-        }
-        let current = PathBuf::from("linguigenesis/data/wordnet_coding_edges.json");
-        if current.exists() {
-            return Some(current);
-        }
-        None
+        Self::locate_data_file("wordnet_coding_edges.json")
     }
 
     fn merge_coding_registry(registry: &mut Registry) {
         Self::merge_coding_registry_opt(registry, true);
+    }
+
+    /// Additively declare the value-TYPE vocabulary the fail-closed gate compares
+    /// operand types against. The registry ships operation entities and an "array"
+    /// noun, but NO `Type` entities, so the gate's generic type-mismatch check
+    /// (`mentioned_value_type`, which keys on `EntityType::Type`) is dormant and a
+    /// request like "reverse a STRING" silently resolves to the i64-array `reverse`
+    /// — a confidently-wrong domain answer the prior code documented as an
+    /// acceptable over-acceptance pending exactly this Type entity
+    /// (see `nl_reverse_a_string_is_a_documented_type_case`).
+    ///
+    /// This declares the `string` type (with its signature surface forms via
+    /// `signature_aliases`) ONCE, ONLY if absent — additive, idempotent, and on
+    /// the registry path. It is a TYPE VOCABULARY entry, NOT a phrase→refuse map:
+    /// the gate still decides emergently by comparing the resolved op's signature
+    /// against the mentioned type's surface forms. A genuine string-typed op (none
+    /// ship today) whose signature carried "string" would satisfy the check and be
+    /// accepted; only a type/domain mismatch refuses.
+    fn ensure_value_type_vocabulary(registry: &mut Registry) {
+        use linguigenesis_core::entity::{Entity, EntityType};
+        if registry.get_by_lemma("string").is_some() {
+            return;
+        }
+        let id = registry.stats().total_entities as u64 + 5000;
+        let mut entity = Entity::new(id, "string".to_string(), EntityType::Type);
+        entity.add_definition("Sequence of characters (text value)".to_string());
+        // Signature surface forms the gate matches against an op's signature.
+        entity.add_property("signature_aliases".to_string(), "string,str,&str".to_string());
+        if let Err(e) = registry.add_entity(entity) {
+            eprintln!("[Linguigenesis] string Type vocabulary add warning: {e}");
+        }
     }
 
     /// Collision-safe merge of the WordNet edge file into an ALREADY-populated
@@ -308,6 +337,9 @@ impl LinguigenesisBridge {
                 eprintln!("[Linguigenesis] computing_knowledge merge warning: {}", e);
             }
         }
+        // Activate the dormant emergent type-mismatch gate by declaring the value-
+        // type vocabulary it compares against (additive, idempotent).
+        Self::ensure_value_type_vocabulary(registry);
         if let Err(errors) =
             linguigenesis_core::coding_registry_validate::validate_coding_registry(registry)
         {
@@ -358,6 +390,35 @@ impl LinguigenesisBridge {
         Ok(())
     }
 
+    /// EXPLICIT load-failure surface (FIX A): the coding registry is the source
+    /// of every programming operation the agent can resolve. If it failed to
+    /// load (file not found from ANY of the location-independent probes, or
+    /// loaded but carries zero Function/Operator entities), the agent would
+    /// otherwise silently degrade — every request resolves to nothing and is
+    /// reported as "workflow unknown / clarification". Callers consult this to
+    /// surface a real error instead of pretending every op is unknown.
+    ///
+    /// Returns `Some(message)` when no operations are available, `None` when the
+    /// registry is healthy.
+    pub fn registry_load_error(&self) -> Option<String> {
+        use linguigenesis_core::entity::EntityType;
+        let registry = self.registry.read().ok()?;
+        let has_ops = !registry.get_by_type(&EntityType::Function).is_empty()
+            || !registry.get_by_type(&EntityType::Operator).is_empty();
+        if has_ops {
+            None
+        } else {
+            Some(format!(
+                "Linguigenesis coding registry failed to load (0 operations available): \
+                 looked for coding_registry.json via compile-time base \
+                 '{}/../../linguigenesis/data', the executable's sibling \
+                 'linguigenesis/data', then CWD/$HOME fallbacks. The agent cannot \
+                 resolve any operation until the registry is reachable.",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+        }
+    }
+
     /// Create bridge with custom registry
     pub fn with_registry(registry: Registry) -> Self {
         let comprehension = Arc::new(RwLock::new(Comprehension::new(registry.clone())));
@@ -381,6 +442,30 @@ impl LinguigenesisBridge {
             .read()
             .map_err(|_| BridgeError::LockError)?
             .clone())
+    }
+
+    /// EMERGENT fail-closed gate (FIX C), exposed for callers (the agent's
+    /// `run_synthesis`) that obtained a `SynthesisRequirement` via
+    /// `comprehend_outcome` and therefore BYPASSED the gate baked into
+    /// `nl_to_requirement`. Runs the exact same
+    /// [`unsound_confident_solve_categorized`] check (domain/type/operation-
+    /// identity + the >=2-example floor, derived from the resolver + registry
+    /// signatures — NOT a phrase blocklist).
+    ///
+    /// Returns `Some(reason)` ONLY for HARD refusals — a confidently-WRONG
+    /// resolution (out-of-domain, type/signature mismatch, thin scalar spec, or no
+    /// operation resolved). The SOFT `CompositionUnsupported` case (the request
+    /// names a second op the array-pipeline path did not build, e.g. the
+    /// conjunction "and" in "doubles AND squares a number") is NOT refused here:
+    /// the single-op solver still synthesizes the primary op, matching the agent's
+    /// long-standing single-function behaviour. (`nl_to_requirement` keeps refusing
+    /// on every category via the back-compat `unsound_confident_solve`.)
+    pub fn fail_closed_reason(&self, input: &str, req: &SynthesisRequirement) -> Option<String> {
+        let registry = self.registry.read().ok()?;
+        match unsound_confident_solve_categorized(input, req, &registry) {
+            Some(r) if r.category == GateCategory::Hard => Some(r.reason),
+            _ => None,
+        }
     }
 
     /// Parse NL into registry-derived synthesis requirements (KVRM only).
@@ -476,8 +561,48 @@ impl LinguigenesisBridge {
         req: &SynthesisRequirement,
         fn_name: Option<&str>,
     ) -> Result<Problem, BridgeError> {
-        let examples = synthesis_requirement_to_examples(req)?;
+        let all_examples = synthesis_requirement_to_examples(req)?;
         let name = fn_name.unwrap_or(&req.function_name).to_string();
+
+        // FIX B (single-op fresh holdouts): when the registry op carries enough
+        // spec — >=3 DISTINCT example rows — reserve one distinct row as a HELD-OUT
+        // generalization probe the solver never sees, mirroring the pipeline path's
+        // fresh-holdout differential check. `verify_problem_code_strict` then runs
+        // the candidate against this unseen, registry-labelled row, so a program
+        // that merely memorised the seed rows fails. (The >=2-example floor in
+        // `unsound_confident_solve` already refuses ops too thin to do this; here
+        // we keep >=2 seed rows so synthesis itself is not starved.) Below 3
+        // distinct rows we keep all as seed (holdouts empty) — examples-only, but
+        // the floor has already blocked the dangerous single-row overfit.
+        let mut seed: Vec<Example> = Vec::new();
+        let mut holdouts: Vec<Example> = Vec::new();
+        {
+            let mut distinct: Vec<Example> = Vec::new();
+            for ex in &all_examples {
+                if !distinct.iter().any(|d| d == ex) {
+                    distinct.push(ex.clone());
+                }
+            }
+            if distinct.len() >= 3 {
+                // Last distinct row → holdout; everything else (incl. duplicates of
+                // remaining rows) stays as seed so the solver keeps full signal.
+                let reserved = distinct.last().cloned();
+                if let Some(reserved) = reserved {
+                    for ex in &all_examples {
+                        if *ex == reserved && holdouts.is_empty() {
+                            holdouts.push(ex.clone());
+                        } else {
+                            seed.push(ex.clone());
+                        }
+                    }
+                } else {
+                    seed = all_examples.clone();
+                }
+            } else {
+                seed = all_examples.clone();
+            }
+        }
+        let examples = seed;
         let signature = infer_signature(&name, &examples);
         let signature = Box::leak(signature.into_boxed_str());
         let category = Box::leak(req.category.clone().into_boxed_str());
@@ -488,7 +613,7 @@ impl LinguigenesisBridge {
             description,
             signature,
             examples,
-            holdouts: Vec::new(),
+            holdouts,
             reference_code: "",
             synthetic_args: Vec::new(),
             synthetic_values: Vec::new(),
@@ -1010,11 +1135,44 @@ pub struct BridgeBeliefState {
 /// evidence is the demonstrated behaviour, not a registry guess. We detect that
 /// the same way the comprehension layer does — a non-generic function name with
 /// the user's own examples is treated as user-specified.
+/// Why the fail-closed gate declined to synthesize confidently. The category lets
+/// callers choose WHICH refusals are hard (a genuine confidently-wrong resolution
+/// that must REFUSE everywhere) vs the soft "this is a composition the single-op
+/// solver may still partially handle" case, which the agent path lets fall through
+/// to the solver rather than refusing outright.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GateCategory {
+    /// Out-of-domain / type / unresolved / thin-spec: a confidently-WRONG single-op
+    /// resolution. Must refuse on every path.
+    Hard,
+    /// The request names >1 distinct operation (a composition) that the pipeline
+    /// path did not build. Soft: the agent's single-op solver may still synthesize
+    /// the primary op, so the agent does not refuse on this alone.
+    CompositionUnsupported,
+}
+
+/// Gate result: the refusal category plus its human-readable reason.
+#[derive(Clone, Debug)]
+struct GateRefusal {
+    category: GateCategory,
+    reason: String,
+}
+
+/// Back-compat `Option<String>` view used by `nl_to_requirement` (refuses on ANY
+/// category — the comprehension front door fails closed on every gate signal).
 fn unsound_confident_solve(
     input: &str,
     req: &SynthesisRequirement,
     registry: &Registry,
 ) -> Option<String> {
+    unsound_confident_solve_categorized(input, req, registry).map(|r| r.reason)
+}
+
+fn unsound_confident_solve_categorized(
+    input: &str,
+    req: &SynthesisRequirement,
+    registry: &Registry,
+) -> Option<GateRefusal> {
     use linguigenesis_core::nl_tokens::tokenize_lower;
 
     // Inline-example requests carry the user's OWN demonstrated I/O pairs as the
@@ -1047,6 +1205,53 @@ fn unsound_confident_solve(
         return None;
     }
 
+    // (1a) >=2-DISTINCT-EXAMPLE DISCRIMINATION FLOOR (HARDEN-2 FIX B), scoped to
+    // SCALAR ops. A single-op request (pipeline = None, not inline-example — both
+    // exempted above) whose op is SCALAR is verified examples-only by
+    // `verify_problem_code_strict` (its `problem_from_requirement` problem has no
+    // runnable reference, so `generated_holdouts` degrades to the seed rows). With
+    // a single distinct row ANY program reproducing that one pair "passes",
+    // letting a thin 1-row scalar spec overfit confidently-wrong. We therefore
+    // require >=2 DISTINCT (input → expected) rows: enough to (a) reserve one as a
+    // held-out generalization probe in `problem_from_requirement` and (b)
+    // discriminate against trivial constant/identity overfits. Below the floor we
+    // DOWNGRADE to clarification rather than emit confident code.
+    //
+    // ARRAY-domain ops (sort/reverse — any example carries a `LiteralValue::Array`
+    // operand or result) are EXEMPT: they are synthesized + verified through the
+    // array-transform path (`classify_array_transform_by_spec/_by_exec`), which
+    // checks the candidate against the op's labelled (array → array) pairs — a
+    // differential oracle, not examples-only — so a single registry row does not
+    // overfit. Array-ness is read from the op's own example shapes, not a name/
+    // type table.
+    let op_is_array = req.examples.iter().any(|ex| {
+        use linguigenesis_core::coding_requirements::LiteralValue;
+        matches!(ex.expected, LiteralValue::Array(_))
+            || ex.inputs.iter().any(|i| matches!(i, LiteralValue::Array(_)))
+    });
+    if !op_is_array {
+        let distinct_examples = {
+            let mut seen: Vec<&linguigenesis_core::coding_requirements::ExampleSpec> = Vec::new();
+            for ex in &req.examples {
+                if !seen.iter().any(|s| **s == *ex) {
+                    seen.push(ex);
+                }
+            }
+            seen.len()
+        };
+        if distinct_examples < 2 {
+            return Some(GateRefusal {
+                category: GateCategory::Hard,
+                reason: format!(
+                    "insufficient evidence to synthesize confidently: resolved scalar op '{}' carries \
+                     only {} distinct example row(s) (need >=2 to verify generalization, not overfit a \
+                     single pair); supply an explicit example or disambiguate",
+                    req.function_name, distinct_examples
+                ),
+            });
+        }
+    }
+
     let sig_lower = req.signature.to_lowercase();
 
     // (1b) ARRAY-DOMAIN vs SCALAR-OP mismatch, derived emergently from SIGNATURES.
@@ -1062,11 +1267,14 @@ fn unsound_confident_solve(
     let req_sig_is_array = sig_lower.contains('[') || sig_lower.contains("vec<");
     if !req_sig_is_array {
         if let Some(arr_word) = array_domain_word(input, registry, &req.function_name) {
-            return Some(format!(
-                "no operation confidently resolved: request names an array operand ('{}') but \
-                 resolved op '{}' has scalar signature '{}' (domain mismatch)",
-                arr_word, req.function_name, req.signature
-            ));
+            return Some(GateRefusal {
+                category: GateCategory::Hard,
+                reason: format!(
+                    "no operation confidently resolved: request names an array operand ('{}') but \
+                     resolved op '{}' has scalar signature '{}' (domain mismatch)",
+                    arr_word, req.function_name, req.signature
+                ),
+            });
         }
     }
 
@@ -1079,11 +1287,14 @@ fn unsound_confident_solve(
     if let Some((type_word, needles)) = mentioned_value_type(input, registry) {
         let satisfied = needles.iter().any(|n| sig_lower.contains(n.as_str()));
         if !satisfied {
-            return Some(format!(
-                "no operation confidently resolved: request mentions a '{}' value but \
-                 resolved op '{}' has signature '{}' (type mismatch)",
-                type_word, req.function_name, req.signature
-            ));
+            return Some(GateRefusal {
+                category: GateCategory::Hard,
+                reason: format!(
+                    "no operation confidently resolved: request mentions a '{}' value but \
+                     resolved op '{}' has signature '{}' (type mismatch)",
+                    type_word, req.function_name, req.signature
+                ),
+            });
         }
     }
 
@@ -1098,28 +1309,37 @@ fn unsound_confident_solve(
             if op.fn_name == req.function_name {
                 names_resolved_op = true;
             } else {
-                return Some(format!(
-                    "request also names operation '{}' (resolves to '{}'), dropped in favor \
-                     of '{}' — compositional request not yet supported",
-                    op.surface, op.fn_name, req.function_name
-                ));
+                return Some(GateRefusal {
+                    category: GateCategory::CompositionUnsupported,
+                    reason: format!(
+                        "request also names operation '{}' (resolves to '{}'), dropped in favor \
+                         of '{}' — compositional request not yet supported",
+                        op.surface, op.fn_name, req.function_name
+                    ),
+                });
             }
         }
         if !names_resolved_op {
             let surfaces: Vec<&str> = ops.iter().map(|o| o.surface.as_str()).collect();
-            return Some(format!(
-                "no operation confidently resolved: request content words {:?} do not name the \
-                 resolved op '{}'",
-                surfaces, req.function_name
-            ));
+            return Some(GateRefusal {
+                category: GateCategory::Hard,
+                reason: format!(
+                    "no operation confidently resolved: request content words {:?} do not name the \
+                     resolved op '{}'",
+                    surfaces, req.function_name
+                ),
+            });
         }
     } else if !tokenize_lower(input).is_empty() {
         // Tokens present but NONE resolve to any operation (pure operands / gibberish):
         // there is no evidence the resolved op was named. Fail closed.
-        return Some(format!(
-            "no operation confidently resolved: no request token names the resolved op '{}'",
-            req.function_name
-        ));
+        return Some(GateRefusal {
+            category: GateCategory::Hard,
+            reason: format!(
+                "no operation confidently resolved: no request token names the resolved op '{}'",
+                req.function_name
+            ),
+        });
     }
 
     None
@@ -1258,6 +1478,28 @@ fn array_domain_word(input: &str, registry: &Registry, req_fn: &str) -> Option<S
 
     let resolver = EntityResolver::new(registry.clone());
     for tok in tokenize_lower(input) {
+        // The token must be a genuine DOMAIN word, not a structural / stop word.
+        // `resolve_operation_surface` fuzzily links almost ANY token to SOME op at
+        // ~0.51 (e.g. "function"→map, "array"→array_max BOTH score 0.51), so the
+        // weak op-link alone cannot tell a real array operand ("array") from meta
+        // noise ("a FUNCTION that…"). We disambiguate emergently via the token's
+        // CONTENT resolution (`resolve_surface`): a real domain operand resolves to
+        // a high-confidence Noun/Type entity (registry "array" → Noun, score 1.0),
+        // whereas a stop word resolves to a GrammarMarker (registry "function" →
+        // GrammarMarker "grammar_stop_words", 0.51) or to nothing content-ful.
+        // Skip the latter. This reads the registry's own entity types/scores — no
+        // hardcoded stop-word list here.
+        match resolver.resolve_surface(&tok) {
+            Some(content) => {
+                if matches!(
+                    content.entity.entity_type,
+                    EntityType::GrammarMarker | EntityType::ConstraintMarker
+                ) {
+                    continue;
+                }
+            }
+            None => continue,
+        }
         let Some(resolved) = resolver.resolve_operation_surface(&tok) else {
             continue;
         };
@@ -2336,5 +2578,138 @@ mod tests {
             checked,
             failures.join("\n")
         );
+    }
+
+    /// Build a `SynthesisRequirement` directly from a registry op by name (no NL),
+    /// so a soundness test can target a SPECIFIC op's spec.
+    fn req_for_op(bridge: &LinguigenesisBridge, fn_name: &str) -> SynthesisRequirement {
+        use linguigenesis_core::entity::EntityType;
+        let registry = bridge.registry_clone().expect("registry clone");
+        let entity = registry
+            .get_by_type(&EntityType::Function)
+            .into_iter()
+            .find(|e| {
+                e.get_property("default_fn_name").map(|f| f == fn_name).unwrap_or(false)
+                    || e.lemma == fn_name
+            })
+            .unwrap_or_else(|| panic!("registry op {fn_name:?} not found"));
+        SynthesisRequirement::from_operation_entity(&entity)
+            .unwrap_or_else(|| panic!("op {fn_name:?} has no synthesizable spec"))
+    }
+
+    /// HARDEN-2 FIX B ACCEPT (un-gameable, single-op overfit floor). A SCALAR
+    /// registry op carrying <2 DISTINCT example rows is verified examples-only by
+    /// `verify_problem_code_strict` (no runnable reference → holdouts degrade to
+    /// the seed rows), so ANY program reproducing that one pair "passes" — a
+    /// confident-WRONG overfit. The fail-closed gate must now REFUSE it.
+    ///
+    /// The test is differential and cannot be gamed:
+    ///   * PRIOR PATH PROOF: the op DOES synthesize a "successful" program through
+    ///     the un-gated `synthesize_from_requirement` (the exact confident-wrong
+    ///     emission this fix prevents);
+    ///   * NEW GATE: `fail_closed_reason` (HARD category) REFUSES it, and the
+    ///     reason is the EMERGENT example-floor signal (not a phrase list);
+    ///   * CONTRAST: a genuine scalar op with >=2 distinct rows (`negate`) is NOT
+    ///     refused, proving the floor discriminates on evidence, not over-refuses.
+    #[test]
+    fn failclosed_floor_refuses_thin_scalar_single_op() {
+        let bridge = LinguigenesisBridge::new();
+
+        // `subtract` ships exactly one example row and is scalar (i64,i64 -> i64).
+        let thin = req_for_op(&bridge, "subtract");
+        let distinct: std::collections::BTreeSet<_> =
+            thin.examples.iter().map(|e| format!("{e:?}")).collect();
+        assert!(
+            distinct.len() < 2,
+            "fixture invalid: 'subtract' must carry <2 distinct rows for this floor test, got {}",
+            distinct.len()
+        );
+
+        // PRIOR PATH: the un-gated solver WOULD emit a "successful" program — this
+        // is the confident-wrong emission the floor must stop.
+        let prior = bridge
+            .synthesize_from_requirement(&thin, Some(&thin.function_name))
+            .expect("subtract synthesis runs");
+        assert!(
+            prior.success,
+            "fixture invalid: the un-gated path must succeed (else there is nothing to gate)"
+        );
+
+        // NEW GATE: must REFUSE, via the emergent example-floor signal.
+        let reason = bridge
+            .fail_closed_reason("subtract two numbers", &thin)
+            .expect("thin scalar single-op must be refused by the floor");
+        assert!(
+            reason.contains("distinct example row"),
+            "refusal must come from the emergent example-floor signal, got: {reason}"
+        );
+
+        // CONTRAST: a genuine multi-example scalar op is NOT refused by the floor.
+        let genuine = req_for_op(&bridge, "negate");
+        assert!(
+            bridge.fail_closed_reason("negate a number", &genuine).is_none(),
+            "the floor must NOT over-refuse a genuine >=2-example scalar op (negate)"
+        );
+    }
+
+    /// HARDEN-2 FIX B ACCEPT (single-op FRESH holdout). When a registry op carries
+    /// >=3 distinct rows, `problem_from_requirement` reserves one as a HELD-OUT
+    /// generalization probe (NOT shown to the solver) so strict verification is
+    /// differential, not examples-only. Prove the reserved holdout is real and the
+    /// synthesized program passes it (so a memoriser would be caught).
+    #[test]
+    fn single_op_problem_reserves_fresh_holdout_and_strict_verifies() {
+        let bridge = LinguigenesisBridge::new();
+        let req = req_for_op(&bridge, "negate"); // 5 distinct rows -> reserve 1
+        let problem = bridge
+            .problem_from_requirement(&req, Some(&req.function_name))
+            .expect("negate problem");
+        assert!(
+            !problem.holdouts.is_empty(),
+            "a >=3-example single-op problem must reserve a FRESH (held-out) row"
+        );
+        // The reserved holdout must be a row the solver never saw as a seed.
+        for h in &problem.holdouts {
+            assert!(
+                !problem.examples.contains(h),
+                "reserved holdout {h:?} leaked into the seed examples (not differential)"
+            );
+        }
+        // Synthesize from the (reduced) seed and STRICT-verify against the fresh
+        // held-out row — a memoriser of the seeds would fail here.
+        let solved = crate::solver::solve_problem(&problem);
+        assert!(solved.success, "negate must synthesize from reduced seed: {:?}", solved.error);
+        crate::runtime::verify_problem_code_strict(&problem, &solved.code)
+            .unwrap_or_else(|e| panic!("negate failed FRESH-holdout strict verify: {e}"));
+    }
+
+    /// HARDEN-2 FIX A ACCEPT (portability): the registry resolves through a
+    /// COMPILE-TIME absolute base (`CARGO_MANIFEST_DIR`-relative), so it loads
+    /// regardless of CWD / $HOME and the explicit load-error surface reports
+    /// HEALTHY. We assert the COMPILE-TIME base is an absolute path that points
+    /// at the real data file (this is what makes load cwd/HOME-independent), and
+    /// that a freshly-built bridge reports no load error + can synthesize an
+    /// in-vocab op. (Full cross-CWD/HOME proof is the CLI transcript battery —
+    /// mutating process-global CWD/HOME inside a parallel test binary would race
+    /// other tests, so the un-gameable location proof lives in the CLI accept run.)
+    #[test]
+    fn registry_resolves_via_compile_time_absolute_base() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../linguigenesis/data/coding_registry.json");
+        assert!(
+            base.is_absolute(),
+            "compile-time base must be absolute (cwd/HOME-independent), got {base:?}"
+        );
+        assert!(
+            base.exists(),
+            "compile-time base must point at the real coding_registry.json: {base:?}"
+        );
+        let bridge = LinguigenesisBridge::new();
+        assert!(
+            bridge.registry_load_error().is_none(),
+            "registry must report healthy (operations available) when loaded"
+        );
+        let r = bridge.synthesize_from_description("add two numbers", Some("add"));
+        assert!(r.is_ok() && r.unwrap().success, "add must synthesize with the loaded registry");
     }
 }
