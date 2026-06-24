@@ -130,6 +130,37 @@ fn body_fits(body: &Expr, rows: &[(Vec<i64>, Vec<i64>)]) -> bool {
     true
 }
 
+/// Pre-screen a per-element body COMPOSED WITH an order transform (sort/reverse):
+/// `transform(map(input)) == output` must hold on every row. The map is applied
+/// element-wise (via the same checked `eval`), then the mapped row is reordered.
+/// This is the array-transform analogue of `body_fits` for the
+/// map-then-reorder composite (one ScalarMap chain followed by ONE array
+/// transform). Length-preserving by construction. The binding accept gate
+/// remains `verify_problem_code_strict`.
+fn body_then_order_fits(
+    body: &Expr,
+    rows: &[(Vec<i64>, Vec<i64>)],
+    reorder: fn(&mut Vec<i64>),
+) -> bool {
+    for (input, output) in rows {
+        if input.len() != output.len() {
+            return false;
+        }
+        let mut mapped: Vec<i64> = Vec::with_capacity(input.len());
+        for (i, &item) in input.iter().enumerate() {
+            match body.eval(&[item, i as i64]) {
+                Some(v) => mapped.push(v),
+                None => return false,
+            }
+        }
+        reorder(&mut mapped);
+        if &mapped != output {
+            return false;
+        }
+    }
+    true
+}
+
 /// Pre-screen a guard predicate against the filter data: keeping exactly the
 /// elements for which `lhs CMP rhs` is true must reproduce every output row.
 fn predicate_fits(cmp: CmpOp, lhs: &Expr, rhs: &Expr, rows: &[(Vec<i64>, Vec<i64>)]) -> bool {
@@ -220,6 +251,31 @@ fn map_program(fn_name: &str, push_body: &str) -> String {
     format!(
         "fn {fn_name}(arr: [i64]) -> [i64] {{\n    result: [i64] = [];\n    for item in arr {{\n{push_body}    }}\n    return result;\n}}\n"
     )
+}
+
+/// Which single array transform a map-then-reorder composite applies after the
+/// per-element map: sort ascending or reverse. (The only ArrayTransform ops in
+/// the NL pipeline — `sort`/`reverse`, both `Vec<i64> -> Vec<i64>`.)
+#[derive(Clone, Copy)]
+enum ReorderKind {
+    SortAsc,
+    Reverse,
+}
+
+/// Emit a `fn f(arr) -> [i64]` that maps every element with `elem_expr` (over the
+/// loop var `item`), then applies ONE array transform. The map result is built
+/// into `mapped`, then sorted in place (`mapped.sort()`) or reversed into a new
+/// array — reusing the exact DSL the dedicated sort/reverse candidates already
+/// emit, so no new runtime construct is introduced.
+fn map_then_reorder_program(fn_name: &str, elem_expr: &str, kind: ReorderKind) -> String {
+    match kind {
+        ReorderKind::SortAsc => format!(
+            "fn {fn_name}(arr: [i64]) -> [i64] {{\n    mapped: [i64] = [];\n    for item in arr {{\n        mapped.push({elem_expr});\n    }}\n    mapped.sort();\n    return mapped;\n}}\n"
+        ),
+        ReorderKind::Reverse => format!(
+            "fn {fn_name}(arr: [i64]) -> [i64] {{\n    mapped: [i64] = [];\n    for item in arr {{\n        mapped.push({elem_expr});\n    }}\n    result: [i64] = [];\n    i: i64 = mapped.len - 1;\n    while i >= 0 {{\n        result.push(mapped[i]);\n        i = i - 1;\n    }}\n    return result;\n}}\n"
+        ),
+    }
 }
 
 /// Solve an exact integer affine map `y = a*x + b` from observed element pairs.
@@ -507,6 +563,34 @@ fn candidates(problem: &Problem, rows: &[(Vec<i64>, Vec<i64>)]) -> Vec<(&'static
                 map_program(fn_name, &push_body),
             ));
         }
+
+        // (NL-COMPOSE-ARRTRANSFORM) MAP-then-REORDER composite: a per-element map
+        // (the SAME searched element grammar) followed by ONE array transform —
+        // sort ascending or reverse. This is the single array-transform stage of
+        // the NL pipeline ("the sorted negated values" = sort(map(negate)),
+        // "reverse the squared values" = reverse(map(square))). The map alone is
+        // already covered above; this only reaches the genuinely-2-stage case
+        // where the OUTPUT IS REORDERED, so the element-wise `body_fits` rejected
+        // it. Pre-screened by APPLYING the map then the reorder (`body_then_order_fits`),
+        // emitted simplest-map-first; the strict verifier remains the accept gate.
+        // Bounded by the same `element_bodies()` grammar × 2 reorders.
+        for body in element_bodies() {
+            let body_src = body.to_mog(&["item", "i"]);
+            // sort ascending
+            if body_then_order_fits(&body, rows, |v| v.sort()) {
+                out.push((
+                    "array_transform_map_then_sort",
+                    map_then_reorder_program(fn_name, &body_src, ReorderKind::SortAsc),
+                ));
+            }
+            // reverse
+            if body_then_order_fits(&body, rows, |v| v.reverse()) {
+                out.push((
+                    "array_transform_map_then_reverse",
+                    map_then_reorder_program(fn_name, &body_src, ReorderKind::Reverse),
+                ));
+            }
+        }
     }
 
     // Predicate filter (length may change). Thresholds derived from the data.
@@ -773,11 +857,13 @@ mod tests {
     fn synthesize_fixed_only(problem: &Problem) -> Option<SolveResult> {
         let rows = array_rows(problem)?;
         for (method, code) in candidates(problem, &rows) {
-            // Exclude ALL searched entries (quadratic AND the U5a element-map
-            // body, which is strictly more general and also solves quadratics):
-            // "fixed menu only" must mean no searched candidate at all.
+            // Exclude ALL searched entries (quadratic, the U5a element-map body,
+            // AND the map-then-reorder composites — all enumerate the searched
+            // element grammar): "fixed menu only" must mean no searched candidate.
             if method == "array_transform_map_searched_quadratic"
                 || method == "array_transform_map_searched_body"
+                || method == "array_transform_map_then_sort"
+                || method == "array_transform_map_then_reverse"
             {
                 continue;
             }
@@ -899,6 +985,8 @@ mod tests {
         for (method, code) in candidates(problem, &rows) {
             if method == "array_transform_map_searched_body"
                 || method == "array_transform_map_searched_quadratic"
+                || method == "array_transform_map_then_sort"
+                || method == "array_transform_map_then_reverse"
             {
                 continue;
             }
@@ -1045,6 +1133,61 @@ mod tests {
         assert!(
             synthesize_fixed_filter_only(&problem).is_none(),
             "fixed predicate set must NOT solve item % 3 == 1"
+        );
+    }
+
+    #[test]
+    fn solves_map_then_sort_via_composite() {
+        // sort(negate(x)): map each element with negate, then sort ascending. The
+        // output REORDERS the mapped array, so no element-wise map (`searched_body`)
+        // and no bare sort/reverse can express it. Reference is an independent
+        // map-then-sort push loop; differential holdouts (fresh [-64,64] inputs).
+        let rows: &[(&[i64], &[i64])] = &[
+            (&[3, 1, 2], &[-3, -2, -1]),
+            (&[5, 2, 8], &[-8, -5, -2]),
+            (&[4, 7, 3, 9], &[-9, -7, -4, -3]),
+            (&[1, 6, 2], &[-6, -2, -1]),
+        ];
+        let reference = "fn f(arr: [i64]) -> [i64] {\n    mapped: [i64] = [];\n    for item in arr {\n        mapped.push(0 - item);\n    }\n    mapped.sort();\n    return mapped;\n}\n";
+        let problem = pa_ref(rows, reference);
+        assert_differential(&problem);
+        assert_eq!(
+            synthesize_array_transform(&problem)
+                .expect("expected a solution")
+                .method,
+            "array_transform_map_then_sort"
+        );
+        // Un-gameable: the fixed map menu (no searched body, no composite) must NOT
+        // solve a map-then-reorder — proving the composite is genuinely required.
+        assert!(
+            synthesize_fixed_map_only(&problem).is_none(),
+            "fixed map menu must NOT solve sort(negate(x))"
+        );
+    }
+
+    #[test]
+    fn solves_map_then_reverse_via_composite() {
+        // reverse(square(x)): square each element, then reverse the order. The
+        // mapped array is reordered (reverse), so only the map-then-reverse
+        // composite can express it. Independent map-then-reverse reference oracle.
+        let rows: &[(&[i64], &[i64])] = &[
+            (&[2, 3, 4], &[16, 9, 4]),
+            (&[1, 5, 2], &[4, 25, 1]),
+            (&[3, 6, 1, 2], &[4, 1, 36, 9]),
+            (&[7, 1], &[1, 49]),
+        ];
+        let reference = "fn f(arr: [i64]) -> [i64] {\n    mapped: [i64] = [];\n    for item in arr {\n        mapped.push(item * item);\n    }\n    result: [i64] = [];\n    i: i64 = mapped.len - 1;\n    while i >= 0 {\n        result.push(mapped[i]);\n        i = i - 1;\n    }\n    return result;\n}\n";
+        let problem = pa_ref(rows, reference);
+        assert_differential(&problem);
+        assert_eq!(
+            synthesize_array_transform(&problem)
+                .expect("expected a solution")
+                .method,
+            "array_transform_map_then_reverse"
+        );
+        assert!(
+            synthesize_fixed_map_only(&problem).is_none(),
+            "fixed map menu must NOT solve reverse(square(x))"
         );
     }
 

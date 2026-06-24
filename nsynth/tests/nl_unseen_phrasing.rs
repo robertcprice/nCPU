@@ -36,6 +36,12 @@ const BUCKET_A_PHRASES: &[&str] = &[
     "largest of the incremented values", // reduce=array_max   ∘ map=increment
     "smallest of the negated numbers", // reduce=array_min     ∘ map=negate
     "sum of the decremented values",   // reduce=add(sum-fold) ∘ map=decrement
+    // (NL-COMPOSE-ARRTRANSFORM) BROADENED natural compositional phrasings. These
+    // exercise more surface forms of the reduce∘map shape. `tripled` is
+    // registry-absent morphology (∈ BUCKET_A_NOVEL_WORDS); `absolute` is a legit
+    // registered synonym of `abs` (a content word, not a novel-word claim).
+    "the total of the tripled values", // reduce=array_sum     ∘ map=triple
+    "the sum of the absolute values",  // reduce=add(sum-fold) ∘ map=abs
 ];
 
 /// ACCEPT-CRITERION core: >=4 compositional requests OUTSIDE any hand-table each
@@ -104,6 +110,10 @@ fn bucket_a_compositions_compute_the_intended_function() {
         ("largest of the incremented values", &[1, 5, 3], 6),
         // smallest of negated numbers: min(-(1), -(5), -(3)) = min(-1,-5,-3) = -5
         ("smallest of the negated numbers", &[1, 5, 3], -5),
+        // (broadened) total of tripled values: 3*1 + 3*2 + 3*3 = 18
+        ("the total of the tripled values", &[1, 2, 3], 18),
+        // (broadened) sum of absolute values: |-2| + |3| + |-4| = 9
+        ("the sum of the absolute values", &[-2, 3, -4], 9),
     ];
 
     for (phrase, input, expected) in cases {
@@ -419,6 +429,170 @@ fn chain_reduce_computes_order_correct_function() {
                 outcome.code
             ),
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ARRAY-TRANSFORM compositions (NL-COMPOSE-ARRTRANSFORM): a ScalarMap chain
+// followed by ONE array transform (sort / reverse: `Vec<i64> -> Vec<i64>`),
+// returning an ARRAY where ORDER MATTERS. This is the genuinely-2-stage
+// array→array shape the map-chain (which collapses to a single element fn) cannot
+// express — sort/reverse REORDER the mapped array. The map word stays
+// registry-ABSENT (reached only by morphology — `negated` ∈ BUCKET_A_NOVEL_WORDS),
+// the array transform is classified by EXECUTION / its verified registry output
+// spec (never its name), and acceptance is strict-verify on fresh holdouts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Each must synthesize a real >=2-stage pipeline (a ScalarMap + an array
+/// transform), strict-verify on FRESH holdouts, and carry a behaviour-classified
+/// array transform. `square`/`squared` is a registered synonym (a legit content
+/// word, not a novel-word cheat); `negated` is registry-absent morphology.
+const ARRTRANSFORM_PHRASES: &[&str] = &[
+    "the sorted negated values",    // sort(map(negate))   -> array
+    "reverse the squared values",   // reverse(map(square)) -> array
+    "the reversed negated numbers", // reverse(map(negate)) -> array
+    "the sorted incremented values", // sort(map(increment)) -> array
+];
+
+#[test]
+fn arrtransform_compositions_synthesize_and_strict_verify() {
+    let bridge = LinguigenesisBridge::new();
+    let mut failures: Vec<String> = Vec::new();
+    let mut accepted = 0usize;
+
+    for phrase in ARRTRANSFORM_PHRASES {
+        match bridge.try_compose_pipeline(phrase) {
+            Some(Ok(outcome)) => {
+                // A genuine array-transform stage (sort/reverse) over a map.
+                assert!(
+                    outcome.has_array_transform(),
+                    "{phrase:?}: accepted but has NO array-transform stage (xfm_fn={:?})",
+                    outcome.array_xfm_fn
+                );
+                assert!(
+                    outcome.array_xfm.is_some(),
+                    "{phrase:?}: array transform not behaviour-classified"
+                );
+                assert!(
+                    !outcome.map_fns.is_empty(),
+                    "{phrase:?}: expected a map stage composed with the array transform"
+                );
+                // Array output (no reduce → shape b).
+                assert!(
+                    outcome.reduce_fn.is_none(),
+                    "{phrase:?}: expected array output (no reduce), got {:?}",
+                    outcome.reduce_fn
+                );
+                assert!(
+                    outcome.is_two_stage(),
+                    "{phrase:?}: accepted but NOT multi-stage"
+                );
+                assert!(
+                    outcome.method.starts_with("nl-compose-chain:"),
+                    "{phrase:?}: method tag not a composed pipeline: {}",
+                    outcome.method
+                );
+                accepted += 1;
+            }
+            Some(Err(e)) => failures.push(format!("{phrase:?}: recognised but rejected: {e}")),
+            None => failures.push(format!("{phrase:?}: NOT recognised as a pipeline")),
+        }
+    }
+
+    for f in &failures {
+        println!("ARRTRANSFORM-FAILURE: {f}");
+    }
+    assert!(
+        failures.is_empty(),
+        "{}/{} array-transform compositions failed:\n{}",
+        failures.len(),
+        ARRTRANSFORM_PHRASES.len(),
+        failures.join("\n")
+    );
+    // ACCEPT-CRITERION: >=2 genuine array-transform compositions.
+    assert!(
+        accepted >= 2,
+        "ACCEPT-CRITERION needs >=2 array-transform compositions; only {accepted} accepted"
+    );
+}
+
+/// ORDER/SEMANTICS-correct computation: the accepted program must REORDER the
+/// MAPPED array exactly as sort/reverse demands. Computed by EXECUTING the
+/// accepted program on hand inputs. Includes the task's canonical discriminator
+/// `sorted-negated([3,-1,2]) == [-3,-2,1]`.
+#[test]
+fn arrtransform_compositions_compute_the_correct_array() {
+    use mog_synth::benchmark::{Problem, Value};
+    let bridge = LinguigenesisBridge::new();
+
+    // (phrase, input, expected array) — expected derived by hand from the EMERGENT
+    // decomposition. These distinguish sort/reverse AND map-then-transform ORDER:
+    //   sort(negate([3,-1,2]))   = sort([-3,1,-2])  = [-3,-2,1]
+    //   reverse(square([2,-3,4])) = reverse([4,9,16]) = [16,9,4]
+    //   reverse(negate([1,2,3]))  = reverse([-1,-2,-3]) = [-3,-2,-1]
+    //   sort(increment([3,1,2]))  = sort([4,2,3]) = [2,3,4]
+    let cases: &[(&str, &[i64], &[i64])] = &[
+        ("the sorted negated values", &[3, -1, 2], &[-3, -2, 1]),
+        ("reverse the squared values", &[2, -3, 4], &[16, 9, 4]),
+        ("the reversed negated numbers", &[1, 2, 3], &[-3, -2, -1]),
+        ("the sorted incremented values", &[3, 1, 2], &[2, 3, 4]),
+    ];
+
+    for (phrase, input, expected) in cases {
+        let outcome = bridge
+            .try_compose_pipeline(phrase)
+            .unwrap_or_else(|| panic!("{phrase:?}: not recognised as pipeline"))
+            .unwrap_or_else(|e| panic!("{phrase:?}: rejected: {e}"));
+        let problem = Problem {
+            name: "probe".to_string(),
+            category: "test",
+            description: "array-transform order probe",
+            signature: "fn probe(a: [i64]) -> [i64]",
+            examples: vec![],
+            ..Default::default()
+        };
+        let got = mog_synth::runtime::execute_function_for_problem(
+            &outcome.code,
+            &outcome.fn_name,
+            &[Value::int_array(input)],
+            &problem,
+        )
+        .unwrap_or_else(|e| panic!("{phrase:?}: execution failed: {e}\nCODE:\n{}", outcome.code));
+        match got {
+            mog_synth::runtime::Value::Array(v) => {
+                let ints: Vec<i64> = v
+                    .iter()
+                    .map(|e| match e {
+                        mog_synth::runtime::Value::Int(n) => *n,
+                        other => panic!("{phrase:?}: non-int array element {other:?}"),
+                    })
+                    .collect();
+                assert_eq!(
+                    ints,
+                    expected.to_vec(),
+                    "{phrase:?}: expected {expected:?} on {input:?}, got {ints:?}\nCODE:\n{}",
+                    outcome.code
+                );
+            }
+            other => panic!(
+                "{phrase:?}: expected an array output, got {other:?}\nCODE:\n{}",
+                outcome.code
+            ),
+        }
+    }
+}
+
+/// A plain single-op array transform ("reverse the array", "sort the array") must
+/// NOT be hijacked into the composed-pipeline path — it stays a single op (the
+/// pipeline detector returns None) so the ordinary front door handles it.
+#[test]
+fn single_op_array_transform_not_hijacked() {
+    let bridge = LinguigenesisBridge::new();
+    for phrase in ["reverse the array", "sort the array"] {
+        assert!(
+            bridge.try_compose_pipeline(phrase).is_none(),
+            "single-op {phrase:?} must not be treated as a composed pipeline"
+        );
     }
 }
 

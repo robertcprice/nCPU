@@ -470,12 +470,41 @@ impl LinguigenesisBridge {
             None => None,
         };
 
-        // 3. Emit the composed REFERENCE: the map fn bodies (chained) plus either a
-        //    fused fold driver (shape a, scalar out) or an array-builder loop
-        //    (shape b, array out). This is an INDEPENDENT implementation of the
-        //    pipeline, used only to LABEL fresh holdouts.
+        // 2b. Classify the array transform (if any) behaviourally — never by name.
+        //     First try EXECUTING the synthesized transform code on probe arrays;
+        //     if that is inconclusive (a single-example registry op can be
+        //     affine-overfit by the solver — e.g. reverse's lone `[1,2,3]->[3,2,1]`
+        //     fits `y=-x+4`), fall back to matching the op's REGISTRY example_cases
+        //     (its verified output spec) against the candidate transforms. Both
+        //     paths are output-grounded, not name-keyed.
+        let array_xfm = match &plan.array_transform {
+            Some(t) => {
+                let by_exec = self
+                    .synthesize_primitive(t)
+                    .ok()
+                    .and_then(|code| classify_array_transform_by_exec(&code, &t.fn_name));
+                let kind = match by_exec {
+                    Some(k) => k,
+                    None => self.classify_array_transform_by_spec(t).ok_or_else(|| {
+                        format!(
+                            "could not classify array transform '{}' as sort/reverse \
+                             (neither execution nor registry example_cases matched)",
+                            t.fn_name
+                        )
+                    })?,
+                };
+                Some(kind)
+            }
+            None => None,
+        };
+
+        // 3. Emit the composed REFERENCE: the map fn bodies (chained), then the
+        //    optional array transform on the built array, then either a fused fold
+        //    driver (shape a, scalar out) or the array itself (shape b, array out).
+        //    This is an INDEPENDENT implementation of the pipeline, used only to
+        //    LABEL fresh holdouts.
         let composed_name = pipeline_fn_name(plan);
-        let reference = emit_pipeline_reference(&composed_name, fold, &map_chain);
+        let reference = emit_pipeline_reference(&composed_name, fold, array_xfm, &map_chain);
         let reference: &'static str = Box::leak(reference.into_boxed_str());
         // Scalar output when a reduce is present; array output for a pure map chain.
         let ret = if fold.is_some() { "i64" } else { "[i64]" };
@@ -523,6 +552,8 @@ impl LinguigenesisBridge {
             description: description.to_string(),
             fn_name: composed_name.clone(),
             map_fns: plan.maps.iter().map(|m| m.fn_name.clone()).collect(),
+            array_xfm_fn: plan.array_transform.as_ref().map(|t| t.fn_name.clone()),
+            array_xfm,
             reduce_fn: plan.reduce.as_ref().map(|r| r.fn_name.clone()),
             fold,
             code: solved.code,
@@ -559,6 +590,52 @@ impl LinguigenesisBridge {
             ));
         }
         Ok(result.code)
+    }
+
+    /// Classify an ArrayTransform op by matching its REGISTRY `example_cases` (the
+    /// op's verified output spec) against each candidate transform. This is the
+    /// output-grounded fallback for when the synthesized primitive is an affine
+    /// overfit of a single example (so executing it is inconclusive). It reads the
+    /// op's labelled (input-array → output-array) pairs from the registry and asks
+    /// which of {sort, reverse} reproduces EVERY pair — never the op's name.
+    fn classify_array_transform_by_spec(&self, op: &ResolvedContentOp) -> Option<ArrayTransformKind> {
+        use linguigenesis_core::coding_requirements::LiteralValue;
+        use linguigenesis_core::entity::EntityType;
+        let registry = self.registry_clone().ok()?;
+        let entity = registry.get_by_type(&EntityType::Function).into_iter().find(|e| {
+            e.get_property("default_fn_name")
+                .map(|f| f == &op.fn_name)
+                .unwrap_or(false)
+                || e.lemma == op.fn_name
+        })?;
+        let req = SynthesisRequirement::from_operation_entity(&entity)?;
+        // Collect (input array, output array) pairs from the op's example_cases.
+        let mut pairs: Vec<(Vec<i64>, Vec<i64>)> = Vec::new();
+        for spec in &req.examples {
+            let (Some(LiteralValue::Array(inp)), LiteralValue::Array(out)) =
+                (spec.inputs.first(), &spec.expected)
+            else {
+                return None; // not an array→array op spec
+            };
+            pairs.push((inp.clone(), out.clone()));
+        }
+        if pairs.is_empty() {
+            return None;
+        }
+        for cand in [ArrayTransformKind::Sort, ArrayTransformKind::Reverse] {
+            let all = pairs.iter().all(|(inp, out)| {
+                let mut expected = inp.clone();
+                match cand {
+                    ArrayTransformKind::Sort => expected.sort(),
+                    ArrayTransformKind::Reverse => expected.reverse(),
+                }
+                &expected == out
+            });
+            if all {
+                return Some(cand);
+            }
+        }
+        None
     }
 
     /// Synthesize from an already-derived requirement (e.g. after clarification).
@@ -859,6 +936,9 @@ enum OpRole {
     ScalarMap,
     /// Arity-1 array aggregate `Vec<i64> -> i64` (array_sum, array_max, array_min).
     ArrayReduce,
+    /// Arity-1 array transform `Vec<i64> -> Vec<i64>` (sort, reverse). One such
+    /// stage may sit between the map chain and the optional reduce.
+    ArrayTransform,
     /// Arity-2 scalar binary `(i64, i64) -> i64` that seeds a fold (add → sum-fold,
     /// multiply → product-fold).
     BinaryFoldSeed,
@@ -868,9 +948,12 @@ enum OpRole {
 
 fn op_role(op: &ResolvedContentOp) -> OpRole {
     let out_scalar = op.output_type == "i64";
+    let in_vec = op.input_types.contains("vec");
+    let out_vec = op.output_type.contains("vec");
     match op.arity {
         Some(1) if op.input_types == "i64" && out_scalar => OpRole::ScalarMap,
-        Some(1) if op.input_types.contains("vec") && out_scalar => OpRole::ArrayReduce,
+        Some(1) if in_vec && out_scalar => OpRole::ArrayReduce,
+        Some(1) if in_vec && out_vec => OpRole::ArrayTransform,
         Some(2) if op.input_types == "i64,i64" && out_scalar => OpRole::BinaryFoldSeed,
         _ => OpRole::Other,
     }
@@ -888,67 +971,95 @@ struct CompositionPlan {
     /// Ordered element-wise map chain (`fn map(a:i64)->i64`), request order =
     /// outer→inner. Empty ⇒ reduce-only.
     maps: Vec<ResolvedContentOp>,
-    /// The aggregate over the (mapped) array. `None` ⇒ array-output map chain.
+    /// Optional single array transform (`Vec<i64> -> Vec<i64>`: sort / reverse)
+    /// applied AFTER the map chain and BEFORE any reduce. `None` ⇒ no reorder.
+    array_transform: Option<ResolvedContentOp>,
+    /// The aggregate over the (mapped, possibly reordered) array. `None` ⇒
+    /// array-output pipeline.
     reduce: Option<ResolvedContentOp>,
 }
 
 /// Decide whether the resolved-op set forms a supported array pipeline:
-///   * at most one reduce (ArrayReduce or BinaryFoldSeed) + a CHAIN of >=0 maps,
+///   * at most one reduce (ArrayReduce or BinaryFoldSeed),
+///   * at most one array transform (ArrayTransform: sort / reverse),
+///   * a CHAIN of >=0 maps,
 ///   * and the request is NOT a plain single-op request (which the normal path
 ///     already handles — that case returns `None`).
 ///
-/// Returns the plan for two shapes (all from op ROLES, no phrase table):
-///   * (a) `reduce(mapchain(arr)) -> scalar` — >=1 map + exactly one reduce, e.g.
-///         "sum of the negated squares", or reduce-only on an implicit array
-///         where the reduce is named but is NOT the requirement op;
-///   * (b) `mapchain(arr) -> [i64]` — >=1 map and NO reduce (array output), e.g.
-///         "the negated squares of the array". A single map that IS the resolved
-///         requirement op (plain "square a number") is the ordinary single-op
-///         request and returns `None`.
+/// Stage order is fixed by the op ROLES (no phrase table): the map CHAIN applies
+/// element-wise first, then the optional ArrayTransform reorders the built array,
+/// then the optional reduce folds it to a scalar. Returns the plan for:
+///   * (a) `reduce(arrxfm?(mapchain(arr))) -> scalar` — at least one of {map,
+///         array-transform} plus exactly one reduce (a reduce-only request naming
+///         the req op stays single-op → `None`);
+///   * (b) `arrxfm?(mapchain(arr)) -> [i64]` — array output, no reduce, with at
+///         least a real 2-stage shape: a >=2 map chain, OR a map + array transform,
+///         OR an array transform that is NOT the resolved single op. A lone map
+///         that IS the req op (plain "square a number") returns `None`.
 fn classify_pipeline(req: &SynthesisRequirement, ops: &[ResolvedContentOp]) -> Option<CompositionPlan> {
     let mut maps: Vec<ResolvedContentOp> = Vec::new();
     let mut reduces: Vec<&ResolvedContentOp> = Vec::new();
+    let mut transforms: Vec<&ResolvedContentOp> = Vec::new();
     let mut other = false;
     for op in ops {
         match op_role(op) {
             // Preserve REQUEST ORDER (outer→inner) for the fused transform.
             OpRole::ScalarMap => maps.push(op.clone()),
             OpRole::ArrayReduce | OpRole::BinaryFoldSeed => reduces.push(op),
+            OpRole::ArrayTransform => transforms.push(op),
             OpRole::Other => other = true,
         }
     }
-    // At most one reduce. Two reduces / an unclassifiable op is a documented
-    // follow-on (no 3rd op kind, no multi-reduce).
-    if other || reduces.len() > 1 {
+    // At most one reduce AND at most one array transform. More than one of either,
+    // or an unclassifiable op, is a documented follow-on (no 3rd op kind here).
+    if other || reduces.len() > 1 || transforms.len() > 1 {
         return None;
     }
     let reduce = reduces.first().map(|r| (*r).clone());
+    let array_transform = transforms.first().map(|t| (*t).clone());
 
     match &reduce {
         // ── Shape (a): reduce present. ────────────────────────────────────────
         Some(r) => {
-            // A reduce with NO maps that IS the resolved requirement op is the
-            // ordinary single-op request (e.g. "compute the total of an array" →
-            // array_sum), handled unchanged by the normal path.
-            if maps.is_empty() && r.fn_name == req.function_name {
+            // A reduce with NO other stage (no maps, no array transform) that IS
+            // the resolved requirement op is the ordinary single-op request (e.g.
+            // "compute the total of an array" → array_sum), handled unchanged.
+            if maps.is_empty() && array_transform.is_none() && r.fn_name == req.function_name {
                 return None;
             }
-            Some(CompositionPlan { maps, reduce })
+            Some(CompositionPlan { maps, array_transform, reduce })
         }
-        // ── Shape (b): no reduce → array-output map chain. ────────────────────
+        // ── Shape (b): no reduce → array-output pipeline. ─────────────────────
         None => {
-            // Need at least one map to have an array transform at all.
-            if maps.is_empty() {
-                return None;
+            match &array_transform {
+                // No reduce AND no array transform → a pure map chain (shape b').
+                None => {
+                    // Need at least one map to have an array transform at all.
+                    if maps.is_empty() {
+                        return None;
+                    }
+                    // A SINGLE map that is itself the resolved requirement op is a
+                    // plain scalar op (e.g. "square a number" → square), NOT an
+                    // array pipeline. A chain of >=2 maps (or a single map that is
+                    // NOT the req op) is a genuine array→array transform.
+                    if maps.len() == 1 && maps[0].fn_name == req.function_name {
+                        return None;
+                    }
+                    Some(CompositionPlan { maps, array_transform: None, reduce: None })
+                }
+                // An array transform is present (sort/reverse). It is a genuine
+                // pipeline when there is at least one map to compose with it, OR
+                // the transform itself is NOT the resolved single op (e.g. it was
+                // reached but the req op is something else). A lone array transform
+                // that IS the req op ("reverse the array") is the ordinary single-
+                // op array transform → `None`.
+                Some(t) => {
+                    if maps.is_empty() && t.fn_name == req.function_name {
+                        return None;
+                    }
+                    Some(CompositionPlan { maps, array_transform, reduce: None })
+                }
             }
-            // A SINGLE map that is itself the resolved requirement op is a plain
-            // scalar op (e.g. "square a number" → square), NOT an array pipeline.
-            // A chain of >=2 maps (or a single map that is NOT the req op) is a
-            // genuine array→array transform.
-            if maps.len() == 1 && maps[0].fn_name == req.function_name {
-                return None;
-            }
-            Some(CompositionPlan { maps, reduce: None })
         }
     }
 }
@@ -1052,6 +1163,74 @@ pub enum FoldKind {
     Min,
 }
 
+/// The array→array reordering an ArrayTransform primitive computes, determined by
+/// EXECUTING the synthesized transform code on probe arrays — never inferred from
+/// the op's name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrayTransformKind {
+    /// Sort ascending.
+    Sort,
+    /// Reverse element order.
+    Reverse,
+}
+
+/// Classify an ARRAY-transform primitive (`Vec<i64> -> Vec<i64>`) by running its
+/// SYNTHESIZED code on probe arrays and matching the output against each candidate
+/// transform's known result. Behaviour-driven: the op's NAME is only a label, so
+/// "is it sort vs reverse" is decided by execution, not assumption. Returns `None`
+/// when neither candidate matches (e.g. the synthesized code is an affine misfit
+/// of a single-example op) so the caller can fall back to the registry spec.
+fn classify_array_transform_by_exec(transform_code: &str, transform_fn: &str) -> Option<ArrayTransformKind> {
+    use crate::benchmark::{Problem, Value};
+    let problem = Problem {
+        name: "arrxfm_probe".to_string(),
+        category: "probe",
+        description: "array transform classification",
+        signature: "fn f(a: [i64]) -> [i64]",
+        examples: vec![],
+        ..Default::default()
+    };
+    // Probes where sort and reverse disagree (already-sorted/reversed inputs would
+    // not discriminate), and where identity differs from both.
+    let probes: &[&[i64]] = &[&[3, 1, 2], &[5, 2, 8, 1], &[4, 7, 3, 9, 1]];
+    let run = |arr: &[i64]| -> Option<Vec<i64>> {
+        match crate::runtime::execute_function_for_problem(
+            transform_code,
+            transform_fn,
+            &[Value::int_array(arr)],
+            &problem,
+        ) {
+            Ok(crate::runtime::Value::Array(vs)) => vs
+                .iter()
+                .map(|v| match v {
+                    crate::runtime::Value::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .collect(),
+            _ => None,
+        }
+    };
+    let candidates = [ArrayTransformKind::Sort, ArrayTransformKind::Reverse];
+    for cand in candidates {
+        let mut all_match = true;
+        for p in probes {
+            let mut expected: Vec<i64> = p.to_vec();
+            match cand {
+                ArrayTransformKind::Sort => expected.sort(),
+                ArrayTransformKind::Reverse => expected.reverse(),
+            }
+            if run(p).as_deref() != Some(expected.as_slice()) {
+                all_match = false;
+                break;
+            }
+        }
+        if all_match {
+            return Some(cand);
+        }
+    }
+    None
+}
+
 /// Accepted, strict-verified transform-chain pipeline result.
 #[derive(Clone, Debug)]
 pub struct PipelineOutcome {
@@ -1062,6 +1241,11 @@ pub struct PipelineOutcome {
     /// Element map op function names in REQUEST ORDER (outer→inner). Empty for a
     /// reduce-only pipeline.
     pub map_fns: Vec<String>,
+    /// Array-transform op function name, if the pipeline has a sort/reverse stage
+    /// between the map chain and any reduce. `None` when no array transform.
+    pub array_xfm_fn: Option<String>,
+    /// The array transform kind (behaviour-classified), if present.
+    pub array_xfm: Option<ArrayTransformKind>,
     /// Aggregate (reduce) op function name, if the pipeline has a reduce stage
     /// (shape a). `None` for an array-output map chain (shape b).
     pub reduce_fn: Option<String>,
@@ -1080,10 +1264,18 @@ impl PipelineOutcome {
     /// the accept-test to reject a single-op match masquerading as a composition.
     pub fn is_two_stage(&self) -> bool {
         // Any reduce-bearing pipeline (shape a — including reduce-on-implicit-
-        // array) or a chain of >=2 maps (shape b array output) is genuinely
-        // multi-stage. A lone single map with no reduce never reaches acceptance
-        // (classify_pipeline returns None for the plain single op).
-        self.reduce_fn.is_some() || self.map_fns.len() >= 2
+        // array), a chain of >=2 maps, or a map+array-transform / standalone
+        // non-req array transform is genuinely multi-stage. A lone single map
+        // with no reduce never reaches acceptance (classify_pipeline returns None
+        // for the plain single op).
+        self.reduce_fn.is_some() || self.map_fns.len() >= 2 || self.array_xfm_fn.is_some()
+    }
+
+    /// True iff this pipeline contains a genuine array-transform stage (sort /
+    /// reverse) composed over a map chain — the >=2-stage array→array shape the
+    /// NL-COMPOSE-ARRTRANSFORM accept-criterion requires.
+    pub fn has_array_transform(&self) -> bool {
+        self.array_xfm_fn.is_some()
     }
 
     /// Length of the element-transform chain (number of composed ScalarMaps).
@@ -1112,6 +1304,10 @@ fn pipeline_fn_name(plan: &CompositionPlan) -> String {
     } else {
         name.push_str("_maps");
     }
+    if let Some(t) = &plan.array_transform {
+        name.push('_');
+        name.push_str(&t.fn_name);
+    }
     for m in &plan.maps {
         name.push('_');
         name.push_str(&m.fn_name);
@@ -1126,9 +1322,13 @@ fn describe_plan(plan: &CompositionPlan) -> String {
     } else {
         maps.join(" ∘ ")
     };
+    let xfm = match &plan.array_transform {
+        Some(t) => format!(" arrayxfm={}", t.fn_name),
+        None => String::new(),
+    };
     match &plan.reduce {
-        Some(r) => format!("reduce={} ∘ mapchain=[{}]", r.fn_name, chain),
-        None => format!("mapchain=[{}] -> array (no reduce)", chain),
+        Some(r) => format!("reduce={} ∘{} mapchain=[{}]", r.fn_name, xfm, chain),
+        None => format!("mapchain=[{}]{} -> array (no reduce)", chain, xfm),
     }
 }
 
@@ -1222,13 +1422,17 @@ fn classify_binary_fold(reduce_code: &str, reduce_fn: &str) -> Option<FoldKind> 
 /// Emit an INDEPENDENT reference implementation of the pipeline in the runtime
 /// DSL. The map chain's fn bodies (verified single-op synthesis) go first so the
 /// driver can call them; the element expression nests the chain in REQUEST ORDER
-/// (`maps[0](maps[1](...maps[n-1](arr[i])))`, outer→inner). When `fold` is set
-/// (shape a) the driver folds that element expression to a scalar; otherwise
-/// (shape b) it builds the mapped array. Used only to LABEL fresh holdouts; the
-/// accepted program is what the solver finds.
+/// (`maps[0](maps[1](...maps[n-1](arr[i])))`, outer→inner). Then:
+///   * if an `array_xfm` is present, the driver MATERIALIZES the mapped array,
+///     applies the sort/reverse to it, and finally folds it (shape a) or returns
+///     it (shape b) — the array transform sits between the map chain and reduce;
+///   * otherwise the driver folds the element expression inline (shape a) or
+///     builds the mapped array (shape b), exactly as before.
+/// Used only to LABEL fresh holdouts; the accepted program is what the solver finds.
 fn emit_pipeline_reference(
     composed_name: &str,
     fold: Option<FoldKind>,
+    array_xfm: Option<ArrayTransformKind>,
     map_chain: &[(String, String)],
 ) -> String {
     let mut out = String::new();
@@ -1255,6 +1459,61 @@ fn emit_pipeline_reference(
         }
         expr
     };
+
+    // ── ARRAY-TRANSFORM present: materialize mapped array, reorder, then fold or
+    //    return. The reorder uses the SAME DSL the dedicated sort/reverse
+    //    array_transform candidates emit (`mapped.sort()` / index-loop reverse). ──
+    if let Some(kind) = array_xfm {
+        let elem_item = elem("item");
+        // Build the mapped array, then apply the array transform into `xfm`.
+        let build = format!(
+            "    mapped: [i64] = [];\n    for item in arr {{\n        mapped.push({elem_item});\n    }}\n"
+        );
+        let reorder = match kind {
+            ArrayTransformKind::Sort => {
+                // sort in place; the reordered array is `mapped`.
+                "    mapped.sort();\n".to_string()
+            }
+            ArrayTransformKind::Reverse => String::new(), // handled per-shape below
+        };
+        match fold {
+            // Shape (a): reduce over the reordered array.
+            Some(fk) => {
+                // Reverse does not change sum/max/min/product, but we still emit a
+                // faithful reorder so the reference is an honest independent impl.
+                let reordered_array = match kind {
+                    ArrayTransformKind::Sort => {
+                        format!("{build}{reorder}")
+                    }
+                    ArrayTransformKind::Reverse => format!(
+                        "{build}    xfm: [i64] = [];\n    i: i64 = mapped.len - 1;\n    while i >= 0 {{\n        xfm.push(mapped[i]);\n        i = i - 1;\n    }}\n"
+                    ),
+                };
+                let arr_name = match kind {
+                    ArrayTransformKind::Sort => "mapped",
+                    ArrayTransformKind::Reverse => "xfm",
+                };
+                let body = emit_fold_over_named_array(fk, arr_name);
+                out.push_str(&format!(
+                    "fn {composed_name}(arr: [i64]) -> i64 {{\n{reordered_array}{body}}}\n"
+                ));
+            }
+            // Shape (b): return the reordered mapped array.
+            None => match kind {
+                ArrayTransformKind::Sort => {
+                    out.push_str(&format!(
+                        "fn {composed_name}(arr: [i64]) -> [i64] {{\n{build}{reorder}    return mapped;\n}}\n"
+                    ));
+                }
+                ArrayTransformKind::Reverse => {
+                    out.push_str(&format!(
+                        "fn {composed_name}(arr: [i64]) -> [i64] {{\n{build}    result: [i64] = [];\n    i: i64 = mapped.len - 1;\n    while i >= 0 {{\n        result.push(mapped[i]);\n        i = i - 1;\n    }}\n    return result;\n}}\n"
+                    ));
+                }
+            },
+        }
+        return out;
+    }
 
     match fold {
         // ── Shape (a): reduce present → fold the mapped element to a scalar. ──
@@ -1312,6 +1571,33 @@ fn emit_pipeline_reference(
         }
     }
     out
+}
+
+/// Emit a fold body (Sum/Product/Max/Min) over an already-built array variable
+/// `arr_name`, returning the scalar. Used by the array-transform reference path
+/// where the array has already been mapped + reordered into `arr_name`. The
+/// emitted block ENDS with `return acc;` and is wrapped by the caller's `fn`.
+fn emit_fold_over_named_array(fold: FoldKind, arr_name: &str) -> String {
+    match fold {
+        FoldKind::Sum | FoldKind::Product => {
+            let (init, op) = match fold {
+                FoldKind::Sum => (0, "+"),
+                FoldKind::Product => (1, "*"),
+                _ => unreachable!(),
+            };
+            format!(
+                "    acc: i64 = {init};\n    j: i64 = 0;\n    while j < {arr}.len {{\n        acc = acc {op} {arr}[j];\n        j = j + 1;\n    }}\n    return acc;\n",
+                arr = arr_name
+            )
+        }
+        FoldKind::Max | FoldKind::Min => {
+            let cmp = if fold == FoldKind::Max { ">" } else { "<" };
+            format!(
+                "    acc: i64 = {arr}[0];\n    j: i64 = 1;\n    while j < {arr}.len {{\n        v: i64 = {arr}[j];\n        if v {cmp} acc {{ acc = v; }}\n        j = j + 1;\n    }}\n    return acc;\n",
+                arr = arr_name
+            )
+        }
+    }
 }
 
 fn synthesis_requirement_to_examples(
