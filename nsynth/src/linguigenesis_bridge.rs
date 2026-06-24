@@ -91,8 +91,39 @@ impl LinguigenesisBridge {
         None
     }
 
+    /// TEST-ONLY constructor: identical to [`new`] but WITHOUT the WordNet
+    /// coding-edges file merged. Used by the recall-lift benchmark to compute the
+    /// registry-only baseline so the lift is attributable solely to the edges.
+    /// (Not env-driven, to stay race-free under parallel `cargo test`.)
+    pub fn new_without_wordnet_edges() -> Self {
+        let linguigenesis_path = Self::find_registry_path();
+        let (registry, modified) = if let Some(path) = &linguigenesis_path {
+            Self::load_registry_with_fallback_opt(path, false)
+        } else {
+            Self::load_registry_with_fallback_opt(Path::new(""), false)
+        };
+        let comprehension = Arc::new(RwLock::new(Comprehension::new(registry.clone())));
+        let qa = Arc::new(KnowledgeQA::new(registry.clone()));
+        let analogy = Arc::new(AnalogyReasoner::new(registry.clone()));
+        Self {
+            comprehension,
+            qa,
+            analogy,
+            registry: Arc::new(RwLock::new(registry)),
+            registry_path: linguigenesis_path,
+            last_modified: modified,
+        }
+    }
+
     /// Load registry with fallback to code entities if file not found
     fn load_registry_with_fallback(path: &Path) -> (Registry, Option<SystemTime>) {
+        Self::load_registry_with_fallback_opt(path, true)
+    }
+
+    fn load_registry_with_fallback_opt(
+        path: &Path,
+        include_wordnet: bool,
+    ) -> (Registry, Option<SystemTime>) {
         if !path.as_os_str().is_empty() && path.exists() {
             match Registry::from_json_auto(path) {
                 Ok((mut registry, modified)) => {
@@ -101,7 +132,7 @@ impl LinguigenesisBridge {
                         registry.stats().total_entities,
                         path.display()
                     );
-                    Self::merge_coding_registry(&mut registry);
+                    Self::merge_coding_registry_opt(&mut registry, include_wordnet);
                     return (registry, modified);
                 }
                 Err(e) => {
@@ -114,7 +145,7 @@ impl LinguigenesisBridge {
         }
 
         let mut registry = Registry::new();
-        Self::merge_coding_registry(&mut registry);
+        Self::merge_coding_registry_opt(&mut registry, include_wordnet);
         if registry.stats().total_entities == 0 {
             eprintln!(
                 "[Linguigenesis] No coding registry loaded — set ../../linguigenesis/data/coding_registry.json"
@@ -161,11 +192,114 @@ impl LinguigenesisBridge {
         None
     }
 
+    /// Find the WordNet coding-edges file (additive synonym/similar closure for
+    /// existing ops). Mirrors [`find_coding_registry_path`] path probing.
+    fn find_wordnet_edges_path() -> Option<PathBuf> {
+        let relative = PathBuf::from("../../linguigenesis/data/wordnet_coding_edges.json");
+        if relative.exists() {
+            return Some(relative);
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path =
+                PathBuf::from(home).join("projects/linguigenesis/data/wordnet_coding_edges.json");
+            if home_path.exists() {
+                return Some(home_path);
+            }
+        }
+        let current = PathBuf::from("linguigenesis/data/wordnet_coding_edges.json");
+        if current.exists() {
+            return Some(current);
+        }
+        None
+    }
+
     fn merge_coding_registry(registry: &mut Registry) {
+        Self::merge_coding_registry_opt(registry, true);
+    }
+
+    /// Collision-safe merge of the WordNet edge file into an ALREADY-populated
+    /// registry. Each NEW closure word is re-added with a FRESH high id (base +
+    /// 1000+, mirroring `merge_computing_knowledge`) so it never overwrites a
+    /// like-id coding entity; its `synonym`/`similar` relations are then re-linked
+    /// BY LEMMA against the real (example-bearing) seed entity in `registry`.
+    /// Entities whose lemma already exists (the co-declared seed stubs, or any word
+    /// the hand-table already owns) are left untouched — purely additive.
+    fn merge_wordnet_edges_collision_safe(registry: &mut Registry, edges: &Registry) {
+        use linguigenesis_core::entity::{Entity, RelationType};
+        let mut next_id = registry.stats().total_entities as u64 + 1000;
+        // (source_lemma, rel_type, target_lemma) links to establish after adding.
+        let mut pending: Vec<(String, RelationType, String)> = Vec::new();
+
+        for src in edges.all_entities() {
+            // Skip anything already present (seed stubs, hand-table words): additive.
+            if registry.get_by_lemma(&src.lemma).is_some() {
+                continue;
+            }
+            // Re-create the entity with a fresh, non-colliding id. Carry over the
+            // type, definitions, and properties (incl. wn_synset provenance) but
+            // DROP the edge-file-local relation ids — they are re-linked by lemma
+            // below so they bind to the real seed, never a stale numeric target.
+            let mut entity = Entity::new(next_id, src.lemma.clone(), src.entity_type.clone());
+            next_id += 1;
+            for def in &src.definitions {
+                entity.add_definition(def.clone());
+            }
+            for (k, v) in &src.properties {
+                entity.add_property(k.clone(), v.clone());
+            }
+            if let Err(e) = registry.add_entity(entity) {
+                eprintln!("[Linguigenesis] wordnet edge add warning ({}): {}", src.lemma, e);
+                continue;
+            }
+            // Queue this word's relations to its seed target(s), resolved by lemma
+            // within the EDGE registry (so the underscore-free seed lemma is known).
+            for (rel_type, target_ids) in &src.relations {
+                for tid in target_ids {
+                    if let Some(target) = edges.get_entity(*tid) {
+                        pending.push((src.lemma.clone(), rel_type.clone(), target.lemma.clone()));
+                    }
+                }
+            }
+        }
+
+        for (source, rel_type, target) in pending {
+            // Links only succeed when BOTH lemmas exist in `registry`; the target
+            // is the real seed op (present from coding_registry), so the closure
+            // word now resolves through a genuine synonym/similar edge to the seed.
+            let _ = registry.link_lemma_relation(&source, rel_type, &target);
+        }
+    }
+
+    fn merge_coding_registry_opt(registry: &mut Registry, include_wordnet: bool) {
         if let Some(path) = Self::find_coding_registry_path() {
             if let Ok(coding) = Registry::from_json(&path) {
                 if let Err(e) = registry.merge_registry(&coding) {
                     eprintln!("[Linguigenesis] coding_registry merge warning: {}", e);
+                }
+            }
+        }
+        // 3rd merge: WordNet synonym/similar closure edges for EXISTING ops. Must
+        // run AFTER coding_registry so each seed op already exists in the merged
+        // registry — the closure word's synonym->seed edge then links to the real,
+        // example-bearing seed entity.
+        //
+        // COLLISION-SAFE merge (NOT `merge_registry`): `Registry::from_json`
+        // numbers the edge file's entities 1..N, and `merge_registry` PRESERVES
+        // those low ids when re-adding, which OVERWRITES the like-id coding_registry
+        // entities in the id-keyed map (corrupting e.g. `add`). We instead allocate
+        // FRESH high ids — exactly as `merge_computing_knowledge` does (base +
+        // 1000) — so the closure words never collide. Seed stubs in the edge file
+        // already exist (skipped); their only purpose is to be the `synonym`
+        // targets, which we re-link by lemma against the real seed.
+        if include_wordnet {
+            if let Some(path) = Self::find_wordnet_edges_path() {
+                match Registry::from_json(&path) {
+                    Ok(edges) => {
+                        Self::merge_wordnet_edges_collision_safe(registry, &edges);
+                    }
+                    Err(e) => {
+                        eprintln!("[Linguigenesis] wordnet_coding_edges load warning: {}", e);
+                    }
                 }
             }
         }
@@ -630,6 +764,110 @@ impl LinguigenesisBridge {
             .problem_from_requirement(req, fn_name)
             .map_err(|e| e.to_string())?;
         Ok(crate::solver::solve_problem(&problem))
+    }
+
+    /// TEST-SUPPORT: resolve a single surface word to its highest-confidence
+    /// programming op via the SAME emergent resolver the gate uses
+    /// ([`resolved_content_ops`]). Returns `(default_fn_name, score)` for the
+    /// top op, or `None` if the word resolves to no Function/Operator op.
+    /// Used by the WordNet-recall benchmark's resolution/lift/refuse probes.
+    pub fn resolve_op_probe(&self, word: &str) -> Option<(String, f32)> {
+        use linguigenesis_core::entity::EntityType;
+        let registry = self.registry_clone().ok()?;
+        let resolver = EntityResolver::new(registry);
+        let resolved = resolver.resolve_operation_surface(word)?;
+        if !matches!(
+            resolved.entity.entity_type,
+            EntityType::Function | EntityType::Operator
+        ) {
+            return None;
+        }
+        let fn_name = resolved
+            .entity
+            .get_property("default_fn_name")
+            .cloned()
+            .unwrap_or_else(|| resolved.entity.lemma.clone());
+        Some((fn_name, resolved.evidence.score))
+    }
+
+    /// TEST-SUPPORT: every DISTINCT op (`default_fn_name`) a word resolves to at
+    /// or above `floor`, across ALL ranked candidates — used to assert
+    /// cluster-separation (a paraphrase must not resolve to two different ops).
+    pub fn resolve_ops_above_floor(&self, word: &str, floor: f32) -> Vec<String> {
+        use linguigenesis_core::entity::EntityType;
+        let Ok(registry) = self.registry_clone() else {
+            return Vec::new();
+        };
+        let resolver = EntityResolver::new(registry.clone());
+        let mut ops: Vec<String> = Vec::new();
+        for cand in resolver.rank_candidates(word) {
+            if cand.evidence.score < floor {
+                continue;
+            }
+            // Map the candidate to its canonical op (follow synonym to the
+            // example-bearing seed), exactly as the resolver's op path does.
+            let Some(op) = resolver.resolve_operation_surface(&cand.entity.lemma) else {
+                continue;
+            };
+            if !matches!(
+                op.entity.entity_type,
+                EntityType::Function | EntityType::Operator
+            ) {
+                continue;
+            }
+            let fn_name = op
+                .entity
+                .get_property("default_fn_name")
+                .cloned()
+                .unwrap_or_else(|| op.entity.lemma.clone());
+            if !ops.contains(&fn_name) {
+                ops.push(fn_name);
+            }
+        }
+        ops
+    }
+
+    /// TEST-SUPPORT: prove a paraphrase RESOLVES to `expected_op` via the WordNet
+    /// edge AND that op synthesizes a program passing strict differential
+    /// verification on FRESH holdouts the verifier samples and labels by RUNNING
+    /// an INDEPENDENT reference (`problem_from_reference` path — never
+    /// example_cases). Errors carry the failure reason.
+    pub fn resolve_and_strict_verify(
+        &self,
+        paraphrase: &str,
+        expected_op: &str,
+        ref_name: &'static str,
+        ref_signature: &'static str,
+        reference_code: &'static str,
+    ) -> Result<(), String> {
+        // 1. RESOLUTION: the paraphrase must reach `expected_op` at the floor.
+        match self.resolve_op_probe(paraphrase) {
+            Some((fn_name, score)) if fn_name == expected_op && score >= OP_RESOLVE_FLOOR => {}
+            Some((fn_name, score)) => {
+                return Err(format!(
+                    "{paraphrase:?} resolved to {fn_name:?}@{score:.3}, expected {expected_op:?}@>={OP_RESOLVE_FLOOR}"
+                ));
+            }
+            None => return Err(format!("{paraphrase:?} did not resolve to any op")),
+        }
+        // 2. SYNTHESIS + STRICT FRESH-HOLDOUT VERIFY via the reference path.
+        let mut problem = crate::benchmark::problem_from_reference(
+            ref_name,
+            ref_signature,
+            reference_code,
+        )
+        .map_err(|e| format!("reference unrunnable: {e}"))?;
+        problem.category = "nl-wordnet-recall";
+        let solved = crate::solver::solve_problem(&problem);
+        if !solved.success {
+            return Err(format!(
+                "resolved to {expected_op} but solver could not synthesize (method={}, err={:?})",
+                solved.method, solved.error
+            ));
+        }
+        crate::runtime::verify_problem_code_strict(&problem, &solved.code).map_err(|e| {
+            format!("OVERFIT — strict holdout verification failed: {e}\nCODE:\n{}", solved.code)
+        })
     }
 
     /// Get belief state from NL (for debugging)
