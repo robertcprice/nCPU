@@ -11,7 +11,9 @@ use linguigenesis_core::{
         apply_clarification, build_clarifications, format_clarification_prompt,
         needs_clarification, ClarificationField, ClarificationQuestion,
     },
-    coding_requirements::{LiteralValue, SynthesisRequirement},
+    coding_requirements::{
+        CompositionPlan, LiteralValue, OpRef, OpRole, SynthesisRequirement,
+    },
     comprehension::Comprehension,
     entity_resolution::EntityResolver,
     computing_knowledge_import::merge_computing_knowledge,
@@ -398,42 +400,22 @@ impl LinguigenesisBridge {
     ///     or did not strict-verify (fail honestly, do NOT silently fall back),
     ///   * `None` — the request is not a two-op pipeline (caller uses single-op).
     ///
-    /// No phrase→plan table: the plan is `classify_pipeline` over
-    /// `resolved_content_ops`, i.e. purely what each word EMERGENTLY resolves to.
+    /// No phrase→plan table: linguigenesis-core's `comprehend` EMITS the plan in
+    /// `req.pipeline` (see `coding_requirements::classify_pipeline`). The bridge no
+    /// longer derives it — it only EXECUTES the comprehended plan.
     pub fn try_compose_pipeline(&self, description: &str) -> Option<Result<PipelineOutcome, String>> {
-        // Inline-example requests are user-specified; never treat as a pipeline.
-        if !linguigenesis_core::inline_examples::parse_inline_examples(description).is_empty() {
-            return None;
-        }
         let registry = match self.registry_clone() {
             Ok(r) => r,
             Err(e) => return Some(Err(e.to_string())),
         };
-        let req = match self.requirement_for_pipeline(description, &registry) {
-            Some(r) => r,
-            None => return None,
-        };
-        let ops = resolved_content_ops(description, &registry);
-        let plan = classify_pipeline(&req, &ops)?;
-        Some(self.build_and_verify_pipeline(description, &plan))
-    }
-
-    /// Build a requirement we can hand to `classify_pipeline` even when the
-    /// fail-closed gate would downgrade the request. We reuse the comprehension
-    /// layer directly (bypassing the gate) so `req.function_name` reflects the
-    /// op the registry actually assigned — that is the very thing the pipeline
-    /// detector compares the second op against.
-    fn requirement_for_pipeline(
-        &self,
-        description: &str,
-        registry: &Registry,
-    ) -> Option<SynthesisRequirement> {
-        let mut coding = CodingComprehension::new(registry.clone());
+        // Comprehend the request; linguigenesis-core decides — purely from registry
+        // signatures — whether it is a composable pipeline and, if so, populates
+        // `req.pipeline`. Single-op (and inline-example) requests come back with
+        // `pipeline = None`, so the caller falls through to the single-op door.
+        let mut coding = CodingComprehension::new(registry);
         let req = coding.comprehend(description);
-        if req.function_name.is_empty() {
-            return None;
-        }
-        Some(req)
+        let plan = req.pipeline.clone()?;
+        Some(self.build_and_verify_pipeline(description, &plan))
     }
 
     fn build_and_verify_pipeline(
@@ -457,7 +439,7 @@ impl LinguigenesisBridge {
         let fold = match &plan.reduce {
             Some(r) => {
                 let reduce_code = self.synthesize_primitive(r)?;
-                let fk = match op_role(r) {
+                let fk = match r.role {
                     OpRole::ArrayReduce => classify_array_fold(&reduce_code, &r.fn_name),
                     OpRole::BinaryFoldSeed => classify_binary_fold(&reduce_code, &r.fn_name),
                     _ => None,
@@ -565,7 +547,7 @@ impl LinguigenesisBridge {
     /// existing solver, returning its verified code. The primitive is described
     /// by its registry entity's `example_cases`, so this is the same proven path
     /// `every_registry_operation_is_synthesizable` exercises.
-    fn synthesize_primitive(&self, op: &ResolvedContentOp) -> Result<String, String> {
+    fn synthesize_primitive(&self, op: &OpRef) -> Result<String, String> {
         use linguigenesis_core::entity::EntityType;
         let registry = self.registry_clone().map_err(|e| e.to_string())?;
         let entity = registry
@@ -598,7 +580,7 @@ impl LinguigenesisBridge {
     /// overfit of a single example (so executing it is inconclusive). It reads the
     /// op's labelled (input-array → output-array) pairs from the registry and asks
     /// which of {sort, reverse} reproduces EVERY pair — never the op's name.
-    fn classify_array_transform_by_spec(&self, op: &ResolvedContentOp) -> Option<ArrayTransformKind> {
+    fn classify_array_transform_by_spec(&self, op: &OpRef) -> Option<ArrayTransformKind> {
         use linguigenesis_core::coding_requirements::LiteralValue;
         use linguigenesis_core::entity::EntityType;
         let registry = self.registry_clone().ok()?;
@@ -759,13 +741,13 @@ fn unsound_confident_solve(
     // `entity_type ∈ {Function, Operator}` and `evidence.score >= OP_RESOLVE_FLOOR`.)
     let ops = resolved_content_ops(input, registry);
 
-    // If the request EMERGENTLY names a second operation that forms a
-    // transform+aggregate (or reduce-only / map-only degenerate) array pipeline,
-    // it is *comprehensible* — not unsound. Composition is built downstream
-    // (`try_compose_pipeline`); here we simply decline to fail-closed so the
-    // pipeline path can run. Single-op requests (one op, naming the resolved op)
-    // fall through unchanged.
-    if classify_pipeline(req, &ops).is_some() {
+    // If linguigenesis-core COMPREHENDED the request as a transform+aggregate (or
+    // reduce-only / map-only degenerate) array pipeline, it populated
+    // `req.pipeline` — the request is *comprehensible*, not unsound. Composition is
+    // built downstream (`try_compose_pipeline`); here we simply decline to
+    // fail-closed so the pipeline path can run. Single-op requests (`pipeline =
+    // None`) fall through unchanged.
+    if req.pipeline.is_some() {
         return None;
     }
 
@@ -926,142 +908,6 @@ fn resolved_content_ops(input: &str, registry: &Registry) -> Vec<ResolvedContent
         });
     }
     ops
-}
-
-/// Structural role of an emergently-resolved op, inferred from its arity +
-/// declared `input_types`/`output_type` — NOT its name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OpRole {
-    /// Arity-1 scalar transform `i64 -> i64` (square, abs, negate, increment, ...).
-    ScalarMap,
-    /// Arity-1 array aggregate `Vec<i64> -> i64` (array_sum, array_max, array_min).
-    ArrayReduce,
-    /// Arity-1 array transform `Vec<i64> -> Vec<i64>` (sort, reverse). One such
-    /// stage may sit between the map chain and the optional reduce.
-    ArrayTransform,
-    /// Arity-2 scalar binary `(i64, i64) -> i64` that seeds a fold (add → sum-fold,
-    /// multiply → product-fold).
-    BinaryFoldSeed,
-    /// Anything else (not part of the supported transform+aggregate shape).
-    Other,
-}
-
-fn op_role(op: &ResolvedContentOp) -> OpRole {
-    let out_scalar = op.output_type == "i64";
-    let in_vec = op.input_types.contains("vec");
-    let out_vec = op.output_type.contains("vec");
-    match op.arity {
-        Some(1) if op.input_types == "i64" && out_scalar => OpRole::ScalarMap,
-        Some(1) if in_vec && out_scalar => OpRole::ArrayReduce,
-        Some(1) if in_vec && out_vec => OpRole::ArrayTransform,
-        Some(2) if op.input_types == "i64,i64" && out_scalar => OpRole::BinaryFoldSeed,
-        _ => OpRole::Other,
-    }
-}
-
-/// A buildable array pipeline derived purely from the emergently-resolved ops.
-///
-/// `maps` is the ordered element-transform CHAIN in REQUEST ORDER (the earlier a
-/// map word appears, the OUTER it is applied: "negated squares" → maps=[negate,
-/// square] applied as `negate(square(x))`). `reduce` is the optional aggregate:
-///   * `Some(_)` ⇒ shape (a) `reduce(mapchain(arr)) -> scalar`,
-///   * `None`    ⇒ shape (b) `mapchain(arr) -> [i64]` (no aggregate).
-#[derive(Clone, Debug)]
-struct CompositionPlan {
-    /// Ordered element-wise map chain (`fn map(a:i64)->i64`), request order =
-    /// outer→inner. Empty ⇒ reduce-only.
-    maps: Vec<ResolvedContentOp>,
-    /// Optional single array transform (`Vec<i64> -> Vec<i64>`: sort / reverse)
-    /// applied AFTER the map chain and BEFORE any reduce. `None` ⇒ no reorder.
-    array_transform: Option<ResolvedContentOp>,
-    /// The aggregate over the (mapped, possibly reordered) array. `None` ⇒
-    /// array-output pipeline.
-    reduce: Option<ResolvedContentOp>,
-}
-
-/// Decide whether the resolved-op set forms a supported array pipeline:
-///   * at most one reduce (ArrayReduce or BinaryFoldSeed),
-///   * at most one array transform (ArrayTransform: sort / reverse),
-///   * a CHAIN of >=0 maps,
-///   * and the request is NOT a plain single-op request (which the normal path
-///     already handles — that case returns `None`).
-///
-/// Stage order is fixed by the op ROLES (no phrase table): the map CHAIN applies
-/// element-wise first, then the optional ArrayTransform reorders the built array,
-/// then the optional reduce folds it to a scalar. Returns the plan for:
-///   * (a) `reduce(arrxfm?(mapchain(arr))) -> scalar` — at least one of {map,
-///         array-transform} plus exactly one reduce (a reduce-only request naming
-///         the req op stays single-op → `None`);
-///   * (b) `arrxfm?(mapchain(arr)) -> [i64]` — array output, no reduce, with at
-///         least a real 2-stage shape: a >=2 map chain, OR a map + array transform,
-///         OR an array transform that is NOT the resolved single op. A lone map
-///         that IS the req op (plain "square a number") returns `None`.
-fn classify_pipeline(req: &SynthesisRequirement, ops: &[ResolvedContentOp]) -> Option<CompositionPlan> {
-    let mut maps: Vec<ResolvedContentOp> = Vec::new();
-    let mut reduces: Vec<&ResolvedContentOp> = Vec::new();
-    let mut transforms: Vec<&ResolvedContentOp> = Vec::new();
-    let mut other = false;
-    for op in ops {
-        match op_role(op) {
-            // Preserve REQUEST ORDER (outer→inner) for the fused transform.
-            OpRole::ScalarMap => maps.push(op.clone()),
-            OpRole::ArrayReduce | OpRole::BinaryFoldSeed => reduces.push(op),
-            OpRole::ArrayTransform => transforms.push(op),
-            OpRole::Other => other = true,
-        }
-    }
-    // At most one reduce AND at most one array transform. More than one of either,
-    // or an unclassifiable op, is a documented follow-on (no 3rd op kind here).
-    if other || reduces.len() > 1 || transforms.len() > 1 {
-        return None;
-    }
-    let reduce = reduces.first().map(|r| (*r).clone());
-    let array_transform = transforms.first().map(|t| (*t).clone());
-
-    match &reduce {
-        // ── Shape (a): reduce present. ────────────────────────────────────────
-        Some(r) => {
-            // A reduce with NO other stage (no maps, no array transform) that IS
-            // the resolved requirement op is the ordinary single-op request (e.g.
-            // "compute the total of an array" → array_sum), handled unchanged.
-            if maps.is_empty() && array_transform.is_none() && r.fn_name == req.function_name {
-                return None;
-            }
-            Some(CompositionPlan { maps, array_transform, reduce })
-        }
-        // ── Shape (b): no reduce → array-output pipeline. ─────────────────────
-        None => {
-            match &array_transform {
-                // No reduce AND no array transform → a pure map chain (shape b').
-                None => {
-                    // Need at least one map to have an array transform at all.
-                    if maps.is_empty() {
-                        return None;
-                    }
-                    // A SINGLE map that is itself the resolved requirement op is a
-                    // plain scalar op (e.g. "square a number" → square), NOT an
-                    // array pipeline. A chain of >=2 maps (or a single map that is
-                    // NOT the req op) is a genuine array→array transform.
-                    if maps.len() == 1 && maps[0].fn_name == req.function_name {
-                        return None;
-                    }
-                    Some(CompositionPlan { maps, array_transform: None, reduce: None })
-                }
-                // An array transform is present (sort/reverse). It is a genuine
-                // pipeline when there is at least one map to compose with it, OR
-                // the transform itself is NOT the resolved single op (e.g. it was
-                // reached but the req op is something else). A lone array transform
-                // that IS the req op ("reverse the array") is the ordinary single-
-                // op array transform → `None`.
-                Some(t) => {
-                    if maps.is_empty() && t.fn_name == req.function_name {
-                        return None;
-                    }
-                    Some(CompositionPlan { maps, array_transform, reduce: None })
-                }
-            }
-        }
-    }
 }
 
 /// EMERGENT value-type mention: find the first request token that resolves
@@ -1689,6 +1535,71 @@ fn param_names(idx: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// NL-COMPREHEND-IN-LGCORE ANTI-CHEAT: linguigenesis-core — NOT this bridge —
+    /// now COMPREHENDS the composition. Calling `CodingComprehension::comprehend`
+    /// directly (the lg-core entry point) on a compositional request must return a
+    /// `SynthesisRequirement` whose `pipeline` field is `Some(reduce=sum, maps=
+    /// [negate])`. The bridge only EXECUTES this emitted plan; it derives nothing.
+    /// (This mirrors the lg-core-side unit test `comprehend_emits_pipeline_for_sum_
+    /// of_negated`, but runs under the nsynth build which links lg-core as a path
+    /// dependency, so the relocated comprehension is proven end-to-end here too.)
+    #[test]
+    fn lgcore_comprehend_emits_composition_plan() {
+        let registry = LinguigenesisBridge::new()
+            .registry_clone()
+            .expect("registry");
+        let mut coding = CodingComprehension::new(registry);
+        let req = coding.comprehend("sum of the negated values");
+        let plan = req
+            .pipeline
+            .as_ref()
+            .unwrap_or_else(|| panic!("lg-core must emit pipeline; unresolved={:?}", req.unresolved));
+        assert_eq!(plan.maps.len(), 1, "maps={:?}", plan.maps);
+        assert_eq!(plan.maps[0].role, OpRole::ScalarMap);
+        assert_eq!(plan.maps[0].fn_name, "negate");
+        let reduce = plan.reduce.as_ref().expect("reduce stage");
+        assert!(
+            matches!(reduce.role, OpRole::ArrayReduce | OpRole::BinaryFoldSeed),
+            "reduce role={:?}",
+            reduce.role
+        );
+        assert!(
+            reduce.fn_name.contains("sum") || reduce.fn_name == "add",
+            "reduce fn_name={}",
+            reduce.fn_name
+        );
+        // Single-op requests must comprehend with NO pipeline (unchanged path).
+        for single in ["square a number", "compute the total of an array"] {
+            let r = coding.comprehend(single);
+            assert!(
+                r.pipeline.is_none(),
+                "{single:?} must have no pipeline, got {:?}",
+                r.pipeline
+            );
+        }
+    }
+
+    /// NL-COMPREHEND-IN-LGCORE STRUCTURAL PROOF: the comprehended plan is what
+    /// drives acceptance — a composed program built from the emitted plan must
+    /// strict-verify on FRESH holdouts. (Distinct from the integration suite: this
+    /// asserts the bridge consumed `req.pipeline`, not a bridge-local derivation.)
+    #[test]
+    fn lgcore_plan_drives_strict_verified_composition() {
+        let bridge = LinguigenesisBridge::new();
+        let outcome = bridge
+            .try_compose_pipeline("sum of the negated values")
+            .expect("recognised as pipeline (plan came from lg-core comprehend)")
+            .expect("built and strict-verified");
+        assert!(outcome.is_two_stage(), "must be a genuine multi-stage pipeline");
+        assert_eq!(outcome.map_fns, vec!["negate".to_string()]);
+        assert!(outcome.reduce_fn.is_some(), "reduce stage present");
+        assert!(
+            outcome.method.starts_with("nl-compose-chain:"),
+            "method tag={}",
+            outcome.method
+        );
+    }
 
     /// P0-NL ACCEPT (fail-closed): requests that the registry SILENTLY
     /// MIS-RESOLVES (returned a confident-wrong, strict-"verified" WRONG program
