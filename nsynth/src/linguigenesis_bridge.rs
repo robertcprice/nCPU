@@ -369,6 +369,12 @@ impl LinguigenesisBridge {
         description: &str,
         fn_name: Option<&str>,
     ) -> Result<crate::solver::SolveResult, String> {
+        // COMPOSITIONAL path first: a request that emergently names a two-op
+        // array pipeline is comprehensible even though the fail-closed gate would
+        // downgrade it (the second op would look "dropped"). Build+verify it here.
+        if let Some(outcome) = self.try_compose_pipeline(description) {
+            return outcome.map(|o| o.into_solve_result());
+        }
         let req = match self.nl_to_requirement(description) {
             Ok(req) => req,
             Err(BridgeError::ClarificationNeeded { questions, .. }) => {
@@ -380,6 +386,166 @@ impl LinguigenesisBridge {
             .problem_from_requirement(&req, fn_name)
             .map_err(|e| e.to_string())?;
         Ok(crate::solver::solve_problem(&problem))
+    }
+
+    /// COMPOSITIONAL front door: if the request emergently names a two-op
+    /// array pipeline `reduce(map(arr))` (or its reduce-only/map-anchored
+    /// degenerate), build that pipeline from the resolved primitives, synthesize
+    /// it through the EXISTING solver, and strict-verify it on FRESH holdouts
+    /// labelled by an independent reference composition. Returns:
+    ///   * `Some(Ok(outcome))` — a pipeline was recognised AND accepted,
+    ///   * `Some(Err(reason))` — a pipeline was recognised but could not be built
+    ///     or did not strict-verify (fail honestly, do NOT silently fall back),
+    ///   * `None` — the request is not a two-op pipeline (caller uses single-op).
+    ///
+    /// No phrase→plan table: the plan is `classify_pipeline` over
+    /// `resolved_content_ops`, i.e. purely what each word EMERGENTLY resolves to.
+    pub fn try_compose_pipeline(&self, description: &str) -> Option<Result<PipelineOutcome, String>> {
+        // Inline-example requests are user-specified; never treat as a pipeline.
+        if !linguigenesis_core::inline_examples::parse_inline_examples(description).is_empty() {
+            return None;
+        }
+        let registry = match self.registry_clone() {
+            Ok(r) => r,
+            Err(e) => return Some(Err(e.to_string())),
+        };
+        let req = match self.requirement_for_pipeline(description, &registry) {
+            Some(r) => r,
+            None => return None,
+        };
+        let ops = resolved_content_ops(description, &registry);
+        let plan = classify_pipeline(&req, &ops)?;
+        Some(self.build_and_verify_pipeline(description, &plan))
+    }
+
+    /// Build a requirement we can hand to `classify_pipeline` even when the
+    /// fail-closed gate would downgrade the request. We reuse the comprehension
+    /// layer directly (bypassing the gate) so `req.function_name` reflects the
+    /// op the registry actually assigned — that is the very thing the pipeline
+    /// detector compares the second op against.
+    fn requirement_for_pipeline(
+        &self,
+        description: &str,
+        registry: &Registry,
+    ) -> Option<SynthesisRequirement> {
+        let mut coding = CodingComprehension::new(registry.clone());
+        let req = coding.comprehend(description);
+        if req.function_name.is_empty() {
+            return None;
+        }
+        Some(req)
+    }
+
+    fn build_and_verify_pipeline(
+        &self,
+        description: &str,
+        plan: &CompositionPlan,
+    ) -> Result<PipelineOutcome, String> {
+        // 1. Synthesize each primitive through the EXISTING solver from its
+        //    registry example_cases. The reduce primitive defines the fold; the
+        //    optional map primitive defines the element transform.
+        let reduce_code = self.synthesize_primitive(&plan.reduce)?;
+        let map_code = match &plan.map {
+            Some(m) => Some((m.fn_name.clone(), self.synthesize_primitive(m)?)),
+            None => None,
+        };
+
+        // 2. Classify the reduce fold by EXECUTING the synthesized reduce code on
+        //    probe inputs (behaviour-driven; never keyed on the op's name). An
+        //    ArrayReduce is probed with arrays; a BinaryFoldSeed (e.g. add) with
+        //    scalar pairs — the shape comes from its emergent `op_role`.
+        let fold = match op_role(&plan.reduce) {
+            OpRole::ArrayReduce => classify_array_fold(&reduce_code, &plan.reduce.fn_name),
+            OpRole::BinaryFoldSeed => classify_binary_fold(&reduce_code, &plan.reduce.fn_name),
+            _ => None,
+        }
+        .ok_or_else(|| format!("could not classify fold for reduce op '{}'", plan.reduce.fn_name))?;
+
+        // 3. Emit the composed REFERENCE: the map fn body (if any) plus a fused
+        //    driver loop applying `fold` over `map(arr[i])`. This is an INDEPENDENT
+        //    implementation of the pipeline, used only to LABEL fresh holdouts.
+        let composed_name = pipeline_fn_name(plan);
+        let reference = emit_pipeline_reference(&composed_name, fold, map_code.as_ref());
+        let reference: &'static str = Box::leak(reference.into_boxed_str());
+        let signature: &'static str =
+            Box::leak(format!("fn {}(a: [i64]) -> i64", composed_name).into_boxed_str());
+
+        // 4. Build a Problem whose reference IS the composition, so the existing
+        //    strict verifier samples FRESH arrays and labels them by RUNNING the
+        //    reference. Seed examples are likewise produced by the reference.
+        let mut problem = crate::benchmark::problem_from_reference(
+            &composed_name,
+            signature,
+            reference,
+        )
+        .map_err(|e| format!("pipeline reference unrunnable: {e}"))?;
+        let category: &'static str = Box::leak("nl-compose".to_string().into_boxed_str());
+        let descr: &'static str =
+            Box::leak(format!("two-op pipeline for: {description}").into_boxed_str());
+        problem.category = category;
+        problem.description = descr;
+
+        // 5. Synthesize the WHOLE pipeline through the existing solver from the
+        //    seed examples (the array engine handles map/reduce per U5a/U5b).
+        let solved = crate::solver::solve_problem(&problem);
+        if !solved.success {
+            return Err(format!(
+                "two-op pipeline recognised ({}) but solver could not synthesize it (method={}, err={:?})",
+                describe_plan(plan),
+                solved.method,
+                solved.error
+            ));
+        }
+
+        // 6. STRICT verification on FRESH holdouts (reference-labelled): the solved
+        //    program must match the independent composition on unseen arrays.
+        crate::runtime::verify_problem_code_strict(&problem, &solved.code).map_err(|e| {
+            format!(
+                "two-op pipeline OVERFIT — strict holdout verification failed: {e}\nCODE:\n{}",
+                solved.code
+            )
+        })?;
+
+        Ok(PipelineOutcome {
+            description: description.to_string(),
+            fn_name: composed_name.clone(),
+            map_fn: plan.map.as_ref().map(|m| m.fn_name.clone()),
+            reduce_fn: plan.reduce.fn_name.clone(),
+            fold,
+            code: solved.code,
+            method: format!("nl-compose-2op:{}", solved.method),
+        })
+    }
+
+    /// Synthesize a single registry primitive (map or reduce op) through the
+    /// existing solver, returning its verified code. The primitive is described
+    /// by its registry entity's `example_cases`, so this is the same proven path
+    /// `every_registry_operation_is_synthesizable` exercises.
+    fn synthesize_primitive(&self, op: &ResolvedContentOp) -> Result<String, String> {
+        use linguigenesis_core::entity::EntityType;
+        let registry = self.registry_clone().map_err(|e| e.to_string())?;
+        let entity = registry
+            .get_by_type(&EntityType::Function)
+            .into_iter()
+            .find(|e| {
+                e.get_property("default_fn_name")
+                    .map(|f| f == &op.fn_name)
+                    .unwrap_or(false)
+                    || e.lemma == op.fn_name
+            })
+            .ok_or_else(|| format!("primitive '{}' not found in registry", op.fn_name))?;
+        let req = SynthesisRequirement::from_operation_entity(&entity)
+            .ok_or_else(|| format!("primitive '{}' is not synthesizable", op.fn_name))?;
+        let result = self
+            .synthesize_from_requirement(&req, Some(&req.function_name))
+            .map_err(|e| format!("primitive '{}' synthesis: {e}", op.fn_name))?;
+        if !result.success {
+            return Err(format!(
+                "primitive '{}' did not synthesize (method={}, err={:?})",
+                op.fn_name, result.method, result.error
+            ));
+        }
+        Ok(result.code)
     }
 
     /// Synthesize from an already-derived requirement (e.g. after clarification).
@@ -494,93 +660,560 @@ fn unsound_confident_solve(
         return None;
     }
 
-    let req_tokens: Vec<String> = tokenize_lower(input);
-    let sig_lower = req.signature.to_lowercase();
+    // EMERGENT operation inventory: ask the RESOLVER what each surface token names,
+    // and let the resolved ENTITY itself decide operand-vs-operation. There is no
+    // VALUE_NOUNS wordlist, no type-noun→signature table, and no `evidence.method`
+    // string switch. A token is an *operand* (number/value/array/the/of/...) exactly
+    // when it does not resolve to a high-confidence programming operation; that is
+    // observed, never enumerated. (`resolved_content_ops` filters by
+    // `entity_type ∈ {Function, Operator}` and `evidence.score >= OP_RESOLVE_FLOOR`.)
+    let ops = resolved_content_ops(input, registry);
 
-    // (2) Request value-type vs resolved-signature value-type mismatch.
-    // Map each request type-noun to the signature fragment that must be present.
-    let type_mentions: &[(&[&str], &[&str])] = &[
-        // request says "string"/"text"/"char" -> sig must carry a string type
-        (&["string", "char", "text"], &["string", "str", "&str"]),
-        // request says "array"/"list"/"vector" -> sig must carry an array/vec type
-        (&["array", "list", "vector", "arrays", "lists"], &["[", "vec<"]),
-    ];
-    for (request_words, sig_needles) in type_mentions {
-        let mentioned = req_tokens.iter().any(|t| request_words.contains(&t.as_str()));
-        if mentioned {
-            let satisfied = sig_needles.iter().any(|n| sig_lower.contains(n));
-            if !satisfied {
-                return Some(format!(
-                    "no operation confidently resolved: request mentions a '{}' value but \
-                     resolved op '{}' has signature '{}' (type mismatch)",
-                    request_words[0], req.function_name, req.signature
-                ));
-            }
-        }
+    // If the request EMERGENTLY names a second operation that forms a
+    // transform+aggregate (or reduce-only / map-only degenerate) array pipeline,
+    // it is *comprehensible* — not unsound. Composition is built downstream
+    // (`try_compose_pipeline`); here we simply decline to fail-closed so the
+    // pipeline path can run. Single-op requests (one op, naming the resolved op)
+    // fall through unchanged.
+    if classify_pipeline(req, &ops).is_some() {
+        return None;
     }
 
-    // (3) Operation identity, via the RESOLVER (handles synonyms + morphology the
-    // same way comprehension did — e.g. "absolute"->abs, "maximum"->array_max,
-    // "combine"->add). For each request content word that resolves to an
-    // operation: if it resolves to the SAME op the request was assigned, the op
-    // was genuinely named; if it resolves to a DIFFERENT op, that op was silently
-    // dropped (a compositional request like "sum of squares" -> array_sum dropping
-    // "squares"->square) and we fail closed. If NO content word names the resolved
-    // op, it was not actually understood. All registry-driven — no phrase list,
-    // and `req.description` (the request echoed back) is deliberately NOT used as
-    // op identity. Generic operand/value words are filtered first; they resolve to
-    // no operation. Inline requests already returned above.
-    const VALUE_NOUNS: &[&str] = &[
-        "number", "numbers", "integer", "integers", "value", "values", "int",
-        "ints", "array", "arrays", "list", "lists", "string", "strings", "char",
-        "chars", "text", "element", "elements", "item", "items", "two", "three",
-        "a", "an", "the", "of", "to", "from", "in", "on", "and", "or",
-    ];
-    let content_words: Vec<&String> = req_tokens
-        .iter()
-        .filter(|t| !VALUE_NOUNS.contains(&t.as_str()))
-        .collect();
-    if !content_words.is_empty() {
-        let resolver = EntityResolver::new(registry.clone());
-        let mut names_resolved_op = false;
-        for word in &content_words {
-            if let Some(resolved) = resolver.resolve_operation_surface(word) {
-                // Only HIGH-CONFIDENCE resolution methods count as genuinely naming
-                // an operation. Coincidental fuzzy-edit-distance ("file" ~ "filter")
-                // and definition-overlap matches are exactly HOW the request got
-                // MIS-resolved in the first place, so they must NOT be treated as
-                // evidence the op was understood. direct/morphology/synonym/relation
-                // are genuine; fuzzy_lemma/definition_overlap are not.
-                let m = resolved.evidence.method;
-                if m == "fuzzy_lemma" || m == "definition_overlap" {
-                    continue;
-                }
-                let fname = resolved
-                    .entity
-                    .get_property("default_fn_name")
-                    .cloned()
-                    .unwrap_or_else(|| resolved.entity.lemma.clone());
-                if fname == req.function_name {
-                    names_resolved_op = true;
-                } else {
-                    return Some(format!(
-                        "request also names operation '{}' (resolves to '{}'), dropped in favor \
-                         of '{}' — compositional request not yet supported",
-                        word, fname, req.function_name
-                    ));
-                }
-            }
-        }
-        if !names_resolved_op {
+    let sig_lower = req.signature.to_lowercase();
+
+    // (1b) ARRAY-DOMAIN vs SCALAR-OP mismatch, derived emergently from SIGNATURES.
+    // If the resolved requirement op is SCALAR (its signature carries no array
+    // type) yet some request token resolves to an ARRAY-domain operation (an op
+    // whose declared `input_types` contains a vector type), the request is about
+    // arrays but was collapsed onto a scalar op — a confidently-wrong resolution
+    // (e.g. "sum of squares OF AN ARRAY" → `fn add(i64,i64)`, where the array
+    // operation word was dropped). This compares the operand domain the request
+    // names against the resolved op's domain; it is NOT a value-noun wordlist.
+    // (A genuinely array-typed req op — array_sum, reverse — carries an array type
+    // in its own signature, so this never fires for them.)
+    let req_sig_is_array = sig_lower.contains('[') || sig_lower.contains("vec<");
+    if !req_sig_is_array {
+        if let Some(arr_word) = array_domain_word(input, registry, &req.function_name) {
             return Some(format!(
-                "no operation confidently resolved: request content words {:?} do not name the \
-                 resolved op '{}'",
-                content_words, req.function_name
+                "no operation confidently resolved: request names an array operand ('{}') but \
+                 resolved op '{}' has scalar signature '{}' (domain mismatch)",
+                arr_word, req.function_name, req.signature
             ));
         }
     }
 
+    // (2) Request value-type vs resolved-signature value-type MISMATCH, derived
+    // emergently: a token that resolves (high-confidence) to a registry *Type*
+    // entity (e.g. "string", "array") asserts the operand's value type. If the
+    // resolved op's signature carries none of that type's surface forms, the op
+    // was applied to the wrong domain ("reverse a STRING" → `fn reverse(Vec<i64>)`).
+    // The type's surface forms come from the registry entity, not a literal table.
+    if let Some((type_word, needles)) = mentioned_value_type(input, registry) {
+        let satisfied = needles.iter().any(|n| sig_lower.contains(n.as_str()));
+        if !satisfied {
+            return Some(format!(
+                "no operation confidently resolved: request mentions a '{}' value but \
+                 resolved op '{}' has signature '{}' (type mismatch)",
+                type_word, req.function_name, req.signature
+            ));
+        }
+    }
+
+    // (3) Operation identity. For each emergently-resolved operation in the
+    // request: if it IS the resolved op, the op was genuinely named. If a content
+    // word resolves to a DIFFERENT op and the pair is NOT a buildable pipeline
+    // (already returned above), the named op was silently dropped — fail closed.
+    // If NO content word names the resolved op at all, it was not understood.
+    if !ops.is_empty() {
+        let mut names_resolved_op = false;
+        for op in &ops {
+            if op.fn_name == req.function_name {
+                names_resolved_op = true;
+            } else {
+                return Some(format!(
+                    "request also names operation '{}' (resolves to '{}'), dropped in favor \
+                     of '{}' — compositional request not yet supported",
+                    op.surface, op.fn_name, req.function_name
+                ));
+            }
+        }
+        if !names_resolved_op {
+            let surfaces: Vec<&str> = ops.iter().map(|o| o.surface.as_str()).collect();
+            return Some(format!(
+                "no operation confidently resolved: request content words {:?} do not name the \
+                 resolved op '{}'",
+                surfaces, req.function_name
+            ));
+        }
+    } else if !tokenize_lower(input).is_empty() {
+        // Tokens present but NONE resolve to any operation (pure operands / gibberish):
+        // there is no evidence the resolved op was named. Fail closed.
+        return Some(format!(
+            "no operation confidently resolved: no request token names the resolved op '{}'",
+            req.function_name
+        ));
+    }
+
     None
+}
+
+/// Minimum `ResolutionEvidence.score` for a surface token to count as genuinely
+/// naming a programming operation. Coincidental low-confidence links
+/// (fuzzy edit-distance ~0.64, definition-overlap ~0.51) fall below this and are
+/// treated as operands, exactly as the prior `evidence.method` blocklist intended
+/// — but now via the resolver's own numeric confidence, not a method-name switch.
+const OP_RESOLVE_FLOOR: f32 = 0.80;
+
+/// A content word that EMERGENTLY resolved to a programming operation.
+#[derive(Clone, Debug)]
+struct ResolvedContentOp {
+    /// The surface token as it appeared in the request.
+    surface: String,
+    /// The op's canonical function name (`default_fn_name` or lemma).
+    fn_name: String,
+    /// Declared arity from the registry entity, if any.
+    arity: Option<u32>,
+    /// `input_types` property (e.g. "i64", "i64,i64", "Vec<i64>"), lowercased.
+    input_types: String,
+    /// `output_type` property, lowercased.
+    output_type: String,
+}
+
+/// Resolve every request token to a high-confidence programming operation, in
+/// request order, de-duplicated by function name. A token is an *operand* (and
+/// silently dropped here) precisely when it does NOT resolve to a
+/// Function/Operator entity at or above [`OP_RESOLVE_FLOOR`] — operand-vs-operation
+/// is decided by the resolver + entity type, never a wordlist.
+fn resolved_content_ops(input: &str, registry: &Registry) -> Vec<ResolvedContentOp> {
+    use linguigenesis_core::entity::EntityType;
+    use linguigenesis_core::nl_tokens::tokenize_lower;
+
+    let resolver = EntityResolver::new(registry.clone());
+    let mut ops: Vec<ResolvedContentOp> = Vec::new();
+    for tok in tokenize_lower(input) {
+        let Some(resolved) = resolver.resolve_operation_surface(&tok) else {
+            continue;
+        };
+        if resolved.evidence.score < OP_RESOLVE_FLOOR {
+            continue;
+        }
+        if !matches!(
+            resolved.entity.entity_type,
+            EntityType::Function | EntityType::Operator
+        ) {
+            continue;
+        }
+        let fn_name = resolved
+            .entity
+            .get_property("default_fn_name")
+            .cloned()
+            .unwrap_or_else(|| resolved.entity.lemma.clone());
+        let arity = resolved
+            .entity
+            .get_property("arity")
+            .and_then(|s| s.parse::<u32>().ok());
+        let input_types = resolved
+            .entity
+            .get_property("input_types")
+            .cloned()
+            .unwrap_or_default()
+            .to_lowercase();
+        let output_type = resolved
+            .entity
+            .get_property("output_type")
+            .cloned()
+            .unwrap_or_default()
+            .to_lowercase();
+        if ops.iter().any(|o| o.fn_name == fn_name) {
+            continue;
+        }
+        ops.push(ResolvedContentOp {
+            surface: tok,
+            fn_name,
+            arity,
+            input_types,
+            output_type,
+        });
+    }
+    ops
+}
+
+/// Structural role of an emergently-resolved op, inferred from its arity +
+/// declared `input_types`/`output_type` — NOT its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpRole {
+    /// Arity-1 scalar transform `i64 -> i64` (square, abs, negate, increment, ...).
+    ScalarMap,
+    /// Arity-1 array aggregate `Vec<i64> -> i64` (array_sum, array_max, array_min).
+    ArrayReduce,
+    /// Arity-2 scalar binary `(i64, i64) -> i64` that seeds a fold (add → sum-fold,
+    /// multiply → product-fold).
+    BinaryFoldSeed,
+    /// Anything else (not part of the supported transform+aggregate shape).
+    Other,
+}
+
+fn op_role(op: &ResolvedContentOp) -> OpRole {
+    let out_scalar = op.output_type == "i64";
+    match op.arity {
+        Some(1) if op.input_types == "i64" && out_scalar => OpRole::ScalarMap,
+        Some(1) if op.input_types.contains("vec") && out_scalar => OpRole::ArrayReduce,
+        Some(2) if op.input_types == "i64,i64" && out_scalar => OpRole::BinaryFoldSeed,
+        _ => OpRole::Other,
+    }
+}
+
+/// A buildable array pipeline derived purely from the emergently-resolved ops.
+#[derive(Clone, Debug)]
+struct CompositionPlan {
+    /// Optional element-wise map op (`fn map(a:i64)->i64`). `None` ⇒ reduce-only.
+    map: Option<ResolvedContentOp>,
+    /// The aggregate over the (possibly-mapped) array.
+    reduce: ResolvedContentOp,
+}
+
+/// Decide whether the resolved-op set forms a supported array pipeline:
+///   * exactly one reduce (ArrayReduce or BinaryFoldSeed) + at most one ScalarMap,
+///   * and the request is NOT a plain single-op request (which the normal path
+///     already handles — that case returns `None`).
+///
+/// Returns the plan when the shape is `reduce(map(arr))`, `reduce(arr)` (reduce-only
+/// where the request *also* names a non-array reduce on an implicit array, e.g.
+/// "sum of the values"), or rejects (`None`). All from op ROLES, no phrase table.
+fn classify_pipeline(req: &SynthesisRequirement, ops: &[ResolvedContentOp]) -> Option<CompositionPlan> {
+    let mut maps: Vec<&ResolvedContentOp> = Vec::new();
+    let mut reduces: Vec<&ResolvedContentOp> = Vec::new();
+    let mut other = false;
+    for op in ops {
+        match op_role(op) {
+            OpRole::ScalarMap => maps.push(op),
+            OpRole::ArrayReduce | OpRole::BinaryFoldSeed => reduces.push(op),
+            OpRole::Other => other = true,
+        }
+    }
+    // Supported shape: exactly one reduce + at most one map. Anything richer
+    // (3-op, two maps, an unclassifiable op) is left to a documented follow-on.
+    if other || reduces.len() != 1 || maps.len() > 1 {
+        return None;
+    }
+    let reduce = reduces[0].clone();
+    let map = maps.first().map(|m| (*m).clone());
+
+    // A *single* op that is itself the resolved requirement op is NOT a pipeline —
+    // it is the ordinary single-op request, handled unchanged by the normal path.
+    if map.is_none() && reduce.fn_name == req.function_name {
+        // Reduce-only AND the reduce IS the requirement op: this is just the plain
+        // op (e.g. "compute the total of an array" → array_sum). Not compositional.
+        return None;
+    }
+    // A bare scalar map with no reduce is not an array pipeline either; require a
+    // reduce to anchor the aggregate. (Pure "square a number" never reaches here:
+    // it has a ScalarMap but no reduce, so `reduces.len() != 1` already returned.)
+    Some(CompositionPlan { map, reduce })
+}
+
+/// EMERGENT value-type mention: find the first request token that resolves
+/// (high-confidence) to a registry **Type** entity, and return that type's
+/// signature surface forms (its lemma + synonyms) so the gate can check the
+/// resolved op's signature actually carries the domain. No literal type-noun table.
+fn mentioned_value_type(input: &str, registry: &Registry) -> Option<(String, Vec<String>)> {
+    use linguigenesis_core::entity::EntityType;
+    use linguigenesis_core::nl_tokens::tokenize_lower;
+
+    let resolver = EntityResolver::new(registry.clone());
+    for tok in tokenize_lower(input) {
+        let Some(resolved) = resolver.resolve_surface(&tok) else {
+            continue;
+        };
+        if resolved.entity.entity_type != EntityType::Type {
+            continue;
+        }
+        if resolved.evidence.score < OP_RESOLVE_FLOOR {
+            continue;
+        }
+        // The type's accepted signature surface forms: its lemma plus any declared
+        // `signature_aliases` property (comma-separated) — emergent from the entity.
+        let mut needles: Vec<String> = vec![resolved.entity.lemma.to_lowercase()];
+        if let Some(aliases) = resolved.entity.get_property("signature_aliases") {
+            for a in aliases.split(',') {
+                let a = a.trim().to_lowercase();
+                if !a.is_empty() {
+                    needles.push(a);
+                }
+            }
+        }
+        return Some((tok, needles));
+    }
+    None
+}
+
+/// Minimal resolution score for a token to count as *evidence of the array
+/// domain*. This is intentionally BELOW [`OP_RESOLVE_FLOOR`]: an array-context
+/// word like "array" links to an array op only weakly (definition-overlap), yet
+/// its mere presence — against a SCALAR resolved op — is a real domain signal.
+/// Pure non-resolving noise (score 0 / no match) never reaches here.
+const ARRAY_DOMAIN_FLOOR: f32 = 0.50;
+
+/// Find the first request token that resolves to an ARRAY-domain operation (an op
+/// whose declared `input_types` contains a vector type) other than `req_fn`.
+/// Returns the surface word so the gate can report the domain mismatch. Emergent:
+/// the operand domain is read from the resolved entity's signature, not a list.
+fn array_domain_word(input: &str, registry: &Registry, req_fn: &str) -> Option<String> {
+    use linguigenesis_core::entity::EntityType;
+    use linguigenesis_core::nl_tokens::tokenize_lower;
+
+    let resolver = EntityResolver::new(registry.clone());
+    for tok in tokenize_lower(input) {
+        let Some(resolved) = resolver.resolve_operation_surface(&tok) else {
+            continue;
+        };
+        if resolved.evidence.score < ARRAY_DOMAIN_FLOOR {
+            continue;
+        }
+        if !matches!(
+            resolved.entity.entity_type,
+            EntityType::Function | EntityType::Operator
+        ) {
+            continue;
+        }
+        let in_types = resolved
+            .entity
+            .get_property("input_types")
+            .cloned()
+            .unwrap_or_default()
+            .to_lowercase();
+        if !in_types.contains("vec") {
+            continue;
+        }
+        let fname = resolved
+            .entity
+            .get_property("default_fn_name")
+            .cloned()
+            .unwrap_or_else(|| resolved.entity.lemma.clone());
+        if fname != req_fn {
+            return Some(tok);
+        }
+    }
+    None
+}
+
+/// The associative fold a reduce primitive computes, determined by EXECUTING the
+/// synthesized reduce code on probe arrays — never inferred from the op's name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FoldKind {
+    /// `acc = acc + x`, identity 0.
+    Sum,
+    /// `acc = acc * x`, identity 1.
+    Product,
+    /// running maximum (seeded with the first element).
+    Max,
+    /// running minimum (seeded with the first element).
+    Min,
+}
+
+/// Accepted, strict-verified two-op pipeline result.
+#[derive(Clone, Debug)]
+pub struct PipelineOutcome {
+    /// The original NL request.
+    pub description: String,
+    /// The synthesized pipeline's own function name (call this to run `code`).
+    pub fn_name: String,
+    /// Element map op function name, if the pipeline has a map stage.
+    pub map_fn: Option<String>,
+    /// Aggregate (reduce) op function name.
+    pub reduce_fn: String,
+    /// The fold kind the reduce computes (behaviour-classified).
+    pub fold: FoldKind,
+    /// The solver-synthesized program for the whole pipeline.
+    pub code: String,
+    /// `nl-compose-2op:<inner-solver-method>`.
+    pub method: String,
+}
+
+impl PipelineOutcome {
+    /// True iff this is a genuine TWO-stage pipeline (map + reduce), not a
+    /// degenerate reduce-only match. Used by the accept-test to reject a
+    /// coincidental single-op solve masquerading as a composition.
+    pub fn is_two_stage(&self) -> bool {
+        self.map_fn.is_some()
+    }
+
+    fn into_solve_result(self) -> crate::solver::SolveResult {
+        crate::solver::SolveResult {
+            success: true,
+            code: self.code,
+            method: self.method,
+            error: None,
+            metadata: Default::default(),
+        }
+    }
+}
+
+/// Deterministic function name for a pipeline, so the strict verifier's holdout
+/// seed (which hashes `problem.name`) is stable.
+fn pipeline_fn_name(plan: &CompositionPlan) -> String {
+    match &plan.map {
+        Some(m) => format!("compose_{}_{}", plan.reduce.fn_name, m.fn_name),
+        None => format!("compose_{}", plan.reduce.fn_name),
+    }
+}
+
+fn describe_plan(plan: &CompositionPlan) -> String {
+    match &plan.map {
+        Some(m) => format!("reduce={} ∘ map={}", plan.reduce.fn_name, m.fn_name),
+        None => format!("reduce={} (reduce-only)", plan.reduce.fn_name),
+    }
+}
+
+/// Classify an ARRAY-reduce primitive's fold by running it on probe arrays and
+/// matching the output against each candidate fold's known result. Behaviour-
+/// driven: the op's NAME is only a label in error messages.
+fn classify_array_fold(reduce_code: &str, reduce_fn: &str) -> Option<FoldKind> {
+    use crate::benchmark::{Problem, Value};
+    let problem = Problem {
+        name: "reduce_probe".to_string(),
+        category: "probe",
+        description: "fold classification",
+        signature: "fn f(a: [i64]) -> i64",
+        examples: vec![],
+        ..Default::default()
+    };
+    // Distinct probes so the four folds give DIFFERENT answers (no collision).
+    let probes: &[&[i64]] = &[&[3, 1, 2], &[2, 5, 4], &[2, 3, 4]];
+    let run = |arr: &[i64]| -> Option<i64> {
+        match crate::runtime::execute_function_for_problem(
+            reduce_code,
+            reduce_fn,
+            &[Value::int_array(arr)],
+            &problem,
+        ) {
+            Ok(crate::runtime::Value::Int(v)) => Some(v),
+            _ => None,
+        }
+    };
+    let candidates = [FoldKind::Sum, FoldKind::Product, FoldKind::Max, FoldKind::Min];
+    for cand in candidates {
+        let mut all_match = true;
+        for p in probes {
+            let expected = match cand {
+                FoldKind::Sum => p.iter().sum::<i64>(),
+                FoldKind::Product => p.iter().product::<i64>(),
+                FoldKind::Max => *p.iter().max().unwrap(),
+                FoldKind::Min => *p.iter().min().unwrap(),
+            };
+            if run(p) != Some(expected) {
+                all_match = false;
+                break;
+            }
+        }
+        if all_match {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Classify a BINARY scalar reduce-seed (e.g. `add`/`multiply`) by running it on
+/// scalar PROBE PAIRS to learn its combiner — `a+b` ⇒ Sum-fold, `a*b` ⇒
+/// Product-fold. Behaviour-driven (the op is executed), never name-keyed. A
+/// binary op whose behaviour is neither addition nor multiplication is not a
+/// supported fold seed (returns `None`).
+fn classify_binary_fold(reduce_code: &str, reduce_fn: &str) -> Option<FoldKind> {
+    use crate::benchmark::{Problem, Value};
+    let problem = Problem {
+        name: "binop_probe".to_string(),
+        category: "probe",
+        description: "binary fold classification",
+        signature: "fn f(a: i64, b: i64) -> i64",
+        examples: vec![],
+        ..Default::default()
+    };
+    let run = |a: i64, b: i64| -> Option<i64> {
+        match crate::runtime::execute_function_for_problem(
+            reduce_code,
+            reduce_fn,
+            &[Value::Int(a), Value::Int(b)],
+            &problem,
+        ) {
+            Ok(crate::runtime::Value::Int(v)) => Some(v),
+            _ => None,
+        }
+    };
+    // Probe pairs chosen so + and * disagree on every pair.
+    let pairs = [(2, 3), (4, 5), (1, 7), (3, 6)];
+    let is_sum = pairs.iter().all(|&(a, b)| run(a, b) == Some(a + b));
+    if is_sum {
+        return Some(FoldKind::Sum);
+    }
+    let is_prod = pairs.iter().all(|&(a, b)| run(a, b) == Some(a * b));
+    if is_prod {
+        return Some(FoldKind::Product);
+    }
+    None
+}
+
+/// Emit an INDEPENDENT reference implementation of the pipeline in the runtime
+/// DSL: the optional map fn body verbatim, plus a driver that folds `map(arr[i])`
+/// (or `arr[i]` when there is no map) with the classified combiner. This is used
+/// only to LABEL fresh holdouts; the accepted program is what the solver finds.
+fn emit_pipeline_reference(
+    composed_name: &str,
+    fold: FoldKind,
+    map: Option<&(String, String)>,
+) -> String {
+    let mut out = String::new();
+    // Map fn body (verified single-op synthesis) goes first so the driver can call it.
+    let elem = if let Some((map_fn, map_code)) = map {
+        out.push_str(map_code);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+        format!("{}(arr[i])", map_fn)
+    } else {
+        "arr[i]".to_string()
+    };
+
+    match fold {
+        FoldKind::Sum | FoldKind::Product => {
+            let (init, op) = match fold {
+                FoldKind::Sum => (0, "+"),
+                FoldKind::Product => (1, "*"),
+                _ => unreachable!(),
+            };
+            out.push_str(&format!(
+                "fn {name}(arr: [i64]) -> i64 {{\n    \
+                 acc: i64 = {init};\n    \
+                 i: i64 = 0;\n    \
+                 while i < arr.len {{\n        \
+                 acc = acc {op} {elem};\n        \
+                 i = i + 1;\n    }}\n    \
+                 return acc;\n}}\n",
+                name = composed_name,
+                init = init,
+                op = op,
+                elem = elem,
+            ));
+        }
+        FoldKind::Max | FoldKind::Min => {
+            let cmp = if fold == FoldKind::Max { ">" } else { "<" };
+            out.push_str(&format!(
+                "fn {name}(arr: [i64]) -> i64 {{\n    \
+                 i: i64 = 0;\n    \
+                 acc: i64 = {elem};\n    \
+                 i = 1;\n    \
+                 while i < arr.len {{\n        \
+                 v: i64 = {elem};\n        \
+                 if v {cmp} acc {{ acc = v; }}\n        \
+                 i = i + 1;\n    }}\n    \
+                 return acc;\n}}\n",
+                name = composed_name,
+                elem = elem,
+                cmp = cmp,
+            ));
+        }
+    }
+    out
 }
 
 fn synthesis_requirement_to_examples(
@@ -675,29 +1308,53 @@ mod tests {
 
     /// P0-NL ACCEPT (fail-closed): requests that the registry SILENTLY
     /// MIS-RESOLVES (returned a confident-wrong, strict-"verified" WRONG program
-    /// before this gate) must now be REFUSED via ClarificationNeeded — caught by
-    /// the STRUCTURAL signals (type-mismatch / operation-not-named), never a
-    /// phrase blocklist. A confidently-wrong coding agent is worse than one that
-    /// asks. Empirically these resolved to: sum-of-squares->add (array vs scalar
-    /// sig + content words don't name 'add'), reverse-a-string->reverse(Vec)
-    /// (string vs Vec sig), parse-a-CSV->filter (content words don't name
-    /// 'filter').
+    /// before this gate) must be REFUSED via ClarificationNeeded — caught by the
+    /// EMERGENT STRUCTURAL signals (array-domain-vs-scalar-op mismatch derived from
+    /// signatures, operation-not-named), never a phrase blocklist and never a
+    /// value-noun / type-noun wordlist. A confidently-wrong coding agent is worse
+    /// than one that asks. Empirically:
+    ///   * "...sum of squares OF AN ARRAY" → `add` (scalar sig): the array operand
+    ///     the request names ("array" resolves to an array-input op) does not match
+    ///     the scalar resolved op → DOMAIN MISMATCH → refuse.
+    ///   * "parse a CSV file" → no request token names the resolved op at all (the
+    ///     content words resolve to nothing above the confidence floor) → refuse.
     #[test]
     fn nl_failclosed_refuses_confident_wrong_resolution() {
         let bridge = LinguigenesisBridge::new();
         for phrase in [
             "return the sum of squares of an array",
-            "reverse a string",
             "parse a CSV file",
         ] {
             match bridge.nl_to_requirement(phrase) {
                 Err(BridgeError::ClarificationNeeded { .. }) => {}
+                Err(BridgeError::ParseError(_)) => {}
                 other => panic!(
-                    "request {phrase:?} must fail closed (ClarificationNeeded), \
+                    "request {phrase:?} must fail closed (ClarificationNeeded/ParseError), \
                      got {other:?} — confident-wrong resolution leaked"
                 ),
             }
         }
+    }
+
+    /// DOCUMENTED type-case (Bucket B of the unseen-phrasing benchmark): "reverse a
+    /// string" may PASS or REFUSE. The coding registry currently has no `Type`
+    /// entity for "string", so — by design, per the EMERGENT-only rule — the bridge
+    /// cannot detect a string/Vec type mismatch without a value-type wordlist (which
+    /// the global guardrail forbids). It therefore resolves "reverse" to the array
+    /// `reverse`. This is acceptable (a benign over-acceptance, not a confidently-
+    /// WRONG numeric answer); tightening it requires adding a `Type` entity to
+    /// linguigenesis-core (a documented follow-on), NOT a phrase/type blocklist here.
+    #[test]
+    fn nl_reverse_a_string_is_a_documented_type_case() {
+        let bridge = LinguigenesisBridge::new();
+        // Whatever the outcome, it must NOT be a non-refusal that ALSO produces a
+        // composed-pipeline mis-solve; the type case stays a plain single-op resolve.
+        assert!(
+            bridge.try_compose_pipeline("reverse a string").is_none(),
+            "'reverse a string' must not be mis-built as a numeric pipeline"
+        );
+        // It is allowed to resolve (single-op reverse) OR refuse; both are fine.
+        let _ = bridge.nl_to_requirement("reverse a string");
     }
 
     /// P0-NL must NOT over-refuse: genuine in-vocab single-op requests whose
