@@ -119,20 +119,57 @@ pub fn write_synthesized_project(
     let mut written = Vec::new();
     let mut modules: Vec<String> = Vec::with_capacity(components.len());
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (name, mog_code) in components {
-        // (B) MODULE NAMING: sanitize -> keyword-escape -> dedup on the FINAL
-        // module name (so addTwo/add_two don't both become `mod add_two`, and a
-        // component named `loop` doesn't emit an illegal `mod loop;`). The file
-        // name and the `mod`/`pub use` name all stay in sync via `module`.
+
+    // First pass: assign each component its final module name and record the
+    // (fn_name -> module) map so a CONSUMER that calls a SIBLING producer can
+    // get a precise `use crate::<producer_module>::<producer_fn>;` injected.
+    // (B) MODULE NAMING: sanitize -> keyword-escape -> dedup on the FINAL module
+    // name (so addTwo/add_two don't both become `mod add_two`, and a component
+    // named `loop` doesn't emit an illegal `mod loop;`).
+    let mut fn_to_module: Vec<(String, String)> = Vec::with_capacity(components.len());
+    let mut module_for: Vec<String> = Vec::with_capacity(components.len());
+    for (name, _) in components {
         let base = escape_module_name(&sanitize_module_name(name));
         let module = dedup_module_name(base, &mut used);
+        // The emitted Mog/Rust fn name is the original component name (the
+        // transpiler keeps `fn <name>`), so map THAT to the module.
+        fn_to_module.push((name.clone(), module.clone()));
+        module_for.push(module);
+    }
+
+    for (idx, (name, mog_code)) in components.iter().enumerate() {
+        let module = module_for[idx].clone();
 
         let rust = to_rust(mog_code);
         // (A) Robust Rust-normalization pass (replaces brittle publicize_fns):
         // pub-fns, `.len`->`.len()`, i64 index cast, mutated-Vec-param `mut`,
         // empty-array literal -> Vec::new(). GENERATED file only; transpiler untouched.
         let rust = normalize_component(&rust);
-        let body = format!("//! Synthesized component `{module}`.\n\n{}\n", rust.trim_end());
+
+        // (STEP7) USE-INJECTION: if this component's body CALLS a sibling
+        // producer's fn (true inter-function data flow discovered by the search),
+        // inject `use crate::<producer_module>::<producer_fn>;` so the generated
+        // module compiles. No transpiler edit — purely a post-transpile prelude
+        // on the GENERATED file, mirroring `normalize_component`.
+        let mut uses: Vec<String> = Vec::new();
+        for (sib_fn, sib_mod) in &fn_to_module {
+            if sib_fn == name {
+                continue; // never import self
+            }
+            if body_calls_fn(&rust, sib_fn) {
+                uses.push(format!("use crate::{sib_mod}::{sib_fn};"));
+            }
+        }
+        let prelude = if uses.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n\n", uses.join("\n"))
+        };
+
+        let body = format!(
+            "//! Synthesized component `{module}`.\n\n{prelude}{}\n",
+            rust.trim_end()
+        );
         let rel = format!("src/{module}.rs");
         write(&rel, &body)?;
         written.push(rel);
@@ -185,6 +222,29 @@ pub fn write_tensor_program(
     }
     let compile = compile_gate(root);
     Ok(WriteOutcome { written, compile })
+}
+
+/// True when `body` contains a CALL to `fn_name` (`fn_name(` with a
+/// non-identifier char immediately before, so `mydouble(` does not match
+/// `double`). Used to decide whether to inject a `use` for a sibling producer.
+fn body_calls_fn(body: &str, fn_name: &str) -> bool {
+    let pat = format!("{fn_name}(");
+    let bytes = body.as_bytes();
+    let mut from = 0usize;
+    while let Some(off) = body[from..].find(&pat) {
+        let at = from + off;
+        let prev_ok = if at == 0 {
+            true
+        } else {
+            let pc = bytes[at - 1] as char;
+            !(pc.is_alphanumeric() || pc == '_')
+        };
+        if prev_ok {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
 }
 
 /// Pick a unique module name: if `base` is already used, suffix `_2`, `_3`, …
@@ -647,5 +707,148 @@ mod tests {
             outcome.compile
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// STEP7 END-TO-END: solve `double` from examples, register it as a callable
+    /// PRIMITIVE, then SEARCH `quadruple` so its body DISCOVERS a call to
+    /// `double` (no compose template). Assert the solved quadruple AST contains
+    /// a `Call(double)` node (structural, not string), write the 2-module crate
+    /// via the real writer (which injects `use crate::double::double;` and runs
+    /// the cargo-check gate), then append a generated `assert_eq!(quadruple(3),
+    /// 12)` unit test and run `cargo test` — the consumer genuinely calling the
+    /// producer, compiled and executed.
+    #[test]
+    fn step7_quadruple_calls_double_endtoend() {
+        use crate::benchmark::{Example, Problem, Value};
+        use crate::enumerative::{
+            solve_scalar_expr_with_callees, synthesize_scalar_with_callees, NamedCallable,
+        };
+
+        // 1. Solve `double(x) = 2*x` from examples (plain base-op search).
+        let double_problem = Problem {
+            name: "double".to_string(),
+            category: "step7",
+            description: "double a number",
+            signature: "fn double(a: i64) -> i64",
+            examples: vec![
+                Example { inputs: vec![Value::Int(1)], expected: Value::Int(2) },
+                Example { inputs: vec![Value::Int(3)], expected: Value::Int(6) },
+                Example { inputs: vec![Value::Int(5)], expected: Value::Int(10) },
+                Example { inputs: vec![Value::Int(-2)], expected: Value::Int(-4) },
+            ],
+            holdouts: vec![],
+            reference_code: "",
+            ..Default::default()
+        };
+        let double_res = crate::solver::solve_problem(&double_problem);
+        assert!(double_res.success, "double must solve: {:?}", double_res.error);
+        let double_code = double_res.code.clone();
+
+        // 2. Register `double` as a callable PRIMITIVE (eval runs its Mog source).
+        let dc = double_code.clone();
+        let registry: Vec<NamedCallable> = vec![NamedCallable {
+            name: "double".to_string(),
+            n_args: 1,
+            source: double_code.clone(),
+            eval: Box::new(move |xs: &[i64]| {
+                if xs.len() != 1 {
+                    return None;
+                }
+                let args = vec![Value::Int(xs[0])];
+                match crate::runtime::execute_function(&dc, "double", &args, "double") {
+                    Ok(crate::runtime::Value::Int(v)) => Some(v),
+                    _ => None,
+                }
+            }),
+        }];
+
+        // 3. quadruple(x) = 4*x. SEARCH it WITH `double` registered. Inspect the
+        // AST: it MUST contain a Call to double (the searched inter-fn edge).
+        let quad_problem = Problem {
+            name: "quadruple".to_string(),
+            category: "step7",
+            description: "quadruple a number using double",
+            signature: "fn quadruple(a: i64) -> i64",
+            examples: vec![
+                Example { inputs: vec![Value::Int(1)], expected: Value::Int(4) },
+                Example { inputs: vec![Value::Int(3)], expected: Value::Int(12) },
+                Example { inputs: vec![Value::Int(5)], expected: Value::Int(20) },
+                Example { inputs: vec![Value::Int(-2)], expected: Value::Int(-8) },
+            ],
+            holdouts: vec![],
+            reference_code: "",
+            ..Default::default()
+        };
+
+        // AST inspection (no library, controlled): prove a Call IS searched.
+        let quad_ast = solve_scalar_expr_with_callees(&quad_problem, &registry, 8_000)
+            .expect("quadruple must be solvable with double registered");
+        fn contains_call(e: &crate::enumerative::Expr) -> bool {
+            use crate::enumerative::Expr;
+            match e {
+                Expr::Call(..) => true,
+                Expr::UnaryOp(_, c) => contains_call(c),
+                Expr::BinOp(_, l, r) => contains_call(l) || contains_call(r),
+                Expr::IfExpr(_, a, b, c, d) => {
+                    contains_call(a) || contains_call(b) || contains_call(c) || contains_call(d)
+                }
+                _ => false,
+            }
+        }
+        assert!(
+            contains_call(&quad_ast),
+            "searched quadruple AST must contain a Call(double) node, got: {quad_ast:?}"
+        );
+
+        // The emitted quadruple code (with library available) — must call double.
+        let quad_res = synthesize_scalar_with_callees(&quad_problem, &registry)
+            .expect("quadruple must emit code calling double");
+        assert!(
+            quad_res.code.contains("double("),
+            "emitted quadruple must call double(...): {}",
+            quad_res.code
+        );
+
+        // 4. Write the 2-module crate via the REAL writer (use-injection + gate).
+        let root = fresh("step7");
+        let components = vec![
+            ("double".to_string(), double_code),
+            ("quadruple".to_string(), quad_res.code.clone()),
+        ];
+        let outcome = write_synthesized_project(&root, "step7", &components).expect("write");
+        assert!(
+            outcome.compile.is_ok(),
+            "2-module crate must compile clean (use-injection working): {:?}\nquad code:\n{}",
+            outcome.compile,
+            quad_res.code
+        );
+        // The quadruple module must carry the injected `use crate::double::double;`.
+        let quad_mod = fs::read_to_string(root.join("src/quadruple.rs")).unwrap();
+        assert!(
+            quad_mod.contains("use crate::double::double;"),
+            "quadruple module must import double: {quad_mod}"
+        );
+
+        // 5. Append a GENERATED unit test and run `cargo test`.
+        let mut lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        lib.push_str(
+            "\n#[cfg(test)]\nmod step7_tests {\n    use super::*;\n    #[test]\n    fn quadruple_calls_double() {\n        assert_eq!(quadruple(3), 12);\n        assert_eq!(quadruple(-2), -8);\n    }\n}\n",
+        );
+        fs::write(root.join("src/lib.rs"), &lib).unwrap();
+        let runtime = SecureToolRuntime::for_repo_repair(root.clone(), GuardrailPolicy::default());
+        let test_run = runtime
+            .run_verification_command("cargo test")
+            .expect("cargo test must run");
+        assert!(
+            test_run.success,
+            "generated unit test must pass:\nstdout:\n{}\nstderr:\n{}",
+            test_run.stdout, test_run.stderr
+        );
+        eprintln!("[STEP7-E2E] crate root = {}", root.display());
+        eprintln!("[STEP7-E2E] cargo test stdout:\n{}", test_run.stdout);
+        // Keep the crate for inspection when NSYNTH_KEEP_CRATE is set.
+        if std::env::var("NSYNTH_KEEP_CRATE").is_err() {
+            let _ = fs::remove_dir_all(root);
+        }
     }
 }
