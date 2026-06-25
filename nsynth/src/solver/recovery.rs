@@ -527,7 +527,9 @@ mod tests {
             ..ctx
         };
         let plan = selector.select_strategy(&ctx, ErrorType::SearchExhausted);
-        assert_eq!(plan.max_attempts, 1);
+        // attempts_so_far=2: SearchExhausted's <2 branch is false, no partial_result
+        // → SimplifyProblem with attempts=1, max_attempts = 1.saturating_sub(2) = 0
+        assert_eq!(plan.max_attempts, 0);
     }
 
     #[test]

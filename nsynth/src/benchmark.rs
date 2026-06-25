@@ -2803,18 +2803,25 @@ fn make_has_strictly_increasing_run(variant: usize) -> Problem {
         "arrays",
         description,
         signature,
+        // Positives contain a strictly-increasing run of length >= 5, so
+        // they return 1 for every variant run_length in 2..=5. Negatives are
+        // non-increasing everywhere (run stays 1), so they return 0 for every
+        // run_length >= 2. The old arrays ([1,2]->0, [1,5,3]->0, holdout
+        // [3,3,4]->0) assumed run_length>=3 and disagreed with variant 0's
+        // run_length==2 reference, making the teacher's solution fail the
+        // reference-generated holdouts.
         vec![
-            example(vec![array(&[1, 2, 3])], 1),
+            example(vec![array(&[1, 2, 3, 4, 5])], 1),
             example(vec![array(&[0, 1, 5, 6, 7])], 1),
-            example(vec![array(&[10, 20, 30])], 1),
-            example(vec![array(&[5, 4, 3, 7, 8, 9])], 1),
-            example(vec![array(&[1, 2])], 0),
-            example(vec![array(&[1, 5, 3])], 0),
+            example(vec![array(&[10, 20, 30, 40, 50])], 1),
+            example(vec![array(&[5, 4, 3, 6, 7, 8, 9, 10])], 1),
+            example(vec![array(&[2, 2, 2])], 0),
+            example(vec![array(&[5, 3, 1])], 0),
             example(vec![array(&[5, 4, 3, 2, 1])], 0),
         ],
         vec![
-            example(vec![array(&[3, 3, 4])], 0),
-            example(vec![array(&[-1, 0, 1, 2, 0, 1])], 1),
+            example(vec![array(&[3, 3, 2])], 0),
+            example(vec![array(&[-1, 0, 1, 2, 3, 4])], 1),
         ],
         reference,
     )
@@ -2849,16 +2856,25 @@ fn make_first_index_of(variant: usize) -> Problem {
         "arrays",
         description,
         signature,
+        // Examples are authored against `target` so they agree with the
+        // variant's reference_code. The old hand-authored arrays assumed
+        // target=5, but variant 0 (the only one materialized by
+        // get_benchmark(1)) targets 0 — they disagreed with reference_code,
+        // making the teacher's correct solution fail the reference holdouts.
+        // Build arrays parametrically so they agree for any variant target.
         vec![
-            example(vec![array(&[1, 2, 3, 4, 5])], 4),
-            example(vec![array(&[5, 5, 5])], 0),
-            example(vec![array(&[0, 0, 0, 5])], 3),
-            example(vec![array(&[10, 20, 30])], -1),
-            example(vec![array(&[5])], 0),
+            example(vec![array(&[101, 102, 103, target, 105])], 3),
+            example(vec![array(&[target, target, target])], 0),
+            example(vec![array(&[106, 107, 108, target])], 3),
+            example(vec![array(&[110, 120, 130])], -1),
+            example(vec![array(&[target])], 0),
         ],
         vec![
-            example(vec![array(&[1, 2, 3, 4, 6, 7, 5, 8, 9, 5])], 6),
-            example(vec![array(&[1, 2, 3, 4])], -1),
+            example(
+                vec![array(&[111, 112, 113, 114, 116, 117, target, 118, 119, target])],
+                6,
+            ),
+            example(vec![array(&[111, 112, 113, 114])], -1),
         ],
         reference,
     )
@@ -2983,13 +2999,21 @@ fn make_longest_run(variant: usize) -> Problem {
         "arrays",
         description,
         signature,
+        // Examples are authored against `target` so they agree with the
+        // variant's reference_code. The old arrays assumed target=5, but
+        // variant 0 (the only one get_benchmark(1) materializes) targets 0,
+        // so the teacher's correct solution failed the reference holdouts.
+        // Filler values (2,3,4,8,9) avoid every cycle target {0,1,5,7}.
         vec![
-            example(vec![array(&[5, 5, 5])], 3),
-            example(vec![array(&[1, 2, 5, 5, 5, 6, 7])], 3),
-            example(vec![array(&[5])], 1),
-            example(vec![array(&[1, 2, 3, 4])], 0),
+            example(vec![array(&[target, target, target])], 3),
+            example(vec![array(&[2, 3, target, target, target, 4, 9])], 3),
+            example(vec![array(&[target])], 1),
+            example(vec![array(&[2, 3, 4, 9])], 0),
         ],
-        vec![example(vec![array(&[5, 6, 5, 6, 5, 5])], 2)],
+        vec![example(
+            vec![array(&[target, 8, target, 8, target, target])],
+            2,
+        )],
         reference,
     )
 }
