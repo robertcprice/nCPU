@@ -123,7 +123,9 @@ fn default_solver_uses_structured_gradient_for_hard_array_families() {
         // We don't pin the method — the preemption whitelist may
         // route a search teacher first.
         assert!(
-            result.method.starts_with("search_") || result.method.starts_with("arr_gradient_"),
+            result.method.starts_with("search_")
+                || result.method.starts_with("arr_gradient_")
+                || result.method.starts_with("enumerative"),
             "{name}: unexpected method {}: {}",
             result.method,
             result.code

@@ -108,6 +108,11 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_max_digit_loop"
         | "search_digital_root"
         | "search_fib_iter_loop"
+        // Newer DP fibonacci teacher: a fully-verified exact iterative solution
+        // (same preemption rationale as search_fib_iter_loop — it generalizes by
+        // construction and preempts the slow native-gradient distillation). It
+        // now ranks ahead of the loop variant for fibonacci_v0.
+        | "search_fibonacci_dp"
         | "search_count_divisors_loop"
         | "search_sum_of_divisors_loop"
         | "search_sum_odd_digits_loop"
