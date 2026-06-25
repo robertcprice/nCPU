@@ -76,6 +76,15 @@ use self::routing::{
 use self::routing::{ROUTE_ARRAY_GRADIENT, ROUTE_SCALAR_GRADIENT, ROUTE_SEARCH_TEACHER};
 use self::search::solve_by_search;
 
+/// Re-export the engine's stateful-reducer op surface so the reflective
+/// capability descriptor (`synthesis::stateful_reducer_surface`) can BIND its
+/// mined NL vocabulary to the SAME slice the solver enumerates over — keeping the
+/// mined surface emergent (a new reducer/op grows NL reach with no hand edit) and
+/// fail-closed (the surface guard drifts if the descriptor diverges).
+pub(crate) use self::search_families::{
+    stateful_reducer_apply, STATEFUL_REDUCER_NAMES, STATEFUL_REDUCER_OPS,
+};
+
 /// Error categories for better error handling and user feedback.
 ///
 /// Ported from the stale fork's richer `SolveResult` model. The canonical
