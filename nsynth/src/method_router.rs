@@ -79,6 +79,7 @@ impl ProblemFeatures {
                             Value::Tree(_) => pr = true,
                             Value::Tuple(_) => pr = true,
                             Value::Struct(_) => pr = true,
+                            Value::Tensor { .. } => {}
                             Value::Int(_) | Value::Float(_) | Value::Bool(_) => {}
                         }
                     }

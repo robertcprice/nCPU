@@ -2140,6 +2140,7 @@ pub fn infer_signature(fn_name: &str, examples: &[Example]) -> String {
             Value::Tree(_) => "Tree",
             Value::Tuple(_) => "Tuple",
             Value::Struct(_) => "Struct",
+            Value::Tensor { .. } => "Tensor",
         };
         param_idx += 1;
         param_types.push(format!("{}: {}", param_names(param_idx), type_str));
@@ -2156,6 +2157,7 @@ pub fn infer_signature(fn_name: &str, examples: &[Example]) -> String {
         Value::Tree(_) => "Tree",
         Value::Tuple(_) => "Tuple",
         Value::Struct(_) => "Struct",
+        Value::Tensor { .. } => "Tensor",
     };
 
     format!(

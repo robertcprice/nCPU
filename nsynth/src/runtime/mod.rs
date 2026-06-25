@@ -1282,6 +1282,14 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
                 fields: runtime_fields,
             })
         }
+        // Tensors NEVER reach the DSL interpreter: the tensor reach is pure
+        // CODEGEN (a `crate::tensor` call compiled by the cargo-check gate), so
+        // a tensor wire value here is an error rather than a fabricated runtime
+        // shape. This keeps the example-based runtime honest.
+        BenchmarkValue::Tensor { .. } => Err(format!(
+            "tensor value cannot be lowered to the DSL runtime for {problem_name} \
+             (tensors use the codegen path, not the interpreter)"
+        )),
     }
 }
 

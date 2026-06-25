@@ -121,6 +121,10 @@ impl TypeClass {
             Value::Tree(_) => TypeClass::Tree,
             Value::Tuple(_) => TypeClass::Struct,
             Value::Struct(_) => TypeClass::Struct,
+            // Tensors are not example-search-solved; classify as Mixed so the
+            // method-stats router never routes a tensor problem to a scalar/array
+            // specialist (the tensor reach is codegen, handled before this point).
+            Value::Tensor { .. } => TypeClass::Mixed,
         }
     }
 }
