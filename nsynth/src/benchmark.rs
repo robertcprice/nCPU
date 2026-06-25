@@ -39,6 +39,39 @@ pub enum Value {
     /// serialization are deterministic. Generalizes the 2-/4-int struct cases
     /// that previously had to collapse onto `Pair`/`Quad`.
     Struct(Vec<(String, Value)>),
+    /// A dense numeric tensor: row-major `data` paired with `shape` dims.
+    /// Element values are stored as IEEE-754 bits (`Vec<u64>`, same trick as
+    /// `Value::Float`) so `Value` keeps deriving `Eq`/`Ord`/`Serialize` —
+    /// `f64` is neither `Eq` nor `Ord`. Recover element `i` with
+    /// `f64::from_bits(data[i])`. This is the runtime carrier for the
+    /// tensor/forward-inference reach (NL-BRIDGE-3B-TENSOR-FORWARD); the
+    /// synthesis path for tensors is CODEGEN (emit a `crate::tensor` call),
+    /// not example-search, so this variant exists mainly to make tensor I/O
+    /// representable + type-distinguishable on the wire.
+    Tensor { data: Vec<u64>, shape: Vec<usize> },
+}
+
+impl Value {
+    /// Build a `Value::Tensor` from real `f64` element data + shape, storing
+    /// each element as its IEEE-754 bit pattern (round-trips via
+    /// `f64::from_bits`). Keeps callers from hand-rolling the bit conversion.
+    pub fn tensor(data: &[f64], shape: &[usize]) -> Value {
+        Value::Tensor {
+            data: data.iter().map(|x| x.to_bits()).collect(),
+            shape: shape.to_vec(),
+        }
+    }
+
+    /// Recover the tensor's element data as `f64` (and its shape), or `None`
+    /// for a non-tensor value.
+    pub fn as_tensor(&self) -> Option<(Vec<f64>, Vec<usize>)> {
+        match self {
+            Value::Tensor { data, shape } => {
+                Some((data.iter().map(|b| f64::from_bits(*b)).collect(), shape.clone()))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Value {
@@ -82,6 +115,20 @@ impl std::fmt::Display for Value {
                 fields
                     .iter()
                     .map(|(k, v)| format!("{k}: {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Value::Tensor { data, shape } => write!(
+                f,
+                "tensor<{}>[{}]",
+                shape
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                data
+                    .iter()
+                    .map(|b| f64::from_bits(*b).to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -373,6 +420,9 @@ fn render_expected(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        // Tensors are not example-rendered (they reach the engine via CODEGEN,
+        // not literal-based synthesis); fall back to the Display form.
+        Value::Tensor { .. } => value.to_string(),
     }
 }
 
@@ -518,6 +568,14 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(format!("{{ {} }}", rendered.join(", ")))
         }
+        // Tensors are never rendered as a Mog literal for example-based
+        // synthesis — the tensor reach is CODEGEN-only (a direct
+        // `crate::tensor` call), so a tensor here is a hard error rather than
+        // a fabricated literal.
+        Value::Tensor { .. } => Err(format!(
+            "cannot render tensor literal for {} (tensors use the codegen path, not example literals)",
+            problem.name
+        )),
     }
 }
 

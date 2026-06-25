@@ -68,6 +68,11 @@ fn fingerprint_value(v: &Value) -> String {
                 .collect();
             format!("st:{{{}}}", joined.join(","))
         }
+        Value::Tensor { data, shape } => {
+            let dims: Vec<String> = shape.iter().map(|d| d.to_string()).collect();
+            let elems: Vec<String> = data.iter().map(|b| b.to_string()).collect();
+            format!("tn:<{}>[{}]", dims.join(","), elems.join(","))
+        }
     }
 }
 

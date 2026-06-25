@@ -554,6 +554,7 @@ impl ProblemSnapshot {
                         Value::Tree(_) => 'T',
                         Value::Tuple(_) => 'U',
                         Value::Struct(_) => 'C',
+                        Value::Tensor { .. } => 'N',
                     })
                     .collect()
             })
@@ -570,6 +571,7 @@ impl ProblemSnapshot {
             Some(Value::Tree(_)) => "Tree",
             Some(Value::Tuple(_)) => "Tuple",
             Some(Value::Struct(_)) => "Struct",
+            Some(Value::Tensor { .. }) => "Tensor",
             None => "Unknown",
         }
         .to_string();

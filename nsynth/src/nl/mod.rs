@@ -470,6 +470,9 @@ impl NLPipeline {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            // A tensor renders as the engine `Tensor` type (the codegen path
+            // emits `crate::tensor::ops::Tensor` calls, not a DSL literal).
+            Value::Tensor { .. } => "Tensor".to_string(),
         }
     }
 

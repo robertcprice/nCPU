@@ -160,6 +160,33 @@ pub fn write_synthesized_project(
     Ok(WriteOutcome { written, compile })
 }
 
+/// TENSOR REACH (NL-BRIDGE-3B-TENSOR-FORWARD): write a self-contained tensor
+/// crate (its `Cargo.toml` + `src/lib.rs` come from
+/// [`crate::tensor_nl::tensor_crate_files`], including a path dep on the
+/// canonical `mog_synth` crate) to `root`, then run the SAME `cargo check`
+/// compile gate used for synthesized projects. The emitted `src/lib.rs` calls
+/// real `crate::tensor` forward ops, so a clean gate proves the engine op
+/// genuinely type-checks + links — codegen-verified-by-compile, not example
+/// search. All writes go through the traversal-guarded [`FsTool`].
+pub fn write_tensor_program(
+    root: &Path,
+    files: &[(String, String)],
+) -> Result<WriteOutcome, String> {
+    if files.is_empty() {
+        return Err("no tensor program files to write".to_string());
+    }
+    let fs_tool = FsTool::new(root.to_path_buf());
+    let mut written = Vec::new();
+    for (rel, content) in files {
+        fs_tool
+            .invoke(&ToolCall::new("write").arg("path", rel).arg("content", content))
+            .map_err(|e| e.to_string())?;
+        written.push(rel.clone());
+    }
+    let compile = compile_gate(root);
+    Ok(WriteOutcome { written, compile })
+}
+
 /// Pick a unique module name: if `base` is already used, suffix `_2`, `_3`, …
 fn dedup_module_name(base: String, used: &mut std::collections::HashSet<String>) -> String {
     if used.insert(base.clone()) {

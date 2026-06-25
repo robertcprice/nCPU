@@ -527,6 +527,9 @@ impl TaskDecomposer {
                     Value::Struct(_) => {
                         input_types.insert("struct");
                     }
+                    Value::Tensor { .. } => {
+                        input_types.insert("tensor");
+                    }
                 }
             }
             match &ex.expected {
@@ -559,6 +562,9 @@ impl TaskDecomposer {
                 }
                 Value::Struct(_) => {
                     output_types.insert("struct");
+                }
+                Value::Tensor { .. } => {
+                    output_types.insert("tensor");
                 }
             }
         }

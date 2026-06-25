@@ -44,6 +44,7 @@ pub mod string_synth;
 pub mod synthesis;
 pub mod tensor;
 pub mod tensor_codegen;
+pub mod tensor_nl;
 pub mod testing;
 pub mod time_codegen;
 pub mod transfer_learning;

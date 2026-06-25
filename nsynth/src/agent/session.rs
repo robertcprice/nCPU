@@ -195,6 +195,26 @@ impl CodingAgentSession {
 
     /// Handle any NL coding query via KVRM workflow routing.
     pub fn handle_query(&mut self, query: &str) -> AgentQueryResult {
+        // TENSOR REACH (NL-BRIDGE-3B-TENSOR-FORWARD): intercept tensor requests
+        // BEFORE generic comprehension, which would otherwise divert a
+        // 'train a model' to a clarification loop or a forward op to ToolExplore.
+        // A forward-inference request → codegen; a training request → honest
+        // refusal (training is a no-op here). Non-tensor requests are unaffected.
+        let tensor_route = crate::tensor_nl::classify(query);
+        if !matches!(tensor_route, crate::tensor_nl::TensorRouteOutcome::NotTensor) {
+            let result = match tensor_route {
+                crate::tensor_nl::TensorRouteOutcome::RefuseTraining => {
+                    self.refuse_tensor_training()
+                }
+                crate::tensor_nl::TensorRouteOutcome::Forward { lemma, code } => {
+                    self.run_tensor_forward(&lemma, &code)
+                }
+                crate::tensor_nl::TensorRouteOutcome::NotTensor => unreachable!(),
+            };
+            self.record_result(query, &result);
+            return result;
+        }
+
         let bridge = LinguigenesisBridge::new();
         let result = match bridge.comprehend_outcome(query) {
             Ok(ComprehensionOutcome::Ready(req)) => self.dispatch(query, &req, true),
@@ -242,6 +262,23 @@ impl CodingAgentSession {
     /// the gate against the original (often gibberish) query would wrongly refuse
     /// the user-confirmed op.
     fn dispatch(&mut self, query: &str, req: &SynthesisRequirement, gate: bool) -> AgentQueryResult {
+        // TENSOR REACH (NL-BRIDGE-3B-TENSOR-FORWARD): consult the tensor route
+        // FIRST, before workflow routing, so a forward-inference request
+        // (relu/sigmoid/softmax/transpose/matmul — vocab reflected from
+        // `crate::tensor::ops`) is solved by CODEGEN and a TRAINING request is
+        // REFUSED (training is a no-op here), regardless of which generic
+        // workflow the comprehension layer assigned. Non-tensor requests fall
+        // through unchanged, so every prior type/route is untouched.
+        match crate::tensor_nl::classify(query) {
+            crate::tensor_nl::TensorRouteOutcome::RefuseTraining => {
+                return self.refuse_tensor_training();
+            }
+            crate::tensor_nl::TensorRouteOutcome::Forward { lemma, code } => {
+                return self.run_tensor_forward(&lemma, &code);
+            }
+            crate::tensor_nl::TensorRouteOutcome::NotTensor => {}
+        }
+
         let route = route_from_workflow(&req.workflow);
         match route {
             QueryRoute::SynthesizeFunction => self.run_synthesis(query, req, gate),
@@ -385,6 +422,82 @@ impl CodingAgentSession {
             synthesis_method: Some(synthesis.method.clone()),
             repo_result: None,
             tool_trace,
+        }
+    }
+
+    /// HONEST REFUSAL: tensor TRAINING is a no-op in this engine
+    /// (`Trainer::train` backprop is a TODO, autodiff is disconnected), so a
+    /// 'train a model' / 'fit' / 'backprop' request is refused rather than
+    /// emitting code that pretends to learn. success = false.
+    fn refuse_tensor_training(&self) -> AgentQueryResult {
+        AgentQueryResult {
+            route: QueryRoute::SynthesizeFunction,
+            success: false,
+            response: "cannot train (no-op): tensor TRAINING is unimplemented in this engine \
+                       (Trainer::train backprop is a TODO and autodiff is disconnected). \
+                       Forward-inference ops (relu/sigmoid/softmax/transpose/matmul) ARE supported."
+                .to_string(),
+            workflow: "tensor.forward".to_string(),
+            clarification_questions: Vec::new(),
+            synthesis_method: Some("tensor-train-refused".to_string()),
+            repo_result: None,
+            tool_trace: Vec::new(),
+        }
+    }
+
+    /// TENSOR FORWARD CODEGEN: write the emitted `crate::tensor`-calling program
+    /// (a self-contained crate with a path dep on the canonical `mog_synth`
+    /// crate) and verify it through the cargo-check compile gate. Reports
+    /// success ONLY when the gate is clean (the emitted code genuinely
+    /// type-checks + links against the real engine op).
+    fn run_tensor_forward(&mut self, lemma: &str, code: &str) -> AgentQueryResult {
+        let files = crate::tensor_nl::tensor_crate_files(lemma, code);
+        match crate::agent::repo::write_tensor_program(&self.root, &files) {
+            Ok(outcome) => {
+                let mut tool_trace: Vec<(String, String)> = outcome
+                    .written
+                    .iter()
+                    .map(|p| (format!("fs.write:{p}"), "ok".to_string()))
+                    .collect();
+                let (success, note) = match &outcome.compile {
+                    crate::agent::repo::CompileStatus::Ok => {
+                        tool_trace.push(("cargo.check".to_string(), "ok".to_string()));
+                        (true, String::new())
+                    }
+                    crate::agent::repo::CompileStatus::Failed(err) => {
+                        tool_trace.push(("cargo.check".to_string(), "failed".to_string()));
+                        (false, format!("\ncompile gate FAILED:\n{err}"))
+                    }
+                    crate::agent::repo::CompileStatus::Unverified(why) => {
+                        tool_trace.push(("cargo.check".to_string(), "unverified".to_string()));
+                        (false, format!("\ncompile gate UNVERIFIED (cargo unavailable): {why}"))
+                    }
+                };
+                let mut response = format!(
+                    "tensor forward-inference program (op `{lemma}`, codegen → crate::tensor):\n{code}"
+                );
+                response.push_str(&note);
+                AgentQueryResult {
+                    route: QueryRoute::SynthesizeFunction,
+                    success,
+                    response,
+                    workflow: "tensor.forward".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some(format!("tensor-forward-codegen:{lemma}")),
+                    repo_result: None,
+                    tool_trace,
+                }
+            }
+            Err(error) => AgentQueryResult {
+                route: QueryRoute::SynthesizeFunction,
+                success: false,
+                response: format!("tensor program write failed: {error}"),
+                workflow: "tensor.forward".to_string(),
+                clarification_questions: Vec::new(),
+                synthesis_method: None,
+                repo_result: None,
+                tool_trace: Vec::new(),
+            },
         }
     }
 
