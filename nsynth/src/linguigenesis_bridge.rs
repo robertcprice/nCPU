@@ -581,7 +581,20 @@ impl LinguigenesisBridge {
             .map_err(|_| BridgeError::LockError)?
             .clone();
         let mut coding = CodingComprehension::new(registry);
-        let req = coding.comprehend(input);
+        let mut req = coding.comprehend(input);
+        // STATEFUL RE-TARGET (UNWALL-1-STATEFUL-NL): a request whose primary op is a
+        // collection→scalar REDUCE (array→int example shape) but which ALSO carries
+        // a STRUCTURAL per-tick-state operand signal (a token resolves to a
+        // `nsynth_category=stateful` entity) is a per-tick stateful reducer, not a
+        // plain array reduce. Re-target it to the mined stateful capability whose
+        // engine reducer BEHAVIORALLY reproduces the resolved reduce op's outputs
+        // (state=0 ⇒ f(0,arr)=g(arr)). Both signals are structural: the reduce shape
+        // is read from example types, the stateful signal from a registry-resolved
+        // operand class, and the op identity from a BEHAVIORAL match — never a
+        // phrase→op table. Plain reduces (no stateful operand token) are untouched.
+        if let Some(stateful) = retarget_stateful_reducer(input, &req, coding.registry()) {
+            req = stateful;
+        }
         if req.examples.is_empty() {
             let questions = build_clarifications(&req, coding.registry());
             if !questions.is_empty() {
@@ -629,7 +642,22 @@ impl LinguigenesisBridge {
             .map_err(|_| BridgeError::LockError)?
             .clone();
         let mut coding = CodingComprehension::new(registry);
-        Ok(coding.comprehend_outcome(input))
+        let outcome = coding.comprehend_outcome(input);
+        // STATEFUL RE-TARGET (UNWALL-1-STATEFUL-NL): apply the SAME structural
+        // re-target the `nl_to_requirement` front door uses, so the PRODUCT path
+        // (`CodingAgentSession::handle_query` → `comprehend_outcome`) also routes a
+        // per-tick stateful reducer to the real stateful synthesis instead of a
+        // plain array reduce. A re-targeted request is unambiguously Ready (its
+        // behaviorally-matched stateful examples are the spec), so it also resolves
+        // an ambiguous reduce-shaped clarification.
+        let req_ref = match &outcome {
+            ComprehensionOutcome::Ready(req) => req,
+            ComprehensionOutcome::NeedsClarification(req, _) => req,
+        };
+        if let Some(stateful) = retarget_stateful_reducer(input, req_ref, coding.registry()) {
+            return Ok(ComprehensionOutcome::Ready(stateful));
+        }
+        Ok(outcome)
     }
 
     /// Apply a clarification answer and return an updated requirement.
@@ -1291,6 +1319,26 @@ fn unsound_confident_solve_categorized(
         return None;
     }
 
+    // STATEFUL RE-TARGET EXEMPTION (UNWALL-1-STATEFUL-NL): a requirement whose
+    // examples carry the two-input per-tick shape `(state: i64, arr: [i64]) -> i64`
+    // was BEHAVIORALLY re-targeted to a stateful reducer (`retarget_stateful_
+    // reducer`) — the reduce op the request also named is SUBSUMED by the stateful
+    // op (it IS the same reduction, threaded through a per-tick state), not a
+    // dropped composition. The operation-identity gate below would otherwise read
+    // the array-reduce word ("total"/"sum") as a dropped op and refuse. Detected
+    // STRUCTURALLY from the example shape (Int seed + Array, Int result), not a
+    // category-name or phrase test; a plain reduce can never carry this shape.
+    let is_stateful_pertick_shape = !req.examples.is_empty()
+        && req.examples.iter().all(|ex| {
+            ex.inputs.len() == 2
+                && matches!(ex.inputs[0], LiteralValue::Int(_))
+                && matches!(ex.inputs[1], LiteralValue::Array(_))
+                && matches!(ex.expected, LiteralValue::Int(_))
+        });
+    if is_stateful_pertick_shape {
+        return None;
+    }
+
     // EMERGENT operation inventory: ask the RESOLVER what each surface token names,
     // and let the resolved ENTITY itself decide operand-vs-operation. There is no
     // VALUE_NOUNS wordlist, no type-noun→signature table, and no `evidence.method`
@@ -1477,6 +1525,167 @@ struct ResolvedContentOp {
 /// silently dropped here) precisely when it does NOT resolve to a
 /// Function/Operator entity at or above [`OP_RESOLVE_FLOOR`] — operand-vs-operation
 /// is decided by the resolver + entity type, never a wordlist.
+/// Minimal score for a token to count as a STATEFUL operand-class signal. Set to
+/// the same ARRAY_DOMAIN_FLOOR rationale: a per-tick-state word ("tick", "state",
+/// "running", …) links to a stateful op weakly (definition overlap), yet its mere
+/// presence — against a plain array-REDUCE primary op — is a real operand-class
+/// signal. The behavioral-match step below still gates correctness, so a weak
+/// false-positive here cannot produce a confident-wrong solve (it can only fail to
+/// behaviorally match and leave the plain reduce untouched).
+const STATEFUL_OPERAND_FLOOR: f32 = 0.50;
+
+/// STATEFUL RE-TARGET: detect a per-tick stateful reducer disguised (by the
+/// resolver) as a plain array reduce, and re-target the requirement to the mined
+/// stateful capability whose engine reducer behaviorally matches. Returns `None`
+/// (leaving the plain reduce untouched) unless ALL structural conditions hold:
+///
+///   1. REDUCE SHAPE (structural, from example types): every resolved example is
+///      a single ARRAY input → INT output — i.e. a collection→scalar reduce.
+///   2. STATEFUL OPERAND SIGNAL (structural, registry-resolved): some request
+///      token resolves (>= floor) to an entity whose `nsynth_category` is
+///      `stateful` — the per-tick-state operand class, read from the registry, not
+///      a phrase list.
+///   3. BEHAVIORAL MATCH (no name table): among the mined stateful entities, pick
+///      the one whose engine reducer `g` reproduces the resolved reduce op's
+///      output on EVERY row with the additive seed (state=0, op="+" ⇒ f(0,arr) =
+///      g(arr) = the reduce op's output). The op identity is chosen by BEHAVIOUR,
+///      never by matching the array op's name to a stateful op's name.
+fn retarget_stateful_reducer(
+    input: &str,
+    req: &SynthesisRequirement,
+    registry: &Registry,
+) -> Option<SynthesisRequirement> {
+    use linguigenesis_core::coding_requirements::{parse_example_cases, ExampleSpec};
+    use linguigenesis_core::nl_tokens::tokenize_lower;
+
+    // (1) REDUCE SHAPE: collection→scalar. Read from example value types only.
+    if req.examples.is_empty() {
+        return None;
+    }
+    let is_reduce_shape = req.examples.iter().all(|ex| {
+        ex.inputs.len() == 1
+            && matches!(ex.inputs[0], LiteralValue::Array(_))
+            && matches!(ex.expected, LiteralValue::Int(_))
+    });
+    if !is_reduce_shape {
+        return None;
+    }
+
+    // (2) STATEFUL OPERAND SIGNAL: a request token resolves to a stateful-category
+    // entity. The category lives on the registry entity (mined `nsynth_category`),
+    // so this is an emergent operand-class read, not a hardcoded phrase list.
+    let resolver = EntityResolver::new(registry.clone());
+    let has_stateful_operand = tokenize_lower(input).iter().any(|tok| {
+        resolver
+            .resolve_operation_surface(tok)
+            .map(|r| {
+                r.evidence.score >= STATEFUL_OPERAND_FLOOR
+                    && r.entity.get_property("nsynth_category").map(|c| c.as_str())
+                        == Some("stateful")
+            })
+            .unwrap_or(false)
+    });
+    if !has_stateful_operand {
+        return None;
+    }
+
+    // (3) BEHAVIORAL MATCH: pick the mined stateful entity whose additive update
+    // (state=0, op="+") reproduces the resolved reduce op's output on every row.
+    // f(0, arr) = g(arr) for the matching reducer, so we just need g(arr) == the
+    // reduce op's labelled output. We test this via the stateful entity's OWN
+    // engine reducer applied at state 0 — sourced from the engine surface through
+    // the descriptor, not re-implemented here.
+    let reduce_rows: Vec<(&Vec<i64>, i64)> = req
+        .examples
+        .iter()
+        .filter_map(|ex| match (&ex.inputs[0], &ex.expected) {
+            (LiteralValue::Array(a), LiteralValue::Int(v)) => Some((a, *v)),
+            _ => None,
+        })
+        .collect();
+
+    let stateful_descriptors = crate::synthesis::stateful_reducer_surface::mineable_stateful_ops();
+    for entity in registry.all_entities() {
+        if entity.get_property("nsynth_category").map(|c| c.as_str()) != Some("stateful") {
+            continue;
+        }
+        let reducer = entity.get_property("mined_engine_reducer")?.clone();
+        let op = entity.get_property("mined_engine_op")?.clone();
+        // Confirm this entity is one the descriptor actually emits (bound to the
+        // engine surface), and use the descriptor's runner as the reference for
+        // `f(state, arr) = state op g(arr)`.
+        let Some(desc) = stateful_descriptors.iter().find(|d| {
+            d.lemma == entity.lemma && d.reducer == reducer && d.op == op
+        }) else {
+            continue;
+        };
+        // EMERGENT left-identity seed: a plain single-array reduce is the special
+        // case of the per-tick update where the prior state contributes nothing —
+        // i.e. f(e, arr) = e op g(arr) = g(arr) when `e` is op's LEFT-IDENTITY. We
+        // derive `e` by PROBING the op's own combine arithmetic
+        // (`stateful_state_combine`, the SAME math `search_stateful_reducer`
+        // verifies), never a per-op phrase table: `e` is the seed for which
+        // `e op x == x` across sample `x`. This generalises the prior op="+"/seed=0
+        // case to ALL state-combining ops (running MAX uses e=i64::MIN, running MIN
+        // uses e=i64::MAX, a product uses e=1), so the genuinely-stateful
+        // non-additive updates become NL-reachable. Ops with NO left-identity (e.g.
+        // "-", which never mirrors a plain reduce) yield `None` and are skipped.
+        let Some(identity) = op_left_identity(&op) else {
+            continue;
+        };
+        // BEHAVIORAL test: f(e, arr) == the reduce op's labelled output on EVERY
+        // row, where `e` is op's left-identity. The op identity is chosen by this
+        // BEHAVIOUR (state contributes nothing at the identity seed), not by a name
+        // match between the array op and the stateful op.
+        let matches_all = reduce_rows
+            .iter()
+            .all(|(arr, out)| (desc.run)(identity, arr) == Some(*out));
+        if !matches_all {
+            continue;
+        }
+        // MATCH. Build a re-targeted requirement from THIS stateful entity's mined
+        // (state, arr) example_cases.
+        let stateful_examples: Vec<ExampleSpec> = parse_example_cases(&entity);
+        if stateful_examples.len() < 3 {
+            continue; // keep the holdout-protected floor
+        }
+        let mut retargeted = req.clone();
+        retargeted.function_name = entity.lemma.clone();
+        retargeted.category = "stateful".to_string();
+        retargeted.target_structure = Some(entity.lemma.clone());
+        // Stateful per-tick signature `(state: i64, arr: [i64]) -> i64`, so the
+        // downstream gates / `infer_signature` see the real two-input shape rather
+        // than the resolver's stale single-input reduce signature.
+        retargeted.signature = format!("fn {}(state: i64, arr: [i64]) -> i64", entity.lemma);
+        retargeted.examples = stateful_examples;
+        retargeted.unresolved.clear();
+        retargeted.pipeline = None;
+        return Some(retargeted);
+    }
+    None
+}
+
+/// The LEFT-IDENTITY seed `e` of a state-combining `op` (the `op` in
+/// `state op g(arr)`): the prior-state value for which the per-tick update
+/// degenerates to the plain reduce, `e op x == x` for all `x`. Derived
+/// EMERGENTLY by probing the engine's OWN combine arithmetic
+/// (`solver::stateful_state_combine`) over a small candidate seed set — NOT a
+/// per-op table — so it tracks the engine surface and fails closed (`None`) for
+/// an op with no left-identity (e.g. subtraction, which can never mirror a plain
+/// reduce). Candidates cover the additive (0), multiplicative (1), and lattice
+/// (`i64::MIN` for max, `i64::MAX` for min) identities the 5 stateful ops need.
+fn op_left_identity(op: &str) -> Option<i64> {
+    // Sample `x` values spanning sign, zero, and magnitude so a false identity
+    // (one that happens to fix a single probe) cannot pass.
+    const SAMPLES: [i64; 6] = [0, 1, -1, 7, -13, 1_000_000];
+    const CANDIDATES: [i64; 4] = [0, 1, i64::MIN, i64::MAX];
+    CANDIDATES.into_iter().find(|&e| {
+        SAMPLES
+            .iter()
+            .all(|&x| crate::solver::stateful_state_combine(op, e, x) == Some(x))
+    })
+}
+
 fn resolved_content_ops(input: &str, registry: &Registry) -> Vec<ResolvedContentOp> {
     use linguigenesis_core::entity::EntityType;
     use linguigenesis_core::nl_tokens::tokenize_lower;
@@ -2181,6 +2390,41 @@ fn param_names(idx: usize) -> String {
 mod tests {
     use super::*;
 
+    /// UNWALL-1B EMERGENT left-identity derivation: the non-additive stateful
+    /// re-target picks each op's behavioral seed by deriving its LEFT-IDENTITY from
+    /// the engine's OWN combine arithmetic (`solver::stateful_state_combine`), never
+    /// a per-op phrase table. This asserts the broadened match relies on the real
+    /// identities — `+`→0, `*`→1, `max`→i64::MIN, `min`→i64::MAX — and that an op
+    /// with NO left-identity (subtraction) yields `None` so it can never mirror a
+    /// plain reduce (the additive-only behaviour, generalised soundly).
+    #[test]
+    fn op_left_identity_is_engine_derived_per_op() {
+        assert_eq!(op_left_identity("+"), Some(0), "+ identity is 0");
+        assert_eq!(op_left_identity("*"), Some(1), "* identity is 1");
+        assert_eq!(op_left_identity("max"), Some(i64::MIN), "max identity is i64::MIN");
+        assert_eq!(op_left_identity("min"), Some(i64::MAX), "min identity is i64::MAX");
+        // Subtraction has no left-identity (0 - x = -x != x), so a non-additive
+        // request can never wrongly mirror a plain reduce via `-`.
+        assert_eq!(op_left_identity("-"), None, "subtraction has no left-identity");
+        // An op absent from the engine surface fails closed.
+        assert_eq!(op_left_identity("xor"), None, "unknown op fails closed");
+        // The derived identity actually degenerates the engine update to the plain
+        // reduce: f(e, arr) = e op g(arr) = g(arr). Probe max + min directly.
+        let arr = &[3i64, -1, 7, 2];
+        let id_max = op_left_identity("max").unwrap();
+        assert_eq!(
+            crate::solver::stateful_reducer_apply("max", "max", id_max, arr),
+            Some(7),
+            "max left-identity seed must degenerate state.max(max(arr)) to max(arr)"
+        );
+        let id_min = op_left_identity("min").unwrap();
+        assert_eq!(
+            crate::solver::stateful_reducer_apply("min", "min", id_min, arr),
+            Some(-1),
+            "min left-identity seed must degenerate state.min(min(arr)) to min(arr)"
+        );
+    }
+
     /// NL-COMPREHEND-IN-LGCORE ANTI-CHEAT: linguigenesis-core — NOT this bridge —
     /// now COMPREHENDS the composition. Calling `CodingComprehension::comprehend`
     /// directly (the lg-core entry point) on a compositional request must return a
@@ -2351,6 +2595,7 @@ mod tests {
         assert!(!examples.is_empty());
         assert_eq!(examples[0].expected, Value::int_array(&[2, 4, 6]));
     }
+
 
     #[test]
     fn test_synthesize_from_description_add() {

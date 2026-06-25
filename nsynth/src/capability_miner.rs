@@ -49,6 +49,19 @@ const STRING_PROBES: &[&str] = &[
 /// Canonical input arrays the array order ops are exercised on.
 const ARRAY_PROBES: &[&[i64]] = &[&[3, 1, 2], &[5, 4, 6, 4], &[1], &[2, 2, 1, 3]];
 
+/// Canonical `(state, arr)` probes the STATEFUL per-tick reducers are exercised
+/// on to manufacture two-input example rows. Each carries BOTH a non-trivial seed
+/// state AND an array mixing positive/negative/zero so the rows DISCRIMINATE the
+/// intended `(reducer, op)` from the others in the engine surface (e.g. `running_
+/// total` vs `running_max` give different outputs on these), and so each op yields
+/// >=3 DISTINCT (state, arr) -> result rows for the bridge's fresh-holdout check.
+const STATEFUL_PROBES: &[(i64, &[i64])] = &[
+    (0, &[1, 2, 3]),
+    (10, &[5, -2, 0]),
+    (-5, &[2, 9, 1]),
+    (100, &[-1, 0, -4]),
+];
+
 /// Canonical input arrays the elementwise maps are exercised on. Includes BOTH
 /// negative AND positive values so EVERY mined map (negate / double / increment /
 /// square / abs) produces a NON-identity, mutually-distinct output — in particular
@@ -121,6 +134,32 @@ fn nl_surface(lemma: &str) -> (Vec<&'static str>, &'static str, &'static str) {
             "Take the absolute value of every element of an array",
             "array",
         ),
+        // ── UNWALL-1-STATEFUL-NL: per-tick (state, arr) -> state reducers ──
+        "running_total" => (
+            vec!["running_sum", "accumulate", "accumulator", "running_accumulator"],
+            "Update a running total by adding the sum of this tick's array to the state",
+            "stateful",
+        ),
+        "running_deduction" => (
+            vec!["running_balance", "drain", "deplete"],
+            "Update a running balance by subtracting the sum of this tick's array from the state",
+            "stateful",
+        ),
+        "running_max" => (
+            vec!["high_water_mark", "running_maximum", "peak"],
+            "Update a high-water mark with the maximum of this tick's array",
+            "stateful",
+        ),
+        "running_min" => (
+            vec!["low_water_mark", "running_minimum", "trough"],
+            "Update a low-water mark with the minimum of this tick's array",
+            "stateful",
+        ),
+        "running_positive_count" => (
+            vec!["accumulate_positive", "tally_positive", "count_positive_running"],
+            "Accumulate the count of positive values seen each tick into the state",
+            "stateful",
+        ),
         _ => (vec![], "", "unknown"),
     }
 }
@@ -171,6 +210,71 @@ fn array_example_cases_on(run: fn(&[i64]) -> Vec<i64>, probes: &[&[i64]]) -> Opt
         return None;
     }
     Some(Value::Array(cases).to_string())
+}
+
+/// Build the `example_cases` JSON for a STATEFUL per-tick reducer by RUNNING the
+/// engine's OWN reference (`solver::stateful_reducer_apply`, surfaced through the
+/// descriptor's `run`) on the canonical `(state, arr)` probes. Each row is a
+/// two-input `[{Int}, {Array}]` case so the bridge's `infer_signature` derives
+/// `(a: i64, b: [i64]) -> i64` and the solver routes to `search_stateful_reducer`.
+/// De-dups by (state, arr, out); returns `None` below the >=3 distinct-row floor.
+fn stateful_example_cases(run: fn(i64, &[i64]) -> Option<i64>) -> Option<String> {
+    let mut cases: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<(i64, Vec<i64>, i64)> = std::collections::HashSet::new();
+    for &(state, arr) in STATEFUL_PROBES {
+        let out = run(state, arr)?; // auto-run the engine's OWN reference
+        if seen.insert((state, arr.to_vec(), out)) {
+            cases.push(json!({
+                "inputs": [
+                    {"type": "Int", "value": state},
+                    {"type": "Array", "value": arr},
+                ],
+                "expected": {"type": "Int", "value": out},
+            }));
+        }
+    }
+    if cases.len() < 3 {
+        return None; // too thin to be a sound, holdout-protected capability
+    }
+    Some(Value::Array(cases).to_string())
+}
+
+/// One mined STATEFUL reducer capability in the `coding_registry.json` schema.
+/// Signature is two-input `(state: i64, arr: [i64]) -> i64`; provenance records
+/// the engine `(reducer, op)` the descriptor bound to, proving it came from the
+/// engine surface, not a hand table.
+fn stateful_entity(
+    lemma: &str,
+    reducer: &str,
+    op: &str,
+    example_cases: String,
+) -> (String, Value) {
+    let (syns, def, domain) = nl_surface(lemma);
+    let attrs = json!({
+        "arity": "2",
+        "input_types": "i64, Vec<i64>",
+        "output_type": "i64",
+        "nsynth_category": "stateful",
+        "default_fn_name": lemma,
+        "signature_template": "fn {name}({params}) -> {return}",
+        // Provenance: the engine `(reducer, op)` the per-tick update reflects, and
+        // that the rows were machine-mined from the engine reference.
+        "mined_engine_reducer": reducer,
+        "mined_engine_op": op,
+        "mined_provenance": "search_families::search_stateful_reducer",
+        "example_cases": example_cases,
+    });
+    let entity = json!({
+        "word": lemma,
+        "entity_type": "function",
+        "definitions": [def],
+        "attributes": attrs,
+        "relations": {
+            "synonym": syns,
+            "domain": [domain],
+        },
+    });
+    (lemma.to_string(), entity)
 }
 
 /// One mined capability, ready to serialize into the `coding_registry.json`
@@ -273,6 +377,21 @@ pub fn mine_capabilities() -> Value {
     for op in elem_ops {
         if let Some(cases) = array_example_cases_on(op.run, ELEMENT_MAP_PROBES) {
             let (k, v) = array_entity_with(op.lemma, cases, "array_transform::ElementMapKind");
+            entities.insert(k, v);
+        }
+    }
+
+    // ── STATEFUL per-tick reducers — reflected from the engine's
+    //    search_stateful_reducer op surface (UNWALL-1-STATEFUL-NL). Two-input
+    //    (state, arr) -> state rows AUTO-RUN through the engine's OWN reference
+    //    (stateful_reducer_apply), so a request resolved to one of these lemmas
+    //    synthesizes the REAL search_stateful_reducer program.
+    let mut stateful_ops =
+        crate::synthesis::stateful_reducer_surface::mineable_stateful_ops();
+    stateful_ops.sort_by(|a, b| a.lemma.cmp(b.lemma));
+    for op in stateful_ops {
+        if let Some(cases) = stateful_example_cases(op.run) {
+            let (k, v) = stateful_entity(op.lemma, op.reducer, op.op, cases);
             entities.insert(k, v);
         }
     }

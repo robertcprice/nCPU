@@ -341,6 +341,55 @@ pub(super) fn search_array_item_loop(problem: &Problem, fn_name: &str) -> Option
 /// `op` in {+, -, *, min, max} — the small set of per-tick game-loop
 /// shapes that already run in production games. See
 /// `docs/stateful_synthesis_status.md` Stage 1.
+/// The reducer surface `search_stateful_reducer` enumerates over (the `g` in
+/// `f(state, arr) = state op g(arr)`). This is the SINGLE source of the engine's
+/// stateful reducer vocabulary — the reflective capability descriptor
+/// (`synthesis::stateful_reducer_surface`) binds its mined surface to THIS slice
+/// via an exhaustive guard, so adding a reducer here (and only here) grows the
+/// NL-reachable stateful surface with no hand edit elsewhere.
+pub(crate) const STATEFUL_REDUCER_NAMES: &[&str] = &[
+    "sum",
+    "max",
+    "min",
+    "count_positive",
+    "count_zero",
+    "count_negative",
+];
+
+/// The state-combining op surface `search_stateful_reducer` enumerates over (the
+/// `op` in `f(state, arr) = state op g(arr)`). Single source; see
+/// `STATEFUL_REDUCER_NAMES`.
+pub(crate) const STATEFUL_REDUCER_OPS: &[&str] = &["+", "-", "*", "min", "max"];
+
+/// Apply the engine's stateful per-tick update `state op g(arr)` for a
+/// `(reducer, op)` drawn from the surfaces above. Returns `None` if either name
+/// is not in the engine surface (so a reflected descriptor that drifts from the
+/// engine fails to manufacture examples — fail-closed). This is the EXACT
+/// reference `search_stateful_reducer` verifies against, reused so the mined
+/// examples are the engine's own semantics, not a re-implementation.
+pub(crate) fn stateful_reducer_apply(reducer: &str, op: &str, state: i64, arr: &[i64]) -> Option<i64> {
+    let g = reducer_fn(reducer)?;
+    let r = g(arr);
+    stateful_state_combine(op, state, r)
+}
+
+/// The bare state-combine step `state op r` of a stateful per-tick update, for an
+/// `op` in [`STATEFUL_REDUCER_OPS`]. Single source for the combine arithmetic
+/// (`stateful_reducer_apply` defers to it); returns `None` for an op not in the
+/// engine surface (fail-closed). Exposed so the NL bridge can derive an op's
+/// left-identity EMERGENTLY (by probing this arithmetic), instead of a phrase
+/// table — see `linguigenesis_bridge::retarget_stateful_reducer`.
+pub(crate) fn stateful_state_combine(op: &str, state: i64, r: i64) -> Option<i64> {
+    match op {
+        "+" => Some(state + r),
+        "-" => Some(state - r),
+        "*" => Some(state * r),
+        "min" => Some(state.min(r)),
+        "max" => Some(state.max(r)),
+        _ => None,
+    }
+}
+
 pub(super) fn search_stateful_reducer(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64, ParamType::ArrayI64] {
@@ -350,15 +399,8 @@ pub(super) fn search_stateful_reducer(problem: &Problem, fn_name: &str) -> Optio
     let state_arg = "state";
     let arr_arg = "arr";
 
-    let reducers = &[
-        "sum",
-        "max",
-        "min",
-        "count_positive",
-        "count_zero",
-        "count_negative",
-    ];
-    let ops = &["+", "-", "*", "min", "max"];
+    let reducers = STATEFUL_REDUCER_NAMES;
+    let ops = STATEFUL_REDUCER_OPS;
 
     for reducer in reducers {
         for op in ops {
