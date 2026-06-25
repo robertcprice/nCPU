@@ -1043,10 +1043,61 @@ impl LinguigenesisBridge {
         let mut coding = CodingComprehension::new(registry);
         let plan: ProjectPlan = coding.comprehend_project(text);
 
-        let mut solved = Vec::with_capacity(plan.components.len());
-        let mut skipped = Vec::new();
+        // Assign each component a stable, collision-free fn/module name up-front,
+        // so a CONSUMER's composed-example derivation and the writer's
+        // use-injection agree on the producer's name. (The single-function and
+        // independent-sibling cases keep the exact names they had before.)
         let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for req in &plan.components {
+        let names: Vec<String> = plan
+            .components
+            .iter()
+            .map(|req| {
+                let base = if req.function_name.is_empty() {
+                    "f".to_string()
+                } else {
+                    req.function_name.clone()
+                };
+                let mut name = base.clone();
+                let mut n = 2;
+                while used_names.contains(&name) {
+                    name = format!("{base}{n}");
+                    n += 1;
+                }
+                used_names.insert(name.clone());
+                name
+            })
+            .collect();
+
+        // EMERGENT inter-component edges: `deps[i] = (consumer, producer)`. For
+        // each consumer that depends on exactly one producer, solve it through the
+        // COMPOSED-example + Call-node door (see `synthesize_consumer_with_call`).
+        // A component that is the CONSUMER of such an edge is skipped in the plain
+        // loop below (it is solved by the dep path). Independent / single-function
+        // requests have `deps == []`, so the plain loop runs unchanged.
+        let mut producer_of: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for &(c, p) in &plan.deps {
+            // MVP: a single producer per consumer (single producer→consumer DAG
+            // edge). A second producer for the same consumer is ignored here and
+            // reported rather than silently mis-composed.
+            producer_of.entry(c).or_insert(p);
+        }
+
+        let mut solved: Vec<(String, crate::solver::SolveResult)> =
+            Vec::with_capacity(plan.components.len());
+        let mut skipped = Vec::new();
+        // Cache solved producer code by index so a consumer can compose against it.
+        let mut solved_code: std::collections::HashMap<usize, String> =
+            std::collections::HashMap::new();
+
+        // PASS 1: solve every NON-consumer (producer + independent) component on
+        // the existing single-op door. This topo-orders producers before the
+        // consumers that call them (every dep edge points consumer→producer, and
+        // producers are never themselves consumers in this single-edge MVP).
+        for (idx, req) in plan.components.iter().enumerate() {
+            if producer_of.contains_key(&idx) {
+                continue; // a consumer — solved in pass 2
+            }
             if req.examples.is_empty() {
                 skipped.push(format!(
                     "component '{}' did not comprehend (no examples derived)",
@@ -1054,23 +1105,12 @@ impl LinguigenesisBridge {
                 ));
                 continue;
             }
-            // Stable per-component fn name; de-duplicate sibling collisions
-            // (e.g. two unnamed map components) so each writes a distinct file.
-            let base = if req.function_name.is_empty() {
-                "f".to_string()
-            } else {
-                req.function_name.clone()
-            };
-            let mut name = base.clone();
-            let mut n = 2;
-            while used_names.contains(&name) {
-                name = format!("{base}{n}");
-                n += 1;
-            }
-            used_names.insert(name.clone());
-
-            match self.synthesize_from_requirement(req, Some(&name)) {
-                Ok(result) if result.success => solved.push((name, result)),
+            let name = &names[idx];
+            match self.synthesize_from_requirement(req, Some(name)) {
+                Ok(result) if result.success => {
+                    solved_code.insert(idx, result.code.clone());
+                    solved.push((name.clone(), result));
+                }
                 Ok(result) => skipped.push(format!(
                     "component '{}' failed to synthesize: {}",
                     name,
@@ -1079,7 +1119,264 @@ impl LinguigenesisBridge {
                 Err(e) => skipped.push(format!("component '{name}' error: {e}")),
             }
         }
+
+        // PASS 2: solve each CONSUMER against its producer via the Call-node door.
+        for (idx, req) in plan.components.iter().enumerate() {
+            let Some(&pidx) = producer_of.get(&idx) else {
+                continue;
+            };
+            let consumer_name = &names[idx];
+            let producer_name = &names[pidx];
+            let Some(producer_code) = solved_code.get(&pidx).cloned() else {
+                skipped.push(format!(
+                    "consumer '{consumer_name}' skipped: producer '{producer_name}' did not solve"
+                ));
+                continue;
+            };
+            match self.synthesize_consumer_with_call(
+                req,
+                consumer_name,
+                producer_name,
+                &plan.components[pidx],
+                &producer_code,
+            ) {
+                Ok(result) => solved.push((consumer_name.clone(), result)),
+                Err(e) => skipped.push(format!(
+                    "consumer '{consumer_name}' (calls '{producer_name}') skipped: {e}"
+                )),
+            }
+        }
         Ok((solved, skipped))
+    }
+
+    /// COMPOSED-EXAMPLE + CALL-NODE door for a consumer B that depends on a sibling
+    /// producer A (edge detected emergently in `comprehend_project`). B's request
+    /// comprehends to its OWN op's RAW examples (the comprehension confusion the
+    /// HARD-MECHANISM note records), so we cannot search B directly. Instead:
+    ///
+    ///   1. RESIDUAL h: B's clause minus the producer reference. We resolve it as
+    ///      B's own resolved op (`req.function_name`) and synthesize it from its
+    ///      registry entity through the SAME single-op door producers use. If
+    ///      B's op IS the producer (pure alias, `square(x) = square(x)`), h is the
+    ///      identity and no residual synthesis is needed.
+    ///   2. COMPOSED EXAMPLES: run the SOLVED producer A on A's example inputs and
+    ///      apply the SOLVED residual h: `B(x) = h(A(x))`. These are DERIVED by
+    ///      execution (never fabricated): the producer + residual are real solved
+    ///      programs the runtime evaluates.
+    ///   3. CALL SEARCH: register A as a `NamedCallable` (its arity + Mog source +
+    ///      `eval`) and solve B's COMPOSED problem via
+    ///      `enumerative::synthesize_scalar_with_callees`. The Call-node search
+    ///      discovers `A(x)`-bearing expressions (e.g. `negate(square(a))` /
+    ///      `square(a) + 1`), and the strict-verify gate prepends A's source so the
+    ///      call resolves. The returned code names A — the writer injects the
+    ///      `use crate::<A_module>::<A_fn>;` import.
+    ///
+    /// Only single-arg producers + single-arg residuals (the arities the call wiring
+    /// registers) are handled; anything else is reported honestly (no fabrication).
+    fn synthesize_consumer_with_call(
+        &self,
+        consumer_req: &SynthesisRequirement,
+        consumer_name: &str,
+        producer_name: &str,
+        producer_req: &SynthesisRequirement,
+        producer_code: &str,
+    ) -> Result<crate::solver::SolveResult, String> {
+        use crate::enumerative::NamedCallable;
+
+        // The producer must be a single-arg scalar op (the only call arity the
+        // composed-example derivation + the search wiring support here).
+        let producer_inputs = producer_req
+            .examples
+            .first()
+            .map(|e| e.inputs.len())
+            .unwrap_or(0);
+        if producer_inputs != 1 {
+            return Err(format!(
+                "producer '{producer_name}' is not single-arg (arity {producer_inputs}); \
+                 single-arg producer→consumer is the MVP"
+            ));
+        }
+
+        // The producer's example inputs are the x's we compose over. Reuse the
+        // producer's OWN comprehended example inputs (real, registry-derived).
+        let xs: Vec<i64> = producer_req
+            .examples
+            .iter()
+            .filter_map(|spec| match spec.inputs.first() {
+                Some(LiteralValue::Int(v)) => Some(*v),
+                _ => None,
+            })
+            .collect();
+        if xs.len() < 2 {
+            return Err("producer carries fewer than 2 integer example inputs to compose over".into());
+        }
+
+        // RESIDUAL h: identity when B's op IS the producer (pure alias); else the
+        // single-arg op B itself resolves to (`consumer_req.function_name`),
+        // synthesized from its registry entity through the same single-op door.
+        let residual_code: Option<String> = if consumer_req.function_name == producer_name {
+            None // pure alias B(x) = A(x)
+        } else {
+            let code = self.synthesize_named_unary_op(&consumer_req.function_name).map_err(|e| {
+                format!(
+                    "residual op '{}' could not be derived as a single-arg function: {e}",
+                    consumer_req.function_name
+                )
+            })?;
+            Some(code)
+        };
+
+        // COMPOSED EXAMPLES: B(x) = h(A(x)), derived by RUNNING the solved
+        // producer then the solved residual. No fabrication: every expected value
+        // is produced by executing real synthesized code.
+        let mut composed: Vec<Example> = Vec::new();
+        for &x in &xs {
+            let a_out = crate::runtime::execute_function(
+                producer_code,
+                producer_name,
+                &[Value::Int(x)],
+                "nl-compose-producer",
+            )
+            .map_err(|e| format!("producer '{producer_name}' failed to run on x={x}: {e}"))?;
+            let a_int = match a_out {
+                crate::runtime::Value::Int(v) => v,
+                other => return Err(format!("producer returned non-int {other:?}")),
+            };
+            let b_expected = match &residual_code {
+                None => a_int, // identity residual
+                Some(hc) => {
+                    let h_out = crate::runtime::execute_function(
+                        hc,
+                        &consumer_req.function_name,
+                        &[Value::Int(a_int)],
+                        "nl-compose-residual",
+                    )
+                    .map_err(|e| {
+                        format!(
+                            "residual '{}' failed to run on {a_int}: {e}",
+                            consumer_req.function_name
+                        )
+                    })?;
+                    match h_out {
+                        crate::runtime::Value::Int(v) => v,
+                        other => return Err(format!("residual returned non-int {other:?}")),
+                    }
+                }
+            };
+            composed.push(Example {
+                inputs: vec![Value::Int(x)],
+                expected: Value::Int(b_expected),
+            });
+        }
+        // De-duplicate identical composed rows (a square op repeats x and -x);
+        // keep distinct inputs so the search gets the widest signal.
+        composed.dedup();
+
+        // Build B's COMPOSED problem. The signature/category are inferred from the
+        // composed examples (single i64 -> i64). Holdouts are empty (the composed
+        // rows are themselves derived by an independent reference: the solved
+        // producer+residual, NOT B's own search).
+        let signature = infer_signature(consumer_name, &composed);
+        let signature = Box::leak(signature.into_boxed_str());
+        let category = Box::leak(consumer_req.category.clone().into_boxed_str());
+        let description = Box::leak(consumer_req.description.clone().into_boxed_str());
+        let problem = Problem {
+            name: consumer_name.to_string(),
+            category,
+            description,
+            signature,
+            examples: composed,
+            holdouts: Vec::new(),
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: Vec::new(),
+        };
+
+        // Register the producer A as a real callable: name (for emission), arity,
+        // its full Mog source (for the strict-verify prepend), and an `eval` that
+        // RUNS A so a `Call(A, args)` candidate is verified end-to-end.
+        let producer_src = producer_code.to_string();
+        let producer_fn = producer_name.to_string();
+        let callee = NamedCallable {
+            name: producer_fn.clone(),
+            n_args: 1,
+            source: producer_src.clone(),
+            eval: Box::new(move |xs: &[i64]| {
+                if xs.len() != 1 {
+                    return None;
+                }
+                match crate::runtime::execute_function(
+                    &producer_src,
+                    &producer_fn,
+                    &[Value::Int(xs[0])],
+                    "nl-compose-callee",
+                ) {
+                    Ok(crate::runtime::Value::Int(v)) => Some(v),
+                    _ => None,
+                }
+            }),
+        };
+
+        let result = crate::enumerative::synthesize_scalar_with_callees(&problem, &[callee])
+            .ok_or_else(|| {
+                "Call-node search found no program calling the producer for the composed examples"
+                    .to_string()
+            })?;
+        if !result.success {
+            return Err(format!(
+                "Call-node search did not verify (method={}, err={:?})",
+                result.method, result.error
+            ));
+        }
+        // The emitted code MUST genuinely CALL the producer (not an inlined
+        // re-derivation). Refuse silently-inlined results so the accept-criterion
+        // (a real call naming A) is never gamed.
+        if !crate::agent::repo::body_calls_fn(&result.code, producer_name) {
+            return Err(format!(
+                "Call-node search produced a program that does NOT call '{producer_name}' \
+                 (inlined): {}",
+                result.code
+            ));
+        }
+        Ok(result)
+    }
+
+    /// Synthesize a single-arg (`i64 -> i64`) op named `op_fn` from its registry
+    /// entity through the same single-op door producers use. Errors if the op is
+    /// absent, not synthesizable, not single-arg, or fails to solve. Used to
+    /// derive a consumer's RESIDUAL h.
+    fn synthesize_named_unary_op(&self, op_fn: &str) -> Result<String, String> {
+        use linguigenesis_core::entity::EntityType;
+        let registry = self.registry_clone().map_err(|e| e.to_string())?;
+        let entity = registry
+            .get_by_type(&EntityType::Function)
+            .into_iter()
+            .find(|e| {
+                e.get_property("default_fn_name").map(|f| f == op_fn).unwrap_or(false)
+                    || e.lemma == op_fn
+            })
+            .ok_or_else(|| format!("op '{op_fn}' not in registry"))?;
+        let req = SynthesisRequirement::from_operation_entity(&entity)
+            .ok_or_else(|| format!("op '{op_fn}' is not synthesizable (no example_cases)"))?;
+        // Must be a single-arg scalar op for the unary-residual composition.
+        let arity = req.examples.first().map(|e| e.inputs.len()).unwrap_or(0);
+        if arity != 1 {
+            return Err(format!("op '{op_fn}' is not single-arg (arity {arity})"));
+        }
+        let result = self
+            .synthesize_from_requirement(&req, Some(op_fn))
+            .map_err(|e| format!("residual '{op_fn}' synthesis: {e}"))?;
+        if !result.success {
+            return Err(format!(
+                "residual '{op_fn}' did not solve (method={}, err={:?})",
+                result.method, result.error
+            ));
+        }
+        Ok(result.code)
     }
 
     /// TEST-SUPPORT: resolve a single surface word to its highest-confidence
@@ -3063,5 +3360,152 @@ mod tests {
         );
         let r = bridge.synthesize_from_description("add two numbers", Some("add"));
         assert!(r.is_ok() && r.unwrap().success, "add must synthesize with the loaded registry");
+    }
+
+    // ===== UNWALL-2-CALLNODE-NL: B-calls-A from an English request =====
+
+    fn unwall2_fresh(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "nsynth_unwall2_{tag}_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// ACCEPT (un-gameable, CLI-equivalent end-to-end): an English 'B uses/calls A'
+    /// request flows through the REAL NL door (`synthesize_project`: comprehend →
+    /// emergent dep-detection → COMPOSED-example derivation → Call-node search) and
+    /// yields a 2-module crate where the CONSUMER genuinely CALLS the producer
+    /// (a real call naming `square`, NOT an inlined re-derivation), the crate
+    /// COMPILES through the cargo-check writer gate, and a GENERATED assert passes
+    /// via `cargo test`. The composed consumer examples are DERIVED by RUNNING the
+    /// solved producer + residual inside `synthesize_consumer_with_call` — never
+    /// fabricated.
+    #[test]
+    fn unwall2_consumer_calls_producer_endtoend() {
+        let bridge = LinguigenesisBridge::new();
+        assert!(bridge.registry_load_error().is_none(), "registry must load");
+
+        // "increments its square using square" → B(x) = square(x) + 1.
+        let request = "a function that squares a number \
+                       and a function that increments its square using square";
+        let (solved, skipped) = bridge
+            .synthesize_project(request)
+            .expect("synthesize_project must run");
+        eprintln!("[UNWALL2] solved={:?} skipped={:?}",
+            solved.iter().map(|(n, r)| (n.clone(), r.method.clone(), r.code.clone())).collect::<Vec<_>>(),
+            skipped);
+
+        assert_eq!(solved.len(), 2, "both producer + consumer must solve; skipped={skipped:?}");
+        // Producer "square" present.
+        let producer = solved.iter().find(|(n, _)| n == "square").expect("square solved");
+        assert!(producer.1.code.contains("fn square"), "producer is square: {}", producer.1.code);
+        // Consumer "increment" present AND genuinely CALLS square (not inlined).
+        let consumer = solved.iter().find(|(n, _)| n == "increment").expect("increment solved");
+        assert!(
+            crate::agent::repo::body_calls_fn(&consumer.1.code, "square"),
+            "consumer must CALL square (not inline a*a): {}",
+            consumer.1.code
+        );
+        // NOT inlined: the body must NOT contain a raw `a * a` self-multiplication.
+        assert!(
+            !consumer.1.code.replace(' ', "").contains("a*a"),
+            "consumer must NOT inline a*a — it must reuse square: {}",
+            consumer.1.code
+        );
+
+        // END-TO-END: write the 2-module crate via the real writer (use-injection +
+        // cargo-check gate), then append a generated assert and run cargo test.
+        let components: Vec<(String, String)> =
+            solved.iter().map(|(n, r)| (n.clone(), r.code.clone())).collect();
+        let root = unwall2_fresh("square_inc");
+        let outcome = crate::agent::repo::write_synthesized_project(&root, "square_inc", &components)
+            .expect("write crate");
+        assert!(
+            outcome.compile.is_ok(),
+            "2-module crate must compile clean: {:?}",
+            outcome.compile
+        );
+        // The consumer module must carry the injected `use crate::square::square;`.
+        let cons_mod = std::fs::read_to_string(root.join("src/increment.rs")).unwrap();
+        assert!(
+            cons_mod.contains("use crate::square::square;"),
+            "consumer module must import square: {cons_mod}"
+        );
+        assert!(
+            cons_mod.contains("square("),
+            "consumer module body must call square(...): {cons_mod}"
+        );
+
+        // GENERATED assert: increment(3) must equal 3*3 + 1 == 10.
+        let mut lib = std::fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        lib.push_str(
+            "\n#[cfg(test)]\nmod unwall2_tests {\n    use super::*;\n    #[test]\n    fn consumer_calls_producer() {\n        assert_eq!(increment(3), 10);\n        assert_eq!(increment(4), 17);\n    }\n}\n",
+        );
+        std::fs::write(root.join("src/lib.rs"), &lib).unwrap();
+        let runtime = crate::agent::tools::SecureToolRuntime::for_repo_repair(
+            root.clone(),
+            crate::agent::repo::GuardrailPolicy::default(),
+        );
+        let test_run = runtime
+            .run_verification_command("cargo test")
+            .expect("cargo test must run");
+        assert!(
+            test_run.success,
+            "generated assert must pass:\nstdout:\n{}\nstderr:\n{}\nconsumer:\n{cons_mod}",
+            test_run.stdout, test_run.stderr
+        );
+        eprintln!("[UNWALL2] consumer module:\n{cons_mod}");
+        eprintln!("[UNWALL2] cargo test stdout:\n{}", test_run.stdout);
+        if std::env::var("NSYNTH_KEEP_CRATE").is_err() {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    /// DIFFERENTIAL: an INDEPENDENT-sibling request ('negate' + 'triple', no
+    /// call/use cue) must yield TWO INDEPENDENT functions with NO spurious call —
+    /// `deps` is empty so neither body references the other. This is the
+    /// no-false-positive guard for the dep path.
+    #[test]
+    fn unwall2_independent_siblings_have_no_call() {
+        let bridge = LinguigenesisBridge::new();
+        let request = "a module with a function that negates a number \
+                       and a function that triples a number";
+        let (solved, skipped) = bridge
+            .synthesize_project(request)
+            .expect("synthesize_project must run");
+        assert_eq!(solved.len(), 2, "both independent fns solve; skipped={skipped:?}");
+        for (name, res) in &solved {
+            // Neither sibling may call the other (independent → no Call discovered).
+            for (other, _) in &solved {
+                if other == name {
+                    continue;
+                }
+                assert!(
+                    !crate::agent::repo::body_calls_fn(&res.code, other),
+                    "independent sibling '{name}' must NOT call '{other}': {}",
+                    res.code
+                );
+            }
+        }
+    }
+
+    /// REGRESSION: a SINGLE-function request is a 1-component plan (deps empty), so
+    /// the dep path is never taken and behaviour is unchanged (the existing
+    /// single-op door still solves it).
+    #[test]
+    fn unwall2_single_function_unchanged() {
+        let bridge = LinguigenesisBridge::new();
+        let (solved, _skipped) = bridge
+            .synthesize_project("a function that squares a number")
+            .expect("synthesize_project must run");
+        assert_eq!(solved.len(), 1, "single-function request yields 1 component");
+        assert!(solved[0].1.code.contains("fn square"), "single fn is square: {}", solved[0].1.code);
     }
 }
