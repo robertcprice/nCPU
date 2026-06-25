@@ -370,6 +370,16 @@ pub(crate) const STATEFUL_REDUCER_OPS: &[&str] = &["+", "-", "*", "min", "max"];
 pub(crate) fn stateful_reducer_apply(reducer: &str, op: &str, state: i64, arr: &[i64]) -> Option<i64> {
     let g = reducer_fn(reducer)?;
     let r = g(arr);
+    stateful_state_combine(op, state, r)
+}
+
+/// The bare state-combine step `state op r` of a stateful per-tick update, for an
+/// `op` in [`STATEFUL_REDUCER_OPS`]. Single source for the combine arithmetic
+/// (`stateful_reducer_apply` defers to it); returns `None` for an op not in the
+/// engine surface (fail-closed). Exposed so the NL bridge can derive an op's
+/// left-identity EMERGENTLY (by probing this arithmetic), instead of a phrase
+/// table — see `linguigenesis_bridge::retarget_stateful_reducer`.
+pub(crate) fn stateful_state_combine(op: &str, state: i64, r: i64) -> Option<i64> {
     match op {
         "+" => Some(state + r),
         "-" => Some(state - r),

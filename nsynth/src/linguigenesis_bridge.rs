@@ -1611,22 +1611,35 @@ fn retarget_stateful_reducer(
         }
         let reducer = entity.get_property("mined_engine_reducer")?.clone();
         let op = entity.get_property("mined_engine_op")?.clone();
-        // Only the ADDITIVE-seed reducers can mirror a plain reduce: f(0,arr) =
-        // 0 op g(arr) must equal g(arr), which holds for op="+" (and only "+").
-        if op != "+" {
-            continue;
-        }
         // Confirm this entity is one the descriptor actually emits (bound to the
-        // engine surface), and use the descriptor's runner as the reference g.
+        // engine surface), and use the descriptor's runner as the reference for
+        // `f(state, arr) = state op g(arr)`.
         let Some(desc) = stateful_descriptors.iter().find(|d| {
             d.lemma == entity.lemma && d.reducer == reducer && d.op == op
         }) else {
             continue;
         };
-        // BEHAVIORAL test: f(0, arr) == the reduce op's labelled output on EVERY row.
+        // EMERGENT left-identity seed: a plain single-array reduce is the special
+        // case of the per-tick update where the prior state contributes nothing —
+        // i.e. f(e, arr) = e op g(arr) = g(arr) when `e` is op's LEFT-IDENTITY. We
+        // derive `e` by PROBING the op's own combine arithmetic
+        // (`stateful_state_combine`, the SAME math `search_stateful_reducer`
+        // verifies), never a per-op phrase table: `e` is the seed for which
+        // `e op x == x` across sample `x`. This generalises the prior op="+"/seed=0
+        // case to ALL state-combining ops (running MAX uses e=i64::MIN, running MIN
+        // uses e=i64::MAX, a product uses e=1), so the genuinely-stateful
+        // non-additive updates become NL-reachable. Ops with NO left-identity (e.g.
+        // "-", which never mirrors a plain reduce) yield `None` and are skipped.
+        let Some(identity) = op_left_identity(&op) else {
+            continue;
+        };
+        // BEHAVIORAL test: f(e, arr) == the reduce op's labelled output on EVERY
+        // row, where `e` is op's left-identity. The op identity is chosen by this
+        // BEHAVIOUR (state contributes nothing at the identity seed), not by a name
+        // match between the array op and the stateful op.
         let matches_all = reduce_rows
             .iter()
-            .all(|(arr, out)| (desc.run)(0, arr) == Some(*out));
+            .all(|(arr, out)| (desc.run)(identity, arr) == Some(*out));
         if !matches_all {
             continue;
         }
@@ -1650,6 +1663,27 @@ fn retarget_stateful_reducer(
         return Some(retargeted);
     }
     None
+}
+
+/// The LEFT-IDENTITY seed `e` of a state-combining `op` (the `op` in
+/// `state op g(arr)`): the prior-state value for which the per-tick update
+/// degenerates to the plain reduce, `e op x == x` for all `x`. Derived
+/// EMERGENTLY by probing the engine's OWN combine arithmetic
+/// (`solver::stateful_state_combine`) over a small candidate seed set — NOT a
+/// per-op table — so it tracks the engine surface and fails closed (`None`) for
+/// an op with no left-identity (e.g. subtraction, which can never mirror a plain
+/// reduce). Candidates cover the additive (0), multiplicative (1), and lattice
+/// (`i64::MIN` for max, `i64::MAX` for min) identities the 5 stateful ops need.
+fn op_left_identity(op: &str) -> Option<i64> {
+    // Sample `x` values spanning sign, zero, and magnitude so a false identity
+    // (one that happens to fix a single probe) cannot pass.
+    const SAMPLES: [i64; 6] = [0, 1, -1, 7, -13, 1_000_000];
+    const CANDIDATES: [i64; 4] = [0, 1, i64::MIN, i64::MAX];
+    CANDIDATES.into_iter().find(|&e| {
+        SAMPLES
+            .iter()
+            .all(|&x| crate::solver::stateful_state_combine(op, e, x) == Some(x))
+    })
 }
 
 fn resolved_content_ops(input: &str, registry: &Registry) -> Vec<ResolvedContentOp> {
@@ -2355,6 +2389,41 @@ fn param_names(idx: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// UNWALL-1B EMERGENT left-identity derivation: the non-additive stateful
+    /// re-target picks each op's behavioral seed by deriving its LEFT-IDENTITY from
+    /// the engine's OWN combine arithmetic (`solver::stateful_state_combine`), never
+    /// a per-op phrase table. This asserts the broadened match relies on the real
+    /// identities — `+`→0, `*`→1, `max`→i64::MIN, `min`→i64::MAX — and that an op
+    /// with NO left-identity (subtraction) yields `None` so it can never mirror a
+    /// plain reduce (the additive-only behaviour, generalised soundly).
+    #[test]
+    fn op_left_identity_is_engine_derived_per_op() {
+        assert_eq!(op_left_identity("+"), Some(0), "+ identity is 0");
+        assert_eq!(op_left_identity("*"), Some(1), "* identity is 1");
+        assert_eq!(op_left_identity("max"), Some(i64::MIN), "max identity is i64::MIN");
+        assert_eq!(op_left_identity("min"), Some(i64::MAX), "min identity is i64::MAX");
+        // Subtraction has no left-identity (0 - x = -x != x), so a non-additive
+        // request can never wrongly mirror a plain reduce via `-`.
+        assert_eq!(op_left_identity("-"), None, "subtraction has no left-identity");
+        // An op absent from the engine surface fails closed.
+        assert_eq!(op_left_identity("xor"), None, "unknown op fails closed");
+        // The derived identity actually degenerates the engine update to the plain
+        // reduce: f(e, arr) = e op g(arr) = g(arr). Probe max + min directly.
+        let arr = &[3i64, -1, 7, 2];
+        let id_max = op_left_identity("max").unwrap();
+        assert_eq!(
+            crate::solver::stateful_reducer_apply("max", "max", id_max, arr),
+            Some(7),
+            "max left-identity seed must degenerate state.max(max(arr)) to max(arr)"
+        );
+        let id_min = op_left_identity("min").unwrap();
+        assert_eq!(
+            crate::solver::stateful_reducer_apply("min", "min", id_min, arr),
+            Some(-1),
+            "min left-identity seed must degenerate state.min(min(arr)) to min(arr)"
+        );
+    }
 
     /// NL-COMPREHEND-IN-LGCORE ANTI-CHEAT: linguigenesis-core — NOT this bridge —
     /// now COMPREHENDS the composition. Calling `CodingComprehension::comprehend`

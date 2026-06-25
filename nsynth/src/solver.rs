@@ -82,7 +82,7 @@ use self::search::solve_by_search;
 /// mined surface emergent (a new reducer/op grows NL reach with no hand edit) and
 /// fail-closed (the surface guard drifts if the descriptor diverges).
 pub(crate) use self::search_families::{
-    stateful_reducer_apply, STATEFUL_REDUCER_NAMES, STATEFUL_REDUCER_OPS,
+    stateful_reducer_apply, stateful_state_combine, STATEFUL_REDUCER_NAMES, STATEFUL_REDUCER_OPS,
 };
 
 /// Error categories for better error handling and user feedback.
