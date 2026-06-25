@@ -132,6 +132,106 @@ fn softmax_forward_emits_engine_call_and_compiles() {
     assert!(cargo_check_ok(&r), "cargo.check must be ok: {:?}", r.tool_trace);
 }
 
+/// UNWALL-6 FORWARD (new unary tanh, compile-verified): "apply tanh to a tensor"
+/// emits a program that calls the real engine `crate::tensor` tanh AND compiles.
+#[test]
+fn tanh_forward_emits_engine_call_and_compiles() {
+    let root = fresh_root("tanh");
+    let r = run(&root, "apply tanh to a tensor");
+    assert!(r.success, "tanh forward must succeed; got: {}", r.response);
+    assert_eq!(r.route, QueryRoute::SynthesizeFunction);
+    assert!(
+        r.response.contains("mog_synth::tensor::ops::Tensor"),
+        "must call crate::tensor, got:\n{}",
+        r.response
+    );
+    assert!(
+        r.response.contains("a.tanh()"),
+        "must emit the reflected tanh call, got:\n{}",
+        r.response
+    );
+    // UN-GAMEABLE: the cargo-check compile gate actually passed.
+    assert!(
+        cargo_check_ok(&r),
+        "cargo.check must be ok (real compile), tool_trace: {:?}",
+        r.tool_trace
+    );
+    assert_eq!(
+        r.synthesis_method.as_deref(),
+        Some("tensor-forward-codegen:tanh")
+    );
+    assert!(root.join("src/lib.rs").exists());
+}
+
+/// UNWALL-6 FORWARD (new binary add, compile-verified): "add two tensors" emits a
+/// 2-arg `crate::tensor` add program that compiles. The tensor marker disambiguates
+/// it from the scalar i64 "add two numbers" lane (see `i64_lane_unaffected_*`).
+#[test]
+fn add_two_tensors_emits_engine_call_and_compiles() {
+    let root = fresh_root("addt");
+    let r = run(&root, "add two tensors");
+    assert!(r.success, "tensor add forward must succeed; got: {}", r.response);
+    assert!(
+        r.response.contains("a.add(&b)?"),
+        "must emit the reflected add call, got:\n{}",
+        r.response
+    );
+    assert!(
+        r.response.contains("mog_synth::tensor::ops::Tensor"),
+        "must call crate::tensor, got:\n{}",
+        r.response
+    );
+    assert!(
+        cargo_check_ok(&r),
+        "cargo.check must be ok (real compile), tool_trace: {:?}",
+        r.tool_trace
+    );
+    assert_eq!(
+        r.synthesis_method.as_deref(),
+        Some("tensor-forward-codegen:add")
+    );
+}
+
+/// UNWALL-6 FORWARD (new binary mul elementwise, compile-verified): a third NEW
+/// op, proving the broadened reach is the reflected op SET, not one new path.
+#[test]
+fn mul_two_tensors_elementwise_emits_engine_call_and_compiles() {
+    let root = fresh_root("mult");
+    let r = run(&root, "multiply two tensors elementwise");
+    assert!(r.success, "tensor mul forward must succeed; got: {}", r.response);
+    assert!(
+        r.response.contains("a.mul(&b)?"),
+        "must emit the reflected mul call, got:\n{}",
+        r.response
+    );
+    assert!(cargo_check_ok(&r), "cargo.check must be ok: {:?}", r.tool_trace);
+    assert_eq!(
+        r.synthesis_method.as_deref(),
+        Some("tensor-forward-codegen:mul")
+    );
+}
+
+/// HONEST (dim-reduction stub NOT mined): a dim-reduction request must NOT route
+/// to the tensor codegen — those engine ops (mean_dim/sum_dim) are stubs that
+/// ignore `dim`. It falls through to the normal lane instead of emitting a
+/// fake `crate::tensor` reduction.
+#[test]
+fn dim_reduction_request_not_mined_as_tensor_forward() {
+    let root = fresh_root("dimred");
+    let r = run(&root, "sum along a dimension of the tensor");
+    // It must NOT have been solved by the tensor-forward codegen.
+    assert_ne!(
+        r.synthesis_method.as_deref(),
+        Some("tensor-forward-codegen:add"),
+        "dim-reduction must not be mined as elementwise add"
+    );
+    assert!(
+        !r.response.contains("mog_synth::tensor::ops::Tensor"),
+        "dim-reduction stub must not emit a crate::tensor forward, got:\n{}",
+        r.response
+    );
+}
+
 /// HONEST REFUSAL: 'train a model' is a no-op here, so it must REFUSE.
 #[test]
 fn train_a_model_refuses_as_noop() {
