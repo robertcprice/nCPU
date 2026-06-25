@@ -64,6 +64,63 @@ pub enum Expr {
         body_op: BinOp,        // acc = acc OP body_rhs
         body_rhs: Box<Expr>,   // rhs over {args, x, acc, i}
     },
+    /// Call a previously-SOLVED function (a registered [`NamedCallable`]) by its
+    /// registry index, with `args` sub-expressions. This is the inter-function
+    /// data-flow node: when component B is searched with producer A registered,
+    /// the enumerator may emit `Call(idx_of_A, [arg])`. It is DISCOVERED by the
+    /// search exactly like any other constructor — there is no compose template.
+    /// `eval` requires the matching registry to be in scope (see `eval_with_callees`).
+    Call(usize, Vec<Expr>),
+}
+
+/// A solved function registered as a real callable PRIMITIVE for the search.
+/// `eval` executes the producer A on concrete args during candidate evaluation,
+/// so the enumerator can verify a `Call(idx, args)` candidate end-to-end. The
+/// registry is supplied ONLY at the call site that wants inter-function flow
+/// (B's solve with A registered); when it is empty the base search is byte-
+/// identical to today (no `Call` node is ever constructed).
+pub struct NamedCallable {
+    /// The producer's emitted Mog fn name (used by `emit_mog` to render the call).
+    pub name: String,
+    /// Exact arity. A `Call` is only enumerated when `args.len() == n_args`.
+    pub n_args: usize,
+    /// Executes A on concrete args. `None` on a domain error (e.g. overflow),
+    /// propagated like every other partial op so an unsound call is rejected.
+    pub eval: Box<dyn Fn(&[i64]) -> Option<i64>>,
+    /// The producer's full Mog SOURCE (`fn name(..) -> i64 { .. }`). Prepended to
+    /// the consumer's emitted code so the strict-verify gate can RESOLVE the call
+    /// (the consumer `name(args)` references a real definition). Empty string ⇒
+    /// no source prelude (the consumer is verified standalone, as before).
+    pub source: String,
+}
+
+impl std::fmt::Debug for NamedCallable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NamedCallable")
+            .field("name", &self.name)
+            .field("n_args", &self.n_args)
+            .finish()
+    }
+}
+
+thread_local! {
+    /// Callee-name table read by `to_mog_ext` when rendering a `Call(idx, _)`
+    /// node. Set ONLY for the duration of an `emit_mog`/`to_mog` call that may
+    /// contain `Call`s (see [`with_callee_names`]); empty otherwise, so the
+    /// base emission path is unaffected. It is a SCOPED producer→consumer edge,
+    /// not persistent shared state: cleared when the scope guard drops.
+    static CALLEE_NAMES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `f` with `CALLEE_NAMES` set to `names` for the duration of the call,
+/// restoring the prior value afterward (so nested/re-entrant emission is safe).
+fn with_callee_names<R>(names: &[String], f: impl FnOnce() -> R) -> R {
+    CALLEE_NAMES.with(|c| {
+        let prev = std::mem::replace(&mut *c.borrow_mut(), names.to_vec());
+        let r = f();
+        *c.borrow_mut() = prev;
+        r
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -136,16 +193,40 @@ const LOOP_BODY_OPS: [BinOp; 5] = [
 
 impl Expr {
     pub fn eval(&self, args: &[i64]) -> Option<i64> {
+        // No callee registry in scope → a `Call` node cannot be evaluated.
+        // The base search never CONSTRUCTS a `Call` (registry empty), so this
+        // path is only reached when an externally-built `Call` is `eval`'d
+        // without callees, which is correctly a domain error (`None`).
+        self.eval_with_callees(args, &[])
+    }
+
+    /// Like [`eval`] but resolves `Call(idx, args)` against `callees`. Every
+    /// non-Call arm is identical to the base `eval`, so when `callees` is empty
+    /// this is byte-identical to the historical evaluator. A `Call` evaluates
+    /// its arg sub-expressions (which may themselves contain `Call`s, same
+    /// registry), then runs the callee's `eval` closure on the concrete values.
+    pub fn eval_with_callees(&self, args: &[i64], callees: &[NamedCallable]) -> Option<i64> {
         match self {
             Expr::Var(i) => args.get(*i).copied(),
             Expr::Const(c) => Some(*c),
+            Expr::Call(idx, call_args) => {
+                let callee = callees.get(*idx)?;
+                if call_args.len() != callee.n_args {
+                    return None;
+                }
+                let mut vals = Vec::with_capacity(call_args.len());
+                for a in call_args {
+                    vals.push(a.eval_with_callees(args, callees)?);
+                }
+                (callee.eval)(&vals)
+            }
             Expr::BinOp(op, l, r) => {
-                let a = l.eval(args)?;
-                let b = r.eval(args)?;
+                let a = l.eval_with_callees(args, callees)?;
+                let b = r.eval_with_callees(args, callees)?;
                 eval_binop(*op, a, b)
             }
             Expr::UnaryOp(op, e) => {
-                let v = e.eval(args)?;
+                let v = e.eval_with_callees(args, callees)?;
                 match op {
                     UnOp::Neg => v.checked_neg(),
                     UnOp::Abs => v.checked_abs(),
@@ -154,12 +235,12 @@ impl Expr {
                 }
             }
             Expr::IfExpr(cmp, lhs, rhs, then_e, else_e) => {
-                let l = lhs.eval(args)?;
-                let r = rhs.eval(args)?;
+                let l = lhs.eval_with_callees(args, callees)?;
+                let r = rhs.eval_with_callees(args, callees)?;
                 if eval_cmp(*cmp, l, r) {
-                    then_e.eval(args)
+                    then_e.eval_with_callees(args, callees)
                 } else {
-                    else_e.eval(args)
+                    else_e.eval_with_callees(args, callees)
                 }
             }
             Expr::WhileAccum {
@@ -168,8 +249,8 @@ impl Expr {
                 body_op,
                 body_rhs,
             } => {
-                let mut acc = init.eval(args)?;
-                let n = bound.eval(args)?;
+                let mut acc = init.eval_with_callees(args, callees)?;
+                let n = bound.eval_with_callees(args, callees)?;
                 if n < 0 || n > 10_000 {
                     return None;
                 } // safety bound
@@ -178,7 +259,7 @@ impl Expr {
                     let mut ext = args.to_vec();
                     ext.push(acc);
                     ext.push(i);
-                    let rhs = body_rhs.eval(&ext)?;
+                    let rhs = body_rhs.eval_with_callees(&ext, callees)?;
                     acc = eval_binop(*body_op, acc, rhs)?;
                 }
                 Some(acc)
@@ -299,6 +380,9 @@ impl Expr {
     pub fn size(&self) -> usize {
         match self {
             Expr::Var(_) | Expr::Const(_) => 1,
+            // A call costs 1 (the call itself) plus the size of every argument,
+            // mirroring UnaryOp/BinOp so cost/depth bounds apply uniformly.
+            Expr::Call(_, call_args) => 1 + call_args.iter().map(|a| a.size()).sum::<usize>(),
             Expr::BinOp(_, l, r) => 1 + l.size() + r.size(),
             Expr::UnaryOp(_, e) => 1 + e.size(),
             Expr::IfExpr(_, a, b, c, d) => 1 + a.size() + b.size() + c.size() + d.size(),
@@ -355,6 +439,26 @@ impl Expr {
                 } else {
                     format!("{c}")
                 }
+            }
+            // Render `Call(idx, args)` as `callee_name(arg0, arg1, ...)`. The
+            // callee name is resolved from the thread-local emission table set
+            // by `emit_mog` (see `with_callee_names`). This is REAL Mog source:
+            // a plain function call the line-based transpiler passes through
+            // unchanged — no transpiler edit. When the table lacks the index
+            // (i.e. emission was not scoped, which never happens for a searched
+            // Call) it falls back to a stable synthetic name so output is total.
+            Expr::Call(idx, call_args) => {
+                let name = CALLEE_NAMES.with(|c| {
+                    c.borrow()
+                        .get(*idx)
+                        .cloned()
+                        .unwrap_or_else(|| format!("callee{idx}"))
+                });
+                let arg_strs: Vec<String> = call_args
+                    .iter()
+                    .map(|a| a.to_mog_ext(param_names, extra_names))
+                    .collect();
+                format!("{name}({})", arg_strs.join(", "))
             }
             Expr::BinOp(op, l, r) => {
                 let ls = l.to_mog_ext(param_names, extra_names);
@@ -495,9 +599,16 @@ fn eval_cmp(cmp: CmpOp, a: i64, b: i64) -> bool {
 // ─── Observational equivalence ───────────────────────────────────────────────
 
 fn fingerprint(expr: &Expr, test_inputs: &[Vec<i64>]) -> Option<Vec<i64>> {
+    fingerprint_c(expr, test_inputs, &[])
+}
+
+/// Callee-aware fingerprint. Identical to [`fingerprint`] when `callees` is
+/// empty (the base path), but resolves `Call` nodes against the registry so a
+/// `Call(idx, args)` candidate gets a real behavioural fingerprint.
+fn fingerprint_c(expr: &Expr, test_inputs: &[Vec<i64>], callees: &[NamedCallable]) -> Option<Vec<i64>> {
     let mut fp = Vec::with_capacity(test_inputs.len());
     for args in test_inputs {
-        match expr.eval(args) {
+        match expr.eval_with_callees(args, callees) {
             Some(v) => fp.push(v),
             None => return None,
         }
@@ -506,9 +617,16 @@ fn fingerprint(expr: &Expr, test_inputs: &[Vec<i64>]) -> Option<Vec<i64>> {
 }
 
 fn matches_all(expr: &Expr, examples: &[(Vec<i64>, i64)]) -> bool {
+    matches_all_c(expr, examples, &[])
+}
+
+/// Callee-aware `matches_all`. Identical to [`matches_all`] when `callees` is
+/// empty; otherwise resolves `Call` nodes so a candidate using a registered
+/// producer is checked against the examples with the producer actually run.
+fn matches_all_c(expr: &Expr, examples: &[(Vec<i64>, i64)], callees: &[NamedCallable]) -> bool {
     examples
         .iter()
-        .all(|(args, expected)| expr.eval(args) == Some(*expected))
+        .all(|(args, expected)| expr.eval_with_callees(args, callees) == Some(*expected))
 }
 
 // ─── Robust verification (anti-fingerprint collision) ──────────────────────────
@@ -535,8 +653,20 @@ fn probe_inputs(n_args: usize, count: usize) -> Vec<Vec<i64>> {
 /// Check that an expression doesn't crash on random inputs (no None returns).
 /// This catches spurious matches like `b - b%3` for min(a,b).
 fn robust_well_defined(expr: &Expr, n_args: usize, n_probes: usize) -> bool {
+    robust_well_defined_c(expr, n_args, n_probes, &[])
+}
+
+/// Callee-aware `robust_well_defined`. Identical to [`robust_well_defined`]
+/// when `callees` is empty; otherwise resolves `Call` nodes so a candidate is
+/// probed with the producer actually executed (an unsound call → `None` → reject).
+fn robust_well_defined_c(
+    expr: &Expr,
+    n_args: usize,
+    n_probes: usize,
+    callees: &[NamedCallable],
+) -> bool {
     for args in probe_inputs(n_args, n_probes) {
-        if expr.eval(&args).is_none() {
+        if expr.eval_with_callees(&args, callees).is_none() {
             return false;
         }
     }
@@ -586,6 +716,12 @@ fn free_vars(e: &Expr) -> BTreeSet<usize> {
                 walk(c, out);
                 walk(d, out);
             }
+            // A call's free vars are the union of its arg sub-expressions' vars.
+            Expr::Call(_, call_args) => {
+                for a in call_args {
+                    walk(a, out);
+                }
+            }
             // Loop variants are out of scope — their interiors reference
             // loop-local extended Var slots that are meaningless when lifted.
             Expr::WhileAccum { .. }
@@ -622,7 +758,11 @@ fn collect_scalar_subtrees<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
             collect_scalar_subtrees(d, out);
         }
         // Scope guard: do not push, do not descend into loop interiors.
-        Expr::WhileAccum { .. }
+        // A `Call` is likewise not a liftable scalar subtree — its callee index
+        // is meaningful only within the consumer's registry scope, so mining it
+        // into the global library would be unsound. Skip it entirely.
+        Expr::Call(..)
+        | Expr::WhileAccum { .. }
         | Expr::ForFold { .. }
         | Expr::NestedWhile { .. }
         | Expr::WhileCond { .. } => {}
@@ -1739,6 +1879,35 @@ fn enumerate_exprs_resumable(
     unops: &[UnOp],
     soft_cap: Option<usize>,
 ) -> (Option<Expr>, bool) {
+    enumerate_exprs_resumable_c(
+        frontier,
+        examples,
+        time_limit_ms,
+        library,
+        binops,
+        unops,
+        soft_cap,
+        &[],
+    )
+}
+
+/// Callee-aware resumable enumerator. When `callees` is non-empty the deepening
+/// loop additionally emits `Call(idx, args)` candidates for each registered
+/// producer (gated by exact arity + the same size budget as unary ops), and all
+/// candidate checks resolve `Call` nodes against the registry. When `callees`
+/// is EMPTY this is byte-identical to the historical enumerator: no `Call` is
+/// ever constructed and every check uses `&[]` (the regression-critical path).
+#[allow(clippy::too_many_arguments)]
+fn enumerate_exprs_resumable_c(
+    frontier: &mut Frontier,
+    examples: &[(Vec<i64>, i64)],
+    time_limit_ms: u64,
+    library: Option<&ComponentLibrary>,
+    binops: &[BinOp],
+    unops: &[UnOp],
+    soft_cap: Option<usize>,
+    callees: &[NamedCallable],
+) -> (Option<Expr>, bool) {
     let start = std::time::Instant::now();
     let n_args = frontier.n_args;
     let test_inputs: Vec<Vec<i64>> = examples.iter().map(|(a, _)| a.clone()).collect();
@@ -1772,8 +1941,10 @@ fn enumerate_exprs_resumable(
                      by_size: &mut Vec<Vec<Expr>>,
                      seen: &mut HashSet<Vec<i64>>|
      -> Option<Expr> {
-        if let Some(fp) = fingerprint(e, &test_inputs) {
-            if matches_all(e, examples) && robust_well_defined(e, n_args, 30) {
+        if let Some(fp) = fingerprint_c(e, &test_inputs, callees) {
+            if matches_all_c(e, examples, callees)
+                && robust_well_defined_c(e, n_args, 30, callees)
+            {
                 return Some(e.clone());
             }
             if seen.insert(fp) {
@@ -1796,7 +1967,7 @@ fn enumerate_exprs_resumable(
     if resuming {
         for stratum in by_size.iter() {
             for e in stratum {
-                if let Some(fp) = fingerprint(e, &test_inputs) {
+                if let Some(fp) = fingerprint_c(e, &test_inputs, callees) {
                     seen.insert(fp);
                 }
             }
@@ -1830,8 +2001,10 @@ fn enumerate_exprs_resumable(
             if injected >= MAX_SIZE1_INJECTIONS {
                 break;
             }
-            if let Some(fp) = fingerprint(&comp, &test_inputs) {
-                if matches_all(&comp, examples) && robust_well_defined(&comp, n_args, 30) {
+            if let Some(fp) = fingerprint_c(&comp, &test_inputs, callees) {
+                if matches_all_c(&comp, examples, callees)
+                    && robust_well_defined_c(&comp, n_args, 30, callees)
+                {
                     return (Some(comp), false);
                 }
                 if seen.insert(fp) {
@@ -1863,14 +2036,88 @@ fn enumerate_exprs_resumable(
             for child in &children {
                 for &uop in unops {
                     let e = Expr::UnaryOp(uop, Box::new(child.clone()));
-                    if let Some(fp) = fingerprint(&e, &test_inputs) {
-                        if matches_all(&e, examples) && robust_well_defined(&e, n_args, 30) {
+                    if let Some(fp) = fingerprint_c(&e, &test_inputs, callees) {
+                        if matches_all_c(&e, examples, callees)
+                            && robust_well_defined_c(&e, n_args, 30, callees)
+                        {
                             return (Some(e), false);
                         }
                         if seen.insert(fp) {
                             new.push(e);
                         }
                     }
+                }
+            }
+        }
+
+        // Calls to registered producers (inter-function data flow). EMPTY when
+        // `callees` is empty, so the base search is byte-identical to today: no
+        // `Call` node is ever constructed without a registry. For each callable,
+        // emit `Call(idx, args)` where the args are drawn from existing strata so
+        // that `Call.size() == 1 + sum(arg sizes)` lands in THIS size level —
+        // exactly the same cost discipline as UnaryOp/BinOp. The args are
+        // DISCOVERED by the enumeration (any sub-expression of the right size),
+        // not synthesized from a template. MVP supports arity-1 and arity-2
+        // callees (the only arities the wiring registers); the arg-size split
+        // for arity-2 enumerates ordered pairs summing to `size - 1`.
+        if !callees.is_empty() && size >= 2 {
+            for (idx, callee) in callees.iter().enumerate() {
+                let arg_budget = size - 1; // the Call node itself costs 1
+                match callee.n_args {
+                    1 => {
+                        if arg_budget >= 1 && arg_budget <= cap {
+                            let args0 = by_size[arg_budget].clone();
+                            for a0 in &args0 {
+                                let e = Expr::Call(idx, vec![a0.clone()]);
+                                if let Some(fp) = fingerprint_c(&e, &test_inputs, callees) {
+                                    if matches_all_c(&e, examples, callees)
+                                        && robust_well_defined_c(&e, n_args, 30, callees)
+                                    {
+                                        return (Some(e), false);
+                                    }
+                                    if seen.insert(fp) {
+                                        new.push(e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    2 => {
+                        // ordered (s0, s1) with s0 + s1 == arg_budget, both >= 1
+                        for s0 in 1..arg_budget {
+                            let s1 = arg_budget - s0;
+                            if s1 < 1 || s0 > cap || s1 > cap {
+                                continue;
+                            }
+                            let a0s = by_size[s0].clone();
+                            let a1s = by_size[s1].clone();
+                            for a0 in &a0s {
+                                for a1 in &a1s {
+                                    let e = Expr::Call(idx, vec![a0.clone(), a1.clone()]);
+                                    if let Some(fp) = fingerprint_c(&e, &test_inputs, callees) {
+                                        if matches_all_c(&e, examples, callees)
+                                            && robust_well_defined_c(&e, n_args, 30, callees)
+                                        {
+                                            return (Some(e), false);
+                                        }
+                                        if seen.insert(fp) {
+                                            new.push(e);
+                                        }
+                                    }
+                                }
+                            }
+                            if start.elapsed().as_millis() as u64 > time_limit_ms {
+                                timed_out = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Higher arities are out of scope for this MVP (not registered).
+                    _ => {}
+                }
+                if start.elapsed().as_millis() as u64 > time_limit_ms {
+                    timed_out = true;
+                    break;
                 }
             }
         }
@@ -1891,8 +2138,10 @@ fn enumerate_exprs_resumable(
                 for right in &rights {
                     for &op in binops {
                         let e = Expr::BinOp(op, Box::new(left.clone()), Box::new(right.clone()));
-                        if let Some(fp) = fingerprint(&e, &test_inputs) {
-                            if matches_all(&e, examples) && robust_well_defined(&e, n_args, 30) {
+                        if let Some(fp) = fingerprint_c(&e, &test_inputs, callees) {
+                            if matches_all_c(&e, examples, callees)
+                                && robust_well_defined_c(&e, n_args, 30, callees)
+                            {
                                 return (Some(e), false);
                             }
                             if seen.insert(fp) {
@@ -1935,9 +2184,9 @@ fn enumerate_exprs_resumable(
                                         Box::new(te.clone()),
                                         Box::new(ee.clone()),
                                     );
-                                    if let Some(fp) = fingerprint(&e, &test_inputs) {
-                                        if matches_all(&e, examples)
-                                            && robust_well_defined(&e, n_args, 30)
+                                    if let Some(fp) = fingerprint_c(&e, &test_inputs, callees) {
+                                        if matches_all_c(&e, examples, callees)
+                                            && robust_well_defined_c(&e, n_args, 30, callees)
                                         {
                                             return (Some(e), false);
                                         }
@@ -2006,9 +2255,9 @@ fn enumerate_exprs_resumable(
                                     body_op: bop,
                                     body_rhs: Box::new(rhs.clone()),
                                 };
-                                if let Some(fp) = fingerprint(&e, &test_inputs) {
-                                    if matches_all(&e, examples)
-                                        && robust_well_defined(&e, n_args, 30)
+                                if let Some(fp) = fingerprint_c(&e, &test_inputs, callees) {
+                                    if matches_all_c(&e, examples, callees)
+                                        && robust_well_defined_c(&e, n_args, 30, callees)
                                     {
                                         return (Some(e), false);
                                     }
@@ -2479,6 +2728,169 @@ fn synthesize_scalar_enumerative(problem: &Problem) -> Option<SolveResult> {
     }
 
     None
+}
+
+/// Solve a SCALAR problem with a set of registered producers available as
+/// callable primitives. This is the inter-function-data-flow entry point: when
+/// component B is synthesized with producer A registered, the search may emit a
+/// `Call(A, ...)` node (discovered, not templated). It is a thin wrapper over
+/// the same `enumerate_exprs_resumable_c` core the base path uses, with three
+/// differences from `synthesize_scalar_enumerative`:
+///   1. it threads `callees` into the enumerator (the ONLY behavioural delta);
+///   2. it uses a FRESH per-call frontier (callee searches are NOT disk-cached,
+///      so callee/non-callee strata never mix and the frontier-store byte guard
+///      is untouched);
+///   3. emission is wrapped in `with_callee_names` so a `Call` node renders as a
+///      real `callee_name(args)` Mog call.
+/// The library is still injected (mined abstractions help B too). The final
+/// `verify_problem_code_strict` gate is the SAME un-gameable acceptance as the
+/// base path — a `Call` candidate must pass strict holdout verification (the
+/// verifier runs B's emitted code, which calls A's source).
+pub fn synthesize_scalar_with_callees(
+    problem: &Problem,
+    callees: &[NamedCallable],
+) -> Option<SolveResult> {
+    let n_args = problem.examples.first()?.inputs.len();
+    let fn_name = problem.function_name();
+
+    let examples: Vec<(Vec<i64>, i64)> = problem
+        .examples
+        .iter()
+        .map(|ex| {
+            let args: Vec<i64> = ex
+                .inputs
+                .iter()
+                .filter_map(|v| {
+                    if let Value::Int(i) = v {
+                        Some(*i)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            (args, ex.expected_int())
+        })
+        .collect();
+
+    let param_names: Vec<&str> = ["a", "b", "c", "d", "e", "f"]
+        .iter()
+        .take(n_args)
+        .copied()
+        .collect();
+
+    let library = ComponentLibrary::load_or_dream(5_000);
+
+    let default_budget: u64 = if n_args <= 1 {
+        18_000
+    } else if n_args <= 2 {
+        13_000
+    } else {
+        10_000
+    };
+    let budget_ms: u64 = std::env::var("NSYNTH_ENUM_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default_budget);
+    let core_budget = (budget_ms * 55 / 100).max(1);
+    let full_budget = budget_ms.saturating_sub(core_budget).max(1);
+    let soft_cap: Option<usize> = std::env::var("NSYNTH_ENUM_SOFT_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok());
+
+    // Callee names for emission, indexed by registry position.
+    let callee_names: Vec<String> = callees.iter().map(|c| c.name.clone()).collect();
+
+    let mut run_tier = |binops: &[BinOp], unops: &[UnOp], budget: u64| -> Option<SolveResult> {
+        // FRESH frontier per call (no disk load/save) — see doc comment.
+        let mut frontier = Frontier::fresh(String::new(), n_args, 0);
+        let (expr, _timed_out) = enumerate_exprs_resumable_c(
+            &mut frontier,
+            &examples,
+            budget,
+            Some(&library),
+            binops,
+            unops,
+            soft_cap,
+            callees,
+        );
+        if let Some(expr) = expr {
+            let code = with_callee_names(&callee_names, || emit_mog(&expr, fn_name, &param_names));
+            // STRICT-VERIFY GATE: prepend every callee's source so the verifier
+            // can resolve the call (`fn_name(args)` references a real definition).
+            // The consumer's own source (`code`) is the LAST fn, so the problem's
+            // `function_name()` still names the entry point. Callees that the
+            // emitted code does not actually call are harmless (dead but valid).
+            let mut verify_src = String::new();
+            for c in callees {
+                if !c.source.trim().is_empty() {
+                    verify_src.push_str(c.source.trim_end());
+                    verify_src.push_str("\n\n");
+                }
+            }
+            verify_src.push_str(&code);
+            if verify_problem_code_strict(problem, &verify_src).is_ok() {
+                return Some(SolveResult {
+                    success: true,
+                    // Return ONLY the consumer's source (the producer lives in
+                    // its own module); the writer injects the `use` import.
+                    code,
+                    method: "enumerative-call".to_string(),
+                    error: None,
+                    metadata: DifferentiableMetadata::default(),
+                });
+            }
+            eprintln!(
+                "[enum-call] found expr but Mog verification failed: {}",
+                with_callee_names(&callee_names, || expr.to_mog(&param_names))
+            );
+        }
+        None
+    };
+
+    if let Some(result) = run_tier(&CORE_BINOPS, &CORE_UNOPS, core_budget) {
+        return Some(result);
+    }
+    if let Some(result) = run_tier(&ALL_BINOPS, &ALL_UNOPS, full_budget) {
+        return Some(result);
+    }
+    None
+}
+
+/// Inspect-only: return the solved `Expr` (not the Mog string) for `problem`
+/// under `callees`, so a test can assert structurally that the AST contains a
+/// `Call` node. Mirrors `synthesize_scalar_with_callees` but returns the Expr
+/// and SKIPS the strict-verify gate's discard (it still runs the same accept
+/// gate inside the enumerator: matches_all + robust_well_defined). Test-only.
+pub fn solve_scalar_expr_with_callees(
+    problem: &Problem,
+    callees: &[NamedCallable],
+    budget_ms: u64,
+) -> Option<Expr> {
+    let n_args = problem.examples.first()?.inputs.len();
+    let examples: Vec<(Vec<i64>, i64)> = problem
+        .examples
+        .iter()
+        .map(|ex| {
+            let args: Vec<i64> = ex
+                .inputs
+                .iter()
+                .filter_map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+                .collect();
+            (args, ex.expected_int())
+        })
+        .collect();
+    let mut frontier = Frontier::fresh(String::new(), n_args, 0);
+    let (expr, _timed_out) = enumerate_exprs_resumable_c(
+        &mut frontier,
+        &examples,
+        budget_ms,
+        None, // no library — keep the search space minimal/controlled for the test
+        &ALL_BINOPS,
+        &ALL_UNOPS,
+        None,
+        callees,
+    );
+    expr
 }
 
 // ─── Array enumeration ─────────────────────────────────────────────────────
@@ -4474,6 +4886,169 @@ mod tests {
         assert!(
             verify_problem_code_strict(&problem, &old_code).is_err(),
             "the old `+` (SUM) rendering MUST fail strict verify on XOR holdouts"
+        );
+    }
+
+    // ── STEP7: Call-node search — controlled, un-gameable necessity proof ─────
+
+    /// Does `e` (or any sub-expr) contain a `Call(idx, _)` node? Inspect the
+    /// AST structurally — NOT the rendered string — so the proof cannot be
+    /// gamed by an emitted name that merely looks like a call.
+    fn expr_contains_call(e: &Expr) -> bool {
+        match e {
+            Expr::Call(..) => true,
+            Expr::Var(_) | Expr::Const(_) => false,
+            Expr::UnaryOp(_, c) => expr_contains_call(c),
+            Expr::BinOp(_, l, r) => expr_contains_call(l) || expr_contains_call(r),
+            Expr::IfExpr(_, a, b, c, d) => {
+                expr_contains_call(a)
+                    || expr_contains_call(b)
+                    || expr_contains_call(c)
+                    || expr_contains_call(d)
+            }
+            _ => false,
+        }
+    }
+
+    /// The OPAQUE producer A(x) = if x>0 { x*x*x - 7 } else { 13 }. Piecewise +
+    /// non-polynomial: the base ops CANNOT replicate B(x)=A(x)+1 within a small
+    /// budget, so a found Call is NECESSARY, not a coincidence of cheaper base
+    /// ops. The closure is the ground truth the registry exposes.
+    fn opaque_a(x: i64) -> Option<i64> {
+        if x > 0 {
+            x.checked_mul(x)?.checked_mul(x)?.checked_sub(7)
+        } else {
+            Some(13)
+        }
+    }
+
+    fn registry_with_a() -> Vec<NamedCallable> {
+        vec![NamedCallable {
+            name: "opaque_a".to_string(),
+            n_args: 1,
+            // Opaque closure (no Mog source) — used by `solve_scalar_expr_with_callees`,
+            // which does the in-search accept gate, not the source-prepend verify.
+            source: String::new(),
+            eval: Box::new(|xs: &[i64]| {
+                if xs.len() != 1 {
+                    return None;
+                }
+                opaque_a(xs[0])
+            }),
+        }]
+    }
+
+    /// Build the B problem: B(x) = A(x) + 1 on a set of SEED rows, with FRESH
+    /// holdout rows the search never sees (used to prove generalization, not
+    /// memorization). Returns (problem, holdout_rows).
+    fn b_problem() -> (Problem, Vec<(i64, i64)>) {
+        use crate::benchmark::Example;
+        // Seed rows (search sees these). Mix of x>0 and x<=0 so the piecewise
+        // structure must be captured.
+        let seed_xs = [1i64, 2, 3, 4, -1, -5, 0];
+        let examples: Vec<Example> = seed_xs
+            .iter()
+            .map(|&x| Example {
+                inputs: vec![Value::Int(x)],
+                expected: Value::Int(opaque_a(x).unwrap() + 1),
+            })
+            .collect();
+        // FRESH holdouts: distinct x values, NOT in the seed set.
+        let holdout_xs = [6i64, 7, -2, -10];
+        let holdouts: Vec<(i64, i64)> = holdout_xs
+            .iter()
+            .map(|&x| (x, opaque_a(x).unwrap() + 1))
+            .collect();
+        let problem = Problem {
+            name: "b_consumer".to_string(),
+            category: "step7",
+            description: "B(x) = A(x) + 1, solvable only by calling A.",
+            signature: "fn b_consumer(a: i64) -> i64",
+            examples,
+            holdouts: vec![],
+            reference_code: "",
+            ..Default::default()
+        };
+        (problem, holdouts)
+    }
+
+    #[test]
+    fn call_node_is_searched_and_necessary() {
+        let (problem, holdouts) = b_problem();
+        let budget_ms = 8_000;
+
+        // (a) WITH registry=[A]: the solver must find a program whose SOLVED AST
+        // CONTAINS Call(idx_of_A, ...), and it must generalize to FRESH holdouts.
+        let callees = registry_with_a();
+        let solved = solve_scalar_expr_with_callees(&problem, &callees, budget_ms)
+            .expect("B must be solvable when A is a registered callable");
+        eprintln!("[STEP7] solved B AST = {solved:?}");
+        eprintln!(
+            "[STEP7] solved B Mog = {}",
+            with_callee_names(&["opaque_a".to_string()], || solved.to_mog(&["a"]))
+        );
+        assert!(
+            expr_contains_call(&solved),
+            "solved B AST must structurally contain a Call node, got: {solved:?}"
+        );
+        // Verify on FRESH holdouts (rows NOT in the seed) — differential proof
+        // the solution generalizes, not memorizes. Resolve Call against [A].
+        for (x, expected) in &holdouts {
+            assert_eq!(
+                solved.eval_with_callees(&[*x], &callees),
+                Some(*expected),
+                "solved B must hold on FRESH holdout x={x}"
+            );
+        }
+
+        // (b) CONTROL — registry=[]: the SAME B problem must NOT be solved within
+        // the SAME budget using base ops alone. This is the necessity proof: the
+        // solve in (a) depended on the callable, not on cheaper base ops.
+        let no_callees: Vec<NamedCallable> = Vec::new();
+        let control = solve_scalar_expr_with_callees(&problem, &no_callees, budget_ms);
+        // NON-VACUOUS necessity: B must be genuinely UNSOLVED with registry=[].
+        // Asserting `is_none()` (not merely "no Call node") proves the solve in (a)
+        // depended on the opaque callable A — there is NO cheaper base-op program
+        // that reproduces A(x)+1 within the same budget. A non-None control here
+        // would mean the callable was unnecessary, voiding the necessity claim.
+        assert!(
+            control.is_none(),
+            "CONTROL: with registry=[], B must be UNSOLVED within budget (necessity \
+             of the callable), but base ops found: {control:?}"
+        );
+    }
+
+    #[test]
+    fn call_renders_to_real_mog_call() {
+        // The Call node must emit real Mog source `opaque_a(a)` — a plain call
+        // the line-based transpiler passes through unchanged.
+        let call = Expr::Call(0, vec![Expr::Var(0)]);
+        let names = vec!["opaque_a".to_string()];
+        let rendered = with_callee_names(&names, || call.to_mog(&["a"]));
+        assert_eq!(rendered, "opaque_a(a)");
+    }
+
+    #[test]
+    fn empty_registry_never_constructs_call() {
+        // REGRESSION: with callees=[], the enumerator behaves byte-identically —
+        // it never constructs a Call, so a problem trivially solvable by base ops
+        // is solved WITHOUT a Call node.
+        let examples = vec![(vec![3], 6), (vec![7], 14), (vec![-2], -4)]; // 2*x
+        let mut frontier = Frontier::fresh(String::new(), 1, 0);
+        let (expr, _t) = enumerate_exprs_resumable_c(
+            &mut frontier,
+            &examples,
+            5_000,
+            None,
+            &ALL_BINOPS,
+            &ALL_UNOPS,
+            None,
+            &[],
+        );
+        let e = expr.expect("2*x must be found by base ops");
+        assert!(
+            !expr_contains_call(&e),
+            "empty registry must never yield a Call node, got: {e:?}"
         );
     }
 }
