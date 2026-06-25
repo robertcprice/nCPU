@@ -15,6 +15,7 @@ pub mod hybrid;
 pub mod interactive;
 pub mod interactive_legacy;
 pub mod knowledge;
+pub mod learn_nl;
 pub mod learned_biases;
 pub mod learning;
 pub mod learning_freeze;
