@@ -134,7 +134,8 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
     let single = train.iter().all(|(i, _)| i.len() == 1);
 
-    // Fast morphology specialist (single-arg suffix transduction).
+    // Fast morphology specialist (single-arg suffix transduction). A genuine
+    // generalizing transducer, so it stays first.
     if single {
         use crate::morph_transduce::{solve_morph_transduction, StrExample};
         let mk = |rs: &[(Vec<String>, String)]| {
@@ -155,15 +156,15 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
                 metadata: Default::default(),
             });
         }
-
-        // Whole-word lexicon lookup for arbitrary string->string maps no suffix
-        // transduction explains (e.g. irregular inflection: have->has, be->is).
-        if let Some(result) = solve_string_lexicon(problem, &train, fn_name) {
-            return Some(result);
-        }
     }
 
-    // General enumerative string synthesizer.
+    // General enumerative string synthesizer. NL-BRIDGE-1: this runs BEFORE the
+    // whole-word lexicon fallback. `string_synth` finds a GENERALIZING rule
+    // (`s.to_uppercase()`, `reverse`, slice, affix, …) that holds on unseen inputs;
+    // the lexicon below only MEMORIZES the training pairs in an if-chain. Trying the
+    // generalizer first means a request like "uppercase a string" emits the real
+    // `s.to_uppercase()` program instead of a lookup table that fails on a fresh
+    // string — memorization is the irregular-map fallback, not the default.
     use crate::string_synth::{synthesize_string_program, StrSynthExample};
     let params: Vec<String> = problem
         .signature
@@ -200,6 +201,16 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
             error: None,
             metadata: Default::default(),
         });
+    }
+
+    // Whole-word lexicon lookup (LAST resort): for arbitrary string->string maps no
+    // suffix transduction OR generalizing string program explains (e.g. irregular
+    // inflection: have->has, be->is). This memorizes the training pairs, so it is
+    // tried only after the generalizers above decline.
+    if single {
+        if let Some(result) = solve_string_lexicon(problem, &train, fn_name) {
+            return Some(result);
+        }
     }
     None
 }

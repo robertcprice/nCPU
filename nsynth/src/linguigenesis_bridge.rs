@@ -233,16 +233,38 @@ impl LinguigenesisBridge {
     /// accepted; only a type/domain mismatch refuses.
     fn ensure_value_type_vocabulary(registry: &mut Registry) {
         use linguigenesis_core::entity::{Entity, EntityType};
-        if registry.get_by_lemma("string").is_some() {
-            return;
-        }
-        let id = registry.stats().total_entities as u64 + 5000;
-        let mut entity = Entity::new(id, "string".to_string(), EntityType::Type);
-        entity.add_definition("Sequence of characters (text value)".to_string());
-        // Signature surface forms the gate matches against an op's signature.
-        entity.add_property("signature_aliases".to_string(), "string,str,&str".to_string());
-        if let Err(e) = registry.add_entity(entity) {
-            eprintln!("[Linguigenesis] string Type vocabulary add warning: {e}");
+        // (lemma, definition, signature_aliases) for each value-TYPE the fail-closed
+        // gate compares a resolved op's signature against. NL-BRIDGE-1 adds `float`
+        // alongside `string` so a genuine float/string type-mismatch still refuses
+        // (the gate keys on `EntityType::Type`); the seed float/string ops carry the
+        // matching surface forms so a CORRECT-domain request is accepted, only a
+        // mismatch refuses. Additive + idempotent: each is declared once, only if
+        // its lemma is absent.
+        let value_types = [
+            (
+                "string",
+                "Sequence of characters (text value)",
+                "string,str,&str",
+            ),
+            (
+                "float",
+                "Real (floating-point) number value",
+                "f64,f32,float,double",
+            ),
+        ];
+        let mut next_id = registry.stats().total_entities as u64 + 5000;
+        for (lemma, def, aliases) in value_types {
+            if registry.get_by_lemma(lemma).is_some() {
+                continue;
+            }
+            let mut entity = Entity::new(next_id, lemma.to_string(), EntityType::Type);
+            next_id += 1;
+            entity.add_definition(def.to_string());
+            // Signature surface forms the gate matches against an op's signature.
+            entity.add_property("signature_aliases".to_string(), aliases.to_string());
+            if let Err(e) = registry.add_entity(entity) {
+                eprintln!("[Linguigenesis] {lemma} Type vocabulary add warning: {e}");
+            }
         }
     }
 
