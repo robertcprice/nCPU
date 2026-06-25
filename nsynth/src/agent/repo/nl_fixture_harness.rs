@@ -227,7 +227,7 @@ pub fn write_tensor_program(
 /// True when `body` contains a CALL to `fn_name` (`fn_name(` with a
 /// non-identifier char immediately before, so `mydouble(` does not match
 /// `double`). Used to decide whether to inject a `use` for a sibling producer.
-fn body_calls_fn(body: &str, fn_name: &str) -> bool {
+pub fn body_calls_fn(body: &str, fn_name: &str) -> bool {
     let pat = format!("{fn_name}(");
     let bytes = body.as_bytes();
     let mut from = 0usize;

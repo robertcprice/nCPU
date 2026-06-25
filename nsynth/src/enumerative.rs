@@ -2730,6 +2730,21 @@ fn synthesize_scalar_enumerative(problem: &Problem) -> Option<SolveResult> {
     None
 }
 
+/// Does `e` (or any sub-expr) contain a `Call(idx, _)` node? Module-level so the
+/// callee search can prefer a genuine inter-function call over a library-inlined
+/// re-derivation of the producer's behaviour.
+pub fn expr_has_call(e: &Expr) -> bool {
+    match e {
+        Expr::Call(..) => true,
+        Expr::UnaryOp(_, c) => expr_has_call(c),
+        Expr::BinOp(_, l, r) => expr_has_call(l) || expr_has_call(r),
+        Expr::IfExpr(_, a, b, c, d) => {
+            expr_has_call(a) || expr_has_call(b) || expr_has_call(c) || expr_has_call(d)
+        }
+        _ => false,
+    }
+}
+
 /// Solve a SCALAR problem with a set of registered producers available as
 /// callable primitives. This is the inter-function-data-flow entry point: when
 /// component B is synthesized with producer A registered, the search may emit a
@@ -2800,8 +2815,42 @@ pub fn synthesize_scalar_with_callees(
     // Callee names for emission, indexed by registry position.
     let callee_names: Vec<String> = callees.iter().map(|c| c.name.clone()).collect();
 
+    // Emit + strict-verify a found Expr into a SolveResult (None ⇒ verify failed).
+    let emit_verify = |expr: &Expr| -> Option<SolveResult> {
+        let code = with_callee_names(&callee_names, || emit_mog(expr, fn_name, &param_names));
+        // STRICT-VERIFY GATE: prepend every callee's source so the verifier can
+        // resolve the call (`fn_name(args)` references a real definition). The
+        // consumer's own source (`code`) is the LAST fn, so the problem's
+        // `function_name()` still names the entry point. Callees the emitted code
+        // does not actually call are harmless (dead but valid).
+        let mut verify_src = String::new();
+        for c in callees {
+            if !c.source.trim().is_empty() {
+                verify_src.push_str(c.source.trim_end());
+                verify_src.push_str("\n\n");
+            }
+        }
+        verify_src.push_str(&code);
+        if verify_problem_code_strict(problem, &verify_src).is_ok() {
+            return Some(SolveResult {
+                success: true,
+                // Return ONLY the consumer's source (the producer lives in its own
+                // module); the writer injects the `use` import.
+                code,
+                method: "enumerative-call".to_string(),
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            });
+        }
+        eprintln!(
+            "[enum-call] found expr but Mog verification failed: {}",
+            with_callee_names(&callee_names, || expr.to_mog(&param_names))
+        );
+        None
+    };
+
     let mut run_tier = |binops: &[BinOp], unops: &[UnOp], budget: u64| -> Option<SolveResult> {
-        // FRESH frontier per call (no disk load/save) — see doc comment.
+        // PASS A — library ON: mined abstractions speed B's search.
         let mut frontier = Frontier::fresh(String::new(), n_args, 0);
         let (expr, _timed_out) = enumerate_exprs_resumable_c(
             &mut frontier,
@@ -2813,38 +2862,42 @@ pub fn synthesize_scalar_with_callees(
             soft_cap,
             callees,
         );
-        if let Some(expr) = expr {
-            let code = with_callee_names(&callee_names, || emit_mog(&expr, fn_name, &param_names));
-            // STRICT-VERIFY GATE: prepend every callee's source so the verifier
-            // can resolve the call (`fn_name(args)` references a real definition).
-            // The consumer's own source (`code`) is the LAST fn, so the problem's
-            // `function_name()` still names the entry point. Callees that the
-            // emitted code does not actually call are harmless (dead but valid).
-            let mut verify_src = String::new();
-            for c in callees {
-                if !c.source.trim().is_empty() {
-                    verify_src.push_str(c.source.trim_end());
-                    verify_src.push_str("\n\n");
+        // PREFER A GENUINE CALL: when producers are registered but the library-on
+        // search inlined the producer's behaviour (a cheap library primitive
+        // undercut the `Call` node by size), retry with the library OFF so the
+        // `Call(A, ..)` is size-competitive and gets discovered instead. This is
+        // the only behavioural change vs. before; with no callees, or when the
+        // first pass already found a call, PASS B is skipped (byte-identical).
+        if let Some(expr) = &expr {
+            if callees.is_empty() || expr_has_call(expr) {
+                return emit_verify(expr);
+            }
+        }
+        if !callees.is_empty() {
+            // PASS B — library OFF: force the call to compete on size alone.
+            let mut frontier_b = Frontier::fresh(String::new(), n_args, 0);
+            let (expr_b, _t) = enumerate_exprs_resumable_c(
+                &mut frontier_b,
+                &examples,
+                budget,
+                None,
+                binops,
+                unops,
+                soft_cap,
+                callees,
+            );
+            if let Some(expr_b) = &expr_b {
+                if expr_has_call(expr_b) {
+                    if let Some(r) = emit_verify(expr_b) {
+                        return Some(r);
+                    }
                 }
             }
-            verify_src.push_str(&code);
-            if verify_problem_code_strict(problem, &verify_src).is_ok() {
-                return Some(SolveResult {
-                    success: true,
-                    // Return ONLY the consumer's source (the producer lives in
-                    // its own module); the writer injects the `use` import.
-                    code,
-                    method: "enumerative-call".to_string(),
-                    error: None,
-                    metadata: DifferentiableMetadata::default(),
-                });
-            }
-            eprintln!(
-                "[enum-call] found expr but Mog verification failed: {}",
-                with_callee_names(&callee_names, || expr.to_mog(&param_names))
-            );
         }
-        None
+        // Fall back to the library-on result (inlined but correct) only if PASS B
+        // found no call — keeps a solution rather than failing, though the NL
+        // orchestrator's anti-inline guard will reject a non-calling consumer.
+        expr.as_ref().and_then(&emit_verify)
     };
 
     if let Some(result) = run_tier(&CORE_BINOPS, &CORE_UNOPS, core_budget) {
