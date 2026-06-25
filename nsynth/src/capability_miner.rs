@@ -49,6 +49,14 @@ const STRING_PROBES: &[&str] = &[
 /// Canonical input arrays the array order ops are exercised on.
 const ARRAY_PROBES: &[&[i64]] = &[&[3, 1, 2], &[5, 4, 6, 4], &[1], &[2, 2, 1, 3]];
 
+/// Canonical input arrays the elementwise maps are exercised on. Includes BOTH
+/// negative AND positive values so EVERY mined map (negate / double / increment /
+/// square / abs) produces a NON-identity, mutually-distinct output — in particular
+/// `abs` must see a negative to be a real transform, and the rows stay >=3 distinct
+/// for every op so the bridge's fresh-holdout differential check has a held-out probe.
+const ELEMENT_MAP_PROBES: &[&[i64]] =
+    &[&[-3, 1, -2], &[5, -4, 6, -4], &[-1], &[2, -2, 1, -3]];
+
 /// Hand-authored NL surface FORMS (synonyms + a one-line gloss) per mined lemma.
 /// These are presentation metadata for the comprehension layer — NOT the op set
 /// or its behaviour (both of which are reflected + auto-run). The lemma keys are
@@ -87,6 +95,32 @@ fn nl_surface(lemma: &str) -> (Vec<&'static str>, &'static str, &'static str) {
             "Reverse order of array elements",
             "array",
         ),
+        // ── NL-BRIDGE-3A: fixed elementwise array maps (Vec<i64> -> Vec<i64>) ──
+        "double_each" => (
+            vec!["double_all", "double_values", "twice_each"],
+            "Multiply every element of an array by two",
+            "array",
+        ),
+        "negate_each" => (
+            vec!["negate_all", "negate_values"],
+            "Negate every element of an array",
+            "array",
+        ),
+        "increment_each" => (
+            vec!["increment_all", "add_one_each", "bump_each"],
+            "Add one to every element of an array",
+            "array",
+        ),
+        "square_each" => (
+            vec!["square_all", "square_values"],
+            "Square every element of an array",
+            "array",
+        ),
+        "abs_each" => (
+            vec!["abs_all", "absolute_each"],
+            "Take the absolute value of every element of an array",
+            "array",
+        ),
         _ => (vec![], "", "unknown"),
     }
 }
@@ -116,9 +150,15 @@ fn string_example_cases(run: fn(&str) -> Option<String>) -> Option<String> {
 /// Build the `example_cases` JSON string for an array order op by RUNNING its real
 /// semantics on the canonical probe arrays.
 fn array_example_cases(run: fn(&[i64]) -> Vec<i64>) -> Option<String> {
+    array_example_cases_on(run, ARRAY_PROBES)
+}
+
+/// As `array_example_cases` but over an explicit probe set (used by the
+/// elementwise-map family, which needs negatives so `abs` is a real transform).
+fn array_example_cases_on(run: fn(&[i64]) -> Vec<i64>, probes: &[&[i64]]) -> Option<String> {
     let mut cases: Vec<Value> = Vec::new();
     let mut seen: std::collections::HashSet<(Vec<i64>, Vec<i64>)> = std::collections::HashSet::new();
-    for &probe in ARRAY_PROBES {
+    for &probe in probes {
         let out = run(probe); // auto-run the REAL op
         if seen.insert((probe.to_vec(), out.clone())) {
             cases.push(json!({
@@ -170,7 +210,7 @@ fn string_entity(
     (lemma.to_string(), entity)
 }
 
-fn array_entity(lemma: &str, example_cases: String) -> (String, Value) {
+fn array_entity_with(lemma: &str, example_cases: String, provenance: &str) -> (String, Value) {
     let (syns, def, domain) = nl_surface(lemma);
     let attrs = json!({
         "arity": "1",
@@ -179,7 +219,7 @@ fn array_entity(lemma: &str, example_cases: String) -> (String, Value) {
         "nsynth_category": "array",
         "default_fn_name": lemma,
         "signature_template": "fn {name}({params}) -> {return}",
-        "mined_provenance": "array_transform::ReorderKind",
+        "mined_provenance": provenance,
         "example_cases": example_cases,
     });
     let entity = json!({
@@ -220,7 +260,19 @@ pub fn mine_capabilities() -> Value {
     array_ops.sort_by(|a, b| a.lemma.cmp(b.lemma));
     for op in array_ops {
         if let Some(cases) = array_example_cases(op.run) {
-            let (k, v) = array_entity(op.lemma, cases);
+            let (k, v) = array_entity_with(op.lemma, cases, "array_transform::ReorderKind");
+            entities.insert(k, v);
+        }
+    }
+
+    // ── ARRAY elementwise maps — reflected from array_transform's ElementMapKind
+    //    enum (NL-BRIDGE-3A-MINER-WIDEN). Same Vec<i64> -> Vec<i64> schema as the
+    //    order ops; example_cases AUTO-RUN through the real `element_apply`.
+    let mut elem_ops = crate::synthesis::array_transform::mineable_element_map_ops();
+    elem_ops.sort_by(|a, b| a.lemma.cmp(b.lemma));
+    for op in elem_ops {
+        if let Some(cases) = array_example_cases_on(op.run, ELEMENT_MAP_PROBES) {
+            let (k, v) = array_entity_with(op.lemma, cases, "array_transform::ElementMapKind");
             entities.insert(k, v);
         }
     }
@@ -401,15 +453,87 @@ mod tests {
     }
 
     /// The miner must produce the NON-seed ops the accept-criterion requires
-    /// (`lowercase`, `trim`) plus the order ops it now self-supplies.
+    /// (`lowercase`, `trim`) plus the order ops it now self-supplies, plus the
+    /// NL-BRIDGE-3A widened elementwise-map family.
     #[test]
     fn miner_emits_expected_capabilities() {
         let lemmas = mined_lemmas();
-        for needed in ["uppercase", "lowercase", "trim", "reverse_string", "sort", "reverse"] {
+        for needed in [
+            "uppercase", "lowercase", "trim", "reverse_string", "sort", "reverse",
+            // NL-BRIDGE-3A new elementwise maps:
+            "double_each", "negate_each", "increment_each", "square_each", "abs_each",
+        ] {
             assert!(
                 lemmas.contains(&needed.to_string()),
                 "miner missing capability {needed}; mined = {lemmas:?}"
             );
+        }
+    }
+
+    /// EMERGENCE (a) for the NL-BRIDGE-3A elementwise-map family: the mined op set
+    /// is DERIVED FROM + EQUAL TO the engine's `ElementMapKind` enum surface, and
+    /// every variant is also EMITTED as a candidate by the solver's candidate
+    /// builder (so the mined surface == the engine's emitted surface). Adding a
+    /// variant to the enum without classifying it fails to COMPILE the guard.
+    #[test]
+    fn mined_element_map_surface_equals_engine_enum_surface() {
+        // The enum-exhaustiveness guard: mined element-map lemmas == ElementMapKind.
+        crate::synthesis::array_transform::mineable_element_map_ops_exhaustive();
+
+        let mined = mine_capabilities();
+        let ents = mined["entities"].as_object().unwrap();
+        for op in crate::synthesis::array_transform::mineable_element_map_ops() {
+            let e = ents
+                .get(op.lemma)
+                .unwrap_or_else(|| panic!("engine element-map op {} not mined", op.lemma));
+            assert_eq!(e["attributes"]["input_types"], "Vec<i64>");
+            assert_eq!(e["attributes"]["output_type"], "Vec<i64>");
+            assert_eq!(
+                e["attributes"]["mined_provenance"],
+                "array_transform::ElementMapKind"
+            );
+        }
+    }
+
+    /// EMERGENCE (b) for the elementwise-map family: example_cases are
+    /// AUTO-GENERATED by RUNNING the op. Re-run the REAL `element_apply` on the
+    /// mined inputs and assert the mined `expected` equals the freshly-computed
+    /// output — so the examples provably came from executing the op, and at least
+    /// one row is a genuine (non-identity) transform.
+    #[test]
+    fn mined_element_map_examples_match_op_executed() {
+        let mined = mine_capabilities();
+        let ents = mined["entities"].as_object().unwrap();
+        for op in crate::synthesis::array_transform::mineable_element_map_ops() {
+            let cases_str = ents[op.lemma]["attributes"]["example_cases"].as_str().unwrap();
+            let cases: Value = serde_json::from_str(cases_str).unwrap();
+            let arr = cases.as_array().unwrap();
+            assert!(arr.len() >= 3, "{} mined <3 example rows", op.lemma);
+            let mut any_transform = false;
+            for case in arr {
+                let input: Vec<i64> = case["inputs"][0]["value"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_i64().unwrap())
+                    .collect();
+                let expected: Vec<i64> = case["expected"]["value"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_i64().unwrap())
+                    .collect();
+                assert_eq!(
+                    (op.run)(&input),
+                    expected,
+                    "mined {} example != op executed",
+                    op.lemma
+                );
+                if input != expected {
+                    any_transform = true;
+                }
+            }
+            assert!(any_transform, "{} mined examples are all identity", op.lemma);
         }
     }
 }
