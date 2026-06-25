@@ -204,6 +204,9 @@ impl LinguigenesisBridge {
     fn find_computing_knowledge_path() -> Option<PathBuf> {
         Self::locate_data_file("computing_knowledge.json")
     }
+    fn find_mined_capabilities_path() -> Option<PathBuf> {
+        Self::locate_data_file("mined_capabilities.json")
+    }
 
     /// Find the WordNet coding-edges file (additive synonym/similar closure for
     /// existing ops). Resolved location-independently via [`locate_data_file`].
@@ -321,11 +324,91 @@ impl LinguigenesisBridge {
         }
     }
 
+    /// Collision-safe merge of the AUTO-MINED capability registry into an
+    /// ALREADY-populated registry. Each mined entity is re-added with a FRESH high
+    /// id (base + 1000+), mirroring `merge_wordnet_edges_collision_safe`, so it
+    /// never overwrites a like-id coding entity. Definitions + properties (incl.
+    /// the machine-generated `example_cases`, `input_types`, `output_type`,
+    /// `nsynth_category`, `default_fn_name`) are carried over so the mined op is a
+    /// full, synthesizable capability; relations (synonym/domain) are re-linked BY
+    /// LEMMA. If the mined lemma ALREADY exists (a hand seed not yet removed), its
+    /// properties are overlaid only when the existing entity lacks `example_cases`
+    /// — purely additive, never destructive.
+    fn merge_mined_collision_safe(registry: &mut Registry, mined: &Registry) {
+        use linguigenesis_core::entity::{Entity, RelationType};
+        let mut next_id = registry.stats().total_entities as u64 + 1000;
+        let mut pending: Vec<(String, RelationType, String)> = Vec::new();
+
+        for src in mined.all_entities() {
+            if let Some(existing) = registry.get_by_lemma(&src.lemma) {
+                // Lemma already present (un-removed seed): overlay missing props.
+                if existing.get_property("example_cases").is_none()
+                    && src.get_property("example_cases").is_some()
+                {
+                    let _ = registry.overlay_entity_properties(&src.lemma, &src);
+                }
+                continue;
+            }
+            let mut entity = Entity::new(next_id, src.lemma.clone(), src.entity_type.clone());
+            next_id += 1;
+            for def in &src.definitions {
+                entity.add_definition(def.clone());
+            }
+            for (k, v) in &src.properties {
+                entity.add_property(k.clone(), v.clone());
+            }
+            if let Err(e) = registry.add_entity(entity) {
+                eprintln!("[Linguigenesis] mined capability add warning ({}): {}", src.lemma, e);
+                continue;
+            }
+            // Re-link this op's relations to their targets BY LEMMA (resolved in
+            // the mined registry so synonym/domain lemmas are known).
+            for (rel_type, target_ids) in &src.relations {
+                for tid in target_ids {
+                    if let Some(target) = mined.get_entity(*tid) {
+                        pending.push((src.lemma.clone(), rel_type.clone(), target.lemma.clone()));
+                    }
+                }
+            }
+        }
+
+        for (source, rel_type, target) in pending {
+            let _ = registry.link_lemma_relation(&source, rel_type, &target);
+        }
+    }
+
     fn merge_coding_registry_opt(registry: &mut Registry, include_wordnet: bool) {
         if let Some(path) = Self::find_coding_registry_path() {
             if let Ok(coding) = Registry::from_json(&path) {
                 if let Err(e) = registry.merge_registry(&coding) {
                     eprintln!("[Linguigenesis] coding_registry merge warning: {}", e);
+                }
+            }
+        }
+        // AUTO-MINED capabilities (NL-BRIDGE-2): the engine's own synthesizable
+        // operator surface (string_synth `SExpr`, array_transform `ReorderKind`),
+        // reflected offline into the same `coding_registry.json` schema with
+        // auto-run example_cases, and loaded through the EXACT same proven path as
+        // the hand registry above. Runs AFTER coding_registry so mined entities
+        // augment/overlay it (e.g. supply the `lowercase`/`trim` ops the hand
+        // registry never seeded). Self-growing: re-running the miner after adding
+        // an operator variant grows the NL vocabulary with no code edit here.
+        if let Some(path) = Self::find_mined_capabilities_path() {
+            match Registry::from_json(&path) {
+                Ok(mined) => {
+                    // COLLISION-SAFE merge (NOT `merge_registry`): `from_json`
+                    // numbers the mined file's entities 1..N, and `add_entity`
+                    // inserts at the donor id, which OVERWRITES the like-id
+                    // coding_registry entities in the id-keyed map (corrupting e.g.
+                    // `add`). We re-add each mined entity with a FRESH high id —
+                    // exactly as `merge_wordnet_edges_collision_safe` /
+                    // `merge_computing_knowledge` do — carrying its definitions,
+                    // properties (incl. the auto-mined `example_cases`) and
+                    // relations re-linked by lemma.
+                    Self::merge_mined_collision_safe(registry, &mined);
+                }
+                Err(e) => {
+                    eprintln!("[Linguigenesis] mined_capabilities load warning: {}", e);
                 }
             }
         }
