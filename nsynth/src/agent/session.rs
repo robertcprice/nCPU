@@ -195,6 +195,33 @@ impl CodingAgentSession {
 
     /// Handle any NL coding query via KVRM workflow routing.
     pub fn handle_query(&mut self, query: &str) -> AgentQueryResult {
+        // REFERENCE INTAKE (UNWALL-3-REFERENCE-INTAKE-NL): if the request CARRIES
+        // a runnable reference implementation ("behaves like THIS: <fn>"), the
+        // reference's behavior IS the spec. Intercept BEFORE comprehension (which
+        // would mis-route a request containing code) and route it through the
+        // existing reference path (Spec::Reference → problem_from_reference →
+        // solve_problem → strict-verify against fresh inputs run through the
+        // reference). Structural signal (an embedded `fn` block), not a phrase
+        // table; an unparseable reference is refused honestly. Requests with no
+        // embedded reference fall through unchanged.
+        match crate::reference_nl::classify(query) {
+            crate::reference_nl::ReferenceIntake::Reference {
+                name,
+                signature,
+                code,
+            } => {
+                let result = self.run_reference_synthesis(&name, &signature, &code);
+                self.record_result(query, &result);
+                return result;
+            }
+            crate::reference_nl::ReferenceIntake::Unparseable(reason) => {
+                let result = self.refuse_unparseable_reference(&reason);
+                self.record_result(query, &result);
+                return result;
+            }
+            crate::reference_nl::ReferenceIntake::NotReference => {}
+        }
+
         // TENSOR REACH (NL-BRIDGE-3B-TENSOR-FORWARD): intercept tensor requests
         // BEFORE generic comprehension, which would otherwise divert a
         // 'train a model' to a clarification loop or a forward op to ToolExplore.
@@ -422,6 +449,109 @@ impl CodingAgentSession {
             synthesis_method: Some(synthesis.method.clone()),
             repo_result: None,
             tool_trace,
+        }
+    }
+
+    /// REFERENCE SYNTHESIS (UNWALL-3): synthesize a program equivalent to the
+    /// supplied reference implementation. The reference's behavior IS the spec:
+    /// [`crate::agent::coding_intent::Spec::Reference`] reduces to a `Problem`
+    /// whose seed I/O examples are MANUFACTURED by running the reference and whose
+    /// `reference_code` stays set, so [`crate::solver::solve_problem`] SEARCHES for
+    /// a program that strict-verifies against fresh inputs run through the
+    /// reference ([`crate::benchmark::generated_holdouts`]). The synthesized code
+    /// is NOT a copy of the reference text — it is a solver result that matches the
+    /// reference's behavior. If the reference cannot be parsed/run into a Problem,
+    /// refuse honestly (never fabricate).
+    fn run_reference_synthesis(
+        &mut self,
+        name: &str,
+        signature: &str,
+        reference_code: &str,
+    ) -> AgentQueryResult {
+        use crate::agent::coding_intent::Spec;
+        let spec = Spec::Reference {
+            name: name.to_string(),
+            signature: signature.to_string(),
+            code: reference_code.to_string(),
+        };
+        let problem = match spec.to_problem() {
+            Ok(p) => p,
+            Err(error) => {
+                // The reference could not be parsed/run into a Problem (e.g. it
+                // errored on every sampled input, or its signature is
+                // unsampleable). Honest refusal — no fabricated success.
+                return AgentQueryResult {
+                    route: QueryRoute::SynthesizeFunction,
+                    success: false,
+                    response: format!(
+                        "cannot synthesize from reference (intake refused): {error}"
+                    ),
+                    workflow: "reference.synthesize".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("reference-intake-refused".to_string()),
+                    repo_result: None,
+                    tool_trace: Vec::new(),
+                };
+            }
+        };
+
+        let solved = crate::solver::solve_problem(&problem);
+
+        // Defense in depth: even on a reported solve, strict-verify the result
+        // against the reference-derived holdouts so a "success" is always backed by
+        // differential agreement with the reference, never just the seed examples.
+        let verified = solved.success
+            && crate::runtime::verify_problem_code_strict(&problem, &solved.code).is_ok();
+
+        let mut tool_trace = Vec::new();
+        if verified {
+            let filename = format!("synth_{name}.mog");
+            if let Ok(out) = self.tools.invoke(
+                "fs",
+                &ToolCall::new("write")
+                    .arg("path", filename.clone())
+                    .arg("content", solved.code.clone()),
+            ) {
+                tool_trace.push((format!("fs.write:{filename}"), out.content));
+            }
+        }
+
+        AgentQueryResult {
+            route: QueryRoute::SynthesizeFunction,
+            success: verified,
+            response: if verified {
+                solved.code.clone()
+            } else {
+                solved
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| {
+                        "reference-equivalent synthesis failed (no candidate matched the \
+                         reference on the held-out inputs)"
+                            .to_string()
+                    })
+            },
+            workflow: "reference.synthesize".to_string(),
+            clarification_questions: Vec::new(),
+            synthesis_method: Some(format!("reference-intake:{}", solved.method)),
+            repo_result: None,
+            tool_trace,
+        }
+    }
+
+    /// HONEST REFUSAL: the request pointed at a reference (fenced code / a
+    /// `behaves like`-style marker) but no runnable `fn NAME(params) -> RET { ... }`
+    /// could be extracted. Refuse rather than fabricate a spec.
+    fn refuse_unparseable_reference(&self, reason: &str) -> AgentQueryResult {
+        AgentQueryResult {
+            route: QueryRoute::SynthesizeFunction,
+            success: false,
+            response: format!("cannot synthesize from reference (unparseable): {reason}"),
+            workflow: "reference.synthesize".to_string(),
+            clarification_questions: Vec::new(),
+            synthesis_method: Some("reference-intake-unparseable".to_string()),
+            repo_result: None,
+            tool_trace: Vec::new(),
         }
     }
 
@@ -917,6 +1047,162 @@ mod tests {
         assert_eq!(result.route, QueryRoute::SynthesizeFunction);
         assert!(result.success);
         assert!(result.response.contains("a") || result.response.contains("+"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Agree-on-held-out helper: run two programs over a fresh, deterministic input
+    /// set DISJOINT from any seeds/holdouts the solver used, and assert they agree.
+    /// This is the un-gameable differential check — the synthesized program must
+    /// match the reference on inputs neither was tuned on.
+    fn agree_on_holdout(reference: &str, synthesized: &str, fn_name: &str, sig: &'static str) {
+        let sig_owned: &'static str = sig;
+        let problem = crate::benchmark::Problem {
+            name: format!("{fn_name}_holdout_check"),
+            category: "reference",
+            description: "held-out agreement check",
+            signature: sig_owned,
+            ..Default::default()
+        };
+        // Inputs the solver never saw (range distinct from solver's [-64,64]).
+        let mut agreed = 0usize;
+        for x in [-500i64, -333, -77, 0, 13, 256, 999, 4321] {
+            let args = vec![crate::benchmark::Value::Int(x)];
+            let r = crate::runtime::benchmark_value_from_runtime(
+                &crate::runtime::execute_function_for_problem(reference, fn_name, &args, &problem)
+                    .expect("reference runs on held-out input"),
+            )
+            .expect("reference output representable");
+            let s = crate::runtime::benchmark_value_from_runtime(
+                &crate::runtime::execute_function_for_problem(
+                    synthesized,
+                    fn_name,
+                    &args,
+                    &problem,
+                )
+                .expect("synthesized runs on held-out input"),
+            )
+            .expect("synthesized output representable");
+            assert_eq!(
+                r, s,
+                "reference and synthesized disagree on held-out input {x}"
+            );
+            agreed += 1;
+        }
+        assert!(agreed >= 8, "held-out agreement set must be non-empty");
+    }
+
+    /// UNWALL-3 ACCEPT (polynomial): a 'behaves like THIS: <polynomial fn>' CLI
+    /// request synthesizes a verified-equivalent program — searched + strict-
+    /// verified against fresh inputs RUN through the reference, NOT a verbatim copy
+    /// of the reference text, agreeing on a held-out input set.
+    #[test]
+    fn session_reference_intake_polynomial_synthesizes_verified_equivalent() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("ref_poly");
+        fs::create_dir_all(&root).unwrap();
+        let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+
+        let reference = "fn f(x: i64) -> i64 { return x * x - x; }";
+        let result = session
+            .handle_query(&format!("make a function that behaves like THIS: {reference}"));
+
+        assert_eq!(result.route, QueryRoute::SynthesizeFunction);
+        assert!(
+            result.success,
+            "reference-equivalent synthesis must succeed: {:?}",
+            result.response
+        );
+        // (a) The method is a REAL solver method, tagged as reference-intake.
+        let method = result.synthesis_method.clone().unwrap_or_default();
+        assert!(
+            method.starts_with("reference-intake:"),
+            "method must be reference-intake-tagged, got {method}"
+        );
+        let inner = method.trim_start_matches("reference-intake:");
+        assert!(
+            !inner.is_empty()
+                && inner != "reference-intake-refused"
+                && inner != "reference-intake-unparseable",
+            "inner method must be a real solver method, got {inner}"
+        );
+        // (b) NOT a verbatim copy of the reference text.
+        assert_ne!(
+            result.response.trim(),
+            reference.trim(),
+            "synthesized code must not be a verbatim copy of the reference"
+        );
+        // (c) Agrees with the reference on a held-out input set.
+        agree_on_holdout(reference, &result.response, "f", "fn f(x: i64) -> i64");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// UNWALL-3 ACCEPT (piecewise/abs): a second, structurally-distinct reference
+    /// (branching abs) also synthesizes a verified-equivalent, non-copy program.
+    #[test]
+    fn session_reference_intake_piecewise_synthesizes_verified_equivalent() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("ref_abs");
+        fs::create_dir_all(&root).unwrap();
+        let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+
+        let reference = "fn g(a: i64) -> i64 { if a < 0 { return -a; } return a; }";
+        let result = session
+            .handle_query(&format!("synthesize a function equivalent to: {reference}"));
+
+        assert_eq!(result.route, QueryRoute::SynthesizeFunction);
+        assert!(
+            result.success,
+            "abs reference synthesis must succeed: {:?}",
+            result.response
+        );
+        let method = result.synthesis_method.clone().unwrap_or_default();
+        assert!(method.starts_with("reference-intake:"), "got {method}");
+        assert_ne!(result.response.trim(), reference.trim());
+        agree_on_holdout(reference, &result.response, "g", "fn g(a: i64) -> i64");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// UNWALL-3 ANTI-GAME (prior path): a plain NL request (NO embedded reference)
+    /// must NOT be hijacked by the reference route — it routes through normal
+    /// comprehension. Proves the reference intake fires ONLY on a structural
+    /// reference signal, not on every request.
+    #[test]
+    fn session_plain_request_does_not_trigger_reference_route() {
+        // classify() returns NotReference for a plain request, so handle_query
+        // never enters run_reference_synthesis (workflow != "reference.synthesize").
+        assert_eq!(
+            crate::reference_nl::classify("add two numbers"),
+            crate::reference_nl::ReferenceIntake::NotReference
+        );
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("ref_plain");
+        fs::create_dir_all(&root).unwrap();
+        let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+        let result = session.handle_query("add two numbers");
+        assert_ne!(
+            result.workflow, "reference.synthesize",
+            "a plain request must not route through reference intake"
+        );
+        assert!(result.success);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// UNWALL-3 ANTI-GAME (honest refusal): a request that signals a reference but
+    /// supplies no runnable `fn` is REFUSED (success=false), not fabricated.
+    #[test]
+    fn session_unparseable_reference_is_refused_honestly() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("ref_refuse");
+        fs::create_dir_all(&root).unwrap();
+        let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+        let result =
+            session.handle_query("make a function that behaves like this reference implementation");
+        assert!(!result.success, "an unparseable reference must be refused");
+        assert_eq!(result.workflow, "reference.synthesize");
+        assert_eq!(
+            result.synthesis_method.as_deref(),
+            Some("reference-intake-unparseable")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
