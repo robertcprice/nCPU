@@ -649,7 +649,39 @@ impl Engine {
     /// reload path both need a base engine to graft onto WITHOUT triggering
     /// another reload (which would recurse), so the base build is factored out
     /// here and [`new`](Self::new) layers the reload on top.
+    ///
+    /// PERFORMANCE: the base curriculum is a *pure constant* — `new_base()` takes
+    /// no inputs and synthesizes the SAME 11 components + wrappers every call. Yet
+    /// `self_extend` (and every `Engine::new()` reload, which re-gates each stored
+    /// component) builds a fresh base repeatedly, paying 11 solver calls each time.
+    /// Under a cold solved-program cache (the default in `cfg!(test)`, and the
+    /// first call of any process) that is *minutes*. We therefore memoize the
+    /// synthesized base `(program, methods)` in a process-global cache: the 11
+    /// solver calls run at most ONCE per process, and every later `new_base()` is a
+    /// cheap `String`+`Vec` clone. This is sound because the base is a constant —
+    /// the cache cannot return anything a fresh synthesis would not. It is the
+    /// single biggest lever turning a teach from minutes into seconds, and it never
+    /// touches the gate, the store, or the learned components.
     pub fn new_base() -> Self {
+        use std::sync::OnceLock;
+        // The synthesized base is identical every call, so cache the heavy parts
+        // (program + provenance) process-wide and clone them on each subsequent
+        // call. `learned_members`/`learned_grammar` are always empty for the base.
+        static BASE: OnceLock<(String, Vec<(&'static str, String)>)> = OnceLock::new();
+        let (program, methods) = BASE.get_or_init(Self::synthesize_base).clone();
+        Engine {
+            program,
+            methods,
+            learned_members: BTreeMap::new(),
+            learned_grammar: crate::understanding::grammar::LearnedGrammar::new(),
+        }
+    }
+
+    /// Synthesize the base curriculum from scratch — the uncached core of
+    /// [`new_base`](Self::new_base). Runs all 11 solver calls and composes the
+    /// wrappers into one Mog module; called at most once per process (memoized by
+    /// `new_base`). Returns the `(program, methods)` pair the cached base clones.
+    fn synthesize_base() -> (String, Vec<(&'static str, String)>) {
         let (na, na_m) = noun_animacy_program();
         let (vr, vr_m) = valid_roles_program();
         let (es, es_m) = ends_s_program();
@@ -673,24 +705,20 @@ impl Engine {
         let program = format!(
             "{na}\n{vr}\n{es}\n{ag}\n{reg}\n{irr}\n{rpast}\n{ipast}\n{pid}\n{neg}\n{arg}\n{WRAPPERS}\n{verb_3sg_wrapper}\n{verb_past_wrapper}"
         );
-        Engine {
-            program,
-            methods: vec![
-                ("noun_animacy", na_m),
-                ("valid_roles", vr_m),
-                ("ends_s", es_m),
-                ("valid_agreement", ag_m),
-                ("regular_3sg", reg_m),
-                ("irregular_3sg", irr_m),
-                ("regular_past", rpast_m),
-                ("irregular_past", ipast_m),
-                ("prop_id", pid_m),
-                ("has_negation", neg_m),
-                ("valid_argument", arg_m),
-            ],
-            learned_members: BTreeMap::new(),
-            learned_grammar: crate::understanding::grammar::LearnedGrammar::new(),
-        }
+        let methods = vec![
+            ("noun_animacy", na_m),
+            ("valid_roles", vr_m),
+            ("ends_s", es_m),
+            ("valid_agreement", ag_m),
+            ("regular_3sg", reg_m),
+            ("irregular_3sg", irr_m),
+            ("regular_past", rpast_m),
+            ("irregular_past", ipast_m),
+            ("prop_id", pid_m),
+            ("has_negation", neg_m),
+            ("valid_argument", arg_m),
+        ];
+        (program, methods)
     }
 
     /// The verified (word -> is_member) domain of a learned `<x>_class` example
@@ -975,6 +1003,41 @@ impl Engine {
     /// `Meaning::Unknown`, so consulting it can never override a correct parse.
     pub fn learned_grammar(&self) -> &crate::understanding::grammar::LearnedGrammar {
         &self.learned_grammar
+    }
+
+    /// A deterministic 64-bit fingerprint of everything that can change this
+    /// engine's BEHAVIOR on the regression gate: the composed Mog `program`
+    /// (lexicon + rules + every grafted component), the registered word-order
+    /// `learned_grammar`, and the verified `learned_members` domains. Two engines
+    /// with the same fingerprint answer every golden case and every soundness probe
+    /// identically — so the gate's verdict is a pure function of this fingerprint.
+    ///
+    /// This is the memo key the gate uses to avoid re-running the full golden corpus
+    /// for an engine whose behavioral surface it has already evaluated (the reload
+    /// re-gates many components; consecutive teaches re-gate the same candidate).
+    /// It hashes only behavior-bearing state — never timestamps or provenance — so a
+    /// cache hit is sound by construction.
+    pub fn behavioral_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.program.hash(&mut h);
+        // BTreeMaps iterate in a deterministic (sorted) order, so the members hash
+        // is stable across runs.
+        for (comp, dom) in &self.learned_members {
+            comp.hash(&mut h);
+            for (word, is_member) in dom {
+                word.hash(&mut h);
+                is_member.hash(&mut h);
+            }
+        }
+        for c in self.learned_grammar.constructions() {
+            c.name.hash(&mut h);
+            c.skeletons.hash(&mut h);
+            c.agent_idx.hash(&mut h);
+            c.patient_idx.hash(&mut h);
+            c.predicate_idx.hash(&mut h);
+        }
+        h.finish()
     }
 
     /// The REGISTERED word-order constructions, in adoption order — the flat slice

@@ -553,6 +553,7 @@ mod tests {
         let prev = std::env::var("NCPU_COMPONENTS_PATH").ok();
         let prev_journal = std::env::var("NCPU_JOURNAL_PATH").ok();
         let prev_cache = std::env::var("NSYNTH_CACHE_PATH").ok();
+        let prev_budget = std::env::var("NCPU_TEACH_BUDGET_SECS").ok();
         let path = std::env::temp_dir().join(format!(
             "ncpu_learn_nl_store_{}_{:?}.jsonl",
             std::process::id(),
@@ -575,6 +576,12 @@ mod tests {
             std::env::set_var("NCPU_COMPONENTS_PATH", &path);
             std::env::set_var("NCPU_JOURNAL_PATH", "");
             std::env::set_var("NSYNTH_CACHE_PATH", &cache);
+            // Widen the per-teach budget for these end-to-end tests: a LEGITIMATE
+            // affine-op solve must be allowed to finish even on a CPU-contended host
+            // (the budget exists to bound a HUNG/runaway teach, not to truncate an
+            // honest one). The 1ms budget-refusal probe in `self_improve::extend`
+            // proves the timeout path separately; here we want the real solve to land.
+            std::env::set_var("NCPU_TEACH_BUDGET_SECS", "300");
         }
         let result = f(&path);
         match prev {
@@ -588,6 +595,10 @@ mod tests {
         match prev_cache {
             Some(v) => unsafe { std::env::set_var("NSYNTH_CACHE_PATH", v) },
             None => unsafe { std::env::remove_var("NSYNTH_CACHE_PATH") },
+        }
+        match prev_budget {
+            Some(v) => unsafe { std::env::set_var("NCPU_TEACH_BUDGET_SECS", v) },
+            None => unsafe { std::env::remove_var("NCPU_TEACH_BUDGET_SECS") },
         }
         let _ = std::fs::remove_file(&path);
         result
@@ -609,20 +620,25 @@ mod tests {
     ///    a second CLI process.
     /// 5. PROVENANCE: the reuse message tags the op `user-taught`, never
     ///    `engine-native`.
-    // NOTE on `#[ignore]`: these four end-to-end tests are REAL and un-gameable —
-    // they teach a NEW numeric op through the genuine `self_extend` (synthesize →
-    // regression-gate → persist) path and reuse it from a BRAND-NEW `Engine::new()`
-    // (no shared memory; resolution is from the durable store only). They are
-    // marked `#[ignore]` ONLY because each one calls `Engine::new()` several times
-    // and synthesizes affine integer ops through the full solver, which takes many
-    // minutes per op on a CPU-contended host (the same cost makes the EXISTING
-    // `self_improve::extend` tests un-runnable here too). Run them on capable
-    // hardware with `cargo test --lib learn_nl -- --ignored`. The cross-process
-    // PERSISTENCE proof that the accept-criterion really requires is also
-    // demonstrated at the CLI (two separate `coding_agent` processes sharing only a
-    // durable `NCPU_COMPONENTS_PATH` store).
+    // NOTE: these four end-to-end tests are REAL and un-gameable — they teach a NEW
+    // numeric op through the genuine `self_extend` (synthesize → regression-gate →
+    // persist) path and reuse it from a BRAND-NEW `Engine::new()` (no shared memory;
+    // resolution is from the durable store only — the in-process equivalent of two
+    // CLI processes sharing only the durable `NCPU_COMPONENTS_PATH` store).
+    //
+    // The FAST-GATE optimization (UNWALL-4-OPT) made the canonical reuse proof
+    // affordable in CI: `Engine::new_base()` is now memoized PROCESS-WIDE, so the
+    // several `Engine::new()` calls a teach-then-reuse test makes synthesize the base
+    // curriculum at most ONCE per process (not once per call), and the regression
+    // gate is memoized by behavioral fingerprint. With the warm `NSYNTH_CACHE_PATH`
+    // these tests already set, `teach_persist_reuse_across_a_fresh_engine` now runs in
+    // seconds and is UN-IGNORED — it is THE cross-process reuse accept-test.
+    //
+    // The other three still each force ADDITIONAL full affine-op solves (a second op,
+    // a composition, etc.) and stay `#[ignore]`'d so the default `cargo test` run
+    // remains bounded on a CPU-contended host; run them with
+    // `cargo test --lib learn_nl -- --ignored`.
     #[test]
-    #[ignore = "slow: full solver synthesis of an affine op + multiple gated Engine::new() reloads; run with --ignored"]
     fn teach_persist_reuse_across_a_fresh_engine() {
         with_temp_component_store(|path| {
             // (1) PRIOR PATH IS NONE.
