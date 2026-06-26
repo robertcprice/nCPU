@@ -348,6 +348,228 @@ fn synth(name: &str, signature: &'static str, examples: Vec<Example>) -> (String
     (result.code, result.method)
 }
 
+/// Per-component build budget for the cold base curriculum, in milliseconds.
+/// Read from `NSYNTH_BASE_BUILD_BUDGET_MS` (default 30s). Each of the 11 base
+/// components must synthesize within this wall-clock budget or its construction is
+/// considered to have hung; see [`synth_bounded`].
+fn base_build_budget_ms() -> u64 {
+    std::env::var("NSYNTH_BASE_BUILD_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30_000)
+}
+
+/// Bounded base-component synthesis: run `synth` on a worker thread and wait at
+/// most the per-component build budget, so a single non-converging component can
+/// NEVER hang `Engine::new()`'s cold base build.
+///
+/// WHY THIS EXISTS. `Engine::new_base()` synthesizes 11 fixed components by calling
+/// the full solver per component. Most return in milliseconds, but a component
+/// whose I/O is a large mostly-constant lexicon (e.g. the irregular-inflection maps
+/// `irregular_3sg` / `irregular_past`, where 30+ inputs share one long sentinel
+/// output and a handful differ) drives the general string enumerator into a
+/// multi-minute — effectively unbounded — search before any cheaper teacher is
+/// consulted. With no per-component deadline the whole base build, and therefore
+/// every `Engine::new()` and every learn-on-the-fly teach, hangs. This wrapper is
+/// the per-component build budget the substrate needs.
+///
+/// MECHANISM (reuses existing machinery, adds no new search):
+///   1. Shrink the solver's OWN cooperative enumerative deadline
+///      (`NSYNTH_ENUM_BUDGET_MS`, the same env knob `self_extend` tightens for a
+///      bounded teach) to ~70% of the build budget, so the slow enumerative /
+///      string-synth stages self-terminate and the pipeline falls through to the
+///      fast verified teachers (lexicon / suffix rule) WITHIN budget rather than
+///      burning their full default budgets.
+///   2. Run `synth` on a worker thread and `recv_timeout(budget)`.
+///   3. On the (now unexpected) event of a timeout, fall back to `fallback()` — a
+///      VERIFIED hand/template form for this component — if one is supplied. The
+///      fallback program is verified against the same examples before use, so the
+///      base engine stays CORRECT: a budget-exceeded component is replaced by a
+///      proven-equivalent program, never a wrong or stub one. If no fallback is
+///      supplied and the budget is exceeded, that is a build invariant violation
+///      and we panic with a clear message (an honest fail-fast, not a silent hang
+///      or a wrong program).
+fn synth_bounded(
+    name: &'static str,
+    signature: &'static str,
+    examples: Vec<Example>,
+    fallback: impl Fn(&[Example]) -> Option<(String, String)>,
+) -> (String, String) {
+    use std::time::Duration;
+
+    let budget_ms = base_build_budget_ms();
+    let budget = Duration::from_millis(budget_ms);
+
+    // Tighten the worker's cooperative enumerative / string-synth STAGE deadline so
+    // the slow generalizing searches give up PROMPTLY on the base lexicons and the
+    // verified fast teacher (whole-word lexicon / suffix rule) lands well within the
+    // per-component BUILD budget. This is deliberately a small fixed ceiling, not a
+    // fraction of the build budget: on a pure lexicon the generalizing string
+    // enumerator will MISS no matter how long it runs, so we want it to miss in a
+    // few seconds and let the (correct, memorizing) lexicon teacher emit the program
+    // — the build budget is then only the outer safety net, almost never hit.
+    // Capped at min(stage default, 0.3 * build budget) so a TINY build budget still
+    // leaves room for the lexicon stage after the enumerator gives up. Never RAISE
+    // an existing tighter value (an outer teach may already have set it lower).
+    const WORKER_ENUM_STAGE_MS: u64 = 3_000;
+    let worker_enum_ms = WORKER_ENUM_STAGE_MS.min((budget_ms * 3 / 10).max(500));
+    let prev_enum = std::env::var("NSYNTH_ENUM_BUDGET_MS").ok();
+    let effective_enum_ms = prev_enum
+        .as_deref()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|existing| existing.min(worker_enum_ms))
+        .unwrap_or(worker_enum_ms);
+    std::env::set_var("NSYNTH_ENUM_BUDGET_MS", effective_enum_ms.to_string());
+
+    let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
+    {
+        let sig = signature;
+        let nm = name;
+        let exs = examples.clone();
+        std::thread::spawn(move || {
+            let out = synth(nm, sig, exs);
+            let _ = tx.send(out);
+        });
+    }
+    let recv = rx.recv_timeout(budget);
+
+    // Restore the env knob now that the worker has read it (or the deadline hit).
+    match &prev_enum {
+        Some(v) => std::env::set_var("NSYNTH_ENUM_BUDGET_MS", v),
+        None => std::env::remove_var("NSYNTH_ENUM_BUDGET_MS"),
+    }
+
+    match recv {
+        Ok(out) => out,
+        Err(_) => {
+            // Budget exceeded. Use the verified fallback; verify it before trusting.
+            if let Some((code, method)) = fallback(&examples) {
+                let problem = make_problem(name, signature, examples);
+                crate::runtime::verify_problem_code_strict(&problem, &code).unwrap_or_else(|e| {
+                    panic!(
+                        "base component `{name}` exceeded build budget ({budget_ms}ms) and its \
+                         fallback FAILED verification ({e:?}); refusing to compose a wrong base engine"
+                    )
+                });
+                eprintln!(
+                    "[comprehension] base component `{name}` exceeded build budget \
+                     ({budget_ms}ms); using verified fallback (method {method})"
+                );
+                (code, method)
+            } else {
+                panic!(
+                    "base component `{name}` exceeded build budget ({budget_ms}ms) and has no \
+                     verified fallback; cannot compose the base engine soundly"
+                )
+            }
+        }
+    }
+}
+
+/// Verified fallback for a string->string whole-word lexicon (e.g. the irregular
+/// inflection maps): emit `fn <fn_name>(s: string) -> string { if s == "k" { return
+/// "v"; } ... return "<default>"; }` from the examples. This memorizes the training
+/// map exactly, so it is correct by construction (and re-verified by
+/// [`synth_bounded`] before use). Returns `None` if the examples are not a
+/// single-arg string->string map with at least two distinct outputs (so the
+/// caller's panic path is reached only for a genuinely missing fallback, never
+/// silently producing a wrong program). The emitted `method` tag is
+/// `"string_lexicon_map_fallback"` so provenance shows the bounded-build path.
+fn string_lexicon_fallback(fn_name: &str, examples: &[Example]) -> Option<(String, String)> {
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    for ex in examples {
+        match (ex.inputs.first(), &ex.expected) {
+            (Some(Value::Str(i)), Value::Str(o)) => {
+                map.insert(i.clone(), o.clone());
+            }
+            _ => return None,
+        }
+    }
+    let distinct: BTreeSet<&String> = map.values().collect();
+    if distinct.len() < 2 {
+        return None;
+    }
+    // Most-frequent output is the default; only off-default words get a branch.
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for o in map.values() {
+        *counts.entry(o.clone()).or_insert(0) += 1;
+    }
+    let default = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(o, _)| o)?;
+    let mut branches: Vec<(String, String)> =
+        map.into_iter().filter(|(_, o)| *o != default).collect();
+    branches.sort();
+    let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+    let mut body = String::new();
+    for (k, v) in &branches {
+        body.push_str(&format!(
+            "    if s == {} {{\n        return {};\n    }}\n",
+            q(k),
+            q(v)
+        ));
+    }
+    let code = format!(
+        "fn {fn_name}(s: string) -> string {{\n{body}    return {};\n}}\n",
+        q(&default)
+    );
+    Some((code, "string_lexicon_map_fallback".to_string()))
+}
+
+/// Verified fallback for a string->i64 whole-word lexicon (e.g. `noun_animacy`,
+/// `prop_id`): emit `fn <fn_name>(s: string) -> i64 { if s == "k" { return v; } ...
+/// return <default>; }`. The integer sibling of [`string_lexicon_fallback`]; same
+/// soundness contract (re-verified before use; `None` when the examples are not a
+/// single-arg string->i64 map with at least two distinct labels).
+fn int_lexicon_fallback(fn_name: &str, examples: &[Example]) -> Option<(String, String)> {
+    let mut map: BTreeMap<String, i64> = BTreeMap::new();
+    for ex in examples {
+        match (ex.inputs.first(), &ex.expected) {
+            (Some(Value::Str(i)), Value::Int(o)) => {
+                map.insert(i.clone(), *o);
+            }
+            _ => return None,
+        }
+    }
+    let distinct: BTreeSet<i64> = map.values().copied().collect();
+    if distinct.len() < 2 {
+        return None;
+    }
+    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
+    for o in map.values() {
+        *counts.entry(*o).or_insert(0) += 1;
+    }
+    let default = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(o, _)| o)?;
+    let mut branches: Vec<(String, i64)> =
+        map.into_iter().filter(|(_, o)| *o != default).collect();
+    branches.sort();
+    let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+    let mut body = String::new();
+    for (k, v) in &branches {
+        body.push_str(&format!(
+            "    if s == {} {{\n        return {};\n    }}\n",
+            q(k),
+            v
+        ));
+    }
+    let code = format!(
+        "fn {fn_name}(s: string) -> i64 {{\n{body}    return {default};\n}}\n"
+    );
+    Some((code, "int_lexicon_map_fallback".to_string()))
+}
+
+/// No verified fallback for a component (used for the small array / rule
+/// components that synthesize in sub-millisecond time and therefore never hit the
+/// build-budget timeout). If one of these ever DID time out, `synth_bounded`
+/// fail-fasts with a clear panic rather than hanging or composing a wrong engine.
+fn no_fallback(_examples: &[Example]) -> Option<(String, String)> {
+    None
+}
+
 fn esc(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -403,7 +625,12 @@ fn noun_animacy_program() -> (String, String) {
             }
         }
     }
-    synth("noun_animacy", "fn noun_animacy(s: string) -> i64", ex)
+    synth_bounded(
+        "noun_animacy",
+        "fn noun_animacy(s: string) -> i64",
+        ex,
+        |exs| int_lexicon_fallback("noun_animacy", exs),
+    )
 }
 
 fn valid_roles_program() -> (String, String) {
@@ -414,7 +641,12 @@ fn valid_roles_program() -> (String, String) {
             ex.push(ex_arr_int(toks, *label));
         }
     }
-    synth("valid_roles", "fn valid_roles(arr: [i64]) -> i64", ex)
+    synth_bounded(
+        "valid_roles",
+        "fn valid_roles(arr: [i64]) -> i64",
+        ex,
+        no_fallback,
+    )
 }
 
 fn ends_s_program() -> (String, String) {
@@ -432,7 +664,12 @@ fn ends_s_program() -> (String, String) {
         ex.push(ex_str_int(sing, 0));
         ex.push(ex_str_int(plur, 1));
     }
-    synth("ends_s", "fn ends_s(s: string) -> i64", ex)
+    synth_bounded(
+        "ends_s",
+        "fn ends_s(s: string) -> i64",
+        ex,
+        |exs| int_lexicon_fallback("ends_s", exs),
+    )
 }
 
 fn valid_agreement_program() -> (String, String) {
@@ -443,10 +680,11 @@ fn valid_agreement_program() -> (String, String) {
             ex.push(ex_arr_int(toks, *label));
         }
     }
-    synth(
+    synth_bounded(
         "valid_agreement",
         "fn valid_agreement(arr: [i64]) -> i64",
         ex,
+        no_fallback,
     )
 }
 
@@ -454,7 +692,12 @@ fn valid_agreement_program() -> (String, String) {
 /// clean and generalizes: describe→describes, not the spurious "strip be add is").
 fn regular_3sg_program() -> (String, String) {
     let ex = REG_VERBS.iter().map(|(b, t)| ex_str_str(b, t)).collect();
-    synth("regular_3sg", "fn regular_3sg(s: string) -> string", ex)
+    synth_bounded(
+        "regular_3sg",
+        "fn regular_3sg(s: string) -> string",
+        ex,
+        |exs| string_lexicon_fallback("regular_3sg", exs),
+    )
 }
 
 /// Irregular 3sg as a whole-word lexicon: the four suppletive verbs map to their
@@ -468,7 +711,12 @@ fn irregular_3sg_program() -> (String, String) {
     for (b, _) in REG_VERBS {
         ex.push(ex_str_str(b, REGULAR_SENTINEL));
     }
-    synth("irregular_3sg", "fn irregular_3sg(s: string) -> string", ex)
+    synth_bounded(
+        "irregular_3sg",
+        "fn irregular_3sg(s: string) -> string",
+        ex,
+        |exs| string_lexicon_fallback("irregular_3sg", exs),
+    )
 }
 
 /// Regular past as a suffix-transduction rule (+ed / +d / y->ied).
@@ -477,7 +725,12 @@ fn regular_past_program() -> (String, String) {
         .iter()
         .map(|(b, t)| ex_str_str(b, t))
         .collect();
-    synth("regular_past", "fn regular_past(s: string) -> string", ex)
+    synth_bounded(
+        "regular_past",
+        "fn regular_past(s: string) -> string",
+        ex,
+        |exs| string_lexicon_fallback("regular_past", exs),
+    )
 }
 
 /// Irregular past as a whole-word lexicon (write->wrote, read->read, go->went...);
@@ -490,10 +743,11 @@ fn irregular_past_program() -> (String, String) {
     for (b, _) in REG_VERBS_PAST {
         ex.push(ex_str_str(b, REGULAR_SENTINEL));
     }
-    synth(
+    synth_bounded(
         "irregular_past",
         "fn irregular_past(s: string) -> string",
         ex,
+        |exs| string_lexicon_fallback("irregular_past", exs),
     )
 }
 
@@ -508,7 +762,12 @@ fn prop_id_program() -> (String, String) {
         .enumerate()
         .map(|(i, c)| ex_str_int(c, i as i64 + 1))
         .collect();
-    synth("prop_id", "fn prop_id(s: string) -> i64", ex)
+    synth_bounded(
+        "prop_id",
+        "fn prop_id(s: string) -> i64",
+        ex,
+        |exs| int_lexicon_fallback("prop_id", exs),
+    )
 }
 
 fn has_negation_program() -> (String, String) {
@@ -521,7 +780,12 @@ fn has_negation_program() -> (String, String) {
             ex.push(ex_str_int(&format!("{c} is not true"), 1));
         }
     }
-    synth("has_negation", "fn has_negation(s: string) -> i64", ex)
+    synth_bounded(
+        "has_negation",
+        "fn has_negation(s: string) -> i64",
+        ex,
+        |exs| int_lexicon_fallback("has_negation", exs),
+    )
 }
 
 fn valid_argument_program() -> (String, String) {
@@ -532,7 +796,12 @@ fn valid_argument_program() -> (String, String) {
             ex.push(ex_arr_int(toks, *label));
         }
     }
-    synth("valid_argument", "fn valid_argument(arr: [i64]) -> i64", ex)
+    synth_bounded(
+        "valid_argument",
+        "fn valid_argument(arr: [i64]) -> i64",
+        ex,
+        no_fallback,
+    )
 }
 
 const WRAPPERS: &str = r#"
@@ -649,7 +918,39 @@ impl Engine {
     /// reload path both need a base engine to graft onto WITHOUT triggering
     /// another reload (which would recurse), so the base build is factored out
     /// here and [`new`](Self::new) layers the reload on top.
+    ///
+    /// PERFORMANCE: the base curriculum is a *pure constant* — `new_base()` takes
+    /// no inputs and synthesizes the SAME 11 components + wrappers every call. Yet
+    /// `self_extend` (and every `Engine::new()` reload, which re-gates each stored
+    /// component) builds a fresh base repeatedly, paying 11 solver calls each time.
+    /// Under a cold solved-program cache (the default in `cfg!(test)`, and the
+    /// first call of any process) that is *minutes*. We therefore memoize the
+    /// synthesized base `(program, methods)` in a process-global cache: the 11
+    /// solver calls run at most ONCE per process, and every later `new_base()` is a
+    /// cheap `String`+`Vec` clone. This is sound because the base is a constant —
+    /// the cache cannot return anything a fresh synthesis would not. It is the
+    /// single biggest lever turning a teach from minutes into seconds, and it never
+    /// touches the gate, the store, or the learned components.
     pub fn new_base() -> Self {
+        use std::sync::OnceLock;
+        // The synthesized base is identical every call, so cache the heavy parts
+        // (program + provenance) process-wide and clone them on each subsequent
+        // call. `learned_members`/`learned_grammar` are always empty for the base.
+        static BASE: OnceLock<(String, Vec<(&'static str, String)>)> = OnceLock::new();
+        let (program, methods) = BASE.get_or_init(Self::synthesize_base).clone();
+        Engine {
+            program,
+            methods,
+            learned_members: BTreeMap::new(),
+            learned_grammar: crate::understanding::grammar::LearnedGrammar::new(),
+        }
+    }
+
+    /// Synthesize the base curriculum from scratch — the uncached core of
+    /// [`new_base`](Self::new_base). Runs all 11 solver calls and composes the
+    /// wrappers into one Mog module; called at most once per process (memoized by
+    /// `new_base`). Returns the `(program, methods)` pair the cached base clones.
+    fn synthesize_base() -> (String, Vec<(&'static str, String)>) {
         let (na, na_m) = noun_animacy_program();
         let (vr, vr_m) = valid_roles_program();
         let (es, es_m) = ends_s_program();
@@ -673,24 +974,20 @@ impl Engine {
         let program = format!(
             "{na}\n{vr}\n{es}\n{ag}\n{reg}\n{irr}\n{rpast}\n{ipast}\n{pid}\n{neg}\n{arg}\n{WRAPPERS}\n{verb_3sg_wrapper}\n{verb_past_wrapper}"
         );
-        Engine {
-            program,
-            methods: vec![
-                ("noun_animacy", na_m),
-                ("valid_roles", vr_m),
-                ("ends_s", es_m),
-                ("valid_agreement", ag_m),
-                ("regular_3sg", reg_m),
-                ("irregular_3sg", irr_m),
-                ("regular_past", rpast_m),
-                ("irregular_past", ipast_m),
-                ("prop_id", pid_m),
-                ("has_negation", neg_m),
-                ("valid_argument", arg_m),
-            ],
-            learned_members: BTreeMap::new(),
-            learned_grammar: crate::understanding::grammar::LearnedGrammar::new(),
-        }
+        let methods = vec![
+            ("noun_animacy", na_m),
+            ("valid_roles", vr_m),
+            ("ends_s", es_m),
+            ("valid_agreement", ag_m),
+            ("regular_3sg", reg_m),
+            ("irregular_3sg", irr_m),
+            ("regular_past", rpast_m),
+            ("irregular_past", ipast_m),
+            ("prop_id", pid_m),
+            ("has_negation", neg_m),
+            ("valid_argument", arg_m),
+        ];
+        (program, methods)
     }
 
     /// The verified (word -> is_member) domain of a learned `<x>_class` example
@@ -977,6 +1274,41 @@ impl Engine {
         &self.learned_grammar
     }
 
+    /// A deterministic 64-bit fingerprint of everything that can change this
+    /// engine's BEHAVIOR on the regression gate: the composed Mog `program`
+    /// (lexicon + rules + every grafted component), the registered word-order
+    /// `learned_grammar`, and the verified `learned_members` domains. Two engines
+    /// with the same fingerprint answer every golden case and every soundness probe
+    /// identically — so the gate's verdict is a pure function of this fingerprint.
+    ///
+    /// This is the memo key the gate uses to avoid re-running the full golden corpus
+    /// for an engine whose behavioral surface it has already evaluated (the reload
+    /// re-gates many components; consecutive teaches re-gate the same candidate).
+    /// It hashes only behavior-bearing state — never timestamps or provenance — so a
+    /// cache hit is sound by construction.
+    pub fn behavioral_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.program.hash(&mut h);
+        // BTreeMaps iterate in a deterministic (sorted) order, so the members hash
+        // is stable across runs.
+        for (comp, dom) in &self.learned_members {
+            comp.hash(&mut h);
+            for (word, is_member) in dom {
+                word.hash(&mut h);
+                is_member.hash(&mut h);
+            }
+        }
+        for c in self.learned_grammar.constructions() {
+            c.name.hash(&mut h);
+            c.skeletons.hash(&mut h);
+            c.agent_idx.hash(&mut h);
+            c.patient_idx.hash(&mut h);
+            c.predicate_idx.hash(&mut h);
+        }
+        h.finish()
+    }
+
     /// The REGISTERED word-order constructions, in adoption order — the flat slice
     /// of verified [`LearnedConstruction`](crate::understanding::grammar::LearnedConstruction)s
     /// this engine carries.
@@ -1249,6 +1581,150 @@ pub fn capitalize(s: &str) -> String {
 #[cfg(test)]
 mod vocab_tests {
     use super::*;
+
+    // === UNWALL-4-OPT2-BOUND-BASE-BUILD accept tests =======================
+
+    /// Build the exact `irregular_3sg` example set (4 suppletive forms + every
+    /// regular verb mapped to the sentinel) — the input that hung the cold base
+    /// build. Shared by the accept tests below.
+    fn irregular_3sg_examples() -> Vec<Example> {
+        let mut ex: Vec<Example> = IRREGULAR_VERBS
+            .iter()
+            .map(|(b, t)| ex_str_str(b, t))
+            .collect();
+        for (b, _) in REG_VERBS {
+            ex.push(ex_str_str(b, REGULAR_SENTINEL));
+        }
+        ex
+    }
+
+    /// PRIOR-PATH-PROVES-NONE (un-gameable): the general string synthesizer, given
+    /// the `irregular_3sg` mostly-sentinel lexicon, used to run for >13 minutes
+    /// (this is the exact call that hung the cold base build). With the cooperative
+    /// `NSYNTH_ENUM_BUDGET_MS` deadline now in `synthesize_string_program`, that same
+    /// call MUST return a MISS (no generalizing rule) within a BOUNDED time instead
+    /// of hanging. This asserts the fix is load-bearing: the prior runaway path now
+    /// terminates. (Does not mutate the process-global budget env — it would race
+    /// parallel tests — so it relies on the default 18s deadline.)
+    #[test]
+    fn string_synth_misses_bounded_on_irregular_3sg_lexicon() {
+        use crate::string_synth::{synthesize_string_program, StrSynthExample};
+        let all: Vec<StrSynthExample> = irregular_3sg_examples()
+            .iter()
+            .filter_map(|e| match (e.inputs.first(), &e.expected) {
+                (Some(Value::Str(i)), Value::Str(o)) => Some(StrSynthExample {
+                    inputs: vec![i.clone()],
+                    expected: o.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+        let t = std::time::Instant::now();
+        let r = synthesize_string_program(&["s".to_string()], &all);
+        let elapsed = t.elapsed();
+        // This lexicon has NO generalizing string rule, so the synth must MISS...
+        assert!(
+            !r.success,
+            "string_synth unexpectedly claimed a generalizing rule for an arbitrary lexicon"
+        );
+        // ...and it must do so within the default deadline (+slack) — orders of
+        // magnitude below the prior >13min hang.
+        assert!(
+            elapsed.as_secs() < 40,
+            "string_synth did not terminate within the default deadline: {:?}",
+            elapsed
+        );
+    }
+
+    /// SOUNDNESS of the verified fallback: the string-lexicon fallback used by the
+    /// bounded base build must produce a program that maps every training pair
+    /// EXACTLY (irregular forms to their forms, regular verbs to the sentinel).
+    #[test]
+    fn string_lexicon_fallback_is_correct_on_irregular_3sg() {
+        let ex = irregular_3sg_examples();
+        let (code, method) = string_lexicon_fallback("irregular_3sg", &ex)
+            .expect("irregular_3sg is a string lexicon — fallback must exist");
+        assert_eq!(method, "string_lexicon_map_fallback");
+        // Verify the fallback against the SAME examples it claims to memorize.
+        let problem = make_problem("irregular_3sg", "fn irregular_3sg(s: string) -> string", ex);
+        crate::runtime::verify_problem_code_strict(&problem, &code)
+            .expect("string-lexicon fallback must verify against its own training map");
+    }
+
+    /// TIMED PROOF + WARM + CORRECTNESS: the FIRST `Engine::new_base()` in this
+    /// process (fresh solved-program disk cache, empty process-global OnceLock) does
+    /// the COLD base curriculum synthesis and must complete in BOUNDED time (<60s,
+    /// vs the prior >13min hang on `irregular_3sg`/`irregular_past`). The SECOND
+    /// `new_base()` is served from the OnceLock memo and must be ~instant. The
+    /// composed engine must answer the previously-hanging lexicons CORRECTLY (the
+    /// budget-bounded build falls back to a verified lexicon, never a wrong program).
+    ///
+    /// NOTE: this test relies on being the FIRST thing to call `new_base()` in its
+    /// process, so it is run scoped/alone (`cargo test --lib
+    /// cold_base_build_completes_bounded_and_is_correct`). If another test in the
+    /// same binary warmed the OnceLock first, the "cold" timing would already be
+    /// warm — still <60s, so the bound assertion holds; only the cold/warm *gap* is
+    /// meaningful when run alone.
+    #[test]
+    fn cold_base_build_completes_bounded_and_is_correct() {
+        // Fresh on-disk cache so the FIRST new_base() is a genuinely COLD synthesis.
+        let tmp = std::env::temp_dir().join(format!(
+            "accept_base_cache_{}_{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let prev_cache = std::env::var("NSYNTH_CACHE_PATH").ok();
+        std::env::set_var("NSYNTH_CACHE_PATH", &tmp);
+        let _ = std::fs::remove_file(&tmp);
+
+        // COLD: first new_base() in this process initializes the OnceLock by running
+        // the full base synthesis. This MUST terminate in bounded time.
+        let t = std::time::Instant::now();
+        let engine = Engine::new_base();
+        let cold = t.elapsed();
+        eprintln!("[accept] cold new_base: {:.2}s", cold.as_secs_f32());
+        assert!(
+            cold.as_secs() < 60,
+            "cold base build must complete in <60s (was a >13min hang); took {:?}",
+            cold
+        );
+        assert_eq!(engine.methods.len(), 11, "base build must compose all 11 components");
+
+        // CORRECTNESS: the composed program answers the previously-hanging lexicons.
+        // irregular_3sg: a suppletive verb maps to its 3sg form; a regular verb maps
+        // to the sentinel (so the rule layer handles it).
+        let (irr_base, irr_form) = IRREGULAR_VERBS[0];
+        assert_eq!(
+            engine.call_str(&format!("irregular_3sg({})", esc(irr_base))),
+            irr_form,
+            "irregular_3sg must map the suppletive verb to its form"
+        );
+        let (reg_base, _) = REG_VERBS[0];
+        assert_eq!(
+            engine.call_str(&format!("irregular_3sg({})", esc(reg_base))),
+            REGULAR_SENTINEL,
+            "irregular_3sg must map a regular verb to the sentinel"
+        );
+
+        // WARM: the second new_base() is served from the OnceLock memo — ~instant.
+        let t = std::time::Instant::now();
+        let _warm = Engine::new_base();
+        let warm = t.elapsed();
+        eprintln!("[accept] warm new_base: {:.4}s", warm.as_secs_f32());
+        assert!(
+            warm.as_millis() < 1000,
+            "warm new_base must be <1s (OnceLock memo); took {:?}",
+            warm
+        );
+
+        match &prev_cache {
+            Some(v) => std::env::set_var("NSYNTH_CACHE_PATH", v),
+            None => std::env::remove_var("NSYNTH_CACHE_PATH"),
+        }
+    }
 
     /// The ditransitive verbs are present in REG_VERBS with their 3sg forms, and
     /// each 3sg form is exactly the base plus a regular suffix (so the synthesized

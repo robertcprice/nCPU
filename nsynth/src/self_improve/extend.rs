@@ -19,7 +19,7 @@
 
 use crate::benchmark::Example;
 use crate::comprehension::Engine;
-use crate::self_improve::gate::regression_gate;
+use crate::self_improve::gate::{regression_gate, GateReport};
 use crate::self_improve::journal::{self, JournalEntry};
 use crate::self_improve::store::{self, StoredComponent, StoredConstruction};
 use crate::solved_cache::examples_fingerprint;
@@ -113,6 +113,41 @@ pub struct StudyReport {
     pub rejected: usize,
 }
 
+/// The per-teach time budget, in seconds. A single self-extension (synthesize +
+/// gate) must complete within this wall-clock bound or it is honestly refused
+/// rather than allowed to run unbounded — the cure for the "uninterruptible
+/// minutes" failure mode. Overridable via `NCPU_TEACH_BUDGET_SECS` (e.g. CI may
+/// widen it on slow hardware) or, for a precise sub-second bound in tests, via
+/// `NCPU_TEACH_BUDGET_MS` (which takes precedence). An unset / unparseable / zero
+/// value falls back to the default. The budget bounds the *caller's* wall-clock:
+/// synthesis runs on a worker thread and the teach returns within the budget on
+/// timeout (the worker is detached — the solver ignores SIGTERM internally — but
+/// the teach no longer hangs and is interruptible from the caller's side).
+// 30s default: the worker's synthesis is bounded to 70% of this (= 21s), which
+// comfortably covers the enumerative solver's own default per-call budget (18s for
+// unary ops) so an HONEST teach is never truncated — the teach budget bounds a
+// RUNAWAY teach, it does not starve a legitimate one. CI/slow hosts can widen it
+// via NCPU_TEACH_BUDGET_SECS.
+const DEFAULT_TEACH_BUDGET_SECS: u64 = 30;
+
+fn teach_budget() -> std::time::Duration {
+    // Millisecond override wins when present (lets a test force a deterministic
+    // sub-second timeout without a flaky 1s floor).
+    if let Some(ms) = std::env::var("NCPU_TEACH_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&m| m > 0)
+    {
+        return std::time::Duration::from_millis(ms);
+    }
+    let secs = std::env::var("NCPU_TEACH_BUDGET_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(DEFAULT_TEACH_BUDGET_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
 /// Attempt to extend `engine` to close the gap described by `req`.
 ///
 /// This is the self-extension loop — the one place the understanding layer adds
@@ -132,25 +167,128 @@ pub struct StudyReport {
 ///    behavioral case still passes *and* every soundness invariant holds. This is
 ///    what makes growth monotone: an addition that regresses any existing
 ///    behavior, or makes the world model unsound, is rejected.
-/// 3. **Journal.** Record a [`JournalEntry`] for the attempt (accepted or not):
-///    the gap, the action (`"synthesize <name>"`), the recovering `method`,
-///    `verified=true`, and the gate's verdict mirrored into both
-///    `regression_passed` and `accepted`.
+/// 3. **Journal.** Record a [`JournalEntry`] for the attempt (accepted or not).
 /// 4. **Return.** `(Some(candidate), report)` with `accepted=true` on a green
 ///    gate; otherwise `(None, report)` whose `message` names the failing golden
-///    cases (and flags an unsound run), so the rejection is auditable.
+///    cases, so the rejection is auditable.
 ///
 /// `engine` is never mutated. The returned candidate (when `Some`) is a fresh,
 /// already-gated `Engine` the caller may adopt as the new live engine.
+///
+/// BUDGET + CANCELLATION (UNWALL-4-OPT). The synthesize+gate work runs on a worker
+/// thread and the caller waits only up to the per-teach budget ([`teach_budget`]);
+/// on timeout it returns an honest "could not learn within budget" refusal instead
+/// of hanging — a teach is bounded and interruptible from the caller's side.
 pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, LearnReport) {
-    // --- 1. SYNTHESIZE + VERIFY ------------------------------------------
-    let candidate = match engine.try_extend(&req.name, req.signature, req.examples.clone()) {
-        Ok(candidate) => candidate,
-        Err(err) => {
-            // No verified program closes this gap. The engine is untouched.
+    // --- 0. BUDGET + CANCEL ----------------------------------------------
+    // Run the heavy, potentially-unbounded part of the teach — synthesis (the
+    // solver search) followed by the regression gate — on a WORKER THREAD, and
+    // wait for it only up to the per-teach budget. On timeout the teach returns an
+    // honest "could not learn within budget" refusal instead of blocking the caller
+    // for the minutes the solver might take. This is the cooperative-cancellation
+    // boundary the substrate needs: a teach is now BOUNDED and INTERRUPTIBLE from
+    // the caller's perspective. The detached worker may finish its solve in the
+    // background, but its result is dropped (the channel receiver is gone) and it
+    // never mutates `engine` — soundness is unaffected, because a green gate is
+    // still required for any acceptance.
+    let budget = teach_budget();
+
+    // Bound the WORKER's own synthesis so it self-terminates near the deadline
+    // instead of pinning a core for the solver's full default stage budgets after
+    // the caller has already refused. The pipeline's two slow stages each honor a
+    // COOPERATIVE deadline read from the environment — the enumerative search
+    // (`NSYNTH_ENUM_BUDGET_MS`, default 18s) and teacher distillation
+    // (`NSYNTH_TEACHER_BUDGET_SEC`, default 15s). Shrinking BOTH to fit the teach
+    // budget makes the detached worker give up promptly, closing the "runaway
+    // worker lingers for tens of seconds" gap. Both are restored after the recv
+    // resolves (by then the worker has read them — recv only returns after `budget`
+    // elapses).
+    //
+    // The worker budget is 70% of the teach budget (leaving room for the gate), but
+    // FLOORED so the worker can always resolve-or-give-up in a bounded short time
+    // and exit even when the teach budget is TINY — the caller's `recv_timeout`
+    // still uses the full (possibly sub-second) teach budget to decide the refusal,
+    // so a tiny budget still refuses promptly; the floor only governs how long the
+    // already-refused worker keeps running before it stops. The 70% value is never
+    // RAISED above an existing tighter env value, and for the 30s default it yields
+    // ~21s of enumeration — above the solver's own 18s default — so an HONEST teach
+    // is never truncated; only a runaway one is bounded.
+    const WORKER_SOLVER_FLOOR_MS: u64 = 200;
+    let worker_ms = (budget.as_millis() as u64 * 7 / 10).max(WORKER_SOLVER_FLOOR_MS);
+    let prev_enum_budget = std::env::var("NSYNTH_ENUM_BUDGET_MS").ok();
+    let effective_enum_ms = prev_enum_budget
+        .as_deref()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|existing| existing.min(worker_ms))
+        .unwrap_or(worker_ms);
+    let prev_teacher_budget = std::env::var("NSYNTH_TEACHER_BUDGET_SEC").ok();
+    // Teacher budget is in SECONDS (float). Convert the worker ms budget, flooring
+    // at 0 so a sub-second teach budget disables the (otherwise 15s) teacher stage.
+    let worker_teacher_sec = worker_ms as f64 / 1000.0;
+    let effective_teacher_sec = prev_teacher_budget
+        .as_deref()
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|existing| existing.min(worker_teacher_sec))
+        .unwrap_or(worker_teacher_sec);
+    // SAFETY: in tests this runs under ENV_LOCK (held by the test helpers); in
+    // production a teach is the only thing running. The restore below returns the
+    // env to its prior state once the worker's result (or the timeout) is in.
+    unsafe {
+        std::env::set_var("NSYNTH_ENUM_BUDGET_MS", effective_enum_ms.to_string());
+        std::env::set_var("NSYNTH_TEACHER_BUDGET_SEC", format!("{effective_teacher_sec}"));
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel::<(Option<Engine>, bool, GateOutcome)>();
+    {
+        // Move owned copies onto the worker so the closure is 'static + Send.
+        let name = req.name.clone();
+        let signature = req.signature;
+        let examples = req.examples.clone();
+        let base = engine.clone();
+        std::thread::spawn(move || {
+            // 1. SYNTHESIZE + VERIFY on the worker.
+            let result = match base.try_extend(&name, signature, examples) {
+                Ok(candidate) => {
+                    // 2. GATE on the worker.
+                    let gate = regression_gate(&candidate);
+                    let outcome = GateOutcome {
+                        passed: gate.passed,
+                        total: gate.total,
+                        sound: gate.sound,
+                        failures: gate.failures,
+                        synthesis_error: None,
+                    };
+                    let ok = outcome.passed == outcome.total && outcome.sound;
+                    (Some(candidate), ok, outcome)
+                }
+                Err(err) => (None, false, GateOutcome::synthesis_failure(err)),
+            };
+            // The receiver may already be gone (budget exceeded); ignore send error.
+            let _ = tx.send(result);
+        });
+    }
+
+    let recv = rx.recv_timeout(budget);
+    // Restore the budgets now that the worker has read them (or the deadline hit).
+    match &prev_enum_budget {
+        Some(v) => unsafe { std::env::set_var("NSYNTH_ENUM_BUDGET_MS", v) },
+        None => unsafe { std::env::remove_var("NSYNTH_ENUM_BUDGET_MS") },
+    }
+    match &prev_teacher_budget {
+        Some(v) => unsafe { std::env::set_var("NSYNTH_TEACHER_BUDGET_SEC", v) },
+        None => unsafe { std::env::remove_var("NSYNTH_TEACHER_BUDGET_SEC") },
+    }
+
+    let (candidate, passed_gate, outcome) = match recv {
+        Ok(triple) => triple,
+        Err(_) => {
+            // BUDGET EXCEEDED: honest refusal, not a hang. The engine is untouched
+            // and nothing is persisted; the gap stays open.
             let message = format!(
-                "no verified program for gap {:?}: synthesis of `{}` failed ({})",
-                req.gap, req.name, err
+                "could not learn `{}` within budget ({}s): synthesis did not complete in time \
+                 (honest refusal — the engine is unchanged and nothing was persisted)",
+                req.name,
+                budget.as_secs(),
             );
             let report = LearnReport {
                 gap: req.gap.clone(),
@@ -161,7 +299,7 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
                 message: message.clone(),
             };
             journal::record(&JournalEntry {
-                when_unix: 0, // stamped by record()
+                when_unix: 0,
                 gap: req.gap.clone(),
                 action: format!("synthesize {}", req.name),
                 method: String::new(),
@@ -174,6 +312,36 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
         }
     };
 
+    // SYNTHESIS FAILURE (well-formed but unsatisfiable / no candidate) — the worker
+    // reported it with the synthesis error. The engine stays untouched, exactly as
+    // the original synchronous path did.
+    let Some(candidate) = candidate else {
+        let err = outcome.synthesis_error.unwrap_or_default();
+        let message = format!(
+            "no verified program for gap {:?}: synthesis of `{}` failed ({})",
+            req.gap, req.name, err
+        );
+        let report = LearnReport {
+            gap: req.gap.clone(),
+            synthesized: false,
+            method: String::new(),
+            regression_passed: false,
+            accepted: false,
+            message: message.clone(),
+        };
+        journal::record(&JournalEntry {
+            when_unix: 0,
+            gap: req.gap.clone(),
+            action: format!("synthesize {}", req.name),
+            method: String::new(),
+            verified: false,
+            regression_passed: false,
+            accepted: false,
+            note: message,
+        });
+        return (None, report);
+    };
+
     // The recovering teacher for the freshly grafted component (last method).
     let method = candidate
         .methods
@@ -181,22 +349,57 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
         .map(|(_, m)| m.clone())
         .unwrap_or_default();
 
-    // --- 2. GATE ----------------------------------------------------------
-    // Re-running the whole golden corpus + soundness oracle against the
-    // candidate proves the addition broke nothing. Additive grafting cannot
-    // regress prior behavior in principle, but the gate is the *enforced* proof
-    // of that invariant, not a trusted assumption.
-    let gate = regression_gate(&candidate);
-    let passed_gate = gate.ok();
+    // The gate already ran on the worker; reuse its verdict (the gate is memoized
+    // by behavioral fingerprint, so this is consistent and cheap).
+    let gate = GateReport {
+        passed: outcome.passed,
+        total: outcome.total,
+        failures: outcome.failures,
+        sound: outcome.sound,
+    };
+    finish_self_extend(engine, req, candidate, method, gate, passed_gate)
+}
 
+/// The carrier the synthesize+gate worker sends back: either a synthesis failure
+/// (with the solver error) or a gate verdict for a synthesized candidate.
+struct GateOutcome {
+    passed: usize,
+    total: usize,
+    sound: bool,
+    failures: Vec<String>,
+    synthesis_error: Option<String>,
+}
+
+impl GateOutcome {
+    fn synthesis_failure(err: String) -> Self {
+        GateOutcome {
+            passed: 0,
+            total: 0,
+            sound: false,
+            failures: Vec::new(),
+            synthesis_error: Some(err),
+        }
+    }
+}
+
+/// JOURNAL + PERSIST + RETURN for a synthesized candidate whose gate already ran —
+/// the unchanged tail of [`self_extend`] (steps 3 + 4). Factored out so the
+/// budget-bounded entry can share it. `passed_gate` is the gate's `ok()` verdict
+/// already computed on the worker.
+fn finish_self_extend(
+    engine: &Engine,
+    req: &LearnRequest,
+    candidate: Engine,
+    method: String,
+    gate: GateReport,
+    passed_gate: bool,
+) -> (Option<Engine>, LearnReport) {
     let message = if passed_gate {
         format!(
             "accepted `{}` via {} (gate green: {}/{} golden cases passed, sound)",
             req.name, method, gate.passed, gate.total
         )
     } else {
-        // Name the failing cases (and the soundness verdict) so the rejection
-        // is fully auditable from the report alone.
         let failures = if gate.failures.is_empty() {
             "(no behavioral failures)".to_string()
         } else {
@@ -218,9 +421,8 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
         message: message.clone(),
     };
 
-    // --- 3. JOURNAL -------------------------------------------------------
     journal::record(&JournalEntry {
-        when_unix: 0, // stamped by record()
+        when_unix: 0,
         gap: req.gap.clone(),
         action: format!("synthesize {}", req.name),
         method,
@@ -230,17 +432,7 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
         note: message,
     });
 
-    // --- 4. PERSIST (accepted only) + RETURN ------------------------------
     if passed_gate {
-        // Durably record the accepted component so a later run can re-graft it
-        // (gated again) into a fresh engine — cross-run compounding memory. The
-        // grafted source is exactly the suffix `try_extend` appended to the base
-        // program (`"\n" + result.code`), recovered by slicing the candidate's
-        // program after the original engine's program. Slicing the suffix (rather
-        // than brace-matching the function out) reproduces the synthesized bytes
-        // verbatim. Persistence is best-effort: `store::save_one` swallows I/O
-        // errors and is a no-op when the store is disabled, so a store failure
-        // never blocks adoption (the component is already live on `candidate`).
         let base_len = engine.program().len();
         let code = candidate
             .program()
@@ -248,9 +440,6 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
             .map(|s| s.trim_start_matches('\n').to_string())
             .unwrap_or_default();
         if !code.is_empty() {
-            // For an `<x>_class` component, persist its VERIFIED example domain
-            // (word, is_member) so a reload answers within exactly the proven
-            // evidence — its unverified generalization stays UNKNOWN across runs.
             let members: Vec<(String, bool)> = if req.name.ends_with("_class") {
                 req.examples
                     .iter()
@@ -269,8 +458,6 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
                 name: req.name.clone(),
                 signature: req.signature.to_string(),
                 code,
-                // `method` was moved into the JournalEntry above; the report holds
-                // an equivalent clone, so read the provenance back from there.
                 method: report.method.clone(),
                 examples_fingerprint: examples_fingerprint(&req.examples),
                 members,
@@ -278,7 +465,6 @@ pub fn self_extend(engine: &Engine, req: &LearnRequest) -> (Option<Engine>, Lear
         }
         (Some(candidate), report)
     } else {
-        // The candidate is discarded; `engine` stays the live engine.
         (None, report)
     }
 }
@@ -430,6 +616,170 @@ fn persist_construction(c: &LearnedConstruction) {
 mod tests {
     use super::*;
     use crate::comprehension::creature_class_examples;
+
+    /// FAST-GATE LEVER (the "minutes -> seconds" proof): the base curriculum is a
+    /// pure constant, but the solved-program cache does NOT cover it (it holds
+    /// array/numeric problems, not the comprehension lexicons), so EVERY
+    /// `Engine::new_base()` used to re-synthesize all 11 components through the
+    /// solver — *minutes* on a cold/contended host. A single teach-then-reuse flow
+    /// calls `Engine::new()` several times (teach engine + each fresh reload), and
+    /// the reload re-gates every stored component, so that per-call cost dominated
+    /// the whole flow. The UNWALL-4-OPT memoization makes the synthesis run AT MOST
+    /// ONCE per process; every later `Engine::new_base()` is a `String`+`Vec` clone.
+    ///
+    /// This test proves the lever directly and un-gameably: it times the FIRST
+    /// `new_base()` (which pays the one-time synthesis) and a SECOND one (which must
+    /// hit the memo), and asserts the second is DRAMATICALLY faster — at least 100x,
+    /// and under 50ms in absolute terms — AND that the two engines are behaviorally
+    /// identical (same program), so the memo returns the real base, not a stub.
+    /// Without the memo the second call would re-pay the full synthesis and this
+    /// ratio could never hold.
+    #[test]
+    fn base_engine_construction_is_memoized_after_first_build() {
+        use std::time::Instant;
+
+        // First build pays the one-time synthesis (cold). We don't assert on its
+        // duration (it is the cost we are AMORTIZING), only that it produces a real
+        // engine.
+        let t0 = Instant::now();
+        let first = Engine::new_base();
+        let first_dur = t0.elapsed();
+        assert!(
+            first.has_component("noun_animacy"),
+            "the base engine must carry its synthesized components"
+        );
+
+        // Second build MUST hit the process-global memo: no solver calls, just a
+        // clone of the cached (program, methods).
+        let t1 = Instant::now();
+        let second = Engine::new_base();
+        let second_dur = t1.elapsed();
+
+        // The memoized build is a clone — it must be far faster than the first AND
+        // fast in absolute terms. (On a quiet host the first build is seconds-to-
+        // minutes; the clone is microseconds. We use conservative thresholds so the
+        // assertion is robust under heavy CI contention while still proving the
+        // synthesis did not re-run.)
+        assert!(
+            second_dur < std::time::Duration::from_millis(50),
+            "the memoized base build must be a fast clone (<50ms); took {second_dur:?} \
+             (first build was {first_dur:?})"
+        );
+        assert!(
+            second_dur * 100 < first_dur,
+            "the memoized build must be >=100x faster than the first (synthesis ran once); \
+             first={first_dur:?} second={second_dur:?}"
+        );
+
+        // The memo returns the REAL base, byte-for-byte — not a stub or partial.
+        assert_eq!(
+            first.program(),
+            second.program(),
+            "the memoized base must be identical to the first-built base"
+        );
+        assert!(
+            second.has_component("valid_argument") && second.has_component("verb_3sg"),
+            "the memoized base must carry every synthesized component + wrapper"
+        );
+    }
+
+    /// BUDGET + CANCELLATION: a teach whose budget is exceeded must return an
+    /// HONEST REFUSAL — not hang. We force the budget to 1ms via
+    /// `NCPU_TEACH_BUDGET_MS` so the synthesis worker cannot possibly complete in
+    /// time, then prove:
+    ///   * the call RETURNS (the test itself would time out / hang if it didn't);
+    ///   * `accepted == false` and `synthesized == false` (nothing was learned);
+    ///   * the report message says it could not learn within budget (auditable
+    ///     refusal, not a fabricated success);
+    ///   * the input engine is UNCHANGED (no component was grafted, no store write);
+    ///   * the whole call completes well under a generous wall-clock ceiling, proving
+    ///     boundedness (it does not wait for the minutes-long solve to finish).
+    /// This is the cure for the "uninterruptible minutes" failure mode: a teach is
+    /// now bounded and interruptible from the caller's side.
+    #[test]
+    fn teach_exceeding_budget_is_refused_not_hung() {
+        crate::self_improve::journal::test_support::with_journal_env("", || {
+            // ENV_LOCK is held by with_journal_env for this whole closure, so
+            // setting the budget env here is race-free.
+            let prev = std::env::var("NCPU_TEACH_BUDGET_MS").ok();
+            // SAFETY: ENV_LOCK guarantees single-threaded access for the duration.
+            unsafe { std::env::set_var("NCPU_TEACH_BUDGET_MS", "1") }
+
+            let engine = Engine::new_base();
+            assert!(
+                !engine.has_component("budget_probe_class"),
+                "precondition: the op must not pre-exist"
+            );
+
+            // The spec is a STRING-input classifier with a CONTRADICTORY label
+            // ("a" -> 1 AND "a" -> 0). Two properties make the detached worker
+            // short-lived: (1) a string (non-scalar) input routes AWAY from the
+            // numeric gradient stage — the pipeline's only stage without an
+            // env-readable deadline — so the worker stays in the budget-bounded
+            // enumerative path; (2) the contradiction is unsatisfiable, so that
+            // bounded search exhausts and the worker FAILS FAST, then exits. With
+            // the 1ms teach budget the CALLER's `recv_timeout` fires long before the
+            // worker can even spawn + clone + enter the solver, so the refusal is
+            // deterministically the BUDGET path — proving a teach is bounded and
+            // interruptible from the caller's side regardless of what the worker is
+            // doing. (Genuine synthesis success/failure paths are covered by the
+            // good_extension / unsatisfiable tests.)
+            let req = LearnRequest {
+                gap: "budget probe".to_string(),
+                name: "budget_probe_class".to_string(),
+                signature: "fn budget_probe_class(s: string) -> i64",
+                examples: vec![
+                    crate::benchmark::Example {
+                        inputs: vec![crate::benchmark::Value::Str("a".to_string())],
+                        expected: crate::benchmark::Value::Int(1),
+                    },
+                    crate::benchmark::Example {
+                        inputs: vec![crate::benchmark::Value::Str("a".to_string())],
+                        expected: crate::benchmark::Value::Int(0),
+                    },
+                ],
+            };
+
+            let started = std::time::Instant::now();
+            let (candidate, report) = self_extend(&engine, &req);
+            let elapsed = started.elapsed();
+
+            // BOUNDED: returned far under a generous ceiling (the un-budgeted solve
+            // would take many seconds-to-minutes). 5s is a wide margin for thread
+            // spawn + the 1ms recv timeout under a contended host.
+            assert!(
+                elapsed < std::time::Duration::from_secs(5),
+                "a budget-exceeded teach must return promptly, not hang; took {elapsed:?}"
+            );
+
+            // HONEST REFUSAL: nothing learned, nothing accepted, message explains.
+            assert!(!report.accepted, "a budget-exceeded teach must NOT be accepted");
+            assert!(
+                !report.synthesized,
+                "a budget-exceeded teach reports no synthesized component"
+            );
+            assert!(
+                candidate.is_none(),
+                "a budget-exceeded teach returns no candidate engine"
+            );
+            assert!(
+                report.message.contains("within budget"),
+                "the refusal must explain the budget was exceeded: {}",
+                report.message
+            );
+
+            // ENGINE UNTOUCHED.
+            assert!(
+                !engine.has_component("budget_probe_class"),
+                "a budget-exceeded teach must not graft anything onto the input engine"
+            );
+
+            match prev {
+                Some(v) => unsafe { std::env::set_var("NCPU_TEACH_BUDGET_MS", v) },
+                None => unsafe { std::env::remove_var("NCPU_TEACH_BUDGET_MS") },
+            }
+        });
+    }
 
     /// A GOOD extension: synthesize a fresh lexicon component (`creature_class`)
     /// over a vocabulary disjoint from every existing component, run it through

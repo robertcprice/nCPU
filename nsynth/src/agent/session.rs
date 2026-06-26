@@ -195,6 +195,23 @@ impl CodingAgentSession {
 
     /// Handle any NL coding query via KVRM workflow routing.
     pub fn handle_query(&mut self, query: &str) -> AgentQueryResult {
+        // LEARN-ON-THE-FLY (UNWALL-4-LEARN-ON-THE-FLY-NL): if the request DEFINES a
+        // new named op (by examples or by composition) or REUSES a previously-learned
+        // op, route it through the EXISTING regression-gated self-extension +
+        // durable-persistence path (`self_improve::extend::self_extend` →
+        // `regression_gate` → `store::save_one`; reuse resolves from the gated
+        // reload performed by `Engine::new`). Intercept BEFORE comprehension, which
+        // would otherwise mis-route a teach/reuse request. Non-teach/reuse requests
+        // fall through unchanged (`LearnIntake::NotLearn`).
+        match crate::learn_nl::classify(query) {
+            crate::learn_nl::LearnIntake::NotLearn => {}
+            intake => {
+                let result = self.run_learn_intake(intake);
+                self.record_result(query, &result);
+                return result;
+            }
+        }
+
         // REFERENCE INTAKE (UNWALL-3-REFERENCE-INTAKE-NL): if the request CARRIES
         // a runnable reference implementation ("behaves like THIS: <fn>"), the
         // reference's behavior IS the spec. Intercept BEFORE comprehension (which
@@ -449,6 +466,67 @@ impl CodingAgentSession {
             synthesis_method: Some(synthesis.method.clone()),
             repo_result: None,
             tool_trace,
+        }
+    }
+
+    /// LEARN-ON-THE-FLY (UNWALL-4): dispatch a parsed teach/reuse intake through
+    /// the EXISTING self-extension + persistence machinery.
+    ///
+    /// * `TeachByExamples` / `TeachByComposition` → `learn_nl::teach_*`, which
+    ///   build a [`LearnRequest`](crate::self_improve::extend::LearnRequest) and
+    ///   call `self_extend` (synthesize → regression-gate → persist on green). The
+    ///   op is durably stored, so a SEPARATE later process reloads it (gated) via
+    ///   `Engine::new`.
+    /// * `Reuse` → resolve the learned op from a FRESH `Engine::new` (which
+    ///   re-gates the reloaded store) and evaluate it. A name not in the persisted
+    ///   store is reported honestly as not-learned.
+    /// * `Unparseable` → honest refusal; never fabricate a spec.
+    ///
+    /// Persistence is fenced by the same env contract the substrate uses: when
+    /// `NCPU_COMPONENTS_PATH` is empty the store is a no-op (tests), and when it
+    /// points at a real file a learned op survives across CLI invocations.
+    fn run_learn_intake(&mut self, intake: crate::learn_nl::LearnIntake) -> AgentQueryResult {
+        use crate::learn_nl::{LearnIntake, LearnOutcome};
+        let outcome: LearnOutcome = match intake {
+            LearnIntake::TeachByExamples { name, examples } => {
+                // Teach against a FRESH engine so any previously-learned ops are
+                // reloaded (gated) and visible — and so the gate runs against the
+                // current durable state.
+                let engine = crate::comprehension::Engine::new();
+                crate::learn_nl::teach_by_examples(&engine, &name, &examples)
+            }
+            LearnIntake::TeachByComposition { name, steps } => {
+                let engine = crate::comprehension::Engine::new();
+                crate::learn_nl::teach_by_composition(&engine, &name, &steps)
+            }
+            LearnIntake::Reuse { name, arg } => {
+                // A FRESH engine performs the gated reload of every persisted
+                // component — this is the cross-invocation resolution path.
+                let engine = crate::comprehension::Engine::new();
+                crate::learn_nl::reuse(&engine, &name, arg)
+            }
+            LearnIntake::Unparseable(reason) => LearnOutcome {
+                success: false,
+                message: format!("cannot learn (unparseable teach/reuse request): {reason}"),
+                method: None,
+            },
+            // `NotLearn` is filtered out by the caller (`handle_query`) before this
+            // method is reached; handled here only to keep the match exhaustive.
+            LearnIntake::NotLearn => LearnOutcome {
+                success: false,
+                message: "not a learn/reuse request".to_string(),
+                method: None,
+            },
+        };
+        AgentQueryResult {
+            route: QueryRoute::SynthesizeFunction,
+            success: outcome.success,
+            response: outcome.message,
+            workflow: "learn-on-the-fly".to_string(),
+            clarification_questions: Vec::new(),
+            synthesis_method: outcome.method,
+            repo_result: None,
+            tool_trace: Vec::new(),
         }
     }
 

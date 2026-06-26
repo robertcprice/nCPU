@@ -292,6 +292,29 @@ pub fn run_case(engine: &Engine, case: &GoldenCase) -> bool {
 /// `sound` flag is the conjunction of those probes. The report is `ok()` only
 /// when every behavioral case passed *and* every soundness invariant held.
 pub fn regression_gate(engine: &Engine) -> GateReport {
+    // MEMOIZE by behavioral fingerprint. `regression_gate` is a *pure function* of
+    // the engine's behavior-bearing state (program + learned grammar + learned
+    // members), all captured by `behavioral_fingerprint`. Two engines with the same
+    // fingerprint produce the same verdict, so we cache the verdict keyed on the
+    // fingerprint and return it on a hit — turning a repeat gate (the reload
+    // re-gates many components; a teach re-gates the same candidate on reuse) from
+    // ~32 interpreter replays + 5 soundness probes into a single hash lookup. The
+    // cache is process-local and additive: a miss runs the FULL gate exactly as
+    // before, so soundness is untouched — a hit can only return a verdict an honest
+    // full run already produced for that identical behavior.
+    let key = engine.behavioral_fingerprint();
+    if let Some(cached) = gate_cache_get(key) {
+        return cached;
+    }
+    let report = compute_gate(engine);
+    gate_cache_put(key, &report);
+    report
+}
+
+/// Run the full golden corpus + soundness oracle against `engine` — the uncached
+/// core of [`regression_gate`]. Always does the real work; the memo wrapper decides
+/// whether to call it.
+fn compute_gate(engine: &Engine) -> GateReport {
     let cases = golden_cases();
     let total = cases.len();
     let mut passed = 0usize;
@@ -310,6 +333,54 @@ pub fn regression_gate(engine: &Engine) -> GateReport {
         failures,
         sound,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Gate memo: behavioral-fingerprint -> verdict.
+//
+// The gate is pure in the engine's behavioral surface, so caching its verdict by
+// `Engine::behavioral_fingerprint` is sound: a hit returns exactly what a full run
+// would. The cache is bounded (one entry per distinct behavior seen this process)
+// and only ever GROWS the set of known-good answers — it can never manufacture a
+// pass for behavior that has not actually been evaluated.
+// ---------------------------------------------------------------------------
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+#[derive(Clone)]
+struct CachedVerdict {
+    passed: usize,
+    total: usize,
+    failures: Vec<String>,
+    sound: bool,
+}
+
+fn gate_cache() -> &'static Mutex<std::collections::HashMap<u64, CachedVerdict>> {
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<u64, CachedVerdict>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn gate_cache_get(key: u64) -> Option<GateReport> {
+    let guard = gate_cache().lock().unwrap_or_else(|p| p.into_inner());
+    guard.get(&key).map(|v| GateReport {
+        passed: v.passed,
+        total: v.total,
+        failures: v.failures.clone(),
+        sound: v.sound,
+    })
+}
+
+fn gate_cache_put(key: u64, report: &GateReport) {
+    let mut guard = gate_cache().lock().unwrap_or_else(|p| p.into_inner());
+    guard.insert(
+        key,
+        CachedVerdict {
+            passed: report.passed,
+            total: report.total,
+            failures: report.failures.clone(),
+            sound: report.sound,
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
