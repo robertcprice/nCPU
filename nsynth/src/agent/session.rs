@@ -272,9 +272,23 @@ impl CodingAgentSession {
         // description whose HEAD is not a scalar op falls through unchanged
         // (NotCompositional → array-pipeline / single-op); a confirmed scalar
         // composition with an UNRESOLVABLE atom is refused, never fabricated.
+        //
+        // MULTI-COMPONENT GUARD (BUILD-B2-FIX-CLI-MULTICOMP-ROUTING): a request
+        // that DESCRIBES >=2 component functions ("a module with a function that
+        // ... then ..., and a function that ... then ...") is a PROJECT, not a
+        // single scalar composition. The single-fn intercept below splits the
+        // WHOLE string on every `then` and mashes the two components into one
+        // nonsense chain; it must NOT fire here. We consult the SAME structural
+        // signal `synthesize_project` uses to decompose (comprehend_project's
+        // function-head split) — so a multi-component request falls through to
+        // `comprehend_outcome` → `dispatch` → `synthesize_project` (the multi-file
+        // GreenfieldProject door). A bare composition (0 heads) and a SINGLE
+        // described function (1 head) still hit the single-fn P2C intercept
+        // unchanged.
         {
             let bridge = LinguigenesisBridge::new();
-            if let Ok(registry) = bridge.registry_clone() {
+            if !bridge.is_multi_component(query) {
+              if let Ok(registry) = bridge.registry_clone() {
                 match crate::reference_nl::classify_compositional(query, &registry) {
                     crate::reference_nl::CompositionalIntake::Compositional {
                         name,
@@ -293,6 +307,7 @@ impl CodingAgentSession {
                     }
                     crate::reference_nl::CompositionalIntake::NotCompositional => {}
                 }
+              }
             }
         }
 

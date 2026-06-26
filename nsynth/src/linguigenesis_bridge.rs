@@ -1024,6 +1024,27 @@ impl LinguigenesisBridge {
         Ok(crate::solver::solve_problem(&problem))
     }
 
+    /// Structural multi-component signal: does this request DESCRIBE >=2 component
+    /// functions (i.e. a PROJECT) rather than a single (possibly compositional)
+    /// function? Reuses the EXACT same `comprehend_project` decomposition
+    /// (`split_component_clauses`, function-head count) that `synthesize_project`
+    /// uses to split — there is NO separate heuristic and NO phrase table. A bare
+    /// composition ("the larger of two numbers then triples it", 0 heads) and a
+    /// single described function ("a function that ... then ...", 1 head) both
+    /// yield a 1-component plan → `false`; only a request with >=2 function heads
+    /// ("a module with a function that ..., and a function that ...") → `true`.
+    ///
+    /// The CLI front door (`session::handle_query`) consults this to keep a
+    /// multi-component request OUT of the single-function compositional intercept
+    /// so it reaches the `synthesize_project` multi-file door instead.
+    pub fn is_multi_component(&self, text: &str) -> bool {
+        let Ok(registry) = self.registry_clone() else {
+            return false;
+        };
+        let mut coding = CodingComprehension::new(registry);
+        coding.comprehend_project(text).components.len() >= 2
+    }
+
     /// Comprehend a (possibly multi-component) request into a `ProjectPlan` and
     /// synthesize each component INDEPENDENTLY through the existing single-op
     /// door (`problem_from_requirement` + `solve_problem`, via
