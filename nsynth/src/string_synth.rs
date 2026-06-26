@@ -485,6 +485,29 @@ pub fn synthesize_string_program(
     if examples.is_empty() || n_args == 0 {
         return fail("no examples / no args");
     }
+
+    // COOPERATIVE WALL-CLOCK DEADLINE. The MAX_SIZE/MAX_BANK bounds cap the search
+    // *space* but not its *time*: on a large mostly-constant lexicon (e.g. an
+    // irregular-inflection map where 30+ inputs share one long sentinel output and
+    // a handful differ), the size-ordered Concat product `by_size[left] x
+    // by_size[right]` with a 40k-per-size bank, each candidate re-evaluated over
+    // every example by `signature`, can run for many minutes before exhausting the
+    // bound. That is what hung the comprehension base build (irregular_3sg /
+    // irregular_past). The bound reused here is the solver's existing enumerative
+    // budget (`NSYNTH_ENUM_BUDGET_MS`, default 18s) — the SAME cooperative deadline
+    // `self_extend` shrinks to bound a teach. On deadline we stop enumerating and
+    // return a MISS (`fail`), which is sound: this function only ever returns a
+    // signature-verified program or a failure, so an early failure can never emit a
+    // wrong program — the caller (the string-output pipeline) then falls through to
+    // the verified whole-word lexicon path, which memorizes the map exactly.
+    let deadline = {
+        let budget_ms: u64 = std::env::var("NSYNTH_ENUM_BUDGET_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(18_000);
+        std::time::Instant::now() + std::time::Duration::from_millis(budget_ms)
+    };
+
     let target: Vec<String> = examples.iter().map(|e| e.expected.clone()).collect();
 
     // Fast structural pre-pass: concatenation templates (const + input + const ...).
@@ -538,6 +561,9 @@ pub fn synthesize_string_program(
     }
 
     for size in 2..=MAX_SIZE {
+        if std::time::Instant::now() >= deadline {
+            return fail("string enumeration deadline exceeded");
+        }
         // 1. Concat first (field assembly) — the most useful op; never starve it.
         for left in 1..size {
             let right = size - 1 - left;
@@ -547,6 +573,12 @@ pub fn synthesize_string_program(
             let las: Vec<SExpr> = by_size[left].iter().map(|(e, _)| e.clone()).collect();
             let ras: Vec<SExpr> = by_size[right].iter().map(|(e, _)| e.clone()).collect();
             for a in &las {
+                // The Concat product is the explosive inner loop; check the deadline
+                // once per `a` so a runaway pairing aborts within ~one row, not after
+                // the whole product.
+                if std::time::Instant::now() >= deadline {
+                    return fail("string enumeration deadline exceeded");
+                }
                 for b in &ras {
                     try_push!(
                         SExpr::Concat(Box::new(a.clone()), Box::new(b.clone())),
@@ -784,5 +816,50 @@ mod tests {
         // Same input mapped to two different outputs — no function can fit.
         let r = solve(&["s"], &[ex(&["x"], "a"), ex(&["x"], "b")]);
         assert!(!r.success);
+    }
+
+    /// REGRESSION (UNWALL-4-OPT2-BOUND-BASE-BUILD): a large mostly-constant lexicon
+    /// (many inputs sharing one long sentinel output, a few differing) has NO
+    /// generalizing string rule, so the enumerator must MISS — and with the
+    /// cooperative `NSYNTH_ENUM_BUDGET_MS` deadline it must do so within a BOUNDED
+    /// wall-clock time rather than running for the many minutes it took before the
+    /// deadline existed. This is the input shape that hung the comprehension base
+    /// build (`irregular_3sg` / `irregular_past`). The deadline only ever turns a
+    /// would-be (eventual) MISS into a bounded MISS, never a wrong success.
+    ///
+    /// This test does NOT mutate `NSYNTH_ENUM_BUDGET_MS` (that env is process-global
+    /// and would race the other parallel `string_synth` tests); it relies on the
+    /// DEFAULT 18s deadline, asserting the miss lands well under the prior hang.
+    #[test]
+    fn lexicon_map_misses_bounded() {
+        // 4 distinct forms + ~30 inputs all mapping to a long sentinel constant.
+        let sentinel = "__REGULAR__";
+        let mut exs = vec![
+            ex(&["be"], "is"),
+            ex(&["have"], "has"),
+            ex(&["do"], "does"),
+            ex(&["go"], "goes"),
+        ];
+        for w in [
+            "walk", "talk", "open", "close", "push", "pull", "read", "write", "send", "show",
+            "give", "take", "make", "find", "keep", "hold", "bring", "build", "carry", "offer",
+            "hand", "teach", "reach", "watch", "match", "wash", "wish", "rush", "kiss", "miss",
+        ] {
+            exs.push(ex(&[w], sentinel));
+        }
+        let t = std::time::Instant::now();
+        let r = solve(&["s"], &exs);
+        let elapsed = t.elapsed();
+        assert!(
+            !r.success,
+            "an arbitrary lexicon has no generalizing rule — the enumerator must MISS"
+        );
+        // The default deadline is 18s; assert the miss lands comfortably within it
+        // (+slack) — orders of magnitude below the prior multi-minute hang.
+        assert!(
+            elapsed.as_secs() < 40,
+            "enumerator did not give up within the default deadline: {:?}",
+            elapsed
+        );
     }
 }
