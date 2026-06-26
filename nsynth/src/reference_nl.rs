@@ -224,6 +224,385 @@ fn parse_header(block: &str) -> Option<(String, String)> {
     Some((name.to_string(), header.to_string()))
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// P2C-PROMPT-TO-CONTRACT: bare NL behaviour DESCRIPTION → ordered primitive chain
+// ───────────────────────────────────────────────────────────────────────────
+//
+// `classify` (above) needs an embedded runnable `fn`. `classify_compositional`
+// is the next door down: a *prose* description of a behaviour as a SEQUENCE of
+// known operations ("the larger of two numbers, **then** triple it") whose each
+// clause resolves — via the SAME emergent resolver the single-op gate uses
+// ([`EntityResolver::resolve_operation_surface`]) — to a registry primitive that
+// has an emittable body. There is NO phrase→op table: each clause's operation is
+// whatever the registry resolver returns at/above the op-resolution floor, and a
+// clause that resolves to NO scalar-`i64` primitive is refused, never fabricated.
+//
+// Structural signal (mirrors `classify`'s `fn`-block / `behaves like` markers):
+// the explicit SEQUENTIAL connector **"then"** splitting the description into ≥2
+// ordered step-clauses. This is a language-level sequencing word, not a domain
+// phrase. v1 scope is a single LINEAR SCALAR composition over `i64`: a head op
+// (arity 1 or 2 — it sets the signature) followed by unary `i64→i64` ops applied
+// to the running scalar. Anything else (a non-scalar head, a non-unary tail, an
+// unresolvable atom) is reported honestly so the caller refuses rather than
+// guessing.
+
+use linguigenesis_core::coding_requirements::OP_RESOLVE_FLOOR;
+use linguigenesis_core::entity::EntityType;
+use linguigenesis_core::entity_resolution::EntityResolver;
+use linguigenesis_core::nl_tokens::tokenize_lower;
+use linguigenesis_core::registry::Registry;
+
+/// One resolved atomic step of a compositional description.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompositionalStep {
+    /// The clause surface word that resolved to the op (for reporting).
+    pub surface: String,
+    /// The registry op's canonical fn name (`default_fn_name`).
+    pub fn_name: String,
+    /// The op's arity (1 or 2). The HEAD step's arity sets the signature; every
+    /// non-head step must be arity 1 (applied to the running scalar).
+    pub arity: u32,
+}
+
+/// Outcome of structurally inspecting a query for a SCALAR compositional
+/// description (a `"X, then Y, then Z"` sequence of registry primitives).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompositionalIntake {
+    /// Not our shape (no `then` connector, <2 clauses, or the HEAD clause does
+    /// not resolve to a scalar-`i64` primitive). Route normally — the array
+    /// pipeline / single-op / clarify doors still apply.
+    NotCompositional,
+    /// A linear scalar chain: an ordered list of resolved primitives, an inferred
+    /// `i64` signature, and a collision-safe composed fn name. Downstream emits a
+    /// runnable reference body and feeds it to `problem_from_reference`.
+    Compositional {
+        name: String,
+        signature: String,
+        chain: Vec<CompositionalStep>,
+    },
+    /// The description IS a scalar `then`-composition (its HEAD resolves to a
+    /// scalar primitive) but a later atomic step does NOT resolve to a unary
+    /// scalar primitive with an emittable body. Refuse (clarify) — never
+    /// fabricate a contract from a half-understood description. Carries a reason.
+    Unresolvable(String),
+}
+
+/// Classify a query as a linear scalar composition of registry primitives.
+///
+/// Emergent rule (no phrase→op table):
+///   1. Require the SEQUENTIAL connector `then`, splitting into ≥2 step-clauses.
+///   2. Resolve the HEAD clause to a scalar-`i64` primitive (arity 1 or 2). If it
+///      does not resolve to one, this is NOT our shape → [`CompositionalIntake::NotCompositional`].
+///   3. Resolve every TAIL clause to a UNARY scalar-`i64` primitive. If any tail
+///      fails, the description is a scalar composition with an unresolvable atom →
+///      [`CompositionalIntake::Unresolvable`] (refuse, never fabricate).
+///   4. Otherwise return the ordered chain + inferred signature + composed name.
+pub fn classify_compositional(query: &str, registry: &Registry) -> CompositionalIntake {
+    let clauses = split_then_clauses(query);
+    if clauses.len() < 2 {
+        return CompositionalIntake::NotCompositional;
+    }
+
+    let resolver = EntityResolver::new(registry.clone());
+
+    // HEAD: must resolve to a scalar-i64 op (arity 1 or 2). If not, we are not
+    // confident this is a scalar composition — let the other doors handle it.
+    let head = match resolve_scalar_op(&clauses[0], &resolver) {
+        Some(step) if step.arity == 1 || step.arity == 2 => step,
+        _ => return CompositionalIntake::NotCompositional,
+    };
+
+    // TAILS: each must resolve to a UNARY scalar-i64 op. A tail that fails is an
+    // unresolvable atom in a confirmed scalar composition → honest refusal.
+    let mut chain = vec![head];
+    for clause in &clauses[1..] {
+        match resolve_scalar_op(clause, &resolver) {
+            Some(step) if step.arity == 1 => chain.push(step),
+            Some(step) => {
+                return CompositionalIntake::Unresolvable(format!(
+                    "step {clause:?} resolved to a non-unary op {:?} (arity {}); v1 only \
+                     threads UNARY i64→i64 ops after the head",
+                    step.fn_name, step.arity
+                ));
+            }
+            None => {
+                return CompositionalIntake::Unresolvable(format!(
+                    "step {clause:?} does not resolve to any scalar-i64 primitive with an \
+                     emittable body — refusing rather than fabricating a contract"
+                ));
+            }
+        }
+    }
+
+    let name = compose_name(&chain);
+    let signature = if chain[0].arity == 2 {
+        format!("fn {name}(a: i64, b: i64) -> i64")
+    } else {
+        format!("fn {name}(x: i64) -> i64")
+    };
+    CompositionalIntake::Compositional {
+        name,
+        signature,
+        chain,
+    }
+}
+
+/// Split a description into ordered step-clauses on the sequential connector
+/// `then` (a language-level sequencing word, the structural signal). Empty
+/// clauses are dropped. A description without `then` yields a single clause.
+fn split_then_clauses(query: &str) -> Vec<String> {
+    let mut clauses: Vec<String> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for word in query.split_whitespace() {
+        if word.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("then") {
+            if !current.is_empty() {
+                clauses.push(current.join(" "));
+                current.clear();
+            }
+        } else {
+            current.push(word);
+        }
+    }
+    if !current.is_empty() {
+        clauses.push(current.join(" "));
+    }
+    clauses
+}
+
+/// Resolve a clause to its best SCALAR-`i64` primitive: the highest-confidence
+/// (≥ [`OP_RESOLVE_FLOOR`]) Function/Operator op among the clause's tokens whose
+/// signature is purely `i64` (every input `i64`, output `i64`, arity 1 or 2).
+/// Reads the resolver + registry entity properties — never a hardcoded op list.
+fn resolve_scalar_op(clause: &str, resolver: &EntityResolver) -> Option<CompositionalStep> {
+    let mut best: Option<(CompositionalStep, f32)> = None;
+    for tok in tokenize_lower(clause) {
+        let Some(resolved) = resolver.resolve_operation_surface(&tok) else {
+            continue;
+        };
+        if resolved.evidence.score < OP_RESOLVE_FLOOR {
+            continue;
+        }
+        if !matches!(
+            resolved.entity.entity_type,
+            EntityType::Function | EntityType::Operator
+        ) {
+            continue;
+        }
+        let input_types = resolved
+            .entity
+            .get_property("input_types")
+            .cloned()
+            .unwrap_or_default()
+            .to_lowercase();
+        let output_type = resolved
+            .entity
+            .get_property("output_type")
+            .cloned()
+            .unwrap_or_default()
+            .to_lowercase();
+        // SCALAR-i64 gate: read the resolved entity's own declared signature.
+        if output_type != "i64" {
+            continue;
+        }
+        let params: Vec<&str> = input_types.split(',').map(|s| s.trim()).collect();
+        if params.is_empty() || params.iter().any(|p| *p != "i64") {
+            continue;
+        }
+        let arity = params.len() as u32;
+        let fn_name = resolved
+            .entity
+            .get_property("default_fn_name")
+            .cloned()
+            .unwrap_or_else(|| resolved.entity.lemma.clone());
+        let step = CompositionalStep {
+            surface: tok,
+            fn_name,
+            arity,
+        };
+        let score = resolved.evidence.score;
+        match &best {
+            Some((_, b)) if *b >= score => {}
+            _ => best = Some((step, score)),
+        }
+    }
+    best.map(|(step, _)| step)
+}
+
+/// A collision-safe composed fn name: the chain's op names joined by `_then_`.
+/// Because the chain has ≥2 steps the name always contains `_then_`, so it can
+/// never collide with a bare primitive's name (the helper bodies emitted beside
+/// it).
+fn compose_name(chain: &[CompositionalStep]) -> String {
+    chain
+        .iter()
+        .map(|s| s.fn_name.as_str())
+        .collect::<Vec<_>>()
+        .join("_then_")
+}
+
+#[cfg(test)]
+mod compositional_tests {
+    use super::*;
+
+    fn coding_registry() -> Registry {
+        // Mirror the bridge's loader so the test runs against the real op surface.
+        crate::linguigenesis_bridge::LinguigenesisBridge::new()
+            .registry_clone()
+            .expect("coding registry must load for compositional tests")
+    }
+
+    #[test]
+    fn binary_head_then_unary_tail_resolves() {
+        let reg = coding_registry();
+        match classify_compositional("the larger of two numbers, then triple it", &reg) {
+            CompositionalIntake::Compositional {
+                name,
+                signature,
+                chain,
+            } => {
+                assert_eq!(chain.len(), 2, "head + one tail");
+                assert_eq!(chain[0].fn_name, "max");
+                assert_eq!(chain[0].arity, 2, "max is the binary head");
+                assert_eq!(chain[1].fn_name, "triple");
+                assert_eq!(chain[1].arity, 1);
+                assert_eq!(signature, "fn max_then_triple(a: i64, b: i64) -> i64");
+                assert_eq!(name, "max_then_triple");
+            }
+            other => panic!("expected Compositional, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unary_head_then_unary_tail_resolves() {
+        let reg = coding_registry();
+        match classify_compositional(
+            "the absolute value of a number, then increment it",
+            &reg,
+        ) {
+            CompositionalIntake::Compositional {
+                signature, chain, ..
+            } => {
+                assert_eq!(chain[0].fn_name, "abs");
+                assert_eq!(chain[0].arity, 1, "abs is the unary head");
+                assert_eq!(chain[1].fn_name, "increment");
+                assert_eq!(signature, "fn abs_then_increment(x: i64) -> i64");
+            }
+            other => panic!("expected Compositional, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unresolvable_tail_refuses_not_fabricates() {
+        let reg = coding_registry();
+        // Head resolves (max) but the tail atom does not resolve to any primitive.
+        match classify_compositional(
+            "the larger of two numbers, then frobnicate it",
+            &reg,
+        ) {
+            CompositionalIntake::Unresolvable(_) => {}
+            other => panic!("expected Unresolvable (refuse), got {other:?}"),
+        }
+    }
+
+    /// Run a synthesized scalar fn on hand inputs, asserting an `i64` result.
+    fn run_scalar(code: &str, fn_name: &str, inputs: &[i64]) -> i64 {
+        use crate::benchmark::Value;
+        let args: Vec<Value> = inputs.iter().map(|&n| Value::Int(n)).collect();
+        match crate::runtime::execute_function(code, fn_name, &args, "p2c-grader") {
+            Ok(crate::runtime::Value::Int(v)) => v,
+            other => panic!("synthesized {fn_name} returned non-int {other:?}"),
+        }
+    }
+
+    /// Drive a compositional description ALL THE WAY: comprehend → emit reference
+    /// → `problem_from_reference` auto-generates examples + holdout oracle (NO
+    /// human examples) → solve → strict-verify → then the UN-GAMEABLE probe: run
+    /// the synthesized program on HAND-specified inputs and compare to outputs the
+    /// GRADER computes independently (not from the reference). Returns the solved
+    /// code + the auto-generated example count for reporting.
+    fn drive_end_to_end(description: &str) -> (String, String, usize) {
+        use crate::linguigenesis_bridge::LinguigenesisBridge;
+        let reg = coding_registry();
+        let bridge = LinguigenesisBridge::new();
+        let (name, signature, chain) = match classify_compositional(description, &reg) {
+            CompositionalIntake::Compositional {
+                name,
+                signature,
+                chain,
+            } => (name, signature, chain),
+            other => panic!("{description:?} did not comprehend as Compositional: {other:?}"),
+        };
+        let reference = bridge
+            .emit_scalar_reference(&name, &chain)
+            .expect("emit reference");
+        let sig_static: &'static str = Box::leak(signature.into_boxed_str());
+        let ref_static: &'static str = Box::leak(reference.into_boxed_str());
+        let problem = crate::benchmark::problem_from_reference(&name, sig_static, ref_static)
+            .expect("problem_from_reference must manufacture examples from the emitted reference");
+        let n_examples = problem.examples.len();
+        assert!(
+            n_examples >= 3,
+            "auto-generated >=3 seed examples, got {n_examples}"
+        );
+        let solved = crate::solver::solve_problem(&problem);
+        assert!(
+            solved.success,
+            "solver must synthesize {name}: method={}, err={:?}",
+            solved.method, solved.error
+        );
+        assert!(
+            crate::runtime::verify_problem_code_strict(&problem, &solved.code).is_ok(),
+            "synthesized {name} must strict-verify against reference-labelled holdouts"
+        );
+        (name, solved.code, n_examples)
+    }
+
+    #[test]
+    fn e2e_larger_then_triple_correct_by_hand() {
+        let (name, code, _) =
+            drive_end_to_end("the larger of two numbers, then triple it");
+        // GRADER computes expected INDEPENDENTLY as max(a,b)*3 — NOT reference-
+        // derived. Proves the program does what the USER MEANT.
+        for (a, b, expected) in [(3i64, 7i64, 21i64), (9, 2, 27), (5, 1, 15)] {
+            let got = run_scalar(&code, &name, &[a, b]);
+            assert_eq!(got, expected, "max({a},{b})*3 must equal {expected}");
+        }
+    }
+
+    #[test]
+    fn e2e_absolute_then_increment_correct_by_hand() {
+        let (name, code, _) =
+            drive_end_to_end("the absolute value of a number, then increment it");
+        // GRADER computes expected INDEPENDENTLY as |x|+1.
+        for (x, expected) in [(-5i64, 6i64), (3, 4), (-10, 11)] {
+            let got = run_scalar(&code, &name, &[x]);
+            assert_eq!(got, expected, "|{x}|+1 must equal {expected}");
+        }
+    }
+
+    #[test]
+    fn no_then_connector_is_not_compositional() {
+        let reg = coding_registry();
+        // A single op with no sequential connector is NOT our shape — it must fall
+        // through to the existing single-op door.
+        assert_eq!(
+            classify_compositional("add two numbers", &reg),
+            CompositionalIntake::NotCompositional
+        );
+    }
+
+    #[test]
+    fn pure_unresolvable_single_clause_is_not_compositional() {
+        let reg = coding_registry();
+        // No connector → NotCompositional (the single-op door then refuses the
+        // unknown op itself); we do not steal it.
+        assert_eq!(
+            classify_compositional("a function that frobnicates a number", &reg),
+            CompositionalIntake::NotCompositional
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
