@@ -1379,6 +1379,98 @@ impl LinguigenesisBridge {
         Ok(result.code)
     }
 
+    /// Synthesize a scalar-`i64` op named `op_fn` (ANY arity) from its registry
+    /// entity through the SAME single-op door producers use
+    /// ([`Self::synthesize_primitive`]'s path, arity-agnostic). Returns the
+    /// verified Mog source whose `fn` is named `op_fn`. Used by
+    /// [`Self::emit_scalar_reference`] to obtain each chain primitive's emittable
+    /// body. Errors if the op is absent, not synthesizable, or fails to solve.
+    fn synthesize_named_scalar_op(&self, op_fn: &str) -> Result<String, String> {
+        use linguigenesis_core::entity::EntityType;
+        let registry = self.registry_clone().map_err(|e| e.to_string())?;
+        let entity = registry
+            .get_by_type(&EntityType::Function)
+            .into_iter()
+            .find(|e| {
+                e.get_property("default_fn_name").map(|f| f == op_fn).unwrap_or(false)
+                    || e.lemma == op_fn
+            })
+            .ok_or_else(|| format!("op '{op_fn}' not in registry"))?;
+        let req = SynthesisRequirement::from_operation_entity(&entity)
+            .ok_or_else(|| format!("op '{op_fn}' is not synthesizable (no example_cases)"))?;
+        let result = self
+            .synthesize_from_requirement(&req, Some(op_fn))
+            .map_err(|e| format!("primitive '{op_fn}' synthesis: {e}"))?;
+        if !result.success {
+            return Err(format!(
+                "primitive '{op_fn}' did not solve (method={}, err={:?})",
+                result.method, result.error
+            ));
+        }
+        Ok(result.code)
+    }
+
+    /// P2C-PROMPT-TO-CONTRACT: emit an INDEPENDENT runnable reference for a linear
+    /// scalar composition (generalises [`emit_pipeline_reference`] beyond
+    /// map/fold). Each chain primitive's verified single-op body is emitted once
+    /// (deduped), then the composed entry fn NESTS them in DESCRIBED order around
+    /// the head's params: `head(a, b)` (or `head(x)`) threaded through each unary
+    /// tail, e.g. `max` then `triple` → `return triple(max(a, b));`. The emitted
+    /// source is fed UNCHANGED to [`crate::benchmark::problem_from_reference`],
+    /// which RUNS it to manufacture the seed examples + holdout oracle (zero human
+    /// examples). Returns the full Mog source.
+    ///
+    /// `chain[0]` is the head (arity 1 or 2, sets the params); every later step
+    /// must be arity 1 (threaded onto the running scalar) — the caller
+    /// ([`crate::reference_nl::classify_compositional`]) already enforces this.
+    pub fn emit_scalar_reference(
+        &self,
+        name: &str,
+        chain: &[crate::reference_nl::CompositionalStep],
+    ) -> Result<String, String> {
+        if chain.is_empty() {
+            return Err("empty composition chain".to_string());
+        }
+        let head_arity = chain[0].arity;
+        if head_arity != 1 && head_arity != 2 {
+            return Err(format!("unsupported head arity {head_arity}"));
+        }
+
+        // Synthesize + emit each DISTINCT primitive body once (the chain may repeat
+        // an op, but its body only needs to appear a single time).
+        let mut out = String::new();
+        let mut emitted: Vec<String> = Vec::new();
+        for step in chain {
+            if emitted.contains(&step.fn_name) {
+                continue;
+            }
+            if step != &chain[0] && step.arity != 1 {
+                return Err(format!(
+                    "non-head step '{}' has arity {} (must be unary)",
+                    step.fn_name, step.arity
+                ));
+            }
+            let body = self.synthesize_named_scalar_op(&step.fn_name)?;
+            emitted.push(step.fn_name.clone());
+            out.push_str(body.trim_end());
+            out.push_str("\n\n");
+        }
+
+        // Nest the chain head→...→tail around the head's params.
+        let (params, mut expr) = if head_arity == 2 {
+            ("a: i64, b: i64", format!("{}(a, b)", chain[0].fn_name))
+        } else {
+            ("x: i64", format!("{}(x)", chain[0].fn_name))
+        };
+        for step in &chain[1..] {
+            expr = format!("{}({})", step.fn_name, expr);
+        }
+        out.push_str(&format!(
+            "fn {name}({params}) -> i64 {{\n    return {expr};\n}}\n"
+        ));
+        Ok(out)
+    }
+
     /// TEST-SUPPORT: resolve a single surface word to its highest-confidence
     /// programming op via the SAME emergent resolver the gate uses
     /// ([`resolved_content_ops`]). Returns `(default_fn_name, score)` for the

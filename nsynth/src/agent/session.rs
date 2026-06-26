@@ -259,6 +259,43 @@ impl CodingAgentSession {
             return result;
         }
 
+        // COMPOSITIONAL-DESCRIPTION INTAKE (P2C-PROMPT-TO-CONTRACT): a bare prose
+        // description of a SEQUENCE of known ops ("the larger of two numbers, then
+        // triple it") — with NO user-supplied examples — auto-generates its own
+        // contract. Each clause resolves (via the same emergent resolver the
+        // single-op gate uses) to a registry primitive with an emittable body; the
+        // ordered chain is emitted as a runnable reference whose BEHAVIOUR is the
+        // spec, then handed to the EXISTING reference path (problem_from_reference
+        // manufactures the example pairs + holdout oracle → solve → strict-verify).
+        // Intercept BEFORE comprehension's single-op parroting door so a
+        // multi-step description is not mis-routed to one of its sub-ops. A
+        // description whose HEAD is not a scalar op falls through unchanged
+        // (NotCompositional → array-pipeline / single-op); a confirmed scalar
+        // composition with an UNRESOLVABLE atom is refused, never fabricated.
+        {
+            let bridge = LinguigenesisBridge::new();
+            if let Ok(registry) = bridge.registry_clone() {
+                match crate::reference_nl::classify_compositional(query, &registry) {
+                    crate::reference_nl::CompositionalIntake::Compositional {
+                        name,
+                        signature,
+                        chain,
+                    } => {
+                        let result =
+                            self.run_compositional_synthesis(&bridge, &name, &signature, &chain);
+                        self.record_result(query, &result);
+                        return result;
+                    }
+                    crate::reference_nl::CompositionalIntake::Unresolvable(reason) => {
+                        let result = self.refuse_compositional(&reason);
+                        self.record_result(query, &result);
+                        return result;
+                    }
+                    crate::reference_nl::CompositionalIntake::NotCompositional => {}
+                }
+            }
+        }
+
         let bridge = LinguigenesisBridge::new();
         let result = match bridge.comprehend_outcome(query) {
             Ok(ComprehensionOutcome::Ready(req)) => self.dispatch(query, &req, true),
@@ -614,6 +651,67 @@ impl CodingAgentSession {
             synthesis_method: Some(format!("reference-intake:{}", solved.method)),
             repo_result: None,
             tool_trace,
+        }
+    }
+
+    /// P2C-PROMPT-TO-CONTRACT: synthesize from a comprehended scalar composition.
+    /// Emits a runnable reference for the resolved chain, then REUSES the existing
+    /// reference path (`run_reference_synthesis` → problem_from_reference →
+    /// solve_problem → strict-verify). The emitted reference's behaviour is the
+    /// spec; the example pairs + holdouts are manufactured by running it (zero
+    /// human examples). If the chain cannot be emitted (a primitive fails to
+    /// synthesize) this refuses honestly rather than fabricating success.
+    fn run_compositional_synthesis(
+        &mut self,
+        bridge: &LinguigenesisBridge,
+        name: &str,
+        signature: &str,
+        chain: &[crate::reference_nl::CompositionalStep],
+    ) -> AgentQueryResult {
+        let reference_code = match bridge.emit_scalar_reference(name, chain) {
+            Ok(code) => code,
+            Err(error) => {
+                return AgentQueryResult {
+                    route: QueryRoute::SynthesizeFunction,
+                    success: false,
+                    response: format!(
+                        "cannot emit a reference for the comprehended composition: {error}"
+                    ),
+                    workflow: "compositional.synthesize".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("compositional-emit-refused".to_string()),
+                    repo_result: None,
+                    tool_trace: Vec::new(),
+                };
+            }
+        };
+        // REUSE the reference door unchanged: it manufactures examples by running
+        // the emitted reference, solves, and strict-verifies against fresh
+        // reference-labelled holdouts.
+        let mut result = self.run_reference_synthesis(name, signature, &reference_code);
+        result.workflow = "compositional.synthesize".to_string();
+        if let Some(method) = result.synthesis_method.take() {
+            result.synthesis_method = Some(method.replacen("reference-intake", "compositional", 1));
+        }
+        result
+    }
+
+    /// HONEST REFUSAL: a confirmed scalar `then`-composition contained an atomic
+    /// step that does not resolve to a primitive with an emittable body. Refuse
+    /// (clarify) rather than fabricate a contract from a half-understood
+    /// description (the soundness guard).
+    fn refuse_compositional(&self, reason: &str) -> AgentQueryResult {
+        AgentQueryResult {
+            route: QueryRoute::SynthesizeFunction,
+            success: false,
+            response: format!(
+                "cannot synthesize from description (compositional intake refused): {reason}"
+            ),
+            workflow: "compositional.synthesize".to_string(),
+            clarification_questions: Vec::new(),
+            synthesis_method: Some("compositional-unresolvable".to_string()),
+            repo_result: None,
+            tool_trace: Vec::new(),
         }
     }
 
