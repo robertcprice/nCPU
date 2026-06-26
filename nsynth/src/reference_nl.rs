@@ -376,7 +376,13 @@ fn split_then_clauses(query: &str) -> Vec<String> {
 fn resolve_scalar_op(clause: &str, resolver: &EntityResolver) -> Option<CompositionalStep> {
     let mut best: Option<(CompositionalStep, f32)> = None;
     for tok in tokenize_lower(clause) {
-        let Some(resolved) = resolver.resolve_operation_surface(&tok) else {
+      // Try the surface token AND a de-inflected (-s/-es stripped) variant, so a
+      // 3rd-person/plural verb ("triples", "negates") reaches the SAME op its base
+      // form does. This is generic English inflection applied uniformly to every
+      // token — NOT a per-op phrase table; the resolver + the scalar-i64 gate below
+      // still decide what (if anything) each variant resolves to.
+      for surf in surface_variants(&tok) {
+        let Some(resolved) = resolver.resolve_operation_surface(&surf) else {
             continue;
         };
         if resolved.evidence.score < OP_RESOLVE_FLOOR {
@@ -415,7 +421,7 @@ fn resolve_scalar_op(clause: &str, resolver: &EntityResolver) -> Option<Composit
             .cloned()
             .unwrap_or_else(|| resolved.entity.lemma.clone());
         let step = CompositionalStep {
-            surface: tok,
+            surface: tok.clone(),
             fn_name,
             arity,
         };
@@ -424,8 +430,36 @@ fn resolve_scalar_op(clause: &str, resolver: &EntityResolver) -> Option<Composit
             Some((_, b)) if *b >= score => {}
             _ => best = Some((step, score)),
         }
+      }
     }
     best.map(|(step, _)| step)
+}
+
+/// Surface variants of a token for resolution: the token itself, plus a
+/// de-inflected form with a trailing English `-s`/`-es` removed (so a
+/// 3rd-person/plural verb resolves to the same op as its base form). Generic
+/// morphology — no per-word table; only emitted when stripping leaves a word of
+/// at least 3 chars, so short stop-tokens (`is`, `as`, `its`) are untouched.
+fn surface_variants(tok: &str) -> Vec<String> {
+    let mut out = vec![tok.to_string()];
+    if tok.len() >= 4 && tok.ends_with('s') && !tok.ends_with("ss") {
+        // "-es" after a sibilant ("boxes", "passes") strips to the base; the plain
+        // "-s" case ("triples", "negates") strips a single char.
+        let base = if tok.ends_with("es")
+            && tok.len() >= 5
+            && matches!(
+                &tok[tok.len() - 4..tok.len() - 2],
+                "ch" | "sh" | "ss" | "zz"
+            ) {
+            &tok[..tok.len() - 2]
+        } else {
+            &tok[..tok.len() - 1]
+        };
+        if base.len() >= 3 && base != tok {
+            out.push(base.to_string());
+        }
+    }
+    out
 }
 
 /// A collision-safe composed fn name: the chain's op names joined by `_then_`.
