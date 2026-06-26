@@ -1024,6 +1024,27 @@ impl LinguigenesisBridge {
         Ok(crate::solver::solve_problem(&problem))
     }
 
+    /// Structural multi-component signal: does this request DESCRIBE >=2 component
+    /// functions (i.e. a PROJECT) rather than a single (possibly compositional)
+    /// function? Reuses the EXACT same `comprehend_project` decomposition
+    /// (`split_component_clauses`, function-head count) that `synthesize_project`
+    /// uses to split — there is NO separate heuristic and NO phrase table. A bare
+    /// composition ("the larger of two numbers then triples it", 0 heads) and a
+    /// single described function ("a function that ... then ...", 1 head) both
+    /// yield a 1-component plan → `false`; only a request with >=2 function heads
+    /// ("a module with a function that ..., and a function that ...") → `true`.
+    ///
+    /// The CLI front door (`session::handle_query`) consults this to keep a
+    /// multi-component request OUT of the single-function compositional intercept
+    /// so it reaches the `synthesize_project` multi-file door instead.
+    pub fn is_multi_component(&self, text: &str) -> bool {
+        let Ok(registry) = self.registry_clone() else {
+            return false;
+        };
+        let mut coding = CodingComprehension::new(registry);
+        coding.comprehend_project(text).components.len() >= 2
+    }
+
     /// Comprehend a (possibly multi-component) request into a `ProjectPlan` and
     /// synthesize each component INDEPENDENTLY through the existing single-op
     /// door (`problem_from_requirement` + `solve_problem`, via
@@ -1094,9 +1115,49 @@ impl LinguigenesisBridge {
         // the existing single-op door. This topo-orders producers before the
         // consumers that call them (every dep edge points consumer→producer, and
         // producers are never themselves consumers in this single-edge MVP).
+        // A registry handle for the per-component P2C compositional classifier
+        // (the project-comprehension registry was moved into `coding` above).
+        let class_registry = self.registry_clone().map_err(|e| e.to_string())?;
         for (idx, req) in plan.components.iter().enumerate() {
             if producer_of.contains_key(&idx) {
                 continue; // a consumer — solved in pass 2
+            }
+            // P2C COMPOSITIONAL ROUTING (BUILD-B-MULTICOMPONENT-DECOMP): a component
+            // whose DESCRIBED clause is a scalar `"X then Y"` composition is
+            // auto-contracted through the SAME P2C path a single described function
+            // uses (`classify_compositional` -> `emit_scalar_reference` ->
+            // `problem_from_reference` -> solve + strict-verify) instead of being
+            // mis-solved as its HEAD op alone. A single-op clause comes back
+            // `NotCompositional` and falls through to the UNCHANGED single-op door
+            // below (registry-op multi-file paths stay byte-identical). A confirmed
+            // composition whose later atom is unresolvable refuses HONESTLY here —
+            // it is reported in `skipped`, never fabricated.
+            match crate::reference_nl::classify_compositional(&req.description, &class_registry) {
+                crate::reference_nl::CompositionalIntake::Compositional {
+                    name: comp_name,
+                    signature,
+                    chain,
+                } => {
+                    match self.solve_compositional_component(&comp_name, &signature, &chain) {
+                        Ok(result) => {
+                            solved_code.insert(idx, result.code.clone());
+                            solved.push((comp_name, result));
+                        }
+                        Err(e) => skipped.push(format!(
+                            "component '{}' (compositional) failed: {e}",
+                            req.description
+                        )),
+                    }
+                    continue;
+                }
+                crate::reference_nl::CompositionalIntake::Unresolvable(reason) => {
+                    skipped.push(format!(
+                        "component '{}' has an unresolvable atom: {reason}",
+                        req.description
+                    ));
+                    continue;
+                }
+                crate::reference_nl::CompositionalIntake::NotCompositional => {}
             }
             if req.examples.is_empty() {
                 skipped.push(format!(
@@ -1343,6 +1404,48 @@ impl LinguigenesisBridge {
             ));
         }
         Ok(result)
+    }
+
+    /// P2C-AUTO-CONTRACT a single COMPOSITIONAL component (a described scalar
+    /// `"X then Y"` chain) ALL THE WAY into a verified standalone function — the
+    /// same path `reference_nl`'s `drive_end_to_end` uses, factored so
+    /// [`Self::synthesize_project`] can route each component clause through it.
+    ///
+    /// Reuses (NO new synthesizer): [`Self::emit_scalar_reference`] (emit the
+    /// independent composed reference), [`crate::benchmark::problem_from_reference`]
+    /// (RUN that reference to manufacture seed examples + the holdout oracle — zero
+    /// human examples), [`crate::solver::solve_problem`] (synthesize the composed
+    /// fn from those examples), and [`crate::runtime::verify_problem_code_strict`]
+    /// (strict-verify the solved fn on FRESH reference-labelled holdouts so an
+    /// overfit is refused, not written). The returned `SolveResult.code` is a
+    /// self-contained `fn <name>` whose name matches `name` — ready for the
+    /// existing multi-file writer.
+    fn solve_compositional_component(
+        &self,
+        name: &str,
+        signature: &str,
+        chain: &[crate::reference_nl::CompositionalStep],
+    ) -> Result<crate::solver::SolveResult, String> {
+        let reference = self.emit_scalar_reference(name, chain)?;
+        let sig_static: &'static str = Box::leak(signature.to_string().into_boxed_str());
+        let ref_static: &'static str = Box::leak(reference.into_boxed_str());
+        let mut problem = crate::benchmark::problem_from_reference(name, sig_static, ref_static)
+            .map_err(|e| format!("compositional reference unrunnable: {e}"))?;
+        problem.category = Box::leak("nl-compose-scalar".to_string().into_boxed_str());
+        let solved = crate::solver::solve_problem(&problem);
+        if !solved.success {
+            return Err(format!(
+                "solver could not synthesize compositional '{name}' (method={}, err={:?})",
+                solved.method, solved.error
+            ));
+        }
+        crate::runtime::verify_problem_code_strict(&problem, &solved.code).map_err(|e| {
+            format!(
+                "compositional '{name}' OVERFIT — strict holdout verification failed: {e}\nCODE:\n{}",
+                solved.code
+            )
+        })?;
+        Ok(solved)
     }
 
     /// Synthesize a single-arg (`i64 -> i64`) op named `op_fn` from its registry
