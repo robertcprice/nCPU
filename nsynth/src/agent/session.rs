@@ -307,6 +307,42 @@ impl CodingAgentSession {
                     }
                     crate::reference_nl::CompositionalIntake::NotCompositional => {}
                 }
+                // P2C WIDEN (BUILD-A): the scalar door declined — try an ARRAY or
+                // STRING `then`-composition (map-then-reduce / nested string
+                // transforms). A NotDomain result falls through unchanged to the
+                // pipeline / single-op doors; an Unresolvable in-domain atom
+                // refuses honestly rather than fabricating.
+                match crate::reference_nl::classify_domain_compositional(query, &registry) {
+                    crate::reference_nl::DomainCompositionalIntake::Array {
+                        name,
+                        signature,
+                        maps,
+                        reduce,
+                    } => {
+                        let reference = bridge.emit_array_reference(&name, &maps, reduce.as_ref());
+                        let result =
+                            self.run_emitted_compositional(&name, &signature, reference);
+                        self.record_result(query, &result);
+                        return result;
+                    }
+                    crate::reference_nl::DomainCompositionalIntake::StringT {
+                        name,
+                        signature,
+                        steps,
+                    } => {
+                        let reference = bridge.emit_string_reference(&name, &steps);
+                        let result =
+                            self.run_emitted_compositional(&name, &signature, reference);
+                        self.record_result(query, &result);
+                        return result;
+                    }
+                    crate::reference_nl::DomainCompositionalIntake::Unresolvable(reason) => {
+                        let result = self.refuse_compositional(&reason);
+                        self.record_result(query, &result);
+                        return result;
+                    }
+                    crate::reference_nl::DomainCompositionalIntake::NotDomain => {}
+                }
               }
             }
         }
@@ -703,6 +739,44 @@ impl CodingAgentSession {
         // REUSE the reference door unchanged: it manufactures examples by running
         // the emitted reference, solves, and strict-verifies against fresh
         // reference-labelled holdouts.
+        let mut result = self.run_reference_synthesis(name, signature, &reference_code);
+        result.workflow = "compositional.synthesize".to_string();
+        if let Some(method) = result.synthesis_method.take() {
+            result.synthesis_method = Some(method.replacen("reference-intake", "compositional", 1));
+        }
+        result
+    }
+
+    /// P2C WIDEN (BUILD-A): finish an ARRAY/STRING composition once its reference
+    /// has been emitted. REUSES the reference door unchanged
+    /// (`run_reference_synthesis` → problem_from_reference → solve_problem →
+    /// strict-verify); the emitted reference's behaviour is the spec and the
+    /// examples + holdouts are manufactured by running it (zero human examples).
+    /// An emit failure (a primitive that would not synthesize, or an
+    /// unclassifiable fold) refuses honestly rather than fabricating success.
+    fn run_emitted_compositional(
+        &mut self,
+        name: &str,
+        signature: &str,
+        reference: Result<String, String>,
+    ) -> AgentQueryResult {
+        let reference_code = match reference {
+            Ok(code) => code,
+            Err(error) => {
+                return AgentQueryResult {
+                    route: QueryRoute::SynthesizeFunction,
+                    success: false,
+                    response: format!(
+                        "cannot emit a reference for the comprehended composition: {error}"
+                    ),
+                    workflow: "compositional.synthesize".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("compositional-emit-refused".to_string()),
+                    repo_result: None,
+                    tool_trace: Vec::new(),
+                };
+            }
+        };
         let mut result = self.run_reference_synthesis(name, signature, &reference_code);
         result.workflow = "compositional.synthesize".to_string();
         if let Some(method) = result.synthesis_method.take() {

@@ -474,6 +474,274 @@ fn compose_name(chain: &[CompositionalStep]) -> String {
         .join("_then_")
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// P2C WIDEN (BUILD-A): DOMAIN compositions beyond linear scalar-i64.
+//
+// `classify_compositional` (above) covers the scalar-`i64` chain. This door is
+// the next widening: a `then`-split description whose HEAD operand is an ARRAY
+// (`[i64]`) or a STRING — e.g. "double each value in an array THEN sum them"
+// ([i64]→i64) or "uppercase a string THEN reverse it" (string→string). Each
+// step is still resolved STRUCTURALLY via the SAME [`EntityResolver`] (no
+// phrase→op table): the DOMAIN is decided by reading the resolved op's declared
+// `input_types`/`output_type`, and a step that does not resolve to a primitive
+// with an emittable body in the established domain is REFUSED, never fabricated.
+//
+// Reuse, not rebuild: the emitted reference is fed UNCHANGED to the same
+// `problem_from_reference → solve → strict-verify` path the scalar door uses;
+// the array reference reuses the engine's array-map + fold emitters and the
+// string reference nests the engine's `string_synth` transforms.
+
+/// A recall floor for resolving a TAIL step WITHIN an already-established domain
+/// (string/array). It is BELOW [`OP_RESOLVE_FLOOR`] because domain threading
+/// carries an extra HARD structural constraint the bare op-resolution floor does
+/// not: the candidate's declared signature must EXACTLY match the established
+/// operand domain AND it must carry `example_cases` (an emittable body). That
+/// type+body gate is what prevents fabrication, so a real-but-lower-ranked
+/// in-domain op (e.g. `reverse_string`@0.51, ranked under the array `reverse`)
+/// is reachable once the head has fixed the operand type to `string`.
+const DOMAIN_THREAD_FLOOR: f32 = 0.5;
+
+/// One resolved step of a DOMAIN (array/string) composition. Carries the
+/// resolved entity's LEMMA because several distinct string ops share the SAME
+/// `default_fn_name` (`transform`): they can only be told apart — and
+/// synthesized from their OWN `example_cases` — by fetching the entity by lemma.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainStep {
+    /// The clause surface word that resolved to the op (for reporting).
+    pub surface: String,
+    /// The resolved op entity's lemma (the per-op identity, even when `fn_name`
+    /// collides across ops).
+    pub lemma: String,
+    /// The op's canonical `default_fn_name`.
+    pub fn_name: String,
+    /// Lowercased declared input signature (e.g. `vec<i64>`, `i64,i64`, `string`).
+    pub input_types: String,
+    /// Lowercased declared output type (e.g. `vec<i64>`, `i64`, `string`).
+    pub output_type: String,
+}
+
+/// Outcome of inspecting a query for an ARRAY or STRING `then`-composition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DomainCompositionalIntake {
+    /// Not an array/string composition (no `then`, <2 clauses, or the HEAD does
+    /// not resolve to an array/string primitive). The scalar / pipeline /
+    /// single-op doors still apply.
+    NotDomain,
+    /// An ARRAY composition: ordered array transforms (`[i64]→[i64]`) optionally
+    /// terminated by a reduce. `reduce = None` ⇒ array output (`[i64]→[i64]`);
+    /// `Some` ⇒ scalar output (`[i64]→i64`).
+    Array {
+        name: String,
+        signature: String,
+        maps: Vec<DomainStep>,
+        reduce: Option<DomainStep>,
+    },
+    /// A STRING composition: ordered `string→string` transforms (`string→string`).
+    StringT {
+        name: String,
+        signature: String,
+        steps: Vec<DomainStep>,
+    },
+    /// A confirmed array/string composition whose HEAD resolved but a later atom
+    /// did NOT resolve to an in-domain primitive with an emittable body. Refuse
+    /// (clarify) — never fabricate.
+    Unresolvable(String),
+}
+
+/// `(input_types_lc, output_type_lc)` predicates over a resolved op's declared
+/// signature. Purely signature-reading — no op-name table.
+fn is_string_xform(it: &str, ot: &str) -> bool {
+    it == "string" && ot == "string"
+}
+fn is_array_map(it: &str, ot: &str) -> bool {
+    matches!(it, "vec<i64>" | "[i64]") && matches!(ot, "vec<i64>" | "[i64]")
+}
+fn is_array_reduce(it: &str, ot: &str) -> bool {
+    // Either a true array reduce ([i64]→i64) or a BINARY fold seed (i64,i64→i64,
+    // e.g. `add` for "sum") that folds the array elementwise.
+    ot == "i64" && matches!(it, "vec<i64>" | "[i64]" | "i64,i64")
+}
+
+/// Resolve a clause to the best op whose declared signature satisfies `pred`,
+/// at or above `floor`. Reads the resolver's RANKED candidates (so an in-domain
+/// op ranked below the top — e.g. `reverse_string` under array `reverse` — is
+/// reachable once the domain is fixed), follows each candidate to its canonical
+/// op, and keeps only Function/Operator ops that carry `example_cases` (an
+/// emittable body). No hardcoded op list; the signature + body gate decides.
+fn resolve_op_typed(
+    clause: &str,
+    resolver: &EntityResolver,
+    floor: f32,
+    pred: impl Fn(&str, &str) -> bool,
+) -> Option<DomainStep> {
+    let mut best: Option<(DomainStep, f32)> = None;
+    for tok in tokenize_lower(clause) {
+        for surf in surface_variants(&tok) {
+            for cand in resolver.rank_candidates(&surf) {
+                let score = cand.evidence.score;
+                if score < floor {
+                    continue;
+                }
+                // The candidate may itself be the op (signature already present)
+                // or a synonym pointing at the seed op; resolve to the op that
+                // actually carries a signature.
+                let op_entity = if cand.entity.get_property("default_fn_name").is_some()
+                    && cand
+                        .entity
+                        .get_property("example_cases")
+                        .map(|s| !s.is_empty())
+                        .unwrap_or(false)
+                {
+                    cand.entity.clone()
+                } else {
+                    match resolver.resolve_operation_surface(&cand.entity.lemma) {
+                        Some(r) => r.entity,
+                        None => continue,
+                    }
+                };
+                if !matches!(
+                    op_entity.entity_type,
+                    EntityType::Function | EntityType::Operator
+                ) {
+                    continue;
+                }
+                let it = op_entity
+                    .get_property("input_types")
+                    .cloned()
+                    .unwrap_or_default()
+                    .to_lowercase();
+                let ot = op_entity
+                    .get_property("output_type")
+                    .cloned()
+                    .unwrap_or_default()
+                    .to_lowercase();
+                if !pred(&it, &ot) {
+                    continue;
+                }
+                // Require an emittable body (verified example_cases) — never
+                // fabricate from a bare concept node.
+                if op_entity
+                    .get_property("example_cases")
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+                {
+                    continue;
+                }
+                let fn_name = op_entity
+                    .get_property("default_fn_name")
+                    .cloned()
+                    .unwrap_or_else(|| op_entity.lemma.clone());
+                let step = DomainStep {
+                    surface: tok.clone(),
+                    lemma: op_entity.lemma.clone(),
+                    fn_name,
+                    input_types: it,
+                    output_type: ot,
+                };
+                match &best {
+                    Some((_, b)) if *b >= score => {}
+                    _ => best = Some((step, score)),
+                }
+            }
+        }
+    }
+    best.map(|(s, _)| s)
+}
+
+/// Classify a query as an ARRAY or STRING `then`-composition of registry
+/// primitives. Emergent rule (no phrase→op table):
+///   1. Require the sequential connector `then`, splitting into ≥2 clauses.
+///   2. Resolve the HEAD clause (at [`OP_RESOLVE_FLOOR`]): a `string→string` head
+///      ⇒ STRING domain; a `[i64]→[i64]` head ⇒ ARRAY domain; anything else ⇒
+///      [`DomainCompositionalIntake::NotDomain`] (scalar/pipeline/single-op door).
+///   3. STRING: every tail must resolve to a `string→string` op (domain-threaded
+///      at [`DOMAIN_THREAD_FLOOR`]). ARRAY: each tail is another `[i64]→[i64]`
+///      map OR a TERMINAL reduce; a reduce must be last (no map after collapsing
+///      to a scalar). A tail that fails ⇒ [`DomainCompositionalIntake::Unresolvable`].
+pub fn classify_domain_compositional(
+    query: &str,
+    registry: &Registry,
+) -> DomainCompositionalIntake {
+    let clauses = split_then_clauses(query);
+    if clauses.len() < 2 {
+        return DomainCompositionalIntake::NotDomain;
+    }
+    let resolver = EntityResolver::new(registry.clone());
+
+    // STRING head?
+    if let Some(head) = resolve_op_typed(&clauses[0], &resolver, OP_RESOLVE_FLOOR, is_string_xform) {
+        let mut steps = vec![head];
+        for clause in &clauses[1..] {
+            match resolve_op_typed(clause, &resolver, DOMAIN_THREAD_FLOOR, is_string_xform) {
+                Some(step) => steps.push(step),
+                None => {
+                    return DomainCompositionalIntake::Unresolvable(format!(
+                        "string step {clause:?} does not resolve to any string→string \
+                         primitive with an emittable body — refusing rather than fabricating"
+                    ));
+                }
+            }
+        }
+        let name = steps
+            .iter()
+            .map(|s| s.lemma.as_str())
+            .collect::<Vec<_>>()
+            .join("_then_");
+        let signature = format!("fn {name}(s: string) -> string");
+        return DomainCompositionalIntake::StringT {
+            name,
+            signature,
+            steps,
+        };
+    }
+
+    // ARRAY head?
+    if let Some(head) = resolve_op_typed(&clauses[0], &resolver, OP_RESOLVE_FLOOR, is_array_map) {
+        let mut maps = vec![head];
+        let mut reduce: Option<DomainStep> = None;
+        for clause in &clauses[1..] {
+            if reduce.is_some() {
+                // A scalar has already been produced; nothing can follow a reduce.
+                return DomainCompositionalIntake::Unresolvable(format!(
+                    "array step {clause:?} follows a reduce (the value is already a \
+                     scalar) — refusing rather than fabricating a contract"
+                ));
+            }
+            if let Some(step) =
+                resolve_op_typed(clause, &resolver, OP_RESOLVE_FLOOR, is_array_map)
+            {
+                maps.push(step);
+            } else if let Some(step) =
+                resolve_op_typed(clause, &resolver, OP_RESOLVE_FLOOR, is_array_reduce)
+            {
+                reduce = Some(step);
+            } else {
+                return DomainCompositionalIntake::Unresolvable(format!(
+                    "array step {clause:?} does not resolve to any [i64]→[i64] map or \
+                     reduce primitive with an emittable body — refusing rather than fabricating"
+                ));
+            }
+        }
+        let map_names: Vec<&str> = maps.iter().map(|s| s.fn_name.as_str()).collect();
+        let (ret, name) = match &reduce {
+            Some(r) => (
+                "i64",
+                format!("{}_then_{}", map_names.join("_then_"), r.fn_name),
+            ),
+            None => ("[i64]", map_names.join("_then_")),
+        };
+        let signature = format!("fn {name}(arr: [i64]) -> {ret}");
+        return DomainCompositionalIntake::Array {
+            name,
+            signature,
+            maps,
+            reduce,
+        };
+    }
+
+    DomainCompositionalIntake::NotDomain
+}
+
 #[cfg(test)]
 mod compositional_tests {
     use super::*;
@@ -622,6 +890,223 @@ mod compositional_tests {
         assert_eq!(
             classify_compositional("add two numbers", &reg),
             CompositionalIntake::NotCompositional
+        );
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // P2C WIDEN (BUILD-A): 3-stage scalar + ARRAY + STRING compositions.
+    // Each driver is the UN-GAMEABLE end-to-end: comprehend → emit reference →
+    // problem_from_reference (auto examples + reference-labelled holdouts, NO
+    // human examples) → solve → strict-verify → then run the synthesized program
+    // on HAND inputs and compare to outputs the GRADER computes INDEPENDENTLY.
+    // ───────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn e2e_three_stage_scalar_correct_by_hand() {
+        // (a) 3-STAGE scalar: negate → triple → increment ⇒ -3x+1.
+        let reg = coding_registry();
+        // The scalar door already generalises to N steps; prove it comprehends 3.
+        let chain = match classify_compositional(
+            "negate a number then triple it then increment it",
+            &reg,
+        ) {
+            CompositionalIntake::Compositional { chain, .. } => chain,
+            other => panic!("expected 3-stage Compositional, got {other:?}"),
+        };
+        assert_eq!(chain.len(), 3, "negate, triple, increment = 3 stages");
+        let (name, code, _) =
+            drive_end_to_end("negate a number then triple it then increment it");
+        // GRADER computes expected INDEPENDENTLY as -3x+1.
+        for (x, expected) in [(-2i64, 7i64), (1, -2), (0, 1), (5, -14)] {
+            let got = run_scalar(&code, &name, &[x]);
+            assert_eq!(got, expected, "-3*({x})+1 must equal {expected}");
+        }
+    }
+
+    /// Run a synthesized `[i64] -> i64` fn on a hand array, asserting an int out.
+    fn run_array_to_int(code: &str, fn_name: &str, input: &[i64]) -> i64 {
+        use crate::benchmark::Value;
+        match crate::runtime::execute_function(
+            code,
+            fn_name,
+            &[Value::int_array(input)],
+            "p2c-array-grader",
+        ) {
+            Ok(crate::runtime::Value::Int(v)) => v,
+            other => panic!("synthesized {fn_name} returned non-int {other:?}"),
+        }
+    }
+
+    /// Run a synthesized `string -> string` fn on a hand string, asserting a str.
+    fn run_string_to_string(code: &str, fn_name: &str, input: &str) -> String {
+        use crate::benchmark::Value;
+        match crate::runtime::execute_function(
+            code,
+            fn_name,
+            &[Value::Str(input.to_string())],
+            "p2c-string-grader",
+        ) {
+            Ok(crate::runtime::Value::Str(s)) => s,
+            other => panic!("synthesized {fn_name} returned non-string {other:?}"),
+        }
+    }
+
+    /// Drive an ARRAY composition all the way (classify → emit → auto examples →
+    /// solve → strict-verify). Returns (name, solved code, example count).
+    fn drive_array_end_to_end(description: &str) -> (String, String, usize) {
+        use crate::linguigenesis_bridge::LinguigenesisBridge;
+        let reg = coding_registry();
+        let bridge = LinguigenesisBridge::new();
+        let (name, signature, maps, reduce) =
+            match classify_domain_compositional(description, &reg) {
+                DomainCompositionalIntake::Array {
+                    name,
+                    signature,
+                    maps,
+                    reduce,
+                } => (name, signature, maps, reduce),
+                other => panic!("{description:?} did not comprehend as Array: {other:?}"),
+            };
+        let reference = bridge
+            .emit_array_reference(&name, &maps, reduce.as_ref())
+            .expect("emit array reference");
+        let sig_static: &'static str = Box::leak(signature.into_boxed_str());
+        let ref_static: &'static str = Box::leak(reference.into_boxed_str());
+        let problem = crate::benchmark::problem_from_reference(&name, sig_static, ref_static)
+            .expect("problem_from_reference must manufacture examples from the array reference");
+        let n_examples = problem.examples.len();
+        assert!(n_examples >= 3, "auto-generated >=3 seed examples, got {n_examples}");
+        assert!(
+            !problem.reference_code.is_empty(),
+            "reference must be non-empty so holdouts are DIFFERENTIAL (reference-labelled)"
+        );
+        let solved = crate::solver::solve_problem(&problem);
+        assert!(
+            solved.success,
+            "solver must synthesize {name}: method={}, err={:?}",
+            solved.method, solved.error
+        );
+        assert!(
+            crate::runtime::verify_problem_code_strict(&problem, &solved.code).is_ok(),
+            "synthesized {name} must strict-verify against reference-labelled holdouts"
+        );
+        (name, solved.code, n_examples)
+    }
+
+    /// Drive a STRING composition all the way.
+    fn drive_string_end_to_end(description: &str) -> (String, String, usize) {
+        use crate::linguigenesis_bridge::LinguigenesisBridge;
+        let reg = coding_registry();
+        let bridge = LinguigenesisBridge::new();
+        let (name, signature, steps) = match classify_domain_compositional(description, &reg) {
+            DomainCompositionalIntake::StringT {
+                name,
+                signature,
+                steps,
+            } => (name, signature, steps),
+            other => panic!("{description:?} did not comprehend as StringT: {other:?}"),
+        };
+        let reference = bridge
+            .emit_string_reference(&name, &steps)
+            .expect("emit string reference");
+        let sig_static: &'static str = Box::leak(signature.into_boxed_str());
+        let ref_static: &'static str = Box::leak(reference.into_boxed_str());
+        let problem = crate::benchmark::problem_from_reference(&name, sig_static, ref_static)
+            .expect("problem_from_reference must manufacture examples from the string reference");
+        let n_examples = problem.examples.len();
+        assert!(n_examples >= 3, "auto-generated >=3 seed examples, got {n_examples}");
+        assert!(
+            !problem.reference_code.is_empty(),
+            "reference must be non-empty so holdouts are DIFFERENTIAL (reference-labelled)"
+        );
+        let solved = crate::solver::solve_problem(&problem);
+        assert!(
+            solved.success,
+            "solver must synthesize {name}: method={}, err={:?}",
+            solved.method, solved.error
+        );
+        assert!(
+            crate::runtime::verify_problem_code_strict(&problem, &solved.code).is_ok(),
+            "synthesized {name} must strict-verify against reference-labelled holdouts"
+        );
+        (name, solved.code, n_examples)
+    }
+
+    #[test]
+    fn e2e_array_map_then_reduce_correct_by_hand() {
+        // (b) ARRAY map-then-reduce: double each value THEN sum them ⇒ 2*sum.
+        // UN-GAMEABLE PRIOR-PATH PROOF: the SCALAR door must NOT comprehend this
+        // (the reduce tail is not a unary scalar), so the widened domain door is
+        // what makes it reachable — not a pre-existing path.
+        let reg = coding_registry();
+        assert_eq!(
+            classify_compositional("double each value in an array then sum them", &reg),
+            CompositionalIntake::NotCompositional,
+            "the scalar door must decline the array shape (proves the widening is load-bearing)"
+        );
+        let (name, code, _) =
+            drive_array_end_to_end("double each value in an array then sum them");
+        // GRADER computes expected INDEPENDENTLY as 2 * sum(arr).
+        for (arr, expected) in [
+            (vec![1i64, 2, 3], 12i64),
+            (vec![5, 0, -1], 8),
+            (vec![10], 20),
+            (vec![-3, -4, 7], 0),
+        ] {
+            let got = run_array_to_int(&code, &name, &arr);
+            assert_eq!(got, expected, "2*sum({arr:?}) must equal {expected}");
+        }
+    }
+
+    #[test]
+    fn e2e_string_compose_correct_by_hand() {
+        // (c) STRING composition: uppercase a string THEN reverse it ⇒ reverse(upper(s)).
+        // PRIOR-PATH PROOF: the scalar door declines (no scalar i64 head).
+        let reg = coding_registry();
+        assert_eq!(
+            classify_compositional("uppercase a string then reverse it", &reg),
+            CompositionalIntake::NotCompositional,
+            "the scalar door must decline the string shape"
+        );
+        let (name, code, _) = drive_string_end_to_end("uppercase a string then reverse it");
+        // GRADER computes expected INDEPENDENTLY as reverse(uppercase(s)).
+        for (s, expected) in [("abc", "CBA"), ("Hello", "OLLEH"), ("aB2", "2BA")] {
+            let got = run_string_to_string(&code, &name, s);
+            assert_eq!(got, expected, "reverse(upper({s:?})) must equal {expected:?}");
+        }
+    }
+
+    #[test]
+    fn domain_unresolvable_step_refuses_not_fabricates() {
+        let reg = coding_registry();
+        // STRING head resolves (uppercase) but the tail atom does not resolve to
+        // any string→string primitive → honest refusal, never fabrication.
+        match classify_domain_compositional("uppercase a string then frobnicate it", &reg) {
+            DomainCompositionalIntake::Unresolvable(_) => {}
+            other => panic!("expected Unresolvable (refuse), got {other:?}"),
+        }
+        // ARRAY head resolves (double-each map) but the tail atom does not → refuse.
+        match classify_domain_compositional(
+            "double each value in an array then frobnicate them",
+            &reg,
+        ) {
+            DomainCompositionalIntake::Unresolvable(_) => {}
+            other => panic!("expected Unresolvable (refuse), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn domain_classifier_declines_scalar_and_single_op() {
+        let reg = coding_registry();
+        // A scalar composition is NOT a domain composition (scalar door owns it).
+        assert_eq!(
+            classify_domain_compositional("negate a number then triple it", &reg),
+            DomainCompositionalIntake::NotDomain
+        );
+        // A single op with no `then` is not a domain composition.
+        assert_eq!(
+            classify_domain_compositional("reverse a list of integers", &reg),
+            DomainCompositionalIntake::NotDomain
         );
     }
 

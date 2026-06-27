@@ -1574,6 +1574,137 @@ impl LinguigenesisBridge {
         Ok(out)
     }
 
+    /// Synthesize a registry op identified BY LEMMA, emitting it under `as_name`.
+    /// Lemma (not `default_fn_name`) is required because several distinct string
+    /// ops share the same `default_fn_name` (`transform`); they are told apart —
+    /// and synthesized from their OWN `example_cases` — only by lemma. Reuses the
+    /// existing solver via `from_operation_entity` + `synthesize_from_requirement`
+    /// (NO new synthesizer).
+    fn synthesize_op_by_lemma(&self, lemma: &str, as_name: &str) -> Result<String, String> {
+        let registry = self.registry_clone().map_err(|e| e.to_string())?;
+        let entity = registry
+            .get_by_lemma(lemma)
+            .ok_or_else(|| format!("op lemma '{lemma}' not in registry"))?;
+        let req = SynthesisRequirement::from_operation_entity(&entity)
+            .ok_or_else(|| format!("op '{lemma}' is not synthesizable (no example_cases)"))?;
+        let result = self
+            .synthesize_from_requirement(&req, Some(as_name))
+            .map_err(|e| format!("primitive '{lemma}' synthesis: {e}"))?;
+        if !result.success {
+            return Err(format!(
+                "primitive '{lemma}' did not solve (method={}, err={:?})",
+                result.method, result.error
+            ));
+        }
+        Ok(result.code)
+    }
+
+    /// P2C WIDEN (BUILD-A): emit an INDEPENDENT runnable reference for an ARRAY
+    /// composition — ordered whole-array `[i64]→[i64]` map transforms, optionally
+    /// terminated by a reduce. Each distinct map op's verified body is emitted
+    /// once, the running array is threaded through them via fresh bindings
+    /// (`m0 = map0(arr); m1 = map1(m0); ...`), then either the optional fold is
+    /// emitted over the last array (scalar `[i64]→i64` output, reusing
+    /// [`emit_fold_over_named_array`] / the same fold classifiers the pipeline
+    /// door uses) or the last array is returned (`[i64]→[i64]`). Fed UNCHANGED to
+    /// [`crate::benchmark::problem_from_reference`].
+    pub fn emit_array_reference(
+        &self,
+        name: &str,
+        maps: &[crate::reference_nl::DomainStep],
+        reduce: Option<&crate::reference_nl::DomainStep>,
+    ) -> Result<String, String> {
+        if maps.is_empty() {
+            return Err("empty array composition (no map head)".to_string());
+        }
+        let mut out = String::new();
+        // Emit each DISTINCT map body once (keyed by fn_name).
+        let mut emitted: Vec<String> = Vec::new();
+        for m in maps {
+            if emitted.contains(&m.fn_name) {
+                continue;
+            }
+            let body = self.synthesize_op_by_lemma(&m.lemma, &m.fn_name)?;
+            emitted.push(m.fn_name.clone());
+            out.push_str(body.trim_end());
+            out.push_str("\n\n");
+        }
+
+        // Thread the running array through the map chain via fresh bindings.
+        let mut body = String::new();
+        let mut cur = "arr".to_string();
+        for (i, m) in maps.iter().enumerate() {
+            let var = format!("m{i}");
+            body.push_str(&format!("    {var}: [i64] = {}({cur});\n", m.fn_name));
+            cur = var;
+        }
+
+        match reduce {
+            Some(r) => {
+                // Classify the fold by EXECUTING the synthesized reduce op (never
+                // name-keyed) — an array reduce ([i64]→i64) is probed with arrays,
+                // a binary fold seed (i64,i64→i64, e.g. `add` for "sum") with
+                // scalar pairs. Reuses the pipeline door's classifiers.
+                let reduce_code = self.synthesize_op_by_lemma(&r.lemma, &r.fn_name)?;
+                let fold = if r.input_types == "i64,i64" {
+                    classify_binary_fold(&reduce_code, &r.fn_name)
+                } else {
+                    classify_array_fold(&reduce_code, &r.fn_name)
+                }
+                .ok_or_else(|| {
+                    format!("could not classify the reduce fold for op '{}'", r.fn_name)
+                })?;
+                let fold_body = emit_fold_over_named_array(fold, &cur);
+                out.push_str(&format!(
+                    "fn {name}(arr: [i64]) -> i64 {{\n{body}{fold_body}}}\n"
+                ));
+            }
+            None => {
+                out.push_str(&format!(
+                    "fn {name}(arr: [i64]) -> [i64] {{\n{body}    return {cur};\n}}\n"
+                ));
+            }
+        }
+        Ok(out)
+    }
+
+    /// P2C WIDEN (BUILD-A): emit an INDEPENDENT runnable reference for a STRING
+    /// composition — ordered `string→string` transforms nested inner→outer
+    /// around the input (`step_n(...step_0(s)...)`). Each step's verified body is
+    /// synthesized from ITS OWN entity (by lemma, since several string ops share
+    /// `default_fn_name`) and emitted under a UNIQUE helper name (its lemma).
+    /// Fed UNCHANGED to [`crate::benchmark::problem_from_reference`].
+    pub fn emit_string_reference(
+        &self,
+        name: &str,
+        steps: &[crate::reference_nl::DomainStep],
+    ) -> Result<String, String> {
+        if steps.is_empty() {
+            return Err("empty string composition".to_string());
+        }
+        let mut out = String::new();
+        let mut emitted: Vec<String> = Vec::new();
+        for s in steps {
+            // Helper name = lemma (unique per op, unlike the shared fn_name).
+            if emitted.contains(&s.lemma) {
+                continue;
+            }
+            let body = self.synthesize_op_by_lemma(&s.lemma, &s.lemma)?;
+            emitted.push(s.lemma.clone());
+            out.push_str(body.trim_end());
+            out.push_str("\n\n");
+        }
+        // Nest in described order: steps[0] is innermost (applied first).
+        let mut expr = "s".to_string();
+        for s in steps {
+            expr = format!("{}({})", s.lemma, expr);
+        }
+        out.push_str(&format!(
+            "fn {name}(s: string) -> string {{\n    return {expr};\n}}\n"
+        ));
+        Ok(out)
+    }
+
     /// TEST-SUPPORT: resolve a single surface word to its highest-confidence
     /// programming op via the SAME emergent resolver the gate uses
     /// ([`resolved_content_ops`]). Returns `(default_fn_name, score)` for the
