@@ -15,6 +15,7 @@
 //! This is a local backend MVP, not a production web framework claim.
 
 use crate::backend_ir::{BackendApp, RuleModel, StoreKind};
+use crate::backend_repair::compile_with_repair;
 use crate::benchmark::{Example, Problem, Value};
 use crate::mog_transpile::to_rust;
 use crate::solver::solve_problem;
@@ -149,7 +150,7 @@ pub fn synthesize_backend_app(
         })
         .collect();
     let app = BackendApp::from_rules(&description, models, store);
-    let source = app.render_rust();
+    let source = compile_with_repair(&app.render_rust(), store, 3)?;
     Ok(GeneratedBackend { source, rules })
 }
 

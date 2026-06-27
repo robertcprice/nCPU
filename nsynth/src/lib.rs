@@ -3,6 +3,7 @@ pub mod async_mod;
 pub mod benchmark;
 pub mod backend_ir;
 pub mod backend_mvp;
+pub mod backend_repair;
 pub mod capability_miner;
 pub mod bidirectional;
 pub mod comprehension;
