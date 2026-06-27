@@ -15,9 +15,11 @@
 //!
 //! Pipeline (mirrors build_game.py + synth_pong_driver.mjs):
 //!   1. `synthesize_project(text)` → Vec<(name, SolveResult)> + skipped list.
-//!   2. REFUSED gate: every one of the 5 named rules must be present + success,
-//!      and i64-only. f64/string rules are rejected up front (the transpiler's
-//!      proven lane is i64; it emits broken JS for floats). On any failure we
+//!   2. REFUSED gate: every named rule must be present + success, and land in a
+//!      PROVEN scalar lane — i64 (`-> i64`) OR f64 (`-> f64`, recovered by
+//!      search_float_affine). The lane is chosen EMERGENTLY by the synthesized
+//!      Mog's signature, not a phrase table. String/array/struct rules are still
+//!      rejected up front (the verifier can't run that JS). On any failure we
 //!      exit nonzero and write NO html — never a partial game.
 //!   3. Per rule: normalize single-line `if cond { body }` into block form
 //!      (replicates `normalizeMog`, synth_pong_driver.mjs:29-47, because the
@@ -63,7 +65,9 @@ lives_after_miss(3)=2 and lives_after_miss(1)=0 and lives_after_miss(2)=1 and li
 A function is_game_over that returns one when no lives remain otherwise zero, \
 is_game_over(0)=1 and is_game_over(1)=0 and is_game_over(2)=0 and is_game_over(3)=0. \
 A function fall_speed that adds a base of three to the score, \
-fall_speed(0)=3 and fall_speed(1)=4 and fall_speed(5)=8 and fall_speed(10)=13 and fall_speed(2)=5 and fall_speed(7)=10.";
+fall_speed(0)=3 and fall_speed(1)=4 and fall_speed(5)=8 and fall_speed(10)=13 and fall_speed(2)=5 and fall_speed(7)=10. \
+A function fall_speed_f that is three plus the score times one half, \
+fall_speed_f(0)=3.0 and fall_speed_f(2)=4.0 and fall_speed_f(4)=5.0 and fall_speed_f(6)=6.0 and fall_speed_f(8)=7.0.";
 
 /// A rule's English contract: the name to bind + the inline examples that form
 /// its spec. The user owns these (named rules + i64 examples). The body is NOT
@@ -72,8 +76,14 @@ fall_speed(0)=3 and fall_speed(1)=4 and fall_speed(5)=8 and fall_speed(10)=13 an
 struct RuleSpec {
     name: &'static str,
     english: &'static str,
-    /// Inline I/O examples (single-arg i64) — the verification oracle.
+    /// Inline I/O examples (single-arg i64) — the verification oracle for the
+    /// integer lane. Empty for a pure-float rule (see `examples_f64`).
     examples: &'static [(i64, i64)],
+    /// Inline I/O examples for a single-arg FLOAT rule. When non-empty the rule
+    /// is verified through the f64 lane (Mog executed over f64 + shipped JS run
+    /// through node). Empty for the i64 lane. Exactly one of the two is used,
+    /// selected by the synthesized Mog's signature (`-> f64` ⇒ float lane).
+    examples_f64: &'static [(f64, f64)],
 }
 
 const RULES: &[RuleSpec] = &[
@@ -81,37 +91,62 @@ const RULES: &[RuleSpec] = &[
         name: "is_caught",
         english: "Return 1 when the basket and item share a lane (distance 0), else 0.",
         examples: &[(0, 1), (1, 0), (2, 0), (3, 0), (4, 0)],
+        examples_f64: &[],
     },
     RuleSpec {
         name: "score_after_catch",
         english: "Increment the score by one after a successful catch.",
         examples: &[(0, 1), (5, 6), (41, 42), (7, 8), (99, 100)],
+        examples_f64: &[],
     },
     RuleSpec {
         name: "lives_after_miss",
         english: "Decrease the remaining lives by one after a missed item.",
         examples: &[(3, 2), (1, 0), (2, 1), (5, 4), (10, 9)],
+        examples_f64: &[],
     },
     RuleSpec {
         name: "is_game_over",
         english: "Return 1 when no lives remain (lives == 0), else 0.",
         examples: &[(0, 1), (1, 0), (2, 0), (3, 0)],
+        examples_f64: &[],
     },
     RuleSpec {
         name: "fall_speed",
         english: "Fall speed in px/frame: base of three plus one per point of score.",
         examples: &[(0, 3), (1, 4), (5, 8), (10, 13), (2, 5), (7, 10)],
+        examples_f64: &[],
+    },
+    // FLOAT lane: a real-valued physics rule (sub-integer per-point ramp).
+    // fall_speed_f(score) = 3 + 0.5*score — a velocity ramp that can't be i64.
+    // Synthesized by search_float_affine, transpiled, f64-annotation stripped,
+    // verified Mog↔node across the float sweep. Demonstrates LOOP-1: described
+    // REAL-VALUED rules now go all the way to runnable JS.
+    RuleSpec {
+        name: "fall_speed_f",
+        english: "Fall speed (real): base of three plus half a pixel per point of score.",
+        examples: &[],
+        examples_f64: &[(0.0, 3.0), (2.0, 4.0), (4.0, 5.0), (6.0, 6.0), (8.0, 7.0)],
     },
 ];
 
-/// A REQUIRED rule whose contract is non-integer (f64). Used only by `--demo-fail`:
-/// it is added to BOTH the English and the required-rule set, so the REFUSED gate
-/// must catch it — the synthesizer skips it (its differentiable solver is scalar-
-/// integer only) and/or it is not i64, either of which refuses the build.
+/// A REQUIRED rule whose contract is genuinely unsynthesizable — a jagged,
+/// non-affine integer table no closed-form lane (i64 OR f64 affine) can recover.
+/// Used only by `--demo-fail`: it is added to BOTH the English and the
+/// required-rule set, so the build must REFUSE. (Either the synthesizer skips it,
+/// or — as observed — a teacher fits some examples but CEGIS re-verification
+/// catches the disagreement; both paths refuse and write NO html. This is the
+/// honest hard-fail proof now that real-valued affine rules SUCCEED via the f64
+/// lane and are no longer the canonical "unsupported" case.)
 const FAIL_RULE: RuleSpec = RuleSpec {
-    name: "half_speed",
-    english: "Return half of the input as a real number (f64) — outside the i64 lane.",
-    examples: &[(2, 1), (4, 2), (6, 3)], // examples only used if it somehow synthesized
+    name: "needs_lookup",
+    english: "A non-affine table the closed-form solvers cannot recover — genuinely unsynthesizable.",
+    // A jagged, non-monotone, non-affine map: no i64 or f64 affine model fits it,
+    // so BOTH lanes refuse. (The old f64 'half of input' demo is now a real
+    // SUCCESS via the float lane, so the hard-fail rule must be one that no lane
+    // can solve — proving the gate still refuses genuinely unsynthesizable rules.)
+    examples: &[(0, 7), (1, 2), (2, 9), (3, 1), (4, 5), (5, 0)],
+    examples_f64: &[],
 };
 
 /// Integer domain each rule is swept over during CEGIS re-verification. The game
@@ -151,15 +186,21 @@ fn main() {
     // REQUIRED f64 rule so the gate must catch it.
     let mut required: Vec<&RuleSpec> = RULES.iter().collect();
     if demo_fail {
-        // HARD-FAIL PROOF: append a REQUIRED rule whose contract is a non-integer
-        // (f64) ratio the i64 transpiler lane must refuse. It is added to both the
-        // English AND the required set, so the build must REFUSE and write NO html.
+        // HARD-FAIL PROOF: append a REQUIRED rule whose contract is a jagged,
+        // non-affine table that NO closed-form lane (i64 OR f64 affine) can
+        // recover. It is added to both the English AND the required set, so the
+        // build must REFUSE and write NO html. (Note: f64 is no longer the
+        // failure mode — real-valued affine rules now SUCCEED via the float
+        // lane — so the unsynthesizable demo is a genuinely unfittable map.)
         english.push_str(
-            " A function half_speed that returns half of its input as a real number, \
-             half_speed(1.0)=0.5 and half_speed(3.0)=1.5 and half_speed(5.0)=2.5.",
+            " A function needs_lookup that maps inputs to a fixed jagged table, \
+             needs_lookup(0)=7 and needs_lookup(1)=2 and needs_lookup(2)=9 and \
+             needs_lookup(3)=1 and needs_lookup(4)=5 and needs_lookup(5)=0.",
         );
         required.push(&FAIL_RULE);
-        eprintln!("[demo-fail] injected a REQUIRED f64 rule 'half_speed' — expecting REFUSAL.\n");
+        eprintln!(
+            "[demo-fail] injected a REQUIRED unsynthesizable rule 'needs_lookup' — expecting REFUSAL.\n"
+        );
     }
 
     let game = build(&english, &required).unwrap_or_else(|e| {
@@ -239,24 +280,40 @@ fn build(english: &str, required: &[&RuleSpec]) -> Result<Game, String> {
                 res.error.clone().unwrap_or_else(|| "no solution".into())
             ));
         }
-        // i64-ONLY gate: the transpiler's proven lane. Reject f64/string up front
-        // (it emits broken JS for floats). Mirrors build_game.py's REFUSED gate.
-        if !is_i64_only(&res.code) {
+        // TWO-LANE gate, selected EMERGENTLY by the synthesized Mog's signature
+        // (not a phrase table): the integer lane (`-> i64`) and the scalar-float
+        // lane (`-> f64`, recovered by search_float_affine). A rule that is
+        // neither scalar i64 nor scalar f64 (string/array/struct) is refused —
+        // those still emit JS the verifier can't run. Whichever lane the
+        // signature lands in, the i64 path stays byte-identical to before.
+        let lane_i64 = is_i64_only(&res.code);
+        let lane_f64 = is_f64_scalar(&res.code);
+        if !lane_i64 && !lane_f64 {
             return Err(format!(
-                "rule '{}' is not i64-only — the transpiler emits broken JS for f64/string; refusing.\n  mog: {}",
+                "rule '{}' is not a scalar i64 or f64 rule — the transpiler emits JS the \
+                 verifier can't run for string/array/struct; refusing.\n  mog: {}",
                 spec.name,
                 res.code.lines().next().unwrap_or("").trim()
             ));
         }
 
         // normalize single-line ifs (replicate normalizeMog) → transpile → ts→js.
+        // ts_to_js erases `: i64`/`: number` AND `: f64`/`: f32`, so a float fn
+        // body (already valid JS) ships runnable.
         let mog = normalize_mog(&res.code);
         let ts = to_typescript(&mog);
         let js = ts_to_js(&ts);
 
         // CEGIS re-verify: Mog reproduces every example AND the shipped JS agrees
         // with the Mog across the whole sweep. Reject on any residual mismatch.
-        let (n_ex, n_sweep) = cegis_verify(spec, &res.code, &js)?;
+        // The i64 lane uses the in-process i64 evaluator; the f64 lane executes
+        // the Mog over f64 AND runs the SHIPPED JS through node (the real JS
+        // runtime — honest, and avoids a hand-rolled float evaluator).
+        let (n_ex, n_sweep) = if lane_i64 {
+            cegis_verify(spec, &res.code, &js)?
+        } else {
+            cegis_verify_f64(spec, &res.code, &js)?
+        };
 
         verified.push(VerifiedRule {
             name: spec.name.to_string(),
@@ -323,6 +380,27 @@ fn is_i64_only(mog: &str) -> bool {
     lower.contains("-> i64")
 }
 
+/// True iff the Mog function's header is the scalar FLOAT surface: a `-> f64`
+/// return with only `f64` scalar params (no arrays/strings/structs). This is the
+/// second proven lane — `search_float_affine` emits exactly `c0 + Σ c_j·x_j` over
+/// f64, and the transpiler emits a syntactically valid JS body (only the type
+/// annotation is bogus, and `ts_to_js` erases it). Real-valued physics rules
+/// (velocity decay, sub-integer speed) live here.
+fn is_f64_scalar(mog: &str) -> bool {
+    let header = mog.lines().next().unwrap_or("");
+    let lower = header.to_lowercase();
+    // Float return is mandatory (this is the f64 lane, routed emergently by the
+    // op_role/float family — the signature carries `-> f64` only when the NL
+    // examples were real-valued and search_float recovered an affine model).
+    if !lower.contains("-> f64") {
+        return false;
+    }
+    // No arrays/strings/structs — scalar only. (We DON'T ban `f64`; that's the
+    // whole point. We ban the aggregate/foreign types the JS verifier can't run.)
+    let banned = ["string", "str", "&str", "char", "bool", "[", "vec<"];
+    !banned.iter().any(|b| lower.contains(b))
+}
+
 /// Replicate `normalizeMog` (synth_pong_driver.mjs:29-47): the line-based
 /// transpiler parses block-style `if cond {\n body \n}` but mis-parses the
 /// solver's single-line `if cond { body }` (and `... } else { ... }`) form.
@@ -381,10 +459,23 @@ fn parse_single_line_if(line: &str) -> Option<(String, String, String, Option<St
 
 /// Strip TypeScript type annotations to plain JS (mirrors `ts_to_js` in
 /// build_game.py and `tsToJs` in synth_pong_driver.mjs). Bodies are scalar
-/// arithmetic / branches / loops over i64, so only the type syntax is removed.
+/// arithmetic / branches / loops over i64 or f64, so only the type syntax is
+/// removed.
+///
+/// JS is untyped, so erasing the annotation is exactly the right move: a float
+/// body `return 0.5 * x + 3.0;` is already valid JS once the bogus `: f64`
+/// (which the i64-only transpiler emits unchanged for float signatures) is gone.
+/// We strip the float annotations the same way we strip `: number`/`: i64`,
+/// which turns a transpiled f64 fn into runnable JS without ever touching
+/// mog_transpile. The i64 lane never emits `f64`/`f32`, so this is a no-op for it.
 fn ts_to_js(ts: &str) -> String {
     let mut js = ts.replace(": number", "");
     js = js.replace(": i64", "");
+    // Float signatures: the i64-only transpiler passes `f64`/`f32` through as a
+    // literal type name (it only maps i64/[i64]/string). Erase it — the BODY is
+    // already valid JS; only the annotation was bogus.
+    js = js.replace(": f64", "");
+    js = js.replace(": f32", "");
     js.trim().to_string()
 }
 
@@ -438,6 +529,148 @@ fn run_mog_i64(mog: &str, name: &str, x: i64) -> Result<i64, String> {
         RValue::Int(n) => Ok(n),
         other => Err(format!("non-integer return: {other:?}")),
     }
+}
+
+// ---------------------------------------------------------------------------
+// FLOAT lane (LOOP-1): verify a scalar `-> f64` rule end-to-end. The i64 lane
+// above is untouched; this is an additive, parallel path used ONLY when the
+// synthesized Mog's signature is scalar f64 (`is_f64_scalar`).
+//
+// We verify HONESTLY in two ways, mirroring the i64 lane:
+//   (a) the verified Mog (real nsynth runtime, over f64) reproduces every inline
+//       float example within a small tolerance (continuous data is approximate
+//       by nature — the same recover-or-refuse contract as search_float), AND
+//   (b) the SHIPPED JS, run through `node` (the real JS runtime), agrees with the
+//       Mog across a float sweep. Using node — not a hand-rolled float evaluator
+//       — keeps the oracle honest: we run the literal artifact in a real engine.
+// ---------------------------------------------------------------------------
+
+/// Float comparison tolerance for the f64 lane. Generous enough for the
+/// finite-precision coefficients search_float prints, tight enough to catch a
+/// wrong formula or a mangled transpile.
+const F64_EPS: f64 = 1e-6;
+
+/// Float sweep points the f64 rule is checked over (Mog ↔ node). Includes
+/// sub-integer and larger values so an overfit-to-the-examples formula or a
+/// broken transpile shows up. Game inputs are non-negative (score), so a
+/// non-negative sweep is the honest domain.
+fn f64_sweep() -> Vec<f64> {
+    let mut v = Vec::new();
+    let mut x = 0.0f64;
+    while x <= 128.0 {
+        v.push(x);
+        x += 0.5; // sub-integer steps exercise the float regime
+    }
+    v
+}
+
+/// Execute a synthesized Mog single-arg f64 function via the real nsynth runtime.
+/// Accepts an `Int` return too (coerced) so a degenerate integer-valued float fn
+/// still verifies.
+fn run_mog_f64(mog: &str, name: &str, x: f64) -> Result<f64, String> {
+    let v = execute_function(mog, name, &[BValue::Float(x.to_bits())], name)?;
+    match v {
+        RValue::Float(n) => Ok(n),
+        RValue::Int(n) => Ok(n as f64),
+        other => Err(format!("non-float return: {other:?}")),
+    }
+}
+
+/// CEGIS re-verification of one FLOAT rule. Returns (n_examples, n_sweep_points).
+fn cegis_verify_f64(spec: &RuleSpec, mog: &str, js: &str) -> Result<(usize, usize), String> {
+    // (a) Mog reproduces every inline float example within tolerance.
+    for &(x, want) in spec.examples_f64 {
+        let got = run_mog_f64(mog, spec.name, x).map_err(|e| {
+            format!("rule '{}': Mog errored on float example input {x}: {e}", spec.name)
+        })?;
+        if (got - want).abs() > F64_EPS {
+            return Err(format!(
+                "rule '{}': Mog disagrees with inline example {}({x}) = {got}, expected {want}",
+                spec.name, spec.name
+            ));
+        }
+    }
+
+    // (b) shipped JS == Mog across the float sweep, evaluated by node (real JS).
+    let sweep = f64_sweep();
+    let mog_outs: Vec<f64> = sweep
+        .iter()
+        .map(|&x| {
+            run_mog_f64(mog, spec.name, x)
+                .map_err(|e| format!("rule '{}': Mog errored on sweep input {x}: {e}", spec.name))
+        })
+        .collect::<Result<_, _>>()?;
+    let js_outs = eval_js_f64_via_node(js, spec.name, &sweep)
+        .map_err(|e| format!("rule '{}': node evaluation of shipped JS failed: {e}", spec.name))?;
+    if js_outs.len() != sweep.len() {
+        return Err(format!(
+            "rule '{}': node returned {} values for {} sweep points",
+            spec.name,
+            js_outs.len(),
+            sweep.len()
+        ));
+    }
+    for ((&x, &m), &j) in sweep.iter().zip(mog_outs.iter()).zip(js_outs.iter()) {
+        if (m - j).abs() > F64_EPS {
+            return Err(format!(
+                "rule '{}': transpiled JS disagrees with Mog at input {x}: JS={j} Mog={m}\n  js: {js}",
+                spec.name
+            ));
+        }
+    }
+    Ok((spec.examples_f64.len(), sweep.len()))
+}
+
+/// Run the SHIPPED JS function in `node` (the real JS runtime) over a batch of
+/// float inputs and return its outputs. Honest oracle: we evaluate the literal
+/// bytes we ship, in a real engine — no hand-rolled float evaluator to drift.
+/// A missing `node` is a hard error (fail-closed: an f64 rule is only allowed to
+/// ship if it was actually run and verified).
+fn eval_js_f64_via_node(js: &str, name: &str, inputs: &[f64]) -> Result<Vec<f64>, String> {
+    use std::io::Write;
+    // Build a tiny driver: the shipped fn + a loop printing one output per line.
+    let inputs_lit = inputs
+        .iter()
+        .map(|x| format!("{x:?}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let driver = format!(
+        "{js}\nconst __xs=[{inputs_lit}];\nfor(const __x of __xs){{const __y={name}(__x);if(typeof __y!=='number'||!isFinite(__y)){{console.error('non-finite output');process.exit(3);}}console.log(__y);}}\n"
+    );
+    // Write to a temp file and run `node FILE` (avoids shell-escaping the body).
+    let mut path = std::env::temp_dir();
+    path.push(format!("build_game_nl_f64_{}_{}.mjs", name, std::process::id()));
+    {
+        let mut f = std::fs::File::create(&path)
+            .map_err(|e| format!("create temp driver {path:?}: {e}"))?;
+        f.write_all(driver.as_bytes())
+            .map_err(|e| format!("write temp driver: {e}"))?;
+    }
+    let out = std::process::Command::new("node")
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("could not run `node` (required to verify f64 rules): {e}"))?;
+    let _ = std::fs::remove_file(&path);
+    if !out.status.success() {
+        return Err(format!(
+            "node exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut vals = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        vals.push(
+            line.parse::<f64>()
+                .map_err(|_| format!("node printed non-number line {line:?}"))?,
+        );
+    }
+    Ok(vals)
 }
 
 // ---------------------------------------------------------------------------
@@ -897,7 +1130,10 @@ addEventListener('keydown',e=>{
 function step(){
   frame++;
   if(!over && frame>=SPAWN_FRAMES){ items.push({lane:(Math.random()*LANES)|0, y:-20}); frame=0; }
-  const vy = fall_speed(score);   // synthesized difficulty ramp
+  // synthesized REAL-VALUED difficulty ramp: fall_speed_f(score) = 3 + 0.5*score
+  // (an f64 rule discovered from English, transpiled to JS, verified Mog↔node).
+  // Sub-integer px/frame — the integer transpile lane could never express this.
+  const vy = fall_speed_f(score);
   for(const it of items) it.y += vy;
   for(const it of items){
     if(it.y>=H-46 && it.y<H-10 && !it.done){
