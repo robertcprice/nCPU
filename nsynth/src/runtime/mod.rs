@@ -830,7 +830,7 @@ pub fn execute_function(
 /// `catch_unwind` on the verify path does not spam stderr with a backtrace.
 /// This keeps the verify output deterministic and quiet; the `Result` returned
 /// by `catch_unwind` is deterministic regardless of the hook.
-fn install_silent_panic_hook_once() {
+pub(crate) fn install_silent_panic_hook_once() {
     use std::sync::Once;
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {
