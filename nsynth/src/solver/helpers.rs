@@ -98,6 +98,21 @@ where
     })
 }
 
+/// Invoke an array-consuming validator primitive TOTALLY: any panic it raises on
+/// a probe example (e.g. `arr[0]` / `min().unwrap()` on an EMPTY array — which the
+/// reference-driven example sampler now generates, since array lengths are sampled
+/// from `0..=MAX`) is caught and converted to a clean validation MISS rather than
+/// aborting the whole synthesizer mid-validation. This is the single chokepoint
+/// that makes the entire `validate_*_array` primitive family total, mirroring the
+/// `run_isolated` catch_unwind on the runtime verify path. Soundness is unchanged:
+/// the candidate is still proven against the real reference holdouts by the strict
+/// verifier, so a primitive that panics on an input simply fails to match here and
+/// the family is rejected — never fabricated.
+fn array_probe<R>(f: impl FnOnce() -> R) -> Option<R> {
+    crate::runtime::install_silent_panic_hook_once();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+}
+
 pub(super) fn validate_unary_array<F>(problem: &Problem, func: F) -> bool
 where
     F: Fn(&[i64]) -> i64,
@@ -105,7 +120,7 @@ where
     problem.examples.iter().all(|ex| {
         ex.inputs.len() == 1
             && array_value(&ex.inputs[0])
-                .map(|arr| func(&arr) == ex.expected_int())
+                .and_then(|arr| array_probe(|| func(&arr) == ex.expected_int()))
                 .unwrap_or(false)
     })
 }
@@ -118,7 +133,7 @@ where
         ex.inputs.len() == 2
             && array_value(&ex.inputs[0])
                 .zip(int_value(&ex.inputs[1]))
-                .map(|(arr, target)| func(&arr, target) == ex.expected_int())
+                .and_then(|(arr, target)| array_probe(|| func(&arr, target) == ex.expected_int()))
                 .unwrap_or(false)
     })
 }
@@ -155,7 +170,7 @@ where
         ex.inputs.len() == 2
             && array_value(&ex.inputs[0])
                 .zip(array_value(&ex.inputs[1]))
-                .map(|(a, b)| func(&a, &b) == ex.expected_int())
+                .and_then(|(a, b)| array_probe(|| func(&a, &b) == ex.expected_int()))
                 .unwrap_or(false)
     })
 }

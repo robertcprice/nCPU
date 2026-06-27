@@ -156,8 +156,18 @@ pub(super) fn harmonic_sum(n: i64) -> i64 {
 }
 
 pub(super) fn second_max(arr: &[i64]) -> i64 {
-    let mut first = arr[0];
-    let mut second = arr[0];
+    // TOTAL on every input: the solver probes this validator against arbitrary
+    // example arrays (including the empty and single-element arrays that
+    // `sample_holdout_inputs` now generates for `[i64]->i64` reference problems),
+    // so it must NEVER index out of bounds. An array with no first element has no
+    // "second max"; return a sentinel that will simply fail to match the
+    // reference's real output, rejecting this candidate family cleanly instead of
+    // aborting the whole synthesizer mid-validation.
+    let Some(&head) = arr.first() else {
+        return 0;
+    };
+    let mut first = head;
+    let mut second = head;
     for &item in arr {
         if item > first {
             second = first;
@@ -170,8 +180,12 @@ pub(super) fn second_max(arr: &[i64]) -> i64 {
 }
 
 pub(super) fn array_range(arr: &[i64]) -> i64 {
-    let lo = *arr.iter().min().unwrap();
-    let hi = *arr.iter().max().unwrap();
+    // TOTAL on every input (see `second_max`): `min`/`max` of an EMPTY array are
+    // `None`, so guard rather than `.unwrap()`. An empty array has no range;
+    // return a sentinel that fails the validator cleanly instead of panicking.
+    let (Some(lo), Some(hi)) = (arr.iter().min(), arr.iter().max()) else {
+        return 0;
+    };
     hi - lo
 }
 
