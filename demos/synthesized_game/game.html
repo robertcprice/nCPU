@@ -36,7 +36,8 @@
 <tr><td class="r">score_after_catch</td><td>Increment the score by one after a successful catch.</td><td class="m">search_polynomial_multi</td><td>129</td><td class="c high">✓ domain-verified</td></tr>
 <tr><td class="r">lives_after_miss</td><td>Decrease the remaining lives by one after a missed item.</td><td class="m">search_polynomial_multi</td><td>129</td><td class="c high">✓ domain-verified</td></tr>
 <tr><td class="r">is_game_over</td><td>Return 1 when no lives remain (lives == 0), else 0.</td><td class="m">search_scalar_expr</td><td>129</td><td class="c high">✓ domain-verified</td></tr>
-<tr><td class="r">fall_speed</td><td>Fall speed in px/frame: base of three plus one per point of score.</td><td class="m">search_polynomial_multi</td><td>129</td><td class="c high">✓ domain-verified</td></tr></tbody></table>
+<tr><td class="r">fall_speed</td><td>Fall speed in px/frame: base of three plus one per point of score.</td><td class="m">search_polynomial_multi</td><td>129</td><td class="c high">✓ domain-verified</td></tr>
+<tr><td class="r">fall_speed_f</td><td>Fall speed (real): base of three plus half a pixel per point of score.</td><td class="m">search_float_affine</td><td>257</td><td class="c high">✓ domain-verified</td></tr></tbody></table>
 </div>
 <script>
 /* ===== synthesized + verified game logic (nobody wrote these bodies) ===== */
@@ -65,6 +66,10 @@ function is_game_over(x) {
 function fall_speed(x) {
     return (x + 3);
 }
+
+function fall_speed_f(x) {
+    return 0.5 * x + 3.0;
+}
 /* ===== thin presentation shell wiring the synthesized rules ===== */
 const LANES=4, W=480, H=420, lw=W/LANES;
 const cv=document.getElementById('c'), ctx=cv.getContext('2d');
@@ -79,17 +84,13 @@ addEventListener('keydown',e=>{
   if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') basket=clampLane(basket+1);
   if(e.key==='r'||e.key==='R') reset();
 });
-/* touch/pointer controls (mobile: keyboard-less devices) — tap left/right half to move, tap to restart when over */
-cv.addEventListener('pointerdown',e=>{
-  e.preventDefault();
-  if(over){ reset(); return; }
-  const r=cv.getBoundingClientRect();
-  if((e.clientX-r.left) < cv.width/2) basket=clampLane(basket-1); else basket=clampLane(basket+1);
-}, {passive:false});
 function step(){
   frame++;
   if(!over && frame>=SPAWN_FRAMES){ items.push({lane:(Math.random()*LANES)|0, y:-20}); frame=0; }
-  const vy = fall_speed(score);   // synthesized difficulty ramp
+  // synthesized REAL-VALUED difficulty ramp: fall_speed_f(score) = 3 + 0.5*score
+  // (an f64 rule discovered from English, transpiled to JS, verified Mog↔node).
+  // Sub-integer px/frame — the integer transpile lane could never express this.
+  const vy = fall_speed_f(score);
   for(const it of items) it.y += vy;
   for(const it of items){
     if(it.y>=H-46 && it.y<H-10 && !it.done){
