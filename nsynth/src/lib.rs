@@ -7,6 +7,7 @@ pub mod comprehension;
 pub mod db;
 pub mod differentiable;
 pub mod enumerative;
+pub mod emergent_rule_learning;
 pub mod eval;
 pub mod execution;
 pub mod ffi;
