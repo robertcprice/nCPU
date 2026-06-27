@@ -14,7 +14,7 @@
 //!
 //! This is a local backend MVP, not a production web framework claim.
 
-use crate::backend_ir::{BackendApp, StoreKind};
+use crate::backend_ir::{BackendApp, RuleModel, StoreKind};
 use crate::benchmark::{Example, Problem, Value};
 use crate::mog_transpile::to_rust;
 use crate::solver::solve_problem;
@@ -32,6 +32,12 @@ pub struct BackendRuleSpec {
 #[derive(Clone, Debug)]
 pub struct GeneratedBackend {
     pub source: String,
+    pub rules: Vec<SynthesizedRuleArtifact>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SynthesizedRuleArtifact {
+    pub name: String,
     pub rule_code: String,
     pub rule_method: String,
 }
@@ -53,16 +59,30 @@ pub fn default_out_path() -> PathBuf {
         .join("demos/synthesized_backend/generated_rule_backend.rs")
 }
 
-pub fn write_default_backend(path: impl AsRef<Path>) -> Result<GeneratedBackend, String> {
-    write_backend(path, &default_rule_spec(), StoreKind::File)
+pub fn default_rule_specs() -> Vec<BackendRuleSpec> {
+    vec![default_rule_spec(), damage_penalty_spec()]
 }
 
-pub fn write_backend(
+pub fn damage_penalty_spec() -> BackendRuleSpec {
+    BackendRuleSpec {
+        name: "damage_penalty",
+        signature: "fn damage_penalty(a: i64) -> i64",
+        english: "convert hit points lost into a signed penalty score: twice the loss minus three",
+        examples: vec![(0, -3), (1, -1), (2, 1), (4, 5), (5, 7)],
+        holdouts: vec![(3, 3), (10, 17), (-2, -7)],
+    }
+}
+
+pub fn write_default_backend(path: impl AsRef<Path>) -> Result<GeneratedBackend, String> {
+    write_backend_app(path, &default_rule_specs(), StoreKind::File)
+}
+
+pub fn write_backend_app(
     path: impl AsRef<Path>,
-    spec: &BackendRuleSpec,
+    specs: &[BackendRuleSpec],
     store: StoreKind,
 ) -> Result<GeneratedBackend, String> {
-    let generated = synthesize_backend(spec, store)?;
+    let generated = synthesize_backend_app(specs, store)?;
     if let Some(parent) = path.as_ref().parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create output dir {}: {e}", parent.display()))?;
@@ -72,31 +92,65 @@ pub fn write_backend(
     Ok(generated)
 }
 
-pub fn synthesize_backend(
+pub fn write_backend(
+    path: impl AsRef<Path>,
     spec: &BackendRuleSpec,
     store: StoreKind,
 ) -> Result<GeneratedBackend, String> {
-    let problem = problem_from_spec(spec);
-    let result = solve_problem(&problem);
-    if !result.success {
-        return Err(format!(
-            "backend rule synthesis failed via {}: {}",
-            result.method,
-            result
-                .error
-                .unwrap_or_else(|| "solver returned success=false".to_string())
-        ));
+    write_backend_app(path, std::slice::from_ref(spec), store)
+}
+
+pub fn synthesize_backend(spec: &BackendRuleSpec, store: StoreKind) -> Result<GeneratedBackend, String> {
+    synthesize_backend_app(std::slice::from_ref(spec), store)
+}
+
+pub fn synthesize_backend_app(
+    specs: &[BackendRuleSpec],
+    store: StoreKind,
+) -> Result<GeneratedBackend, String> {
+    if specs.is_empty() {
+        return Err("backend synthesis requires at least one rule spec".to_string());
     }
 
-    let rule_code = to_rust(&result.code);
-    validate_emitted_rule(spec, &rule_code)?;
-    let app = BackendApp::from_synthesis(spec, &rule_code, &result.method, store);
+    let mut rules = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let problem = problem_from_spec(spec);
+        let result = solve_problem(&problem);
+        if !result.success {
+            return Err(format!(
+                "backend rule synthesis failed for {} via {}: {}",
+                spec.name,
+                result.method,
+                result
+                    .error
+                    .unwrap_or_else(|| "solver returned success=false".to_string())
+            ));
+        }
+        let rule_code = to_rust(&result.code);
+        validate_emitted_rule(spec, &rule_code)?;
+        rules.push(SynthesizedRuleArtifact {
+            name: spec.name.to_string(),
+            rule_code,
+            rule_method: result.method,
+        });
+    }
+
+    let description = specs
+        .iter()
+        .map(|s| s.english)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let models = rules
+        .iter()
+        .map(|rule| RuleModel {
+            name: rule.name.clone(),
+            synthesis_method: rule.rule_method.clone(),
+            rule_code: rule.rule_code.clone(),
+        })
+        .collect();
+    let app = BackendApp::from_rules(&description, models, store);
     let source = app.render_rust();
-    Ok(GeneratedBackend {
-        source,
-        rule_code,
-        rule_method: result.method,
-    })
+    Ok(GeneratedBackend { source, rules })
 }
 
 fn problem_from_spec(spec: &BackendRuleSpec) -> Problem {
@@ -229,7 +283,12 @@ mod tests {
 
         let generated =
             synthesize_backend(&default_rule_spec(), StoreKind::Memory).expect("synthesize backend");
-        assert!(generated.rule_code.contains("fn score_bonus("));
+        let score_bonus = generated
+            .rules
+            .iter()
+            .find(|r| r.name == "score_bonus")
+            .expect("score_bonus rule");
+        assert!(score_bonus.rule_code.contains("fn score_bonus("));
         assert!(!generated.source.contains(concat!("to", "do!")));
         assert!(!generated.source.contains(concat!("un", "implemented!")));
         assert!(generated.source.contains("trait EventStore"));
@@ -246,9 +305,9 @@ mod tests {
         let rules = request(&addr, "GET", "/rules", "");
         assert!(rules.contains("score_bonus"), "rules response: {rules}");
         assert!(
-            rules.contains(&generated.rule_method),
+            rules.contains(&score_bonus.rule_method),
             "rules response should expose synthesis method {}: {rules}",
-            generated.rule_method
+            score_bonus.rule_method
         );
 
         let eval = request(
@@ -268,6 +327,55 @@ mod tests {
             "events response: {events}"
         );
         assert!(events.contains("\"count\":1"), "events response: {events}");
+
+        stop(&mut child);
+        let _ = std::fs::remove_file(src);
+        let _ = std::fs::remove_file(bin);
+    }
+
+    #[test]
+    fn generated_multi_rule_backend_serves_each_route() {
+        if !rustc_available() {
+            eprintln!("skipping multi-rule backend test: rustc unavailable");
+            return;
+        }
+
+        let generated = synthesize_backend_app(&default_rule_specs(), StoreKind::Memory)
+            .expect("synthesize multi-rule backend");
+        assert_eq!(generated.rules.len(), 2);
+        assert!(generated.source.contains("/rules/score_bonus/evaluate"));
+        assert!(generated.source.contains("/rules/damage_penalty/evaluate"));
+
+        let (src, bin) = compile_generated(&generated.source, StoreKind::Memory);
+        let (mut child, addr) = spawn_backend(&bin, None);
+
+        let rules = request(&addr, "GET", "/rules", "");
+        assert!(rules.contains("score_bonus"), "rules response: {rules}");
+        assert!(rules.contains("damage_penalty"), "rules response: {rules}");
+
+        let bonus = request(
+            &addr,
+            "POST",
+            "/rules/score_bonus/evaluate",
+            "{\"input\":3}",
+        );
+        assert!(bonus.contains("\"output\":35"), "bonus response: {bonus}");
+
+        let penalty = request(
+            &addr,
+            "POST",
+            "/rules/damage_penalty/evaluate",
+            "{\"input\":5}",
+        );
+        assert!(penalty.contains("\"output\":7"), "penalty response: {penalty}");
+
+        let events = request(&addr, "GET", "/events", "");
+        assert!(events.contains("\"count\":2"), "events response: {events}");
+        assert!(events.contains("\"rule\":\"score_bonus\""), "events response: {events}");
+        assert!(
+            events.contains("\"rule\":\"damage_penalty\""),
+            "events response: {events}"
+        );
 
         stop(&mut child);
         let _ = std::fs::remove_file(src);
