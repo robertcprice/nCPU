@@ -1,8 +1,7 @@
 //! Build a generated local backend MVP from synthesized rule contracts.
 //!
-//! LOOP-4 default path: English description with inline examples flows through
-//! the real NL door (`synthesize_project`) into a dependency-free Rust HTTP
-//! backend artifact. `--hand-specs` keeps the pre-authored spec path.
+//! LOOP-4 default: English + inline examples via `synthesize_project`.
+//! LOOP-6 `--p2c`: compositional prose without inline examples.
 
 use mog_synth::backend_ir::StoreKind;
 use mog_synth::backend_mvp::{
@@ -11,6 +10,9 @@ use mog_synth::backend_mvp::{
 };
 use mog_synth::backend_nl::{
     default_required_rule_names, write_backend_from_english, DEFAULT_BACKEND_ENGLISH,
+};
+use mog_synth::backend_p2c::{
+    default_p2c_http_checks, write_backend_from_p2c_prose, DEFAULT_BACKEND_P2C_ENGLISH,
 };
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -28,10 +30,12 @@ fn main() {
             "build_backend_nl — synthesize a rule-backed local Rust backend\n\
              --out PATH        write generated backend source here\n\
              --store MODE      memory | file | sqlite (default: file)\n\
+             --p2c             P2C prose intake (no inline examples required)\n\
              --english PATH    read backend English contract from file\n\
-             --text ENGLISH    inline English contract (default: built-in demo)\n\
+             --text ENGLISH    inline English contract\n\
              --hand-specs      use pre-authored rule specs (no NL door)\n\
              --single          synthesize only the default score_bonus rule\n\
+             default: inline-example NL demo; use --p2c for prose-only demo\n\
              default out: {}",
             default_out_path().display()
         );
@@ -47,8 +51,11 @@ fn main() {
         .unwrap_or(StoreKind::File);
     let single = args.iter().any(|a| a == "--single");
     let hand_specs = args.iter().any(|a| a == "--hand-specs");
+    let p2c = args.iter().any(|a| a == "--p2c");
     let english = if let Some(path) = arg_value(&args, "--english") {
         read_text_file(&path).unwrap_or_else(|e| die(&e))
+    } else if p2c {
+        arg_value(&args, "--text").unwrap_or_else(|| DEFAULT_BACKEND_P2C_ENGLISH.to_string())
     } else {
         arg_value(&args, "--text").unwrap_or_else(|| DEFAULT_BACKEND_ENGLISH.to_string())
     };
@@ -61,6 +68,14 @@ fn main() {
         } else {
             write_backend_app(&out, &default_rule_specs(), store)
         }
+    } else if p2c {
+        write_backend_from_p2c_prose(
+            &out,
+            &english,
+            default_required_rule_names(),
+            &default_p2c_http_checks(),
+            store,
+        )
     } else {
         write_backend_from_english(&out, &english, default_required_rule_names(), store)
     };

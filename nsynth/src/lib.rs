@@ -5,6 +5,7 @@ pub mod backend_http;
 pub mod backend_ir;
 pub mod backend_mvp;
 pub mod backend_nl;
+pub mod backend_p2c;
 pub mod backend_repair;
 pub mod capability_miner;
 pub mod bidirectional;

@@ -168,7 +168,7 @@ fn rustc_available() -> bool {
         .unwrap_or(false)
 }
 
-fn split_function_clauses(text: &str) -> Vec<String> {
+pub fn split_function_clauses(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
     let marker = "a function ";
     let mut starts = Vec::new();

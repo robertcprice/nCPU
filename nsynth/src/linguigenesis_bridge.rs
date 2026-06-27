@@ -1406,6 +1406,35 @@ impl LinguigenesisBridge {
         Ok(result)
     }
 
+    /// P2C scalar synthesis with a caller-chosen function name (LOOP-6 backend door).
+    ///
+    /// Classifies `description` as a linear `"X then Y"` compositional chain,
+    /// manufactures examples via `problem_from_reference`, synthesizes, and
+    /// strict-verifies — zero inline examples required.
+    pub fn synthesize_p2c_scalar_named(
+        &self,
+        name: &str,
+        description: &str,
+    ) -> Result<crate::solver::SolveResult, String> {
+        let registry = self.registry_clone().map_err(|e| e.to_string())?;
+        match crate::reference_nl::classify_compositional(description, &registry) {
+            crate::reference_nl::CompositionalIntake::Compositional { chain, .. } => {
+                let signature = if chain.first().map(|s| s.arity).unwrap_or(1) == 2 {
+                    format!("fn {name}(a: i64, b: i64) -> i64")
+                } else {
+                    format!("fn {name}(x: i64) -> i64")
+                };
+                self.solve_compositional_component(name, &signature, &chain)
+            }
+            crate::reference_nl::CompositionalIntake::Unresolvable(reason) => Err(format!(
+                "P2C description for '{name}' has an unresolvable atom: {reason}"
+            )),
+            crate::reference_nl::CompositionalIntake::NotCompositional => Err(format!(
+                "P2C description for '{name}' is not a compositional scalar chain: {description:?}"
+            )),
+        }
+    }
+
     /// P2C-AUTO-CONTRACT a single COMPOSITIONAL component (a described scalar
     /// `"X then Y"` chain) ALL THE WAY into a verified standalone function — the
     /// same path `reference_nl`'s `drive_end_to_end` uses, factored so
