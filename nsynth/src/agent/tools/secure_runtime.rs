@@ -1,7 +1,7 @@
 //! Deny-by-default tool runtime with guardrail preflight (Package F).
 
-use crate::agent::repo::{GuardrailDecision, GuardrailPolicy, RepairVerification};
 use super::registry::{Tool, ToolCall, ToolError, ToolOutput, ToolRegistry};
+use crate::agent::repo::{GuardrailDecision, GuardrailPolicy, RepairVerification};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,7 +34,8 @@ impl SecureToolRuntime {
 
     /// Allow a single tool action pair.
     pub fn allow(&mut self, tool: &str, action: &str) -> &mut Self {
-        self.allowed_actions.insert((tool.to_string(), action.to_string()));
+        self.allowed_actions
+            .insert((tool.to_string(), action.to_string()));
         self
     }
 
@@ -49,13 +50,7 @@ impl SecureToolRuntime {
             allowed_actions: HashSet::new(),
         };
         for action in [
-            "read",
-            "write",
-            "append",
-            "list",
-            "exists",
-            "mkdir",
-            "remove",
+            "read", "write", "append", "list", "exists", "mkdir", "remove",
         ] {
             runtime.allow("fs", action);
         }
@@ -110,7 +105,9 @@ impl SecureToolRuntime {
             registry,
             allowed_actions: HashSet::new(),
         };
-        for action in ["read", "write", "append", "list", "exists", "mkdir", "remove"] {
+        for action in [
+            "read", "write", "append", "list", "exists", "mkdir", "remove",
+        ] {
             runtime.allow("fs", action);
         }
         for action in ["status", "diff", "log", "current_branch", "branch"] {
@@ -128,7 +125,8 @@ impl SecureToolRuntime {
     }
 
     pub fn is_allowed(&self, tool: &str, action: &str) -> bool {
-        self.allowed_actions.contains(&(tool.to_string(), action.to_string()))
+        self.allowed_actions
+            .contains(&(tool.to_string(), action.to_string()))
     }
 
     /// Invoke a tool after deny-by-default and guardrail checks.
@@ -258,8 +256,8 @@ fn build_sandbox_registry(sandbox: &Path) -> ToolRegistry {
 
 fn build_general_agent_registry(sandbox: &Path) -> ToolRegistry {
     let shell_allow = [
-        "echo", "ls", "cat", "pwd", "grep", "wc", "head", "tail", "find", "date", "uname",
-        "true", "false", "cargo", "rustc", "git", "curl", "python3", "which", "env",
+        "echo", "ls", "cat", "pwd", "grep", "wc", "head", "tail", "find", "date", "uname", "true",
+        "false", "cargo", "rustc", "git", "curl", "python3", "which", "env",
     ];
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(super::fs::FsTool::new(sandbox)));
@@ -303,6 +301,10 @@ fn git_command_line(call: &ToolCall) -> Result<String, ToolError> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::process::Command;
+    use std::thread;
 
     fn temp_sandbox(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -319,6 +321,36 @@ mod tests {
         dir
     }
 
+    fn local_http_once(body: &'static str) -> (String, thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local http server");
+        let addr = listener.local_addr().expect("local addr");
+        let url = format!("http://{addr}/api/rules");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept one request");
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).expect("read request");
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            request
+        });
+        (url, handle)
+    }
+
+    fn curl_available() -> bool {
+        Command::new("curl")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
     #[test]
     fn deny_by_default_rejects_unlisted_tool() {
         let root = temp_sandbox("deny");
@@ -333,8 +365,7 @@ mod tests {
     #[test]
     fn repo_repair_runtime_allows_guarded_fs_write() {
         let root = temp_sandbox("fs_write");
-        let runtime =
-            SecureToolRuntime::for_repo_repair(&root, GuardrailPolicy::default());
+        let runtime = SecureToolRuntime::for_repo_repair(&root, GuardrailPolicy::default());
         runtime
             .invoke(
                 "fs",
@@ -353,8 +384,7 @@ mod tests {
     #[test]
     fn guardrail_denies_dotenv_read_via_fs() {
         let root = temp_sandbox("dotenv");
-        let runtime =
-            SecureToolRuntime::for_repo_repair(&root, GuardrailPolicy::default());
+        let runtime = SecureToolRuntime::for_repo_repair(&root, GuardrailPolicy::default());
         let err = runtime
             .invoke("fs", &ToolCall::new("read").arg("path", ".env"))
             .unwrap_err();
@@ -366,9 +396,7 @@ mod tests {
     fn verification_allowlist_rejects_shell_injection() {
         let root = temp_sandbox("verify");
         let runtime = SecureToolRuntime::deny_by_default(&root);
-        let err = runtime
-            .run_verification_command("rm -rf /")
-            .unwrap_err();
+        let err = runtime.run_verification_command("rm -rf /").unwrap_err();
         assert!(err.contains("allowlist"));
         let _ = fs::remove_dir_all(root);
     }
@@ -394,8 +422,7 @@ mod tests {
     #[test]
     fn general_agent_runtime_allows_all_tool_families() {
         let root = temp_sandbox("general");
-        let runtime =
-            SecureToolRuntime::for_general_agent(&root, GuardrailPolicy::default());
+        let runtime = SecureToolRuntime::for_general_agent(&root, GuardrailPolicy::default());
         let caps = runtime.allowed_capabilities();
         assert!(caps.iter().any(|c| c.starts_with("fs.")));
         assert!(caps.iter().any(|c| c == "shell.run"));
@@ -410,8 +437,7 @@ mod tests {
     #[test]
     fn http_tool_denies_disallowed_host() {
         let root = temp_sandbox("http_deny");
-        let runtime =
-            SecureToolRuntime::for_general_agent(&root, GuardrailPolicy::default());
+        let runtime = SecureToolRuntime::for_general_agent(&root, GuardrailPolicy::default());
         let err = runtime
             .invoke(
                 "http",
@@ -419,6 +445,71 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, ToolError::PermissionDenied(_)));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn general_agent_runtime_executes_local_http_then_records_database_row() {
+        let root = temp_sandbox("http_db_flow");
+        if !curl_available() {
+            eprintln!("skipping secure HTTP+DB flow test: curl unavailable");
+            let _ = fs::remove_dir_all(root);
+            return;
+        }
+        let runtime = SecureToolRuntime::for_general_agent(&root, GuardrailPolicy::default());
+        let (url, handle) = local_http_once("rule=fall_speed_f;status=learned");
+
+        let http = runtime
+            .invoke("http", &ToolCall::new("get").arg("url", &url))
+            .expect("localhost HTTP GET should be allowed and executed");
+        let request = handle.join().expect("local server thread");
+        assert!(
+            request.starts_with("GET /api/rules HTTP/"),
+            "unexpected HTTP request: {request}"
+        );
+        assert_eq!(http.content, "rule=fall_speed_f;status=learned");
+        assert_eq!(http.metadata.get("status").map(|s| s.as_str()), Some("200"));
+
+        runtime
+            .invoke(
+                "database",
+                &ToolCall::new("create_table")
+                    .arg("table", "rule_events")
+                    .arg("columns", "kind,value"),
+            )
+            .expect("create table");
+        runtime
+            .invoke(
+                "database",
+                &ToolCall::new("insert")
+                    .arg("table", "rule_events")
+                    .arg("values", "http_status,200"),
+            )
+            .expect("insert http status row");
+        runtime
+            .invoke(
+                "database",
+                &ToolCall::new("insert")
+                    .arg("table", "rule_events")
+                    .arg("values", "payload,rule=fall_speed_f;status=learned"),
+            )
+            .expect("insert payload row");
+
+        let selected = runtime
+            .invoke(
+                "database",
+                &ToolCall::new("select")
+                    .arg("table", "rule_events")
+                    .arg("where", "kind=payload"),
+            )
+            .expect("select payload row");
+        assert_eq!(
+            selected.metadata.get("matched").map(|s| s.as_str()),
+            Some("1")
+        );
+        assert!(selected
+            .content
+            .contains("rule=fall_speed_f;status=learned"));
         let _ = fs::remove_dir_all(root);
     }
 }

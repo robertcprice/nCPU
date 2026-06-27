@@ -119,6 +119,40 @@ impl Tool for HttpTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::process::Command;
+    use std::thread;
+
+    fn curl_available() -> bool {
+        Command::new("curl")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn serve_once(response_body: &'static str) -> (String, thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test server");
+        let addr = listener.local_addr().expect("local addr");
+        let url = format!("http://{addr}/rule");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept curl request");
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).expect("read request");
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            request
+        });
+        (url, handle)
+    }
 
     #[test]
     fn test_get_requires_url() {
@@ -134,6 +168,54 @@ mod tests {
         assert!(matches!(err, ToolError::UnknownAction { .. }));
     }
 
-    // Network-dependent GET is intentionally not asserted in unit tests to keep
-    // the suite hermetic; the curl integration is exercised manually.
+    #[test]
+    fn test_get_executes_against_local_server() {
+        if !curl_available() {
+            eprintln!("skipping local HTTP execution test: curl unavailable");
+            return;
+        }
+        let (url, handle) = serve_once("ok");
+        let out = HttpTool::new()
+            .with_timeout(3)
+            .invoke(&ToolCall::new("get").arg("url", &url))
+            .expect("local GET should execute through curl");
+        let request = handle.join().expect("server thread");
+
+        assert!(
+            request.starts_with("GET /rule HTTP/"),
+            "unexpected request: {request}"
+        );
+        assert_eq!(out.content, "ok");
+        assert_eq!(out.metadata.get("status").map(|s| s.as_str()), Some("200"));
+    }
+
+    #[test]
+    fn test_post_executes_against_local_server_with_body() {
+        if !curl_available() {
+            eprintln!("skipping local HTTP execution test: curl unavailable");
+            return;
+        }
+        let (url, handle) = serve_once("stored");
+        let out = HttpTool::new()
+            .with_timeout(3)
+            .invoke(
+                &ToolCall::new("post")
+                    .arg("url", &url)
+                    .arg("content_type", "application/json")
+                    .arg("body", "{\"rule\":\"fall_speed\"}"),
+            )
+            .expect("local POST should execute through curl");
+        let request = handle.join().expect("server thread");
+
+        assert!(
+            request.starts_with("POST /rule HTTP/"),
+            "unexpected request: {request}"
+        );
+        assert!(
+            request.contains("{\"rule\":\"fall_speed\"}"),
+            "POST body not observed by local server: {request}"
+        );
+        assert_eq!(out.content, "stored");
+        assert_eq!(out.metadata.get("status").map(|s| s.as_str()), Some("200"));
+    }
 }
