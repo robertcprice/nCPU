@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod async_mod;
 pub mod benchmark;
+pub mod backend_ir;
 pub mod backend_mvp;
 pub mod capability_miner;
 pub mod bidirectional;
