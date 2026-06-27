@@ -79,6 +79,13 @@ addEventListener('keydown',e=>{
   if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') basket=clampLane(basket+1);
   if(e.key==='r'||e.key==='R') reset();
 });
+/* touch/pointer controls (mobile: keyboard-less devices) — tap left/right half to move, tap to restart when over */
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  if(over){ reset(); return; }
+  const r=cv.getBoundingClientRect();
+  if((e.clientX-r.left) < cv.width/2) basket=clampLane(basket-1); else basket=clampLane(basket+1);
+}, {passive:false});
 function step(){
   frame++;
   if(!over && frame>=SPAWN_FRAMES){ items.push({lane:(Math.random()*LANES)|0, y:-20}); frame=0; }
