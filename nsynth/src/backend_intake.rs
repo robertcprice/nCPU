@@ -12,7 +12,7 @@
 
 use crate::backend_http::{parse_output_mismatch, HttpRuleCheck};
 use crate::backend_ir::{BackendApp, RuleModel, StoreKind};
-use crate::backend_mvp::{GeneratedBackend, SynthesizedRuleArtifact};
+use crate::backend_mvp::{GeneratedBackend, SynthesizedRuleArtifact, default_rule_spec, damage_penalty_spec};
 use crate::backend_nl::{examples_for_rule_in_text, split_function_clauses};
 use crate::backend_p2c::parse_p2c_rule_clauses;
 use crate::backend_repair::build_with_compile_and_http_repair;
@@ -182,17 +182,7 @@ fn build_steered_rule(
     input: i64,
     output: i64,
 ) -> Result<BuiltRule, String> {
-    let mini = if name == "score_bonus" && input == 3 && output == 35 {
-        format!(
-            "A function {name} that {description}, {name}(0)=5 and {name}(1)=15 and {name}({input})={output}."
-        )
-    } else if name == "damage_penalty" && input == 5 && output == 7 {
-        format!(
-            "A function {name} that {description}, {name}(0)=-3 and {name}(1)=-1 and {name}({input})={output}."
-        )
-    } else {
-        format!("A function {name} that {description}, {name}({input})={output}.")
-    };
+    let mini = steered_clause_text(bridge, name, description, input, output);
     let (solved, skipped) = bridge
         .synthesize_project(&mini)
         .map_err(|e| format!("steered resynth for '{name}': {e}"))?;
@@ -213,6 +203,54 @@ fn build_steered_rule(
         ));
     }
     finalize_built_rule(name, res, ProseSynthesisDoor::SteeredResynth)
+}
+
+fn steered_clause_text(
+    bridge: &LinguigenesisBridge,
+    name: &str,
+    description: &str,
+    hint_input: i64,
+    hint_output: i64,
+) -> String {
+    use linguigenesis_core::coding_requirements::LiteralValue;
+    let mut pairs = vec![(hint_input, hint_output)];
+    let clause = format!("A function {name} that {description}.");
+    if let Ok(req) = bridge.nl_to_requirement(&clause) {
+        for ex in req.examples.iter().take(6) {
+            if ex.inputs.len() != 1 {
+                continue;
+            }
+            if let (LiteralValue::Int(x), LiteralValue::Int(y)) = (&ex.inputs[0], &ex.expected) {
+                if !pairs.iter().any(|(px, py)| *px == *x && *py == *y) {
+                    pairs.push((*x, *y));
+                }
+            }
+        }
+    }
+    if pairs.len() < 3 {
+        for (x, y) in default_demo_examples(name) {
+            if pairs.len() >= 3 {
+                break;
+            }
+            if !pairs.iter().any(|(px, py)| *px == x && *py == y) {
+                pairs.push((x, y));
+            }
+        }
+    }
+    let literals = pairs
+        .into_iter()
+        .map(|(x, y)| format!("{name}({x})={y}"))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    format!("A function {name} that {description}, {literals}.")
+}
+
+fn default_demo_examples(name: &str) -> Vec<(i64, i64)> {
+    match name {
+        "score_bonus" => default_rule_spec().examples.clone(),
+        "damage_penalty" => damage_penalty_spec().examples.clone(),
+        _ => Vec::new(),
+    }
 }
 
 fn finalize_built_rule(

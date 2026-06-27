@@ -1483,6 +1483,11 @@ impl LinguigenesisBridge {
                     return Ok((res, "prose:seeded"));
                 }
                 let res = self.synthesize_from_description_strict(name, description)?;
+                if !self.verify_mog_against_registry_examples(&res.code, name, description) {
+                    return Err(format!(
+                        "NL description for '{name}' synthesized code that disagrees with registry examples"
+                    ));
+                }
                 Ok((res, "prose:nl-desc"))
             }
         }
@@ -1611,6 +1616,50 @@ impl LinguigenesisBridge {
             ));
         }
         Ok(res)
+    }
+
+    /// When registry `example_cases` exist for a clause, Mog execution must agree.
+    fn verify_mog_against_registry_examples(
+        &self,
+        mog: &str,
+        name: &str,
+        description: &str,
+    ) -> bool {
+        use linguigenesis_core::coding_requirements::LiteralValue;
+        let input = format!("A function {name} that {description}.");
+        let req = match self.nl_to_requirement(&input) {
+            Ok(req) => req,
+            Err(BridgeError::ClarificationNeeded { partial, .. }) if !partial.examples.is_empty() => {
+                partial
+            }
+            Err(_) => return true,
+        };
+        if req.examples.is_empty() {
+            return true;
+        }
+        let mut checked = 0;
+        for ex in req.examples.iter().take(6) {
+            if ex.inputs.len() != 1 {
+                continue;
+            }
+            let (LiteralValue::Int(x), LiteralValue::Int(y)) = (&ex.inputs[0], &ex.expected) else {
+                continue;
+            };
+            checked += 1;
+            let got = match crate::runtime::execute_function(
+                mog,
+                name,
+                &[crate::benchmark::Value::Int(*x)],
+                name,
+            ) {
+                Ok(crate::runtime::Value::Int(n)) => n,
+                _ => return false,
+            };
+            if got != *y {
+                return false;
+            }
+        }
+        checked > 0
     }
 
     /// NL description → solve → strict-verify (LOOP-7 third prose door).
