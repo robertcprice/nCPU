@@ -16,6 +16,40 @@ pub struct HttpRuleCheck {
     pub output: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpOutputMismatch {
+    pub rule: String,
+    pub input: i64,
+    pub expected: i64,
+}
+
+/// Parse an HTTP verification error that reports an output mismatch.
+pub fn parse_output_mismatch(err: &str) -> Option<HttpOutputMismatch> {
+    if !err.contains("expected \"output\":") {
+        return None;
+    }
+    let rule = err
+        .split("/rules/")
+        .nth(1)?
+        .split("/evaluate")
+        .next()?
+        .to_string();
+    let input = err.split("\"input\":").nth(1)?.split('}').next()?.trim().parse().ok()?;
+    let expected = err
+        .split("expected \"output\":")
+        .nth(1)?
+        .split(|c: char| !c.is_ascii_digit() && c != '-')
+        .next()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(HttpOutputMismatch {
+        rule,
+        input,
+        expected,
+    })
+}
+
 pub fn verify_backend_http(
     bin: &Path,
     checks: &[HttpRuleCheck],
@@ -170,6 +204,15 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn parse_output_mismatch_extracts_rule_input_expected() {
+        let err = r#"POST /rules/damage_penalty/evaluate body {"input":5} expected "output":7 in: HTTP/1.1 200"#;
+        let parsed = parse_output_mismatch(err).expect("parse");
+        assert_eq!(parsed.rule, "damage_penalty");
+        assert_eq!(parsed.input, 5);
+        assert_eq!(parsed.expected, 7);
     }
 
     #[test]

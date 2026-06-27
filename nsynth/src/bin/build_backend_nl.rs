@@ -12,7 +12,7 @@ use mog_synth::backend_nl::{
     default_required_rule_names, write_backend_from_english, DEFAULT_BACKEND_ENGLISH,
 };
 use mog_synth::backend_intake::write_backend_unified;
-use mog_synth::backend_p2c::{default_p2c_http_checks, DEFAULT_BACKEND_P2C_ENGLISH};
+use mog_synth::backend_p2c::DEFAULT_BACKEND_P2C_ENGLISH;
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
     args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
@@ -73,7 +73,7 @@ fn main() {
             &out,
             &english,
             default_required_rule_names(),
-            Some(&default_p2c_http_checks()),
+            None,
             store,
         )
     } else {

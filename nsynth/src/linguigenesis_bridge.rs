@@ -1441,7 +1441,7 @@ impl LinguigenesisBridge {
     /// 3. NL comprehend + strict-verify.
     ///
     /// Returns `(SolveResult, door_tag)` where `door_tag` is one of
-    /// `"prose:p2c"`, `"prose:single-op"`, or `"prose:nl-desc"`.
+    /// `"prose:p2c"`, `"prose:single-op"`, `"prose:project"`, `"prose:seeded"`, or `"prose:nl-desc"`.
     pub fn synthesize_prose_scalar_named(
         &self,
         name: &str,
@@ -1476,10 +1476,141 @@ impl LinguigenesisBridge {
                         }
                     }
                 }
+                if let Ok(res) = self.synthesize_project_clause_named(name, description) {
+                    return Ok((res, "prose:project"));
+                }
+                if let Ok(res) = self.synthesize_registry_seeded_clause_named(name, description) {
+                    return Ok((res, "prose:seeded"));
+                }
                 let res = self.synthesize_from_description_strict(name, description)?;
                 Ok((res, "prose:nl-desc"))
             }
         }
+    }
+
+    /// Single-clause project synthesis (LOOP-8 affine/polynomial prose door).
+    ///
+    /// Routes `A function NAME that DESCRIPTION` through the real
+    /// `synthesize_project` comprehend path — the same door inline-example
+    /// backends use, but without requiring `name(x)=y` literals in the text.
+    pub fn synthesize_project_clause_named(
+        &self,
+        name: &str,
+        description: &str,
+    ) -> Result<crate::solver::SolveResult, String> {
+        let text = format!("A function {name} that {description}.");
+        let (solved, skipped) = self.synthesize_project(&text)?;
+        if !skipped.is_empty() {
+            return Err(format!(
+                "project clause for '{name}' skipped component(s): {skipped:?}"
+            ));
+        }
+        if solved.len() == 1 && solved[0].1.success {
+            let res = solved.into_iter().next().unwrap().1;
+            if Self::validates_project_scalar_result(&res.code, name) {
+                return Ok(res);
+            }
+            return Err(format!(
+                "project clause for '{name}' synthesized non-scalar or invalid i64 behaviour"
+            ));
+        }
+        let res = solved
+            .into_iter()
+            .find(|(n, r)| n == name && r.success)
+            .map(|(_, r)| r)
+            .ok_or_else(|| {
+                format!("project clause for '{name}' did not yield a successful synthesis")
+            })?;
+        if !Self::validates_project_scalar_result(&res.code, name) {
+            return Err(format!(
+                "project clause for '{name}' synthesized non-scalar or invalid i64 behaviour"
+            ));
+        }
+        Ok(res)
+    }
+
+    fn validates_project_scalar_result(mog: &str, name: &str) -> bool {
+        let header = mog.lines().next().unwrap_or("").to_lowercase();
+        if !header.contains("-> i64") {
+            return false;
+        }
+        if header.contains('[') || header.contains("vec<") {
+            return false;
+        }
+        for x in [0_i64, 1, 3] {
+            if let Ok(crate::runtime::Value::Int(_)) =
+                crate::runtime::execute_function(mog, name, &[crate::benchmark::Value::Int(x)], name)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Registry-example-seeded project clause (LOOP-8).
+    ///
+    /// When comprehend yields registry `example_cases`, format them as inline
+    /// `name(x)=y` literals and re-enter the project door — no hand-grader.
+    pub fn synthesize_registry_seeded_clause_named(
+        &self,
+        name: &str,
+        description: &str,
+    ) -> Result<crate::solver::SolveResult, String> {
+        use linguigenesis_core::coding_requirements::LiteralValue;
+        let input = format!("A function {name} that {description}.");
+        let req = match self.nl_to_requirement(&input) {
+            Ok(req) => req,
+            Err(BridgeError::ClarificationNeeded { partial, .. }) if partial.examples.len() >= 2 => {
+                partial
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        let mut literals = Vec::new();
+        for ex in req.examples.iter().take(6) {
+            if ex.inputs.len() == 1 {
+                if let (LiteralValue::Int(x), LiteralValue::Int(y)) = (&ex.inputs[0], &ex.expected)
+                {
+                    literals.push(format!("{name}({x})={y}"));
+                }
+            }
+        }
+        if literals.len() < 2 {
+            return Err(format!(
+                "registry seed for '{name}' has fewer than 2 formattable i64 examples"
+            ));
+        }
+        let text = format!(
+            "A function {name} that {description}, {}.",
+            literals.join(" and ")
+        );
+        let (solved, skipped) = self.synthesize_project(&text)?;
+        if !skipped.is_empty() {
+            return Err(format!(
+                "registry-seeded project for '{name}' skipped: {skipped:?}"
+            ));
+        }
+        if solved.len() == 1 && solved[0].1.success {
+            let res = solved.into_iter().next().unwrap().1;
+            if Self::validates_project_scalar_result(&res.code, name) {
+                return Ok(res);
+            }
+            return Err(format!(
+                "registry-seeded project for '{name}' produced invalid scalar i64 behaviour"
+            ));
+        }
+        let res = solved
+            .into_iter()
+            .find(|(n, r)| n == name && r.success)
+            .map(|(_, r)| r)
+            .ok_or_else(|| {
+                format!("registry-seeded project for '{name}' did not synthesize")
+            })?;
+        if !Self::validates_project_scalar_result(&res.code, name) {
+            return Err(format!(
+                "registry-seeded project for '{name}' produced invalid scalar i64 behaviour"
+            ));
+        }
+        Ok(res)
     }
 
     /// NL description → solve → strict-verify (LOOP-7 third prose door).

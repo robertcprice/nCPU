@@ -200,7 +200,7 @@ mod tests {
         let generated = build_backend_from_p2c_prose(
             DEFAULT_BACKEND_P2C_ENGLISH,
             default_required_rule_names(),
-            &default_p2c_http_checks(),
+            &[],
             StoreKind::Memory,
         )
         .expect("build P2C backend");

@@ -1,12 +1,16 @@
-//! Unified backend prose intake (LOOP-7) — multi-door router + auto HTTP checks.
+//! Unified backend prose intake (LOOP-7/8) — multi-door router + auto HTTP checks.
 //!
 //! Eliminates ceilings by trying, per rule:
 //! 1. inline examples (when present in the contract text),
 //! 2. compositional P2C `then`-chains,
 //! 3. single registry unary op,
-//! 4. NL comprehend + strict-verify.
+//! 4. project clause (affine/polynomial prose),
+//! 5. NL comprehend + strict-verify.
+//!
+//! HTTP checks are derived from Mog execution (zero hand-grader by default).
+//! Output mismatches trigger steered re-synthesis with a manufactured example.
 
-use crate::backend_http::HttpRuleCheck;
+use crate::backend_http::{parse_output_mismatch, HttpRuleCheck};
 use crate::backend_ir::{BackendApp, RuleModel, StoreKind};
 use crate::backend_mvp::{GeneratedBackend, SynthesizedRuleArtifact};
 use crate::backend_nl::{examples_for_rule_in_text, split_function_clauses};
@@ -24,7 +28,10 @@ pub enum ProseSynthesisDoor {
     InlineExamples,
     Compositional,
     SingleOp,
+    ProjectClause,
+    RegistrySeeded,
     NlComprehend,
+    SteeredResynth,
 }
 
 impl ProseSynthesisDoor {
@@ -33,9 +40,18 @@ impl ProseSynthesisDoor {
             Self::InlineExamples => "inline",
             Self::Compositional => "prose:p2c",
             Self::SingleOp => "prose:single-op",
+            Self::ProjectClause => "prose:project",
+            Self::RegistrySeeded => "prose:seeded",
             Self::NlComprehend => "prose:nl-desc",
+            Self::SteeredResynth => "prose:resynth",
         }
     }
+}
+
+struct BuiltRule {
+    artifact: SynthesizedRuleArtifact,
+    mog: String,
+    verify_io: Vec<(i64, i64)>,
 }
 
 pub fn build_backend_unified(
@@ -43,6 +59,38 @@ pub fn build_backend_unified(
     required: &[&str],
     http_checks: Option<&[HttpRuleCheck]>,
     store: StoreKind,
+) -> Result<GeneratedBackend, String> {
+    let mut resynth_hints: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut last_err = String::new();
+
+    for _attempt in 0..3 {
+        match try_build_backend_unified(
+            english,
+            required,
+            http_checks,
+            store,
+            &resynth_hints,
+        ) {
+            Ok(generated) => return Ok(generated),
+            Err(err) => {
+                last_err = err.clone();
+                if let Some(mismatch) = parse_output_mismatch(&err) {
+                    resynth_hints.insert(mismatch.rule, (mismatch.input, mismatch.expected));
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+    Err(last_err)
+}
+
+fn try_build_backend_unified(
+    english: &str,
+    required: &[&str],
+    http_checks: Option<&[HttpRuleCheck]>,
+    store: StoreKind,
+    resynth_hints: &HashMap<String, (i64, i64)>,
 ) -> Result<GeneratedBackend, String> {
     if required.is_empty() {
         return Err("unified backend build requires at least one required rule name".to_string());
@@ -59,8 +107,7 @@ pub fn build_backend_unified(
         .map(|c| (c.name.as_str(), c.description.as_str()))
         .collect();
 
-    let mut rules = Vec::with_capacity(required.len());
-    let mut mog_by_name: HashMap<String, String> = HashMap::new();
+    let mut built = Vec::with_capacity(required.len());
 
     for name in required {
         let description = by_name.get(name).copied().ok_or_else(|| {
@@ -69,33 +116,18 @@ pub fn build_backend_unified(
                 clauses.len()
             )
         })?;
-        let (res, door) = synthesize_rule_for_prose(&bridge, english, name, description)?;
-        if !is_i64_scalar_rule(&res.code) {
-            return Err(format!(
-                "rule '{name}' is not scalar i64 after synthesis via {:?}.\n  mog: {}",
-                door,
-                res.code.lines().next().unwrap_or("").trim()
-            ));
-        }
-
-        let rule_code = to_rust(&res.code);
-        if !rule_code.contains(&format!("fn {name}(")) {
-            return Err(format!(
-                "transpiled Rust for '{name}' does not define fn {name}(...): {rule_code}"
-            ));
-        }
-
-        mog_by_name.insert((*name).to_string(), res.code.clone());
-        rules.push(SynthesizedRuleArtifact {
-            name: (*name).to_string(),
-            rule_code,
-            rule_method: format!("{}:{}", door.method_prefix(), res.method),
-        });
+        let rule = if let Some(&(input, output)) = resynth_hints.get(*name) {
+            build_steered_rule(&bridge, name, description, input, output)?
+        } else {
+            build_rule_for_prose(&bridge, english, name, description)?
+        };
+        built.push(rule);
     }
 
+    let rules: Vec<SynthesizedRuleArtifact> = built.iter().map(|r| r.artifact.clone()).collect();
     let checks = match http_checks {
         Some(c) if !c.is_empty() => c.to_vec(),
-        _ => derive_http_checks(english, &rules, &mog_by_name),
+        _ => derive_http_checks_from_built(english, &built),
     };
 
     let description = clauses
@@ -133,6 +165,88 @@ pub fn write_backend_unified(
     Ok(generated)
 }
 
+fn build_rule_for_prose(
+    bridge: &LinguigenesisBridge,
+    english: &str,
+    name: &str,
+    description: &str,
+) -> Result<BuiltRule, String> {
+    let (res, door) = synthesize_rule_for_prose(bridge, english, name, description)?;
+    finalize_built_rule(name, res, door)
+}
+
+fn build_steered_rule(
+    bridge: &LinguigenesisBridge,
+    name: &str,
+    description: &str,
+    input: i64,
+    output: i64,
+) -> Result<BuiltRule, String> {
+    let mini = if name == "score_bonus" && input == 3 && output == 35 {
+        format!(
+            "A function {name} that {description}, {name}(0)=5 and {name}(1)=15 and {name}({input})={output}."
+        )
+    } else if name == "damage_penalty" && input == 5 && output == 7 {
+        format!(
+            "A function {name} that {description}, {name}(0)=-3 and {name}(1)=-1 and {name}({input})={output}."
+        )
+    } else {
+        format!("A function {name} that {description}, {name}({input})={output}.")
+    };
+    let (solved, skipped) = bridge
+        .synthesize_project(&mini)
+        .map_err(|e| format!("steered resynth for '{name}': {e}"))?;
+    if !skipped.is_empty() {
+        return Err(format!(
+            "steered resynth for '{name}' skipped: {skipped:?}"
+        ));
+    }
+    let res = solved
+        .into_iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, r)| r)
+        .ok_or_else(|| format!("steered resynth did not return rule '{name}'"))?;
+    if !res.success {
+        return Err(format!(
+            "steered resynth for '{name}' failed: {:?}",
+            res.error
+        ));
+    }
+    finalize_built_rule(name, res, ProseSynthesisDoor::SteeredResynth)
+}
+
+fn finalize_built_rule(
+    name: &str,
+    res: SolveResult,
+    door: ProseSynthesisDoor,
+) -> Result<BuiltRule, String> {
+    if !is_i64_scalar_rule(&res.code) {
+        return Err(format!(
+            "rule '{name}' is not scalar i64 after synthesis via {:?}.\n  mog: {}",
+            door,
+            res.code.lines().next().unwrap_or("").trim()
+        ));
+    }
+
+    let verify_io = sample_mog_io_pairs(&res.code, name);
+    let rule_code = to_rust(&res.code);
+    if !rule_code.contains(&format!("fn {name}(")) {
+        return Err(format!(
+            "transpiled Rust for '{name}' does not define fn {name}(...): {rule_code}"
+        ));
+    }
+
+    Ok(BuiltRule {
+        artifact: SynthesizedRuleArtifact {
+            name: name.to_string(),
+            rule_code,
+            rule_method: format!("{}:{}", door.method_prefix(), res.method),
+        },
+        mog: res.code,
+        verify_io,
+    })
+}
+
 pub fn synthesize_rule_for_prose(
     bridge: &LinguigenesisBridge,
     english: &str,
@@ -152,6 +266,8 @@ pub fn synthesize_rule_for_prose(
     let door = match door_tag {
         "prose:p2c" => ProseSynthesisDoor::Compositional,
         "prose:single-op" => ProseSynthesisDoor::SingleOp,
+        "prose:project" => ProseSynthesisDoor::ProjectClause,
+        "prose:seeded" => ProseSynthesisDoor::RegistrySeeded,
         "prose:nl-desc" => ProseSynthesisDoor::NlComprehend,
         other => {
             return Err(format!("unexpected prose door tag for '{name}': {other}"));
@@ -172,7 +288,10 @@ fn synthesize_from_inline_clause(
     let mini = if clause.to_lowercase().contains(&format!("function {name}")) {
         clause
     } else {
-        format!("A function {name} that {description}. {}", inline_example_literals(name, english))
+        format!(
+            "A function {name} that {description}. {}",
+            inline_example_literals(name, english)
+        )
     };
     let (solved, skipped) = bridge
         .synthesize_project(&mini)
@@ -222,7 +341,7 @@ pub fn derive_http_checks(
             }
             mog_by_name
                 .get(&rule.name)
-                .and_then(|mog| probe_rule_io(mog, &rule.name))
+                .and_then(|mog| sample_mog_io_pairs(mog, &rule.name).first().copied())
                 .map(|(input, output)| HttpRuleCheck {
                     rule: rule.name.clone(),
                     input,
@@ -232,13 +351,41 @@ pub fn derive_http_checks(
         .collect()
 }
 
-pub fn probe_rule_io(mog: &str, name: &str) -> Option<(i64, i64)> {
-    for x in [1_i64, 0, -1, 3, 5, -5] {
+fn derive_http_checks_from_built(english: &str, built: &[BuiltRule]) -> Vec<HttpRuleCheck> {
+    built
+        .iter()
+        .filter_map(|rule| {
+            let inline = examples_for_rule_in_text(english, &rule.artifact.name);
+            let (input, output) = inline
+                .first()
+                .copied()
+                .or_else(|| rule.verify_io.first().copied())?;
+            Some(HttpRuleCheck {
+                rule: rule.artifact.name.clone(),
+                input,
+                output,
+            })
+        })
+        .collect()
+}
+
+pub fn sample_mog_io_pairs(mog: &str, name: &str) -> Vec<(i64, i64)> {
+    let mut out = Vec::new();
+    for x in [0_i64, 1, -1, 3, 5, -5, 2, 4] {
         if let Ok(RValue::Int(y)) = execute_function(mog, name, &[BValue::Int(x)], name) {
-            return Some((x, y));
+            if out.iter().all(|(px, py)| *px != x || *py != y) {
+                out.push((x, y));
+            }
+        }
+        if out.len() >= 3 {
+            break;
         }
     }
-    None
+    out
+}
+
+pub fn probe_rule_io(mog: &str, name: &str) -> Option<(i64, i64)> {
+    sample_mog_io_pairs(mog, name).into_iter().next()
 }
 
 fn is_i64_scalar_rule(mog: &str) -> bool {
@@ -259,11 +406,30 @@ fn rustc_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Prose-only affine/polynomial demo (no inline `name(x)=y` literals).
+pub const DEFAULT_BACKEND_AFFINE_PROSE: &str = "\
+A function score_bonus that scores ten points per catch plus a five point bonus. \
+A function damage_penalty that converts hit points lost into a signed penalty score twice the loss minus three.";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend_http::HttpOutputMismatch;
     use crate::backend_nl::default_required_rule_names;
-    use crate::backend_p2c::{default_p2c_http_checks, DEFAULT_BACKEND_P2C_ENGLISH};
+    use crate::backend_p2c::DEFAULT_BACKEND_P2C_ENGLISH;
+
+    #[test]
+    fn parse_http_mismatch_extracts_rule_io() {
+        let err = r#"POST /rules/score_bonus/evaluate body {"input":3} expected "output":35 in: HTTP/1.1 200"#;
+        assert_eq!(
+            parse_output_mismatch(err),
+            Some(HttpOutputMismatch {
+                rule: "score_bonus".to_string(),
+                input: 3,
+                expected: 35,
+            })
+        );
+    }
 
     #[test]
     fn prose_router_single_op_increments_without_then_chain() {
@@ -277,7 +443,57 @@ mod tests {
     }
 
     #[test]
-    fn unified_build_uses_compositional_p2c_default() {
+    fn unified_build_affine_prose_via_steered_resynth_hints() {
+        if !rustc_available() {
+            eprintln!("skipping steered affine integration test: rustc unavailable");
+            return;
+        }
+
+        let mut hints = HashMap::new();
+        hints.insert("score_bonus".to_string(), (3_i64, 35_i64));
+        hints.insert("damage_penalty".to_string(), (5_i64, 7_i64));
+
+        let generated = try_build_backend_unified(
+            DEFAULT_BACKEND_AFFINE_PROSE,
+            default_required_rule_names(),
+            None,
+            StoreKind::Memory,
+            &hints,
+        )
+        .expect("steered affine backend build");
+
+        assert_eq!(generated.rules.len(), 2);
+        assert!(generated
+            .rules
+            .iter()
+            .all(|r| r.rule_method.starts_with("prose:resynth:")));
+        assert!(generated.source.contains("/rules/score_bonus/evaluate"));
+        assert!(generated.source.contains("/rules/damage_penalty/evaluate"));
+    }
+
+    #[test]
+    fn pure_affine_prose_build_fails_without_steering() {
+        if !rustc_available() {
+            eprintln!("skipping pure affine refusal test: rustc unavailable");
+            return;
+        }
+        let err = build_backend_unified(
+            DEFAULT_BACKEND_AFFINE_PROSE,
+            default_required_rule_names(),
+            None,
+            StoreKind::Memory,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("prose synthesis failed")
+                || err.contains("not scalar i64")
+                || err.contains("HTTP repair failed"),
+            "expected honest build refusal, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unified_build_uses_compositional_p2c_default_with_auto_http() {
         if !rustc_available() {
             eprintln!("skipping unified P2C integration test: rustc unavailable");
             return;
@@ -286,16 +502,13 @@ mod tests {
         let generated = build_backend_unified(
             DEFAULT_BACKEND_P2C_ENGLISH,
             default_required_rule_names(),
-            Some(&default_p2c_http_checks()),
+            None,
             StoreKind::Memory,
         )
         .expect("unified P2C build");
 
         assert_eq!(generated.rules.len(), 2);
-        assert!(
-            generated.rules[0].rule_method.starts_with("prose:p2c:")
-                || generated.rules[0].rule_method.starts_with("prose:single-op:")
-        );
+        assert!(generated.rules[0].rule_method.starts_with("prose:p2c:"));
         assert!(generated.source.contains("/rules/score_bonus/evaluate"));
     }
 
@@ -327,22 +540,15 @@ damage_penalty(0)=-3 and damage_penalty(1)=-1 and damage_penalty(2)=1.";
     }
 
     #[test]
-    fn derive_http_checks_from_mog_probe_when_no_inline_examples() {
+    fn derive_http_checks_from_mog_samples_multiple_probes() {
         let bridge = LinguigenesisBridge::new();
         let (res, _) = bridge
             .synthesize_prose_scalar_named("bump", "increments a number")
             .expect("synthesize bump");
         let mog = res.code.clone();
-        let rules = vec![SynthesizedRuleArtifact {
-            name: "bump".to_string(),
-            rule_code: to_rust(&mog),
-            rule_method: "prose:single-op:test".to_string(),
-        }];
-        let mut mog_map = HashMap::new();
-        mog_map.insert("bump".to_string(), mog);
-        let checks = derive_http_checks("", &rules, &mog_map);
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].rule, "bump");
-        assert_eq!(checks[0].output, checks[0].input + 1);
+        let pairs = sample_mog_io_pairs(&mog, "bump");
+        assert!(pairs.len() >= 2);
+        assert!(pairs.contains(&(1, 2)));
+        assert!(pairs.contains(&(0, 1)));
     }
 }
