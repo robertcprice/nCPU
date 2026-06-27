@@ -2,6 +2,7 @@ pub mod agent;
 pub mod async_mod;
 pub mod benchmark;
 pub mod backend_http;
+pub mod backend_intake;
 pub mod backend_ir;
 pub mod backend_mvp;
 pub mod backend_nl;

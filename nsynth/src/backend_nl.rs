@@ -5,11 +5,11 @@
 //! `LinguigenesisBridge::synthesize_project` path, then verified i64 rules are
 //! emitted into the BackendIR HTTP artifact.
 
-use crate::backend_http::{cleanup_temp_artifacts, compile_to_temp_bin, verify_backend_http, HttpRuleCheck};
+use crate::backend_http::HttpRuleCheck;
 use crate::backend_ir::{BackendApp, RuleModel, StoreKind};
 use crate::benchmark::Value as BValue;
 use crate::backend_mvp::{GeneratedBackend, SynthesizedRuleArtifact};
-use crate::backend_repair::compile_with_repair;
+use crate::backend_repair::build_with_compile_and_http_repair;
 use crate::linguigenesis_bridge::LinguigenesisBridge;
 use crate::mog_transpile::to_rust;
 use crate::runtime::{execute_function, Value as RValue};
@@ -125,21 +125,6 @@ pub fn build_backend_from_english(
         })
         .collect();
     let app = BackendApp::from_rules(&description, models, store);
-    let source = compile_with_repair(&app.render_rust(), store, 3)?;
-    verify_built_backend_http(english, &source, &rules, store)?;
-    Ok(GeneratedBackend { source, rules })
-}
-
-fn verify_built_backend_http(
-    english: &str,
-    source: &str,
-    rules: &[SynthesizedRuleArtifact],
-    store: StoreKind,
-) -> Result<(), String> {
-    if !rustc_available() {
-        return Ok(());
-    }
-    let (src, bin) = compile_to_temp_bin(source, store == StoreKind::Sqlite)?;
     let checks: Vec<HttpRuleCheck> = rules
         .iter()
         .filter_map(|rule| {
@@ -151,13 +136,8 @@ fn verify_built_backend_http(
             })
         })
         .collect();
-    if checks.is_empty() {
-        cleanup_temp_artifacts(&src, &bin);
-        return Ok(());
-    }
-    let result = verify_backend_http(&bin, &checks, 2);
-    cleanup_temp_artifacts(&src, &bin);
-    result
+    let source = build_with_compile_and_http_repair(&app, &checks, store, 3)?;
+    Ok(GeneratedBackend { source, rules })
 }
 
 fn rustc_available() -> bool {

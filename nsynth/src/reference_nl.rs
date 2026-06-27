@@ -369,6 +369,15 @@ fn split_then_clauses(query: &str) -> Vec<String> {
     clauses
 }
 
+/// Resolve a prose clause to its best scalar-`i64` registry primitive (LOOP-7 door).
+///
+/// Exposed for the unified prose router's single-op fallback — same resolver path
+/// compositional intake uses per clause, no phrase→op table.
+pub fn resolve_best_scalar_op(clause: &str, registry: &Registry) -> Option<CompositionalStep> {
+    let resolver = EntityResolver::new(registry.clone());
+    resolve_scalar_op(clause, &resolver)
+}
+
 /// Resolve a clause to its best SCALAR-`i64` primitive: the highest-confidence
 /// (≥ [`OP_RESOLVE_FLOOR`]) Function/Operator op among the clause's tokens whose
 /// signature is purely `i64` (every input `i64`, output `i64`, arity 1 or 2).

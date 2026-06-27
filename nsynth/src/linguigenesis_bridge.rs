@@ -1435,6 +1435,95 @@ impl LinguigenesisBridge {
         }
     }
 
+    /// Unified prose scalar synthesis (LOOP-7) — tries doors until one succeeds:
+    /// 1. compositional `then`-chain (P2C),
+    /// 2. single registry unary op,
+    /// 3. NL comprehend + strict-verify.
+    ///
+    /// Returns `(SolveResult, door_tag)` where `door_tag` is one of
+    /// `"prose:p2c"`, `"prose:single-op"`, or `"prose:nl-desc"`.
+    pub fn synthesize_prose_scalar_named(
+        &self,
+        name: &str,
+        description: &str,
+    ) -> Result<(crate::solver::SolveResult, &'static str), String> {
+        let registry = self.registry_clone().map_err(|e| e.to_string())?;
+        match crate::reference_nl::classify_compositional(description, &registry) {
+            crate::reference_nl::CompositionalIntake::Compositional { chain, .. } => {
+                let signature = if chain.first().map(|s| s.arity).unwrap_or(1) == 2 {
+                    format!("fn {name}(a: i64, b: i64) -> i64")
+                } else {
+                    format!("fn {name}(x: i64) -> i64")
+                };
+                let res = self.solve_compositional_component(name, &signature, &chain)?;
+                Ok((res, "prose:p2c"))
+            }
+            crate::reference_nl::CompositionalIntake::Unresolvable(reason) => Err(format!(
+                "prose description for '{name}' has an unresolvable compositional atom: {reason}"
+            )),
+            crate::reference_nl::CompositionalIntake::NotCompositional => {
+                if let Some(step) =
+                    crate::reference_nl::resolve_best_scalar_op(description, &registry)
+                {
+                    if step.arity == 1 {
+                        let signature = format!("fn {name}(x: i64) -> i64");
+                        if let Ok(res) = self.solve_compositional_component(
+                            name,
+                            &signature,
+                            std::slice::from_ref(&step),
+                        ) {
+                            return Ok((res, "prose:single-op"));
+                        }
+                    }
+                }
+                let res = self.synthesize_from_description_strict(name, description)?;
+                Ok((res, "prose:nl-desc"))
+            }
+        }
+    }
+
+    /// NL description → solve → strict-verify (LOOP-7 third prose door).
+    fn synthesize_from_description_strict(
+        &self,
+        name: &str,
+        description: &str,
+    ) -> Result<crate::solver::SolveResult, String> {
+        if let Some(outcome) = self.try_compose_pipeline(description) {
+            let res = outcome?;
+            let solved = res.into_solve_result();
+            if !solved.success {
+                return Err(format!(
+                    "pipeline synthesis for '{name}' failed: {:?}",
+                    solved.error
+                ));
+            }
+            return Ok(solved);
+        }
+        let req = match self.nl_to_requirement(description) {
+            Ok(req) => req,
+            Err(BridgeError::ClarificationNeeded { questions, .. }) => {
+                return Err(format_clarification_prompt(&questions));
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        let problem = self
+            .problem_from_requirement(&req, Some(name))
+            .map_err(|e| e.to_string())?;
+        let solved = crate::solver::solve_problem(&problem);
+        if !solved.success {
+            return Err(format!(
+                "NL description for '{name}' did not synthesize (method={}, err={:?})",
+                solved.method, solved.error
+            ));
+        }
+        crate::runtime::verify_problem_code_strict(&problem, &solved.code).map_err(|e| {
+            format!(
+                "NL description for '{name}' OVERFIT — strict holdout verification failed: {e}"
+            )
+        })?;
+        Ok(solved)
+    }
+
     /// P2C-AUTO-CONTRACT a single COMPOSITIONAL component (a described scalar
     /// `"X then Y"` chain) ALL THE WAY into a verified standalone function — the
     /// same path `reference_nl`'s `drive_end_to_end` uses, factored so

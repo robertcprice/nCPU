@@ -1,16 +1,14 @@
-//! P2C backend intake — English prose without inline examples (LOOP-6).
+//! P2C backend intake — English prose without inline examples (LOOP-6/7).
 //!
-//! Uses the proven P2C compositional door: `classify_compositional` →
-//! `emit_scalar_reference` → `problem_from_reference` (auto-manufactures
-//! examples) → solve → strict-verify. No `name(x)=y` literals required.
+//! Uses the unified prose router (`synthesize_prose_scalar_named`) with compile +
+//! HTTP repair gates. Compositional `then`-chains are tried first; single-op and
+//! NL comprehend doors eliminate ceilings when prose is not compositional.
 
-use crate::backend_http::{
-    cleanup_temp_artifacts, compile_to_temp_bin, verify_backend_http, HttpRuleCheck,
-};
+use crate::backend_http::HttpRuleCheck;
 use crate::backend_ir::{BackendApp, RuleModel, StoreKind};
 use crate::backend_mvp::{GeneratedBackend, SynthesizedRuleArtifact};
 use crate::backend_nl::split_function_clauses;
-use crate::backend_repair::compile_with_repair;
+use crate::backend_repair::build_with_compile_and_http_repair;
 use crate::linguigenesis_bridge::LinguigenesisBridge;
 use crate::mog_transpile::to_rust;
 use std::path::Path;
@@ -111,13 +109,13 @@ pub fn build_backend_from_p2c_prose(
                 clauses.len()
             )
         })?;
-        let res = bridge
-            .synthesize_p2c_scalar_named(name, &clause.description)
-            .map_err(|e| format!("P2C synthesis failed for '{name}': {e}"))?;
+        let (res, door) = bridge
+            .synthesize_prose_scalar_named(name, &clause.description)
+            .map_err(|e| format!("prose synthesis failed for '{name}': {e}"))?;
 
         if !is_i64_scalar_rule(&res.code) {
             return Err(format!(
-                "P2C rule '{name}' is not scalar i64 after synthesis.\n  mog: {}",
+                "prose rule '{name}' ({door}) is not scalar i64 after synthesis.\n  mog: {}",
                 res.code.lines().next().unwrap_or("").trim()
             ));
         }
@@ -132,7 +130,7 @@ pub fn build_backend_from_p2c_prose(
         rules.push(SynthesizedRuleArtifact {
             name: (*name).to_string(),
             rule_code,
-            rule_method: format!("p2c:{}", res.method),
+            rule_method: format!("{door}:{}", res.method),
         });
     }
 
@@ -150,23 +148,8 @@ pub fn build_backend_from_p2c_prose(
         })
         .collect();
     let app = BackendApp::from_rules(&description, models, store);
-    let source = compile_with_repair(&app.render_rust(), store, 3)?;
-    verify_built_backend_http(&source, http_checks, store)?;
+    let source = build_with_compile_and_http_repair(&app, http_checks, store, 3)?;
     Ok(GeneratedBackend { source, rules })
-}
-
-fn verify_built_backend_http(
-    source: &str,
-    checks: &[HttpRuleCheck],
-    store: StoreKind,
-) -> Result<(), String> {
-    if checks.is_empty() || !rustc_available() {
-        return Ok(());
-    }
-    let (src, bin) = compile_to_temp_bin(source, store == StoreKind::Sqlite)?;
-    let result = verify_backend_http(&bin, checks, 2);
-    cleanup_temp_artifacts(&src, &bin);
-    result
 }
 
 fn is_i64_scalar_rule(mog: &str) -> bool {
@@ -223,7 +206,7 @@ mod tests {
         .expect("build P2C backend");
 
         assert_eq!(generated.rules.len(), 2);
-        assert!(generated.rules[0].rule_method.starts_with("p2c:"));
+        assert!(generated.rules[0].rule_method.starts_with("prose:p2c:"));
         assert!(generated.source.contains("/rules/score_bonus/evaluate"));
         assert!(generated.source.contains("/rules/damage_penalty/evaluate"));
     }

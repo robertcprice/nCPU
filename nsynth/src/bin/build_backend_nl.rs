@@ -11,9 +11,8 @@ use mog_synth::backend_mvp::{
 use mog_synth::backend_nl::{
     default_required_rule_names, write_backend_from_english, DEFAULT_BACKEND_ENGLISH,
 };
-use mog_synth::backend_p2c::{
-    default_p2c_http_checks, write_backend_from_p2c_prose, DEFAULT_BACKEND_P2C_ENGLISH,
-};
+use mog_synth::backend_intake::write_backend_unified;
+use mog_synth::backend_p2c::{default_p2c_http_checks, DEFAULT_BACKEND_P2C_ENGLISH};
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
     args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
@@ -30,7 +29,8 @@ fn main() {
             "build_backend_nl — synthesize a rule-backed local Rust backend\n\
              --out PATH        write generated backend source here\n\
              --store MODE      memory | file | sqlite (default: file)\n\
-             --p2c             P2C prose intake (no inline examples required)\n\
+             --p2c             unified prose intake (compositional → single-op → NL)\n\
+             --unified         alias for --p2c (inline examples auto-detected when present)\n\
              --english PATH    read backend English contract from file\n\
              --text ENGLISH    inline English contract\n\
              --hand-specs      use pre-authored rule specs (no NL door)\n\
@@ -51,7 +51,7 @@ fn main() {
         .unwrap_or(StoreKind::File);
     let single = args.iter().any(|a| a == "--single");
     let hand_specs = args.iter().any(|a| a == "--hand-specs");
-    let p2c = args.iter().any(|a| a == "--p2c");
+    let p2c = args.iter().any(|a| a == "--p2c" || a == "--unified");
     let english = if let Some(path) = arg_value(&args, "--english") {
         read_text_file(&path).unwrap_or_else(|e| die(&e))
     } else if p2c {
@@ -69,11 +69,11 @@ fn main() {
             write_backend_app(&out, &default_rule_specs(), store)
         }
     } else if p2c {
-        write_backend_from_p2c_prose(
+        write_backend_unified(
             &out,
             &english,
             default_required_rule_names(),
-            &default_p2c_http_checks(),
+            Some(&default_p2c_http_checks()),
             store,
         )
     } else {
