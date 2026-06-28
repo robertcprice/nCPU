@@ -1649,6 +1649,43 @@ mod tests {
     }
 
     #[test]
+    fn session_clarification_persist_and_resume_across_load() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("clarify_persist");
+        fs::create_dir_all(&root).unwrap();
+        let session_id = "clarify-resume";
+        let policy = GuardrailPolicy::default();
+
+        {
+            let mut session =
+                CodingAgentSession::with_session_id(&root, policy.clone(), session_id.into());
+            let first = session.handle_query("xyzqwerty qwerty qwerty");
+            assert_eq!(first.route, QueryRoute::Clarification);
+            assert!(session.has_pending_clarification());
+            let path = session_path(&root, session_id);
+            assert!(path.is_file(), "clarification turn must persist snapshot");
+            let snap = load_session_snapshot(&path).expect("read snapshot");
+            assert!(snap.pending.is_some(), "snapshot must retain pending query");
+        }
+
+        let mut resumed =
+            CodingAgentSession::load(&root, policy, session_id).expect("resume session");
+        assert!(resumed.has_pending_clarification());
+        let second = resumed
+            .clarify_and_continue("implement a function")
+            .expect("first clarify after resume");
+        let third = if second.route == QueryRoute::Clarification {
+            resumed.clarify_and_continue("add").expect("op clarify")
+        } else {
+            second
+        };
+        assert_eq!(third.route, QueryRoute::SynthesizeFunction);
+        assert!(third.success);
+        assert!(!resumed.has_pending_clarification());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn session_persist_and_resume() {
         let _guard = SESSION_TEST_LOCK.lock().unwrap();
         let root = temp_root("persist");

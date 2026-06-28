@@ -42,5 +42,8 @@ ${PYTEST[@]} -q \
 (cd nsynth && cargo test --release --lib --quiet backend_ 2>&1 | tail -8)
 bash scripts/build_nsynth_mcp_release.sh 2>&1 | tail -5
 
-# Gate G5 repair loop CI subset (add + triple + square holdouts)
+# Gate G5 repair loop CI subset (triple/square/negate holdouts)
 (cd nsynth && cargo test --release --lib --quiet workflow_runner_executes_nl_fixture_ci_subset 2>&1 | tail -8)
+
+# nsynth Gate G6 durable agency (LOOP-19)
+(cd nsynth && cargo test --release --lib --quiet g6_gate 2>&1 | tail -5)
