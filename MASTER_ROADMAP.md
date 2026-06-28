@@ -227,7 +227,7 @@ An agent must not:
 **Overall readiness:** roughly 42% of a complete repo coding agent
 **MVP target:** completion through Package H / Gate G5
 **Benchmark-readiness target:** completion through Package M / Gate G7
-**Active priority:** G5 sign-off; Package I durable workflows + CLI session resume
+**Active priority:** G6 durable agency (Package I/J); G7 executable benchmark (Package M)
 
 | Package | Gate | State | Evidence / blocker | Next owner action |
 |---|---|---|---|---|
