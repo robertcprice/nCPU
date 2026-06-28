@@ -2,6 +2,7 @@ use super::nl_fixture_cargo_test_command;
 use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{HardnessProfile, HardnessTier, RepoTaskKind, RepoTaskSpec};
 use crate::agent::runtime::CodeTaskSpec;
+use crate::linguigenesis_bridge::{BridgeError, LinguigenesisBridge};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -442,6 +443,29 @@ pub fn nl_synthesis_fixture_suite() -> Vec<LocalBenchmarkTask> {
     ]
 }
 
+/// Fast CI subset: holdout fixtures with inline I/O (no registry-vocab dependency).
+pub fn nl_synthesis_fixture_ci_subset() -> Vec<LocalBenchmarkTask> {
+    let ids = [
+        "nl_fixture_triple",
+        "nl_fixture_square",
+        "nl_fixture_negate",
+    ];
+    nl_synthesis_fixture_suite()
+        .into_iter()
+        .filter(|task| ids.contains(&task.id.as_str()))
+        .collect()
+}
+
+fn fixture_intent_from_nl(nl: &str) -> CodingIntent {
+    let bridge = LinguigenesisBridge::new();
+    let req = match bridge.nl_to_requirement(nl) {
+        Ok(req) => req,
+        Err(BridgeError::ClarificationNeeded { partial, .. }) => partial,
+        Err(err) => panic!("fixture intent for '{nl}': {err}"),
+    };
+    CodingIntent::from_requirement(&req)
+}
+
 fn nl_fixture_task(id: &str, issue: &str) -> LocalBenchmarkTask {
     LocalBenchmarkTask {
         id: id.to_string(),
@@ -465,7 +489,7 @@ pub fn nl_fixture_code_specs(root: impl AsRef<Path>) -> Vec<CodeTaskSpec> {
                 .strip_prefix("synthesize:")
                 .map(str::trim)
                 .unwrap_or(&task.issue);
-            let intent = CodingIntent::from_nl(nl).expect("fixture intent");
+            let intent = fixture_intent_from_nl(nl);
             CodeTaskSpec::from_nl(
                 root.to_string_lossy(),
                 nl,
@@ -491,6 +515,16 @@ impl RepoBenchmark {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nl_synthesis_fixture_ci_subset_is_holdout_only() {
+        let subset = nl_synthesis_fixture_ci_subset();
+        assert_eq!(subset.len(), 3);
+        let ids: Vec<_> = subset.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains(&"nl_fixture_triple"));
+        assert!(ids.contains(&"nl_fixture_square"));
+        assert!(ids.contains(&"nl_fixture_negate"));
+    }
 
     #[test]
     fn nl_synthesis_fixture_suite_covers_unseen_holdout_corpus() {

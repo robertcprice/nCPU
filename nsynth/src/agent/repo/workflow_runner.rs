@@ -155,20 +155,19 @@ fn sanitize_workflow_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::repo::benchmark::nl_synthesis_fixture_ci_subset;
     use crate::agent::repo::write_nl_fixture_crate;
     use std::fs;
     use std::sync::Mutex;
 
     static WORKFLOW_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    #[test]
-    fn workflow_runner_executes_nl_fixture_suite() {
-        let _guard = WORKFLOW_TEST_LOCK.lock().unwrap();
+    fn run_nl_fixture_tasks(tasks: &[crate::agent::repo::LocalBenchmarkTask]) {
         let root =
             std::env::temp_dir().join(format!("nsynth_workflow_nl_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
 
-        for task in nl_synthesis_fixture_suite() {
+        for task in tasks {
             let _ = fs::remove_dir_all(&root);
             write_nl_fixture_crate(&root, &task.id).expect("write fixture crate");
             let nl = task
@@ -188,6 +187,19 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workflow_runner_executes_nl_fixture_ci_subset() {
+        let _guard = WORKFLOW_TEST_LOCK.lock().unwrap();
+        run_nl_fixture_tasks(&nl_synthesis_fixture_ci_subset());
+    }
+
+    #[test]
+    #[ignore = "full 17-fixture Gate G5 corpus; run locally or in nightly"]
+    fn workflow_runner_executes_nl_fixture_suite() {
+        let _guard = WORKFLOW_TEST_LOCK.lock().unwrap();
+        run_nl_fixture_tasks(&nl_synthesis_fixture_suite());
     }
 
     #[test]
