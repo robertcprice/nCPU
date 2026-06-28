@@ -84,8 +84,8 @@ impl CapabilityRegistry {
                 CapabilityRecord {
                     name: "repo_workflow_runner".into(),
                     status: CapabilityStatus::Implemented,
-                    evidence: "agent/repo/workflow_runner.rs RepoAgent batch + report JSON".into(),
-                    conformance_test: Some("workflow_runner_executes_nl_fixture_suite".into()),
+                    evidence: "agent/repo/workflow_runner.rs RepoAgent batch + report JSON; 17/17 nl_fixture nightly".into(),
+                    conformance_test: Some("workflow_runner_executes_nl_fixture_ci_subset".into()),
                 },
                 CapabilityRecord {
                     name: "repo_agent_closed_loop".into(),
@@ -131,9 +131,9 @@ impl CapabilityRegistry {
                 },
                 CapabilityRecord {
                     name: "nl_synthesis_repair_proposer".into(),
-                    status: CapabilityStatus::Experimental,
-                    evidence: "agent/synthesis_proposer.rs + repair_loop integration".into(),
-                    conformance_test: Some("repair_loop_with_nl_synthesis_proposer".into()),
+                    status: CapabilityStatus::Implemented,
+                    evidence: "agent/synthesis_proposer.rs real synthesis primary; 17/17 nl_fixture workflow nightly".into(),
+                    conformance_test: Some("real_synthesis_repairs_divide_result_idiom".into()),
                 },
                 CapabilityRecord {
                     name: "legacy_nl_llm_module".into(),

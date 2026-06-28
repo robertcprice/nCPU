@@ -34,12 +34,12 @@ mod tests {
     }
 
     #[test]
-    fn g5_real_synthesis_proposer_is_primary_experimental_path() {
+    fn g5_real_synthesis_proposer_is_implemented() {
         let reg = CapabilityRegistry::package_b_native_runtime();
         let cap = reg
             .get("nl_synthesis_repair_proposer")
             .expect("proposer");
-        assert_eq!(cap.status, CapabilityStatus::Experimental);
+        assert_eq!(cap.status, CapabilityStatus::Implemented);
         assert!(cap.conformance_test.is_some());
     }
 }

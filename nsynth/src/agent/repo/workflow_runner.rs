@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "full 17-fixture Gate G5 corpus; run locally or in nightly"]
+    #[ignore = "full 17-fixture Gate G5 corpus (~276s release); verified nightly via scripts/nsynth_g5_nightly.sh"]
     fn workflow_runner_executes_nl_fixture_suite() {
         let _guard = WORKFLOW_TEST_LOCK.lock().unwrap();
         run_nl_fixture_tasks(&nl_synthesis_fixture_suite());
