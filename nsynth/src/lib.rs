@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_introspect;
 pub mod async_mod;
 pub mod benchmark;
 pub mod backend_http;

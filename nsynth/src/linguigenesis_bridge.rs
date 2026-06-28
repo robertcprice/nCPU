@@ -208,6 +208,11 @@ impl LinguigenesisBridge {
         Self::locate_data_file("mined_capabilities.json")
     }
 
+    /// Public path lookup for runtime introspection (MCP / CLI capabilities).
+    pub fn data_file_path(file_name: &str) -> Option<PathBuf> {
+        Self::locate_data_file(file_name)
+    }
+
     /// Find the WordNet coding-edges file (additive synonym/similar closure for
     /// existing ops). Resolved location-independently via [`locate_data_file`].
     fn find_wordnet_edges_path() -> Option<PathBuf> {

@@ -14,6 +14,7 @@ fn usage() {
 Commands (default: query):\n\
   query <text>              Run NL query through registry workflow router\n\
   --tools                   List allowed secure tool capabilities\n\
+  --capabilities            Emit runtime engine capability introspection (JSON)\n\
   --tool <name> <action>    Direct tool invoke (e.g. --tool fs read path=src/lib.rs)\n\
   --clarify <answer>        Answer pending clarification for --session\n\
 \n\
@@ -50,6 +51,7 @@ fn main() {
     let session_id = arg_value(&args, "--session").unwrap_or_else(|| "main".to_string());
     let json_out = args.iter().any(|a| a == "--json");
     let list_tools = args.iter().any(|a| a == "--tools");
+    let capabilities = args.iter().any(|a| a == "--capabilities");
     let clarify = arg_value(&args, "--clarify");
 
     let Some(root) = root else {
@@ -84,6 +86,16 @@ fn main() {
             for cap in caps {
                 println!("{cap}");
             }
+        }
+        return;
+    }
+
+    if capabilities {
+        let doc = mog_synth::agent_introspect::engine_capabilities_json(&root, policy);
+        if json_out {
+            println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+        } else {
+            println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
         }
         return;
     }

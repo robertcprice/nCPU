@@ -17,7 +17,7 @@ use crate::backend_nl::{examples_for_rule_in_text, split_function_clauses};
 use crate::backend_p2c::parse_p2c_rule_clauses;
 use crate::backend_repair::build_with_compile_and_http_repair;
 use crate::benchmark::Value as BValue;
-use crate::linguigenesis_bridge::LinguigenesisBridge;
+use crate::linguigenesis_bridge::{BridgeError, LinguigenesisBridge};
 use crate::mog_transpile::to_rust;
 use crate::runtime::{execute_function, Value as RValue};
 use crate::solver::SolveResult;
@@ -31,6 +31,7 @@ pub enum ProseSynthesisDoor {
     ProjectClause,
     RegistrySeeded,
     NlComprehend,
+    ManufacturedExamples,
     SteeredResynth,
 }
 
@@ -43,9 +44,45 @@ impl ProseSynthesisDoor {
             Self::ProjectClause => "prose:project",
             Self::RegistrySeeded => "prose:seeded",
             Self::NlComprehend => "prose:nl-desc",
+            Self::ManufacturedExamples => "prose:manufactured",
             Self::SteeredResynth => "prose:resynth",
         }
     }
+}
+
+/// Structural catalog for runtime introspection (MCP / CLI) — not a hand capability list.
+pub fn prose_door_catalog() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("inline", "contract text contains name(x)=y literals"),
+        (
+            "prose:p2c",
+            "compositional then-chain resolved via registry EntityResolver",
+        ),
+        (
+            "prose:single-op",
+            "unary registry op resolved by description tokens",
+        ),
+        (
+            "prose:project",
+            "A function NAME that DESCRIPTION via synthesize_project",
+        ),
+        (
+            "prose:seeded",
+            "comprehend/registry example_cases formatted into project clause",
+        ),
+        (
+            "prose:manufactured",
+            "comprehend partial + evidence entity example_cases merged into project clause",
+        ),
+        (
+            "prose:nl-desc",
+            "NL comprehend + strict-verify + registry oracle when available",
+        ),
+        (
+            "prose:resynth",
+            "HTTP output mismatch manufactures hint; integer affines through hint point",
+        ),
+    ]
 }
 
 struct BuiltRule {
@@ -183,14 +220,22 @@ fn build_steered_rule(
     output: i64,
 ) -> Result<BuiltRule, String> {
     let mut last_err = String::new();
-    let mut pair_sets = vec![vec![(input, output)]];
-    pair_sets.extend(
-        candidate_affine_pair_sets(input, output)
-            .into_iter()
-            .take(12),
-    );
-    for pairs in pair_sets {
+
+    // Fast path: merged hint + registry examples + best affine manufacture (LOOP-11).
+    let merged = steered_clause_text(bridge, name, description, input, output);
+    match try_steered_project(bridge, name, &merged) {
+        Ok(res) => return finalize_built_rule(name, res, ProseSynthesisDoor::SteeredResynth),
+        Err(err) => last_err = err,
+    }
+
+    for pairs in candidate_affine_pair_sets(input, output)
+        .into_iter()
+        .take(6)
+    {
         let mini = clause_text_from_pairs(name, description, &pairs);
+        if mini == merged {
+            continue;
+        }
         match try_steered_project(bridge, name, &mini) {
             Ok(res) => return finalize_built_rule(name, res, ProseSynthesisDoor::SteeredResynth),
             Err(err) => last_err = err,
@@ -275,7 +320,58 @@ fn steered_clause_text(
     clause_text_from_pairs(name, description, &pairs)
 }
 
-/// Candidate `(a,b)` lines through `(x,y)` sorted by `|a|+|b|` (non-constant first).
+/// Collect i64 example pairs emergently from comprehend partials + registry
+/// `example_cases` on evidence entities (no phrase-table parsing).
+fn collect_emergent_int_example_pairs(
+    bridge: &LinguigenesisBridge,
+    name: &str,
+    description: &str,
+) -> Vec<(i64, i64)> {
+    use linguigenesis_core::coding_requirements::{parse_example_cases, LiteralValue};
+
+    let input = format!("A function {name} that {description}.");
+    let req = match bridge.nl_to_requirement(&input) {
+        Ok(req) => Some(req),
+        Err(BridgeError::ClarificationNeeded { partial, .. }) if !partial.examples.is_empty() => {
+            Some(partial)
+        }
+        Err(_) => None,
+    };
+    let mut pairs = Vec::new();
+    let mut push_pair = |x: i64, y: i64| {
+        if !pairs.iter().any(|(px, py)| *px == x && *py == y) {
+            pairs.push((x, y));
+        }
+    };
+    let Some(req) = req else {
+        return pairs;
+    };
+    for ex in req.examples.iter().take(8) {
+        if ex.inputs.len() == 1 {
+            if let (LiteralValue::Int(x), LiteralValue::Int(y)) = (&ex.inputs[0], &ex.expected) {
+                push_pair(*x, *y);
+            }
+        }
+    }
+    if let Ok(registry) = bridge.registry_clone() {
+        for entity_id in &req.evidence_entity_ids {
+            if let Some(entity) = registry.get_entity(*entity_id) {
+                for ex in parse_example_cases(&entity) {
+                    if ex.inputs.len() == 1 {
+                        if let (LiteralValue::Int(x), LiteralValue::Int(y)) =
+                            (&ex.inputs[0], &ex.expected)
+                        {
+                            push_pair(*x, *y);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pairs
+}
+
+/// Candidate `(a,b)` lines through `(x,y)` sorted by non-constant first, then `|a|+|b|`.
 pub fn candidate_affines_through_point(x: i64, y: i64) -> Vec<(i64, i64)> {
     let mut scored: Vec<(i64, i64, u64, bool)> = Vec::new();
     for a in -64_i64..=64 {
@@ -384,6 +480,16 @@ pub fn synthesize_rule_for_prose(
     if examples.len() >= 2 {
         if let Ok(res) = synthesize_from_inline_clause(bridge, english, name, description) {
             return Ok((res, ProseSynthesisDoor::InlineExamples));
+        }
+    }
+
+    if let Some(pairs) = {
+        let manufactured = collect_emergent_int_example_pairs(bridge, name, description);
+        (manufactured.len() >= 2).then_some(manufactured)
+    } {
+        let mini = clause_text_from_pairs(name, description, &pairs);
+        if let Ok(res) = try_steered_project(bridge, name, &mini) {
+            return Ok((res, ProseSynthesisDoor::ManufacturedExamples));
         }
     }
 
@@ -541,7 +647,7 @@ A function damage_penalty that converts hit points lost into a signed penalty sc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend_http::HttpOutputMismatch;
+    use crate::backend_http::{HttpOutputMismatch, HttpRuleCheck};
     use crate::backend_nl::default_required_rule_names;
     use crate::backend_p2c::DEFAULT_BACKEND_P2C_ENGLISH;
 
@@ -648,7 +754,12 @@ mod tests {
     }
 
     #[test]
-    fn pure_affine_prose_build_fails_without_steering() {
+    fn prose_door_catalog_is_structural_not_empty() {
+        assert!(prose_door_catalog().len() >= 7);
+    }
+
+    #[test]
+    fn pure_affine_prose_honestly_refuses_without_oracle_or_examples() {
         if !rustc_available() {
             eprintln!("skipping pure affine refusal test: rustc unavailable");
             return;
@@ -662,10 +773,19 @@ mod tests {
         .unwrap_err();
         assert!(
             err.contains("prose synthesis failed")
-                || err.contains("not scalar i64")
-                || err.contains("HTTP repair failed"),
-            "expected honest build refusal, got: {err}"
+                || err.contains("HTTP repair failed")
+                || err.contains("not scalar i64"),
+            "expected honest refusal without examples/oracle, got: {err}"
         );
+    }
+
+    #[test]
+    fn outer_retry_loop_uses_parsed_http_mismatch_not_preseeded_hints() {
+        let err = r#"POST /rules/score_bonus/evaluate body {"input":0} expected "output":9999 in: HTTP/1.1 200"#;
+        let mismatch = parse_output_mismatch(err).expect("parse mismatch");
+        assert_eq!(mismatch.rule, "score_bonus");
+        assert_eq!(mismatch.input, 0);
+        assert_eq!(mismatch.expected, 9999);
     }
 
     #[test]
