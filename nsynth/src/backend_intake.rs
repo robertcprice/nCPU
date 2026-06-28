@@ -12,7 +12,7 @@
 
 use crate::backend_http::{parse_output_mismatch, HttpRuleCheck};
 use crate::backend_ir::{BackendApp, RuleModel, StoreKind};
-use crate::backend_mvp::{GeneratedBackend, SynthesizedRuleArtifact, default_rule_spec, damage_penalty_spec};
+use crate::backend_mvp::{GeneratedBackend, SynthesizedRuleArtifact};
 use crate::backend_nl::{examples_for_rule_in_text, split_function_clauses};
 use crate::backend_p2c::parse_p2c_rule_clauses;
 use crate::backend_repair::build_with_compile_and_http_repair;
@@ -182,9 +182,30 @@ fn build_steered_rule(
     input: i64,
     output: i64,
 ) -> Result<BuiltRule, String> {
-    let mini = steered_clause_text(bridge, name, description, input, output);
+    let mut last_err = String::new();
+    let mut pair_sets = vec![vec![(input, output)]];
+    pair_sets.extend(
+        candidate_affine_pair_sets(input, output)
+            .into_iter()
+            .take(12),
+    );
+    for pairs in pair_sets {
+        let mini = clause_text_from_pairs(name, description, &pairs);
+        match try_steered_project(bridge, name, &mini) {
+            Ok(res) => return finalize_built_rule(name, res, ProseSynthesisDoor::SteeredResynth),
+            Err(err) => last_err = err,
+        }
+    }
+    Err(last_err)
+}
+
+fn try_steered_project(
+    bridge: &LinguigenesisBridge,
+    name: &str,
+    mini: &str,
+) -> Result<SolveResult, String> {
     let (solved, skipped) = bridge
-        .synthesize_project(&mini)
+        .synthesize_project(mini)
         .map_err(|e| format!("steered resynth for '{name}': {e}"))?;
     if !skipped.is_empty() {
         return Err(format!(
@@ -202,7 +223,16 @@ fn build_steered_rule(
             res.error
         ));
     }
-    finalize_built_rule(name, res, ProseSynthesisDoor::SteeredResynth)
+    Ok(res)
+}
+
+fn clause_text_from_pairs(name: &str, description: &str, pairs: &[(i64, i64)]) -> String {
+    let literals = pairs
+        .iter()
+        .map(|(x, y)| format!("{name}({x})={y}"))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    format!("A function {name} that {description}, {literals}.")
 }
 
 fn steered_clause_text(
@@ -228,29 +258,88 @@ fn steered_clause_text(
         }
     }
     if pairs.len() < 3 {
-        for (x, y) in default_demo_examples(name) {
-            if pairs.len() >= 3 {
-                break;
-            }
-            if !pairs.iter().any(|(px, py)| *px == x && *py == y) {
-                pairs.push((x, y));
+        if let Some(extra) = candidate_affine_pair_sets(hint_input, hint_output)
+            .into_iter()
+            .next()
+        {
+            for (x, y) in extra {
+                if pairs.len() >= 3 {
+                    break;
+                }
+                if !pairs.iter().any(|(px, py)| *px == x && *py == y) {
+                    pairs.push((x, y));
+                }
             }
         }
     }
-    let literals = pairs
-        .into_iter()
-        .map(|(x, y)| format!("{name}({x})={y}"))
-        .collect::<Vec<_>>()
-        .join(" and ");
-    format!("A function {name} that {description}, {literals}.")
+    clause_text_from_pairs(name, description, &pairs)
 }
 
-fn default_demo_examples(name: &str) -> Vec<(i64, i64)> {
-    match name {
-        "score_bonus" => default_rule_spec().examples.clone(),
-        "damage_penalty" => damage_penalty_spec().examples.clone(),
-        _ => Vec::new(),
+/// Candidate `(a,b)` lines through `(x,y)` sorted by `|a|+|b|` (non-constant first).
+pub fn candidate_affines_through_point(x: i64, y: i64) -> Vec<(i64, i64)> {
+    let mut scored: Vec<(i64, i64, u64, bool)> = Vec::new();
+    for a in -64_i64..=64 {
+        let Some(b) = a
+            .checked_mul(x)
+            .and_then(|ax| y.checked_sub(ax))
+        else {
+            continue;
+        };
+        let score = a.unsigned_abs().saturating_add(b.unsigned_abs());
+        scored.push((a, b, score, a == 0));
     }
+    scored.sort_by(|left, right| {
+        left.3
+            .cmp(&right.3)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.0.abs().cmp(&right.0.abs()))
+    });
+    scored
+        .into_iter()
+        .map(|(a, b, _, _)| (a, b))
+        .collect()
+}
+
+/// Build candidate inline-example sets from a single HTTP hint by trying integer affines.
+pub fn candidate_affine_pair_sets(hint_input: i64, hint_output: i64) -> Vec<Vec<(i64, i64)>> {
+    let mut out = Vec::new();
+    for (a, b) in candidate_affines_through_point(hint_input, hint_output) {
+        let eval = |x: i64| a.checked_mul(x).and_then(|ax| ax.checked_add(b));
+        let mut pairs = vec![(hint_input, hint_output)];
+        for x in [0_i64, 1, -1, 2] {
+            if let Some(y) = eval(x) {
+                if !pairs.iter().any(|(px, py)| *px == x && *py == y) {
+                    pairs.push((x, y));
+                }
+            }
+            if pairs.len() >= 3 {
+                break;
+            }
+        }
+        if pairs.len() >= 2 {
+            out.push(pairs);
+        }
+    }
+    out
+}
+
+/// Manufacture examples using the best-scoring non-constant affine through the hint.
+pub fn manufacture_examples_from_single_hint(
+    hint_input: i64,
+    hint_output: i64,
+    min_count: usize,
+) -> Vec<(i64, i64)> {
+    candidate_affine_pair_sets(hint_input, hint_output)
+        .into_iter()
+        .find(|pairs| pairs.len() >= min_count.max(2))
+        .unwrap_or_else(|| vec![(hint_input, hint_output)])
+}
+
+/// Return the simplest non-constant integer affine through `(x,y)`, if any.
+pub fn infer_simplest_affine_through_point(x: i64, y: i64) -> Option<(i64, i64)> {
+    candidate_affines_through_point(x, y)
+        .into_iter()
+        .find(|(a, _)| *a != 0)
 }
 
 fn finalize_built_rule(
@@ -478,6 +567,55 @@ mod tests {
         assert_eq!(door, "prose:single-op");
         assert!(res.success);
         assert!(res.code.contains("fn bump"));
+    }
+
+    #[test]
+    fn manufacture_affine_examples_from_score_bonus_hint() {
+        let sets = candidate_affine_pair_sets(3, 35);
+        assert!(sets.iter().any(|pairs| pairs.contains(&(3, 35)) && pairs.contains(&(0, 5))));
+        let pairs = manufacture_examples_from_single_hint(3, 35, 3);
+        assert!(pairs.contains(&(3, 35)));
+    }
+
+    #[test]
+    fn manufacture_affine_examples_from_damage_penalty_hint() {
+        let sets = candidate_affine_pair_sets(5, 7);
+        assert!(sets.iter().any(|pairs| pairs.contains(&(5, 7)) && pairs.contains(&(0, -3))));
+        assert!(sets.iter().any(|pairs| infer_simplest_affine_through_point(5, 7).map(|(a, b)| (a, b)) == Some((2, -3)) || pairs.contains(&(0, -3))));
+    }
+
+    #[test]
+    fn steered_clause_includes_manufactured_affine_seeds() {
+        let bridge = LinguigenesisBridge::new();
+        let text = steered_clause_text(
+            &bridge,
+            "score_bonus",
+            "scores ten points per catch plus a five point bonus",
+            3,
+            35,
+        );
+        assert!(text.contains("score_bonus(3)=35"));
+        assert!(text.matches("score_bonus(").count() >= 2);
+    }
+
+    #[test]
+    fn build_steered_rule_from_single_http_hint() {
+        let bridge = LinguigenesisBridge::new();
+        let rule = build_steered_rule(
+            &bridge,
+            "score_bonus",
+            "scores ten points per catch plus a five point bonus",
+            3,
+            35,
+        )
+        .expect("steered from single hint");
+        assert!(rule.artifact.rule_method.starts_with("prose:resynth:"));
+        let got = execute_function(&rule.mog, "score_bonus", &[BValue::Int(3)], "score_bonus")
+            .expect("run mog");
+        match got {
+            RValue::Int(n) => assert_eq!(n, 35),
+            other => panic!("expected 35, got {other:?}"),
+        }
     }
 
     #[test]
