@@ -230,7 +230,7 @@ fn build_steered_rule(
 
     for pairs in candidate_affine_pair_sets(input, output)
         .into_iter()
-        .take(6)
+        .take(steered_max_affine_candidates())
     {
         let mini = clause_text_from_pairs(name, description, &pairs);
         if mini == merged {
@@ -320,55 +320,90 @@ fn steered_clause_text(
     clause_text_from_pairs(name, description, &pairs)
 }
 
-/// Collect i64 example pairs emergently from comprehend partials + registry
-/// `example_cases` on evidence entities (no phrase-table parsing).
+/// Collect i64 example pairs emergently from comprehend partials, evidence entities,
+/// and registry operation resolution on description tokens (no phrase tables).
 fn collect_emergent_int_example_pairs(
     bridge: &LinguigenesisBridge,
     name: &str,
     description: &str,
 ) -> Vec<(i64, i64)> {
     use linguigenesis_core::coding_requirements::{parse_example_cases, LiteralValue};
+    use linguigenesis_core::entity_resolution::EntityResolver;
 
-    let input = format!("A function {name} that {description}.");
-    let req = match bridge.nl_to_requirement(&input) {
-        Ok(req) => Some(req),
-        Err(BridgeError::ClarificationNeeded { partial, .. }) if !partial.examples.is_empty() => {
-            Some(partial)
-        }
-        Err(_) => None,
-    };
     let mut pairs = Vec::new();
     let mut push_pair = |x: i64, y: i64| {
         if !pairs.iter().any(|(px, py)| *px == x && *py == y) {
             pairs.push((x, y));
         }
     };
-    let Some(req) = req else {
-        return pairs;
-    };
-    for ex in req.examples.iter().take(8) {
-        if ex.inputs.len() == 1 {
-            if let (LiteralValue::Int(x), LiteralValue::Int(y)) = (&ex.inputs[0], &ex.expected) {
-                push_pair(*x, *y);
-            }
-        }
-    }
-    if let Ok(registry) = bridge.registry_clone() {
-        for entity_id in &req.evidence_entity_ids {
-            if let Some(entity) = registry.get_entity(*entity_id) {
-                for ex in parse_example_cases(&entity) {
-                    if ex.inputs.len() == 1 {
-                        if let (LiteralValue::Int(x), LiteralValue::Int(y)) =
-                            (&ex.inputs[0], &ex.expected)
-                        {
-                            push_pair(*x, *y);
-                        }
+
+    let mut ingest_examples =
+        |examples: &[linguigenesis_core::coding_requirements::ExampleSpec]| {
+            for ex in examples.iter().take(8) {
+                if ex.inputs.len() == 1 {
+                    if let (LiteralValue::Int(x), LiteralValue::Int(y)) =
+                        (&ex.inputs[0], &ex.expected)
+                    {
+                        push_pair(*x, *y);
                     }
                 }
             }
+        };
+
+    let input = format!("A function {name} that {description}.");
+    let requirement = match bridge.nl_to_requirement(&input) {
+        Ok(req) => Some(req),
+        Err(BridgeError::ClarificationNeeded { partial, .. }) => Some(partial),
+        Err(_) => None,
+    };
+    if let Some(ref req) = requirement {
+        ingest_examples(&req.examples);
+    }
+
+    let Ok(registry) = bridge.registry_clone() else {
+        return pairs;
+    };
+
+    if let Some(ref req) = requirement {
+        for entity_id in &req.evidence_entity_ids {
+            if let Some(entity) = registry.get_entity(*entity_id) {
+                ingest_examples(&parse_example_cases(&entity));
+            }
         }
     }
+
+    if let Some(step) = crate::reference_nl::resolve_best_scalar_op(description, &registry) {
+        for entity in registry.all_entities() {
+            let matches = entity
+                .get_property("default_fn_name")
+                .is_some_and(|n| n.as_str() == step.fn_name)
+                || entity.lemma == step.fn_name;
+            if matches {
+                ingest_examples(&parse_example_cases(&entity));
+            }
+        }
+    }
+
+    let resolver = EntityResolver::new(registry);
+    for token in description.split(|c: char| !c.is_alphanumeric()) {
+        let surface = token.trim().to_lowercase();
+        if surface.len() < 3 || resolver.is_stop_word(&surface) {
+            continue;
+        }
+        if let Some(resolved) = resolver.resolve_operation_surface(&surface) {
+            ingest_examples(&parse_example_cases(&resolved.entity));
+        }
+    }
+
     pairs
+}
+
+fn steered_max_affine_candidates() -> usize {
+    std::env::var("NSYNTH_STEERED_MAX_CANDIDATES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4)
+        .clamp(1, 12)
 }
 
 /// Candidate `(a,b)` lines through `(x,y)` sorted by non-constant first, then `|a|+|b|`.
@@ -751,6 +786,17 @@ mod tests {
             .all(|r| r.rule_method.starts_with("prose:resynth:")));
         assert!(generated.source.contains("/rules/score_bonus/evaluate"));
         assert!(generated.source.contains("/rules/damage_penalty/evaluate"));
+    }
+
+    #[test]
+    fn collect_emergent_pairs_from_registry_operation_resolution() {
+        let bridge = LinguigenesisBridge::new();
+        let pairs =
+            collect_emergent_int_example_pairs(&bridge, "bump", "increments a number");
+        assert!(
+            pairs.len() >= 2,
+            "registry resolver should seed add examples, got {pairs:?}"
+        );
     }
 
     #[test]

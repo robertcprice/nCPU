@@ -2,6 +2,7 @@
 //! overlay, prose router, sandbox policy, and tensor surface. No hand-maintained
 //! capability marketing lists.
 
+use crate::agent::capability_registry::CapabilityRegistry;
 use crate::agent::tools::secure_runtime::SecureToolRuntime;
 use crate::agent::GuardrailPolicy;
 use crate::backend_intake::prose_door_catalog;
@@ -98,12 +99,32 @@ pub fn engine_capabilities_json(root: &Path, policy: GuardrailPolicy) -> Value {
         .map(|(tag, mechanism)| json!({ "tag": tag, "mechanism": mechanism }))
         .collect();
 
+    let agent_caps: Vec<Value> = CapabilityRegistry::package_b_native_runtime()
+        .capabilities
+        .iter()
+        .map(|cap| {
+            json!({
+                "name": cap.name,
+                "status": format!("{:?}", cap.status),
+                "evidence": cap.evidence,
+                "conformance_test": cap.conformance_test,
+            })
+        })
+        .collect();
+
     json!({
         "source": "runtime_introspection",
         "registry": registry_summary,
         "mined_capabilities": mined_summary,
         "prose_backend_doors": prose_doors,
+        "agent_capabilities": agent_caps,
         "sandbox_tools": sandbox.allowed_capabilities(),
+        "steered_resynth": {
+            "max_affine_candidates": std::env::var("NSYNTH_STEERED_MAX_CANDIDATES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(4),
+        },
         "tensor": {
             "forward_ops": tensor_ops,
             "training_request_gate_active": is_training_request("train a model"),

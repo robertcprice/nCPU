@@ -196,6 +196,7 @@ fn emit_result(result: &AgentQueryResult, json_out: bool) {
             "clarification_questions": result.clarification_questions,
             "synthesis_method": result.synthesis_method,
             "tool_trace": result.tool_trace,
+            "repo_result": result.repo_result,
         });
         println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
         return;
