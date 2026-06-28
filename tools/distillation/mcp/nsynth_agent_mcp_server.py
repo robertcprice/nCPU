@@ -126,6 +126,15 @@ def tool_agent_query(args: Dict[str, Any]) -> Dict[str, Any]:
         parsed = json.loads(raw["stdout"])
     except json.JSONDecodeError:
         parsed = {"raw_stdout": raw["stdout"]}
+    if isinstance(parsed, dict):
+        repo_result = parsed.get("repo_result")
+        if isinstance(repo_result, dict):
+            parsed["repair_summary"] = {
+                "success": repo_result.get("success"),
+                "repair_iterations": repo_result.get("repair_iterations"),
+                "phases_completed": repo_result.get("phases_completed", []),
+                "error": repo_result.get("error"),
+            }
     return {"status": "ok", "result": parsed}
 
 

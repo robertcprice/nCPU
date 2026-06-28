@@ -2,7 +2,6 @@ use super::nl_fixture_cargo_test_command;
 use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{HardnessProfile, HardnessTier, RepoTaskKind, RepoTaskSpec};
 use crate::agent::runtime::CodeTaskSpec;
-use crate::linguigenesis_bridge::{BridgeError, LinguigenesisBridge};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -457,13 +456,7 @@ pub fn nl_synthesis_fixture_ci_subset() -> Vec<LocalBenchmarkTask> {
 }
 
 fn fixture_intent_from_nl(nl: &str) -> CodingIntent {
-    let bridge = LinguigenesisBridge::new();
-    let req = match bridge.nl_to_requirement(nl) {
-        Ok(req) => req,
-        Err(BridgeError::ClarificationNeeded { partial, .. }) => partial,
-        Err(err) => panic!("fixture intent for '{nl}': {err}"),
-    };
-    CodingIntent::from_requirement(&req)
+    CodingIntent::from_nl_lenient(nl).unwrap_or_else(|err| panic!("fixture intent for '{nl}': {err}"))
 }
 
 fn nl_fixture_task(id: &str, issue: &str) -> LocalBenchmarkTask {

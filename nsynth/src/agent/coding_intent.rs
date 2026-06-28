@@ -69,6 +69,18 @@ impl CodingIntent {
         Ok(Self::from_requirement(&req))
     }
 
+    /// Like [`Self::from_nl`], but accepts comprehend partials when clarification
+    /// is needed (registry ops with sparse examples). Used by G5 repair fixtures.
+    pub fn from_nl_lenient(description: &str) -> Result<Self, BridgeError> {
+        let bridge = LinguigenesisBridge::new();
+        let req = match bridge.nl_to_requirement(description) {
+            Ok(req) => req,
+            Err(BridgeError::ClarificationNeeded { partial, .. }) => partial,
+            Err(err) => return Err(err),
+        };
+        Ok(Self::from_requirement(&req))
+    }
+
     /// REFERENCE-IMPLEMENTATION front door: build a solver `Problem` from a
     /// runnable reference alone — no hand-authored examples required.
     ///
@@ -249,6 +261,14 @@ impl Spec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coding_intent_from_nl_lenient_accepts_sparse_registry_partial() {
+        let intent =
+            CodingIntent::from_nl_lenient("subtract two numbers").expect("partial subtract");
+        assert!(!intent.examples.is_empty());
+        assert!(!intent.unresolved.is_empty() || intent.confidence < 1.0);
+    }
 
     #[test]
     fn coding_intent_from_add_nl() {

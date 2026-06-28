@@ -12,6 +12,7 @@ pub mod executor;
 pub mod hierarchy;
 pub mod orchestrator;
 pub mod package_b_gate;
+pub mod g5_gate;
 pub mod planning;
 pub mod repo;
 pub mod repository;

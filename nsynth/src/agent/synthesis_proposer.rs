@@ -92,7 +92,7 @@ pub fn try_real_synthesis_patch(
     context: &RepairContext,
     description: &str,
 ) -> Option<RepairPatch> {
-    let intent = CodingIntent::from_nl(description).ok()?;
+    let intent = CodingIntent::from_nl_lenient(description).ok()?;
     if intent.examples.is_empty() {
         return None;
     }
