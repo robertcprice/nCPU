@@ -37,3 +37,7 @@ ${PYTEST[@]} -q \
     mog_transpile:: 2>&1 | tail -5)
 (cd nsynth && cargo test --release --lib --quiet \
     routing_cases::new_teacher_preemption_cases:: 2>&1 | tail -5)
+
+# nsynth backend NL intake + MCP release binaries (LOOP-12/13)
+(cd nsynth && cargo test --release --lib --quiet backend_ 2>&1 | tail -8)
+bash scripts/build_nsynth_mcp_release.sh 2>&1 | tail -5

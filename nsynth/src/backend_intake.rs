@@ -212,6 +212,8 @@ fn build_rule_for_prose(
     finalize_built_rule(name, res, door)
 }
 
+use std::time::Instant;
+
 fn build_steered_rule(
     bridge: &LinguigenesisBridge,
     name: &str,
@@ -219,10 +221,17 @@ fn build_steered_rule(
     input: i64,
     output: i64,
 ) -> Result<BuiltRule, String> {
+    let started = Instant::now();
+    let budget_ms = steered_wall_clock_budget_ms();
     let mut last_err = String::new();
 
     // Fast path: merged hint + registry examples + best affine manufacture (LOOP-11).
     let merged = steered_clause_text(bridge, name, description, input, output);
+    if steered_budget_exceeded(started, budget_ms) {
+        return Err(format!(
+            "steered resynth for '{name}' exceeded wall-clock budget ({budget_ms}ms)"
+        ));
+    }
     match try_steered_project(bridge, name, &merged) {
         Ok(res) => return finalize_built_rule(name, res, ProseSynthesisDoor::SteeredResynth),
         Err(err) => last_err = err,
@@ -232,6 +241,11 @@ fn build_steered_rule(
         .into_iter()
         .take(steered_max_affine_candidates())
     {
+        if steered_budget_exceeded(started, budget_ms) {
+            return Err(format!(
+                "steered resynth for '{name}' exceeded wall-clock budget ({budget_ms}ms): {last_err}"
+            ));
+        }
         let mini = clause_text_from_pairs(name, description, &pairs);
         if mini == merged {
             continue;
@@ -346,7 +360,14 @@ fn collect_emergent_int_example_pairs(
                     {
                         push_pair(*x, *y);
                     }
+                } else if ex.inputs.len() == 2 {
+                    for (x, y) in project_binary_int_example(ex) {
+                        push_pair(x, y);
+                    }
                 }
+            }
+            for (x, y) in project_binary_batch_to_unary(examples) {
+                push_pair(x, y);
             }
         };
 
@@ -398,12 +419,145 @@ fn collect_emergent_int_example_pairs(
     pairs
 }
 
+/// Project one binary i64 example into unary `(x, y)` pairs when an operand is fixed
+/// or both inputs match (diagonal), so manufactured backend clauses stay scalar i64.
+fn project_binary_int_example(
+    ex: &linguigenesis_core::coding_requirements::ExampleSpec,
+) -> Vec<(i64, i64)> {
+    use linguigenesis_core::coding_requirements::LiteralValue;
+
+    if ex.inputs.len() != 2 {
+        return Vec::new();
+    }
+    let (a, b, out) = match (ex.inputs[0].clone(), ex.inputs[1].clone(), ex.expected.clone()) {
+        (
+            LiteralValue::Int(a),
+            LiteralValue::Int(b),
+            LiteralValue::Int(out),
+        ) => (a, b, out),
+        _ => return Vec::new(),
+    };
+
+    let mut pairs = Vec::new();
+    if a == 0 {
+        pairs.push((b, out));
+    }
+    if b == 0 {
+        pairs.push((a, out));
+    }
+    if a == b {
+        pairs.push((a, out));
+    }
+    pairs
+}
+
+/// When every binary example shares the same second operand, project to unary `f(x)=y`.
+fn project_binary_batch_to_unary(
+    examples: &[linguigenesis_core::coding_requirements::ExampleSpec],
+) -> Vec<(i64, i64)> {
+    use linguigenesis_core::coding_requirements::LiteralValue;
+
+    let binary: Vec<_> = examples
+        .iter()
+        .filter(|ex| ex.inputs.len() == 2)
+        .collect();
+    if binary.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut try_fixed_second = |k: i64| -> Option<Vec<(i64, i64)>> {
+        let mut pairs = Vec::new();
+        for ex in &binary {
+            let (a, b, out) = match (
+                ex.inputs[0].clone(),
+                ex.inputs[1].clone(),
+                ex.expected.clone(),
+            ) {
+                (
+                    LiteralValue::Int(a),
+                    LiteralValue::Int(b),
+                    LiteralValue::Int(out),
+                ) => (a, b, out),
+                _ => return None,
+            };
+            if b != k {
+                return None;
+            }
+            pairs.push((a, out));
+        }
+        Some(pairs)
+    };
+
+    if let Some(first) = binary.first() {
+        if let LiteralValue::Int(k) = first.inputs[1].clone() {
+            if let Some(pairs) = try_fixed_second(k) {
+                return pairs;
+            }
+        }
+    }
+
+    let mut try_fixed_first = |k: i64| -> Option<Vec<(i64, i64)>> {
+        let mut pairs = Vec::new();
+        for ex in &binary {
+            let (a, b, out) = match (
+                ex.inputs[0].clone(),
+                ex.inputs[1].clone(),
+                ex.expected.clone(),
+            ) {
+                (
+                    LiteralValue::Int(a),
+                    LiteralValue::Int(b),
+                    LiteralValue::Int(out),
+                ) => (a, b, out),
+                _ => return None,
+            };
+            if a != k {
+                return None;
+            }
+            pairs.push((b, out));
+        }
+        Some(pairs)
+    };
+
+    if let Some(first) = binary.first() {
+        if let LiteralValue::Int(k) = first.inputs[0].clone() {
+            if let Some(pairs) = try_fixed_first(k) {
+                return pairs;
+            }
+        }
+    }
+
+    if binary.iter().all(|ex| ex.inputs[0] == ex.inputs[1]) {
+        return binary
+            .iter()
+            .filter_map(|ex| match (ex.inputs[0].clone(), ex.expected.clone()) {
+                (LiteralValue::Int(a), LiteralValue::Int(out)) => Some((a, out)),
+                _ => None,
+            })
+            .collect();
+    }
+
+    Vec::new()
+}
+
 fn steered_max_affine_candidates() -> usize {
     std::env::var("NSYNTH_STEERED_MAX_CANDIDATES")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(4)
         .clamp(1, 12)
+}
+
+fn steered_wall_clock_budget_ms() -> u64 {
+    std::env::var("NSYNTH_STEERED_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30_000)
+        .clamp(1_000, 300_000)
+}
+
+fn steered_budget_exceeded(started: Instant, budget_ms: u64) -> bool {
+    started.elapsed().as_millis() as u64 >= budget_ms
 }
 
 /// Candidate `(a,b)` lines through `(x,y)` sorted by non-constant first, then `|a|+|b|`.
@@ -786,6 +940,48 @@ mod tests {
             .all(|r| r.rule_method.starts_with("prose:resynth:")));
         assert!(generated.source.contains("/rules/score_bonus/evaluate"));
         assert!(generated.source.contains("/rules/damage_penalty/evaluate"));
+    }
+
+    #[test]
+    fn steered_wall_clock_budget_helpers() {
+        use std::time::{Duration, Instant};
+        let started = Instant::now() - Duration::from_millis(50);
+        assert!(steered_budget_exceeded(started, 10));
+        assert!(!steered_budget_exceeded(Instant::now(), steered_wall_clock_budget_ms()));
+    }
+
+    #[test]
+    fn project_binary_int_example_zero_and_diagonal() {
+        use linguigenesis_core::coding_requirements::{ExampleSpec, LiteralValue};
+        let ex = ExampleSpec {
+            inputs: vec![LiteralValue::Int(0), LiteralValue::Int(5)],
+            expected: LiteralValue::Int(5),
+        };
+        assert_eq!(project_binary_int_example(&ex), vec![(5, 5)]);
+        let diag = ExampleSpec {
+            inputs: vec![LiteralValue::Int(4), LiteralValue::Int(4)],
+            expected: LiteralValue::Int(16),
+        };
+        assert_eq!(project_binary_int_example(&diag), vec![(4, 16)]);
+    }
+
+    #[test]
+    fn project_binary_batch_fixed_second_operand() {
+        use linguigenesis_core::coding_requirements::{ExampleSpec, LiteralValue};
+        let examples = vec![
+            ExampleSpec {
+                inputs: vec![LiteralValue::Int(2), LiteralValue::Int(3)],
+                expected: LiteralValue::Int(6),
+            },
+            ExampleSpec {
+                inputs: vec![LiteralValue::Int(4), LiteralValue::Int(3)],
+                expected: LiteralValue::Int(12),
+            },
+        ];
+        assert_eq!(
+            project_binary_batch_to_unary(&examples),
+            vec![(2, 6), (4, 12)]
+        );
     }
 
     #[test]

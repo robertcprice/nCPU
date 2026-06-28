@@ -1,5 +1,6 @@
 //! Universal coding-agent session: any NL query → registry workflow route + full tools.
 
+use crate::agent::capability_registry::CapabilityRegistry;
 use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{GuardrailPolicy, RepoAgent, RepoAgentRunResult};
 use crate::agent::repository::{retrieve_paths, RepoIndex};
@@ -992,14 +993,25 @@ impl CodingAgentSession {
         let success = repo_result.success;
         let response = if success {
             format!(
-                "repair succeeded after {} iterations",
-                repo_result.repair_iterations
+                "repair succeeded after {} iterations (phases: {})",
+                repo_result.repair_iterations,
+                repo_result.phases_completed.join(" → ")
             )
         } else {
-            repo_result
-                .error
-                .clone()
-                .unwrap_or_else(|| "repair did not satisfy oracle".to_string())
+            format!(
+                "repair failed after {} iterations (phases: {})\n{}\n\n{}",
+                repo_result.repair_iterations,
+                if repo_result.phases_completed.is_empty() {
+                    "none".to_string()
+                } else {
+                    repo_result.phases_completed.join(" → ")
+                },
+                repo_result
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "repair did not satisfy oracle".to_string()),
+                repair_capability_notes()
+            )
         };
         AgentQueryResult {
             route: QueryRoute::RepoRepair,
@@ -1236,6 +1248,31 @@ fn truncate(text: &str, max: usize) -> String {
     } else {
         format!("{}…", text.chars().take(max).collect::<String>())
     }
+}
+
+fn repair_capability_notes() -> String {
+    let reg = CapabilityRegistry::package_b_native_runtime();
+    let mut lines = vec!["### Repair capability status (runtime registry)".to_string()];
+    for name in [
+        "repo_agent_closed_loop",
+        "nl_synthesis_repair_proposer",
+        "repo_workflow_runner",
+    ] {
+        if let Some(cap) = reg.get(name) {
+            lines.push(format!(
+                "- **{}**: {:?} — {} (conformance: {})",
+                cap.name,
+                cap.status,
+                cap.evidence,
+                cap.conformance_test.as_deref().unwrap_or("none")
+            ));
+        }
+    }
+    lines.push(
+        "Probe a specific NL synthesis request via `agent_query`; route + synthesis_method report what fired."
+            .to_string(),
+    );
+    lines.join("\n")
 }
 
 fn knowledge_notes(req: &SynthesisRequirement) -> String {

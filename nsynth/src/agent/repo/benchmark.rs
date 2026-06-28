@@ -407,6 +407,38 @@ pub fn nl_synthesis_fixture_suite() -> Vec<LocalBenchmarkTask> {
             "nl_fixture_triple",
             "synthesize: a function where triple(2)=6 and triple(5)=15 and triple(3)=9",
         ),
+        nl_fixture_task(
+            "nl_fixture_square",
+            "synthesize: a function where square(2)=4 and square(3)=9 and square(4)=16 and square(5)=25 and square(6)=36 and square(0)=0",
+        ),
+        nl_fixture_task(
+            "nl_fixture_negate",
+            "synthesize: a function where negate(5)=-5 and negate(-3)=3 and negate(0)=0 and negate(7)=-7 and negate(-12)=12",
+        ),
+        nl_fixture_task(
+            "nl_fixture_abs",
+            "synthesize: a function where absval(-3)=3 and absval(4)=4 and absval(-10)=10 and absval(0)=0 and absval(-1)=1 and absval(8)=8",
+        ),
+        nl_fixture_task(
+            "nl_fixture_sum3",
+            "synthesize: a function where add3(1,2,3)=6 and add3(0,0,5)=5 and add3(2,2,2)=6 and add3(10,20,30)=60 and add3(-1,1,0)=0",
+        ),
+        nl_fixture_task(
+            "nl_fixture_arrsum",
+            "synthesize: a function where total([1,2,3])=6 and total([4,5])=9 and total([10])=10 and total([2,2,2,2])=8 and total([7,3])=10",
+        ),
+        nl_fixture_task(
+            "nl_fixture_arrmax",
+            "synthesize: a function where biggest([3,1,2])=3 and biggest([5,9,1])=9 and biggest([7])=7 and biggest([-1,-5,-2])=-1 and biggest([2,2,8,4])=8",
+        ),
+        nl_fixture_task(
+            "nl_fixture_arrlen",
+            "synthesize: a function where howmany([3,1,2])=3 and howmany([5,9])=2 and howmany([7])=1 and howmany([1,2,3,4,5])=5 and howmany([6,6])=2",
+        ),
+        nl_fixture_task(
+            "nl_fixture_min3",
+            "synthesize: a function where smallest(3,7,5)=3 and smallest(9,2,8)=2 and smallest(1,4,1)=1 and smallest(5,5,2)=2 and smallest(-1,0,3)=-1 and smallest(8,8,8)=8 and smallest(4,1,9)=1",
+        ),
     ]
 }
 
@@ -459,6 +491,27 @@ impl RepoBenchmark {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nl_synthesis_fixture_suite_covers_unseen_holdout_corpus() {
+        let suite = nl_synthesis_fixture_suite();
+        assert_eq!(suite.len(), 17);
+        let ids: Vec<_> = suite.iter().map(|t| t.id.as_str()).collect();
+        for id in [
+            "nl_fixture_add",
+            "nl_fixture_triple",
+            "nl_fixture_square",
+            "nl_fixture_negate",
+            "nl_fixture_abs",
+            "nl_fixture_sum3",
+            "nl_fixture_arrsum",
+            "nl_fixture_arrmax",
+            "nl_fixture_arrlen",
+            "nl_fixture_min3",
+        ] {
+            assert!(ids.contains(&id), "missing fixture {id}");
+        }
+    }
 
     #[test]
     fn standard_suite_has_twenty_tasks() {

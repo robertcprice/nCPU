@@ -241,7 +241,8 @@ TOOLS = {
         "impl": tool_agent_query,
         "description": (
             "Run NL through the native coding agent. Returns route, success, "
-            "response, synthesis_method, and clarification questions."
+            "response, synthesis_method, clarification questions, and repo_result "
+            "(repair_iterations, phases_completed) on repair routes."
         ),
         "inputSchema": {
             "type": "object",
