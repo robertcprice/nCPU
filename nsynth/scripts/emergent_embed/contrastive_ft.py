@@ -2,6 +2,16 @@
 """Coding-synonym contrastive fine-tune of the exported morpheme embedding, with a
 HELD-OUT synonym-separation gate.
 
+*** NEGATIVE RESULT (2026-06-29) — DO NOT WIRE THIS EMBEDDING. ***
+The held-out PAIR metric (margin 0.40 / AUC 0.81 seed1234, ~0.72 mean over 6 splits)
+OVERSTATES usefulness: the fine-tune separates TRAINED synonym pairs, but the
+embedding's GLOBAL nearest-neighbour geometry stays NOISE. `gen_embedding_edges.py`
+(offline NN over the 5110 vocab per op) produced garbage (dhabi->abs, olivia->factorial,
+lee->triple). Pair-supervising ~30 words cannot fix 5110 tokens' geometry. Generalizing
+to unseen coding synonyms needs a REAL coding-text corpus (synonyms co-occurring in
+context), not pair supervision. Kept as documented evidence; see memory
+`emergent-nl-embedding-retrain`.
+
 Goal: test whether the (measured-incoherent) nsynth embedding can be made to
 separate coding synonyms from non-synonyms WITHOUT a full lg-neural corpus
 retrain — by contrastively fine-tuning the exported 5110x256 matrix on
@@ -88,6 +98,13 @@ for f in (WNEDGES,):
                 add_cluster(clusters, seed, [k])
     except FileNotFoundError:
         pass
+
+# NOTE: tried enlarging clusters with broad sense-pinned nltk WordNet lemmas — it
+# REGRESSED held-out separation (AUC 0.72->0.67) because the extra lemmas carry
+# wrong-sense coding noise. The clean registry + curated wordnet_coding_edges
+# clusters are the better signal, so we keep ONLY those. The residual cap (~0.72
+# AUC) is the arbitrary single-token synonyms (add/sum/plus, no shared morphemes),
+# which genuinely need corpus training, not more pair data.
 
 # keep clusters with >=3 words so we can hold out and still train
 clusters = {k: sorted(v) for k, v in clusters.items() if len(v) >= 3}
@@ -199,4 +216,21 @@ print(f"[GATE] need margin>=0.20 AND AUC>=0.85 -> "
       f"{'PASS' if (mg2>=0.20 and auc2>=0.85) else 'FAIL'}")
 
 save_file({"token_emb.weight": W.detach().numpy().astype(np.float32)}, OUT)
-print(f"[export] wrote {OUT}")
+# Sidecar metadata: the lg-core wiring reads `separation_gate_passed` and only
+# enables the cosine source if true, so an incoherent embedding can never degrade
+# resolution. margin>=0.20 is the wireable-as-last-resort bar; AUC>=0.85 is the
+# stricter "trust as primary" bar.
+gate_passed = bool(mg2 >= 0.20)
+meta = {
+    "artifact": "token_emb_coding_ft.safetensors",
+    "dim": int(W0.shape[1]),
+    "vocab": int(W0.shape[0]),
+    "heldout_margin": float(mg2),
+    "heldout_auc": float(auc2),
+    "separation_gate_passed": gate_passed,  # margin>=0.20 (wireable last-resort)
+    "strict_auc_gate_passed": bool(auc2 >= 0.85),
+    "seed": SEED,
+    "clusters": {c: ws for c, ws in clusters.items()},
+}
+json.dump(meta, open(OUT.replace(".safetensors", "_meta.json"), "w"), indent=2)
+print(f"[export] wrote {OUT} + meta (gate_passed={gate_passed})")

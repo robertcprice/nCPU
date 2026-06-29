@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Materialize the fine-tuned coding embedding's nearest-neighbour synonyms as
+registry SYNONYM EDGES (emergent, not hand-typed), shipped as a data file the
+nsynth bridge merges collision-safe — same pattern as wordnet_coding_edges.json.
+
+Only runs if the embedding passed the held-out separation gate (meta json). For
+each registry op it emits the top-K vocab words whose fine-tuned-embedding cosine
+to the op exceeds CONSERVATIVE thresholds AND that are unambiguously closest to
+THIS op (margin over the 2nd-best op), excluding already-covered words. Each edge
+carries `attributes.emb_cosine` provenance. Conservative by design: a noisy
+synonym edge would cause confident-wrong resolution, so precision >> recall here.
+"""
+import json, sys
+import numpy as np
+from safetensors.numpy import load_file
+
+ROOT = "/Users/bobbyprice/projects/linguigenesis"
+EMB = f"{ROOT}/data/nsynth_embeddings/token_emb_coding_ft.safetensors"
+META = f"{ROOT}/data/nsynth_embeddings/token_emb_coding_ft_meta.json"
+TOKJSON = f"{ROOT}/data/nsynth_embeddings/morpheme_tokenizer.json"
+CODEREG = f"{ROOT}/data/coding_registry.json"
+WNEDGES = f"{ROOT}/data/wordnet_coding_edges.json"
+OUT = f"{ROOT}/data/embedding_coding_edges.json"
+
+MIN_COSINE = 0.55      # absolute floor: a candidate must be this close to the op
+MIN_OP_MARGIN = 0.10   # must beat the 2nd-best op by this much (unambiguous)
+TOPK_PER_OP = 4
+
+meta = json.load(open(META))
+if not meta.get("separation_gate_passed"):
+    sys.stderr.write(f"[abort] embedding did not pass separation gate "
+                     f"(margin={meta.get('heldout_margin')}, auc={meta.get('heldout_auc')}); "
+                     f"refusing to emit edges from an incoherent embedding.\n")
+    sys.exit(2)
+
+tok = json.load(open(TOKJSON))
+T2I = tok["token_to_id"]
+SUF = tok.get("suffixes", [])
+MORPHS = sorted([k for k, v in T2I.items() if v > tok["char_end"]], key=len, reverse=True)
+W = load_file(EMB)["token_emb.weight"].astype(np.float32)
+
+
+def word_to_ids(w):
+    w = w.strip().lower()
+    if not w:
+        return []
+    if w in T2I:
+        return [T2I[w]]
+    for s in SUF:
+        if w.endswith(s) and w[: -len(s)] in T2I:
+            return [T2I[w[: -len(s)]]]
+    ids, i = [], 0
+    while i < len(w):
+        m = next((m for m in MORPHS if len(m) > 1 and w.startswith(m, i)), None)
+        if m:
+            ids.append(T2I[m]); i += len(m)
+        else:
+            ids.append(T2I.get(w[i], tok["unk_id"])); i += 1
+    return ids or [tok["unk_id"]]
+
+
+def wvec(w):
+    v = W[word_to_ids(w)].mean(0)
+    n = np.linalg.norm(v)
+    return v / n if n > 1e-8 else v
+
+
+# Registry ops (lemma -> default_fn_name) = the binding-bearing seeds.
+creg = json.load(open(CODEREG))
+ents = creg["entities"] if isinstance(creg, dict) and "entities" in creg else creg
+items = ents.items() if isinstance(ents, dict) else [(e.get("word"), e) for e in ents]
+ops = {}
+covered = set()
+for k, e in items:
+    attrs = e.get("attributes", {})
+    if "default_fn_name" in attrs or "example_cases" in attrs:
+        ops[k.lower()] = e
+    covered.add(k.lower())
+    for syn in (e.get("relations", {}).get("synonym") or []):
+        covered.add(syn.lower())
+# also treat existing wordnet-edge words as covered (don't duplicate)
+try:
+    wd = json.load(open(WNEDGES))
+    we = wd["entities"] if isinstance(wd, dict) and "entities" in wd else wd
+    wi = we.items() if isinstance(we, dict) else [(e.get("word"), e) for e in we]
+    for k, _ in wi:
+        covered.add(k.lower())
+except FileNotFoundError:
+    pass
+
+op_names = sorted(ops)
+op_vecs = {o: wvec(o) for o in op_names}
+
+# Candidate vocabulary = the tokenizer's whole-word morpheme tokens (lowercased
+# single words), minus already-covered words and the op names themselves.
+candidates = sorted({
+    k.lower() for k, v in T2I.items()
+    if v > tok["char_end"] and k.isalpha() and len(k) >= 3 and " " not in k
+})
+
+edges = {}
+for cand in candidates:
+    if cand in covered or cand in ops:
+        continue
+    cv = wvec(cand)
+    sims = sorted(((o, float(cv @ op_vecs[o])) for o in op_names), key=lambda x: -x[1])
+    best_op, best = sims[0]
+    second = sims[1][1] if len(sims) > 1 else -1.0
+    if best >= MIN_COSINE and (best - second) >= MIN_OP_MARGIN:
+        edges.setdefault(best_op, []).append((cand, best))
+
+# Keep top-K per op, build the registry-shaped edge file.
+out_entities = {}
+n_emitted = 0
+for op in op_names:
+    cs = sorted(edges.get(op, []), key=lambda x: -x[1])[:TOPK_PER_OP]
+    for w, cos in cs:
+        out_entities[w] = {
+            "word": w,
+            "label": "operation",
+            "entity_type": "function",
+            "definitions": [],
+            "attributes": {"emb_cosine": round(cos, 4), "emb_seed": op},
+            "relations": {"synonym": [op]},
+        }
+        n_emitted += 1
+        sys.stderr.write(f"  {w} -> {op}  (cos={cos:.3f})\n")
+
+doc = {
+    "_provenance": "GENERATED by gen_embedding_edges.py from token_emb_coding_ft "
+                   f"(heldout margin={meta['heldout_margin']:.3f}, auc={meta['heldout_auc']:.3f}); "
+                   f"thresholds cos>={MIN_COSINE}, op_margin>={MIN_OP_MARGIN}, topk={TOPK_PER_OP}. "
+                   "Words are embedding nearest-neighbours, NOT hand-typed.",
+    "entities": out_entities,
+}
+json.dump(doc, open(OUT, "w"), indent=2)
+print(f"[emit] {n_emitted} embedding-derived synonym edges -> {OUT}")
