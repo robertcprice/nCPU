@@ -485,7 +485,14 @@ impl Orchestrator {
             })
             .await?;
 
-        let result = crate::solver::solve_problem_search_only(problem);
+        // Use the FULL solver portfolio, not the search-only subset: the agent
+        // path was artificially capped at `solve_problem_search_only`, which skips
+        // the enumerative engine (anytime frontier + mined library), the
+        // differentiable scalar/loop zoo, and the post-enumerative routes — so the
+        // agent declared "unsolved" problems the canonical `solve_problem` solves.
+        // The stock path is Rust-only by default (NSYNTH_DIFF_BRIDGE unset), so no
+        // hidden LLM/python dependency is introduced.
+        let result = crate::solver::solve_problem(problem);
         if !result.success {
             return Err(SolverError::NoSolutionFound(result.error.unwrap_or_else(
                 || "native synthesis portfolio exhausted".to_string(),
