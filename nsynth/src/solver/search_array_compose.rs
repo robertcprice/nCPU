@@ -369,9 +369,10 @@ fn affine_over_terms(c0: i64, terms: &[(String, i64)]) -> String {
 ///   * SPARSE / SIMPLEST-FIRST: subsets are tried size 1, then 2, then 3, each in
 ///     the fixed rank order; the first exact-and-verified fit wins.
 ///   * NOT A SINGLE-REDUCTION RESTATEMENT: a size-1 bare reduction with
-///     `c0==0, |c1|==1` (`return sum`) is refused — those belong to the dedicated
-///     reduction solvers that run earlier. A size-1 scalar-only subset is also
-///     refused (pure scalar affine is `search_affine`'s).
+///     `c0==0, c1==+1` (`return sum`) is refused — those belong to the dedicated
+///     reduction solvers that run earlier. A coeff of -1 (`-sum`/`-max`, owned by
+///     no dedicated solver) is KEPT. A size-1 scalar-only subset is also refused
+///     (pure scalar affine is `search_affine`'s).
 ///   * EXACT INTEGER + ROUND-GATE + FULL VERIFY: `solve_linear_features` rejects
 ///     non-integral coefficients; `predicts_all` requires the integer fit to
 ///     reproduce every example; `verified_result` re-runs the emitted Mog.
@@ -449,8 +450,13 @@ pub(super) fn search_array_affine_features(
                     if !feat.kind.is_reduction() {
                         return None; // pure scalar affine — search_affine's job
                     }
-                    if c0 == 0 && w1.abs() == 1 {
-                        return None; // bare single-reduction restatement
+                    if c0 == 0 && *w1 == 1 {
+                        // `return <reduction>` (coeff +1) is the bare restatement
+                        // owned by the dedicated reduction solvers that run earlier.
+                        // A coeff of -1 (`return 0 - <reduction>`, e.g. -sum / -max)
+                        // is a GENUINE sign-flip transform owned by NO dedicated
+                        // solver, so it is kept here (still gated by verified_result).
+                        return None;
                     }
                 }
             }
@@ -721,5 +727,34 @@ mod tests {
             search_array_affine_features(&p, "f").is_none(),
             "bare sum is owned by search_array_sum — must refuse"
         );
+    }
+
+    // T6 (coverage hole closed) — `-sum(arr)` (c0=0, coeff=-1) is a genuine
+    // sign-flip transform owned by NO dedicated reduction solver. The OLD
+    // `|coeff|==1` guard refused it (alongside the real +sum restatement), leaving
+    // it unsolvable; the relaxed guard (refuse only +1) now KEEPS it. Still gated
+    // by verified_result, and strict-verified here on UNSEEN arrays. T5 proves the
+    // +sum boundary is preserved (still refused), so this did not over-open.
+    #[test]
+    fn recovers_negated_sum() {
+        let f = |a: &[i64]| -a.iter().sum::<i64>();
+        let train: [&[i64]; 8] = [
+            &[1],
+            &[1, 2],
+            &[3, 3],
+            &[-1, 4],
+            &[10],
+            &[2, 2, 2, 2],
+            &[7, -3, 1],
+            &[0, 0, 5],
+        ];
+        let rows: Vec<(&[i64], i64)> = train.iter().map(|&a| (a, f(a))).collect();
+        let p = pa(&rows);
+        let r = search_array_affine_features(&p, "f")
+            .expect("must recover -sum (coeff -1 is not the +1 bare restatement)");
+        let unseen: [&[i64]; 4] = [&[100], &[5, 5, 5, 5, 5], &[-9, -9], &[0, 1, 2, 3, 4, 5]];
+        let check: Vec<(&[i64], i64)> = unseen.iter().map(|&a| (a, f(a))).collect();
+        crate::runtime::verify_problem_code_strict(&pa(&check), &r.code)
+            .expect("must be exact -sum on unseen arrays");
     }
 }
