@@ -869,6 +869,116 @@ pub fn generated_holdouts_with_source(problem: &Problem) -> (Vec<Example>, Holdo
     (generated, HoldoutSource::Generated)
 }
 
+/// Salt for the robustness-probe input draws — distinct from the holdout/seed/
+/// property salts so the probe exercises inputs disjoint from those.
+const ROBUSTNESS_PROBE_SALT: u64 = 0x84222325cbf29ce4;
+
+/// Fresh, in-distribution inputs for the STRICT verifier's *robustness floor*.
+///
+/// Used ONLY when a problem has no oracle-labelled holdouts (an examples-only
+/// spec: empty `reference_code` and empty `holdouts`). With no reference there is
+/// no ground truth, so a vacuous strict pass would let a candidate that is defined
+/// only on the narrow visible inputs (index-out-of-bounds, shape brittleness) be
+/// reported as strictly verified. These inputs are PERTURBATIONS of the actual
+/// example inputs — same types, mutated values, and varied array length — so they
+/// stay in-distribution (a correct total function handles them) while probing
+/// points the candidate has not seen. The strict verifier requires the candidate
+/// to EXECUTE CLEANLY on them; it cannot check the output value (no oracle) —
+/// detecting a total-but-wrong overfit is the agent-boundary differential-
+/// consensus gate's job, not this floor's.
+///
+/// Returns an empty vec when there are no examples to perturb (the caller then
+/// keeps its prior behavior rather than fabricating inputs from nothing).
+pub fn robustness_probe_inputs(problem: &Problem) -> Vec<Vec<Value>> {
+    if problem.examples.is_empty() {
+        return Vec::new();
+    }
+    let mut rng = HoldoutRng::new(holdout_seed(&problem.name) ^ ROBUSTNESS_PROBE_SALT);
+    let mut probes = Vec::new();
+    for example in &problem.examples {
+        // Three SYSTEMATIC modes (not RNG-chosen) so length coverage is
+        // deterministic: whenever an array arg has len > 1 a shorter-array probe
+        // is guaranteed to exist (that is the input that exposes index-OOB
+        // overfit). `Jitter` only mutates values; `Shrink`/`Grow` also change
+        // array length. Value jitter within each mode stays RNG-driven for variety.
+        for mode in [PerturbMode::Jitter, PerturbMode::Shrink, PerturbMode::Grow] {
+            let inputs: Vec<Value> = example
+                .inputs
+                .iter()
+                .map(|v| perturb_value(&mut rng, v, mode))
+                .collect();
+            // A perturbation identical to the example carries no new information —
+            // keep only inputs the candidate has not already been shown.
+            if inputs != example.inputs {
+                probes.push(inputs);
+            }
+        }
+    }
+    probes
+}
+
+#[derive(Clone, Copy)]
+enum PerturbMode {
+    /// Mutate scalar / array-element VALUES; preserve array length.
+    Jitter,
+    /// Jitter values and drop one array element (kept >= 1, never empty).
+    Shrink,
+    /// Jitter values and append one array element.
+    Grow,
+}
+
+/// Perturb one input value in-distribution: same type, mutated contents. Types we
+/// cannot safely perturb are returned unchanged (the caller's verbatim guard then
+/// drops the perturbation). Array length is varied per `mode` but kept >= 1 (never
+/// empty) so index-brittle candidates are exercised without the degenerate
+/// empty-array edge that many correct functions legitimately reject.
+fn perturb_value(rng: &mut HoldoutRng, value: &Value, mode: PerturbMode) -> Value {
+    match value {
+        Value::Int(v) => Value::Int(v.saturating_add(rng.next_in(-3, 3))),
+        Value::Float(bits) => {
+            let f = f64::from_bits(*bits) + rng.next_in(-3, 3) as f64;
+            Value::Float(f.to_bits())
+        }
+        Value::Bool(b) => Value::Bool(if rng.next_in(0, 1) == 0 { *b } else { !*b }),
+        Value::Str(s) => {
+            let mut chars: Vec<char> = s.chars().collect();
+            let c = (b'a' + (rng.next_in(0, 25) as u8)) as char;
+            if chars.is_empty() {
+                chars.push(c);
+            } else {
+                let idx = rng.next_in(0, chars.len() as i64 - 1) as usize;
+                chars[idx] = c;
+            }
+            Value::Str(chars.into_iter().collect())
+        }
+        Value::Array(elems) => {
+            let mut out: Vec<Value> = elems
+                .iter()
+                .map(|e| perturb_value(rng, e, PerturbMode::Jitter))
+                .collect();
+            match mode {
+                // Shrink (but never to empty) to exercise shorter arrays.
+                PerturbMode::Shrink if out.len() > 1 => {
+                    out.pop();
+                }
+                // Grow by one, mirroring the element type when possible.
+                PerturbMode::Grow => {
+                    let filler = out
+                        .last()
+                        .map(|e| perturb_value(rng, e, PerturbMode::Jitter))
+                        .unwrap_or_else(|| Value::Int(rng.next_in(HOLDOUT_MIN, HOLDOUT_MAX)));
+                    out.push(filler);
+                }
+                _ => {}
+            }
+            Value::Array(out)
+        }
+        // Composite / opaque shapes (Pair/Quad/Tree/Tuple/Struct): leave unchanged;
+        // the verbatim guard drops them so we never fabricate a malformed composite.
+        other => other.clone(),
+    }
+}
+
 /// REFERENCE-IMPLEMENTATION front door: build a solvable [`Problem`] from a
 /// runnable reference implementation alone — no hand-authored I/O examples.
 ///

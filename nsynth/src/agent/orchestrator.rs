@@ -491,17 +491,51 @@ impl Orchestrator {
                 || "native synthesis portfolio exhausted".to_string(),
             )));
         }
-        crate::runtime::verify_problem_code(problem, &result.code)
+        // Baseline gate: STRICT verification (non-vacuous robustness floor),
+        // upgraded from the former examples-only `verify_problem_code` so an
+        // overfit that is brittle on unseen in-distribution inputs is rejected
+        // here rather than silently reported as verified.
+        crate::runtime::verify_problem_code_strict(problem, &result.code)
             .map_err(SolverError::VerificationFailed)?;
+
+        // For an examples-only spec (no reference/property/holdouts) the strict
+        // floor cannot prove generalization (it is undecidable from finite
+        // examples). Run the differential-consensus gate and LABEL the proposal
+        // honestly rather than claiming an unverifiable `verified: true`:
+        //   - Verified  → an independent candidate corroborates generalization.
+        //   - Ambiguous → an independent candidate disagrees → spec is
+        //                  underdetermined / candidate overfits (the witness input
+        //                  is the example the user should disambiguate with).
+        //   - NoConsensus → ran clean + matched examples, no corroboration.
+        // We do NOT hard-fail here (that would break the collaborative contract
+        // that always returns proposals); the honest `verified` flag lets the
+        // user-facing success gate fail closed on anything but a real verification.
+        let (verified, verification) = if crate::agent::consensus::is_examples_only(problem) {
+            use crate::agent::consensus::ConsensusVerdict;
+            match crate::agent::consensus::differential_consensus(problem, &result.code) {
+                ConsensusVerdict::Verified { agreeing, probes } => {
+                    (true, format!("consensus(agreeing={agreeing},probes={probes})"))
+                }
+                ConsensusVerdict::Ambiguous { witness } => {
+                    (false, format!("ambiguous(witness={witness:?})"))
+                }
+                ConsensusVerdict::NoConsensus => (false, "examples_only".to_string()),
+            }
+        } else {
+            // A reference/property/holdout oracle already gave the strict verifier
+            // a real differential correctness check.
+            (true, "oracle".to_string())
+        };
 
         Ok(vec![SolutionProposal {
             agent_id: synthesizer.id(),
             code: result.code,
-            confidence: 1.0,
+            confidence: if verified { 1.0 } else { 0.5 },
             metadata: serde_json::json!({
                 "method": result.method,
                 "examples_count": problem.examples.len(),
-                "verified": true,
+                "verified": verified,
+                "verification": verification,
             }),
             reviews: HashMap::new(),
         }])

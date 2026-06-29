@@ -5,6 +5,7 @@ pub mod agent_run;
 pub mod agent_run_persistence;
 pub mod capability_registry;
 pub mod coding_intent;
+pub mod consensus;
 pub mod debate;
 pub mod dependencies;
 pub mod edit;

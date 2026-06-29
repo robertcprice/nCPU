@@ -1118,7 +1118,29 @@ pub fn verify_problem_code(problem: &Problem, code: &str) -> Result<(), String> 
 pub fn verify_problem_code_strict(problem: &Problem, code: &str) -> Result<(), String> {
     verify_problem_code_via_main(problem, code)?;
     let fn_name = problem.function_name();
-    for example in generated_holdouts(problem) {
+    let holdouts = generated_holdouts(problem);
+    // No oracle-labelled holdouts (examples-only spec: empty `reference_code` and
+    // empty hand `holdouts`). A bare `for example in []` would pass VACUOUSLY here,
+    // silently degrading "strict" to "examples-only" and letting an overfit/brittle
+    // candidate be reported as strictly verified. With no reference we cannot check
+    // correctness, but we MUST NOT pass vacuously: run a robustness floor that
+    // requires the candidate to execute cleanly on fresh in-distribution inputs
+    // (perturbations of the examples). This catches candidates defined only on the
+    // narrow visible inputs (index-out-of-bounds, shape brittleness). Detecting a
+    // total-but-wrong overfit needs an independent oracle — that is the agent-
+    // boundary differential-consensus gate's job (see `agent::consensus`).
+    if holdouts.is_empty() {
+        for inputs in crate::benchmark::robustness_probe_inputs(problem) {
+            execute_function_for_problem(code, fn_name, &inputs, problem).map_err(|e| {
+                format!(
+                    "robustness probe failed for {}: inputs {:?}: {e}",
+                    problem.name, inputs
+                )
+            })?;
+        }
+        return Ok(());
+    }
+    for example in holdouts {
         let value = execute_function_for_problem(code, fn_name, &example.inputs, problem)?;
         if !output_matches(&value, &example.expected) {
             return Err(format!(
@@ -4766,6 +4788,14 @@ fn truthy(value: &Value) -> bool {
 ///   - `Unit`/`Unit` is equal.
 ///   - Opaque handles (`Function`/`Builtin`/`Closure`/`FileHandle`/`Channel`/
 ///     `Mutex`/`ThreadHandle`) and any cross-type pair are not equal.
+/// Public structural equality over two runtime `Value`s. Delegates to the
+/// internal recursive `value_eq` (which honors the float epsilon policy) so the
+/// differential-consensus gate can compare two candidates' outputs without
+/// re-exposing the private comparator.
+pub fn outputs_equal(a: &Value, b: &Value) -> bool {
+    value_eq(a, b)
+}
+
 fn value_eq(lhs: &Value, rhs: &Value) -> bool {
     match (lhs, rhs) {
         (Value::Int(a), Value::Int(b)) => a == b,
@@ -6079,6 +6109,112 @@ fn main() -> i64 {
         // The identity reference passes its own generated holdouts.
         verify_problem_code_strict(&problem, problem.reference_code)
             .expect("array identity reference must pass its generated holdouts");
+    }
+
+    // ── No-vacuous-strict: robustness floor for examples-only specs ────────
+
+    /// An examples-only spec (no `reference_code`, no hand `holdouts`) over an
+    /// array input — exactly the agent / NL front-door regime where the strict
+    /// verifier previously passed VACUOUSLY (zero holdouts → empty loop).
+    fn examples_only_array_problem() -> Problem {
+        Problem {
+            name: "examples_only_arr_v0".to_string(),
+            category: "test",
+            description: "test",
+            signature: "fn examples_only_arr_v0(a: [i64]) -> i64",
+            // f([3,1,2]) = 2. Matched by BOTH `a[2]` (brittle) and `a[0]-1`
+            // (total) — the visible example alone cannot distinguish them.
+            examples: vec![Example {
+                inputs: vec![BmValue::Array(vec![
+                    BmValue::Int(3),
+                    BmValue::Int(1),
+                    BmValue::Int(2),
+                ])],
+                expected: BmValue::Int(2),
+            }],
+            holdouts: Vec::new(),
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        }
+    }
+
+    /// The robustness floor generates a shorter-array probe whenever an array arg
+    /// has length > 1, so the OOB-overfit input is guaranteed to exist (not left
+    /// to chance).
+    #[test]
+    fn robustness_probe_covers_shorter_array() {
+        let problem = examples_only_array_problem();
+        let probes = crate::benchmark::robustness_probe_inputs(&problem);
+        assert!(!probes.is_empty(), "examples-only spec must yield probes");
+        let has_shorter = probes.iter().any(|inputs| {
+            matches!(inputs.first(), Some(BmValue::Array(v)) if v.len() < 3)
+        });
+        assert!(
+            has_shorter,
+            "a deterministic shrink probe (len < 3) must be present to expose \
+             index-OOB overfit, got: {probes:?}"
+        );
+    }
+
+    /// THE FIX: a brittle candidate that matches the visible example but indexes a
+    /// fixed position only valid at the example's array length is now REJECTED by
+    /// strict verify (robustness probe hits a shorter array → OOB). Before the fix
+    /// this passed vacuously (empty holdouts → empty loop → Ok).
+    #[test]
+    fn strict_rejects_vacuous_brittle_examples_only_candidate() {
+        let problem = examples_only_array_problem();
+        let brittle = "fn examples_only_arr_v0(a: [i64]) -> i64 { return a[2]; }";
+
+        // It DOES satisfy the visible example (a[2] of [3,1,2] is 2)...
+        verify_problem_code(&problem, brittle)
+            .expect("brittle candidate must satisfy the visible example");
+
+        // ...but strict verify now rejects it instead of passing vacuously.
+        let strict = verify_problem_code_strict(&problem, brittle);
+        assert!(
+            strict.is_err(),
+            "examples-only strict verify must NOT pass vacuously for a candidate \
+             that is brittle on a shorter array: {strict:?}"
+        );
+    }
+
+    /// A correct TOTAL candidate on the same examples-only spec still passes: the
+    /// robustness floor must not false-reject a function that is well-defined on
+    /// every in-distribution probe (here `a[0] - 1`, total for any len >= 1).
+    #[test]
+    fn strict_accepts_robust_examples_only_candidate() {
+        let problem = examples_only_array_problem();
+        let robust = "fn examples_only_arr_v0(a: [i64]) -> i64 { return a[0] - 1; }";
+        verify_problem_code(&problem, robust)
+            .expect("robust candidate must satisfy the visible example (3-1=2)");
+        verify_problem_code_strict(&problem, robust).expect(
+            "a total candidate must pass the robustness floor (no false reject)",
+        );
+    }
+
+    /// HONEST LIMITATION (documents why Tier-3 differential consensus is needed):
+    /// the robustness floor cannot catch a TOTAL-but-WRONG overfit. A constant
+    /// `return 2;` matches the single example and never crashes, so it passes the
+    /// floor. Detecting it requires an independent oracle / second candidate —
+    /// that is the agent-boundary consensus gate's job, not this floor's. If this
+    /// test ever starts FAILING (i.e. strict rejects the constant), the floor has
+    /// gained correctness power and this note should be revisited.
+    #[test]
+    fn robustness_floor_cannot_catch_total_but_wrong_overfit() {
+        let problem = examples_only_array_problem();
+        let constant = "fn examples_only_arr_v0(a: [i64]) -> i64 { return 2; }";
+        verify_problem_code(&problem, constant)
+            .expect("constant matches the single visible example");
+        assert!(
+            verify_problem_code_strict(&problem, constant).is_ok(),
+            "documented limitation: the robustness floor (no oracle) passes a \
+             total-but-wrong constant — consensus is required to catch it"
+        );
     }
 
     // ── GATE-0: widened generalization probe closes the holdout hole ───────
