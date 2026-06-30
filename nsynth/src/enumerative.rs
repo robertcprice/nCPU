@@ -3424,6 +3424,11 @@ fn synthesize_aggregate_map(problem: &Problem) -> Option<SolveResult> {
         ("first", |a| a.first().copied(), "    agg: i64 = arr[0];\n"),
         ("last", |a| a.last().copied(), "    agg: i64 = arr[arr.len - 1];\n"),
         ("product", |a| Some(a.iter().product()), "    agg: i64 = 1;\n    for av in arr {\n        agg = agg * av;\n    }\n"),
+        // Derived aggregates (still a single per-array value): mean = sum/len
+        // (integer), range = max - min. Cover centering ("x - mean") and
+        // range-relative maps without a full multi-aggregate search.
+        ("mean", |a| (!a.is_empty()).then(|| a.iter().sum::<i64>() / a.len() as i64), "    agg: i64 = 0;\n    for av in arr {\n        agg = agg + av;\n    }\n    agg = agg / arr.len;\n"),
+        ("range", |a| { let mx = *a.iter().max()?; let mn = *a.iter().min()?; Some(mx - mn) }, "    mx: i64 = arr[0];\n    mn: i64 = arr[0];\n    for av in arr {\n        if av > mx {\n            mx = av;\n        }\n        if av < mn {\n            mn = av;\n        }\n    }\n    agg: i64 = mx - mn;\n"),
     ];
     for (label, compute, agg_code) in aggs {
         let mut flat: Vec<(Vec<i64>, i64)> = Vec::new();

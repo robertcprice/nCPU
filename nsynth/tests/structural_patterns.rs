@@ -113,3 +113,23 @@ fn aggregate_map_probe() {
         r.method
     );
 }
+
+/// Mean-centering: "each element minus the mean" — out[k] = arr[k] - mean(arr),
+/// mean = sum/len (integer). Reduce-then-map with a derived aggregate.
+#[test]
+fn minus_mean() {
+    let mk = |a: &[i64]| {
+        let m = a.iter().sum::<i64>() / a.len() as i64;
+        Example {
+            inputs: vec![Value::int_array(a)],
+            expected: Value::int_array(&a.iter().map(|x| x - m).collect::<Vec<_>>()),
+        }
+    };
+    let r = probe(
+        "center",
+        "fn center(a: [i64]) -> [i64]",
+        vec![mk(&[1, 2, 3, 4]), mk(&[2, 4, 6]), mk(&[10, 20, 30]), mk(&[5, 5, 5]), mk(&[0, 4, 8, 12]), mk(&[3, 6, 9])],
+    );
+    assert!(r.success, "mean-centering should synthesize (aggregate map: mean)");
+    assert!(r.method.contains("aggregate-map"), "expected aggregate-map, got: {}", r.method);
+}
