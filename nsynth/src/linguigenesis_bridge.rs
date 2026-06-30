@@ -25,6 +25,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::time::SystemTime;
 
+thread_local! {
+    /// Set while inside the local-LLM fallback so the symbolic path it re-invokes
+    /// (Mode A' rephrase → synthesize_from_description) cannot re-enter the LLM
+    /// fallback — no infinite recursion.
+    static IN_LLM_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Linguigenesis bridge for NL→Code synthesis
 pub struct LinguigenesisBridge {
     /// Comprehension engine
@@ -764,7 +771,29 @@ impl LinguigenesisBridge {
     }
 
     /// NL description → verified synthesis via registry requirements (no keyword routing).
+    /// NL → verified program. Tries the symbolic comprehension first; if it
+    /// produces no successful result AND a local LLM is configured, falls back to
+    /// the untrusted LLM lane (translate to a known op / canonical rephrase →
+    /// strict-verify). The fallback is INERT without `NSYNTH_LOCAL_LLM_URL` (so
+    /// default/CI behavior is unchanged) and recursion-guarded.
     pub fn synthesize_from_description(
+        &self,
+        description: &str,
+        fn_name: Option<&str>,
+    ) -> Result<crate::solver::SolveResult, String> {
+        let symbolic = self.synthesize_from_description_symbolic(description, fn_name);
+        if matches!(&symbolic, Ok(r) if r.success) {
+            return symbolic;
+        }
+        if !IN_LLM_FALLBACK.with(|f| f.get()) {
+            if let Some(r) = self.synthesize_via_local_llm(description) {
+                return Ok(r);
+            }
+        }
+        symbolic
+    }
+
+    fn synthesize_from_description_symbolic(
         &self,
         description: &str,
         fn_name: Option<&str>,
@@ -826,10 +855,13 @@ impl LinguigenesisBridge {
         }
         // Mode A' — composition breadth: rephrase to canonical NL, then run the
         // EXISTING comprehension (which recognizes filter/map/reduce pipelines) +
-        // strict-verify. A bad rephrase fails closed (no verified program).
+        // strict-verify. A bad rephrase fails closed (no verified program). The
+        // guard keeps the inner synthesize_from_description on the SYMBOLIC path.
         let canon = crate::local_llm::canonical_rephrase(request)?;
-        let res = self.synthesize_from_description(&canon, None).ok()?;
-        res.success.then_some(res)
+        IN_LLM_FALLBACK.with(|f| f.set(true));
+        let res = self.synthesize_from_description(&canon, None);
+        IN_LLM_FALLBACK.with(|f| f.set(false));
+        res.ok().filter(|r| r.success)
     }
 
     /// Synthesize a KNOWN op directly from its registry `example_cases` (its

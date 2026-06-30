@@ -55,3 +55,22 @@ fn local_llm_composition_via_rephrase() {
         res.code
     );
 }
+
+/// The agent's NL entry (synthesize_from_description) AUTO-falls-back to the LLM
+/// lane when the symbolic path fails — proving the lane is actually used, not just
+/// callable. Gated (inert without NSYNTH_LOCAL_LLM_URL).
+#[test]
+fn synthesize_from_description_auto_falls_back_to_llm() {
+    if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
+        eprintln!("[AUTO] skipped (no url)");
+        return;
+    }
+    let bridge = LinguigenesisBridge::new();
+    // Symbolic mis-resolves "add ... elements" to scalar add → no array program;
+    // the wrapper must auto-fall-back to the LLM lane and return a verified fold.
+    let r = bridge.synthesize_from_description("add up all the elements of an array", None);
+    eprintln!("[AUTO] → {:?}", r.as_ref().map(|x| (x.success, x.method.clone())));
+    let r = r.expect("must produce a result");
+    assert!(r.success, "auto-fallback must yield a verified program");
+    assert!(r.code.contains("for ") && r.code.contains("arr"), "expected array fold: {}", r.code);
+}
