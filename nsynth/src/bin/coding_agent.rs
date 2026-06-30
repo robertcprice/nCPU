@@ -204,6 +204,7 @@ fn emit_result(result: &AgentQueryResult, json_out: bool) {
             "tool_trace": result.tool_trace,
             "repo_result": result.repo_result,
             "explanation": explain_solution(result),
+            "security": security_report(result),
         });
         println!(
             "{}",
@@ -229,6 +230,28 @@ fn emit_result(result: &AgentQueryResult, json_out: bool) {
         println!("---");
         println!("explanation: {explanation}");
     }
+    if let Some(sec) = security_report(result) {
+        println!("---");
+        println!("security: {sec}");
+    }
+}
+
+/// Vulnerability scan of the synthesized solution — wires the security/ scanner.
+/// Reports ONLY when findings exist (no noise on clean code). Best-effort.
+fn security_report(result: &AgentQueryResult) -> Option<String> {
+    if !result.success || result.synthesis_method.is_none() {
+        return None;
+    }
+    let scan = mog_synth::security::scan_vulnerabilities(&result.response, "synthesized");
+    if scan.findings.is_empty() {
+        return None;
+    }
+    let crit = if scan.has_critical() {
+        " (CRITICAL present)"
+    } else {
+        ""
+    };
+    Some(format!("{} potential issue(s){crit}", scan.findings.len()))
 }
 
 /// Natural-language explanation of a synthesized solution — wires the
