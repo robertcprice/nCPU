@@ -32,6 +32,22 @@ Modes are layered by risk; the riskiest (B) is behind a **separate** env gate.
 | Mode | Trigger | LLM proposes | Engine path | Gate |
 |------|---------|--------------|-------------|------|
 | **A** — op | request maps to one known op | op name (validated vs **live registry** op set) | `synthesize_op_by_name` builds a `Problem` from the op's own `parse_example_cases` → `solve_problem` | `NSYNTH_LOCAL_LLM_URL` |
+
+### Mode A reliability (gloss menu + reasoning-model headroom)
+
+Two empirically-found fixes lifted Mode A recall from 4/7 → **7/7** on the array-sum
+phrasing corpus:
+
+1. **Gloss menu.** The op menu is rendered as `fn_name: <registry definition>` lines
+   (`known_op_glosses`), not bare names. The 4B model maps a paraphrase
+   ("accumulate the values") to the **exact** registered op (`array_sum`, not the
+   near-miss `sum`) by matching the gloss.
+2. **`max_tokens` headroom.** Gemma 4 is a **reasoning** model: it spends 100-150
+   tokens "thinking" before emitting the JSON. At `max_tokens=64` the answer was
+   truncated (`finish_reason=length`, empty `content`) → `None` → a recall miss.
+   Raised to 256, plus a fallback that reads the op out of the `reasoning` channel
+   when `content` is empty.
+
 | **A′** — composition | request is a canonical rephrase of a filter/map/reduce | a canonical NL paraphrase | `synthesize_from_description` (filter/map/reduce composition), recursion-guarded | `NSYNTH_LOCAL_LLM_URL` |
 | **B** — out-of-vocab | no known op fits (e.g. composite affine) | 6 I/O **examples** | examples → `Problem` w/ **held-out generalization probe** → `solve_problem` | `NSYNTH_LOCAL_LLM_URL` **and** `NSYNTH_LOCAL_LLM_EXAMPLES` |
 
@@ -84,6 +100,11 @@ cargo test --test local_llm_e2e -- --nocapture --test-threads=1
 | `"add up only the positive numbers in the list"` | mis-parses | **Mode A′** → filter+reduce `compose_add_filter_positive` |
 | `"triple a number then add five"` | no single op | **Mode B** → `f(x) = (3*x)+5` (`search_polynomial_multi`) |
 | auto-fallback on `"add up all the elements"` | fails | falls back → verified fold |
+
+**Recall benchmark** (`tests/llm_recall_bench.rs`, server up): symbolic-only **2/7**
+→ with-LME **7/7** over the array-sum phrasing corpus (each win checked to be a real
+array *fold*, not scalar `add`). The lane never reduces net recall (auto-fallback only
+adds) and must recover ≥1 phrasing the symbolic path misses.
 
 Model-currency note: Gemma 4 E4B is current-era (chosen over stale 2024 models).
 It is a *reasoning* model with a `reasoning` field → example generation needs

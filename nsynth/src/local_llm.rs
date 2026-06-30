@@ -90,16 +90,29 @@ fn url_port(url: &str) -> Option<u16> {
 /// endpoint. `None` when disabled (no `NSYNTH_LOCAL_LLM_URL`), on any error, or
 /// when the model's chosen op is NOT in `known_ops` (so only a real, synthesizable
 /// op can ever reach the verified pipeline).
-pub fn translate_op(request: &str, known_ops: &[String]) -> Option<String> {
+pub fn translate_op(request: &str, ops: &[(String, String)]) -> Option<String> {
     let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
         .ok()
         .filter(|s| !s.is_empty())?;
     let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
-    let ops = known_ops.join(", ");
+    // Gloss menu: one "fn_name: definition" per line so the model matches a
+    // PARAPHRASE to the exact registered op (bare names leave it guessing).
+    let menu = ops
+        .iter()
+        .map(|(name, gloss)| {
+            if gloss.is_empty() {
+                name.clone()
+            } else {
+                format!("{name}: {gloss}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let sys = format!(
         "You convert a coding request into JSON for a program synthesizer. Output ONLY one \
-         JSON object {{\"op\":\"...\"}}. Choose the single best op from this exact list, or \
-         {{\"op\":\"\"}} if none fits: {ops}."
+         JSON object {{\"op\":\"...\"}} where op is the exact name (the text before the colon) \
+         of the single best match, judged against the description after each colon, or \
+         {{\"op\":\"\"}} if none fits:\n{menu}"
     );
     let body = serde_json::json!({
         "model": model,
@@ -108,14 +121,15 @@ pub fn translate_op(request: &str, known_ops: &[String]) -> Option<String> {
             {"role": "user", "content": format!("Request: \"{}\" ->", request.replace('"', "'"))}
         ],
         "temperature": 0.0,
-        // Enough headroom that a long op menu never truncates the JSON mid-token.
-        "max_tokens": 64
+        // Headroom for a REASONING model (Gemma 4): thinking can consume 100-150
+        // tokens before the JSON, so a low cap returns empty content (finish=length).
+        "max_tokens": 256
     });
     let out = Command::new("curl")
         .args([
             "-s",
             "-m",
-            "30",
+            "40",
             &url,
             "-H",
             "Content-Type: application/json",
@@ -128,10 +142,16 @@ pub fn translate_op(request: &str, known_ops: &[String]) -> Option<String> {
         return None;
     }
     let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let content = resp["choices"][0]["message"]["content"].as_str()?;
-    let op = extract_op(content)?;
+    let msg = &resp["choices"][0]["message"];
+    // Prefer the answer channel; fall back to the reasoning channel (a reasoning
+    // model that ran out of token budget may leave `content` empty but still have
+    // emitted the JSON inside `reasoning`).
+    let op = msg["content"]
+        .as_str()
+        .and_then(extract_op)
+        .or_else(|| msg["reasoning"].as_str().and_then(extract_op))?;
     // Only a KNOWN op may pass — a hallucinated op never enters the pipeline.
-    known_ops.iter().any(|k| k == &op).then_some(op)
+    ops.iter().any(|(k, _)| k == &op).then_some(op)
 }
 
 /// One LLM-proposed I/O example (raw JSON values; the caller maps to runtime
@@ -274,7 +294,10 @@ mod tests {
         // With no NSYNTH_LOCAL_LLM_URL set, the path is inert (returns None).
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
         assert_eq!(
-            translate_op("add up all the elements", &["array_sum".to_string()]),
+            translate_op(
+                "add up all the elements",
+                &[("array_sum".to_string(), "sum of all elements".to_string())]
+            ),
             None
         );
     }

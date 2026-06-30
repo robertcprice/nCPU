@@ -836,6 +836,28 @@ impl LinguigenesisBridge {
         ops
     }
 
+    /// Each known op paired with its registry gloss (first definition). The gloss
+    /// menu lets the tiny model match a paraphrase ("accumulate the values") to the
+    /// EXACT registered op name (`array_sum`, not the near-miss `sum`) — bare names
+    /// alone leave the model guessing what each identifier means.
+    pub fn known_op_glosses(&self) -> Vec<(String, String)> {
+        let Ok(registry) = self.registry_clone() else {
+            return Vec::new();
+        };
+        let mut ops: Vec<(String, String)> = registry
+            .get_by_type(&linguigenesis_core::entity::EntityType::Function)
+            .into_iter()
+            .filter_map(|e| {
+                let name = e.get_property("default_fn_name").cloned()?;
+                let gloss = e.definitions.first().cloned().unwrap_or_default();
+                Some((name, gloss))
+            })
+            .collect();
+        ops.sort();
+        ops.dedup();
+        ops
+    }
+
     /// UNTRUSTED local-LLM front door (gated by `NSYNTH_LOCAL_LLM_URL`): translate
     /// arbitrary NL prose → a KNOWN op via a tiny local model, then synthesize that
     /// op through the TRUSTED path (its registry example_cases → solve →
@@ -850,7 +872,7 @@ impl LinguigenesisBridge {
         if !crate::local_llm::ensure_server() {
             return None;
         }
-        let ops = self.known_op_names();
+        let ops = self.known_op_glosses();
         if ops.is_empty() {
             return None;
         }
