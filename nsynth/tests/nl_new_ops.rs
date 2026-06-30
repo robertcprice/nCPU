@@ -8,11 +8,13 @@ fn nl_invokes_newly_exposed_ops() {
     let bridge = LinguigenesisBridge::new();
     assert!(bridge.registry_load_error().is_none(), "registry must load");
 
-    // Only the ops that resolve CORRECTLY (the right fn) are asserted. `even`
-    // (parity predicate) + `product` (array reduce) are now reachable from prose
-    // AND synthesize a verified program. (positive/negative are NOT here: they
-    // collide with WordNet adjectives and mis-resolve — a known resolution gap,
-    // not shipped until the coding-overlay-vs-WordNet priority is fixed.)
+    // `even` (parity predicate) + `product` (array reduce) resolve from prose to
+    // the CORRECT fn + synthesize a verified program. positive/negative are HELD
+    // BACK: those words are sense-ambiguous (filter modifier in "the positive
+    // values" / negation marker / standalone predicate) — exposing them as
+    // standalone ops regresses filter composition (and "negative" panics via the
+    // negation path). The real fix is context-based word-sense disambiguation, not
+    // resolution priority (priority tweaks regressed array-op + filter resolution).
     let cases: &[(&str, &str)] = &[
         ("whether a number is even", "is_even"),
         ("the product of all the elements", "product"),
@@ -24,7 +26,7 @@ fn nl_invokes_newly_exposed_ops() {
             Ok((solved, skipped)) => {
                 match solved.iter().find(|(_, r)| r.success) {
                     Some((name, r)) => {
-                        eprintln!("[NL-OP] {phrase:?} → fn={name} method={}\n{}", r.method, r.code);
+                        eprintln!("[NL-OP] {phrase:?} → fn={name} (want {want_fn}) method={}", r.method);
                         if !r.code.contains(want_fn) && name != want_fn {
                             failures.push(format!(
                                 "{phrase:?}: resolved to {name} ({}), wanted {want_fn}",
@@ -32,16 +34,20 @@ fn nl_invokes_newly_exposed_ops() {
                             ));
                         }
                     }
-                    None => failures.push(format!(
-                        "{phrase:?} (want {want_fn}): no success; skipped={skipped:?}"
-                    )),
+                    None => {
+                        eprintln!("[NL-OP] {phrase:?} → NO SUCCESS (want {want_fn}) skipped={skipped:?}");
+                        failures.push(format!("{phrase:?} (want {want_fn}): no success"));
+                    }
                 }
             }
-            Err(e) => failures.push(format!("{phrase:?}: bridge error {e}")),
+            Err(e) => {
+                eprintln!("[NL-OP] {phrase:?} → ERR {e}");
+                failures.push(format!("{phrase:?}: bridge error {e}"));
+            }
         }
     }
     for f in &failures {
-        println!("NL-OP-FAILURE: {f}");
+        eprintln!("NL-OP-FAILURE: {f}");
     }
     assert!(
         failures.is_empty(),
