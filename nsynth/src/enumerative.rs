@@ -2620,14 +2620,18 @@ fn emit_mog_array(expr: &Expr, fn_name: &str, scalar_names: &[&str], array_idx: 
 /// Enumerative synthesis: discovers programs from I/O examples alone.
 /// Handles both scalar and array problems.
 pub fn synthesize_enumerative(problem: &Problem) -> Option<SolveResult> {
-    // COMPOSITE OUTPUT (tuple/pair/quad of ints) with scalar inputs → synthesize
-    // each component with the scalar enumerator and emit a struct. Tried first so
-    // a composite expected never falls through to the scalar/array int paths.
+    // COMPOSITE OUTPUT (tuple/pair/quad of ints) → emit a struct. Scalar inputs:
+    // each component is a flat expression (inline). Array inputs: each component
+    // is a fold synthesized as a helper fn and called. Tried first so a composite
+    // expected never falls through to the scalar/array int paths.
     if let Some(first) = problem.examples.first() {
-        if tuple_arity(&first.expected).is_some()
-            && first.inputs.iter().all(|v| matches!(v, Value::Int(_)))
-        {
-            if let Some(r) = synthesize_tuple_output_enumerative(problem) {
+        if tuple_arity(&first.expected).is_some() {
+            let r = if first.inputs.iter().all(|v| matches!(v, Value::Int(_))) {
+                synthesize_tuple_output_enumerative(problem)
+            } else {
+                synthesize_tuple_output_array(problem)
+            };
+            if let Some(r) = r {
                 return Some(r);
             }
         }
@@ -3579,6 +3583,92 @@ fn emit_mog_tuple(fn_name: &str, n_args: usize, bodies: &[Expr]) -> Option<Strin
     ))
 }
 
+/// COMPOSITE OUTPUT with an ARRAY input (e.g. `minmax(arr) -> (min, max)`).
+/// Components here are array→scalar FOLDS (loops), not flat expressions, so they
+/// can't inline into the struct constructor. Instead synthesize each component as
+/// its OWN helper function through the full solver (so it can use folds / array
+/// teachers), then the main function CALLS each helper in the struct constructor.
+/// Strict-verified end to end. `solve_problem` on the scalar-output sub-problems
+/// does not recurse back here (their output is a plain int, not composite).
+fn synthesize_tuple_output_array(problem: &Problem) -> Option<SolveResult> {
+    let fn_name = problem.function_name();
+    let first = problem.examples.first()?;
+    let ncomp = tuple_arity(&first.expected)?;
+    if ncomp < 2 {
+        return None;
+    }
+    // Need an array input (all-scalar inputs use the inline-expr path); only int
+    // scalars and int arrays are in scope.
+    if !first.inputs.iter().any(|v| matches!(v, Value::Array(_)))
+        || !first
+            .inputs
+            .iter()
+            .all(|v| matches!(v, Value::Int(_) | Value::Array(_)))
+    {
+        return None;
+    }
+    let arg_decls: Vec<String> = first
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let ty = if matches!(v, Value::Array(_)) { "[i64]" } else { "i64" };
+            format!("p{i}: {ty}")
+        })
+        .collect();
+    let arg_names: Vec<String> = (0..first.inputs.len()).map(|i| format!("p{i}")).collect();
+
+    let mut helpers = String::new();
+    let mut decl_fields: Vec<String> = Vec::with_capacity(ncomp);
+    let mut ctor_fields: Vec<String> = Vec::with_capacity(ncomp);
+    for k in 0..ncomp {
+        let helper_name = format!("{fn_name}_c{k}");
+        let mut sub = problem.clone();
+        sub.name = helper_name.clone();
+        sub.signature = Box::leak(
+            format!("fn {helper_name}({}) -> i64", arg_decls.join(", ")).into_boxed_str(),
+        );
+        sub.reference_code = "";
+        sub.holdouts = Vec::new();
+        sub.examples = problem
+            .examples
+            .iter()
+            .map(|ex| {
+                tuple_component(&ex.expected, k).map(|c| crate::benchmark::Example {
+                    inputs: ex.inputs.clone(),
+                    expected: Value::Int(c),
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let solved = crate::solver::solve_problem(&sub);
+        if !solved.success {
+            return None;
+        }
+        helpers.push_str(solved.code.trim_end());
+        helpers.push_str("\n\n");
+        decl_fields.push(format!("f{k}: i64"));
+        ctor_fields.push(format!("f{k}: {helper_name}({})", arg_names.join(", ")));
+    }
+    let struct_name = format!("Out_{fn_name}");
+    let main = format!(
+        "struct {struct_name} {{ {} }}\nfn {fn_name}({}) -> {struct_name} {{\n    return {struct_name} {{ {} }};\n}}\n",
+        decl_fields.join(", "),
+        arg_decls.join(", "),
+        ctor_fields.join(", "),
+    );
+    let code = format!("{helpers}{main}");
+    if verify_problem_code_strict(problem, &code).is_ok() {
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: "enumerative-tuple-output-array".to_string(),
+            error: None,
+            metadata: DifferentiableMetadata::default(),
+        });
+    }
+    None
+}
+
 fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
 
@@ -4294,6 +4384,44 @@ mod tests {
         let r = synthesize_enumerative(&problem)
             .unwrap_or_else(|| panic!("quad-output should synthesize"));
         assert_eq!(r.method, "enumerative-tuple-output", "code:\n{}", r.code);
+    }
+
+    /// COMPOSITE OUTPUT with ARRAY input: `minmax(arr) -> (min, max)` — each
+    /// component is a fold synthesized as a helper fn and called from the struct
+    /// constructor. Proves structured output over array→scalar reductions.
+    #[test]
+    fn synthesizes_array_input_pair_minmax() {
+        use crate::benchmark::{Example, Problem, Value};
+        let mk = |a: &[i64]| {
+            let mn = *a.iter().min().unwrap();
+            let mx = *a.iter().max().unwrap();
+            Example {
+                inputs: vec![Value::int_array(a)],
+                expected: Value::Pair(mn, mx),
+            }
+        };
+        let problem = Problem {
+            name: "minmax".to_string(),
+            category: "test",
+            description: "min and max of an array",
+            signature: "fn minmax(p0: [i64]) -> Out_minmax",
+            examples: vec![
+                mk(&[3, 1, 2]),
+                mk(&[5, 9, 1, 7]),
+                mk(&[-1, 4, 2]),
+                mk(&[8, 8, 2, 10]),
+                mk(&[0, -5, 5]),
+                mk(&[6, 3, 9, 1]),
+            ],
+            ..Default::default()
+        };
+        let r = synthesize_enumerative(&problem)
+            .unwrap_or_else(|| panic!("array-input pair (minmax) should synthesize"));
+        assert_eq!(
+            r.method, "enumerative-tuple-output-array",
+            "code:\n{}",
+            r.code
+        );
     }
 
     #[test]
