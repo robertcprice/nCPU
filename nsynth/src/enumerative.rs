@@ -3808,6 +3808,99 @@ fn synthesize_emptiness_guard(problem: &Problem) -> Option<SolveResult> {
     None
 }
 
+thread_local! {
+    static IN_LENGTH_BRANCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Solve a branch's example subset as its own fn, holding the length-branch
+/// re-entrancy guard so the sub-group cannot re-split (no infinite recursion).
+fn solve_branch_body(
+    problem: &Problem,
+    examples: &[crate::benchmark::Example],
+    body_fn: &str,
+) -> Option<SolveResult> {
+    let mut sub = problem.clone();
+    sub.name = body_fn.to_string();
+    sub.signature = Box::leak(format!("fn {body_fn}(arr: [i64]) -> i64").into_boxed_str());
+    sub.reference_code = "";
+    sub.holdouts = Vec::new();
+    sub.examples = examples.to_vec();
+    IN_LENGTH_BRANCH.with(|f| f.set(true));
+    let res = crate::solver::solve_problem(&sub);
+    IN_LENGTH_BRANCH.with(|f| f.set(false));
+    res.success.then_some(res)
+}
+
+/// Two branch bodies are equivalent (a spurious split) if their code is identical
+/// after neutralizing each one's own fn name — i.e. the same program both sides.
+fn branch_bodies_equivalent(lo_code: &str, lo_fn: &str, hi_code: &str, hi_fn: &str) -> bool {
+    lo_code.replace(lo_fn, "F") == hi_code.replace(hi_fn, "F")
+}
+
+/// #2 BRANCH-ON-STRUCTURE (general): `f(arr) = if arr.len < K { lo(arr) } else
+/// { hi(arr) }`, generalizing the emptiness guard (len==0) to any small length
+/// threshold K — e.g. "len < 2 → 0, else the max". Split examples by arr.len < K,
+/// synthesize each side as its own fn through the full solver, require the two
+/// bodies to be genuinely DIFFERENT (else a single op already covers it), emit a
+/// length-guarded wrapper, strict-verify. The thread_local guard stops a sub-group
+/// from re-splitting. Tried after the emptiness guard (which handles the constant-
+/// empty-default case it can't).
+fn synthesize_length_branch(problem: &Problem) -> Option<SolveResult> {
+    if IN_LENGTH_BRANCH.with(|f| f.get()) {
+        return None;
+    }
+    let fn_name = problem.function_name();
+    let first = problem.examples.first()?;
+    if first.inputs.len() != 1
+        || !matches!(first.inputs[0], Value::Array(_))
+        || !matches!(first.expected, Value::Int(_))
+        || problem.examples.len() < 4
+    {
+        return None;
+    }
+    for k in 1usize..=3 {
+        let mut lo: Vec<crate::benchmark::Example> = Vec::new();
+        let mut hi: Vec<crate::benchmark::Example> = Vec::new();
+        for ex in &problem.examples {
+            let len = ex.inputs.first().and_then(|v| v.as_i64_slice()).map(|a| a.len())?;
+            if len < k {
+                lo.push(ex.clone());
+            } else {
+                hi.push(ex.clone());
+            }
+        }
+        if lo.len() < 2 || hi.len() < 2 {
+            continue;
+        }
+        let lo_fn = format!("{fn_name}_lo");
+        let hi_fn = format!("{fn_name}_hi");
+        let (Some(lo_res), Some(hi_res)) = (
+            solve_branch_body(problem, &lo, &lo_fn),
+            solve_branch_body(problem, &hi, &hi_fn),
+        ) else {
+            continue;
+        };
+        if branch_bodies_equivalent(&lo_res.code, &lo_fn, &hi_res.code, &hi_fn) {
+            continue; // not a real branch — a single op covers both sides
+        }
+        let code = format!(
+            "{}\n{}\nfn {fn_name}(arr: [i64]) -> i64 {{\n    if arr.len < {k} {{\n        return {lo_fn}(arr);\n    }}\n    return {hi_fn}(arr);\n}}\n",
+            lo_res.code.trim_end(),
+            hi_res.code.trim_end()
+        );
+        if verify_problem_code_strict(problem, &code).is_ok() {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method: format!("structural-length-branch:{}|{}", lo_res.method, hi_res.method),
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            });
+        }
+    }
+    None
+}
+
 fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
 
@@ -3824,6 +3917,11 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
     // #2 BRANCH-ON-STRUCTURE: examples mixing empty + non-empty arrays → the
     // emptiness-guarded form (the flat fold can't carry an empty default).
     if let Some(r) = synthesize_emptiness_guard(problem) {
+        return Some(r);
+    }
+    // General length-threshold branch (len < K) — handles cases the emptiness
+    // guard can't (a synthesized lo body, K up to 3). Re-entrancy-guarded.
+    if let Some(r) = synthesize_length_branch(problem) {
         return Some(r);
     }
 

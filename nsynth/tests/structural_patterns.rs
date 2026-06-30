@@ -39,3 +39,34 @@ fn max_or_zero_if_empty() {
     );
     assert!(r.success, "max-or-0-if-empty should synthesize (branch on length)");
 }
+
+/// General length-threshold branch, TOP-LEVEL (no empty case, so the emptiness
+/// guard skips): "if len < 2 return the single element, else the sum". Two
+/// genuinely different branch bodies selected by arr.len.
+#[test]
+fn single_element_else_sum() {
+    let mk = |a: &[i64], o: i64| Example {
+        inputs: vec![Value::int_array(a)],
+        expected: Value::Int(o),
+    };
+    let r = probe(
+        "small_zero_else_sum",
+        "fn small_zero_else_sum(a: [i64]) -> i64",
+        vec![
+            mk(&[5], 0),
+            mk(&[3], 0),
+            mk(&[7], 0),
+            mk(&[1, 2], 3),
+            mk(&[4, 5, 6], 15),
+            mk(&[2, 3], 5),
+            mk(&[10, 20], 30),
+            mk(&[1, 1, 1], 3),
+        ],
+    );
+    assert!(r.success, "len<2->element else sum should synthesize (length branch)");
+    assert!(
+        r.method.contains("structural-length-branch:"),
+        "wrong method (expected a length branch): {}",
+        r.method
+    );
+}
