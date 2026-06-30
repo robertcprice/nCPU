@@ -3740,6 +3740,74 @@ fn synthesize_bool_output_enumerative(problem: &Problem) -> Option<SolveResult> 
     None
 }
 
+/// #2 BRANCH-ON-STRUCTURE: a function over an array whose EMPTY case returns a
+/// fixed default and whose NON-EMPTY case is an ordinary reduce/computation —
+/// e.g. "the max, or 0 if empty". The flat composition shape cannot express the
+/// empty default (a reduce's identity is fixed; max/min/average have no
+/// meaningful empty value). Split examples by emptiness, synthesize the NON-EMPTY
+/// body through the full solver, and wrap it in a length guard. The non-empty
+/// sub-problem has no empty examples → no re-entry here. Strict-verified.
+fn synthesize_emptiness_guard(problem: &Problem) -> Option<SolveResult> {
+    let fn_name = problem.function_name();
+    let first = problem.examples.first()?;
+    if first.inputs.len() != 1 || !matches!(first.expected, Value::Int(_)) {
+        return None; // one array arg, scalar int output
+    }
+    let array_idx = first.inputs.iter().position(|v| matches!(v, Value::Array(_)))?;
+    let is_empty_ex = |ex: &crate::benchmark::Example| -> bool {
+        matches!(ex.inputs.get(array_idx), Some(Value::Array(a)) if a.is_empty())
+    };
+    let empty: Vec<&crate::benchmark::Example> =
+        problem.examples.iter().filter(|e| is_empty_ex(e)).collect();
+    let nonempty: Vec<crate::benchmark::Example> = problem
+        .examples
+        .iter()
+        .filter(|e| !is_empty_ex(e))
+        .cloned()
+        .collect();
+    // Need BOTH a guarded (empty) case and enough body (non-empty) cases.
+    if empty.is_empty() || nonempty.len() < 2 {
+        return None;
+    }
+    // The empty default must be a single agreed-upon Int.
+    let default = match empty[0].expected {
+        Value::Int(d) => d,
+        _ => return None,
+    };
+    if !empty
+        .iter()
+        .all(|e| matches!(e.expected, Value::Int(x) if x == default))
+    {
+        return None;
+    }
+    // Synthesize the NON-EMPTY body as its own fn through the full solver.
+    let body_fn = format!("{fn_name}_body");
+    let mut sub = problem.clone();
+    sub.name = body_fn.clone();
+    sub.signature = Box::leak(format!("fn {body_fn}(arr: [i64]) -> i64").into_boxed_str());
+    sub.reference_code = "";
+    sub.holdouts = Vec::new();
+    sub.examples = nonempty;
+    let body = crate::solver::solve_problem(&sub);
+    if !body.success {
+        return None;
+    }
+    let code = format!(
+        "{}\nfn {fn_name}(arr: [i64]) -> i64 {{\n    if arr.len == 0 {{\n        return {default};\n    }}\n    return {body_fn}(arr);\n}}\n",
+        body.code.trim_end()
+    );
+    if verify_problem_code_strict(problem, &code).is_ok() {
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: format!("structural-guard:{}", body.method),
+            error: None,
+            metadata: DifferentiableMetadata::default(),
+        });
+    }
+    None
+}
+
 fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
 
@@ -3751,6 +3819,12 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
         .is_some_and(|ex| matches!(ex.expected, Value::Array(_)))
     {
         return synthesize_array_map_enumerative(problem);
+    }
+
+    // #2 BRANCH-ON-STRUCTURE: examples mixing empty + non-empty arrays → the
+    // emptiness-guarded form (the flat fold can't carry an empty default).
+    if let Some(r) = synthesize_emptiness_guard(problem) {
+        return Some(r);
     }
 
     // Extract scalar args and arrays from examples
