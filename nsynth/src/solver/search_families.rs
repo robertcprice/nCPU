@@ -2758,15 +2758,26 @@ pub(super) fn search_sequence_quadratic_polynomial(
     let (n1, v1) = values[1];
     let (n2, v2) = values[2];
 
-    let d0 = (v1 - v0) / (n1 - n0 + 1);
-    let d1 = (v2 - v1) / (n2 - n1 + 1);
-    let a = (d1 - d0) / ((n2 - n0) / 2 + 1);
+    // Guard every divisor: these denominators are 0 for ordinary inputs (e.g.
+    // first two x differ by -1 → n1-n0+1 == 0), which previously panicked
+    // (uncaught, aborting the whole solve). A zero divisor just means this
+    // heuristic doesn't apply → return None.
+    let den0 = n1 - n0 + 1;
+    let den1 = n2 - n1 + 1;
+    let den2 = (n2 - n0) / 2 + 1;
+    if den0 == 0 || den1 == 0 || den2 == 0 {
+        return None;
+    }
+
+    let d0 = (v1 - v0) / den0;
+    let d1 = (v2 - v1) / den1;
+    let a = (d1 - d0) / den2;
 
     if a == 0 {
         return None;
     }
 
-    let b = (v1 - v0) / (n1 - n0 + 1) - a * (n0 + n1) / 2;
+    let b = (v1 - v0) / den0 - a * (n0 + n1) / 2;
     let c = v0 - a * n0 * n0 - b * n0;
 
     let passes = values.iter().all(|(n, v)| {

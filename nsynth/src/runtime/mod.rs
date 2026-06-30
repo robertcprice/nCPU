@@ -834,6 +834,12 @@ pub(crate) fn install_silent_panic_hook_once() {
     use std::sync::Once;
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {
+        // NSYNTH_VERBOSE_PANIC keeps the default hook so panics (incl. uncaught
+        // ones in the search itself, not just caught candidate panics) print —
+        // for debugging. Default: silent (a caught candidate panic is not noise).
+        if std::env::var_os("NSYNTH_VERBOSE_PANIC").is_some() {
+            return;
+        }
         std::panic::set_hook(Box::new(|_| {}));
     });
 }
