@@ -70,3 +70,46 @@ fn single_element_else_sum() {
         r.method
     );
 }
+
+/// Probe: top-level scalar branch with NON-affine sides — if n<0 { n*n } else { n+1 }.
+/// Tests whether the enumerative IfExpr already covers expr-branches (to target the gap).
+#[test]
+fn scalar_branch_probe() {
+    let mk = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+    let r = probe(
+        "sgnsq",
+        "fn sgnsq(n: i64) -> i64",
+        vec![
+            mk(-2, 4), mk(-3, 9), mk(-1, 1), mk(0, 1),
+            mk(1, 2), mk(5, 6), mk(3, 4), mk(-5, 25), mk(2, 3), mk(-4, 16),
+        ],
+    );
+    // Already covered by search_single_branch (top-level scalar branch, arbitrary
+    // expr sides) — lock it as a guard.
+    assert!(r.success, "top-level scalar branch (non-affine sides) should synthesize");
+}
+
+/// GAP probe: array->array map whose body uses a WHOLE-ARRAY aggregate computed
+/// once — "each element minus the max". out[k] = arr[k] - max(arr). The flat
+/// elementwise map can't see max(arr); needs a reduce-then-map intermediate.
+#[test]
+fn aggregate_map_probe() {
+    let mk = |a: &[i64]| {
+        let mx = *a.iter().max().unwrap();
+        Example {
+            inputs: vec![Value::int_array(a)],
+            expected: Value::int_array(&a.iter().map(|x| x - mx).collect::<Vec<_>>()),
+        }
+    };
+    let r = probe(
+        "minus_max",
+        "fn minus_max(a: [i64]) -> [i64]",
+        vec![mk(&[3, 1, 5]), mk(&[2, 8, 4]), mk(&[7, 7, 1]), mk(&[10, 2, 6]), mk(&[1, 2, 3, 4]), mk(&[9, 0, 5])],
+    );
+    assert!(r.success, "each-minus-max should synthesize (aggregate-parameterized map)");
+    assert!(
+        r.method.contains("aggregate-map"),
+        "expected aggregate-map, got: {}",
+        r.method
+    );
+}

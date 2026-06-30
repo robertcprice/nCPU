@@ -3398,6 +3398,96 @@ fn emit_mog_map(body: &Expr, fn_name: &str, scalar_names: &[&str], array_idx: us
 ///
 /// Elementwise only (`out.len() == in.len()`); filter (shorter output) and
 /// reorder (sort/reverse) stay with `array_transform`. Strict-verified end to end.
+/// #2 MULTI-STEP INTERMEDIATE: an array→array map whose element body uses a
+/// WHOLE-ARRAY AGGREGATE computed once — e.g. "each element minus the max"
+/// (out[k] = arr[k] - max(arr)), centering, normalization. The flat elementwise
+/// map can't see an aggregate of the whole array; this computes the aggregate
+/// into a local FIRST, then maps each element with it (genuine reduce-then-map
+/// intermediate state). Single int-array input, elementwise int-array output,
+/// non-empty. Tries a small set of aggregates; the body MUST use the aggregate
+/// (else the plain map already covers it). Strict-verified.
+fn synthesize_aggregate_map(problem: &Problem) -> Option<SolveResult> {
+    let fn_name = problem.function_name();
+    let first = problem.examples.first()?;
+    if first.inputs.len() != 1
+        || !matches!(first.inputs[0], Value::Array(_))
+        || !matches!(first.expected, Value::Array(_))
+    {
+        return None;
+    }
+    // (label, compute fn, Mog code that puts the aggregate into local `agg`).
+    let aggs: &[(&str, fn(&[i64]) -> Option<i64>, &str)] = &[
+        ("sum", |a| Some(a.iter().sum()), "    agg: i64 = 0;\n    for av in arr {\n        agg = agg + av;\n    }\n"),
+        ("max", |a| a.iter().copied().max(), "    agg: i64 = arr[0];\n    for av in arr {\n        if av > agg {\n            agg = av;\n        }\n    }\n"),
+        ("min", |a| a.iter().copied().min(), "    agg: i64 = arr[0];\n    for av in arr {\n        if av < agg {\n            agg = av;\n        }\n    }\n"),
+        ("len", |a| Some(a.len() as i64), "    agg: i64 = arr.len;\n"),
+        ("first", |a| a.first().copied(), "    agg: i64 = arr[0];\n"),
+        ("last", |a| a.last().copied(), "    agg: i64 = arr[arr.len - 1];\n"),
+        ("product", |a| Some(a.iter().product()), "    agg: i64 = 1;\n    for av in arr {\n        agg = agg * av;\n    }\n"),
+    ];
+    for (label, compute, agg_code) in aggs {
+        let mut flat: Vec<(Vec<i64>, i64)> = Vec::new();
+        let mut applicable = true;
+        for ex in &problem.examples {
+            let arr = ex.inputs[0].as_i64_slice()?;
+            let Value::Array(out) = &ex.expected else {
+                return None;
+            };
+            if out.len() != arr.len() {
+                return None; // not elementwise
+            }
+            if arr.is_empty() {
+                applicable = false; // aggregate (max/first/...) undefined on empty
+                break;
+            }
+            let Some(aval) = compute(&arr) else {
+                applicable = false;
+                break;
+            };
+            for (k, item) in arr.iter().enumerate() {
+                let Value::Int(o) = out[k] else {
+                    return None;
+                };
+                flat.push((vec![*item, k as i64, aval], o)); // [item, i, agg]
+            }
+        }
+        if !applicable || flat.is_empty() {
+            continue;
+        }
+        let library = ComponentLibrary::load_or_dream(3_000);
+        let (body, _t, _m) = enumerate_exprs_with_ops_stats(
+            3,
+            7,
+            &flat,
+            8_000,
+            Some(&library),
+            &ALL_BINOPS,
+            &ALL_UNOPS,
+        );
+        let Some(body) = body else { continue };
+        let Some(body_s) = render_map_body(&body, &["item", "i", "agg"]) else {
+            continue;
+        };
+        // Body MUST reference the aggregate, else the plain elementwise map covers it.
+        if !body_s.contains("agg") {
+            continue;
+        }
+        let code = format!(
+            "fn {fn_name}(arr: [i64]) -> [i64] {{\n{agg_code}    result: [i64] = [];\n    i: i64 = 0;\n    for item in arr {{\n        result.push({body_s});\n        i = i + 1;\n    }}\n    return result;\n}}\n"
+        );
+        if verify_problem_code_strict(problem, &code).is_ok() {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method: format!("aggregate-map:{label}"),
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            });
+        }
+    }
+    None
+}
+
 fn synthesize_array_map_enumerative(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
     let first = problem.examples.first()?;
@@ -3911,7 +4001,12 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
         .first()
         .is_some_and(|ex| matches!(ex.expected, Value::Array(_)))
     {
-        return synthesize_array_map_enumerative(problem);
+        if let Some(r) = synthesize_array_map_enumerative(problem) {
+            return Some(r);
+        }
+        // Multi-step intermediate: a map whose body uses a whole-array aggregate
+        // (reduce-then-map, e.g. "each element minus the max").
+        return synthesize_aggregate_map(problem);
     }
 
     // #2 BRANCH-ON-STRUCTURE: examples mixing empty + non-empty arrays → the
