@@ -128,16 +128,15 @@ fn suggests_sampling_process(examples: &[Example]) -> bool {
         return true;
     }
 
-    // Check for boolean outputs (coin flips, Bernoulli)
-    let bool_count = examples
-        .iter()
-        .filter(|ex| matches!(&ex.expected, Value::Bool(_)))
-        .count();
-
-    if bool_count > examples.len() / 2 {
-        return true;
-    }
-
+    // NOTE: bool OUTPUT alone is NOT evidence of a stochastic process. A
+    // deterministic predicate (is_even, is_positive: distinct inputs → fixed
+    // outputs) has bool output but is NOT a coin flip. Classifying it as Bernoulli
+    // made the probabilistic teacher emit a random sampler that FALSE-ACCEPTED
+    // (e.g. is_even "solved" by a bias-0.625 rand::Rng). Genuine randomness is
+    // caught by has_conflicting_scalar_examples (same input → different output)
+    // and the empty-input check above. A deterministic bool predicate must fall
+    // through to real synthesis (and honestly fail if no path covers it) rather
+    // than be faked. (Removed the `bool_count > len/2` heuristic.)
     false
 }
 

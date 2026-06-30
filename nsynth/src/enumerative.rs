@@ -2635,6 +2635,12 @@ pub fn synthesize_enumerative(problem: &Problem) -> Option<SolveResult> {
                 return Some(r);
             }
         }
+        // BOOL OUTPUT (deterministic predicate) → encode {1,0} + emit `!= 0`.
+        if matches!(first.expected, Value::Bool(_)) {
+            if let Some(r) = synthesize_bool_output_enumerative(problem) {
+                return Some(r);
+            }
+        }
     }
 
     // Detect array vs scalar
@@ -3662,6 +3668,71 @@ fn synthesize_tuple_output_array(problem: &Problem) -> Option<SolveResult> {
             success: true,
             code,
             method: "enumerative-tuple-output-array".to_string(),
+            error: None,
+            metadata: DifferentiableMetadata::default(),
+        });
+    }
+    None
+}
+
+/// BOOL-OUTPUT synthesis — deterministic predicates (is_even, is_positive, …).
+/// A bool function is a PREDICATE over an i64 expression: encode each example's
+/// bool as {1,0}, synthesize an i64 body that fits {1,0} with the existing
+/// full-grammar enumerator (it freely builds `n%2`, comparisons-in-IfExpr,
+/// arithmetic), then emit `fn f(..) -> bool { return (<body>) != 0; }` — since the
+/// body is {0,1} on every example, `!= 0` IS the predicate. Strict-verified as
+/// bool (output_matches Bool↔Bool). This is the REAL bool path; the old
+/// probabilistic Bernoulli "solution" was a false-accept (now removed).
+fn synthesize_bool_output_enumerative(problem: &Problem) -> Option<SolveResult> {
+    let fn_name = problem.function_name();
+    let first = problem.examples.first()?;
+    if !matches!(first.expected, Value::Bool(_)) {
+        return None;
+    }
+    let n_args = first.inputs.len();
+    if n_args == 0 || n_args > 4 || !first.inputs.iter().all(|v| matches!(v, Value::Int(_))) {
+        return None;
+    }
+    let mut flat: Vec<(Vec<i64>, i64)> = Vec::with_capacity(problem.examples.len());
+    for ex in &problem.examples {
+        let inputs: Vec<i64> = ex
+            .inputs
+            .iter()
+            .filter_map(|v| if let Value::Int(n) = v { Some(*n) } else { None })
+            .collect();
+        if inputs.len() != n_args {
+            return None;
+        }
+        let b = match ex.expected {
+            Value::Bool(b) => b,
+            _ => return None,
+        };
+        flat.push((inputs, if b { 1 } else { 0 }));
+    }
+    let library = ComponentLibrary::load_or_dream(3_000);
+    let (body, _t, _m) = enumerate_exprs_with_ops_stats(
+        n_args,
+        7,
+        &flat,
+        8_000,
+        Some(&library),
+        &ALL_BINOPS,
+        &ALL_UNOPS,
+    );
+    let body = body?;
+    let arg_names: Vec<&str> = ["a", "b", "c", "d"].get(..n_args)?.to_vec();
+    let bs = render_map_body(&body, &arg_names)?;
+    let sig_params = arg_names
+        .iter()
+        .map(|n| format!("{n}: i64"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let code = format!("fn {fn_name}({sig_params}) -> bool {{\n    return ({bs}) != 0;\n}}\n");
+    if verify_problem_code_strict(problem, &code).is_ok() {
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: "enumerative-bool".to_string(),
             error: None,
             metadata: DifferentiableMetadata::default(),
         });

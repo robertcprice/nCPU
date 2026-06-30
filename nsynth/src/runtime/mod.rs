@@ -1206,12 +1206,18 @@ pub fn verify_problem_code_via_main(problem: &Problem, code: &str) -> Result<(),
 
 /// A wire value that the stdout wrapper cannot print (needs structural compare).
 fn is_composite_expected(v: &BenchmarkValue) -> bool {
+    // Outputs the int/string/array stdout wrapper (`println_i64`/`println`) cannot
+    // faithfully print → verify the examples STRUCTURALLY via output_matches
+    // instead. Composites (Pair/Quad/Tuple/Struct) AND Bool (println_i64 rejects a
+    // bool) need this; Bool support is what lets deterministic bool-predicate
+    // synthesis verify end to end.
     matches!(
         v,
         BenchmarkValue::Pair(..)
             | BenchmarkValue::Quad(..)
             | BenchmarkValue::Tuple(..)
             | BenchmarkValue::Struct(..)
+            | BenchmarkValue::Bool(..)
     )
 }
 
