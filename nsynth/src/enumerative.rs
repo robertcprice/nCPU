@@ -2620,6 +2620,19 @@ fn emit_mog_array(expr: &Expr, fn_name: &str, scalar_names: &[&str], array_idx: 
 /// Enumerative synthesis: discovers programs from I/O examples alone.
 /// Handles both scalar and array problems.
 pub fn synthesize_enumerative(problem: &Problem) -> Option<SolveResult> {
+    // COMPOSITE OUTPUT (tuple/pair/quad of ints) with scalar inputs → synthesize
+    // each component with the scalar enumerator and emit a struct. Tried first so
+    // a composite expected never falls through to the scalar/array int paths.
+    if let Some(first) = problem.examples.first() {
+        if tuple_arity(&first.expected).is_some()
+            && first.inputs.iter().all(|v| matches!(v, Value::Int(_)))
+        {
+            if let Some(r) = synthesize_tuple_output_enumerative(problem) {
+                return Some(r);
+            }
+        }
+    }
+
     // Detect array vs scalar
     let has_array = problem
         .examples
@@ -3448,6 +3461,124 @@ fn synthesize_array_map_enumerative(problem: &Problem) -> Option<SolveResult> {
     None
 }
 
+/// Extract the k-th int component of a flat composite expected value.
+fn tuple_component(expected: &Value, k: usize) -> Option<i64> {
+    match expected {
+        Value::Pair(a, b) => [*a, *b].get(k).copied(),
+        Value::Quad(a, b, c, d) => [*a, *b, *c, *d].get(k).copied(),
+        Value::Tuple(t) => match t.get(k)? {
+            Value::Int(v) => Some(*v),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Component arity of a flat-int composite (Pair=2, Quad=4, Tuple=len), else None.
+fn tuple_arity(expected: &Value) -> Option<usize> {
+    match expected {
+        Value::Pair(_, _) => Some(2),
+        Value::Quad(_, _, _, _) => Some(4),
+        Value::Tuple(t) if !t.is_empty() && t.iter().all(|v| matches!(v, Value::Int(_))) => {
+            Some(t.len())
+        }
+        _ => None,
+    }
+}
+
+/// COMPOSITE-OUTPUT synthesis — lift the engine over the scalar/array OUTPUT
+/// ceiling into STRUCTURED output. A function returning a tuple/pair/quad is the
+/// componentwise product of scalar functions: component k is correct iff a body
+/// fits EVERY `(scalar_inputs -> expected_k)` example. So FLATTEN by component
+/// (mirroring the array-map flatten by element), synthesize each component with
+/// the existing scalar enumerator, and emit a struct-returning Mog program. The
+/// strict verifier accepts a runtime Struct against a wire Pair/Quad/Tuple
+/// (`struct_fields_match`, a multiset of int fields). Scalar (int) inputs only;
+/// array-input composites (e.g. minmax(arr)) need the fold engine per component
+/// and stay out of scope. Strict-verified end to end.
+fn synthesize_tuple_output_enumerative(problem: &Problem) -> Option<SolveResult> {
+    let fn_name = problem.function_name();
+    let first = problem.examples.first()?;
+    let ncomp = tuple_arity(&first.expected)?;
+    if ncomp < 2 {
+        return None;
+    }
+    let n_args = first.inputs.len();
+    if n_args == 0 || n_args > 6 || !first.inputs.iter().all(|v| matches!(v, Value::Int(_))) {
+        return None; // scalar (int) inputs only, bounded arity for naming
+    }
+    let library = ComponentLibrary::load_or_dream(3_000);
+    let mut bodies: Vec<Expr> = Vec::with_capacity(ncomp);
+    for k in 0..ncomp {
+        let mut flat: Vec<(Vec<i64>, i64)> = Vec::with_capacity(problem.examples.len());
+        for ex in &problem.examples {
+            if ex.inputs.len() != n_args {
+                return None;
+            }
+            let inputs: Vec<i64> = ex
+                .inputs
+                .iter()
+                .filter_map(|v| if let Value::Int(n) = v { Some(*n) } else { None })
+                .collect();
+            if inputs.len() != n_args {
+                return None; // a non-int input — out of scope
+            }
+            let comp = tuple_component(&ex.expected, k)?;
+            flat.push((inputs, comp));
+        }
+        let (body, _t, _m) = enumerate_exprs_with_ops_stats(
+            n_args,
+            7,
+            &flat,
+            8_000,
+            Some(&library),
+            &ALL_BINOPS,
+            &ALL_UNOPS,
+        );
+        bodies.push(body?);
+    }
+    let code = emit_mog_tuple(fn_name, n_args, &bodies)?;
+    // STRICT gate over the whole program — the examples are checked structurally
+    // (a runtime Struct vs the wire Pair/Quad/Tuple) via output_matches, never on
+    // the componentwise fit alone.
+    if verify_problem_code_strict(problem, &code).is_ok() {
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: "enumerative-tuple-output".to_string(),
+            error: None,
+            metadata: DifferentiableMetadata::default(),
+        });
+    }
+    None
+}
+
+/// Emit a struct-returning Mog program for composite output: a struct with one
+/// `i64` field per component, returned from the component bodies.
+fn emit_mog_tuple(fn_name: &str, n_args: usize, bodies: &[Expr]) -> Option<String> {
+    let arg_names: Vec<&str> = ["a", "b", "c", "d", "e", "f"].get(..n_args)?.to_vec();
+    let sig_params = arg_names
+        .iter()
+        .map(|n| format!("{n}: i64"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Mog only parses `Name { .. }` struct construction when Name is
+    // uppercase-first (parser disambiguation from block braces), so prefix.
+    let struct_name = format!("Out_{fn_name}");
+    let mut decl_fields: Vec<String> = Vec::with_capacity(bodies.len());
+    let mut ctor_fields: Vec<String> = Vec::with_capacity(bodies.len());
+    for (k, body) in bodies.iter().enumerate() {
+        let bs = render_map_body(body, &arg_names)?;
+        decl_fields.push(format!("f{k}: i64"));
+        ctor_fields.push(format!("f{k}: {bs}"));
+    }
+    Some(format!(
+        "struct {struct_name} {{ {} }}\nfn {fn_name}({sig_params}) -> {struct_name} {{\n    return {struct_name} {{ {} }};\n}}\n",
+        decl_fields.join(", "),
+        ctor_fields.join(", "),
+    ))
+}
+
 fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
 
@@ -4095,6 +4226,76 @@ pub fn dream(time_budget_ms: u64) -> ComponentLibrary {
 mod tests {
     use super::*;
 
+    /// COMPOSITE OUTPUT: a Pair-returning function `(a,b) -> (a+b, a-b)` is
+    /// synthesized componentwise (each component a scalar fit), emitted as a
+    /// struct, and strict-verified — the engine producing STRUCTURED output, not
+    /// just i64/array. This is the type-ceiling lift.
+    #[test]
+    fn synthesizes_pair_output_componentwise() {
+        use crate::benchmark::{Example, Problem, Value};
+        let mk = |a: i64, b: i64| Example {
+            inputs: vec![Value::Int(a), Value::Int(b)],
+            expected: Value::Pair(a + b, a - b),
+        };
+        let problem = Problem {
+            name: "sumdiff".to_string(),
+            category: "test",
+            description: "pair output (a+b, a-b)",
+            signature: "fn sumdiff(a: i64, b: i64) -> Out_sumdiff",
+            examples: vec![
+                mk(5, 3),
+                mk(10, 2),
+                mk(7, 1),
+                mk(8, 4),
+                mk(20, 6),
+                mk(3, 9),
+            ],
+            ..Default::default()
+        };
+        let r = synthesize_enumerative(&problem)
+            .unwrap_or_else(|| panic!("pair-output should synthesize"));
+        assert_eq!(
+            r.method, "enumerative-tuple-output",
+            "wrong method; code:\n{}",
+            r.code
+        );
+        // The emitted program declares a struct and returns it.
+        assert!(
+            r.code.contains("struct Out_sumdiff") && r.code.contains("return Out_sumdiff {"),
+            "emit not a struct-returning program:\n{}",
+            r.code
+        );
+    }
+
+    /// COMPOSITE OUTPUT, 4 components: `(a,b) -> (a+b, a-b, a*b, a)` proves the
+    /// componentwise lift generalizes beyond pairs (Quad → 4-field struct).
+    #[test]
+    fn synthesizes_quad_output_componentwise() {
+        use crate::benchmark::{Example, Problem, Value};
+        let mk = |a: i64, b: i64| Example {
+            inputs: vec![Value::Int(a), Value::Int(b)],
+            expected: Value::Quad(a + b, a - b, a * b, a),
+        };
+        let problem = Problem {
+            name: "quadfn".to_string(),
+            category: "test",
+            description: "quad output",
+            signature: "fn quadfn(a: i64, b: i64) -> Out_quadfn",
+            examples: vec![
+                mk(5, 3),
+                mk(10, 2),
+                mk(7, 1),
+                mk(8, 4),
+                mk(2, 6),
+                mk(9, 5),
+            ],
+            ..Default::default()
+        };
+        let r = synthesize_enumerative(&problem)
+            .unwrap_or_else(|| panic!("quad-output should synthesize"));
+        assert_eq!(r.method, "enumerative-tuple-output", "code:\n{}", r.code);
+    }
+
     #[test]
     fn core_ext_finds_identity_and_reports_no_timeout() {
         // f(x) = x: should be found at size 1 (Var), so timed_out stays false
@@ -4109,13 +4310,15 @@ mod tests {
 
     #[test]
     fn stats_reports_max_completed_when_exhausted() {
-        // f(x) = x + 1000 doesn't match any expression under the size/const budget
-        // used here. At max_size=3 with a generous 3s budget, size 3 should
-        // complete and max_completed should equal 3.
-        let examples = vec![(vec![0], 1000), (vec![1], 1001), (vec![2], 1002)];
+        // f(x) = x*x*x (cube) is genuinely unsolvable at max_size=3 — a cube needs
+        // size 5, and no mined constant fits {8,27,64}. (The old `x+1000` premise
+        // is stale since LOOP-23: constant-mining now seeds 1000 from the outputs,
+        // so `x+1000` IS findable. Cube is mining-proof.) At max_size=3 with a
+        // generous 3s budget, every size completes → max_completed == 3.
+        let examples = vec![(vec![2], 8), (vec![3], 27), (vec![4], 64)];
         let (expr, timed_out, max_completed) =
             enumerate_exprs_with_ops_stats(1, 3, &examples, 3_000, None, &CORE_BINOPS, &CORE_UNOPS);
-        assert!(expr.is_none(), "1000 is not in the constant set");
+        assert!(expr.is_none(), "cube is size-5, unsolvable at size 3");
         assert!(!timed_out, "size 3 enumeration should fit within 3s");
         assert_eq!(max_completed, 3, "every size should have completed cleanly");
     }

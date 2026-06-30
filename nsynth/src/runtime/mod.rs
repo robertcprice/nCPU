@@ -1168,6 +1168,29 @@ fn execute_program_verified(code: &str) -> Result<ExecutionResult, String> {
 }
 
 pub fn verify_problem_code_via_main(problem: &Problem, code: &str) -> Result<(), String> {
+    // COMPOSITE OUTPUT (Pair/Quad/Tuple/Struct expected): the int/string/array
+    // stdout wrapper can't print a struct (`println_i64` rejects it), so the
+    // stdout check is inapplicable. Verify the examples STRUCTURALLY via
+    // `output_matches` — the same total comparison the holdouts use (a runtime
+    // Struct matches a wire Pair/Quad by `struct_fields_match`). Runs the candidate
+    // under the same FS-deny + panic isolation as the holdout path.
+    if problem
+        .examples
+        .iter()
+        .any(|e| is_composite_expected(&e.expected))
+    {
+        let fn_name = problem.function_name();
+        for example in &problem.examples {
+            let value = execute_function_for_problem(code, fn_name, &example.inputs, problem)?;
+            if !output_matches(&value, &example.expected) {
+                return Err(format!(
+                    "example mismatch for {}: inputs {:?}, expected {}, got {:?}",
+                    problem.name, example.inputs, example.expected, value
+                ));
+            }
+        }
+        return Ok(());
+    }
     let program = problem.wrap_program(code)?;
     let result = execute_program_verified(&program)?;
     if result.output != problem.expected_stdout() {
@@ -1179,6 +1202,17 @@ pub fn verify_problem_code_via_main(problem: &Problem, code: &str) -> Result<(),
         ));
     }
     Ok(())
+}
+
+/// A wire value that the stdout wrapper cannot print (needs structural compare).
+fn is_composite_expected(v: &BenchmarkValue) -> bool {
+    matches!(
+        v,
+        BenchmarkValue::Pair(..)
+            | BenchmarkValue::Quad(..)
+            | BenchmarkValue::Tuple(..)
+            | BenchmarkValue::Struct(..)
+    )
 }
 
 fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Result<Value, String> {
