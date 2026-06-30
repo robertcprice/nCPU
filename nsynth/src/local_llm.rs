@@ -14,7 +14,77 @@
 //! OpenAI-compatible endpoint (e.g. `mlx_lm.server` / LM Studio). HTTP via
 //! subprocess `curl` — no http crate dependency, mirroring `hybrid::`.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+/// Ensure the local model endpoint is reachable. If `NSYNTH_LOCAL_LLM_URL` already
+/// responds → true. Otherwise, when `NSYNTH_LOCAL_LLM_AUTOSERVE` is set, spawn
+/// `mlx_lm.server` (detached; persists across calls) for `NSYNTH_LOCAL_LLM_MODEL`
+/// on the URL's port and wait for it to load. Best-effort; returns whether the
+/// endpoint is now reachable. Without AUTOSERVE this is a fast no-op (returns
+/// whether a server happens to already be up). So the lane can be fully
+/// self-starting (`NSYNTH_LOCAL_LLM_AUTOSERVE=1`) or rely on an externally-managed
+/// server (default).
+pub fn ensure_server() -> bool {
+    let Some(url) = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+    else {
+        return false;
+    };
+    if server_reachable(&url) {
+        return true;
+    }
+    if std::env::var("NSYNTH_LOCAL_LLM_AUTOSERVE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return false;
+    }
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_default();
+    if model.is_empty() {
+        return false;
+    }
+    let port = url_port(&url).unwrap_or(8765);
+    let _ = Command::new("python3")
+        .args(["-m", "mlx_lm", "server", "--model", &model, "--port", &port.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    // Wait for the model to load (~16s observed; allow up to ~60s).
+    for _ in 0..30 {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if server_reachable(&url) {
+            return true;
+        }
+    }
+    false
+}
+
+/// GET `<base>/models` (base derived from the chat-completions URL) returns 2xx.
+fn server_reachable(url: &str) -> bool {
+    let base = url.rsplit_once("/chat/completions").map_or(url, |(b, _)| b);
+    Command::new("curl")
+        .args([
+            "-s", "-m", "2", "-o", "/dev/null", "-w", "%{http_code}",
+            &format!("{base}/models"),
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).starts_with('2'))
+        .unwrap_or(false)
+}
+
+fn url_port(url: &str) -> Option<u16> {
+    url.split("://")
+        .nth(1)?
+        .split('/')
+        .next()?
+        .rsplit(':')
+        .next()?
+        .parse()
+        .ok()
+}
 
 /// Translate `request` to one of `known_ops` via a local OpenAI-compatible chat
 /// endpoint. `None` when disabled (no `NSYNTH_LOCAL_LLM_URL`), on any error, or
@@ -144,5 +214,18 @@ mod tests {
             translate_op("add up all the elements", &["array_sum".to_string()]),
             None
         );
+    }
+
+    #[test]
+    fn url_port_parses() {
+        assert_eq!(url_port("http://localhost:8765/v1/chat/completions"), Some(8765));
+        assert_eq!(url_port("http://127.0.0.1:1234/v1/chat/completions"), Some(1234));
+        assert_eq!(url_port("not a url"), None);
+    }
+
+    #[test]
+    fn ensure_server_inert_without_url() {
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        assert!(!ensure_server());
     }
 }

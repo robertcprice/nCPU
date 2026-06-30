@@ -843,6 +843,11 @@ impl LinguigenesisBridge {
     /// op vocabulary (e.g. "add up all the elements of an array" → array_sum, which
     /// the symbolic comprehension mis-resolves to scalar add).
     pub fn synthesize_via_local_llm(&self, request: &str) -> Option<crate::solver::SolveResult> {
+        // Server reachable (or auto-started when NSYNTH_LOCAL_LLM_AUTOSERVE is set);
+        // bail fast otherwise so the lane stays inert when no model is available.
+        if !crate::local_llm::ensure_server() {
+            return None;
+        }
         let ops = self.known_op_names();
         if ops.is_empty() {
             return None;
