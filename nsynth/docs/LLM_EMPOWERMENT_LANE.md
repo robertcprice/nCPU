@@ -57,6 +57,23 @@ strict-verified result. **Mode C** (`synthesize_project_via_llm`) is a separate
 entry: it returns `(verified, failed)` — the strict-verified `(name, result)`
 components and the names the engine could not verify.
 
+### The full loop works end-to-end (prompt → verified compiling multi-file crate)
+
+`tests/llm_project_compiles.rs` (gated): one English prompt → Mode C decomposition
+→ each component strict-verified → `write_synthesized_project` emits a multi-file
+Rust crate → **`cargo check` COMPILE GATE passes**. Verified:
+`"build helpers to analyze a list of numbers: total, largest, how many positive"`
+→ 3 verified components → `src/{calculate_sum,find_maximum,count_positive}.rs` +
+`lib.rs` + `Cargo.toml`, **compile = Ok**.
+
+This is **layered verification**, and it is how "verified complex programs" actually
+works: each logic leaf is verified against examples (strict); the ASSEMBLY is
+verified by compilation. The compile gate is load-bearing — it caught a real
+transpiler bug (a `for x in arr` that moved a reused `Vec` param → E0382), fixed by
+`gencode_normalize` Rule 6 (borrow-iterate value-Vec params). Next layers to add for
+bigger artifacts: execution smoke tests (it runs / a server responds) and LLM-
+proposed property + acceptance tests (declared behavior holds).
+
 ### Mode C trust scope (read this)
 
 Mode C verifies **each PART**, not the **whole artifact**. The LLM proposes the

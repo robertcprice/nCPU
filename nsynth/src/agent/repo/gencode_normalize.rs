@@ -23,6 +23,9 @@ pub fn normalize_component(rust: &str) -> String {
     // BEFORE rewriting `.len`/index (those don't affect param-mutation detection
     // but we want a stable scan of the original body for the param signature).
     let mutated = mutated_value_params(rust);
+    // Rule 6 inputs: every by-value Vec param. `for x in arr` MOVES such a param,
+    // so any later `arr[..]`/`arr.len()` fails to borrow a moved value (E0382).
+    let vec_params = value_vec_params(rust);
 
     let mut out_lines: Vec<String> = Vec::with_capacity(rust.lines().count());
     for line in rust.lines() {
@@ -47,9 +50,40 @@ pub fn normalize_component(rust: &str) -> String {
         // Rules 2 + 3: `.len` -> `.len()`, `IDENT[expr]` -> `IDENT[(expr) as usize]`.
         let rewritten = rewrite_len_property(&rewritten);
         let rewritten = rewrite_slice_index(&rewritten);
+        // Rule 6: borrow-iterate a by-value Vec param so it isn't moved.
+        let rewritten = rewrite_for_in_vec_param(&rewritten, &vec_params);
         out_lines.push(rewritten);
     }
     out_lines.join("\n")
+}
+
+/// Rule 6: `for VAR in PARAM` over a by-value `Vec` param MOVES the param, so any
+/// later use of it (`PARAM[..]`, `PARAM.len()`, a second loop) fails with E0382.
+/// Borrow instead: `for VAR in PARAM.iter().copied()` — elements are `Copy` (i64),
+/// so VAR keeps its type and the body is unchanged. Only fires when the iterand is
+/// the bare param identifier (not `PARAM.iter()` / `&PARAM`), so it never double-
+/// rewrites.
+fn rewrite_for_in_vec_param(line: &str, vec_params: &[String]) -> String {
+    if !line.trim_start().starts_with("for ") {
+        return line.to_string();
+    }
+    let Some(in_pos) = line.find(" in ") else {
+        return line.to_string();
+    };
+    let after = &line[in_pos + 4..];
+    let iterand_end = after
+        .find(|c: char| c.is_whitespace() || c == '{')
+        .unwrap_or(after.len());
+    let iterand = after[..iterand_end].trim();
+    if vec_params.iter().any(|p| p == iterand) {
+        return format!(
+            "{}{}.iter().copied(){}",
+            &line[..in_pos + 4],
+            iterand,
+            &after[iterand_end..]
+        );
+    }
+    line.to_string()
 }
 
 /// Rule 5: `: Vec<i64> = []` (any spacing) at the end of an assignment becomes
@@ -346,6 +380,25 @@ mod tests {
         let out = normalize_component(src);
         assert!(out.contains("arr.len() as i64"), "got: {out}");
         assert!(!out.contains("arr.len -"), "got: {out}");
+    }
+
+    #[test]
+    fn borrow_iterates_reused_vec_param() {
+        // The exact shape that failed the compile gate: `for x in arr` then `arr[..]`
+        // again -> E0382 (arr moved). Rule 6 must borrow-iterate.
+        let src = "fn find_maximum(arr: Vec<i64>) -> i64 {\n    let mut r0: i64 = arr[0];\n    \
+                   for x0 in arr {\n        r0 = max(r0, x0);\n    }\n    let mut lo1: i64 = arr[0];\n    return r0;\n}\n";
+        let out = normalize_component(src);
+        assert!(out.contains("for x0 in arr.iter().copied()"), "got: {out}");
+        assert!(!out.contains("for x0 in arr {"), "still moves arr: {out}");
+    }
+
+    #[test]
+    fn does_not_double_borrow_iter() {
+        // An already-borrowed loop must not be rewritten again.
+        let src = "fn f(arr: Vec<i64>) -> i64 {\n    let mut s: i64 = 0;\n    for x in arr.iter().copied() {\n        s = s + x;\n    }\n    return s;\n}\n";
+        let out = normalize_component(src);
+        assert!(!out.contains(".iter().copied().iter()"), "double-rewrote: {out}");
     }
 
     #[test]
