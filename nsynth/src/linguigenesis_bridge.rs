@@ -991,7 +991,11 @@ impl LinguigenesisBridge {
             ..Default::default()
         };
         let res = crate::solver::solve_problem(&problem);
-        if !res.success || !crate::runtime::code_reproduces_examples(&res.code, holdouts) {
+        // Re-verify the synthesized code against the FULL spec (seed + holdouts) at
+        // the interpreter level: holdouts are the generalization probe solve_problem
+        // strips, and re-checking the seed too catches a search/codegen mismatch
+        // (the search claims a seed fit but the emitted code executes differently).
+        if !res.success || !crate::runtime::code_reproduces_examples(&res.code, &exs) {
             return None;
         }
         Some(res)
@@ -1126,7 +1130,10 @@ impl LinguigenesisBridge {
                 ..Default::default()
             };
             let res = crate::solver::solve_problem(&problem);
-            if res.success && crate::runtime::code_reproduces_examples(&res.code, holdouts) {
+            // Re-verify against the FULL spec (seed + holdouts) at the interpreter
+            // level (holdouts = the generalization probe solve_problem strips; the
+            // seed re-check catches a search/codegen mismatch).
+            if res.success && crate::runtime::code_reproduces_examples(&res.code, &exs) {
                 // Store the FULL example set (seed + holdouts) for reproduction tests.
                 verified.push(VerifiedComponent { name, result: res, examples: exs });
             } else {
