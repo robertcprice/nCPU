@@ -203,6 +203,7 @@ fn emit_result(result: &AgentQueryResult, json_out: bool) {
             "synthesis_method": result.synthesis_method,
             "tool_trace": result.tool_trace,
             "repo_result": result.repo_result,
+            "explanation": explain_solution(result),
         });
         println!(
             "{}",
@@ -224,4 +225,24 @@ fn emit_result(result: &AgentQueryResult, json_out: bool) {
     }
     println!("---");
     println!("{}", result.response);
+    if let Some(explanation) = explain_solution(result) {
+        println!("---");
+        println!("explanation: {explanation}");
+    }
+}
+
+/// Natural-language explanation of a synthesized solution — wires the
+/// bidirectional code→NL pipeline (parse → semantics → NL). Best-effort: only for
+/// a successful synthesis whose response IS the code; skipped if it can't parse.
+fn explain_solution(result: &AgentQueryResult) -> Option<String> {
+    if !result.success || result.synthesis_method.is_none() {
+        return None;
+    }
+    let nl = mog_synth::bidirectional::code_to_nl(&result.response).ok()?;
+    let nl = nl.trim();
+    if nl.is_empty() {
+        None
+    } else {
+        Some(nl.to_string())
+    }
 }

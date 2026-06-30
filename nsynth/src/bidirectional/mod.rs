@@ -18,3 +18,18 @@ pub fn code_to_nl(code: &str) -> Result<String, String> {
     let nl = generate_nl(&semantics);
     Ok(nl)
 }
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    /// The code→NL pipeline produces a non-empty explanation for the kind of
+    /// single-function program the synthesizer emits (now wired into the agent's
+    /// emit_result as an "explanation:" section).
+    #[test]
+    fn code_to_nl_explains_a_synthesized_function() {
+        let code = "fn add_one(a: i64) -> i64 {\n    return a + 1;\n}";
+        let nl = code_to_nl(code).expect("should produce an explanation");
+        assert!(!nl.trim().is_empty(), "explanation must be non-empty: {nl:?}");
+    }
+}
