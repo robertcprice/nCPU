@@ -18,6 +18,10 @@ pub(super) const ROUTE_EXPR_TEMPLATES: &str = "expr_templates";
 pub(super) const ROUTE_SCALAR_TEMPLATES: &str = "scalar_templates";
 pub(super) const ROUTE_TEMPLATE_REFERENCE: &str = "template_reference";
 pub(super) const ROUTE_SEARCH: &str = "search";
+/// SoftUniversalProgram: a fully-learned init→while-loop→post program trained by
+/// gradient (universal.rs). A late fallback that discovers GENERAL loops the fixed
+/// diff-zoo architectures miss. Strict-verified internally (try_emit_verify).
+pub(super) const ROUTE_UNIVERSAL: &str = "universal";
 
 const ENUMERATION_SKIP_MIN_WINS: u32 = 3;
 const ENUMERATION_SKIP_MIN_SUCCESS_RATE_PERCENT: u32 = 70;
@@ -90,6 +94,9 @@ pub(super) fn route_is_applicable(
         | ROUTE_EXPR_TEMPLATES
         | ROUTE_SEARCH => true,
         ROUTE_EXPR_ONLY => ctx.scalar_only_inputs,
+        // Universal program: scalar int inputs + scalar output only (it trains on
+        // f32-cast inputs against expected_int). Gated to bound the gradient cost.
+        ROUTE_UNIVERSAL => ctx.scalar_only_inputs && (!ctx.is_external || ctx.n_args <= 3),
         // Reference implementations are evaluator-owned oracles, never solver
         // routes. Keep the route identifiers parseable for old telemetry only.
         ROUTE_REFERENCE_DISTILLATION
@@ -121,6 +128,11 @@ pub(super) fn default_post_enumerative_routes(
     routes.push(ROUTE_EXPR_TEMPLATES);
     if route_is_applicable(ROUTE_SCALAR_TEMPLATES, problem, ctx) {
         routes.push(ROUTE_SCALAR_TEMPLATES);
+    }
+    // SoftUniversalProgram before the terminal search fallback: a last gradient
+    // attempt at a general learned loop when the fixed architectures all missed.
+    if route_is_applicable(ROUTE_UNIVERSAL, problem, ctx) {
+        routes.push(ROUTE_UNIVERSAL);
     }
     routes.push(ROUTE_SEARCH);
 
@@ -158,6 +170,7 @@ pub(super) fn normalize_router_route(route: &str) -> Option<&'static str> {
         ROUTE_SCALAR_TEMPLATES | "template" => Some(ROUTE_SCALAR_TEMPLATES),
         ROUTE_TEMPLATE_REFERENCE => Some(ROUTE_TEMPLATE_REFERENCE),
         ROUTE_SEARCH => Some(ROUTE_SEARCH),
+        ROUTE_UNIVERSAL | "univ" | "soft_universal" => Some(ROUTE_UNIVERSAL),
         route if route.starts_with("search_") => Some(ROUTE_SEARCH_TEACHER),
         route if route.starts_with("diff_gradient_") => Some(ROUTE_BRIDGE_GRADIENT),
         _ => None,

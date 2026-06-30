@@ -18,7 +18,7 @@ use super::routing::{
     ROUTE_ARRAY_REFERENCE_DISTILLATION, ROUTE_BRIDGE_GRADIENT, ROUTE_EXPR_ONLY,
     ROUTE_EXPR_TEMPLATES, ROUTE_NATIVE_REFERENCE_DISTILLATION, ROUTE_REFERENCE_DISTILLATION,
     ROUTE_REGISTER_MACHINE, ROUTE_SCALAR_GRADIENT, ROUTE_SCALAR_TEMPLATES, ROUTE_SEARCH,
-    ROUTE_SEARCH_TEACHER, ROUTE_TEMPLATE_REFERENCE,
+    ROUTE_SEARCH_TEACHER, ROUTE_TEMPLATE_REFERENCE, ROUTE_UNIVERSAL,
 };
 use super::{solve_by_search, SolveResult};
 
@@ -516,6 +516,27 @@ fn try_post_enumerative_route(
                 result.success
             );
             Some(result)
+        }
+        ROUTE_UNIVERSAL => {
+            let t_u = Instant::now();
+            // SoftUniversalProgram: 5 gradient restarts at a bounded step budget;
+            // strict-verified internally. Discovers general learned loops the fixed
+            // diff-zoo architectures miss. Late fallback → bounded latency impact.
+            if let Some((result, _)) = synthesis::synthesize_universal_and_collect(problem, 2_000) {
+                if result.success {
+                    eprintln!(
+                        "[solve] synthesize_universal OK in {:.1}s — {}",
+                        t_u.elapsed().as_secs_f32(),
+                        result.method
+                    );
+                    return Some(result);
+                }
+            }
+            eprintln!(
+                "[solve] synthesize_universal MISS in {:.1}s",
+                t_u.elapsed().as_secs_f32()
+            );
+            None
         }
         _ => None,
     }
