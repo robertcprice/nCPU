@@ -72,8 +72,8 @@ fn main() {
         }
     }
 
-    let mut session = CodingAgentSession::load(&root, policy, &session_id)
-        .unwrap_or_else(|e| {
+    let mut session =
+        CodingAgentSession::load(&root, policy.clone(), &session_id).unwrap_or_else(|e| {
             eprintln!("error: load session: {e}");
             process::exit(2);
         });
@@ -81,7 +81,10 @@ fn main() {
     if list_tools {
         let caps = session.allowed_tool_capabilities();
         if json_out {
-            println!("{}", serde_json::to_string_pretty(&caps).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&caps).unwrap_or_default()
+            );
         } else {
             for cap in caps {
                 println!("{cap}");
@@ -121,7 +124,10 @@ fn main() {
                         "content": out.content,
                         "metadata": out.metadata,
                     });
-                    println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&body).unwrap_or_default()
+                    );
                 } else {
                     print!("{}", out.content);
                     if !out.content.ends_with('\n') {
@@ -198,7 +204,10 @@ fn emit_result(result: &AgentQueryResult, json_out: bool) {
             "tool_trace": result.tool_trace,
             "repo_result": result.repo_result,
         });
-        println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&value).unwrap_or_default()
+        );
         return;
     }
     println!("route: {:?}", result.route);

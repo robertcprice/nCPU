@@ -12,7 +12,8 @@ use linguigenesis_core::{
         needs_clarification, ClarificationField, ClarificationQuestion,
     },
     coding_requirements::{
-        CompositionPlan, LiteralValue, OpRef, OpRole, ProjectPlan, SynthesisRequirement,
+        CompositionPlan, FilterPred, LiteralValue, OpRef, OpRole, ProjectPlan,
+        SynthesisRequirement,
     },
     comprehension::Comprehension,
     entity_resolution::EntityResolver,
@@ -848,6 +849,60 @@ impl LinguigenesisBridge {
             }
             None => None,
         };
+
+        // 2a-FILTER. A predicate filter ("the positive values", "sum of the even
+        //     values") is its own pipeline shape: map-chain → filter → optional
+        //     Sum/Product reduce. Mutually exclusive with an array transform
+        //     (enforced in classify_pipeline). Max/Min over a filtered (possibly
+        //     empty) array is edge-casey → deferred (falls back to non-filter).
+        if let Some(fp) = &plan.filter {
+            if matches!(fold, Some(FoldKind::Max) | Some(FoldKind::Min)) {
+                return Err("filter + max/min reduce not yet supported".to_string());
+            }
+            let composed_name = pipeline_fn_name(plan);
+            let reference = emit_filter_pipeline_reference(&composed_name, fold, fp, &map_chain);
+            let reference: &'static str = Box::leak(reference.into_boxed_str());
+            let ret = if fold.is_some() { "i64" } else { "[i64]" };
+            let signature: &'static str = Box::leak(
+                format!("fn {}(a: [i64]) -> {}", composed_name, ret).into_boxed_str(),
+            );
+            let mut problem = crate::benchmark::problem_from_reference(
+                &composed_name,
+                signature,
+                reference,
+            )
+            .map_err(|e| format!("filter pipeline reference unrunnable: {e}"))?;
+            problem.category = Box::leak("nl-compose".to_string().into_boxed_str());
+            problem.description = Box::leak(
+                format!("filter pipeline for: {description}").into_boxed_str(),
+            );
+            let solved = crate::solver::solve_problem(&problem);
+            if !solved.success {
+                return Err(format!(
+                    "filter pipeline ({}) recognised but solver could not synthesize it (method={}, err={:?})",
+                    describe_plan(plan),
+                    solved.method,
+                    solved.error
+                ));
+            }
+            crate::runtime::verify_problem_code_strict(&problem, &solved.code).map_err(|e| {
+                format!(
+                    "filter pipeline OVERFIT — strict holdout verification failed: {e}\nCODE:\n{}",
+                    solved.code
+                )
+            })?;
+            return Ok(PipelineOutcome {
+                description: description.to_string(),
+                fn_name: composed_name.clone(),
+                map_fns: plan.maps.iter().map(|m| m.fn_name.clone()).collect(),
+                array_xfm_fn: None,
+                array_xfm: None,
+                reduce_fn: plan.reduce.as_ref().map(|r| r.fn_name.clone()),
+                fold,
+                code: solved.code,
+                method: format!("nl-compose-filter:{}", solved.method),
+            });
+        }
 
         // 2b. Classify the array transform (if any) behaviourally — never by name.
         //     First try EXECUTING the synthesized transform code on probe arrays;
@@ -2932,6 +2987,10 @@ fn pipeline_fn_name(plan: &CompositionPlan) -> String {
         name.push('_');
         name.push_str(&t.fn_name);
     }
+    if let Some(f) = &plan.filter {
+        name.push_str("_filter_");
+        name.push_str(&f.word);
+    }
     for m in &plan.maps {
         name.push('_');
         name.push_str(&m.fn_name);
@@ -2950,9 +3009,13 @@ fn describe_plan(plan: &CompositionPlan) -> String {
         Some(t) => format!(" arrayxfm={}", t.fn_name),
         None => String::new(),
     };
+    let filt = match &plan.filter {
+        Some(f) => format!(" filter={}({} {})", f.word, f.cmp, f.value),
+        None => String::new(),
+    };
     match &plan.reduce {
-        Some(r) => format!("reduce={} ∘{} mapchain=[{}]", r.fn_name, xfm, chain),
-        None => format!("mapchain=[{}]{} -> array (no reduce)", chain, xfm),
+        Some(r) => format!("reduce={} ∘{}{} mapchain=[{}]", r.fn_name, filt, xfm, chain),
+        None => format!("mapchain=[{}]{}{} -> array (no reduce)", chain, filt, xfm),
     }
 }
 
@@ -3053,6 +3116,69 @@ fn classify_binary_fold(reduce_code: &str, reduce_fn: &str) -> Option<FoldKind> 
 ///   * otherwise the driver folds the element expression inline (shape a) or
 ///     builds the mapped array (shape b), exactly as before.
 /// Used only to LABEL fresh holdouts; the accepted program is what the solver finds.
+/// Emit the composed REFERENCE for a FILTER pipeline: map-chain applied to each
+/// element, kept only when the predicate holds, then either summed/multiplied
+/// (Sum/Product reduce) or returned as the filtered array. Independent impl used
+/// only to label fresh holdouts — the solver synthesizes the real program.
+fn emit_filter_pipeline_reference(
+    composed_name: &str,
+    fold: Option<FoldKind>,
+    filter: &FilterPred,
+    map_chain: &[(String, String)],
+) -> String {
+    let mut out = String::new();
+    let mut emitted: Vec<&str> = Vec::new();
+    for (map_fn, map_code) in map_chain {
+        if emitted.contains(&map_fn.as_str()) {
+            continue;
+        }
+        emitted.push(map_fn.as_str());
+        out.push_str(map_code);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    // elem(item): nest the map chain outer→inner around the raw element.
+    let mut elem_item = "item".to_string();
+    for (map_fn, _) in map_chain.iter().rev() {
+        elem_item = format!("{}({})", map_fn, elem_item);
+    }
+    let cmp = match filter.cmp.as_str() {
+        "gt" => ">",
+        "lt" => "<",
+        "ge" => ">=",
+        "le" => "<=",
+        "eq" => "==",
+        _ => "!=",
+    };
+    let cond = match filter.modulus {
+        Some(m) => format!("e % {} {} {}", m, cmp, filter.value),
+        None => format!("e {} {}", cmp, filter.value),
+    };
+    match fold {
+        Some(fk) => {
+            let (init, op) = match fk {
+                FoldKind::Product => (1, "*"),
+                _ => (0, "+"), // Sum (Max/Min+filter excluded upstream)
+            };
+            out.push_str(&format!(
+                "fn {composed_name}(arr: [i64]) -> i64 {{\n    acc: i64 = {init};\n    \
+                 for item in arr {{\n        e: i64 = {elem_item};\n        if {cond} {{\n            \
+                 acc = acc {op} e;\n        }}\n    }}\n    return acc;\n}}\n"
+            ));
+        }
+        None => {
+            out.push_str(&format!(
+                "fn {composed_name}(arr: [i64]) -> [i64] {{\n    result: [i64] = [];\n    \
+                 for item in arr {{\n        e: i64 = {elem_item};\n        if {cond} {{\n            \
+                 result.push(e);\n        }}\n    }}\n    return result;\n}}\n"
+            ));
+        }
+    }
+    out
+}
+
 fn emit_pipeline_reference(
     composed_name: &str,
     fold: Option<FoldKind>,

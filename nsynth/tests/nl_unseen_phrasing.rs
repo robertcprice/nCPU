@@ -615,3 +615,89 @@ fn locate_coding_registry() -> std::path::PathBuf {
     }
     panic!("coding_registry.json not found for non-gameable guard");
 }
+
+// ── FILTER composition (predicate stage): reduce ∘ filter(predicate) ─────────
+// The predicate adjectives (positive/negative/even) are NOT registry ops — they
+// ground to a comparison the solver must independently re-discover + strict-verify.
+
+// Comparison-predicate filters (item CMP 0) — the solver synthesizes these fast
+// (the cond-sum fold / searched filter). MODULUS predicates ("even"/"odd") are a
+// known follow-on: the cond-mod fold is harder and the router currently skips
+// enumerative for them, so they are exercised separately, not gated here.
+const FILTER_PHRASES: &[&str] = &[
+    "sum of the positive values",       // array_sum ∘ filter(item > 0)
+    "the total of the negative values", // array_sum ∘ filter(item < 0)
+];
+
+#[test]
+fn filter_compositions_synthesize_and_strict_verify() {
+    let bridge = LinguigenesisBridge::new();
+    let mut accepted = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+    for phrase in FILTER_PHRASES {
+        match bridge.try_compose_pipeline(phrase) {
+            Some(Ok(outcome)) => {
+                assert!(
+                    outcome.method.starts_with("nl-compose-filter:"),
+                    "{phrase:?}: accepted but not a FILTER pipeline: {}",
+                    outcome.method
+                );
+                accepted += 1;
+            }
+            Some(Err(e)) => failures.push(format!("{phrase:?}: recognised but rejected: {e}")),
+            None => failures.push(format!("{phrase:?}: NOT recognised as a filter pipeline")),
+        }
+    }
+    for f in &failures {
+        println!("FILTER-FAILURE: {f}");
+    }
+    assert!(
+        failures.is_empty(),
+        "{}/{} filter compositions failed:\n{}",
+        failures.len(),
+        FILTER_PHRASES.len(),
+        failures.join("\n")
+    );
+    assert!(accepted >= 2, "need >=2 filter pipelines; only {accepted}");
+}
+
+#[test]
+fn filter_compositions_compute_intended() {
+    use mog_synth::benchmark::{Problem, Value};
+    let bridge = LinguigenesisBridge::new();
+    let cases: &[(&str, &[i64], i64)] = &[
+        // sum of positives: 3 + 5 = 8
+        ("sum of the positive values", &[-2, 3, -1, 5], 8),
+        // total of negatives: -2 + -1 + -4 = -7
+        ("the total of the negative values", &[-2, 3, -1, 5, -4], -7),
+    ];
+    for (phrase, input, expected) in cases {
+        let outcome = bridge
+            .try_compose_pipeline(phrase)
+            .unwrap_or_else(|| panic!("{phrase:?}: not recognised as filter pipeline"))
+            .unwrap_or_else(|e| panic!("{phrase:?}: rejected: {e}"));
+        let problem = Problem {
+            name: "probe".to_string(),
+            category: "test",
+            description: "intended-fn probe",
+            signature: "fn probe(a: [i64]) -> i64",
+            examples: vec![],
+            ..Default::default()
+        };
+        let got = mog_synth::runtime::execute_function_for_problem(
+            &outcome.code,
+            &outcome.fn_name,
+            &[Value::int_array(input)],
+            &problem,
+        )
+        .unwrap_or_else(|e| panic!("{phrase:?}: exec failed: {e}\nCODE:\n{}", outcome.code));
+        match got {
+            mog_synth::runtime::Value::Int(v) => assert_eq!(
+                v, *expected,
+                "{phrase:?}: expected {expected} on {input:?}, got {v}\nCODE:\n{}",
+                outcome.code
+            ),
+            other => panic!("{phrase:?}: expected Int, got {other:?}"),
+        }
+    }
+}
