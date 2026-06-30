@@ -217,6 +217,82 @@ fn parse_examples(content: &str) -> Option<Vec<ProposedExample>> {
     (out.len() >= 4).then_some(out)
 }
 
+/// One LLM-proposed sub-function in a project decomposition: a fn name + a single
+/// NL description the per-component synthesis door will independently solve+verify.
+pub struct ProposedComponent {
+    pub name: String,
+    pub description: String,
+}
+
+/// Mode C (project decomposition, RISKIER tier): the LLM breaks an open-ended
+/// build request into a list of named, individually-synthesizable sub-functions.
+/// UNTRUSTED — the LLM only proposes the DECOMPOSITION (names + NL descriptions);
+/// each component is still synthesized + STRICT-VERIFIED downstream, so a bad plan
+/// yields components that either verify (correct leaves) or are dropped, never an
+/// unverified accept. Returns >=2 components, or None (disabled / error / too few).
+/// NOTE: this verifies each PART, not the whole-artifact behavior — there is no
+/// example oracle for "does the assembled program do what was asked".
+pub fn propose_decomposition(request: &str) -> Option<Vec<ProposedComponent>> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "Break a programming request into small INDEPENDENT pure functions, each computing \
+        ONE value from its inputs (integers, arrays of integers, or booleans). Output ONLY a JSON \
+        object, no prose: {\"functions\":[{\"name\":\"snake_case\",\"description\":\"one clear \
+        sentence describing exactly what this function computes\"}]}. Give 2 to 5 functions. Each \
+        description must be self-contained and concrete (e.g. 'the sum of all elements in the \
+        array', 'whether the number is even'), NOT a vague feature.";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": format!("Request: {}", request.replace('"', "'"))}
+        ],
+        "temperature": 0.0,
+        // Decomposition is a harder task than op-selection: Gemma 4's reasoning
+        // channel alone runs ~1900 tokens, so a low cap returns empty content
+        // (finish=length). Give room for reasoning AND the JSON answer.
+        "max_tokens": 1024
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "90", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| msg["reasoning"].as_str())?;
+    parse_decomposition(content)
+}
+
+/// Extract `{"functions":[{"name":..,"description":..}]}` from the model text.
+fn parse_decomposition(content: &str) -> Option<Vec<ProposedComponent>> {
+    let s = content.trim();
+    let start = s.find('{')?;
+    let end = s.rfind('}')? + 1;
+    let parsed: serde_json::Value = serde_json::from_str(&s[start..end]).ok()?;
+    let arr = parsed.get("functions")?.as_array()?;
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for e in arr {
+        let name = e.get("name")?.as_str()?.trim().to_string();
+        let description = e.get("description")?.as_str()?.trim().to_string();
+        if name.is_empty() || description.is_empty() || !seen.insert(name.clone()) {
+            continue;
+        }
+        out.push(ProposedComponent { name, description });
+    }
+    (out.len() >= 2).then_some(out)
+}
+
 /// Rewrite an arbitrary request into ONE short CANONICAL sentence the symbolic
 /// comprehension reliably parses — a single op or a filter/map/reduce COMPOSITION
 /// ("the sum of the positive values", "the maximum of the doubled values"). Used
@@ -313,6 +389,23 @@ mod tests {
     fn ensure_server_inert_without_url() {
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
         assert!(!ensure_server());
+    }
+
+    #[test]
+    fn parse_decomposition_extracts_functions() {
+        let s = "```json\n{\"functions\":[{\"name\":\"sum_all\",\"description\":\"the sum of all elements\"},\
+                 {\"name\":\"count_pos\",\"description\":\"how many are positive\"}]}\n```";
+        let c = parse_decomposition(s).expect("2 components");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].name, "sum_all");
+        assert_eq!(c[1].description, "how many are positive");
+        // fewer than 2 distinct → None
+        assert!(parse_decomposition("{\"functions\":[{\"name\":\"a\",\"description\":\"x\"}]}").is_none());
+        // duplicate names dedup below the floor → None
+        assert!(parse_decomposition(
+            "{\"functions\":[{\"name\":\"a\",\"description\":\"x\"},{\"name\":\"a\",\"description\":\"y\"}]}"
+        )
+        .is_none());
     }
 
     #[test]

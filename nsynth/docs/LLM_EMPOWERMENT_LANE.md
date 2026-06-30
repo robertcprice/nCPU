@@ -50,9 +50,24 @@ phrasing corpus:
 
 | **A′** — composition | request is a canonical rephrase of a filter/map/reduce | a canonical NL paraphrase | `synthesize_from_description` (filter/map/reduce composition), recursion-guarded | `NSYNTH_LOCAL_LLM_URL` |
 | **B** — out-of-vocab | no known op fits (e.g. composite affine) | 6 I/O **examples** | examples → `Problem` w/ **held-out generalization probe** → `solve_problem` | `NSYNTH_LOCAL_LLM_URL` **and** `NSYNTH_LOCAL_LLM_EXAMPLES` |
+| **C** — project decomposition | a multi-part build request | a list of named sub-functions (`{name, description}`) | each description → `synthesize_from_description` (normal door, strict-verified, itself A/A′/B-capable) | `NSYNTH_LOCAL_LLM_URL` **and** `NSYNTH_LOCAL_LLM_PROJECT` |
 
 `synthesize_via_local_llm` tries **A → A′ → B** in order, returning the first
-strict-verified result.
+strict-verified result. **Mode C** (`synthesize_project_via_llm`) is a separate
+entry: it returns `(verified, failed)` — the strict-verified `(name, result)`
+components and the names the engine could not verify.
+
+### Mode C trust scope (read this)
+
+Mode C verifies **each PART**, not the **whole artifact**. The LLM proposes the
+decomposition (names + NL descriptions); every returned component is strict-
+verified through the normal door. But there is **no example oracle for "does the
+assembled program do what was asked"** — so Mode C delivers *verified parts of a
+plausible plan*, not a verified program. It also inherits the per-component NL-
+synthesis overfit risk (a description with ambiguous auto-derived examples can
+verify a wrong-but-consistent program — see the `first→max` finding above).
+Verified e2e: `"build helpers to analyze a list of numbers: their total, the
+largest one, and how many are positive"` → 3 strict-verified components.
 
 ### Mode B held-out guard (the extra safety for the riskiest tier)
 

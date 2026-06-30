@@ -958,6 +958,53 @@ impl LinguigenesisBridge {
         res.success.then_some(res)
     }
 
+    /// Mode C (project decomposition, gated by `NSYNTH_LOCAL_LLM_PROJECT`): the
+    /// untrusted LLM breaks an open-ended request into named sub-functions; each is
+    /// synthesized through the NORMAL door (`synthesize_from_description`, which
+    /// strict-verifies and itself auto-falls-back to the LLM lane). Returns
+    /// `(verified, failed)`: the verified `(name, result)` components and the names
+    /// the engine could NOT verify.
+    ///
+    /// TRUST: the LLM only proposes the decomposition; every returned component is
+    /// strict-verified. What is NOT verified is the WHOLE-ARTIFACT behavior — there
+    /// is no example oracle for "does the assembled program do what was asked". So
+    /// this delivers *verified parts of a plausible plan*, not a verified program.
+    pub fn synthesize_project_via_llm(
+        &self,
+        request: &str,
+    ) -> Option<(Vec<(String, crate::solver::SolveResult)>, Vec<String>)> {
+        if std::env::var("NSYNTH_LOCAL_LLM_PROJECT")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            return None;
+        }
+        if !crate::local_llm::ensure_server() {
+            return None;
+        }
+        let components = crate::local_llm::propose_decomposition(request)?;
+        let mut verified = Vec::new();
+        let mut failed = Vec::new();
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for comp in &components {
+            // Collision-free fn name (mirrors synthesize_project's naming).
+            let base = if comp.name.is_empty() { "f".to_string() } else { comp.name.clone() };
+            let mut name = base.clone();
+            let mut n = 2;
+            while used.contains(&name) {
+                name = format!("{base}{n}");
+                n += 1;
+            }
+            used.insert(name.clone());
+            match self.synthesize_from_description(&comp.description, Some(&name)) {
+                Ok(r) if r.success => verified.push((name, r)),
+                _ => failed.push(format!("{name}: {}", comp.description)),
+            }
+        }
+        Some((verified, failed))
+    }
+
     /// Synthesize a KNOWN op directly from its registry `example_cases` (its
     /// TRUSTED spec) — bypassing NL comprehension, since the input is the op's
     /// own name. solve_problem strict-verifies; returns a verified result or None.
