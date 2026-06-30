@@ -793,7 +793,9 @@ impl LinguigenesisBridge {
         symbolic
     }
 
-    fn synthesize_from_description_symbolic(
+    /// Symbolic-only NL synthesis (NO LLM fallback). Public so the recall
+    /// benchmark can isolate the symbolic baseline from the +LME lane.
+    pub fn synthesize_from_description_symbolic(
         &self,
         description: &str,
         fn_name: Option<&str>,
@@ -862,11 +864,76 @@ impl LinguigenesisBridge {
         // EXISTING comprehension (which recognizes filter/map/reduce pipelines) +
         // strict-verify. A bad rephrase fails closed (no verified program). The
         // guard keeps the inner synthesize_from_description on the SYMBOLIC path.
-        let canon = crate::local_llm::canonical_rephrase(request)?;
-        IN_LLM_FALLBACK.with(|f| f.set(true));
-        let res = self.synthesize_from_description(&canon, None);
-        IN_LLM_FALLBACK.with(|f| f.set(false));
-        res.ok().filter(|r| r.success)
+        if let Some(canon) = crate::local_llm::canonical_rephrase(request) {
+            IN_LLM_FALLBACK.with(|f| f.set(true));
+            let res = self.synthesize_from_description(&canon, None);
+            IN_LLM_FALLBACK.with(|f| f.set(false));
+            if let Some(r) = res.ok().filter(|r| r.success) {
+                return Some(r);
+            }
+        }
+        // Mode B — out-of-vocab (separately gated, RISKIER): LLM-proposed examples.
+        self.synthesize_via_llm_examples(request)
+    }
+
+    /// Mode B (gated by `NSYNTH_LOCAL_LLM_EXAMPLES`, RISKIER): out-of-vocab —
+    /// the LLM proposes I/O examples; synthesize from them with a HELD-OUT
+    /// generalization probe (the program must match LLM examples it didn't fit,
+    /// catching an inconsistent spec) + strict-verify. UNTRUSTED: a consistently-
+    /// wrong LLM spec yields a wrong-but-verified program, so this is a separate
+    /// opt-in beyond the basic op/rephrase lane.
+    pub fn synthesize_via_llm_examples(&self, request: &str) -> Option<crate::solver::SolveResult> {
+        if std::env::var("NSYNTH_LOCAL_LLM_EXAMPLES")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            return None;
+        }
+        let proposed = crate::local_llm::propose_examples(request)?;
+        let json_to_value = |v: &serde_json::Value| -> Option<crate::benchmark::Value> {
+            use crate::benchmark::Value;
+            if let Some(b) = v.as_bool() {
+                return Some(Value::Bool(b));
+            }
+            if let Some(i) = v.as_i64() {
+                return Some(Value::Int(i));
+            }
+            if let Some(arr) = v.as_array() {
+                let ints: Option<Vec<i64>> = arr.iter().map(|x| x.as_i64()).collect();
+                return Some(Value::int_array(&ints?));
+            }
+            v.as_str().map(|s| Value::Str(s.to_string()))
+        };
+        let mut exs: Vec<crate::benchmark::Example> = Vec::new();
+        for p in &proposed {
+            let inputs: Option<Vec<_>> = p.inputs.iter().map(&json_to_value).collect();
+            let (Some(inputs), Some(output)) = (inputs, json_to_value(&p.output)) else {
+                continue;
+            };
+            exs.push(crate::benchmark::Example { inputs, expected: output });
+        }
+        if exs.len() < 4 {
+            return None;
+        }
+        // HELD-OUT guard: reserve the last 2 as a generalization probe the solver
+        // never sees, so a program that merely memorises the seed but contradicts
+        // the rest of the LLM's spec fails (catches an inconsistent proposal).
+        let split = exs.len().saturating_sub(2).max(2);
+        let (seed, holdouts) = exs.split_at(split);
+        let name = "f".to_string();
+        let signature: &'static str = Box::leak(infer_signature(&name, seed).into_boxed_str());
+        let problem = crate::benchmark::Problem {
+            name,
+            category: "local-llm-examples",
+            description: "llm-proposed examples",
+            signature,
+            examples: seed.to_vec(),
+            holdouts: holdouts.to_vec(),
+            ..Default::default()
+        };
+        let res = crate::solver::solve_problem(&problem);
+        res.success.then_some(res)
     }
 
     /// Synthesize a KNOWN op directly from its registry `example_cases` (its

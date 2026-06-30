@@ -134,6 +134,69 @@ pub fn translate_op(request: &str, known_ops: &[String]) -> Option<String> {
     known_ops.iter().any(|k| k == &op).then_some(op)
 }
 
+/// One LLM-proposed I/O example (raw JSON values; the caller maps to runtime
+/// values). Mode B's untrusted spec.
+pub struct ProposedExample {
+    pub inputs: Vec<serde_json::Value>,
+    pub output: serde_json::Value,
+}
+
+/// Mode B (out-of-vocab, RISKIER tier): the LLM proposes I/O EXAMPLES for a task
+/// with no known op. The spec is UNTRUSTED — the caller MUST synthesize from these
+/// + strict-verify (and ideally hold some out): a program that merely matches the
+/// examples can still be wrong if the LLM's examples are wrong. Returns >=4 parsed
+/// examples, or None (disabled / error / too few). max_tokens is generous because
+/// Gemma-class models pretty-print + may use reasoning tokens.
+pub fn propose_examples(request: &str) -> Option<Vec<ProposedExample>> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "Output ONLY a JSON object, no prose: {\"examples\":[{\"in\":[ARG,...],\"out\":RESULT}]}. \
+        Give 6 CORRECT examples for the request — compute each output carefully and cover edge \
+        cases. Each ARG and RESULT is an integer, an array of integers, or a boolean.";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": format!("Request: {}", request.replace('"', "'"))}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 512
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "60", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let content = resp["choices"][0]["message"]["content"].as_str()?;
+    parse_examples(content)
+}
+
+/// Extract `{"examples":[{"in":[..],"out":..}]}` from the model text.
+fn parse_examples(content: &str) -> Option<Vec<ProposedExample>> {
+    let s = content.trim();
+    let start = s.find('{')?;
+    let end = s.rfind('}')? + 1;
+    let parsed: serde_json::Value = serde_json::from_str(&s[start..end]).ok()?;
+    let arr = parsed.get("examples")?.as_array()?;
+    let mut out = Vec::new();
+    for e in arr {
+        let inputs = e.get("in")?.as_array()?.clone();
+        let output = e.get("out")?.clone();
+        if inputs.is_empty() {
+            continue;
+        }
+        out.push(ProposedExample { inputs, output });
+    }
+    (out.len() >= 4).then_some(out)
+}
+
 /// Rewrite an arbitrary request into ONE short CANONICAL sentence the symbolic
 /// comprehension reliably parses — a single op or a filter/map/reduce COMPOSITION
 /// ("the sum of the positive values", "the maximum of the doubled values"). Used
@@ -227,5 +290,17 @@ mod tests {
     fn ensure_server_inert_without_url() {
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
         assert!(!ensure_server());
+    }
+
+    #[test]
+    fn parse_examples_extracts_in_out() {
+        let s = "```json\n{\"examples\":[{\"in\":[1],\"out\":8},{\"in\":[2],\"out\":11},\
+                 {\"in\":[0],\"out\":5},{\"in\":[3],\"out\":14}]}\n```";
+        let ex = parse_examples(s).expect("4 examples");
+        assert_eq!(ex.len(), 4);
+        assert_eq!(ex[0].inputs, vec![serde_json::json!(1)]);
+        assert_eq!(ex[0].output, serde_json::json!(8));
+        // fewer than 4 → None
+        assert!(parse_examples("{\"examples\":[{\"in\":[1],\"out\":2}]}").is_none());
     }
 }

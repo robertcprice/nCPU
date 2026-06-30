@@ -56,6 +56,31 @@ fn local_llm_composition_via_rephrase() {
     );
 }
 
+/// Mode B (out-of-vocab, RISKIER): no known op fits, so the LLM proposes I/O
+/// EXAMPLES; the engine synthesizes from them with a held-out generalization
+/// probe + strict-verify. Gated by NSYNTH_LOCAL_LLM_EXAMPLES *and* a served model.
+/// Tested in isolation (Mode A can pre-empt composites with a partial op).
+#[test]
+fn local_llm_mode_b_out_of_vocab_examples() {
+    if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
+        eprintln!("[MODE-B] skipped (no url)");
+        return;
+    }
+    std::env::set_var("NSYNTH_LOCAL_LLM_EXAMPLES", "1");
+    let bridge = LinguigenesisBridge::new();
+    // Composite affine (3n+5) — no single registry op computes it, so only the
+    // example-driven lane can. The held-out LLM examples guard against an
+    // inconsistent spec; strict-verify guards against an unverifiable program.
+    let req = "triple a number then add five";
+    let res = bridge.synthesize_via_llm_examples(req);
+    eprintln!(
+        "[MODE-B] {req:?} → {:?}",
+        res.as_ref().map(|r| (r.success, r.method.clone(), r.code.clone()))
+    );
+    let res = res.unwrap_or_else(|| panic!("[MODE-B] {req:?} → None (server up + examples valid?)"));
+    assert!(res.success, "Mode B must yield a strict-verified program");
+}
+
 /// The agent's NL entry (synthesize_from_description) AUTO-falls-back to the LLM
 /// lane when the symbolic path fails — proving the lane is actually used, not just
 /// callable. Gated (inert without NSYNTH_LOCAL_LLM_URL).
