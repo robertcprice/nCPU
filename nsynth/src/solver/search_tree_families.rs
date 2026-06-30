@@ -9,6 +9,24 @@ use crate::benchmark::{Example, Problem, TreeNode, Value};
 use crate::differentiable::DifferentiableMetadata;
 use crate::solver::SolveResult;
 
+/// Build a verified tree-family result. The tree searchers compute the answer in
+/// Rust to RECOGNIZE the family, then emit a hand-written traversal program — but
+/// recognizing the family is NOT the same as the EMITTED program being correct. A
+/// bug in a template would otherwise return `success: true` UNVERIFIED (a latent
+/// false-accept). So strict-verify the emitted code over the whole problem
+/// (examples + holdout/robustness floor) and only succeed if it actually runs
+/// right; a failing template degrades to `None`, not a fake "verified".
+fn verified_tree_result(problem: &Problem, code: String, method: &str) -> Option<SolveResult> {
+    crate::runtime::verify_problem_code_strict(problem, &code).ok()?;
+    Some(SolveResult {
+        success: true,
+        code,
+        method: method.to_string(),
+        error: None,
+        metadata: DifferentiableMetadata::default(),
+    })
+}
+
 /// Check if this problem takes exactly one tree input and returns an i64.
 fn is_tree_problem(problem: &Problem) -> bool {
     // Must have examples
@@ -180,13 +198,7 @@ pub(super) fn search_tree_count_nodes(problem: &Problem, fn_name: &str) -> Optio
          }}"
     );
 
-    Some(SolveResult {
-        success: true,
-        code,
-        method: "search_tree_count_nodes".to_string(),
-        error: None,
-        metadata: DifferentiableMetadata::default(),
-    })
+    verified_tree_result(problem, code, "search_tree_count_nodes")
 }
 
 /// Teacher: Sum values in tree.
@@ -252,13 +264,7 @@ pub(super) fn search_tree_sum_values(problem: &Problem, fn_name: &str) -> Option
          }}"
     );
 
-    Some(SolveResult {
-        success: true,
-        code,
-        method: "search_tree_sum_values".to_string(),
-        error: None,
-        metadata: DifferentiableMetadata::default(),
-    })
+    verified_tree_result(problem, code, "search_tree_sum_values")
 }
 
 /// Teacher: Find maximum value in tree.
@@ -337,13 +343,7 @@ pub(super) fn search_tree_max_value(problem: &Problem, fn_name: &str) -> Option<
          }}"
     );
 
-    Some(SolveResult {
-        success: true,
-        code,
-        method: "search_tree_max_value".to_string(),
-        error: None,
-        metadata: DifferentiableMetadata::default(),
-    })
+    verified_tree_result(problem, code, "search_tree_max_value")
 }
 
 /// Teacher: Compute height of tree.
@@ -417,13 +417,7 @@ pub(super) fn search_tree_height(problem: &Problem, fn_name: &str) -> Option<Sol
          }}"
     );
 
-    Some(SolveResult {
-        success: true,
-        code,
-        method: "search_tree_height".to_string(),
-        error: None,
-        metadata: DifferentiableMetadata::default(),
-    })
+    verified_tree_result(problem, code, "search_tree_height")
 }
 
 /// Teacher: Count leaf nodes (nodes with no children).
@@ -490,13 +484,7 @@ pub(super) fn search_tree_leaf_count(problem: &Problem, fn_name: &str) -> Option
          }}"
     );
 
-    Some(SolveResult {
-        success: true,
-        code,
-        method: "search_tree_leaf_count".to_string(),
-        error: None,
-        metadata: DifferentiableMetadata::default(),
-    })
+    verified_tree_result(problem, code, "search_tree_leaf_count")
 }
 
 // TODO: Tree teacher tests incomplete - Problem struct initialization needs all fields.
