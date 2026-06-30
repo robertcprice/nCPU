@@ -964,6 +964,10 @@ impl LinguigenesisBridge {
             };
             exs.push(crate::benchmark::Example { inputs, expected: output });
         }
+        // Reject an inconsistent spec (same input -> two outputs) and dedup exact
+        // repeats, so the held-out probe below uses genuinely DISTINCT inputs (a
+        // repeated example would make the holdout vacuous).
+        let exs = crate::benchmark::dedup_consistent_examples(&exs)?;
         if exs.len() < 4 {
             return None;
         }
@@ -1092,9 +1096,15 @@ impl LinguigenesisBridge {
                 };
                 exs.push(crate::benchmark::Example { inputs, expected: output });
             }
-            // Need >=3 mappable examples so the proven Mode-B split keeps a non-empty
-            // seed AND a held-out probe. No description fallback: a contract lane
-            // without real examples cannot be strict-verified or reproduced.
+            // Reject an inconsistent spec (same input -> two outputs) and dedup exact
+            // repeats so the held-out probe uses distinct inputs.
+            let Some(exs) = crate::benchmark::dedup_consistent_examples(&exs) else {
+                failed.push(format!("{name}: inconsistent examples (same input, different output)"));
+                continue;
+            };
+            // Need >=3 DISTINCT mappable examples so the proven Mode-B split keeps a
+            // non-empty seed AND a held-out probe. No description fallback: a contract
+            // lane without real examples cannot be strict-verified or reproduced.
             if exs.len() < 3 {
                 failed.push(format!("{name}: {}", spec.description));
                 continue;
