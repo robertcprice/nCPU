@@ -17,8 +17,10 @@ fn nl_invokes_newly_exposed_ops() {
     // resolution priority (priority tweaks regressed array-op + filter resolution).
     let cases: &[(&str, &str)] = &[
         ("whether a number is even", "is_even"),
+        ("whether a number is odd", "is_odd"),
         ("whether a number is positive", "is_positive"),
         ("whether a number is negative", "is_negative"),
+        ("whether a number is zero", "is_zero"),
         ("the product of all the elements", "product"),
     ];
 
