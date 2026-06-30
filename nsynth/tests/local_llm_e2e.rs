@@ -31,3 +31,27 @@ fn local_llm_translates_failing_phrasing_to_verified_program() {
         res.code
     );
 }
+
+/// Mode A' (composition): a request the symbolic path mis-parses → the LLM
+/// rephrases to canonical NL → the filter+reduce composition path → verified.
+#[test]
+fn local_llm_composition_via_rephrase() {
+    if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
+        eprintln!("[LLM-COMP] skipped (no url)");
+        return;
+    }
+    let bridge = LinguigenesisBridge::new();
+    let req = "add up only the positive numbers in the list";
+    let res = bridge
+        .synthesize_via_local_llm(req)
+        .unwrap_or_else(|| panic!("[LLM-COMP] {req:?} → None"));
+    eprintln!("[LLM-COMP] {req:?} → method={}\n{}", res.method, res.code);
+    assert!(res.success, "composition must strict-verify");
+    // sum-of-positives = reduce ∘ filter(>0): a guarded accumulation over arr.
+    assert!(
+        res.code.contains("for ") && (res.code.contains("if") || res.method.contains("filter")),
+        "expected a filter+reduce composition; got method={} code={}",
+        res.method,
+        res.code
+    );
+}

@@ -64,6 +64,51 @@ pub fn translate_op(request: &str, known_ops: &[String]) -> Option<String> {
     known_ops.iter().any(|k| k == &op).then_some(op)
 }
 
+/// Rewrite an arbitrary request into ONE short CANONICAL sentence the symbolic
+/// comprehension reliably parses — a single op or a filter/map/reduce COMPOSITION
+/// ("the sum of the positive values", "the maximum of the doubled values"). Used
+/// as Mode A' (composition breadth) when the single-op menu doesn't fit. Still
+/// comprehended + strict-verified downstream, so a bad rewrite fails closed.
+/// `None` when disabled / on error / empty. Untrusted, like `translate_op`.
+pub fn canonical_rephrase(request: &str) -> Option<String> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "Rewrite a coding request into ONE short canonical sentence a program synthesizer \
+        understands. Use plain operation words (sum, maximum, minimum, average, product, count, \
+        sort, reverse, double, square, negate; positive/negative/even/odd values). For a \
+        collection operation say 'of the list'/'of the values'. For a filter+reduce say 'the SUM \
+        of the POSITIVE values'. Output ONLY the rewritten sentence, no quotes.\n\
+        Examples:\n\
+        'add up only the positive ones' -> the sum of the positive values\n\
+        'what is the biggest number' -> the maximum of the list\n\
+        'multiply every item by itself' -> the squared values of the list\n\
+        'total of the negatives' -> the sum of the negative values";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": format!("{} ->", request.replace('"', "'"))}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 48
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "30", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let content = resp["choices"][0]["message"]["content"].as_str()?.trim();
+    let line = content.lines().next().unwrap_or(content).trim().trim_matches('"').to_string();
+    (!line.is_empty() && line.len() < 200).then_some(line)
+}
+
 /// Pull the `op` field out of the model's reply, tolerating ```json fences /
 /// surrounding prose by scanning for the first `{...}` JSON object.
 fn extract_op(content: &str) -> Option<String> {

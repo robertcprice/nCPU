@@ -818,8 +818,18 @@ impl LinguigenesisBridge {
         if ops.is_empty() {
             return None;
         }
-        let op = crate::local_llm::translate_op(request, &ops)?;
-        self.synthesize_op_by_name(&op)
+        // Mode A — single KNOWN op (safest: only a real op can pass).
+        if let Some(op) = crate::local_llm::translate_op(request, &ops) {
+            if let Some(r) = self.synthesize_op_by_name(&op) {
+                return Some(r);
+            }
+        }
+        // Mode A' — composition breadth: rephrase to canonical NL, then run the
+        // EXISTING comprehension (which recognizes filter/map/reduce pipelines) +
+        // strict-verify. A bad rephrase fails closed (no verified program).
+        let canon = crate::local_llm::canonical_rephrase(request)?;
+        let res = self.synthesize_from_description(&canon, None).ok()?;
+        res.success.then_some(res)
     }
 
     /// Synthesize a KNOWN op directly from its registry `example_cases` (its
