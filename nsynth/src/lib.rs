@@ -29,6 +29,7 @@ pub mod learned_biases;
 pub mod learning;
 pub mod learning_freeze;
 pub mod linguigenesis_bridge;
+pub mod local_llm;
 pub mod meta;
 pub mod meta_learner;
 pub mod method_router;

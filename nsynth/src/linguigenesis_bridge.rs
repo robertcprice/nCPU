@@ -788,6 +788,87 @@ impl LinguigenesisBridge {
         Ok(crate::solver::solve_problem(&problem))
     }
 
+    /// The synthesizable op names (default_fn_name of every Function entity) —
+    /// derived from the LIVE registry, NOT a hand list. Used as the menu the local
+    /// LLM translator must pick from.
+    pub fn known_op_names(&self) -> Vec<String> {
+        let Ok(registry) = self.registry_clone() else {
+            return Vec::new();
+        };
+        let mut ops: Vec<String> = registry
+            .get_by_type(&linguigenesis_core::entity::EntityType::Function)
+            .into_iter()
+            .filter_map(|e| e.get_property("default_fn_name").cloned())
+            .collect();
+        ops.sort();
+        ops.dedup();
+        ops
+    }
+
+    /// UNTRUSTED local-LLM front door (gated by `NSYNTH_LOCAL_LLM_URL`): translate
+    /// arbitrary NL prose → a KNOWN op via a tiny local model, then synthesize that
+    /// op through the TRUSTED path (its registry example_cases → solve →
+    /// strict-verify). Returns a VERIFIED result only, or `None` when the LLM is
+    /// disabled / unsure / picks no known op. The LLM never emits code and never
+    /// bypasses verification — it only widens phrasing coverage over the existing
+    /// op vocabulary (e.g. "add up all the elements of an array" → array_sum, which
+    /// the symbolic comprehension mis-resolves to scalar add).
+    pub fn synthesize_via_local_llm(&self, request: &str) -> Option<crate::solver::SolveResult> {
+        let ops = self.known_op_names();
+        if ops.is_empty() {
+            return None;
+        }
+        let op = crate::local_llm::translate_op(request, &ops)?;
+        self.synthesize_op_by_name(&op)
+    }
+
+    /// Synthesize a KNOWN op directly from its registry `example_cases` (its
+    /// TRUSTED spec) — bypassing NL comprehension, since the input is the op's
+    /// own name. solve_problem strict-verifies; returns a verified result or None.
+    pub fn synthesize_op_by_name(&self, op_name: &str) -> Option<crate::solver::SolveResult> {
+        use linguigenesis_core::coding_requirements::{parse_example_cases, LiteralValue};
+        use linguigenesis_core::entity::EntityType;
+        let registry = self.registry_clone().ok()?;
+        let entity = registry
+            .get_by_type(&EntityType::Function)
+            .into_iter()
+            .find(|e| e.get_property("default_fn_name").map(|n| n == op_name).unwrap_or(false))?;
+        let specs = parse_example_cases(&entity);
+        if specs.len() < 2 {
+            return None;
+        }
+        let lit = |l: &LiteralValue| -> crate::benchmark::Value {
+            use crate::benchmark::Value;
+            match l {
+                LiteralValue::Int(i) => Value::Int(*i),
+                LiteralValue::Float(f) => Value::Float(f.to_bits()),
+                LiteralValue::Str(s) => Value::Str(s.clone()),
+                LiteralValue::Bool(b) => Value::Bool(*b),
+                LiteralValue::Array(v) => Value::int_array(v),
+                LiteralValue::Pair(a, b) => Value::Pair(*a, *b),
+            }
+        };
+        let examples: Vec<crate::benchmark::Example> = specs
+            .iter()
+            .map(|s| crate::benchmark::Example {
+                inputs: s.inputs.iter().map(&lit).collect(),
+                expected: lit(&s.expected),
+            })
+            .collect();
+        let signature: &'static str =
+            Box::leak(infer_signature(op_name, &examples).into_boxed_str());
+        let problem = crate::benchmark::Problem {
+            name: op_name.to_string(),
+            category: "local-llm",
+            description: "local-llm op",
+            signature,
+            examples,
+            ..Default::default()
+        };
+        let res = crate::solver::solve_problem(&problem);
+        res.success.then_some(res)
+    }
+
     /// COMPOSITIONAL front door: if the request emergently names a two-op
     /// array pipeline `reduce(map(arr))` (or its reduce-only/map-anchored
     /// degenerate), build that pipeline from the resolved primitives, synthesize
