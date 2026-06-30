@@ -182,6 +182,46 @@ const ALL_CMPS: [CmpOp; 6] = [
 ];
 const CONSTANTS: [i64; 12] = [0, 1, -1, 2, -2, 3, 5, 7, 10, 32, 100, 255];
 
+/// Max example-mined constants to add to the size-1 seed (bounds search blow-up).
+const MAX_MINED_CONSTANTS: usize = 8;
+/// Magnitude bound on a mined constant (skip absurd literals that explode the
+/// search / risk overflow during enumeration).
+const MINED_CONSTANT_MAX_ABS: i64 = 100_000;
+
+/// Mine candidate literal constants FROM the examples, so a closed form needing a
+/// literal outside the fixed `CONSTANTS` pool (e.g. `x + 42`, `x * 256`) becomes
+/// reachable. Pure function of `examples` (== the frontier fingerprint), so the
+/// seeded set is deterministic per problem and stays frontier-consistent.
+///
+/// Candidates: each output value (constant-output / output literals); each
+/// `output - input[j]` (additive literal `x + k`); and `output / input[j]` when
+/// it divides exactly (multiplicative literal `x * k`). Excludes values already
+/// in `CONSTANTS`, bounds magnitude, dedups, caps count — all deterministically
+/// ordered (by |value| then value) so two runs seed byte-identically.
+fn mine_example_constants(examples: &[(Vec<i64>, i64)]) -> Vec<i64> {
+    use std::collections::BTreeSet;
+    let mut cands: BTreeSet<i64> = BTreeSet::new();
+    for (inputs, out) in examples {
+        cands.insert(*out);
+        for &x in inputs {
+            cands.insert(out.wrapping_sub(x)); // x + k
+            if x != 0 && out % x == 0 {
+                cands.insert(out / x); // x * k
+            }
+        }
+    }
+    let fixed: BTreeSet<i64> = CONSTANTS.iter().copied().collect();
+    let mut mined: Vec<i64> = cands
+        .into_iter()
+        .filter(|c| !fixed.contains(c) && c.abs() <= MINED_CONSTANT_MAX_ABS)
+        .collect();
+    // Deterministic priority: smaller-magnitude literals first (likelier the real
+    // closed-form constant), tie-break by value for stability.
+    mined.sort_by(|a, b| a.abs().cmp(&b.abs()).then(a.cmp(b)));
+    mined.truncate(MAX_MINED_CONSTANTS);
+    mined
+}
+
 // Ops suitable for loop body (no division to avoid div-by-zero in loops)
 const LOOP_BODY_OPS: [BinOp; 5] = [
     BinOp::Add,
@@ -1984,6 +2024,17 @@ fn enumerate_exprs_resumable_c(
         }
     }
     for &c in &CONSTANTS {
+        if let Some(e) = check_add(&Expr::Const(c), &mut by_size, &mut seen) {
+            return (Some(e), false);
+        }
+    }
+    // Example-MINED constants: literals derived from the I/O (output values,
+    // output-input diffs, exact quotients) so a closed form needing a constant
+    // outside the fixed pool (`x + 42`, `x * 256`) is reachable. Deterministic
+    // per fingerprint (mined from `examples`), so frontier-consistent. Seeded
+    // AFTER the fixed pool so the common case is unchanged; check_add dedups any
+    // overlap.
+    for c in mine_example_constants(examples) {
         if let Some(e) = check_add(&Expr::Const(c), &mut by_size, &mut seen) {
             return (Some(e), false);
         }
@@ -4048,11 +4099,15 @@ mod tests {
             enumerate_exprs_with_ops_stats(1, 5, &id, 5_000, None, &CORE_BINOPS, &CORE_UNOPS);
         assert!(e.is_some() && !t, "identity is size-1, no timeout");
 
-        // unsolvable-in-budget but clean exhaustion at small cap
-        let miss = vec![(vec![0], 1000), (vec![1], 1001), (vec![2], 1002)];
+        // Clean exhaustion at a small cap: a CUBE (`x*x*x`) needs size 5, so it is
+        // unsolvable at cap 3 regardless of constants — exhausts sizes 1..=3 cleanly.
+        // (The old `x+1000` example for this check is now SOLVED by example-mined
+        // constants — see `solves_affine_with_mined_constant` — so it no longer
+        // demonstrates exhaustion; cube does, and mining can't shortcut it.)
+        let miss = vec![(vec![0], 0), (vec![2], 8), (vec![3], 27)];
         let (e2, t2, mc2) =
             enumerate_exprs_with_ops_stats(1, 3, &miss, 3_000, None, &CORE_BINOPS, &CORE_UNOPS);
-        assert!(e2.is_none() && !t2, "1000 not in const set; clean exhaustion");
+        assert!(e2.is_none() && !t2, "x*x*x needs size 5; clean exhaustion at cap 3");
         assert_eq!(mc2, 3, "every size up to the cap completed");
     }
 
@@ -5102,6 +5157,53 @@ mod tests {
         assert!(
             !expr_contains_call(&e),
             "empty registry must never yield a Call node, got: {e:?}"
+        );
+    }
+
+    // ── Example-mined constants (closed forms needing out-of-pool literals) ──
+
+    #[test]
+    fn mines_out_of_pool_additive_constant() {
+        // f(a) = a + 1234: `output - input` = 1234 for every row; 1234 is NOT in
+        // the fixed CONSTANTS pool, so it must be mined.
+        let ex = vec![(vec![1i64], 1235i64), (vec![2], 1236), (vec![10], 1244)];
+        let mined = mine_example_constants(&ex);
+        assert!(mined.contains(&1234), "must mine additive literal 1234: {mined:?}");
+        // fixed-pool values are excluded (0/1/2/... already seeded)
+        for c in CONSTANTS {
+            assert!(!mined.contains(&c), "mined set must exclude fixed pool ({c})");
+        }
+    }
+
+    #[test]
+    fn solves_affine_with_mined_constant() {
+        use crate::benchmark::Example;
+        let xs = [1i64, 2, 3, 5, 8, 13];
+        let problem = Problem {
+            name: "affine_mined_k".to_string(),
+            category: "test",
+            description: "f(a) = a + 1234 — needs a literal outside the fixed pool",
+            signature: "fn affine_mined_k(a: i64) -> i64",
+            examples: xs
+                .iter()
+                .map(|&x| Example {
+                    inputs: vec![Value::Int(x)],
+                    expected: Value::Int(x + 1234),
+                })
+                .collect(),
+            holdouts: vec![],
+            // NON-EMPTY reference => strict verify uses real differential holdouts,
+            // so success proves generalization, not example memorization.
+            reference_code: "fn affine_mined_k(a: i64) -> i64 { return a + 1234; }",
+            ..Default::default()
+        };
+        let solved = synthesize_scalar_enumerative(&problem)
+            .expect("a + 1234 must synthesize once 1234 is mined from the examples");
+        assert!(solved.success, "must succeed (strict-verified): {:?}", solved.error);
+        assert!(
+            solved.code.contains("1234"),
+            "emitted closed form must use the mined literal 1234: {}",
+            solved.code
         );
     }
 }
