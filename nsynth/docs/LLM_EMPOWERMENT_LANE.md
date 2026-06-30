@@ -106,6 +106,23 @@ cargo test --test local_llm_e2e -- --nocapture --test-threads=1
 array *fold*, not scalar `add`). The lane never reduces net recall (auto-fallback only
 adds) and must recover ≥1 phrasing the symbolic path misses.
 
+**Multi-family benchmark** (`tests/llm_recall_families.rs`, server up): the honest
+universal-coverage measure — 15 op families spanning array→scalar, scalar→scalar,
+scalar→bool, **value-checked by EXECUTING each synthesized program on a fresh probe
+input** (so a verified-but-wrong-family program can't pass). Result: symbolic **4/15**
+→ with-LME **13/15** (recovered 9). The 2 remaining are SYNTHESIS-path limits, not NL
+mapping (the LLM maps all 3 correctly): `factorial` (1 registry example → can't
+synthesize) and `first` (its 2 registry examples both have `first==max`, so synthesis
+overfits to a verified-but-wrong `max` — the fresh-input check is what exposes it; fix
+= more disambiguating registry examples). The fresh-input value check doubles as a
+**soundness probe**: it catches overfit-but-"verified" programs that thin per-op
+examples can produce.
+
+Engine fix from this benchmark: the enumerative min/max fold gate (`enumerative.rs`
+Strategy 4) was rejecting `array_min` and all-negative `array_max` — it evaluated the
+fold with a constant init `{0,1,-1}` while `emit_mog_array` always emits `acc=arr[0]`.
+Now gated on the true array min/max (guard: `tests/enum_minmax_fold.rs`).
+
 Model-currency note: Gemma 4 E4B is current-era (chosen over stale 2024 models).
 It is a *reasoning* model with a `reasoning` field → example generation needs
 `max_tokens ≥ 400` headroom (set to 512).

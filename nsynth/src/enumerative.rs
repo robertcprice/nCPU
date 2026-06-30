@@ -4283,40 +4283,47 @@ fn synthesize_array_enumerative(problem: &Problem) -> Option<SolveResult> {
     }
 
     // ── Strategy 4: Max/Min folds with conditional update ──────────
-    // Handles: array_max, array_max_elem, min_element
-    // Uses emit_mog_array's built-in min/max handling with `if item > acc { acc = item }`
+    // Handles: array_max, array_min, array_max_elem, min_element.
+    // `emit_mog_array` ALWAYS emits min/max folds seeded `acc = arr[0]` (the correct
+    // reduce), so gate on the TRUE array min/max — NOT a constant-init eval. The old
+    // gate evaluated the fold with init ∈ {0,1,-1}, which is wrong for MIN (no small
+    // constant exceeds every element) and only accidentally right for MAX when the
+    // max is positive; that asymmetry let array_max synthesize while array_min was
+    // rejected before the correct arr[0]-seeded code was ever emitted. The strict
+    // verifier (with holdouts) remains the real gate.
     {
-        // With init=0: works when all arrays have positive max / negative min
-        // The emit_mog_array handles Min/Max body_op by generating `if item CMP acc { acc = item }`
         for &bop in &[BinOp::Min, BinOp::Max] {
-            for init in &[Expr::Const(0), Expr::Const(1), Expr::Const(-1)] {
-                if start.elapsed().as_millis() as u64 > time_limit_ms {
-                    break; // warm-up budget spent → fall through to the frontier
-                }
-                // For max: if item > acc { acc = item }
-                // For min: if item < acc { acc = item }
-                // These are handled by the ForFold body_rhs = Var(item_idx), body_op = Min/Max
-                let fold_expr = Expr::ForFold {
-                    init: Box::new(init.clone()),
-                    body_op: bop,
-                    body_rhs: Box::new(Expr::Var(item_idx)),
-                };
-                if check_fold_examples(&fold_expr, &array_examples) {
-                    let code = emit_mog_array(&fold_expr, fn_name, &scalar_param_names, array_idx);
-                    eprintln!(
-                        "[enum-array] FOUND max/min fold: {} {:?}",
-                        fn_name, fold_expr
-                    );
-                    if verify_problem_code_strict(problem, &code).is_ok() {
-                        return Some(SolveResult {
-                            success: true,
-                            code,
-                            method: "enumerative-array".to_string(),
-                            error: None,
-                            metadata: DifferentiableMetadata::default(),
-                        });
-                    }
-                }
+            if start.elapsed().as_millis() as u64 > time_limit_ms {
+                break; // warm-up budget spent → fall through to the frontier
+            }
+            let matches_all = !array_examples.is_empty()
+                && array_examples.iter().all(|(_, arr, expected)| {
+                    let agg = match bop {
+                        BinOp::Min => arr.iter().copied().min(),
+                        BinOp::Max => arr.iter().copied().max(),
+                        _ => None,
+                    };
+                    agg == Some(*expected)
+                });
+            if !matches_all {
+                continue;
+            }
+            // init is ignored by emit for min/max (it uses arr[0]); kept for the IR shape.
+            let fold_expr = Expr::ForFold {
+                init: Box::new(Expr::Const(0)),
+                body_op: bop,
+                body_rhs: Box::new(Expr::Var(item_idx)),
+            };
+            let code = emit_mog_array(&fold_expr, fn_name, &scalar_param_names, array_idx);
+            eprintln!("[enum-array] FOUND max/min fold (arr[0]-seeded): {fn_name} {bop:?}");
+            if verify_problem_code_strict(problem, &code).is_ok() {
+                return Some(SolveResult {
+                    success: true,
+                    code,
+                    method: "enumerative-array".to_string(),
+                    error: None,
+                    metadata: DifferentiableMetadata::default(),
+                });
             }
         }
     }
