@@ -3,6 +3,7 @@ pub mod benchmark;
 pub mod credit;
 pub mod failure_parser;
 pub mod gencode_normalize;
+pub mod gencode_tests;
 pub mod guardrails;
 pub mod hardness;
 pub mod nl_fixture_harness;
@@ -19,7 +20,8 @@ pub use benchmark::{
 };
 pub use nl_fixture_harness::{
     body_calls_fn, nl_fixture_cargo_test_command, write_nl_fixture_crate,
-    write_synthesized_project, write_tensor_program, CompileStatus, WriteOutcome,
+    write_synthesized_project, write_tensor_program, write_verified_project, CompileStatus,
+    TestStatus, VerifiedOutcome, WriteOutcome,
 };
 
 pub use agent::RepairAgent;

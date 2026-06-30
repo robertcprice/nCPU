@@ -918,6 +918,32 @@ pub fn execute_program(code: &str) -> Result<ExecutionResult, String> {
 /// benchmark value (`benchmark::Value`). Handles int, bool, string, array, and
 /// pair outputs uniformly — this is what lets string/array-output problems
 /// verify through the main pipeline.
+/// Does `code` reproduce EVERY (inputs -> expected) example? Executes the entry fn
+/// per example and checks `output_matches`. The entry fn is the first `fn <name>(`.
+///
+/// This exists because `solve_problem` solves a `synthesis_view()` that CLEARS
+/// `holdouts`/`reference_code` (so the solver never fits them) AND never re-checks
+/// them — so a caller that reserved a held-out generalization probe (the LLM
+/// example lanes) MUST re-verify the solved code against those holdouts HERE,
+/// post-solve, or the probe is cosmetic. Returns false on a parse/exec error or any
+/// mismatch. Empty `examples` -> true (nothing to disprove).
+pub fn code_reproduces_examples(code: &str, examples: &[crate::benchmark::Example]) -> bool {
+    let Some(fn_name) = code
+        .split("fn ")
+        .nth(1)
+        .and_then(|s| s.split('(').next())
+        .map(str::trim)
+    else {
+        return false;
+    };
+    examples.iter().all(|ex| {
+        match execute_function(code, fn_name, &ex.inputs, fn_name) {
+            Ok(got) => output_matches(&got, &ex.expected),
+            Err(_) => false,
+        }
+    })
+}
+
 fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
     use crate::benchmark::Value as BV;
     match (actual, expected) {
@@ -5977,6 +6003,26 @@ fn main() -> i64 {
         assert!(!output_matches(&Value::Int(3), &BmValue::Str("3".to_string())));
         assert!(!output_matches(&Value::Array(vec![Value::Int(1)]), &BmValue::Int(1)));
         assert!(!output_matches(&Value::Pair(1, 2), &BmValue::Quad(1, 2, 0, 0)));
+    }
+
+    #[test]
+    fn code_reproduces_examples_bites_on_held_out_mismatch() {
+        use crate::benchmark::Example;
+        let code = "fn f(x: i64) -> i64 {\n    return x * x;\n}\n";
+        // Seed-consistent holdouts pass.
+        let good = [
+            Example { inputs: vec![BmValue::Int(2)], expected: BmValue::Int(4) },
+            Example { inputs: vec![BmValue::Int(3)], expected: BmValue::Int(9) },
+        ];
+        assert!(code_reproduces_examples(code, &good));
+        // A held-out example the program contradicts MUST be rejected — this is the
+        // bug the adversary found (solve_problem strips holdouts; the re-check bites).
+        let contradicting = [Example { inputs: vec![BmValue::Int(2)], expected: BmValue::Int(5) }];
+        assert!(!code_reproduces_examples(code, &contradicting));
+        // Nothing to disprove -> vacuously true.
+        assert!(code_reproduces_examples(code, &[]));
+        // Unparseable code (no `fn`) -> false, never a silent pass.
+        assert!(!code_reproduces_examples("not rust", &good));
     }
 
     #[test]

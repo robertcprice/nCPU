@@ -48,6 +48,35 @@ pub struct LinguigenesisBridge {
     last_modified: Option<SystemTime>,
 }
 
+/// A component whose behavior was strict-verified against LLM-proposed examples.
+/// `examples` is the FULL proposed set (seed + holdouts) — intended for emitting
+/// reproduction tests (PIECE 3/4), NOT a training subset.
+pub struct VerifiedComponent {
+    pub name: String,
+    pub result: crate::solver::SolveResult,
+    pub examples: Vec<crate::benchmark::Example>,
+}
+
+/// Map one raw LLM-proposed JSON value to a runtime `benchmark::Value`. Byte-for-byte
+/// the same coercion as the inline closure in `synthesize_via_llm_examples`
+/// (bool → Bool, i64 → Int, all-int array → int_array, else str → Str); any value
+/// that fits none of those — a float, a mixed array, a nested object — yields `None`
+/// so the caller skips that example rather than coercing it wrongly.
+fn json_to_bench_value(v: &serde_json::Value) -> Option<crate::benchmark::Value> {
+    use crate::benchmark::Value;
+    if let Some(b) = v.as_bool() {
+        return Some(Value::Bool(b));
+    }
+    if let Some(i) = v.as_i64() {
+        return Some(Value::Int(i));
+    }
+    if let Some(arr) = v.as_array() {
+        let ints: Option<Vec<i64>> = arr.iter().map(|x| x.as_i64()).collect();
+        return Some(Value::int_array(&ints?));
+    }
+    v.as_str().map(|s| Value::Str(s.to_string()))
+}
+
 impl LinguigenesisBridge {
     /// Resolve a Linguigenesis data file by name in a LOCATION-INDEPENDENT way.
     ///
@@ -938,9 +967,12 @@ impl LinguigenesisBridge {
         if exs.len() < 4 {
             return None;
         }
-        // HELD-OUT guard: reserve the last 2 as a generalization probe the solver
-        // never sees, so a program that merely memorises the seed but contradicts
-        // the rest of the LLM's spec fails (catches an inconsistent proposal).
+        // HELD-OUT guard: reserve the last 2 examples as a generalization probe the
+        // solver never fits. NOTE: `solve_problem` solves a `synthesis_view()` that
+        // CLEARS `problem.holdouts`, so the probe does NOT bite inside the solver —
+        // we MUST re-verify the solved code against the holdouts HERE (post-solve),
+        // or an overfit-to-seed program that contradicts the rest of the LLM's spec
+        // would pass. `code_reproduces_examples` is that real re-check.
         let split = exs.len().saturating_sub(2).max(2);
         let (seed, holdouts) = exs.split_at(split);
         let name = "f".to_string();
@@ -955,7 +987,10 @@ impl LinguigenesisBridge {
             ..Default::default()
         };
         let res = crate::solver::solve_problem(&problem);
-        res.success.then_some(res)
+        if !res.success || !crate::runtime::code_reproduces_examples(&res.code, holdouts) {
+            return None;
+        }
+        Some(res)
     }
 
     /// Mode C (project decomposition, gated by `NSYNTH_LOCAL_LLM_PROJECT`): the
@@ -1000,6 +1035,92 @@ impl LinguigenesisBridge {
             match self.synthesize_from_description(&comp.description, Some(&name)) {
                 Ok(r) if r.success => verified.push((name, r)),
                 _ => failed.push(format!("{name}: {}", comp.description)),
+            }
+        }
+        Some((verified, failed))
+    }
+
+    /// Mode C+ (contract-driven project synthesis, gated by `NSYNTH_LOCAL_LLM_PROJECT`):
+    /// the untrusted LLM proposes a decomposition WHERE EACH COMPONENT CARRIES ITS OWN
+    /// I/O EXAMPLES. Each component's examples become a real `Problem` (seed +
+    /// held-out probe) that `solve_problem` strict-verifies; only verified components
+    /// are returned (with the FULL example set, so a downstream writer can emit
+    /// reproduction tests). Returns `(verified, failed)`.
+    ///
+    /// TRUST: the LLM only proposes the decomposition AND the examples; every
+    /// returned component is strict-verified against (a held-out split of) those
+    /// examples, so a component that merely memorises a wrong seed fails closed. What
+    /// remains UNVERIFIED is the WHOLE-ARTIFACT behavior — there is no oracle for
+    /// "does the assembled program do what was asked", and the examples themselves
+    /// are the LLM's unverified claim. So this delivers *verified parts of a
+    /// plausible plan*, not a verified program.
+    pub fn synthesize_project_with_contracts(
+        &self,
+        request: &str,
+    ) -> Option<(Vec<VerifiedComponent>, Vec<String>)> {
+        if std::env::var("NSYNTH_LOCAL_LLM_PROJECT")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            return None;
+        }
+        if !crate::local_llm::ensure_server() {
+            return None;
+        }
+        let specs = crate::local_llm::propose_decomposition_with_contracts(request)?;
+        let mut verified = Vec::new();
+        let mut failed = Vec::new();
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for spec in &specs {
+            // Collision-free fn name (mirrors synthesize_project_via_llm's naming).
+            let base = if spec.name.is_empty() { "f".to_string() } else { spec.name.clone() };
+            let mut name = base.clone();
+            let mut n = 2;
+            while used.contains(&name) {
+                name = format!("{base}{n}");
+                n += 1;
+            }
+            used.insert(name.clone());
+
+            // Map each proposed example to a runtime Example; skip any that don't map.
+            let mut exs: Vec<crate::benchmark::Example> = Vec::new();
+            for p in &spec.examples {
+                let inputs: Option<Vec<_>> = p.inputs.iter().map(json_to_bench_value).collect();
+                let (Some(inputs), Some(output)) = (inputs, json_to_bench_value(&p.output)) else {
+                    continue;
+                };
+                exs.push(crate::benchmark::Example { inputs, expected: output });
+            }
+            // Need >=3 mappable examples so the proven Mode-B split keeps a non-empty
+            // seed AND a held-out probe. No description fallback: a contract lane
+            // without real examples cannot be strict-verified or reproduced.
+            if exs.len() < 3 {
+                failed.push(format!("{name}: {}", spec.description));
+                continue;
+            }
+            // HELD-OUT guard (same formula as synthesize_via_llm_examples): reserve
+            // the last <=2 examples as a generalization probe. solve_problem strips
+            // problem.holdouts via synthesis_view, so the probe is re-checked
+            // post-solve with code_reproduces_examples (else it would be cosmetic).
+            let split = exs.len().saturating_sub(2).max(2);
+            let (seed, holdouts) = exs.split_at(split);
+            let signature: &'static str = Box::leak(infer_signature(&name, seed).into_boxed_str());
+            let problem = crate::benchmark::Problem {
+                name: name.clone(),
+                category: "local-llm-contracts",
+                description: "llm-proposed contract",
+                signature,
+                examples: seed.to_vec(),
+                holdouts: holdouts.to_vec(),
+                ..Default::default()
+            };
+            let res = crate::solver::solve_problem(&problem);
+            if res.success && crate::runtime::code_reproduces_examples(&res.code, holdouts) {
+                // Store the FULL example set (seed + holdouts) for reproduction tests.
+                verified.push(VerifiedComponent { name, result: res, examples: exs });
+            } else {
+                failed.push(format!("{name}: {}", spec.description));
             }
         }
         Some((verified, failed))
@@ -3705,6 +3826,35 @@ fn param_names(idx: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The contract lane is inert (returns None) when the project gate is unset, so
+    /// the untrusted LLM door never opens implicitly.
+    #[test]
+    fn synthesize_project_with_contracts_inert_without_flag() {
+        std::env::remove_var("NSYNTH_LOCAL_LLM_PROJECT");
+        assert!(LinguigenesisBridge::default()
+            .synthesize_project_with_contracts("build a list utility")
+            .is_none());
+    }
+
+    /// The JSON→Value coercion accepts exactly the supported kinds and refuses
+    /// anything it cannot represent soundly (floats, mixed arrays) rather than
+    /// coercing them into a wrong runtime value.
+    #[test]
+    fn json_to_bench_value_maps_supported_kinds() {
+        use crate::benchmark::Value;
+        assert_eq!(json_to_bench_value(&serde_json::json!(true)), Some(Value::Bool(true)));
+        assert_eq!(json_to_bench_value(&serde_json::json!(7)), Some(Value::Int(7)));
+        assert_eq!(
+            json_to_bench_value(&serde_json::json!([1, 2, 3])),
+            Some(Value::int_array(&[1, 2, 3]))
+        );
+        // Mixed array: the all-int collect short-circuits to None, and a JSON array
+        // is not a string, so the whole maps to None (not a coerced Str).
+        assert!(json_to_bench_value(&serde_json::json!([1, "x"])).is_none());
+        // Float is not bool/i64/array/str → None.
+        assert!(json_to_bench_value(&serde_json::json!(1.5)).is_none());
+    }
 
     /// UNWALL-1B EMERGENT left-identity derivation: the non-additive stateful
     /// re-target picks each op's behavioral seed by deriving its LEFT-IDENTITY from

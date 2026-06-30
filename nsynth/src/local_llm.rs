@@ -293,6 +293,119 @@ fn parse_decomposition(content: &str) -> Option<Vec<ProposedComponent>> {
     (out.len() >= 2).then_some(out)
 }
 
+/// One LLM-proposed sub-function with an embedded I/O CONTRACT: a fn name, a NL
+/// description, AND >=3 example rows. Unlike `ProposedComponent` (Mode C, which
+/// re-derives examples downstream), this carries the examples directly so the
+/// bridge can build a real Problem (seed + holdout), strict-verify, and emit
+/// reproduction tests. UNTRUSTED — the examples are the LLM's claim, never an
+/// oracle; the synthesis door is the sole authority.
+pub struct ProposedComponentSpec {
+    pub name: String,
+    pub description: String,
+    pub examples: Vec<ProposedExample>,
+}
+
+/// Mode C+ (contract-bearing decomposition). Successor to `propose_decomposition`:
+/// asks for name + description + >=3 I/O examples per fn IN ONE CALL, so the bridge
+/// can build a real Problem (seed+holdout) and strict-verify each component AND
+/// emit reproduction tests. Untrusted; gated downstream by NSYNTH_LOCAL_LLM_PROJECT.
+/// Returns >=2 functions (each with >=3 examples), or None (disabled / error /
+/// too few).
+pub fn propose_decomposition_with_contracts(request: &str) -> Option<Vec<ProposedComponentSpec>> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "Break a programming request into small INDEPENDENT pure functions, each computing \
+        ONE value from its inputs. Inputs and outputs are integers, arrays of integers, or booleans. \
+        For EACH function give a name (snake_case), a one-sentence description, AND at least 4 \
+        correct input/output examples — compute each output carefully and include an edge case. \
+        IMPORTANT: \"in\" is the ARGUMENT LIST. A function that takes a single LIST has ONE array \
+        argument, written as a NESTED array: {\"in\":[[1,2,3]],\"out\":6} for the sum of a list. A \
+        function of two numbers is {\"in\":[3,4],\"out\":7}. Never use an empty \"in\"; include an \
+        edge case such as a single-element list or a negative number. Output ONLY a JSON object, no prose: \
+        {\"functions\":[{\"name\":\"snake_case\",\"description\":\"one clear sentence\",\
+        \"examples\":[{\"in\":[ARG,...],\"out\":RESULT}]}]}. Give 2 to 5 functions, each with at \
+        least 4 examples.";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": format!("Request: {}", request.replace('"', "'"))}
+        ],
+        "temperature": 0.0,
+        // Decomposition WITH per-fn examples (nested-array list args, 4+ examples each)
+        // is the heaviest Mode-C variant; Gemma 4 reasons longer here, so give ample
+        // headroom or the JSON answer truncates (finish=length -> unparseable).
+        "max_tokens": 2048
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "150", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| msg["reasoning"].as_str())?;
+    parse_decomposition_with_contracts(content)
+}
+
+/// Extract `{"functions":[{"name":..,"description":..,"examples":[{"in":..,"out":..}]}]}`
+/// from the model text. Keeps only functions with >=3 valid example rows; returns
+/// >=2 functions or None. Values are left as raw `serde_json::Value` — the bridge's
+/// `json_to_bench_value` is the sole type authority.
+fn parse_decomposition_with_contracts(content: &str) -> Option<Vec<ProposedComponentSpec>> {
+    let s = content.trim();
+    let start = s.find('{')?;
+    let end = s.rfind('}')? + 1;
+    let parsed: serde_json::Value = serde_json::from_str(&s[start..end]).ok()?;
+    let arr = parsed.get("functions")?.as_array()?;
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for e in arr {
+        let name = match e.get("name").and_then(|v| v.as_str()) {
+            Some(n) => n.trim().to_string(),
+            None => continue,
+        };
+        let description = match e.get("description").and_then(|v| v.as_str()) {
+            Some(d) => d.trim().to_string(),
+            None => continue,
+        };
+        if name.is_empty() || description.is_empty() || !seen.insert(name.clone()) {
+            continue;
+        }
+        let rows = match e.get("examples").and_then(|v| v.as_array()) {
+            Some(r) => r,
+            None => continue,
+        };
+        let mut examples = Vec::new();
+        for row in rows {
+            let inputs = match row.get("in").and_then(|v| v.as_array()) {
+                Some(i) if !i.is_empty() => i.clone(),
+                _ => continue,
+            };
+            let output = match row.get("out") {
+                Some(o) => o.clone(),
+                None => continue,
+            };
+            examples.push(ProposedExample { inputs, output });
+        }
+        // A component without enough examples cannot form a seed+holdout split.
+        if examples.len() < 3 {
+            continue;
+        }
+        out.push(ProposedComponentSpec { name, description, examples });
+    }
+    (out.len() >= 2).then_some(out)
+}
+
 /// Rewrite an arbitrary request into ONE short CANONICAL sentence the symbolic
 /// comprehension reliably parses — a single op or a filter/map/reduce COMPOSITION
 /// ("the sum of the positive values", "the maximum of the doubled values"). Used
@@ -406,6 +519,47 @@ mod tests {
             "{\"functions\":[{\"name\":\"a\",\"description\":\"x\"},{\"name\":\"a\",\"description\":\"y\"}]}"
         )
         .is_none());
+    }
+
+    #[test]
+    fn parse_decomposition_with_contracts_extracts_functions_and_examples() {
+        // Happy path: 2 functions, 3 examples each.
+        let s = "```json\n{\"functions\":[\
+            {\"name\":\"sum_all\",\"description\":\"the sum of all elements\",\"examples\":[\
+                {\"in\":[[1,2,3]],\"out\":6},\
+                {\"in\":[[4,5]],\"out\":9},\
+                {\"in\":[[0]],\"out\":0}]},\
+            {\"name\":\"is_positive\",\"description\":\"whether the value is positive\",\"examples\":[\
+                {\"in\":[1],\"out\":true},\
+                {\"in\":[-2],\"out\":false},\
+                {\"in\":[5],\"out\":true}]}]}\n```";
+        let specs = parse_decomposition_with_contracts(s).expect("2 components");
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].name, "sum_all");
+        assert_eq!(specs[0].examples.len(), 3);
+        assert_eq!(specs[0].examples[0].inputs, vec![serde_json::json!([1, 2, 3])]);
+        assert_eq!(specs[0].examples[0].output, serde_json::json!(6));
+        assert_eq!(specs[1].examples[2].output, serde_json::json!(true));
+
+        // One function only → below the >=2 floor → None.
+        assert!(parse_decomposition_with_contracts(
+            "{\"functions\":[{\"name\":\"a\",\"description\":\"x\",\"examples\":[\
+                {\"in\":[1],\"out\":1},{\"in\":[2],\"out\":2},{\"in\":[3],\"out\":3}]}]}"
+        )
+        .is_none());
+
+        // Two functions but one has only 2 examples → that fn is dropped → <2 → None.
+        assert!(parse_decomposition_with_contracts(
+            "{\"functions\":[\
+                {\"name\":\"a\",\"description\":\"x\",\"examples\":[\
+                    {\"in\":[1],\"out\":1},{\"in\":[2],\"out\":2},{\"in\":[3],\"out\":3}]},\
+                {\"name\":\"b\",\"description\":\"y\",\"examples\":[\
+                    {\"in\":[1],\"out\":1},{\"in\":[2],\"out\":2}]}]}"
+        )
+        .is_none());
+
+        // No JSON → None.
+        assert!(parse_decomposition_with_contracts("no json here").is_none());
     }
 
     #[test]
