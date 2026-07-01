@@ -82,7 +82,19 @@ fn main() {
         // Report the winning method so the driver can attribute solves (library vs
         // search vs …) without a separate baseline run.
         println!("SOLVED {id} {}", res.method);
-    } else {
-        println!("UNSOLVED {id}");
+        return;
     }
+    // Mode D fallback (gated by NSYNTH_LOCAL_LLM_REPAIR + a served model): the LLM
+    // writes a whole program from the DESCRIPTION + examples, verified against the
+    // FULL example set with repair retries. Only accepted on a full reproduction.
+    let desc = task.get("text").and_then(|v| v.as_str()).unwrap_or("solve the task");
+    if let Some(r) =
+        mog_synth::linguigenesis_bridge::LinguigenesisBridge::synthesize_via_repair_loop(desc, &exs)
+    {
+        if mog_synth::runtime::code_reproduces_examples(&r.code, &exs) {
+            println!("SOLVED {id} {}", r.method);
+            return;
+        }
+    }
+    println!("UNSOLVED {id}");
 }

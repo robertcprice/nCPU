@@ -293,6 +293,109 @@ fn parse_decomposition(content: &str) -> Option<Vec<ProposedComponent>> {
     (out.len() >= 2).then_some(out)
 }
 
+/// Mode D (verify-and-repair): the LLM writes a WHOLE Mog program for a task no
+/// known op / example-search can produce (arbitrary algorithms). UNTRUSTED — the
+/// caller MUST run it against the tests and accept ONLY on a full pass; `prior` =
+/// (previous code, concrete failure) drives a fix on the next iteration. Returns the
+/// extracted Mog function source, or None. This is the lever that scales to
+/// arbitrary algorithms (the model knows sort/DP/recursion); verification keeps the
+/// guarantee (a wrong program never passes the tests).
+pub fn propose_program(request: &str, prior: Option<(&str, &str)>) -> Option<String> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "You write MOG, a small imperative language. RULES (critical — Mog is NOT Rust):\n\
+        - Declare a variable with `name: TYPE = EXPR;` — NEVER `let`, NEVER `mut`. \
+        TYPE is i64, [i64], bool, or string.\n\
+        - Reassign with `name = EXPR;`. Use EXACTLY the given function signature.\n\
+        - Control flow: `if C { } else { }`, `while C { }`, `for e in arr { }` (e = each element), \
+        `for ch in s { }` (ch = a 1-char string), `return EXPR;`.\n\
+        - Operators: + - * / % == != < > <= >= && || . Integer arithmetic only.\n\
+        - Arrays: arr[i] (index), arr.len (length, NO parens). For index loops: \
+        `i: i64 = 0; while i < arr.len { ... arr[i] ...; i = i + 1; }`. You CANNOT grow an array; \
+        accumulate into an i64/bool/string instead.\n\
+        - Strings: s.len, s[i], s.upper(), s.lower(), s.reverse(), s.chars(), s.split(x), \
+        s.contains(x), s.slice(a,b); per char: `for ch in s`, ch.is_vowel(), ch.is_digit(), \
+        ch.is_alpha(), ch.ord(); a char is a 1-char string — compare with `ch == 'a'`.\n\
+        - NO imports, NO `let`, NO helper functions — ONE self-contained function.\n\
+        Output ONLY the function in a ```mog code block, no prose.\n\n\
+        EXAMPLE (count elements greater than ten):\n\
+        ```mog\n\
+        fn solve(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > 10 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n\
+        ```";
+    let user = match prior {
+        None => format!("Task:\n{request}\n\nWrite the Mog function."),
+        Some((code, err)) => format!(
+            "Task:\n{request}\n\nYour previous attempt:\n{code}\n\nIt FAILED: {err}\n\n\
+             Fix the bug and output ONLY the corrected Mog function."
+        ),
+    };
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 1200
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "120", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| msg["reasoning"].as_str())?;
+    extract_code(content)
+}
+
+/// Extract a Mog function from the model output: prefer a fenced ``` block; else
+/// take from the first `fn ` through its balanced closing brace.
+fn extract_code(content: &str) -> Option<String> {
+    // Fenced block: between the first ``` (optionally ```mog) and the next ```.
+    if let Some(start) = content.find("```") {
+        let after = &content[start + 3..];
+        let after = after.strip_prefix("mog").unwrap_or(after);
+        let after = after.strip_prefix('\n').unwrap_or(after);
+        if let Some(end) = after.find("```") {
+            let code = after[..end].trim();
+            if code.contains("fn ") {
+                return Some(code.to_string());
+            }
+        }
+    }
+    // Fallback: from `fn ` to the matching closing brace.
+    let fn_pos = content.find("fn ")?;
+    let rest = &content[fn_pos..];
+    let mut depth = 0i32;
+    let mut seen_open = false;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '{' => {
+                depth += 1;
+                seen_open = true;
+            }
+            '}' => {
+                depth -= 1;
+                if seen_open && depth == 0 {
+                    return Some(rest[..=i].trim().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// One LLM-proposed sub-function with an embedded I/O CONTRACT: a fn name, a NL
 /// description, AND >=3 example rows. Unlike `ProposedComponent` (Mode C, which
 /// re-derives examples downstream), this carries the examples directly so the
@@ -502,6 +605,21 @@ mod tests {
     fn ensure_server_inert_without_url() {
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
         assert!(!ensure_server());
+    }
+
+    #[test]
+    fn extract_code_from_fence_and_bare() {
+        let fenced = "Here:\n```mog\nfn f(x: i64) -> i64 {\n    return x + 1;\n}\n```\ndone";
+        let c = extract_code(fenced).expect("fenced");
+        assert!(c.starts_with("fn f(") && c.trim_end().ends_with('}'), "got: {c}");
+        // bare (no fence) — balanced-brace extraction, trailing prose dropped.
+        let bare = "fn g(a: i64) -> i64 { return a; } and then some words";
+        let c2 = extract_code(bare).expect("bare");
+        assert_eq!(c2, "fn g(a: i64) -> i64 { return a; }");
+        // nested braces close correctly.
+        let nested = "```\nfn h(a: i64) -> i64 {\n    if a > 0 {\n        return 1;\n    }\n    return 0;\n}\n```";
+        assert!(extract_code(nested).unwrap().contains("if a > 0"));
+        assert!(extract_code("no code here").is_none());
     }
 
     #[test]

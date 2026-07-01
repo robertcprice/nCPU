@@ -944,6 +944,44 @@ pub fn code_reproduces_examples(code: &str, examples: &[crate::benchmark::Exampl
     })
 }
 
+/// Like [`code_reproduces_examples`] but returns a human-readable description of the
+/// FIRST failure (for an LLM repair loop), or `None` when `code` reproduces every
+/// example. Reports parse errors, runtime errors, and value mismatches concretely
+/// ("f([1,2]) returned 3 but expected 5"), so the model can fix the actual bug.
+pub fn describe_first_failure(
+    code: &str,
+    examples: &[crate::benchmark::Example],
+) -> Option<String> {
+    let fn_name = match code
+        .split("fn ")
+        .nth(1)
+        .and_then(|s| s.split('(').next())
+        .map(str::trim)
+    {
+        Some(n) if !n.is_empty() => n,
+        _ => return Some("no `fn <name>(...)` found — output a single Mog function".to_string()),
+    };
+    for ex in examples {
+        match execute_function(code, fn_name, &ex.inputs, fn_name) {
+            Ok(got) => {
+                if !output_matches(&got, &ex.expected) {
+                    return Some(format!(
+                        "{fn_name}({:?}) returned {:?} but expected {:?}",
+                        ex.inputs, got, ex.expected
+                    ));
+                }
+            }
+            Err(e) => {
+                return Some(format!(
+                    "{fn_name}({:?}) failed to run: {e}",
+                    ex.inputs
+                ));
+            }
+        }
+    }
+    None
+}
+
 fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
     use crate::benchmark::Value as BV;
     match (actual, expected) {

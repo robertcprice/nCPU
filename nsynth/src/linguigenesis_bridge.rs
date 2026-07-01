@@ -1048,6 +1048,75 @@ impl LinguigenesisBridge {
         Some((verified, failed))
     }
 
+    /// Mode D (verify-and-repair, gated by `NSYNTH_LOCAL_LLM_REPAIR`): the LLM writes
+    /// a WHOLE Mog program for a task no known op / example-search can produce; the
+    /// engine RUNS it against every example and, on failure, feeds the concrete
+    /// failure back for a fix — iterating up to `NSYNTH_LOCAL_LLM_REPAIR_TRIES`
+    /// (default 4). Accepts ONLY a program that reproduces EVERY example, so a wrong
+    /// program never passes (the verification guarantee a raw model lacks). This is
+    /// the lever that scales to arbitrary algorithms; `request` is the task
+    /// description, and the examples are appended to the prompt automatically.
+    pub fn synthesize_via_repair_loop(
+        request: &str,
+        examples: &[crate::benchmark::Example],
+    ) -> Option<crate::solver::SolveResult> {
+        if std::env::var("NSYNTH_LOCAL_LLM_REPAIR")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            return None;
+        }
+        if examples.is_empty() || !crate::local_llm::ensure_server() {
+            return None;
+        }
+        let tries: usize = std::env::var("NSYNTH_LOCAL_LLM_REPAIR_TRIES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4);
+        // Show the model the concrete examples (a bounded sample) so it targets the
+        // exact contract, not just the prose.
+        let ex_str = examples
+            .iter()
+            .take(6)
+            .map(|e| format!("  input {:?} -> output {:?}", e.inputs, e.expected))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Pin the EXACT signature (inferred from the examples) so the model fills only
+        // the body — it was otherwise inventing extra params from the grammar example.
+        let signature = infer_signature("solve", examples);
+        let full_request = format!(
+            "{request}\n\nUse EXACTLY this signature (fill the body):\n{signature}\n\n\
+             The function must satisfy these examples:\n{ex_str}"
+        );
+
+        let mut prior: Option<(String, String)> = None;
+        for _ in 0..tries {
+            let Some(code) = crate::local_llm::propose_program(
+                &full_request,
+                prior.as_ref().map(|(c, e)| (c.as_str(), e.as_str())),
+            ) else {
+                break;
+            };
+            match crate::runtime::describe_first_failure(&code, examples) {
+                None => {
+                    return Some(crate::solver::SolveResult {
+                        success: true,
+                        code,
+                        method: "llm-repair".to_string(),
+                        error: None,
+                        metadata: Default::default(),
+                    });
+                }
+                Some(failure) => {
+                    eprintln!("[repair] retry: {}", &failure[..failure.len().min(80)]);
+                    prior = Some((code, failure));
+                }
+            }
+        }
+        None
+    }
+
     /// Mode C+ (contract-driven project synthesis, gated by `NSYNTH_LOCAL_LLM_PROJECT`):
     /// the untrusted LLM proposes a decomposition WHERE EACH COMPONENT CARRIES ITS OWN
     /// I/O EXAMPLES. Each component's examples become a real `Problem` (seed +
