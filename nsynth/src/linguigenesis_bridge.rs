@@ -1090,25 +1090,51 @@ impl LinguigenesisBridge {
              The function must satisfy these examples:\n{ex_str}"
         );
 
+        // BEST-OF-N + repair: each round draws N candidates (a greedy anchor at
+        // temp 0 + N-1 diverse samples at temp 0.8) and the VERIFIER keeps the first
+        // that reproduces every example — pass@N >> pass@1 for a small model, and
+        // verification makes the extra samples free of risk. If none pass, the greedy
+        // anchor's failure drives the next round's repair. N = NSYNTH_LOCAL_LLM_SAMPLES.
+        let samples: usize = std::env::var("NSYNTH_LOCAL_LLM_SAMPLES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4)
+            .max(1);
+        let verified = |code: String| {
+            Some(crate::solver::SolveResult {
+                success: true,
+                code,
+                method: "llm-repair".to_string(),
+                error: None,
+                metadata: Default::default(),
+            })
+        };
         let mut prior: Option<(String, String)> = None;
         for _ in 0..tries {
-            let Some(code) = crate::local_llm::propose_program(
-                &full_request,
-                prior.as_ref().map(|(c, e)| (c.as_str(), e.as_str())),
-            ) else {
+            let prior_ref = prior.as_ref().map(|(c, e)| (c.as_str(), e.as_str()));
+            // Greedy anchor (temp 0): the canonical attempt + the repair seed.
+            let Some(anchor) = crate::local_llm::propose_program(&full_request, prior_ref, 0.0)
+            else {
                 break;
             };
-            match crate::runtime::describe_first_failure(&code, examples) {
-                None => {
-                    return Some(crate::solver::SolveResult {
-                        success: true,
-                        code,
-                        method: "llm-repair".to_string(),
-                        error: None,
-                        metadata: Default::default(),
-                    });
+            let anchor_failure = match crate::runtime::describe_first_failure(&anchor, examples) {
+                None => return verified(anchor),
+                Some(f) => f,
+            };
+            // N-1 diverse samples (temp 0.8) — breadth; the verifier filters.
+            for _ in 1..samples {
+                if let Some(cand) =
+                    crate::local_llm::propose_program(&full_request, prior_ref, 0.8)
+                {
+                    if crate::runtime::describe_first_failure(&cand, examples).is_none() {
+                        return verified(cand);
+                    }
                 }
-                Some(failure) => {
+            }
+            {
+                let failure = anchor_failure;
+                let code = anchor;
+                {
                     eprintln!("[repair] retry: {}", &failure[..failure.len().min(80)]);
                     prior = Some((code, failure));
                 }

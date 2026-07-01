@@ -346,7 +346,11 @@ pub fn training_record(request: &str, verified_code: &str) -> serde_json::Value 
     })
 }
 
-pub fn propose_program(request: &str, prior: Option<(&str, &str)>) -> Option<String> {
+pub fn propose_program(
+    request: &str,
+    prior: Option<(&str, &str)>,
+    temperature: f64,
+) -> Option<String> {
     let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
         .ok()
         .filter(|s| !s.is_empty())?;
@@ -365,7 +369,7 @@ pub fn propose_program(request: &str, prior: Option<(&str, &str)>) -> Option<Str
             {"role": "system", "content": sys},
             {"role": "user", "content": user}
         ],
-        "temperature": 0.0,
+        "temperature": temperature,
         "max_tokens": 1200
     });
     let out = Command::new("curl")
