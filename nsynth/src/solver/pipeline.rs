@@ -343,6 +343,18 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Verified reference-op library FIRST (after the exact cache): a KNOWN algorithm
+    // (is_prime / gcd / factorial / power / count_value / …) whose impl reproduces
+    // EVERY example. Runs before the search/affine/gradient stages because those can
+    // OVERFIT a tiny example set (2 seed points fit spuriously by a single-branch
+    // affine) and short-circuit the correct algorithm. Behavior-matched + example-
+    // verified, so it fires ONLY on a genuine match; a spurious partial match is
+    // caught by the caller's holdout re-verification.
+    if let Some(result) = crate::op_library::try_library(problem) {
+        eprintln!("[solve] library OK in {:.3}s — {}", t0.elapsed().as_secs_f32(), result.method);
+        return result;
+    }
+
     // Exact multi-argument linear family first: a 2-3 arg affine or
     // single-threshold-affine rule is solved by a direct integer linear solve in
     // microseconds and verified against every example, so it must short-circuit
@@ -367,18 +379,6 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
     // measured regression (curve_analysis flagged 22-24s cumulative wall-
     // clock on problems the preemptive stage solved in 5-10ms).
     let preemptive_search_result = solve_problem_from_preemptive_search_teacher(problem);
-
-    // Verified reference-op library: a KNOWN algorithm (is_prime / gcd / factorial /
-    // count_value / …) that reproduces EVERY example. Cheap (a few interpreter runs)
-    // and catches tasks no example-search can induce, BEFORE the expensive teacher +
-    // enumerative stages waste time. Behavior-matched + example-verified, never a
-    // name/shape recognizer. Only when the cheap exact paths already missed.
-    if preemptive_search_result.is_none() {
-        if let Some(result) = crate::op_library::try_library(problem) {
-            eprintln!("[solve] library OK in {:.3}s — {}", t0.elapsed().as_secs_f32(), result.method);
-            return result;
-        }
-    }
 
     // Stage 1.5: cross-run knowledge transfer via CachedTeachers. Runs only
     // when cheaper stages (Stage 0 exact-match + preemptive search) have
