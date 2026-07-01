@@ -4,6 +4,39 @@
 //! (mlx_lm.server / LM Studio) — CI without a model is unaffected.
 use mog_synth::linguigenesis_bridge::LinguigenesisBridge;
 
+/// Mode D (verify-and-repair): a task the LLM-free engine CANNOT synthesize
+/// (contains-duplicate needs a nested scan / set, not an example-inducible fold).
+/// The LLM writes a whole Mog program, verified against every example with repair
+/// retries. Gated by NSYNTH_LOCAL_LLM_URL + set NSYNTH_LOCAL_LLM_REPAIR.
+#[test]
+fn local_llm_repair_loop_solves_engine_miss() {
+    if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
+        eprintln!("[REPAIR] skipped (no url)");
+        return;
+    }
+    std::env::set_var("NSYNTH_LOCAL_LLM_REPAIR", "1");
+    use mog_synth::benchmark::{Example, Value};
+    let ex = |a: &[i64], b: bool| Example { inputs: vec![Value::int_array(a)], expected: Value::Bool(b) };
+    let exs = vec![
+        ex(&[1, 2, 3, 4, 5], false),
+        ex(&[1, 2, 3, 2, 5], true),
+        ex(&[7, 7], true),
+        ex(&[1, 2, 3], false),
+        ex(&[4, 5, 6, 4], true),
+    ];
+    let r = LinguigenesisBridge::synthesize_via_repair_loop(
+        "whether a given array of integers contains any duplicate",
+        &exs,
+    );
+    let r = r.unwrap_or_else(|| panic!("[REPAIR] repair loop returned None (server up + model capable?)"));
+    eprintln!("[REPAIR] method={}\n{}", r.method, r.code);
+    assert!(r.success, "must be a verified result");
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(&r.code, &exs),
+        "the accepted program must reproduce EVERY example"
+    );
+}
+
 #[test]
 fn local_llm_translates_failing_phrasing_to_verified_program() {
     if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
