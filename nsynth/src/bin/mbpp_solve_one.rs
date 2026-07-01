@@ -79,7 +79,9 @@ fn main() {
     let res = mog_synth::solver::solve_problem(&problem);
     // SOLVED = synthesized AND reproduces EVERY test case (seed + held-out).
     if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
-        println!("SOLVED {id}");
+        // Report the winning method so the driver can attribute solves (library vs
+        // search vs …) without a separate baseline run.
+        println!("SOLVED {id} {}", res.method);
     } else {
         println!("UNSOLVED {id}");
     }
