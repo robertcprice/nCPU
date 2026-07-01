@@ -312,8 +312,9 @@ pub const MOG_SYSTEM_PROMPT: &str =
         `for ch in s { }` (ch = a 1-char string), `return EXPR;`.\n\
         - Operators: + - * / % == != < > <= >= && || . Integer arithmetic only.\n\
         - Arrays: arr[i] (index), arr.len (length, NO parens). For index loops: \
-        `i: i64 = 0; while i < arr.len { ... arr[i] ...; i = i + 1; }`. You CANNOT grow an array; \
-        accumulate into an i64/bool/string instead.\n\
+        `i: i64 = 0; while i < arr.len { ... arr[i] ...; i = i + 1; }`. BUILD an array by \
+        starting empty and pushing: `out: [i64] = []; for e in arr { out.push(e * 2); } return out;` \
+        — or a fixed literal `[a, b]`. This is how you RETURN a list.\n\
         - Strings: s.len, s[i], s.upper(), s.lower(), s.reverse(), s.chars(), s.split(x), \
         s.contains(x), s.slice(a,b); per char: `for ch in s`, ch.is_vowel(), ch.is_digit(), \
         ch.is_alpha(), ch.ord(); a char is a 1-char string — compare with `ch == 'a'`.\n\
