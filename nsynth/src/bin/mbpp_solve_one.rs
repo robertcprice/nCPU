@@ -84,10 +84,25 @@ fn main() {
     // loop, so an ABLATION can isolate the model's own ability (LLM_ONLY + TRIES=1 =
     // raw single-shot) from what the engine + repair add.
     let llm_only = std::env::var("NSYNTH_LLM_ONLY").ok().filter(|s| !s.is_empty()).is_some();
+    let desc = task.get("text").and_then(|v| v.as_str()).unwrap_or("solve the task");
+    // NSYNTH_HARVEST=<path>: on any SOLVE, append a VERIFIED (task -> Mog) training
+    // pair to <path> (mlx_lm.lora chat format). Every harvested program passed the
+    // verifier, so the corpus is guaranteed-correct (STaR / rejection-sampling).
+    let harvest = |code: &str| {
+        if let Some(path) = std::env::var("NSYNTH_HARVEST").ok().filter(|s| !s.is_empty()) {
+            let rec = mog_synth::local_llm::training_record(desc, code);
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                use std::io::Write;
+                let _ = writeln!(f, "{rec}");
+            }
+        }
+    };
+
     if !llm_only {
         let res = mog_synth::solver::solve_problem(&problem);
         // SOLVED = synthesized AND reproduces EVERY test case (seed + held-out).
         if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
+            harvest(&res.code);
             // Report the winning method so the driver can attribute solves (library
             // vs search vs …) without a separate baseline run.
             println!("SOLVED {id} {}", res.method);
@@ -97,11 +112,11 @@ fn main() {
     // Mode D fallback (gated by NSYNTH_LOCAL_LLM_REPAIR + a served model): the LLM
     // writes a whole program from the DESCRIPTION + examples, verified against the
     // FULL example set with repair retries. Only accepted on a full reproduction.
-    let desc = task.get("text").and_then(|v| v.as_str()).unwrap_or("solve the task");
     if let Some(r) =
         mog_synth::linguigenesis_bridge::LinguigenesisBridge::synthesize_via_repair_loop(desc, &exs)
     {
         if mog_synth::runtime::code_reproduces_examples(&r.code, &exs) {
+            harvest(&r.code);
             println!("SOLVED {id} {}", r.method);
             return;
         }

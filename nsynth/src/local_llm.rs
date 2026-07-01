@@ -300,12 +300,11 @@ fn parse_decomposition(content: &str) -> Option<Vec<ProposedComponent>> {
 /// extracted Mog function source, or None. This is the lever that scales to
 /// arbitrary algorithms (the model knows sort/DP/recursion); verification keeps the
 /// guarantee (a wrong program never passes the tests).
-pub fn propose_program(request: &str, prior: Option<(&str, &str)>) -> Option<String> {
-    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
-        .ok()
-        .filter(|s| !s.is_empty())?;
-    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
-    let sys = "You write MOG, a small imperative language. RULES (critical — Mog is NOT Rust):\n\
+/// The Mog-writing system prompt. Shared by `propose_program` (inference) AND the
+/// training-corpus harvester (`training_record`), so fine-tuning optimizes the EXACT
+/// inference distribution — the model learns to answer this prompt with valid Mog.
+pub const MOG_SYSTEM_PROMPT: &str =
+    "You write MOG, a small imperative language. RULES (critical — Mog is NOT Rust):\n\
         - Declare a variable with `name: TYPE = EXPR;` — NEVER `let`, NEVER `mut`. \
         TYPE is i64, [i64], bool, or string.\n\
         - Reassign with `name = EXPR;`. Use EXACTLY the given function signature.\n\
@@ -324,6 +323,34 @@ pub fn propose_program(request: &str, prior: Option<(&str, &str)>) -> Option<Str
         ```mog\n\
         fn solve(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > 10 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n\
         ```";
+
+/// Build the user message for a Mog task (task text + optional signature + examples),
+/// matching what the repair loop sends. Shared so a harvested training pair has the
+/// SAME user turn the model will see at inference.
+pub fn mog_user_message(request: &str) -> String {
+    format!("Task:\n{request}\n\nWrite the Mog function.")
+}
+
+/// A single fine-tuning example in `mlx_lm.lora` chat format: the shared Mog system
+/// prompt + the task user turn + the VERIFIED Mog program as the assistant answer.
+/// Only ever built from a program that passed the verifier, so the corpus is
+/// guaranteed-correct (the STaR / rejection-sampling property).
+pub fn training_record(request: &str, verified_code: &str) -> serde_json::Value {
+    serde_json::json!({
+        "messages": [
+            {"role": "system", "content": MOG_SYSTEM_PROMPT},
+            {"role": "user", "content": mog_user_message(request)},
+            {"role": "assistant", "content": format!("```mog\n{}\n```", verified_code.trim())}
+        ]
+    })
+}
+
+pub fn propose_program(request: &str, prior: Option<(&str, &str)>) -> Option<String> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = MOG_SYSTEM_PROMPT;
     let user = match prior {
         None => format!("Task:\n{request}\n\nWrite the Mog function."),
         Some((code, err)) => format!(
@@ -605,6 +632,21 @@ mod tests {
     fn ensure_server_inert_without_url() {
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
         assert!(!ensure_server());
+    }
+
+    #[test]
+    fn training_record_is_valid_chat_format() {
+        let r = training_record("count vowels in a string", "fn f(s: string) -> i64 {\n    return 0;\n}");
+        let msgs = r.get("messages").and_then(|m| m.as_array()).expect("messages array");
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert!(msgs[0]["content"].as_str().unwrap().contains("MOG"));
+        assert!(msgs[1]["content"].as_str().unwrap().contains("count vowels"));
+        // assistant answer is the fenced verified program (the label).
+        let a = msgs[2]["content"].as_str().unwrap();
+        assert!(a.starts_with("```mog") && a.contains("fn f(") && a.trim_end().ends_with("```"));
     }
 
     #[test]
