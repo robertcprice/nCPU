@@ -61,6 +61,24 @@ pub const OPS: &[LibOp] = &[
     // ── array + scalar (2-arg) ─────────────────────────────────────────────
     LibOp { name: "count_value", arity: 2, mog:
 "fn count_value(arr: [i64], x: i64) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e == x {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // ── batch 2: more number theory (1-arg i64) ────────────────────────────
+    LibOp { name: "count_divisors", arity: 1, mog:
+"fn count_divisors(n: i64) -> i64 {\n    c: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        if n % i == 0 {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "sum_divisors", arity: 1, mog:
+"fn sum_divisors(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        if n % i == 0 {\n            s = s + i;\n        }\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "is_perfect", arity: 1, mog:
+"fn is_perfect(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i < n {\n        if n % i == 0 {\n            s = s + i;\n        }\n        i = i + 1;\n    }\n    if s == n {\n        return 1;\n    }\n    return 0;\n}\n" },
+    LibOp { name: "digit_product", arity: 1, mog:
+"fn digit_product(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    p: i64 = 1;\n    while x > 0 {\n        p = p * (x % 10);\n        x = x / 10;\n    }\n    return p;\n}\n" },
+    LibOp { name: "largest_digit", arity: 1, mog:
+"fn largest_digit(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    m: i64 = 0;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d > m {\n            m = d;\n        }\n        x = x / 10;\n    }\n    return m;\n}\n" },
+    LibOp { name: "count_primes_below", arity: 1, mog:
+"fn count_primes_below(n: i64) -> i64 {\n    c: i64 = 0;\n    k: i64 = 2;\n    while k < n {\n        d: i64 = 2;\n        prime: i64 = 1;\n        while d * d <= k {\n            if k % d == 0 {\n                prime = 0;\n            }\n            d = d + 1;\n        }\n        if prime == 1 {\n            c = c + 1;\n        }\n        k = k + 1;\n    }\n    return c;\n}\n" },
+    // ── batch 2: array aggregation (1-arg [i64]) ───────────────────────────
+    LibOp { name: "array_range", arity: 1, mog:
+"fn array_range(arr: [i64]) -> i64 {\n    mx: i64 = arr[0];\n    mn: i64 = arr[0];\n    for e in arr {\n        if e > mx {\n            mx = e;\n        }\n        if e < mn {\n            mn = e;\n        }\n    }\n    return mx - mn;\n}\n" },
+    LibOp { name: "count_negatives", arity: 1, mog:
+"fn count_negatives(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -116,6 +134,15 @@ mod tests {
             ("count_positives", vec![iv(&[-1, 2, -3, 4])], Value::Int(2)),
             ("sum_of_squares", vec![iv(&[1, 2, 3])], Value::Int(14)),
             ("count_value", vec![iv(&[1, 2, 2, 3, 2]), Value::Int(2)], Value::Int(3)),
+            ("count_divisors", vec![Value::Int(12)], Value::Int(6)),
+            ("sum_divisors", vec![Value::Int(6)], Value::Int(12)),
+            ("is_perfect", vec![Value::Int(6)], Value::Int(1)),
+            ("is_perfect", vec![Value::Int(8)], Value::Int(0)),
+            ("digit_product", vec![Value::Int(234)], Value::Int(24)),
+            ("largest_digit", vec![Value::Int(4092)], Value::Int(9)),
+            ("count_primes_below", vec![Value::Int(10)], Value::Int(4)),
+            ("array_range", vec![iv(&[3, 8, 1, 6])], Value::Int(7)),
+            ("count_negatives", vec![iv(&[-1, 2, -3, -4, 5])], Value::Int(3)),
         ];
         for (name, args, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
