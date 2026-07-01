@@ -13,9 +13,18 @@ fn json_to_value(v: &serde_json::Value) -> Option<Value> {
     if let Some(i) = v.as_i64() {
         return Some(Value::Int(i));
     }
+    if let Some(s) = v.as_str() {
+        return Some(Value::Str(s.to_string()));
+    }
     if let Some(arr) = v.as_array() {
-        let ints: Option<Vec<i64>> = arr.iter().map(|x| x.as_i64()).collect();
-        return Some(Value::int_array(&ints?));
+        // All-int -> the engine's dedicated int-array fast path.
+        if let Some(ints) = arr.iter().map(|x| x.as_i64()).collect::<Option<Vec<i64>>>() {
+            return Some(Value::int_array(&ints));
+        }
+        // Else a general array (strings, nested) -> recurse. Any element that
+        // can't map (e.g. a float) fails the whole value -> the task is skipped.
+        let vals: Option<Vec<Value>> = arr.iter().map(json_to_value).collect();
+        return Some(Value::Array(vals?));
     }
     None
 }
