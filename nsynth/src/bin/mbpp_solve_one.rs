@@ -76,13 +76,19 @@ fn main() {
         examples: seed.to_vec(),
         ..Default::default()
     };
-    let res = mog_synth::solver::solve_problem(&problem);
-    // SOLVED = synthesized AND reproduces EVERY test case (seed + held-out).
-    if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
-        // Report the winning method so the driver can attribute solves (library vs
-        // search vs …) without a separate baseline run.
-        println!("SOLVED {id} {}", res.method);
-        return;
+    // NSYNTH_LLM_ONLY skips the LLM-free engine entirely -> straight to the repair
+    // loop, so an ABLATION can isolate the model's own ability (LLM_ONLY + TRIES=1 =
+    // raw single-shot) from what the engine + repair add.
+    let llm_only = std::env::var("NSYNTH_LLM_ONLY").ok().filter(|s| !s.is_empty()).is_some();
+    if !llm_only {
+        let res = mog_synth::solver::solve_problem(&problem);
+        // SOLVED = synthesized AND reproduces EVERY test case (seed + held-out).
+        if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
+            // Report the winning method so the driver can attribute solves (library
+            // vs search vs …) without a separate baseline run.
+            println!("SOLVED {id} {}", res.method);
+            return;
+        }
     }
     // Mode D fallback (gated by NSYNTH_LOCAL_LLM_REPAIR + a served model): the LLM
     // writes a whole program from the DESCRIPTION + examples, verified against the

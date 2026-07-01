@@ -26,6 +26,20 @@ def classify(v):
     return None
 
 
+def representable(v):
+    """True if v maps to a benchmark::Value the interpreter runs: int/bool/str and
+    arbitrarily-nested lists/TUPLES thereof (a Python tuple serializes to a JSON
+    array, and Mog builds fixed arrays with `[a, b]`, so an int-tuple return like
+    (min,max) is solvable). Excludes float and dict (no Value type yet)."""
+    if isinstance(v, bool):
+        return True
+    if isinstance(v, (int, str)):
+        return True
+    if isinstance(v, (list, tuple)):
+        return all(representable(x) for x in v)
+    return False
+
+
 def parse_assert(a):
     """assert FNAME(args) == EXPECTED  (or  assert FNAME(args)  -> True)."""
     try:
