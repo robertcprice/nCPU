@@ -84,6 +84,13 @@ pub struct VerifiedOutcome {
     /// Whether the generated reproduction tests pass (the second gate; only run
     /// when `compile` is `Ok`).
     pub test: TestStatus,
+    /// Components that got a real execution test (>=1 renderable example) — their
+    /// behavior is checked by `cargo test`, not just compilation.
+    pub tested: Vec<String>,
+    /// Components with NO renderable example, so they are COMPILE-ONLY (no
+    /// behavioral test). Surfaced so a green `test` gate never falsely implies
+    /// every component is execution-verified ("no silent caps").
+    pub compile_only: Vec<String>,
 }
 
 const CARGO_TOML_TEMPLATE: &str = r#"[package]
@@ -276,6 +283,8 @@ pub fn write_verified_project(
     let mut written = Vec::new();
     let mut modules: Vec<String> = Vec::with_capacity(components.len());
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut tested: Vec<String> = Vec::new();
+    let mut compile_only: Vec<String> = Vec::new();
 
     // Same module-naming passes as `write_synthesized_project`: sanitize ->
     // keyword-escape -> dedup on the FINAL module name; record fn -> module for
@@ -321,8 +330,11 @@ pub fn write_verified_project(
         // Guard (D7): empty string means nothing rendered -> append nothing
         // (never an empty `mod tests {}` or an always-true test).
         let tests = emit_tests_module(name, examples);
-        if !tests.is_empty() {
+        if tests.is_empty() {
+            compile_only.push(name.clone());
+        } else {
             body.push_str(&tests);
+            tested.push(name.clone());
         }
 
         let rel = format!("src/{module}.rs");
@@ -387,6 +399,8 @@ pub fn write_verified_project(
         written,
         compile,
         test,
+        tested,
+        compile_only,
     })
 }
 
@@ -974,6 +988,9 @@ mod tests {
             "good code must not FAIL its own reproduction tests: {:?}",
             outcome.test
         );
+        // COVERAGE HONESTY: both components render -> both execution-tested, none compile-only.
+        assert_eq!(outcome.tested.len(), 2, "both components should be execution-tested");
+        assert!(outcome.compile_only.is_empty(), "no compile-only component here");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1055,6 +1072,10 @@ mod tests {
             "no false-green/failing test when nothing renders: {:?}",
             outcome.test
         );
+        // COVERAGE HONESTY: `echo` had no renderable example, so it is COMPILE-ONLY,
+        // not execution-tested — a green `test` gate must not imply otherwise.
+        assert_eq!(outcome.compile_only, vec!["echo".to_string()], "must be flagged compile-only");
+        assert!(outcome.tested.is_empty(), "no component is execution-tested here");
         let _ = fs::remove_dir_all(root);
     }
 
