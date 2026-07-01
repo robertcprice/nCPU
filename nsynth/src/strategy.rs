@@ -271,10 +271,20 @@ fn teacher_topk_from_config() -> Option<usize> {
 pub const DEFAULT_TEACHER_BUDGET_SEC: f32 = 15.0;
 
 pub(crate) fn teacher_budget_sec() -> f32 {
-    match std::env::var("NSYNTH_TEACHER_BUDGET_SEC") {
+    let base = match std::env::var("NSYNTH_TEACHER_BUDGET_SEC") {
         Ok(raw) => raw.parse::<f32>().unwrap_or(DEFAULT_TEACHER_BUDGET_SEC),
         Err(_) => DEFAULT_TEACHER_BUDGET_SEC,
+    };
+    // A global per-solve budget caps the teacher stage too: profiling MBPP showed
+    // this transfer heuristic burning up to 15s WITHOUT solving on hard tasks (0/30
+    // timeouts converted even at 30s), so it must not blow the whole budget.
+    if let Some(ms) = std::env::var("NSYNTH_SOLVE_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        return base.min(ms as f32 / 1000.0);
     }
+    base
 }
 
 impl SynthesisStrategy for CachedTeachers {

@@ -270,8 +270,34 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     result
 }
 
+/// Optional global per-solve budget (ms). When set, stages are skipped once it is
+/// exhausted so a solve degrades gracefully instead of spinning (profiling showed
+/// doomed searches burning 15-30s without solving). Also caps the teacher stage
+/// (see `strategy::teacher_budget_sec`). Unset -> unbounded (legacy behavior).
+fn solve_budget_ms() -> Option<u128> {
+    std::env::var("NSYNTH_SOLVE_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+}
+
+fn budget_miss() -> SolveResult {
+    SolveResult {
+        success: false,
+        code: String::new(),
+        method: "budget-exhausted".to_string(),
+        error: Some("NSYNTH_SOLVE_BUDGET_MS exhausted".to_string()),
+        metadata: DifferentiableMetadata::default(),
+    }
+}
+
 fn solve_problem_inner(problem: &Problem) -> SolveResult {
     let t0 = std::time::Instant::now();
+    let over_budget = |t: &std::time::Instant| solve_budget_ms().is_some_and(|b| t.elapsed().as_millis() > b);
+    // Under a global budget, cap ALL gradient training (the array/native cores are
+    // the dominant time-sink — profiling showed synthesize_array burning ~11s on a
+    // doomed task) via the thread-local train deadline. RAII: held for this solve.
+    let _train_deadline = solve_budget_ms()
+        .map(|ms| crate::synthesis::common::TrainDeadline::set(std::time::Duration::from_millis(ms as u64)));
 
     // Float (continuous) lane first: a `-> f64` problem is least-squares affine
     // regression, a different regime from the exact-integer machinery below
@@ -428,6 +454,10 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
     // Skipped for inputs this enumerator cannot express (Str, Pair, struct):
     // those are handled by downstream search teachers and would otherwise
     // burn the full enumerative budget only to miss.
+    if over_budget(&t0) {
+        eprintln!("[solve] budget exhausted before enumerative in {:.1}s", t0.elapsed().as_secs_f32());
+        return budget_miss();
+    }
     if should_try_enumerative(
         problem,
         &router_ctx,
@@ -472,6 +502,19 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    if over_budget(&t0) {
+        eprintln!("[solve] budget exhausted before post-enumeration in {:.1}s", t0.elapsed().as_secs_f32());
+        if let Some(cached) = cached_fallback {
+            return SolveResult {
+                success: true,
+                code: cached.code,
+                method: cached.method,
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            };
+        }
+        return budget_miss();
+    }
     let result = solve_problem_after_enumeration(problem, t0, preemptive_search_result);
     if result.success {
         return result;

@@ -12,16 +12,19 @@ BIN="target/release/mbpp_solve_one"
 
 solved=0; unsolved=0; skip=0; killed=0; n=0
 solved_ids=""
+: > "${MBPP_KILLED_IDS:-/tmp/mbpp_killed_ids.txt}"
+: > "${MBPP_SOLVED_IDS:-/tmp/mbpp_solved_ids.txt}"
 while IFS= read -r line; do
   n=$((n+1)); [ "$n" -gt "$LIMIT" ] && break
+  id=$(printf '%s' "$line" | sed -n 's/.*"id"[: ]*\([0-9]*\).*/\1/p')
   out=$(printf '%s' "$line" | timeout "$TMO" "$BIN" 2>/dev/null)
   rc=$?
-  if [ "$rc" -eq 124 ]; then killed=$((killed+1)); continue; fi
+  if [ "$rc" -eq 124 ]; then killed=$((killed+1)); echo "$id" >> "${MBPP_KILLED_IDS:-/tmp/mbpp_killed_ids.txt}"; continue; fi
   case "$out" in
-    SOLVED*)   solved=$((solved+1)); solved_ids="$solved_ids ${out#SOLVED }";;
+    SOLVED*)   solved=$((solved+1)); solved_ids="$solved_ids ${out#SOLVED }"; echo "${out#SOLVED }" >> "${MBPP_SOLVED_IDS:-/tmp/mbpp_solved_ids.txt}";;
     UNSOLVED*) unsolved=$((unsolved+1));;
     SKIP*)     skip=$((skip+1));;
-    *)         killed=$((killed+1));;
+    *)         killed=$((killed+1)); echo "$id" >> "${MBPP_KILLED_IDS:-/tmp/mbpp_killed_ids.txt}";;
   esac
 done < "$BENCH"
 
