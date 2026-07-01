@@ -1600,6 +1600,17 @@ fn expect_int(value: &Value) -> Result<i64, String> {
     }
 }
 
+/// Total order for the `<`/`>`/`<=`/`>=` operators over comparable value types:
+/// ints numerically and strings lexicographically (so string sorting and char
+/// comparison work). Cross-type / non-orderable operands are an error.
+fn cmp_values(lhs: &Value, rhs: &Value) -> Result<std::cmp::Ordering, String> {
+    match (lhs, rhs) {
+        (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+        (Value::Str(a), Value::Str(b)) => Ok(a.cmp(b)),
+        _ => Err(format!("cannot order {:?} and {:?}", lhs, rhs)),
+    }
+}
+
 /// Coerce an int or float value to `f64` for float arithmetic (an `Int` operand
 /// in a float expression is widened, matching how `1 + 2.5` reads).
 fn as_f64(value: &Value) -> Result<f64, String> {
@@ -1717,6 +1728,34 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                             other => other,
                         };
                         value.push(mapped);
+                    }
+                    other => value.push(other),
+                }
+            }
+            out.push(Token::Str(value));
+            continue;
+        }
+
+        // Char literal `'a'` — sugar for a 1-char string (chars ARE 1-char strings
+        // in Mog), so `ch == 'a'` matches `for ch in s`. Supports the same escapes.
+        if ch == '\'' {
+            chars.next();
+            let mut value = String::new();
+            while let Some(next) = chars.next() {
+                match next {
+                    '\'' => break,
+                    '\\' => {
+                        let esc = chars
+                            .next()
+                            .ok_or_else(|| "unterminated char escape".to_string())?;
+                        value.push(match esc {
+                            'n' => '\n',
+                            't' => '\t',
+                            '\'' => '\'',
+                            '\\' => '\\',
+                            '0' => '\0',
+                            other => other,
+                        });
                     }
                     other => value.push(other),
                 }
@@ -3539,6 +3578,9 @@ impl Runtime {
                 let iterable = self.eval_expr(iterable, env.clone())?;
                 let items = match iterable {
                     Value::Array(items) => items,
+                    // A string is iterable as its chars (each a 1-char string), so
+                    // `for ch in s { ... }` works and `ch == "a"` / `ch == 'a'` match.
+                    Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
                     other => return Err(format!("cannot iterate over {:?}", other)),
                 };
                 let mut iters = 0usize;
@@ -4022,10 +4064,12 @@ impl Runtime {
             BinaryOp::Or => Ok(Value::Bool(truthy(&lhs) || truthy(&rhs))),
             BinaryOp::Eq => Ok(Value::Bool(value_eq(&lhs, &rhs))),
             BinaryOp::Ne => Ok(Value::Bool(!value_eq(&lhs, &rhs))),
-            BinaryOp::Lt => Ok(Value::Bool(expect_int(&lhs)? < expect_int(&rhs)?)),
-            BinaryOp::Gt => Ok(Value::Bool(expect_int(&lhs)? > expect_int(&rhs)?)),
-            BinaryOp::Le => Ok(Value::Bool(expect_int(&lhs)? <= expect_int(&rhs)?)),
-            BinaryOp::Ge => Ok(Value::Bool(expect_int(&lhs)? >= expect_int(&rhs)?)),
+            // Ordering works on ints AND strings (lexicographic), so string sorting
+            // and char comparison (`ch < 'z'`) evaluate.
+            BinaryOp::Lt => Ok(Value::Bool(cmp_values(&lhs, &rhs)? == std::cmp::Ordering::Less)),
+            BinaryOp::Gt => Ok(Value::Bool(cmp_values(&lhs, &rhs)? == std::cmp::Ordering::Greater)),
+            BinaryOp::Le => Ok(Value::Bool(cmp_values(&lhs, &rhs)? != std::cmp::Ordering::Greater)),
+            BinaryOp::Ge => Ok(Value::Bool(cmp_values(&lhs, &rhs)? != std::cmp::Ordering::Less)),
         }
     }
 
@@ -4259,6 +4303,52 @@ impl Runtime {
                     } else {
                         Ok(Value::Str(chars[start..end].iter().collect()))
                     }
+                }
+                // Char-level surface: iterate/inspect a string as chars (each char
+                // is a 1-char string, consistent with `s[i]` and `for ch in s`).
+                "chars" => Ok(Value::Array(
+                    value.chars().map(|c| Value::Str(c.to_string())).collect(),
+                )),
+                "is_digit" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()),
+                )),
+                "is_alpha" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| c.is_alphabetic()),
+                )),
+                "is_alnum" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| c.is_alphanumeric()),
+                )),
+                "is_space" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| c.is_whitespace()),
+                )),
+                "is_upper" => Ok(Value::Bool(
+                    value.chars().any(|c| c.is_uppercase())
+                        && !value.chars().any(|c| c.is_lowercase()),
+                )),
+                "is_lower" => Ok(Value::Bool(
+                    value.chars().any(|c| c.is_lowercase())
+                        && !value.chars().any(|c| c.is_uppercase()),
+                )),
+                "is_vowel" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| "aeiouAEIOU".contains(c)),
+                )),
+                // `ord` of the FIRST char (char code); `count(sub)` = non-overlapping
+                // occurrences of a substring.
+                "ord" => value
+                    .chars()
+                    .next()
+                    .map(|c| Value::Int(c as i64))
+                    .ok_or_else(|| "ord() of empty string".to_string()),
+                "count" => {
+                    let needle = match args.into_iter().next() {
+                        Some(Value::Str(v)) => v,
+                        other => return Err(format!("count() needs a string, got {:?}", other)),
+                    };
+                    Ok(Value::Int(if needle.is_empty() {
+                        0
+                    } else {
+                        value.matches(&needle).count() as i64
+                    }))
                 }
                 _ => Err(format!("unknown string method {method}")),
             },
@@ -6023,6 +6113,43 @@ fn main() -> i64 {
         assert!(code_reproduces_examples(code, &[]));
         // Unparseable code (no `fn`) -> false, never a silent pass.
         assert!(!code_reproduces_examples("not rust", &good));
+    }
+
+    #[test]
+    fn string_char_level_ops_execute() {
+        let s = |x: &str| BmValue::Str(x.to_string());
+        let run_i = |code: &str, name: &str, arg: BmValue| -> i64 {
+            match execute_function(code, name, &[arg], name) {
+                Ok(Value::Int(i)) => i,
+                other => panic!("{name}: expected Int, got {other:?}"),
+            }
+        };
+        let run_b = |code: &str, name: &str, arg: BmValue| -> bool {
+            match execute_function(code, name, &[arg], name) {
+                Ok(Value::Bool(b)) => b,
+                Ok(Value::Int(i)) => i != 0,
+                other => panic!("{name}: expected Bool, got {other:?}"),
+            }
+        };
+        // for-ch iteration + char literals: count vowels.
+        let vowels = "fn count_vowels(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch == 'a' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        assert_eq!(run_i(vowels, "count_vowels", s("banana")), 3);
+        // is_vowel classification method.
+        let vm = "fn nv(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_vowel() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        assert_eq!(run_i(vm, "nv", s("hello")), 2);
+        // is_palindrome via .reverse() equality (string ==).
+        let pal = "fn is_pal(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n";
+        assert!(run_b(pal, "is_pal", s("racecar")));
+        assert!(!run_b(pal, "is_pal", s("hello")));
+        // .chars() + is_digit.
+        let digits = "fn nd(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s.chars() {\n        if ch.is_digit() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        assert_eq!(run_i(digits, "nd", s("a1b2c3")), 3);
+        // string ordering (<): count chars before 'n'.
+        let ord = "fn cb(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch < 'n' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        assert_eq!(run_i(ord, "cb", s("abcxyz")), 3);
+        // .ord() of first char.
+        let ordf = "fn firstcode(s: string) -> i64 {\n    return s.ord();\n}\n";
+        assert_eq!(run_i(ordf, "firstcode", s("A")), 65);
     }
 
     #[test]

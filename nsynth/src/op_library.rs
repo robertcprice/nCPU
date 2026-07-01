@@ -79,6 +79,31 @@ pub const OPS: &[LibOp] = &[
 "fn array_range(arr: [i64]) -> i64 {\n    mx: i64 = arr[0];\n    mn: i64 = arr[0];\n    for e in arr {\n        if e > mx {\n            mx = e;\n        }\n        if e < mn {\n            mn = e;\n        }\n    }\n    return mx - mn;\n}\n" },
     LibOp { name: "count_negatives", arity: 1, mog:
 "fn count_negatives(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // ── batch 3: strings (1-arg string). Now expressible after the char-level
+    // language extension (for-ch, char literals, .chars/.is_*/.ord/ordering). A
+    // string op run on a non-string input errors -> reproduces nothing -> skipped.
+    LibOp { name: "reverse_string", arity: 1, mog:
+"fn reverse_string(s: string) -> string {\n    return s.reverse();\n}\n" },
+    LibOp { name: "to_upper", arity: 1, mog:
+"fn to_upper(s: string) -> string {\n    return s.upper();\n}\n" },
+    LibOp { name: "to_lower", arity: 1, mog:
+"fn to_lower(s: string) -> string {\n    return s.lower();\n}\n" },
+    LibOp { name: "string_length", arity: 1, mog:
+"fn string_length(s: string) -> i64 {\n    return s.len;\n}\n" },
+    LibOp { name: "count_vowels", arity: 1, mog:
+"fn count_vowels(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_vowel() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    LibOp { name: "count_consonants", arity: 1, mog:
+"fn count_consonants(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n            if ch.is_vowel() {\n            } else {\n                c = c + 1;\n            }\n        }\n    }\n    return c;\n}\n" },
+    LibOp { name: "is_palindrome", arity: 1, mog:
+"fn is_palindrome(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n" },
+    LibOp { name: "count_uppercase", arity: 1, mog:
+"fn count_uppercase(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_upper() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    LibOp { name: "count_lowercase", arity: 1, mog:
+"fn count_lowercase(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_lower() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    LibOp { name: "count_string_digits", arity: 1, mog:
+"fn count_string_digits(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_digit() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    LibOp { name: "count_spaces", arity: 1, mog:
+"fn count_spaces(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch == ' ' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -143,6 +168,18 @@ mod tests {
             ("count_primes_below", vec![Value::Int(10)], Value::Int(4)),
             ("array_range", vec![iv(&[3, 8, 1, 6])], Value::Int(7)),
             ("count_negatives", vec![iv(&[-1, 2, -3, -4, 5])], Value::Int(3)),
+            ("reverse_string", vec![Value::Str("abc".into())], Value::Str("cba".into())),
+            ("to_upper", vec![Value::Str("aBc".into())], Value::Str("ABC".into())),
+            ("to_lower", vec![Value::Str("aBc".into())], Value::Str("abc".into())),
+            ("string_length", vec![Value::Str("hello".into())], Value::Int(5)),
+            ("count_vowels", vec![Value::Str("banana".into())], Value::Int(3)),
+            ("count_consonants", vec![Value::Str("banana".into())], Value::Int(3)),
+            ("is_palindrome", vec![Value::Str("racecar".into())], Value::Int(1)),
+            ("is_palindrome", vec![Value::Str("hello".into())], Value::Int(0)),
+            ("count_uppercase", vec![Value::Str("AbCdE".into())], Value::Int(3)),
+            ("count_lowercase", vec![Value::Str("AbCdE".into())], Value::Int(2)),
+            ("count_string_digits", vec![Value::Str("a1b2c3".into())], Value::Int(3)),
+            ("count_spaces", vec![Value::Str("a b c".into())], Value::Int(2)),
         ];
         for (name, args, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
