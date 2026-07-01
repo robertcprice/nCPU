@@ -13,6 +13,10 @@ fn json_to_value(v: &serde_json::Value) -> Option<Value> {
     if let Some(i) = v.as_i64() {
         return Some(Value::Int(i));
     }
+    // Non-integer number -> Float (bits). Tried AFTER as_i64 so ints stay Int.
+    if let Some(f) = v.as_f64() {
+        return Some(Value::Float(f.to_bits()));
+    }
     if let Some(s) = v.as_str() {
         return Some(Value::Str(s.to_string()));
     }
