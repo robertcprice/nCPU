@@ -368,6 +368,18 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
     // clock on problems the preemptive stage solved in 5-10ms).
     let preemptive_search_result = solve_problem_from_preemptive_search_teacher(problem);
 
+    // Verified reference-op library: a KNOWN algorithm (is_prime / gcd / factorial /
+    // count_value / …) that reproduces EVERY example. Cheap (a few interpreter runs)
+    // and catches tasks no example-search can induce, BEFORE the expensive teacher +
+    // enumerative stages waste time. Behavior-matched + example-verified, never a
+    // name/shape recognizer. Only when the cheap exact paths already missed.
+    if preemptive_search_result.is_none() {
+        if let Some(result) = crate::op_library::try_library(problem) {
+            eprintln!("[solve] library OK in {:.3}s — {}", t0.elapsed().as_secs_f32(), result.method);
+            return result;
+        }
+    }
+
     // Stage 1.5: cross-run knowledge transfer via CachedTeachers. Runs only
     // when cheaper stages (Stage 0 exact-match + preemptive search) have
     // already missed. Bounded by NSYNTH_TEACHER_BUDGET_SEC (default 15s).
