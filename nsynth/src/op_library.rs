@@ -251,6 +251,24 @@ pub const OPS: &[LibOp] = &[
 "fn lucas_number(n: i64) -> i64 {\n    a: i64 = 2;\n    b: i64 = 1;\n    i: i64 = 0;\n    while i < n {\n        t: i64 = a + b;\n        a = b;\n        b = t;\n        i = i + 1;\n    }\n    return a;\n}\n" },
     LibOp { name: "perrin_number", arity: 1, mog:
 "fn perrin_number(n: i64) -> i64 {\n    a: i64 = 3;\n    b: i64 = 0;\n    c: i64 = 2;\n    if n == 0 {\n        return a;\n    }\n    if n == 1 {\n        return b;\n    }\n    if n == 2 {\n        return c;\n    }\n    i: i64 = 3;\n    while i <= n {\n        d: i64 = a + b;\n        a = b;\n        b = c;\n        c = d;\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    // ── batch 9: more figurate numbers + recurrences + factorial-first-digit +
+    // cumulative bit counts (all from the remaining scalar cluster). ───────────
+    LibOp { name: "octagonal_number", arity: 1, mog:
+"fn octagonal_number(n: i64) -> i64 {\n    return n * (3 * n - 2);\n}\n" },
+    LibOp { name: "nonagonal_number", arity: 1, mog:
+"fn nonagonal_number(n: i64) -> i64 {\n    return n * (7 * n - 5) / 2;\n}\n" },
+    LibOp { name: "decagonal_number", arity: 1, mog:
+"fn decagonal_number(n: i64) -> i64 {\n    return 4 * n * n - 3 * n;\n}\n" },
+    LibOp { name: "carol_number", arity: 1, mog:
+"fn carol_number(n: i64) -> i64 {\n    p: i64 = 1;\n    i: i64 = 0;\n    while i < n {\n        p = p * 2;\n        i = i + 1;\n    }\n    t: i64 = p - 1;\n    return t * t - 2;\n}\n" },
+    LibOp { name: "jacobsthal_number", arity: 1, mog:
+"fn jacobsthal_number(n: i64) -> i64 {\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 0;\n    while i < n {\n        t: i64 = b + 2 * a;\n        a = b;\n        b = t;\n        i = i + 1;\n    }\n    return a;\n}\n" },
+    LibOp { name: "jacobsthal_lucas", arity: 1, mog:
+"fn jacobsthal_lucas(n: i64) -> i64 {\n    a: i64 = 2;\n    b: i64 = 1;\n    i: i64 = 0;\n    while i < n {\n        t: i64 = b + 2 * a;\n        a = b;\n        b = t;\n        i = i + 1;\n    }\n    return a;\n}\n" },
+    LibOp { name: "first_digit_factorial", arity: 1, mog:
+"fn first_digit_factorial(n: i64) -> i64 {\n    f: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        f = f * i;\n        i = i + 1;\n    }\n    while f >= 10 {\n        f = f / 10;\n    }\n    return f;\n}\n" },
+    LibOp { name: "count_unset_bits_upto", arity: 1, mog:
+"fn count_unset_bits_upto(n: i64) -> i64 {\n    total: i64 = 0;\n    k: i64 = 1;\n    while k <= n {\n        x: i64 = k;\n        while x > 0 {\n            if x % 2 == 0 {\n                total = total + 1;\n            }\n            x = x / 2;\n        }\n        k = k + 1;\n    }\n    return total;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -492,6 +510,35 @@ mod tests {
             ("lucas_number", 4, 7),
             ("perrin_number", 9, 12),
             ("perrin_number", 4, 2),
+        ];
+        for (name, arg, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![Value::Int(*arg)], Value::Int(*expect)),
+                "op {name}({arg}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch9_ops_reproduce_their_probes() {
+        let cases: &[(&str, i64, i64)] = &[
+            ("octagonal_number", 5, 65),
+            ("octagonal_number", 10, 280),
+            ("nonagonal_number", 10, 325),
+            ("nonagonal_number", 15, 750),
+            ("decagonal_number", 3, 27),
+            ("decagonal_number", 7, 175),
+            ("carol_number", 2, 7),
+            ("carol_number", 4, 223),
+            ("jacobsthal_number", 5, 11),
+            ("jacobsthal_number", 2, 1),
+            ("jacobsthal_lucas", 5, 31),
+            ("jacobsthal_lucas", 2, 5),
+            ("first_digit_factorial", 5, 1),
+            ("first_digit_factorial", 10, 3),
+            ("count_unset_bits_upto", 2, 1),
+            ("count_unset_bits_upto", 5, 4),
         ];
         for (name, arg, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
