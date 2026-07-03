@@ -261,6 +261,25 @@ pub const OPS: &[LibOp] = &[
 "fn count_alpha_position(s: string) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    for ch in s {\n        v: i64 = ch.ord();\n        pos: i64 = 0;\n        if v >= 97 {\n            pos = v - 96;\n        } else {\n            if v >= 65 {\n                pos = v - 64;\n            }\n        }\n        if pos == i + 1 {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
     LibOp { name: "is_undulating", arity: 1, mog:
 "fn is_undulating(s: string) -> bool {\n    n: i64 = s.len;\n    if n < 3 {\n        return false;\n    }\n    i: i64 = 2;\n    while i < n {\n        if s[i] != s[i - 2] {\n            return false;\n        }\n        if s[i] == s[i - 1] {\n            return false;\n        }\n        i = i + 1;\n    }\n    if s[0] == s[1] {\n        return false;\n    }\n    return true;\n}\n" },
+    // ── batch 20: more int i->i closed-forms + trivial-but-unreached perimeters.
+    LibOp { name: "first_digit", arity: 1, mog:
+"fn first_digit(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    while x >= 10 {\n        x = x / 10;\n    }\n    return x;\n}\n" },
+    LibOp { name: "even_cube_sum", arity: 1, mog:
+"fn even_cube_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        t: i64 = 2 * i;\n        s = s + t * t * t;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "odd_square_sum", arity: 1, mog:
+"fn odd_square_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        t: i64 = 2 * i - 1;\n        s = s + t * t;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "even_fifth_power_sum", arity: 1, mog:
+"fn even_fifth_power_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        t: i64 = 2 * i;\n        s = s + t * t * t * t * t;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "sum_evens_upto", arity: 1, mog:
+"fn sum_evens_upto(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 2;\n    while i <= n {\n        s = s + i;\n        i = i + 2;\n    }\n    return s;\n}\n" },
+    LibOp { name: "sum_sq_diff", arity: 1, mog:
+"fn sum_sq_diff(n: i64) -> i64 {\n    total: i64 = 0;\n    sq: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        total = total + i;\n        sq = sq + i * i;\n        i = i + 1;\n    }\n    return total * total - sq;\n}\n" },
+    LibOp { name: "times_five", arity: 1, mog:
+"fn times_five(n: i64) -> i64 {\n    return 5 * n;\n}\n" },
+    LibOp { name: "times_four", arity: 1, mog:
+"fn times_four(n: i64) -> i64 {\n    return 4 * n;\n}\n" },
+    LibOp { name: "times_two", arity: 1, mog:
+"fn times_two(n: i64) -> i64 {\n    return 2 * n;\n}\n" },
     // ── batch 4: targeted at the measured MBPP unsolved clusters (2026-07-03 run:
     // 55 min/max/select, 35 count/freq, plus base-conversion / bit / recurrence
     // tasks in "other"). count/freq ops use dict-free O(n²) scans — no Value::Map
@@ -752,6 +771,34 @@ mod tests {
         assert!(runs_to(op("is_undulating"), "is_undulating", vec![s("1212121")], Value::Bool(true)));
         assert!(runs_to(op("is_undulating"), "is_undulating", vec![s("1991")], Value::Bool(false)));
         assert!(runs_to(op("is_undulating"), "is_undulating", vec![s("121")], Value::Bool(true)));
+    }
+
+    #[test]
+    fn batch20_ops_reproduce_their_probes() {
+        let cases: &[(&str, i64, i64)] = &[
+            ("first_digit", 123, 1),
+            ("first_digit", 456, 4),
+            ("even_cube_sum", 2, 72),
+            ("even_cube_sum", 3, 288),
+            ("odd_square_sum", 2, 10),
+            ("odd_square_sum", 3, 35),
+            ("even_fifth_power_sum", 2, 1056),
+            ("even_fifth_power_sum", 3, 8832),
+            ("sum_evens_upto", 6, 12),
+            ("sum_evens_upto", 10, 30),
+            ("sum_sq_diff", 12, 5434),
+            ("sum_sq_diff", 20, 41230),
+            ("times_five", 5, 25),
+            ("times_four", 10, 40),
+            ("times_two", 10, 20),
+        ];
+        for (name, arg, expect) in cases {
+            let o = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(o.mog, name, vec![Value::Int(*arg)], Value::Int(*expect)),
+                "op {name}({arg}) failed (expected {expect})"
+            );
+        }
     }
 
     fn op(name: &str) -> &'static str {
