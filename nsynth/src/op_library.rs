@@ -405,6 +405,27 @@ pub const OPS: &[LibOp] = &[
 "fn gp_sum(a: i64, n: i64, r: i64) -> i64 {\n    total: i64 = 0;\n    term: i64 = a;\n    i: i64 = 0;\n    while i < n {\n        total = total + term;\n        term = term * r;\n        i = i + 1;\n    }\n    return total;\n}\n" },
     LibOp { name: "ncr_mod_p", arity: 3, mog:
 "fn ncr_mod_p(n: i64, r: i64, p: i64) -> i64 {\n    num: i64 = 1;\n    i: i64 = 0;\n    while i < r {\n        num = num * (n - i);\n        i = i + 1;\n    }\n    den: i64 = 1;\n    i = 1;\n    while i <= r {\n        den = den * i;\n        i = i + 1;\n    }\n    return num / den % p;\n}\n" },
+    // ── batch 16: 1-arg [i64]->i64 aggregations the engine/prior library missed.
+    LibOp { name: "first_even", arity: 1, mog:
+"fn first_even(arr: [i64]) -> i64 {\n    for e in arr {\n        if e % 2 == 0 {\n            return e;\n        }\n    }\n    return 0 - 1;\n}\n" },
+    LibOp { name: "first_odd", arity: 1, mog:
+"fn first_odd(arr: [i64]) -> i64 {\n    for e in arr {\n        if e % 2 != 0 {\n            return e;\n        }\n    }\n    return 0 - 1;\n}\n" },
+    LibOp { name: "sum_max_min", arity: 1, mog:
+"fn sum_max_min(arr: [i64]) -> i64 {\n    mx: i64 = arr[0];\n    mn: i64 = arr[0];\n    for e in arr {\n        if e > mx {\n            mx = e;\n        }\n        if e < mn {\n            mn = e;\n        }\n    }\n    return mx + mn;\n}\n" },
+    LibOp { name: "sum_first_even_odd", arity: 1, mog:
+"fn sum_first_even_odd(arr: [i64]) -> i64 {\n    fe: i64 = 0;\n    fo: i64 = 0;\n    ge: i64 = 0;\n    go: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            if ge == 0 {\n                fe = e;\n                ge = 1;\n            }\n        } else {\n            if go == 0 {\n                fo = e;\n                go = 1;\n            }\n        }\n    }\n    return fe + fo;\n}\n" },
+    LibOp { name: "product_three_largest", arity: 1, mog:
+"fn product_three_largest(arr: [i64]) -> i64 {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    n: i64 = out.len;\n    return out[n - 1] * out[n - 2] * out[n - 3];\n}\n" },
+    LibOp { name: "sum_three_smallest", arity: 1, mog:
+"fn sum_three_smallest(arr: [i64]) -> i64 {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    return out[0] + out[1] + out[2];\n}\n" },
+    LibOp { name: "array_lcm", arity: 1, mog:
+"fn array_lcm(arr: [i64]) -> i64 {\n    r: i64 = 1;\n    for e in arr {\n        a: i64 = r;\n        b: i64 = e;\n        while b != 0 {\n            t: i64 = b;\n            b = a % b;\n            a = t;\n        }\n        r = r / a * e;\n    }\n    return r;\n}\n" },
+    LibOp { name: "unique_product", arity: 1, mog:
+"fn unique_product(arr: [i64]) -> i64 {\n    seen: [i64] = [];\n    p: i64 = 1;\n    for e in arr {\n        dup: i64 = 0;\n        for u in seen {\n            if u == e {\n                dup = 1;\n            }\n        }\n        if dup == 0 {\n            seen.push(e);\n            p = p * e;\n        }\n    }\n    return p;\n}\n" },
+    LibOp { name: "max_product_subarray", arity: 1, mog:
+"fn max_product_subarray(arr: [i64]) -> i64 {\n    best: i64 = arr[0];\n    cmax: i64 = arr[0];\n    cmin: i64 = arr[0];\n    i: i64 = 1;\n    while i < arr.len {\n        e: i64 = arr[i];\n        if e < 0 {\n            t: i64 = cmax;\n            cmax = cmin;\n            cmin = t;\n        }\n        p1: i64 = cmax * e;\n        if e > p1 {\n            cmax = e;\n        } else {\n            cmax = p1;\n        }\n        p2: i64 = cmin * e;\n        if e < p2 {\n            cmin = e;\n        } else {\n            cmin = p2;\n        }\n        if cmax > best {\n            best = cmax;\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
+    LibOp { name: "concat_as_number", arity: 1, mog:
+"fn concat_as_number(arr: [i64]) -> i64 {\n    r: i64 = 0;\n    for e in arr {\n        m: i64 = 1;\n        x: i64 = e;\n        if x == 0 {\n            m = 10;\n        }\n        while x > 0 {\n            m = m * 10;\n            x = x / 10;\n        }\n        r = r * m + e;\n    }\n    return r;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -870,6 +891,30 @@ mod tests {
                     Value::Int(*expect)
                 ),
                 "op {name}({a},{b},{c}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch16_array_agg_ops_reproduce_their_probes() {
+        let iv = Value::int_array;
+        let cases: &[(&str, Vec<i64>, i64)] = &[
+            ("first_even", vec![1, 3, 5, 7, 4, 1, 6, 8], 4),
+            ("first_odd", vec![1, 3, 5], 1),
+            ("sum_max_min", vec![1, 2, 3], 4),
+            ("sum_first_even_odd", vec![1, 3, 5, 7, 4, 1, 6, 8], 5),
+            ("product_three_largest", vec![12, 74, 9, 50, 61, 41], 225700),
+            ("sum_three_smallest", vec![10, 20, 30, 40, 50, 60, 7], 37),
+            ("array_lcm", vec![2, 7, 3, 9, 4], 252),
+            ("unique_product", vec![10, 20, 30, 40, 20, 50, 60, 40], 720000000),
+            ("max_product_subarray", vec![1, -2, -3, 0, 7, -8, -2], 112),
+            ("concat_as_number", vec![11, 33, 50], 113350),
+        ];
+        for (name, arr, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![iv(arr)], Value::Int(*expect)),
+                "op {name}({arr:?}) failed its probe (expected {expect})"
             );
         }
     }
