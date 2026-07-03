@@ -117,6 +117,15 @@ pub fn maybe_record_learned(problem: &Problem, result: &SolveResult) {
     }
     let Some(first) = problem.examples.first() else { return };
     let arity = first.inputs.len();
+    // Reject INPUT-IGNORING programs. A few-example task lets search short-circuit
+    // with a constant (`fn smart(x) { return 273; }`) that fits the seed AND passes
+    // consensus (an independent re-synth on 1 example finds the SAME constant, so
+    // they agree). Such a program cannot generalise to a different task, so it has
+    // no place in the learned store. Cheap guard: the entry-fn BODY must mention at
+    // least one parameter name.
+    if !body_uses_a_parameter(&result.code) {
+        return;
+    }
     // Novelty: if the hand-written library already reproduces this, it's covered.
     if try_library(problem).is_some() {
         return;
@@ -142,6 +151,42 @@ fn short_hash(s: &str) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut h);
     format!("{:016x}", h.finish())
+}
+
+/// True if the entry function's BODY references at least one of its parameters.
+/// Parses the first `fn name(p1: T, p2: T) { … }`, extracts param names, and looks
+/// for any as a whole-word token in the body. An input-ignoring (constant) program
+/// returns false. Conservative: on any parse ambiguity returns true (don't drop a
+/// real op), since this only gates the learned-store, never correctness.
+fn body_uses_a_parameter(code: &str) -> bool {
+    let Some(open) = code.find('(') else { return true };
+    let Some(close_rel) = code[open..].find(')') else { return true };
+    let params_str = &code[open + 1..open + close_rel];
+    let params: Vec<&str> = params_str
+        .split(',')
+        .filter_map(|p| p.split(':').next().map(str::trim))
+        .filter(|p| !p.is_empty())
+        .collect();
+    if params.is_empty() {
+        return true; // zero-arg fn — not the case we're guarding
+    }
+    let Some(brace) = code[open + close_rel..].find('{') else { return true };
+    let body = &code[open + close_rel + brace + 1..];
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    for p in params {
+        let mut idx = 0;
+        while let Some(pos) = body[idx..].find(p) {
+            let at = idx + pos;
+            let before_ok = at == 0 || !body[..at].chars().next_back().is_some_and(is_ident);
+            let after = &body[at + p.len()..];
+            let after_ok = !after.chars().next().is_some_and(is_ident);
+            if before_ok && after_ok {
+                return true;
+            }
+            idx = at + p.len();
+        }
+    }
+    false
 }
 
 /// The library. Single-loop / while / early-return algorithms Mog expresses
@@ -864,6 +909,18 @@ mod tests {
 
         // Clean up so other tests see an empty store.
         learned_store().lock().unwrap().clear();
+    }
+
+    #[test]
+    fn input_ignoring_programs_are_rejected() {
+        // Constant / input-ignoring bodies must not be recordable as learned ops.
+        assert!(!body_uses_a_parameter("fn f(x: i64) -> i64 {\n    return 273;\n}\n"));
+        assert!(!body_uses_a_parameter("fn f(n: i64) -> i64 {\n    return 31626;\n}\n"));
+        // Genuine programs that use their parameter are kept.
+        assert!(body_uses_a_parameter("fn f(n: i64) -> i64 {\n    return n * 7 + 3;\n}\n"));
+        assert!(body_uses_a_parameter("fn f(x: i64) -> i64 {\n    y: i64 = x;\n    return y;\n}\n"));
+        // Substring false-positive guard: a param 'n' must not match inside 'return'.
+        assert!(!body_uses_a_parameter("fn f(n: i64) -> i64 {\n    return 5;\n}\n"));
     }
 
     /// Soundness: a learned op that does NOT reproduce a task's examples never
