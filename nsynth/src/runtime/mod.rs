@@ -15,6 +15,21 @@ use crate::benchmark::{generated_holdouts, Problem, Value as BenchmarkValue};
 /// loop arms (`While`, `ForTo`, `ForInRange`, `ForIn`, `ForParallel`) agree.
 const MAX_LOOP_ITERS: usize = 100_000;
 
+/// Global fuel: total loop iterations + user-function calls across ONE
+/// entry-point execution (`call_function` resets it). The per-loop
+/// [`MAX_LOOP_ITERS`] caps compose MULTIPLICATIVELY under nesting — a capped
+/// 100k-iteration outer `while` whose body runs a √n inner `while` is ~3×10⁷
+/// interpreted steps, measured at ~58 wall-seconds for ONE candidate execution —
+/// so only a single global budget actually bounds execution time. Generous:
+/// legitimate synthesized programs use well under 1% of this.
+const MAX_TOTAL_STEPS: u64 = 2_000_000;
+
+/// Per-value size caps. Fuel bounds ITERATIONS, not ALLOCATION: `s = s + s`
+/// doubles per iteration (2^60 bytes in 60 fuel-cheap steps), so growth sites
+/// (string concat, array push) enforce these directly.
+const MAX_VALUE_BYTES: usize = 4_000_000;
+const MAX_VALUE_ELEMS: usize = 1_000_000;
+
 /// Max nested user-function-call recursion depth before a candidate is rejected.
 /// Without this, a non-terminating recursive candidate overflows the native
 /// stack and ABORTS the process — a stack overflow is NOT recoverable via
@@ -3067,6 +3082,9 @@ struct Runtime {
     /// so a non-terminating recursive candidate is rejected (Err) rather than
     /// allowed to stack-overflow and abort the process during verification.
     call_depth: Cell<u32>,
+    /// Global step counter (loop iterations + user calls) for this execution,
+    /// bounded by [`MAX_TOTAL_STEPS`]. Reset at each `call_function` entry.
+    steps: Cell<u64>,
 }
 
 struct MutexChannel {
@@ -3238,6 +3256,7 @@ impl Runtime {
             type_inference_cache: RefCell::new(HashMap::new()),
             verify_mode: Cell::new(false),
             call_depth: Cell::new(0),
+            steps: Cell::new(0),
         }
     }
 
@@ -3262,6 +3281,10 @@ impl Runtime {
     }
 
     fn call_function(&self, function_name: &str, args: Vec<Value>) -> Result<Value, String> {
+        // Entry point: fresh global step budget for this execution (long-lived
+        // Runtimes call this repeatedly; earlier executions must not starve
+        // later ones).
+        self.steps.set(0);
         // Check for qualified method calls (Type::method)
         if function_name.contains("::") {
             let parts: Vec<&str> = function_name.split("::").collect();
@@ -3408,11 +3431,35 @@ impl Runtime {
         })
     }
 
+    /// Burn one unit of the global step budget; `Err` once [`MAX_TOTAL_STEPS`]
+    /// is exhausted. Called on every loop iteration and user-function call so
+    /// nested loops cannot multiply per-loop caps into unbounded wall time.
+    fn burn_step(&self) -> Result<(), String> {
+        let s = self.steps.get() + 1;
+        if s > MAX_TOTAL_STEPS {
+            return Err(format!(
+                "execution exceeded the global step budget ({MAX_TOTAL_STEPS})"
+            ));
+        }
+        self.steps.set(s);
+        Ok(())
+    }
+
     fn call_decl(&self, function: &Function, args: Vec<Value>, env: Env) -> Result<Value, String> {
         // Bound recursion depth so a non-terminating recursive candidate is
         // rejected rather than overflowing the native stack and aborting the
-        // process (which catch_unwind cannot recover). Increment on entry,
-        // always decrement on exit so the counter is correct across error paths.
+        // process (which catch_unwind cannot recover). The decrement lives in a
+        // Drop guard so it also runs when the body PANICS (a panic caught by
+        // catch_unwind at the verify boundary would otherwise leak the counter
+        // upward and poison every later candidate on this Runtime).
+        struct DepthGuard<'a>(&'a Cell<u32>);
+        impl Drop for DepthGuard<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() - 1);
+            }
+        }
+
+        self.burn_step()?;
         let depth = self.call_depth.get() + 1;
         if depth > MAX_CALL_DEPTH {
             return Err(format!(
@@ -3420,23 +3467,19 @@ impl Runtime {
             ));
         }
         self.call_depth.set(depth);
+        let _guard = DepthGuard(&self.call_depth);
 
-        let result = (|| {
-            let local = env.child();
-            for (idx, param) in function.params.iter().enumerate() {
-                let value = args.get(idx).cloned().unwrap_or(Value::Unit);
-                local.define(param, value);
-            }
-            match self.exec_block(&function.body, local)? {
-                Control::Return(value) => Ok(value),
-                Control::Next => Ok(Value::Unit),
-                Control::Break(_) => Err("break outside loop".to_string()),
-                Control::Continue(_) => Err("continue outside loop".to_string()),
-            }
-        })();
-
-        self.call_depth.set(self.call_depth.get() - 1);
-        result
+        let local = env.child();
+        for (idx, param) in function.params.iter().enumerate() {
+            let value = args.get(idx).cloned().unwrap_or(Value::Unit);
+            local.define(param, value);
+        }
+        match self.exec_block(&function.body, local)? {
+            Control::Return(value) => Ok(value),
+            Control::Next => Ok(Value::Unit),
+            Control::Break(_) => Err("break outside loop".to_string()),
+            Control::Continue(_) => Err("continue outside loop".to_string()),
+        }
     }
 
     fn exec_block(&self, stmts: &[Stmt], env: Env) -> Result<Control, String> {
@@ -3518,6 +3561,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 while truthy(&self.eval_expr(condition, env.clone())?) {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3551,6 +3595,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 for item in start..end {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3585,6 +3630,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 for item in start..end {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3624,6 +3670,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 for item in items {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3669,6 +3716,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 for item in range {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -4042,7 +4090,17 @@ impl Runtime {
                     .checked_add(b)
                     .map(Value::Int)
                     .ok_or_else(|| "integer overflow in +".to_string()),
-                (Value::Str(a), Value::Str(b)) => Ok(Value::Str(a + &b)),
+                (Value::Str(a), Value::Str(b)) => {
+                    // Cap result size: repeated self-concat doubles per loop
+                    // iteration, so a fuel-bounded loop can still amplify to
+                    // exabytes (2^60) of allocation. Reject instead of OOM.
+                    if a.len() + b.len() > MAX_VALUE_BYTES {
+                        return Err(format!(
+                            "string exceeds the {MAX_VALUE_BYTES}-byte value cap"
+                        ));
+                    }
+                    Ok(Value::Str(a + &b))
+                }
                 (a, b) => Err(format!("unsupported + operands {:?} and {:?}", a, b)),
             },
             BinaryOp::Sub => {
@@ -4170,6 +4228,13 @@ impl Runtime {
                         .into_iter()
                         .next()
                         .ok_or_else(|| "push requires one argument".to_string())?;
+                    // Cap array growth (see the string-concat cap: bounded
+                    // iteration count does not bound allocation).
+                    if items.len() >= MAX_VALUE_ELEMS {
+                        return Err(format!(
+                            "array exceeds the {MAX_VALUE_ELEMS}-element value cap"
+                        ));
+                    }
                     items.push(value);
                     Ok(Value::Unit)
                 }
@@ -6662,6 +6727,74 @@ fn main() -> i64 {
             result.unwrap_err().contains("iteration limit"),
             "error should mention the iteration limit"
         );
+    }
+
+    #[test]
+    fn nested_loops_bounded_by_global_step_budget() {
+        // Two individually-capped loops compose to 1e10 potential iterations —
+        // per-loop caps alone let this run for ~a minute (measured 58s on a real
+        // candidate). The GLOBAL step budget must reject it in bounded time.
+        let problem = ident_problem("nested_budget_v0");
+        let code = "fn nested_budget_v0(a: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 0;\n    while i < 100000 {\n        j: i64 = 0;\n        while j < 100000 {\n            s = s + 1;\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return s;\n}\n";
+        let t0 = std::time::Instant::now();
+        let result =
+            execute_function_for_problem(code, "nested_budget_v0", &[BmValue::Int(0)], &problem);
+        assert!(
+            result.is_err(),
+            "nested huge loops must hit the global step budget, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("step budget"),
+            "error should mention the step budget"
+        );
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(10),
+            "budget rejection must be fast, took {:?}",
+            t0.elapsed()
+        );
+    }
+
+    #[test]
+    fn string_doubling_amplification_rejected() {
+        // `s = s + s` doubles per iteration: 60 fuel-cheap iterations = 2^60
+        // bytes. The value cap must reject this quickly instead of OOM-killing
+        // the process.
+        let problem = ident_problem("amplify_v0");
+        let code = "fn amplify_v0(a: i64) -> i64 {\n    s: string = \"xxxxxxxx\";\n    i: i64 = 0;\n    while i < 60 {\n        s = s + s;\n        i = i + 1;\n    }\n    return s.len;\n}\n";
+        let t0 = std::time::Instant::now();
+        let result =
+            execute_function_for_problem(code, "amplify_v0", &[BmValue::Int(0)], &problem);
+        assert!(
+            result.is_err(),
+            "exponential string growth must hit the value cap, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("value cap"),
+            "error should mention the value cap"
+        );
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(10),
+            "value-cap rejection must be fast, took {:?}",
+            t0.elapsed()
+        );
+    }
+
+    #[test]
+    fn step_budget_resets_between_entry_calls() {
+        // A long-lived Runtime serves many executions; earlier runs must not
+        // starve later ones.
+        let code = "fn f(a: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 0;\n    while i < 50000 {\n        s = s + 1;\n        i = i + 1;\n    }\n    return s;\n}\n";
+        let program = parse_program(code).expect("parse");
+        let runtime = Runtime::new(program);
+        for _ in 0..50 {
+            let got = runtime
+                .call_function("f", vec![Value::Int(0)])
+                .expect("each entry call gets a fresh budget");
+            match got {
+                Value::Int(50000) => {}
+                other => panic!("expected Int(50000), got {other:?}"),
+            }
+        }
     }
 
     #[test]
