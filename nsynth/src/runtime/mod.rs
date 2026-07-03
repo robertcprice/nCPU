@@ -1186,7 +1186,56 @@ fn tree_struct_matches(fields: &HashMap<String, Value>, nodes: &[crate::benchmar
     })
 }
 
+/// Builtins statically DENIED in any candidate submitted for verification.
+/// The runtime `verify_mode` denial only fires if the call EXECUTES on probe
+/// inputs — a call behind an untriggered branch (`if a == 31337 {
+/// write_file(..) }`) passes every probe and would ship inside a "verified"
+/// program. Verified candidates are pure compute; IO/threading builtins have no
+/// place in one regardless of reachability, so they are rejected by a static
+/// walk over every function body before anything runs.
+const DENIED_VERIFY_BUILTINS: &[&str] =
+    &["open_file", "read_file", "write_file", "close_file", "spawn", "send", "recv"];
+
+/// Static capability check: `Ok(Some(name))` if `code` calls a denied builtin
+/// name anywhere (reachable or not). Deliberately fail-closed on the NAME even
+/// if an in-program function shadows it — the runtime resolves these names to
+/// the builtin regardless (a "shadow" would be denied at execution anyway), and
+/// synthesized code has no legitimate reason to use them. `Err` on parse
+/// failure.
+pub fn code_mentions_denied_builtin(code: &str) -> Result<Option<String>, String> {
+    let program = parse_program(code)?;
+    let denied: std::collections::HashSet<&str> = DENIED_VERIFY_BUILTINS.iter().copied().collect();
+    // Empty "defined"/"builtins" sets: collect EVERY call name, including ones
+    // that resolve to in-program definitions (see fail-closed note above).
+    let no_defined: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let no_builtins: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut calls = Vec::new();
+    for function in program.functions.values() {
+        collect_calls_from_stmts(&function.body, &mut calls, &no_defined, &no_builtins);
+    }
+    for impl_block in &program.impls {
+        for method in &impl_block.methods {
+            collect_calls_from_stmts(&method.body, &mut calls, &no_defined, &no_builtins);
+        }
+    }
+    Ok(calls.into_iter().find(|c| denied.contains(c.as_str())))
+}
+
+/// Reject a candidate that statically mentions a denied builtin. Shared gate for
+/// both verify entry points.
+fn deny_unverifiable_capabilities(code: &str) -> Result<(), String> {
+    if let Some(builtin) = code_mentions_denied_builtin(code)? {
+        return Err(format!(
+            "candidate DENIED: calls IO/threading builtin `{builtin}` — side effects \
+             cannot be verified by I/O probing (a branch-guarded call passes every \
+             probe unexecuted)"
+        ));
+    }
+    Ok(())
+}
+
 pub fn verify_problem_code(problem: &Problem, code: &str) -> Result<(), String> {
+    deny_unverifiable_capabilities(code)?;
     let fn_name = problem.function_name();
     for example in &problem.examples {
         let value = execute_function_for_problem(code, fn_name, &example.inputs, problem)?;
@@ -1201,6 +1250,7 @@ pub fn verify_problem_code(problem: &Problem, code: &str) -> Result<(), String> 
 }
 
 pub fn verify_problem_code_strict(problem: &Problem, code: &str) -> Result<(), String> {
+    deny_unverifiable_capabilities(code)?;
     verify_problem_code_via_main(problem, code)?;
     let fn_name = problem.function_name();
     let holdouts = generated_holdouts(problem);
@@ -6752,6 +6802,39 @@ fn main() -> i64 {
             "budget rejection must be fast, took {:?}",
             t0.elapsed()
         );
+    }
+
+    #[test]
+    fn strict_verify_rejects_branch_guarded_io_backdoor() {
+        // The write_file call is behind a branch no example/probe input ever
+        // triggers, so runtime verify_mode denial NEVER fires and every dynamic
+        // check passes — only the static capability walk can reject it.
+        let problem = ident_problem("backdoor_v0");
+        let code = "fn backdoor_v0(a: i64) -> i64 {\n    if a == 31337 {\n        write_file(\"pwned\", \"x\");\n    }\n    return a;\n}\n";
+        let err = verify_problem_code_strict(&problem, code)
+            .expect_err("branch-guarded IO builtin must be statically denied");
+        assert!(err.contains("DENIED"), "unexpected error: {err}");
+        assert!(err.contains("write_file"), "should name the builtin: {err}");
+    }
+
+    #[test]
+    fn strict_verify_still_accepts_pure_candidate() {
+        let problem = ident_problem("pure_v0");
+        let code = "fn pure_v0(a: i64) -> i64 {\n    return a;\n}\n";
+        verify_problem_code_strict(&problem, code)
+            .expect("pure candidate must be unaffected by the capability gate");
+    }
+
+    #[test]
+    fn capability_gate_denies_shadowing_user_function() {
+        // The runtime resolves builtin names to the BUILTIN even when an
+        // in-program fn shadows them, so the static gate fails closed on the
+        // name itself; a synthesized program has no legitimate reason to use it.
+        let problem = ident_problem("shadow_v0");
+        let code = "fn shadow_v0(a: i64) -> i64 {\n    return write_file(a);\n}\n\nfn write_file(x: i64) -> i64 {\n    return x;\n}\n";
+        let err = verify_problem_code_strict(&problem, code)
+            .expect_err("denied builtin names fail closed even when shadowed");
+        assert!(err.contains("DENIED"), "unexpected error: {err}");
     }
 
     #[test]
