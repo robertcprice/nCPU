@@ -104,6 +104,34 @@ pub const OPS: &[LibOp] = &[
 "fn count_string_digits(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_digit() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_spaces", arity: 1, mog:
 "fn count_spaces(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch == ' ' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // ── batch 18: STRING DOMAIN (Loop 1). char-level build via `out = out + ch`,
+    // predicates via ch.is_*(), ords via ch.ord(), words via s.split(" ").
+    LibOp { name: "ascii_of_first", arity: 1, mog:
+"fn ascii_of_first(s: string) -> i64 {\n    for ch in s {\n        return ch.ord();\n    }\n    return 0;\n}\n" },
+    LibOp { name: "ascii_sum", arity: 1, mog:
+"fn ascii_sum(s: string) -> i64 {\n    total: i64 = 0;\n    for ch in s {\n        total = total + ch.ord();\n    }\n    return total;\n}\n" },
+    LibOp { name: "keep_alnum", arity: 1, mog:
+"fn keep_alnum(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_alnum() {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "keep_alpha", arity: 1, mog:
+"fn keep_alpha(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_alpha() {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "keep_digits", arity: 1, mog:
+"fn keep_digits(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_digit() {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "remove_spaces", arity: 1, mog:
+"fn remove_spaces(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch == ' ' {\n        } else {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "remove_even_position", arity: 1, mog:
+"fn remove_even_position(s: string) -> string {\n    out: string = \"\";\n    i: i64 = 0;\n    for ch in s {\n        if i % 2 == 0 {\n            out = out + ch;\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "first_char", arity: 1, mog:
+"fn first_char(s: string) -> string {\n    for ch in s {\n        return ch;\n    }\n    return \"\";\n}\n" },
+    LibOp { name: "all_chars_distinct", arity: 1, mog:
+"fn all_chars_distinct(s: string) -> bool {\n    seen: string = \"\";\n    for ch in s {\n        if seen.contains(ch) {\n            return false;\n        }\n        seen = seen + ch;\n    }\n    return true;\n}\n" },
+    LibOp { name: "is_digit_string", arity: 1, mog:
+"fn is_digit_string(s: string) -> bool {\n    if s.len == 0 {\n        return false;\n    }\n    for ch in s {\n        if ch.is_digit() {\n        } else {\n            return false;\n        }\n    }\n    return true;\n}\n" },
+    LibOp { name: "has_letter_and_digit", arity: 1, mog:
+"fn has_letter_and_digit(s: string) -> bool {\n    hl: bool = false;\n    hd: bool = false;\n    for ch in s {\n        if ch.is_alpha() {\n            hl = true;\n        }\n        if ch.is_digit() {\n            hd = true;\n        }\n    }\n    return hl && hd;\n}\n" },
+    LibOp { name: "split_words", arity: 1, mog:
+"fn split_words(s: string) -> [string] {\n    return s.split(\" \");\n}\n" },
+    LibOp { name: "reverse_word_order", arity: 1, mog:
+"fn reverse_word_order(s: string) -> string {\n    words: [string] = s.split(\" \");\n    out: string = \"\";\n    i: i64 = words.len - 1;\n    while i >= 0 {\n        out = out + words[i];\n        if i > 0 {\n            out = out + \" \";\n        }\n        i = i - 1;\n    }\n    return out;\n}\n" },
     // ── batch 4: targeted at the measured MBPP unsolved clusters (2026-07-03 run:
     // 55 min/max/select, 35 count/freq, plus base-conversion / bit / recurrence
     // tasks in "other"). count/freq ops use dict-free O(n²) scans — no Value::Map
@@ -529,6 +557,41 @@ mod tests {
                 "op {name} failed its probe (expected {expect:?})"
             );
         }
+    }
+
+    #[test]
+    fn batch18_string_ops_reproduce_their_probes() {
+        let s = |x: &str| Value::Str(x.to_string());
+        // scalar-output string ops
+        assert!(runs_to(op("ascii_of_first"), "ascii_of_first", vec![s("A")], Value::Int(65)));
+        assert!(runs_to(op("ascii_of_first"), "ascii_of_first", vec![s("python")], Value::Int(112)));
+        assert!(runs_to(op("ascii_sum"), "ascii_sum", vec![s("abc")], Value::Int(97 + 98 + 99)));
+        // string-output
+        assert!(runs_to(op("keep_alnum"), "keep_alnum", vec![s("py @#program123")], s("pyprogram123")));
+        assert!(runs_to(op("keep_alpha"), "keep_alpha", vec![s("ab12cd")], s("abcd")));
+        assert!(runs_to(op("keep_digits"), "keep_digits", vec![s("a1b2c3")], s("123")));
+        assert!(runs_to(op("remove_spaces"), "remove_spaces", vec![s("a b c")], s("abc")));
+        assert!(runs_to(op("remove_even_position"), "remove_even_position", vec![s("python")], s("pto")));
+        assert!(runs_to(op("first_char"), "first_char", vec![s("hello")], s("h")));
+        // bool-output
+        assert!(runs_to(op("all_chars_distinct"), "all_chars_distinct", vec![s("abc")], Value::Bool(true)));
+        assert!(runs_to(op("all_chars_distinct"), "all_chars_distinct", vec![s("aba")], Value::Bool(false)));
+        assert!(runs_to(op("is_digit_string"), "is_digit_string", vec![s("12345")], Value::Bool(true)));
+        assert!(runs_to(op("is_digit_string"), "is_digit_string", vec![s("python")], Value::Bool(false)));
+        assert!(runs_to(op("has_letter_and_digit"), "has_letter_and_digit", vec![s("ab12")], Value::Bool(true)));
+        assert!(runs_to(op("has_letter_and_digit"), "has_letter_and_digit", vec![s("abcd")], Value::Bool(false)));
+        // string-array output
+        assert!(runs_to(
+            op("split_words"),
+            "split_words",
+            vec![s("python programming")],
+            Value::Array(vec![s("python"), s("programming")])
+        ));
+        assert!(runs_to(op("reverse_word_order"), "reverse_word_order", vec![s("python program")], s("program python")));
+    }
+
+    fn op(name: &str) -> &'static str {
+        OPS.iter().find(|o| o.name == name).unwrap_or_else(|| panic!("no op {name}")).mog
     }
 
     #[test]
