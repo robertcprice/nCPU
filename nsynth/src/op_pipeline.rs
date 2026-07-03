@@ -29,7 +29,10 @@ use std::time::{Duration, Instant};
 
 use crate::benchmark::{Problem, Value as BValue};
 use crate::op_library::LibOp;
-use crate::runtime::{benchmark_value_from_runtime, code_reproduces_examples, execute_function};
+use crate::runtime::{
+    benchmark_value_from_runtime, code_reproduces_examples, execute_function, execute_parsed,
+    parse_program, Program,
+};
 use crate::solver::SolveResult;
 
 /// The chain search TERMINATES BY CONSTRUCTION — breadth-first over chains of
@@ -42,11 +45,12 @@ use crate::solver::SolveResult;
 /// net over the whole search, not the primary bound.
 ///
 /// Set so a full depth-3 sweep over the CURRENT (unabridged) op set completes —
-/// capability is not traded for speed by dropping reachable ops. Depth-2 tasks
-/// (the common case) return early well before this; only genuine depth-3 solves
-/// and depth-3 misses run near it. Empirically A/B-checked against the MBPP
-/// suite so the wider window does not displace other solver stages' solves.
-const SEARCH_BUDGET: Duration = Duration::from_millis(4000);
+/// capability is not traded for speed by dropping reachable ops. With per-op
+/// parsed-program reuse (stages parse their Mog once) a solo depth-3 sweep runs
+/// ~1.5s, so 3s leaves margin for CPU contention while keeping miss cost below
+/// the 4s it was before the reuse optimization. Depth-2 tasks (the common case)
+/// return early well before this.
+const SEARCH_BUDGET: Duration = Duration::from_millis(3000);
 
 /// Magnitude gate for FRONTIER states (checked after the accept test, so a chain
 /// whose final values legitimately exceed this can still be returned). Interpreter
@@ -123,6 +127,9 @@ struct StageOp {
     input: Ty,
     output: Ty,
     scalar: bool,
+    /// The op's Mog source parsed ONCE (the search runs each stage over thousands
+    /// of intermediate values; re-parsing per call dominated the depth-3 cost).
+    prog: Program,
 }
 
 /// Compose-only ops: reshape/reorder stages that make chains expressive
@@ -197,14 +204,28 @@ fn stage_ops() -> Vec<StageOp> {
         .filter(|op| !HEAVY_STAGE_OPS.contains(&op.name))
         .filter_map(|op| {
             let (ins, out) = parse_sig(op.mog)?;
+            // Every op in OPS/COMPOSE_OPS is valid Mog (guarded by the library's
+            // own probe tests), so parse cannot fail here; skip any that somehow
+            // don't rather than panic.
+            let prog = parse_program(op.mog).ok()?;
             match (op.arity, ins.as_slice()) {
-                (1, [input]) => {
-                    Some(StageOp { name: op.name, mog: op.mog, input: *input, output: out, scalar: false })
-                }
+                (1, [input]) => Some(StageOp {
+                    name: op.name,
+                    mog: op.mog,
+                    input: *input,
+                    output: out,
+                    scalar: false,
+                    prog,
+                }),
                 // Binary stage: second param must be the pass-through scalar.
-                (2, [input, Ty::Int]) => {
-                    Some(StageOp { name: op.name, mog: op.mog, input: *input, output: out, scalar: true })
-                }
+                (2, [input, Ty::Int]) => Some(StageOp {
+                    name: op.name,
+                    mog: op.mog,
+                    input: *input,
+                    output: out,
+                    scalar: true,
+                    prog,
+                }),
                 _ => None,
             }
         })
@@ -272,7 +293,7 @@ fn apply_op(
             if let Some(cached) = memo.get(&key) {
                 return cached.clone();
             }
-            let result = execute_function(op.mog, op.name, &args, op.name)
+            let result = execute_parsed(&op.prog, op.name, &args, op.name)
                 .ok()
                 .and_then(|out| benchmark_value_from_runtime(&out).ok());
             memo.insert(key, result.clone());

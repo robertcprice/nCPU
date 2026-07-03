@@ -841,6 +841,28 @@ pub fn execute_function(
     runtime.call_function(function_name, args)
 }
 
+/// Execute an already-parsed program's entry function. Use when the SAME source
+/// is run many times (e.g. a fixed op set searched over thousands of inputs):
+/// [`execute_function`] re-lexes/parses on every call, which dominates such a
+/// loop; parse once, then call this. The program is cloned into a fresh Runtime
+/// per call (cheaper than re-parsing) so runs stay independent. Not cached
+/// internally on purpose — the caller owns the parsed program, avoiding the
+/// unbounded growth an in-`execute_function` cache would suffer on the
+/// verify path (where every candidate source is distinct and run once).
+pub fn execute_parsed(
+    program: &Program,
+    function_name: &str,
+    args: &[BenchmarkValue],
+    problem_name: &str,
+) -> Result<Value, String> {
+    let runtime = Runtime::new(program.clone());
+    let args = args
+        .iter()
+        .map(|value| runtime_value_from_problem(value, problem_name))
+        .collect::<Result<Vec<_>, _>>()?;
+    runtime.call_function(function_name, args)
+}
+
 /// Install (exactly once, process-wide) a no-op panic hook so a panic caught by
 /// `catch_unwind` on the verify path does not spam stderr with a backtrace.
 /// This keeps the verify output deterministic and quiet; the `Result` returned
