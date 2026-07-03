@@ -99,6 +99,20 @@ fn main() {
     };
 
     if !llm_only {
+        // FULL-EXAMPLE library match FIRST. The seed/held-out split (above) leaves
+        // only 2 seed examples for a 3-example task, and on 2 points try_library
+        // returns the FIRST coincidentally-matching op — e.g. largest_digit fits
+        // (123->3, 25->5) but is wrong on the held-out 30, shadowing the correct
+        // last_digit. A reference-algorithm op that reproduces EVERY example is
+        // high-confidence correct, so try that before the seed-split solve.
+        let full = Problem { examples: exs.clone(), ..problem.clone() };
+        if let Some(res) = mog_synth::op_library::try_library(&full) {
+            if mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
+                harvest(&res.code);
+                println!("SOLVED {id} {}", res.method);
+                return;
+            }
+        }
         let res = mog_synth::solver::solve_problem(&problem);
         // SOLVED = synthesized AND reproduces EVERY test case (seed + held-out).
         if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {

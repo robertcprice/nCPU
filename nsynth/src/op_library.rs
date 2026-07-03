@@ -686,9 +686,17 @@ pub const OPS: &[LibOp] = &[
 /// (arity-compatible, behavior-matched, cheap: a few interpreter runs). `None` if
 /// no known algorithm fits. The returned code is already verified against the spec.
 pub fn try_library(problem: &Problem) -> Option<SolveResult> {
-    let arity = problem.examples.first()?.inputs.len();
+    let first = problem.examples.first()?;
+    let arity = first.inputs.len();
     for op in OPS {
         if op.arity != arity {
+            continue;
+        }
+        // Type gate: the op's parameter types must match the input value types.
+        // Without it a string op (`s.len`) can coincidentally reproduce an
+        // array task by length-parity — a hollow cross-type match that reports a
+        // wrong program as a solve. Behaviour-match alone is not enough.
+        if !op_types_match(op.mog, &first.inputs) {
             continue;
         }
         if code_reproduces_examples(op.mog, &problem.examples) {
@@ -704,12 +712,47 @@ pub fn try_library(problem: &Problem) -> Option<SolveResult> {
     try_learned(problem, arity)
 }
 
+/// Does the entry fn's parameter list type-match the given input values? Parses
+/// `fn name(p1: T1, p2: T2)` and checks each declared type against the runtime
+/// value kind. Unknown/absent types are permissive (return true) — this only
+/// REJECTS a clear mismatch (string param vs array value, etc.).
+fn op_types_match(mog: &str, inputs: &[crate::benchmark::Value]) -> bool {
+    use crate::benchmark::Value;
+    let Some(open) = mog.find('(') else { return true };
+    let Some(close_rel) = mog[open..].find(')') else { return true };
+    let params = &mog[open + 1..open + close_rel];
+    let types: Vec<&str> = params
+        .split(',')
+        .filter_map(|p| p.split(':').nth(1).map(str::trim))
+        .collect();
+    if types.len() != inputs.len() {
+        return true; // can't line them up — don't over-reject
+    }
+    for (ty, v) in types.iter().zip(inputs) {
+        let ok = match *ty {
+            "i64" => matches!(v, Value::Int(_)),
+            "[i64]" => matches!(v, Value::Array(_)),
+            "string" => matches!(v, Value::Str(_)),
+            "bool" => matches!(v, Value::Bool(_)),
+            _ => true, // unknown declared type — be permissive
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
 /// The runtime-grown tier: behaviour-match the learned-op store (see
 /// [`LearnedOp`]). Empty (and free) unless `NSYNTH_LEARNED_OPS_PATH` is set.
 fn try_learned(problem: &Problem, arity: usize) -> Option<SolveResult> {
     let store = learned_store().lock().ok()?;
+    let inputs = &problem.examples.first()?.inputs;
     for op in store.iter() {
         if op.arity != arity {
+            continue;
+        }
+        if !op_types_match(&op.mog, inputs) {
             continue;
         }
         if code_reproduces_examples(&op.mog, &problem.examples) {
