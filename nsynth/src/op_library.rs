@@ -322,6 +322,27 @@ pub const OPS: &[LibOp] = &[
 "fn toggle_middle_bits(n: i64) -> i64 {\n    if n <= 2 {\n        return n;\n    }\n    msb: i64 = 1;\n    x: i64 = n;\n    while x > 1 {\n        msb = msb * 2;\n        x = x / 2;\n    }\n    mask: i64 = msb - 2;\n    return n ^ mask;\n}\n" },
     LibOp { name: "set_leftmost_unset_bit", arity: 1, mog:
 "fn set_leftmost_unset_bit(n: i64) -> i64 {\n    msb: i64 = 1;\n    x: i64 = n;\n    while x > 1 {\n        msb = msb * 2;\n        x = x / 2;\n    }\n    bit: i64 = msb / 2;\n    while bit >= 1 {\n        if n / bit % 2 == 0 {\n            return n + bit;\n        }\n        bit = bit / 2;\n    }\n    return n;\n}\n" },
+    // ── batch 12: 2-arg (i,i)->i — the largest untouched cluster. Products,
+    // max/min (NOT affine-reachable), geometry, shifts, coefficients. Behavior-
+    // matched, so overlapping ops (a*b vs max) disambiguate on the examples.
+    LibOp { name: "max_two", arity: 2, mog:
+"fn max_two(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a;\n    }\n    return b;\n}\n" },
+    LibOp { name: "min_two", arity: 2, mog:
+"fn min_two(a: i64, b: i64) -> i64 {\n    if a < b {\n        return a;\n    }\n    return b;\n}\n" },
+    LibOp { name: "multiply_two", arity: 2, mog:
+"fn multiply_two(a: i64, b: i64) -> i64 {\n    return a * b;\n}\n" },
+    LibOp { name: "rect_perimeter", arity: 2, mog:
+"fn rect_perimeter(a: i64, b: i64) -> i64 {\n    return 2 * (a + b);\n}\n" },
+    LibOp { name: "third_angle", arity: 2, mog:
+"fn third_angle(a: i64, b: i64) -> i64 {\n    return 180 - a - b;\n}\n" },
+    LibOp { name: "left_shift", arity: 2, mog:
+"fn left_shift(a: i64, b: i64) -> i64 {\n    r: i64 = a;\n    i: i64 = 0;\n    while i < b {\n        r = r * 2;\n        i = i + 1;\n    }\n    return r;\n}\n" },
+    LibOp { name: "permutation_coeff", arity: 2, mog:
+"fn permutation_coeff(n: i64, k: i64) -> i64 {\n    r: i64 = 1;\n    i: i64 = 0;\n    while i < k {\n        r = r * (n - i);\n        i = i + 1;\n    }\n    return r;\n}\n" },
+    LibOp { name: "num_common_divisors", arity: 2, mog:
+"fn num_common_divisors(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        t: i64 = y;\n        y = x % y;\n        x = t;\n    }\n    c: i64 = 0;\n    i: i64 = 1;\n    while i <= x {\n        if x % i == 0 {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "count_grid_squares", arity: 2, mog:
+"fn count_grid_squares(m: i64, n: i64) -> i64 {\n    lo: i64 = m;\n    if n < m {\n        lo = n;\n    }\n    s: i64 = 0;\n    k: i64 = 0;\n    while k < lo {\n        s = s + (m - k) * (n - k);\n        k = k + 1;\n    }\n    return s;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -672,6 +693,31 @@ mod tests {
             assert!(
                 runs_to(op.mog, name, vec![Value::Int(*arg)], Value::Int(*expect)),
                 "op {name}({arg}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch12_two_arg_ops_reproduce_their_probes() {
+        let cases: &[(&str, i64, i64, i64)] = &[
+            ("max_two", 10, 20, 20),
+            ("max_two", 5, 3, 5),
+            ("min_two", 10, 20, 10),
+            ("min_two", 5, 3, 3),
+            ("multiply_two", 10, 20, 200),
+            ("rect_perimeter", 10, 20, 60),
+            ("rect_perimeter", 2, 4, 12),
+            ("third_angle", 47, 89, 44),
+            ("left_shift", 16, 2, 64),
+            ("permutation_coeff", 10, 2, 90),
+            ("num_common_divisors", 2, 4, 2),
+            ("count_grid_squares", 4, 3, 20),
+        ];
+        for (name, a, b, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![Value::Int(*a), Value::Int(*b)], Value::Int(*expect)),
+                "op {name}({a},{b}) failed its probe (expected {expect})"
             );
         }
     }
