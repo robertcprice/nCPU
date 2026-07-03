@@ -200,6 +200,33 @@ pub const OPS: &[LibOp] = &[
 "fn count_greater_than(arr: [i64], k: i64) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > k {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_less_than", arity: 2, mog:
 "fn count_less_than(arr: [i64], k: i64) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < k {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // ── batch 7: scalar closed-form / sequence sums — the largest unsolved
+    // cluster (100 scalar->scalar tasks in the 2026-07-03 run). All loop-computed,
+    // exactly integral; also 1-arg pipeline stages. ───────────────────────────
+    LibOp { name: "odd_cube_sum", arity: 1, mog:
+"fn odd_cube_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        t: i64 = 2 * i - 1;\n        s = s + t * t * t;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "even_fourth_power_sum", arity: 1, mog:
+"fn even_fourth_power_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        t: i64 = 2 * i;\n        s = s + t * t * t * t;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "fifth_power_sum", arity: 1, mog:
+"fn fifth_power_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        s = s + i * i * i * i * i;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "square_sum", arity: 1, mog:
+"fn square_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        s = s + i * i;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "cube_sum_natural", arity: 1, mog:
+"fn cube_sum_natural(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        s = s + i * i * i;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "total_set_bits", arity: 1, mog:
+"fn total_set_bits(n: i64) -> i64 {\n    total: i64 = 0;\n    k: i64 = 1;\n    while k <= n {\n        x: i64 = k;\n        while x > 0 {\n            total = total + x % 2;\n            x = x / 2;\n        }\n        k = k + 1;\n    }\n    return total;\n}\n" },
+    LibOp { name: "unset_bits", arity: 1, mog:
+"fn unset_bits(n: i64) -> i64 {\n    x: i64 = n;\n    c: i64 = 0;\n    while x > 0 {\n        if x % 2 == 0 {\n            c = c + 1;\n        }\n        x = x / 2;\n    }\n    return c;\n}\n" },
+    LibOp { name: "decimal_to_octal", arity: 1, mog:
+"fn decimal_to_octal(n: i64) -> i64 {\n    x: i64 = n;\n    r: i64 = 0;\n    p: i64 = 1;\n    while x > 0 {\n        r = r + (x % 8) * p;\n        p = p * 10;\n        x = x / 8;\n    }\n    return r;\n}\n" },
+    LibOp { name: "centered_hexagonal", arity: 1, mog:
+"fn centered_hexagonal(n: i64) -> i64 {\n    return 3 * n * (n - 1) + 1;\n}\n" },
+    LibOp { name: "tetrahedral_number", arity: 1, mog:
+"fn tetrahedral_number(n: i64) -> i64 {\n    return n * (n + 1) * (n + 2) / 6;\n}\n" },
+    LibOp { name: "pentagonal_number", arity: 1, mog:
+"fn pentagonal_number(n: i64) -> i64 {\n    return n * (3 * n - 1) / 2;\n}\n" },
+    LibOp { name: "average_evens_upto", arity: 1, mog:
+"fn average_evens_upto(n: i64) -> i64 {\n    s: i64 = 0;\n    c: i64 = 0;\n    i: i64 = 2;\n    while i <= n {\n        s = s + i;\n        c = c + 1;\n        i = i + 2;\n    }\n    if c == 0 {\n        return 0;\n    }\n    return s / c;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -377,6 +404,41 @@ mod tests {
             assert!(
                 runs_to(op.mog, name, args.clone(), expect.clone()),
                 "op {name} failed its probe (expected {expect:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch7_ops_reproduce_their_probes() {
+        // Probes taken directly from the MBPP tasks this batch targets.
+        let cases: &[(&str, i64, i64)] = &[
+            ("odd_cube_sum", 2, 28),
+            ("odd_cube_sum", 4, 496),
+            ("even_fourth_power_sum", 2, 272),
+            ("even_fourth_power_sum", 3, 1568),
+            ("fifth_power_sum", 2, 33),
+            ("fifth_power_sum", 4, 1300),
+            ("square_sum", 3, 14),
+            ("cube_sum_natural", 3, 36),
+            ("total_set_bits", 16, 33),
+            ("total_set_bits", 2, 2),
+            ("unset_bits", 2, 1),
+            ("unset_bits", 4, 2),
+            ("unset_bits", 6, 1),
+            ("decimal_to_octal", 10, 12),
+            ("decimal_to_octal", 33, 41),
+            ("centered_hexagonal", 10, 271),
+            ("centered_hexagonal", 2, 7),
+            ("tetrahedral_number", 5, 35),
+            ("pentagonal_number", 5, 35),
+            ("average_evens_upto", 4, 3),
+            ("average_evens_upto", 100, 51),
+        ];
+        for (name, arg, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![Value::Int(*arg)], Value::Int(*expect)),
+                "op {name}({arg}) failed its probe (expected {expect})"
             );
         }
     }
