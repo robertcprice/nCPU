@@ -41,6 +41,7 @@ pub mod multi_objective;
 pub mod nl;
 pub mod op_library;
 pub mod op_pipeline;
+pub mod synth_evolve;
 pub mod optimization;
 pub mod orchestrator;
 pub mod prob;

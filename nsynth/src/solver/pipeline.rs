@@ -249,6 +249,17 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
         return result;
     }
 
+    // Fitness-guided evolutionary synthesis (no model; gated NSYNTH_EVOLVE): hill-
+    // climbs an accumulator-loop program for fold-shaped tasks the library/search
+    // miss. Verifier-gated; feeds the flywheel via the success hooks below.
+    if let Some(result) = crate::synth_evolve::synthesize_evolve(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
+        }
+        return result;
+    }
+
     // Array-output problems (`[i64] -> [i64]`): exact array_transform before scalar paths.
     let array_io = problem.examples.first().is_some_and(|ex| {
         ex.inputs.len() == 1
