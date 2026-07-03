@@ -301,6 +301,27 @@ pub const OPS: &[LibOp] = &[
 "fn sum_odd_factors(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        if n % i == 0 {\n            if i % 2 == 1 {\n                s = s + i;\n            }\n        }\n        i = i + 1;\n    }\n    return s;\n}\n" },
     LibOp { name: "proper_divisor_sum", arity: 1, mog:
 "fn proper_divisor_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i < n {\n        if n % i == 0 {\n            s = s + i;\n        }\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    // ── batch 11: prime factors, factorial-last-digit, LCM(1..n), central
+    // binomials, bit-manipulation (rightmost/leftmost unset, toggle first/last/
+    // middle) — remaining scalar cluster.
+    LibOp { name: "max_prime_factor", arity: 1, mog:
+"fn max_prime_factor(n: i64) -> i64 {\n    x: i64 = n;\n    m: i64 = 1;\n    while x % 2 == 0 {\n        m = 2;\n        x = x / 2;\n    }\n    d: i64 = 3;\n    while d * d <= x {\n        while x % d == 0 {\n            m = d;\n            x = x / d;\n        }\n        d = d + 2;\n    }\n    if x > 1 {\n        m = x;\n    }\n    return m;\n}\n" },
+    LibOp { name: "last_digit_factorial", arity: 1, mog:
+"fn last_digit_factorial(n: i64) -> i64 {\n    f: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        f = f * i % 10;\n        i = i + 1;\n    }\n    return f;\n}\n" },
+    LibOp { name: "lcm_upto", arity: 1, mog:
+"fn lcm_upto(n: i64) -> i64 {\n    r: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        a: i64 = r;\n        b: i64 = i;\n        while b != 0 {\n            t: i64 = b;\n            b = a % b;\n            a = t;\n        }\n        r = r / a * i;\n        i = i + 1;\n    }\n    return r;\n}\n" },
+    LibOp { name: "central_binomial", arity: 1, mog:
+"fn central_binomial(n: i64) -> i64 {\n    r: i64 = 1;\n    i: i64 = 1;\n    while i <= n {\n        r = r * (n + i) / i;\n        i = i + 1;\n    }\n    return r;\n}\n" },
+    LibOp { name: "binomial_2n_nm1", arity: 1, mog:
+"fn binomial_2n_nm1(n: i64) -> i64 {\n    k: i64 = n - 1;\n    r: i64 = 1;\n    i: i64 = 1;\n    while i <= k {\n        r = r * (2 * n - k + i) / i;\n        i = i + 1;\n    }\n    return r;\n}\n" },
+    LibOp { name: "set_rightmost_unset_bit", arity: 1, mog:
+"fn set_rightmost_unset_bit(n: i64) -> i64 {\n    return n | (n + 1);\n}\n" },
+    LibOp { name: "toggle_first_and_last_bits", arity: 1, mog:
+"fn toggle_first_and_last_bits(n: i64) -> i64 {\n    if n <= 1 {\n        return n;\n    }\n    msb: i64 = 1;\n    x: i64 = n;\n    while x > 1 {\n        msb = msb * 2;\n        x = x / 2;\n    }\n    return n ^ msb ^ 1;\n}\n" },
+    LibOp { name: "toggle_middle_bits", arity: 1, mog:
+"fn toggle_middle_bits(n: i64) -> i64 {\n    if n <= 2 {\n        return n;\n    }\n    msb: i64 = 1;\n    x: i64 = n;\n    while x > 1 {\n        msb = msb * 2;\n        x = x / 2;\n    }\n    mask: i64 = msb - 2;\n    return n ^ mask;\n}\n" },
+    LibOp { name: "set_leftmost_unset_bit", arity: 1, mog:
+"fn set_leftmost_unset_bit(n: i64) -> i64 {\n    msb: i64 = 1;\n    x: i64 = n;\n    while x > 1 {\n        msb = msb * 2;\n        x = x / 2;\n    }\n    bit: i64 = msb / 2;\n    while bit >= 1 {\n        if n / bit % 2 == 0 {\n            return n + bit;\n        }\n        bit = bit / 2;\n    }\n    return n;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -614,6 +635,37 @@ mod tests {
             ("sum_odd_factors", 18, 13),
             ("proper_divisor_sum", 8, 7),
             ("proper_divisor_sum", 12, 16),
+        ];
+        for (name, arg, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![Value::Int(*arg)], Value::Int(*expect)),
+                "op {name}({arg}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch11_ops_reproduce_their_probes() {
+        let cases: &[(&str, i64, i64)] = &[
+            ("max_prime_factor", 15, 5),
+            ("max_prime_factor", 6, 3),
+            ("last_digit_factorial", 4, 4),
+            ("last_digit_factorial", 21, 0),
+            ("lcm_upto", 13, 360360),
+            ("lcm_upto", 2, 2),
+            ("central_binomial", 4, 70),
+            ("central_binomial", 5, 252),
+            ("binomial_2n_nm1", 3, 15),
+            ("binomial_2n_nm1", 4, 56),
+            ("set_rightmost_unset_bit", 21, 23),
+            ("set_rightmost_unset_bit", 11, 15),
+            ("toggle_first_and_last_bits", 10, 3),
+            ("toggle_first_and_last_bits", 15, 6),
+            ("toggle_middle_bits", 9, 15),
+            ("toggle_middle_bits", 10, 12),
+            ("set_leftmost_unset_bit", 10, 14),
+            ("set_leftmost_unset_bit", 12, 14),
         ];
         for (name, arg, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
