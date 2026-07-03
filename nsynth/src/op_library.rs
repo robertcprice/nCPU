@@ -121,6 +121,18 @@ pub fn maybe_record_learned(problem: &Problem, result: &SolveResult) {
     if try_library(problem).is_some() {
         return;
     }
+    // Anti-overfit gate — the crux of a SOUND flywheel. A seed-verified solve can
+    // still be a hardcoded-branch overfit (`if x == 10 { return 50 } ...`) that
+    // fits the examples but does not generalise. Only record a program that passes
+    // DIFFERENTIAL CONSENSUS: an INDEPENDENT re-synthesis must agree with it on
+    // fresh probes (LOOP-21). This rejects the overfits the eager pipeline verify
+    // lets through, so the learned store fills only with generalising ops.
+    if !matches!(
+        crate::agent::consensus::differential_consensus(problem, &result.code),
+        crate::agent::consensus::ConsensusVerdict::Verified { .. }
+    ) {
+        return;
+    }
     let name = format!("learned_{}", short_hash(&result.code));
     record_learned_op(name, arity, result.code.clone());
 }
