@@ -426,6 +426,25 @@ pub const OPS: &[LibOp] = &[
 "fn max_product_subarray(arr: [i64]) -> i64 {\n    best: i64 = arr[0];\n    cmax: i64 = arr[0];\n    cmin: i64 = arr[0];\n    i: i64 = 1;\n    while i < arr.len {\n        e: i64 = arr[i];\n        if e < 0 {\n            t: i64 = cmax;\n            cmax = cmin;\n            cmin = t;\n        }\n        p1: i64 = cmax * e;\n        if e > p1 {\n            cmax = e;\n        } else {\n            cmax = p1;\n        }\n        p2: i64 = cmin * e;\n        if e < p2 {\n            cmin = e;\n        } else {\n            cmin = p2;\n        }\n        if cmax > best {\n            best = cmax;\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
     LibOp { name: "concat_as_number", arity: 1, mog:
 "fn concat_as_number(arr: [i64]) -> i64 {\n    r: i64 = 0;\n    for e in arr {\n        m: i64 = 1;\n        x: i64 = e;\n        if x == 0 {\n            m = 10;\n        }\n        while x > 0 {\n            m = m * 10;\n            x = x / 10;\n        }\n        r = r * m + e;\n    }\n    return r;\n}\n" },
+    // ── batch 17a: bool-output predicates ([i64]->bool). Return the comparison
+    // directly so the value is a real Bool (matches Value::Bool, not Int 1/0).
+    LibOp { name: "is_sorted_asc", arity: 1, mog:
+"fn is_sorted_asc(arr: [i64]) -> bool {\n    i: i64 = 1;\n    while i < arr.len {\n        if arr[i - 1] > arr[i] {\n            return false;\n        }\n        i = i + 1;\n    }\n    return true;\n}\n" },
+    LibOp { name: "is_monotonic", arity: 1, mog:
+"fn is_monotonic(arr: [i64]) -> bool {\n    inc: bool = true;\n    dec: bool = true;\n    i: i64 = 1;\n    while i < arr.len {\n        if arr[i - 1] > arr[i] {\n            inc = false;\n        }\n        if arr[i - 1] < arr[i] {\n            dec = false;\n        }\n        i = i + 1;\n    }\n    return inc || dec;\n}\n" },
+    LibOp { name: "all_distinct", arity: 1, mog:
+"fn all_distinct(arr: [i64]) -> bool {\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                return false;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return true;\n}\n" },
+    LibOp { name: "is_consecutive", arity: 1, mog:
+"fn is_consecutive(arr: [i64]) -> bool {\n    i: i64 = 1;\n    while i < arr.len {\n        if arr[i] != arr[i - 1] + 1 {\n            return false;\n        }\n        i = i + 1;\n    }\n    return true;\n}\n" },
+    // ── batch 17b: (arr, i, j) -> i64.
+    LibOp { name: "kth_element", arity: 3, mog:
+"fn kth_element(arr: [i64], n: i64, k: i64) -> i64 {\n    return arr[k - 1];\n}\n" },
+    LibOp { name: "sum_range_inclusive", arity: 3, mog:
+"fn sum_range_inclusive(arr: [i64], i: i64, j: i64) -> i64 {\n    s: i64 = 0;\n    k: i64 = i;\n    while k <= j {\n        s = s + arr[k];\n        k = k + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "pairs_count_sum", arity: 3, mog:
+"fn pairs_count_sum(arr: [i64], n: i64, s: i64) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = i + 1;\n        while j < arr.len {\n            if arr[i] + arr[j] == s {\n                c = c + 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "array_product_mod", arity: 3, mog:
+"fn array_product_mod(arr: [i64], n: i64, m: i64) -> i64 {\n    p: i64 = 1;\n    for e in arr {\n        p = p * e % m;\n    }\n    return p;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -915,6 +934,48 @@ mod tests {
             assert!(
                 runs_to(op.mog, name, vec![iv(arr)], Value::Int(*expect)),
                 "op {name}({arr:?}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch17_bool_and_range_ops_reproduce_their_probes() {
+        let iv = Value::int_array;
+        // bool-output predicates
+        let bool_cases: &[(&str, Vec<i64>, bool)] = &[
+            ("is_sorted_asc", vec![1, 2, 4, 6, 8], true),
+            ("is_sorted_asc", vec![1, 3, 2], false),
+            ("is_monotonic", vec![6, 5, 4, 4], true),
+            ("is_monotonic", vec![1, 3, 2], false),
+            ("all_distinct", vec![1, 5, 7, 9], true),
+            ("all_distinct", vec![1, 5, 1], false),
+            ("is_consecutive", vec![1, 2, 3, 4, 5], true),
+            ("is_consecutive", vec![1, 2, 4], false),
+        ];
+        for (name, arr, expect) in bool_cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![iv(arr)], Value::Bool(*expect)),
+                "op {name}({arr:?}) failed its probe (expected {expect})"
+            );
+        }
+        // (arr, i, j) -> i64
+        let range_cases: &[(&str, Vec<i64>, i64, i64, i64)] = &[
+            ("kth_element", vec![12, 3, 5, 7, 19], 5, 2, 3),
+            ("sum_range_inclusive", vec![2, 1, 5, 6, 8, 3, 4, 9, 10, 11, 8, 12], 8, 10, 29),
+            ("pairs_count_sum", vec![1, 1, 1, 1], 4, 2, 6),
+            ("array_product_mod", vec![100, 10, 5, 25, 35, 14], 6, 11, 9),
+        ];
+        for (name, arr, i, j, expect) in range_cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(
+                    op.mog,
+                    name,
+                    vec![iv(arr), Value::Int(*i), Value::Int(*j)],
+                    Value::Int(*expect)
+                ),
+                "op {name}({arr:?},{i},{j}) failed its probe (expected {expect})"
             );
         }
     }
