@@ -252,6 +252,15 @@ pub const OPS: &[LibOp] = &[
 "fn split_words(s: string) -> [string] {\n    return s.split(\" \");\n}\n" },
     LibOp { name: "reverse_word_order", arity: 1, mog:
 "fn reverse_word_order(s: string) -> string {\n    words: [string] = s.split(\" \");\n    out: string = \"\";\n    i: i64 = words.len - 1;\n    while i >= 0 {\n        out = out + words[i];\n        if i > 0 {\n            out = out + \" \";\n        }\n        i = i - 1;\n    }\n    return out;\n}\n" },
+    // ── batch 19: string predicates + counts (s->b, s->i).
+    LibOp { name: "num_substrings", arity: 1, mog:
+"fn num_substrings(s: string) -> i64 {\n    n: i64 = s.len;\n    return n * (n + 1) / 2;\n}\n" },
+    LibOp { name: "word_length_even", arity: 1, mog:
+"fn word_length_even(s: string) -> bool {\n    return s.len % 2 == 0;\n}\n" },
+    LibOp { name: "count_alpha_position", arity: 1, mog:
+"fn count_alpha_position(s: string) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    for ch in s {\n        v: i64 = ch.ord();\n        pos: i64 = 0;\n        if v >= 97 {\n            pos = v - 96;\n        } else {\n            if v >= 65 {\n                pos = v - 64;\n            }\n        }\n        if pos == i + 1 {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "is_undulating", arity: 1, mog:
+"fn is_undulating(s: string) -> bool {\n    n: i64 = s.len;\n    if n < 3 {\n        return false;\n    }\n    i: i64 = 2;\n    while i < n {\n        if s[i] != s[i - 2] {\n            return false;\n        }\n        if s[i] == s[i - 1] {\n            return false;\n        }\n        i = i + 1;\n    }\n    if s[0] == s[1] {\n        return false;\n    }\n    return true;\n}\n" },
     // ── batch 4: targeted at the measured MBPP unsolved clusters (2026-07-03 run:
     // 55 min/max/select, 35 count/freq, plus base-conversion / bit / recurrence
     // tasks in "other"). count/freq ops use dict-free O(n²) scans — no Value::Map
@@ -729,6 +738,20 @@ mod tests {
             Value::Array(vec![s("python"), s("programming")])
         ));
         assert!(runs_to(op("reverse_word_order"), "reverse_word_order", vec![s("python program")], s("program python")));
+    }
+
+    #[test]
+    fn batch19_string_predicate_ops_reproduce_their_probes() {
+        let s = |x: &str| Value::Str(x.to_string());
+        assert!(runs_to(op("num_substrings"), "num_substrings", vec![s("abc")], Value::Int(6)));
+        assert!(runs_to(op("num_substrings"), "num_substrings", vec![s("abcde")], Value::Int(15)));
+        assert!(runs_to(op("word_length_even"), "word_length_even", vec![s("solution")], Value::Bool(true)));
+        assert!(runs_to(op("word_length_even"), "word_length_even", vec![s("program")], Value::Bool(false)));
+        assert!(runs_to(op("count_alpha_position"), "count_alpha_position", vec![s("xbcefg")], Value::Int(2)));
+        assert!(runs_to(op("count_alpha_position"), "count_alpha_position", vec![s("ABcED")], Value::Int(3)));
+        assert!(runs_to(op("is_undulating"), "is_undulating", vec![s("1212121")], Value::Bool(true)));
+        assert!(runs_to(op("is_undulating"), "is_undulating", vec![s("1991")], Value::Bool(false)));
+        assert!(runs_to(op("is_undulating"), "is_undulating", vec![s("121")], Value::Bool(true)));
     }
 
     fn op(name: &str) -> &'static str {
