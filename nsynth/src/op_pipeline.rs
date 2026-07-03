@@ -522,6 +522,169 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
             break;
         }
     }
+    // Systematic BFS (depth <= MAX_DEPTH) missed. Try the input-seeded stochastic
+    // deep sampler, which can reach DEEPER chains the exhaustive search can't.
+    stochastic_deep_search(problem, &ops, in_ty, out_ty, scalar_arity, &scalars, deadline)
+}
+
+/// Deterministic xorshift64 RNG (Rust's stdlib has no seedable PRNG, and we need
+/// REPRODUCIBILITY — a task must draw the same random sequence every run so the
+/// search is deterministic, testable, and flywheel-safe).
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn below(&mut self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            (self.next() % n as u64) as usize
+        }
+    }
+}
+
+/// Seed the RNG from the problem's examples so the draw sequence is a pure
+/// function of the task (deterministic + reproducible).
+fn seed_rng(problem: &Problem) -> Rng {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", problem.examples).hash(&mut h);
+    Rng(h.finish() | 1)
+}
+
+/// Cap on random draws + chain depth for the stochastic sampler.
+const STOCH_MAX_DRAWS: usize = 30_000;
+const STOCH_MAX_DEPTH: usize = 6;
+
+#[cfg(test)]
+thread_local! {
+    /// Per-thread test override for the stochastic stage — avoids the global env
+    /// var (which races under parallel tests, flipping other "expect-None" cases).
+    static STOCH_TEST_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the stochastic deep search runs. Production: `NSYNTH_STOCHASTIC` env
+/// (opt-in for A/B). Tests: a thread-local so each test controls only its own
+/// thread, with no cross-test env pollution.
+fn stochastic_enabled() -> bool {
+    #[cfg(test)]
+    {
+        if STOCH_TEST_ENABLED.with(|c| c.get()) {
+            return true;
+        }
+    }
+    std::env::var_os("NSYNTH_STOCHASTIC").is_some()
+}
+
+/// Input-seeded STOCHASTIC deep-chain search ("weighted dice"). The systematic BFS
+/// above caps at [`MAX_DEPTH`] (exhaustive → combinatorial), so deep compositions
+/// are unreachable. This SAMPLES random type-valid chains up to [`STOCH_MAX_DEPTH`]
+/// — random restarts can jump straight to a depth-5/6 program the exhaustive search
+/// never reaches in budget ("spontaneous discovery"). Every candidate is still
+/// example-matched here and strict-verified in [`emit_and_check`], so recklessness
+/// is free — the verifier is the safety net. No model. Deterministic (seeded from
+/// the examples). Opt-in via `NSYNTH_STOCHASTIC` for clean A/B.
+fn stochastic_deep_search(
+    problem: &Problem,
+    ops: &[StageOp],
+    in_ty: Ty,
+    out_ty: Ty,
+    scalar_arity: bool,
+    scalars: &[BValue],
+    deadline: Instant,
+) -> Option<SolveResult> {
+    if !stochastic_enabled() {
+        return None;
+    }
+    let init: Vec<BValue> = problem.examples.iter().map(|e| e.inputs[0].clone()).collect();
+    let mut rng = seed_rng(problem);
+    let mut memo = std::collections::HashMap::new();
+    for _ in 0..STOCH_MAX_DRAWS {
+        if Instant::now() > deadline {
+            break;
+        }
+        let target_depth = 2 + rng.below(STOCH_MAX_DEPTH - 1); // 2..=STOCH_MAX_DEPTH
+        let mut vals = init.clone();
+        let mut ty = in_ty;
+        let mut path: Vec<usize> = Vec::new();
+        let mut used_scalar = false;
+        let mut alive = true;
+        for step in 0..target_depth {
+            let is_last = step + 1 == target_depth;
+            // Type-valid candidates (the "dice faces"): input type matches, scalar
+            // rules honoured, and on the final step only goal-type producers.
+            let mut cands: Vec<usize> = Vec::new();
+            for (i, op) in ops.iter().enumerate() {
+                if op.input != ty {
+                    continue;
+                }
+                if op.scalar && (!scalar_arity || used_scalar) {
+                    continue;
+                }
+                if is_last && op.output != out_ty {
+                    continue;
+                }
+                if is_last && scalar_arity && !used_scalar && !op.scalar {
+                    continue;
+                }
+                cands.push(i);
+            }
+            if cands.is_empty() {
+                alive = false;
+                break;
+            }
+            // "Weighted dice": bias toward ops that MOVE the value type toward the
+            // goal (an op whose output type equals the goal, or reshapes toward it),
+            // so deep chains still converge instead of wandering. Weight = 3 for a
+            // goal-type-producing op, else 1.
+            let weights: Vec<u64> =
+                cands.iter().map(|&i| if ops[i].output == out_ty { 3 } else { 1 }).collect();
+            let total: u64 = weights.iter().sum();
+            let mut r = rng.next() % total;
+            let mut chosen = cands[0];
+            for (k, &i) in cands.iter().enumerate() {
+                if r < weights[k] {
+                    chosen = i;
+                    break;
+                }
+                r -= weights[k];
+            }
+            let op = &ops[chosen];
+            let scalar_args = if op.scalar { Some(scalars) } else { None };
+            let Some(new_vals) = apply_op(chosen, op, &vals, scalar_args, &mut memo) else {
+                alive = false;
+                break;
+            };
+            if !is_last && !new_vals.iter().all(small_enough) {
+                alive = false;
+                break;
+            }
+            vals = new_vals;
+            ty = op.output;
+            used_scalar |= op.scalar;
+            path.push(chosen);
+        }
+        if !alive
+            || ty != out_ty
+            || path.len() < 2
+            || (scalar_arity && !used_scalar)
+            || !vals.iter().zip(problem.examples.iter()).all(|(v, e)| *v == e.expected)
+        {
+            continue;
+        }
+        let chain: Vec<&StageOp> = path.iter().map(|&j| &ops[j]).collect();
+        if let Some(mut r) = emit_and_check(&chain, problem, scalar_arity) {
+            let names: Vec<&str> = chain.iter().map(|o| o.name).collect();
+            r.method = format!("library-pipeline-stochastic:{}", names.join("->"));
+            return Some(r);
+        }
+    }
     None
 }
 
@@ -798,6 +961,74 @@ mod tests {
             Example { inputs: vec![iv(&[1, 1, 1]), BValue::Int(5)], expected: BValue::Int(3) },
         ];
         assert!(try_pipeline(&p).is_none(), "must not solve by ignoring the scalar argument");
+    }
+
+    #[test]
+    fn stochastic_finds_depth_four_chain_beyond_systematic() {
+        // reverse(sort(unique(abs(arr)))): every op is load-bearing, so the
+        // ONLY solution is depth-4 — the systematic BFS (MAX_DEPTH=3) cannot
+        // reach it. The input-seeded stochastic sampler can.
+        let iv = BValue::int_array;
+        let f = |a: &[i64]| -> Vec<i64> {
+            let mut v: Vec<i64> = a.iter().map(|x| x.abs()).collect();
+            v.sort();
+            v.dedup();
+            v.reverse();
+            v
+        };
+        let inputs: &[&[i64]] = &[&[-3, 2, -3, 1], &[5, -5, 2, 2, 8], &[-1, -4, 4, 1, 0], &[7, 7, -2, 3]];
+        let mut p = problem(vec![]);
+        p.examples = inputs
+            .iter()
+            .map(|a| Example { inputs: vec![iv(a)], expected: iv(&f(a)) })
+            .collect();
+
+        // With stochastic OFF, the systematic depth-3 search must MISS.
+        STOCH_TEST_ENABLED.with(|c| c.set(false));
+        assert!(try_pipeline(&p).is_none(), "systematic depth-3 must not reach a depth-4 chain");
+
+        // With stochastic ON (thread-local — no cross-test env pollution).
+        STOCH_TEST_ENABLED.with(|c| c.set(true));
+        let r = try_pipeline(&p).expect("stochastic sampler should discover the depth-4 chain");
+        STOCH_TEST_ENABLED.with(|c| c.set(false));
+        assert!(
+            r.method.starts_with("library-pipeline-stochastic:"),
+            "expected stochastic attribution, got {}",
+            r.method
+        );
+        // Generalises to an unseen input (held-out).
+        assert!(
+            code_reproduces_examples(
+                &r.code,
+                &[Example { inputs: vec![iv(&[-9, 4, 4, -9, 6])], expected: iv(&f(&[-9, 4, 4, -9, 6])) }]
+            ),
+            "stochastically-discovered program must generalise:\n{}",
+            r.code
+        );
+    }
+
+    #[test]
+    fn stochastic_is_deterministic() {
+        // Same task -> same seed -> same result (reproducible), twice.
+        let iv = BValue::int_array;
+        let f = |a: &[i64]| -> Vec<i64> {
+            let mut v: Vec<i64> = a.iter().map(|x| x.abs()).collect();
+            v.sort();
+            v.dedup();
+            v.reverse();
+            v
+        };
+        let inputs: &[&[i64]] = &[&[-3, 2, -3, 1], &[5, -5, 2, 2, 8], &[-1, -4, 4, 1, 0], &[7, 7, -2, 3]];
+        let mut p = problem(vec![]);
+        p.examples = inputs
+            .iter()
+            .map(|a| Example { inputs: vec![iv(a)], expected: iv(&f(a)) })
+            .collect();
+        STOCH_TEST_ENABLED.with(|c| c.set(true));
+        let a = try_pipeline(&p).map(|r| r.code);
+        let b = try_pipeline(&p).map(|r| r.code);
+        STOCH_TEST_ENABLED.with(|c| c.set(false));
+        assert_eq!(a, b, "stochastic search must be deterministic for a fixed task");
     }
 
     #[test]
