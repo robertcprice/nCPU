@@ -234,6 +234,21 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
         return result;
     }
 
+    // Verified reference-op library FIRST — a known algorithm that reproduces
+    // every example returns instantly (behaviour-matched, cheap). Runs here,
+    // AHEAD of the array-frontier search below, because many array->array tasks
+    // (move-zeros, swap-adjacent, consecutive-sums, rotate, …) have an exact
+    // library op but were timing out inside `synthesize_array`'s frontier before
+    // `try_library` (which lived only in the scalar `solve_problem_inner`) could
+    // run. Non-array problems still hit the scalar-path `try_library` too — a
+    // second call is a few ms and never changes the result.
+    if let Some(result) = crate::op_library::try_library(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+        }
+        return result;
+    }
+
     // Array-output problems (`[i64] -> [i64]`): exact array_transform before scalar paths.
     let array_io = problem.examples.first().is_some_and(|ex| {
         ex.inputs.len() == 1

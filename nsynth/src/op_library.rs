@@ -325,6 +325,20 @@ pub const OPS: &[LibOp] = &[
 "fn times_four(n: i64) -> i64 {\n    return 4 * n;\n}\n" },
     LibOp { name: "times_two", arity: 1, mog:
 "fn times_two(n: i64) -> i64 {\n    return 2 * n;\n}\n" },
+    // ── batch 21: [i64]->[i64] transforms (unlocked alongside the early
+    // try_library routing so they beat the array-frontier timeout).
+    LibOp { name: "swap_first_last", arity: 1, mog:
+"fn swap_first_last(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    n: i64 = out.len;\n    if n >= 2 {\n        t: i64 = out[0];\n        out[0] = out[n - 1];\n        out[n - 1] = t;\n    }\n    return out;\n}\n" },
+    LibOp { name: "consecutive_products", arity: 1, mog:
+"fn consecutive_products(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        j: i64 = i + 1;\n        out.push(arr[i] * arr[j]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "elements_once", arity: 1, mog:
+"fn elements_once(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        c: i64 = 0;\n        for u in arr {\n            if u == e {\n                c = c + 1;\n            }\n        }\n        if c == 1 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "duplicate_elements", arity: 1, mog:
+"fn duplicate_elements(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < arr.len {\n        c: i64 = 0;\n        for u in arr {\n            if u == arr[i] {\n                c = c + 1;\n            }\n        }\n        seen: i64 = 0;\n        for v in out {\n            if v == arr[i] {\n                seen = 1;\n            }\n        }\n        if c > 1 {\n            if seen == 0 {\n                out.push(arr[i]);\n            }\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "indices_of_max", arity: 1, mog:
+"fn indices_of_max(arr: [i64]) -> [i64] {\n    mx: i64 = arr[0];\n    for e in arr {\n        if e > mx {\n            mx = e;\n        }\n    }\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] == mx {\n            out.push(i);\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "indices_of_min", arity: 1, mog:
+"fn indices_of_min(arr: [i64]) -> [i64] {\n    mn: i64 = arr[0];\n    for e in arr {\n        if e < mn {\n            mn = e;\n        }\n    }\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] == mn {\n            out.push(i);\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
     // ── batch 4: targeted at the measured MBPP unsolved clusters (2026-07-03 run:
     // 55 min/max/select, 35 count/freq, plus base-conversion / bit / recurrence
     // tasks in "other"). count/freq ops use dict-free O(n²) scans — no Value::Map
@@ -842,6 +856,31 @@ mod tests {
             assert!(
                 runs_to(o.mog, name, vec![Value::Int(*arg)], Value::Int(*expect)),
                 "op {name}({arg}) failed (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch21_array_transform_ops_reproduce_their_probes() {
+        let iv = Value::int_array;
+        let cases: &[(&str, Vec<i64>, Vec<i64>)] = &[
+            ("swap_first_last", vec![1, 2, 3], vec![3, 2, 1]),
+            ("swap_first_last", vec![12, 35, 9, 56, 24], vec![24, 35, 9, 56, 12]),
+            ("consecutive_products", vec![1, 1, 3, 4, 4, 5, 6, 7], vec![1, 3, 12, 16, 20, 30, 42]),
+            ("elements_once", vec![1, 2, 3, 2, 3, 4, 5], vec![1, 4, 5]),
+            (
+                "duplicate_elements",
+                vec![10, 20, 30, 20, 20, 30, 40, 50, -20, 60, 60, -20, -20],
+                vec![20, 30, -20, 60],
+            ),
+            ("indices_of_max", vec![12, 33, 23, 10, 67, 89, 45, 667, 23, 12, 11, 10, 54], vec![7]),
+            ("indices_of_min", vec![12, 33, 23, 10, 67, 89, 45, 667, 23, 12, 11, 10, 54], vec![3, 11]),
+        ];
+        for (name, arr, expect) in cases {
+            let o = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(o.mog, name, vec![iv(arr)], iv(expect)),
+                "op {name}({arr:?}) failed (expected {expect:?})"
             );
         }
     }
