@@ -377,6 +377,34 @@ pub const OPS: &[LibOp] = &[
 "fn gather_by_indices(a: [i64], idx: [i64]) -> [i64] {\n    out: [i64] = [];\n    for j in idx {\n        out.push(a[j]);\n    }\n    return out;\n}\n" },
     LibOp { name: "merge_and_sort", arity: 2, mog:
 "fn merge_and_sort(a: [i64], b: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in a {\n        out.push(e);\n    }\n    for e in b {\n        out.push(e);\n    }\n    out.sort();\n    return out;\n}\n" },
+    // ── batch 15: 3-arg (i,i,i)->i — a whole new arity cluster: cuboid geometry,
+    // trapezium/triangle, arithmetic/geometric progressions, 3-way max/min, nCr%p.
+    LibOp { name: "max_of_three", arity: 3, mog:
+"fn max_of_three(a: i64, b: i64, c: i64) -> i64 {\n    m: i64 = a;\n    if b > m {\n        m = b;\n    }\n    if c > m {\n        m = c;\n    }\n    return m;\n}\n" },
+    LibOp { name: "min_of_three", arity: 3, mog:
+"fn min_of_three(a: i64, b: i64, c: i64) -> i64 {\n    m: i64 = a;\n    if b < m {\n        m = b;\n    }\n    if c < m {\n        m = c;\n    }\n    return m;\n}\n" },
+    LibOp { name: "volume_cuboid", arity: 3, mog:
+"fn volume_cuboid(a: i64, b: i64, c: i64) -> i64 {\n    return a * b * c;\n}\n" },
+    LibOp { name: "surface_area_cuboid", arity: 3, mog:
+"fn surface_area_cuboid(a: i64, b: i64, c: i64) -> i64 {\n    return 2 * (a * b + b * c + a * c);\n}\n" },
+    LibOp { name: "lateral_surface_cuboid", arity: 3, mog:
+"fn lateral_surface_cuboid(l: i64, b: i64, h: i64) -> i64 {\n    return 2 * h * (l + b);\n}\n" },
+    LibOp { name: "perimeter_triangle", arity: 3, mog:
+"fn perimeter_triangle(a: i64, b: i64, c: i64) -> i64 {\n    return a + b + c;\n}\n" },
+    LibOp { name: "area_trapezium", arity: 3, mog:
+"fn area_trapezium(a: i64, b: i64, h: i64) -> i64 {\n    return (a + b) * h / 2;\n}\n" },
+    LibOp { name: "triangular_prism_volume", arity: 3, mog:
+"fn triangular_prism_volume(l: i64, b: i64, h: i64) -> i64 {\n    return l * b * h / 2;\n}\n" },
+    LibOp { name: "ap_term", arity: 3, mog:
+"fn ap_term(a: i64, n: i64, d: i64) -> i64 {\n    return a + (n - 1) * d;\n}\n" },
+    LibOp { name: "ap_sum", arity: 3, mog:
+"fn ap_sum(a: i64, n: i64, d: i64) -> i64 {\n    return n * (2 * a + (n - 1) * d) / 2;\n}\n" },
+    LibOp { name: "gp_term", arity: 3, mog:
+"fn gp_term(a: i64, n: i64, r: i64) -> i64 {\n    p: i64 = 1;\n    i: i64 = 1;\n    while i < n {\n        p = p * r;\n        i = i + 1;\n    }\n    return a * p;\n}\n" },
+    LibOp { name: "gp_sum", arity: 3, mog:
+"fn gp_sum(a: i64, n: i64, r: i64) -> i64 {\n    total: i64 = 0;\n    term: i64 = a;\n    i: i64 = 0;\n    while i < n {\n        total = total + term;\n        term = term * r;\n        i = i + 1;\n    }\n    return total;\n}\n" },
+    LibOp { name: "ncr_mod_p", arity: 3, mog:
+"fn ncr_mod_p(n: i64, r: i64, p: i64) -> i64 {\n    num: i64 = 1;\n    i: i64 = 0;\n    while i < r {\n        num = num * (n - i);\n        i = i + 1;\n    }\n    den: i64 = 1;\n    i = 1;\n    while i <= r {\n        den = den * i;\n        i = i + 1;\n    }\n    return num / den % p;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -811,6 +839,37 @@ mod tests {
             assert!(
                 runs_to(op.mog, name, vec![iv(a), iv(b)], iv(expect)),
                 "op {name}({a:?},{b:?}) failed its probe (expected {expect:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch15_three_arg_ops_reproduce_their_probes() {
+        let cases: &[(&str, i64, i64, i64, i64)] = &[
+            ("max_of_three", 10, 20, 30, 30),
+            ("min_of_three", 10, 20, 0, 0),
+            ("volume_cuboid", 1, 2, 3, 6),
+            ("surface_area_cuboid", 1, 2, 3, 22),
+            ("lateral_surface_cuboid", 8, 5, 6, 156),
+            ("perimeter_triangle", 10, 20, 30, 60),
+            ("area_trapezium", 6, 9, 4, 30),
+            ("triangular_prism_volume", 10, 8, 6, 240),
+            ("ap_term", 1, 5, 2, 9),
+            ("ap_sum", 1, 5, 2, 25),
+            ("gp_term", 1, 5, 2, 16),
+            ("gp_sum", 1, 5, 2, 31),
+            ("ncr_mod_p", 10, 2, 13, 6),
+        ];
+        for (name, a, b, c, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(
+                    op.mog,
+                    name,
+                    vec![Value::Int(*a), Value::Int(*b), Value::Int(*c)],
+                    Value::Int(*expect)
+                ),
+                "op {name}({a},{b},{c}) failed its probe (expected {expect})"
             );
         }
     }
