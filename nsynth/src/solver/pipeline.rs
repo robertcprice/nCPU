@@ -355,6 +355,21 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         return result;
     }
 
+    // Composition tier: a CHAIN of 2-3 verified library ops (typed, value-level,
+    // OE-pruned — see `op_pipeline`). Runs right after the single-op library and
+    // before the search/affine/gradient stages for the same reason: a genuine
+    // known-algorithm composition ("sum of digits of n!") must not be starved or
+    // overfit-shadowed by bounded expression search. Never fires for a single-op
+    // fit, so library/search attribution is unaffected.
+    if let Some(result) = crate::op_pipeline::try_pipeline(problem) {
+        eprintln!(
+            "[solve] library-pipeline OK in {:.3}s — {}",
+            t0.elapsed().as_secs_f32(),
+            result.method
+        );
+        return result;
+    }
+
     // Exact multi-argument linear family first: a 2-3 arg affine or
     // single-threshold-affine rule is solved by a direct integer linear solve in
     // microseconds and verified against every example, so it must short-circuit

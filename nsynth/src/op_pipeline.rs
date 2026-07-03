@@ -1,0 +1,487 @@
+//! Typed pipeline search over the verified op library — the composition tier.
+//!
+//! [`crate::op_library::try_library`] matches ONE known algorithm against the whole
+//! example set. But most real tasks are short COMPOSITIONS of known algorithms
+//! ("sum of the digits of n!", "is the reversed number prime", "sum of squares of
+//! the distinct values") that no single op reproduces and bounded expression search
+//! cannot induce. This module searches over CHAINS of verified ops instead:
+//!
+//! * **Typed**: each stage op carries an input/output type parsed from its own Mog
+//!   signature (never hand-annotated), and only signature-compatible ops chain.
+//! * **Value-level**: candidate chains are evaluated by propagating the example
+//!   VALUES stage by stage; a full program is only emitted for a chain whose final
+//!   values match every expected output.
+//! * **Observational-equivalence pruned**: a stage whose output value-vector was
+//!   already seen (e.g. an identity-like op on these examples) is dropped, so
+//!   `reverse_number` on single-digit inputs cannot launder a single-op solve into
+//!   a fake "pipeline".
+//! * **Depth ≥ 2 only**: single-op solves are `try_library`'s job (and the general
+//!   engine's); this tier exists purely for composition, so it never competes for
+//!   single-op attribution.
+//!
+//! Like the library tier, a returned result reproduces EVERY example (whole-program
+//! re-check via [`code_reproduces_examples`], not just the value propagation), and a
+//! coincidental seed-only match is still caught by the caller's holdout
+//! re-verification.
+
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+use crate::benchmark::{Problem, Value as BValue};
+use crate::op_library::LibOp;
+use crate::runtime::{benchmark_value_from_runtime, code_reproduces_examples, execute_function};
+use crate::solver::SolveResult;
+
+/// Wall budget for the whole chain search. The type filter keeps branching ~15 per
+/// stage so typical searches finish in well under a second; the deadline is a hard
+/// backstop so a pathological op×value combination can never stall `solve_problem`.
+const SEARCH_BUDGET: Duration = Duration::from_millis(2500);
+
+/// Maximum chain length. Depth 3 already covers reshape→transform→reduce
+/// (e.g. digits → unique → sum); deeper chains explode the state space for
+/// little measured benefit.
+const MAX_DEPTH: usize = 3;
+
+/// The value types stage ops range over. Parsed from Mog signatures; ops using
+/// types outside this set simply don't participate in chaining.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ty {
+    Int,
+    IntArr,
+    Str,
+}
+
+impl Ty {
+    fn from_mog(name: &str) -> Option<Ty> {
+        match name {
+            "i64" => Some(Ty::Int),
+            "[i64]" => Some(Ty::IntArr),
+            "string" => Some(Ty::Str),
+            _ => None,
+        }
+    }
+
+    fn mog_name(self) -> &'static str {
+        match self {
+            Ty::Int => "i64",
+            Ty::IntArr => "[i64]",
+            Ty::Str => "string",
+        }
+    }
+}
+
+/// One chainable stage: a unary verified op with a parsed type signature.
+struct StageOp {
+    name: &'static str,
+    mog: &'static str,
+    input: Ty,
+    output: Ty,
+}
+
+/// Compose-only ops: reshape/reorder stages that make chains expressive
+/// (array→array transforms, int→array explode). They are deliberately NOT in
+/// [`crate::op_library::OPS`] — as single ops they would duplicate what the base
+/// engine (`array_transform`, enumerative fold) already solves and steal its
+/// method attribution; they exist only as chain stages, and [`try_pipeline`]
+/// never returns a depth-1 result.
+const COMPOSE_OPS: &[LibOp] = &[
+    LibOp { name: "sorted_values", arity: 1, mog:
+"fn sorted_values(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    return out;\n}\n" },
+    LibOp { name: "reversed_values", arity: 1, mog:
+"fn reversed_values(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = arr.len - 1;\n    while i >= 0 {\n        out.push(arr[i]);\n        i = i - 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "unique_values", arity: 1, mog:
+"fn unique_values(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        found: i64 = 0;\n        for u in out {\n            if u == e {\n                found = 1;\n            }\n        }\n        if found == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "abs_values", arity: 1, mog:
+"fn abs_values(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        x: i64 = e;\n        if x < 0 {\n            x = 0 - x;\n        }\n        out.push(x);\n    }\n    return out;\n}\n" },
+    LibOp { name: "digits_of", arity: 1, mog:
+"fn digits_of(n: i64) -> [i64] {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    rev: [i64] = [];\n    if x == 0 {\n        rev.push(0);\n    }\n    while x > 0 {\n        rev.push(x % 10);\n        x = x / 10;\n    }\n    out: [i64] = [];\n    i: i64 = rev.len - 1;\n    while i >= 0 {\n        out.push(rev[i]);\n        i = i - 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "max_value", arity: 1, mog:
+"fn max_value(arr: [i64]) -> i64 {\n    m: i64 = arr[0];\n    for e in arr {\n        if e > m {\n            m = e;\n        }\n    }\n    return m;\n}\n" },
+    LibOp { name: "min_value", arity: 1, mog:
+"fn min_value(arr: [i64]) -> i64 {\n    m: i64 = arr[0];\n    for e in arr {\n        if e < m {\n            m = e;\n        }\n    }\n    return m;\n}\n" },
+    LibOp { name: "sum_values", arity: 1, mog:
+"fn sum_values(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        s = s + e;\n    }\n    return s;\n}\n" },
+    LibOp { name: "count_of", arity: 1, mog:
+"fn count_of(arr: [i64]) -> i64 {\n    return arr.len;\n}\n" },
+];
+
+/// Parse `(input types, output type)` from an op's own Mog signature line
+/// (`fn name(a: i64) -> [i64] {`). Ops whose signature uses a type outside [`Ty`]
+/// return `None` and are skipped — the op set stays self-describing, no
+/// hand-maintained annotation table.
+fn parse_sig(mog: &str) -> Option<(Vec<Ty>, Ty)> {
+    let first = mog.lines().next()?;
+    let params = first.split('(').nth(1)?.split(')').next()?;
+    let mut ins = Vec::new();
+    for p in params.split(',') {
+        let p = p.trim();
+        if p.is_empty() {
+            continue;
+        }
+        ins.push(Ty::from_mog(p.split(':').nth(1)?.trim())?);
+    }
+    let out = first.split("->").nth(1)?.trim().trim_end_matches('{').trim();
+    Some((ins, Ty::from_mog(out)?))
+}
+
+/// All unary chainable stages: the compose-only reshapers plus the library's
+/// arity-1 ops, each with its parsed signature. Compose ops come FIRST because
+/// they are uniformly cheap (single pass, no nested trial division), so BFS
+/// reaches reshape-based chains before burning budget on expensive number-theory
+/// stages like `count_primes_below`.
+fn stage_ops() -> Vec<StageOp> {
+    COMPOSE_OPS
+        .iter()
+        .chain(crate::op_library::OPS.iter())
+        .filter(|op| op.arity == 1)
+        .filter_map(|op| {
+            let (ins, out) = parse_sig(op.mog)?;
+            if ins.len() != 1 {
+                return None;
+            }
+            Some(StageOp { name: op.name, mog: op.mog, input: ins[0], output: out })
+        })
+        .collect()
+}
+
+/// The [`Ty`] of a wire value, or `None` for values outside the chainable set.
+fn ty_of_value(v: &BValue) -> Option<Ty> {
+    match v {
+        BValue::Int(_) => Some(Ty::Int),
+        BValue::Str(_) => Some(Ty::Str),
+        BValue::Array(elems) => {
+            if elems.iter().all(|e| matches!(e, BValue::Int(_))) {
+                Some(Ty::IntArr)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Common [`Ty`] across all values, or `None` if mixed/unsupported.
+fn ty_of_values<'a>(mut vals: impl Iterator<Item = &'a BValue>) -> Option<Ty> {
+    let first = ty_of_value(vals.next()?)?;
+    for v in vals {
+        if ty_of_value(v)? != first {
+            return None;
+        }
+    }
+    Some(first)
+}
+
+/// Run one stage op on every current example value. Any per-value error (type
+/// mismatch, fuel exhaustion, overflow) disqualifies the op for this state.
+/// Results are memoized per `(op, value)` — different chain prefixes frequently
+/// reconverge on the same intermediate values, and re-interpreting an expensive
+/// op (trial division, digit loops) for each of them is the dominant search cost.
+fn apply_op(
+    op_idx: usize,
+    op: &StageOp,
+    vals: &[BValue],
+    memo: &mut std::collections::HashMap<(usize, String), Option<BValue>>,
+) -> Option<Vec<BValue>> {
+    vals.iter()
+        .map(|v| {
+            let key = (op_idx, format!("{v:?}"));
+            if let Some(cached) = memo.get(&key) {
+                return cached.clone();
+            }
+            let result = execute_function(op.mog, op.name, &[v.clone()], op.name)
+                .ok()
+                .and_then(|out| benchmark_value_from_runtime(&out).ok());
+            memo.insert(key, result.clone());
+            result
+        })
+        .collect()
+}
+
+/// Deterministic fingerprint of a value-vector for observational-equivalence
+/// pruning (Debug form is distinct per variant and content).
+fn fingerprint(vals: &[BValue]) -> String {
+    format!("{vals:?}")
+}
+
+/// Build the full Mog program for a chain (wrapper first — the entry fn is the
+/// first `fn` in the file — then each distinct op def once) and re-check it against
+/// every example as a whole program.
+fn emit_and_check(chain: &[&StageOp], problem: &Problem) -> Option<SolveResult> {
+    let in_ty = chain.first()?.input;
+    let out_ty = chain.last()?.output;
+    let mut call = "x".to_string();
+    for op in chain {
+        call = format!("{}({})", op.name, call);
+    }
+    let mut code = format!(
+        "fn pipeline(x: {}) -> {} {{\n    return {};\n}}\n\n",
+        in_ty.mog_name(),
+        out_ty.mog_name(),
+        call
+    );
+    let mut emitted: Vec<&str> = Vec::new();
+    for op in chain {
+        if emitted.contains(&op.name) {
+            continue;
+        }
+        emitted.push(op.name);
+        code.push_str(op.mog);
+        code.push('\n');
+    }
+    if !code_reproduces_examples(&code, &problem.examples) {
+        return None;
+    }
+    let names: Vec<&str> = chain.iter().map(|o| o.name).collect();
+    Some(SolveResult {
+        success: true,
+        code,
+        method: format!("library-pipeline:{}", names.join("->")),
+        error: None,
+        metadata: Default::default(),
+    })
+}
+
+/// Search for a chain of 2..=[`MAX_DEPTH`] verified unary ops that reproduces
+/// every example. `None` when the problem is not unary, uses types outside [`Ty`],
+/// or no chain fits within the budget. Depth-1 fits are deliberately never
+/// returned (see module docs).
+pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
+    if problem.examples.is_empty() || problem.examples.iter().any(|e| e.inputs.len() != 1) {
+        return None;
+    }
+    let in_ty = ty_of_values(problem.examples.iter().map(|e| &e.inputs[0]))?;
+    let out_ty = ty_of_values(problem.examples.iter().map(|e| &e.expected))?;
+    let ops = stage_ops();
+    let deadline = Instant::now() + SEARCH_BUDGET;
+
+    let init: Vec<BValue> = problem.examples.iter().map(|e| e.inputs[0].clone()).collect();
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(fingerprint(&init));
+
+    // state: (current type, current value per example, op indices applied so far)
+    let mut frontier: Vec<(Ty, Vec<BValue>, Vec<usize>)> = vec![(in_ty, init, Vec::new())];
+    let mut memo = std::collections::HashMap::new();
+
+    for depth in 0..MAX_DEPTH {
+        // On the final expansion only ops that PRODUCE the goal type can still
+        // accept; applying anything else is pure waste.
+        let is_last = depth + 1 == MAX_DEPTH;
+        let mut next = Vec::new();
+        for (ty, vals, path) in &frontier {
+            for (i, op) in ops.iter().enumerate() {
+                if op.input != *ty {
+                    continue;
+                }
+                if is_last && op.output != out_ty {
+                    continue;
+                }
+                if Instant::now() > deadline {
+                    return None;
+                }
+                let Some(new_vals) = apply_op(i, op, vals, &mut memo) else { continue };
+                if !seen.insert(fingerprint(&new_vals)) {
+                    continue;
+                }
+                let mut new_path = path.clone();
+                new_path.push(i);
+                if op.output == out_ty
+                    && new_path.len() >= 2
+                    && new_vals
+                        .iter()
+                        .zip(problem.examples.iter())
+                        .all(|(v, e)| *v == e.expected)
+                {
+                    let chain: Vec<&StageOp> = new_path.iter().map(|&j| &ops[j]).collect();
+                    if let Some(result) = emit_and_check(&chain, problem) {
+                        return Some(result);
+                    }
+                }
+                if !is_last {
+                    next.push((op.output, new_vals, new_path));
+                }
+            }
+        }
+        frontier = next;
+        if frontier.is_empty() {
+            break;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::benchmark::Example;
+
+    fn problem(examples: Vec<(BValue, BValue)>) -> Problem {
+        let mut p = Problem::default();
+        p.name = "pipeline_test".to_string();
+        p.examples = examples
+            .into_iter()
+            .map(|(input, expected)| Example { inputs: vec![input], expected })
+            .collect();
+        p
+    }
+
+    fn int_examples(pairs: &[(i64, i64)]) -> Vec<(BValue, BValue)> {
+        pairs.iter().map(|&(a, b)| (BValue::Int(a), BValue::Int(b))).collect()
+    }
+
+    #[test]
+    fn every_compose_op_reproduces_its_probe() {
+        let iv = BValue::int_array;
+        let cases: &[(&str, BValue, BValue)] = &[
+            ("sorted_values", iv(&[3, 1, 2]), iv(&[1, 2, 3])),
+            ("reversed_values", iv(&[1, 2, 3]), iv(&[3, 2, 1])),
+            ("unique_values", iv(&[2, 1, 2, 3, 1]), iv(&[2, 1, 3])),
+            ("abs_values", iv(&[-2, 3, -4]), iv(&[2, 3, 4])),
+            ("digits_of", BValue::Int(1203), iv(&[1, 2, 0, 3])),
+            ("digits_of", BValue::Int(0), iv(&[0])),
+            ("digits_of", BValue::Int(-45), iv(&[4, 5])),
+            ("max_value", iv(&[3, 9, 2]), BValue::Int(9)),
+            ("min_value", iv(&[3, -9, 2]), BValue::Int(-9)),
+            ("sum_values", iv(&[1, 2, 3]), BValue::Int(6)),
+            ("count_of", iv(&[7, 7, 7, 7]), BValue::Int(4)),
+        ];
+        for (name, arg, expect) in cases {
+            let op = COMPOSE_OPS.iter().find(|o| o.name == *name).unwrap();
+            assert!(
+                code_reproduces_examples(
+                    op.mog,
+                    &[Example { inputs: vec![arg.clone()], expected: expect.clone() }]
+                ),
+                "compose op {name} failed its probe (expected {expect:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn stage_ops_parse_their_own_signatures() {
+        let ops = stage_ops();
+        // Every compose op must be chainable; a sig-parse regression would silently
+        // empty the search space.
+        for c in COMPOSE_OPS {
+            assert!(ops.iter().any(|o| o.name == c.name), "compose op {} not chainable", c.name);
+        }
+        let digits = ops.iter().find(|o| o.name == "digits_of").unwrap();
+        assert_eq!((digits.input, digits.output), (Ty::Int, Ty::IntArr));
+        let prime = ops.iter().find(|o| o.name == "is_prime").unwrap();
+        assert_eq!((prime.input, prime.output), (Ty::Int, Ty::Int));
+        let vowels = ops.iter().find(|o| o.name == "count_vowels").unwrap();
+        assert_eq!((vowels.input, vowels.output), (Ty::Str, Ty::Int));
+    }
+
+    #[test]
+    fn pipeline_solves_sum_of_digits_of_factorial() {
+        // No single op fits: factorial(4)=24 but expected 6; sum_of_digits(4)=4.
+        let p = problem(int_examples(&[(1, 1), (2, 2), (3, 6), (4, 6), (5, 3)]));
+        assert!(crate::op_library::try_library(&p).is_none(), "single-op library must miss");
+        let r = try_pipeline(&p).expect("pipeline should solve sum_of_digits∘factorial");
+        assert!(r.method.starts_with("library-pipeline:"), "method was {}", r.method);
+        // Un-gameable: the returned program must generalize to an UNSEEN input
+        // (8! = 40320 → 4+0+3+2+0 = 9), not merely fit the five seeds.
+        assert!(
+            code_reproduces_examples(
+                &r.code,
+                &[Example { inputs: vec![BValue::Int(8)], expected: BValue::Int(9) }]
+            ),
+            "returned pipeline failed the held-out probe:\n{}",
+            r.code
+        );
+    }
+
+    #[test]
+    fn pipeline_solves_primality_of_reversed_number() {
+        // is_prime(reverse_number(n)). 16→61 prime distinguishes from is_prime(n).
+        let p = problem(int_examples(&[(13, 1), (15, 0), (16, 1), (18, 0), (35, 1), (25, 0)]));
+        assert!(crate::op_library::try_library(&p).is_none(), "single-op library must miss");
+        let r = try_pipeline(&p).expect("pipeline should solve is_prime∘reverse_number");
+        // Held-out: 94→49=7² → 0; 76→67 prime → 1.
+        assert!(
+            code_reproduces_examples(
+                &r.code,
+                &[
+                    Example { inputs: vec![BValue::Int(94)], expected: BValue::Int(0) },
+                    Example { inputs: vec![BValue::Int(76)], expected: BValue::Int(1) },
+                ]
+            ),
+            "returned pipeline failed held-out probes:\n{}",
+            r.code
+        );
+    }
+
+    #[test]
+    fn pipeline_solves_sum_of_squares_of_distinct_values() {
+        // sum_of_squares(unique_values(arr)): [2,2,3] → 4+9 = 13 (plain
+        // sum_of_squares gives 17, so the reshape stage is load-bearing).
+        let iv = BValue::int_array;
+        let p = problem(vec![
+            (iv(&[2, 2, 3]), BValue::Int(13)),
+            (iv(&[1, 1, 1]), BValue::Int(1)),
+            (iv(&[0, 2, 2]), BValue::Int(4)),
+            (iv(&[3, 4]), BValue::Int(25)),
+        ]);
+        assert!(crate::op_library::try_library(&p).is_none(), "single-op library must miss");
+        let r = try_pipeline(&p).expect("pipeline should solve sum_of_squares∘unique_values");
+        assert!(
+            code_reproduces_examples(
+                &r.code,
+                &[Example { inputs: vec![iv(&[5, 5, 2])], expected: BValue::Int(29) }]
+            ),
+            "returned pipeline failed the held-out probe:\n{}",
+            r.code
+        );
+    }
+
+    #[test]
+    fn pipeline_solves_depth_three_sum_of_distinct_digits() {
+        // sum_values(unique_values(digits_of(n))): 122 → [1,2,2] → [1,2] → 3
+        // (sum_of_digits(122)=5 distinguishes the depth-2 alternative).
+        let p = problem(int_examples(&[(122, 3), (505, 5), (333, 3), (1234, 10)]));
+        assert!(crate::op_library::try_library(&p).is_none(), "single-op library must miss");
+        let r = try_pipeline(&p).expect("pipeline should solve depth-3 distinct-digit sum");
+        assert!(
+            code_reproduces_examples(
+                &r.code,
+                &[Example { inputs: vec![BValue::Int(7717)], expected: BValue::Int(8) }]
+            ),
+            "returned pipeline failed the held-out probe:\n{}",
+            r.code
+        );
+    }
+
+    #[test]
+    fn pipeline_returns_none_for_unchainable_examples() {
+        let p = problem(int_examples(&[(1, 100), (2, -3), (3, 77)]));
+        assert!(try_pipeline(&p).is_none());
+    }
+
+    #[test]
+    fn pipeline_never_returns_a_single_op_fit() {
+        // Factorial itself is a SINGLE library op; the pipeline tier must stay out
+        // of single-op attribution. Identity-like wrappers (reverse_number on
+        // single digits, digits_of→max_value on 1..=5) are killed by the
+        // observational-equivalence prune, not by luck.
+        let p = problem(int_examples(&[(1, 1), (2, 2), (3, 6), (4, 24), (5, 120)]));
+        assert!(
+            crate::op_library::try_library(&p).is_some(),
+            "precondition: factorial is a single-op library solve"
+        );
+        assert!(try_pipeline(&p).is_none(), "pipeline must not launder a depth-1 fit");
+    }
+
+    #[test]
+    fn solve_problem_routes_chain_task_to_pipeline() {
+        // End-to-end wiring: the full solver returns the pipeline method for a
+        // task neither the single-op library nor bounded search reproduces.
+        let p = problem(int_examples(&[(1, 1), (2, 2), (3, 6), (4, 6), (5, 3)]));
+        let r = crate::solver::solve_problem(&p);
+        assert!(r.success, "solve_problem failed: {:?}", r.error);
+        assert!(
+            r.method.starts_with("library-pipeline:"),
+            "expected pipeline attribution, got {}",
+            r.method
+        );
+    }
+}

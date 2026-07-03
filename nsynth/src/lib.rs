@@ -40,6 +40,7 @@ pub mod multi_objective;
 #[cfg(feature = "nl")]
 pub mod nl;
 pub mod op_library;
+pub mod op_pipeline;
 pub mod optimization;
 pub mod orchestrator;
 pub mod prob;
