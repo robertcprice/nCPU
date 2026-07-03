@@ -94,12 +94,16 @@ impl Ty {
     }
 }
 
-/// One chainable stage: a unary verified op with a parsed type signature.
+/// One chainable stage with a parsed type signature. `scalar` stages are binary
+/// ops `(flow, i64) -> output` that consume the problem's second (scalar) input;
+/// a chain may use at most one, and an arity-2 problem's chain must use exactly
+/// one (a fit that ignores an argument is overfit laundering, not a solve).
 struct StageOp {
     name: &'static str,
     mog: &'static str,
     input: Ty,
     output: Ty,
+    scalar: bool,
 }
 
 /// Compose-only ops: reshape/reorder stages that make chains expressive
@@ -127,6 +131,20 @@ const COMPOSE_OPS: &[LibOp] = &[
 "fn sum_values(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        s = s + e;\n    }\n    return s;\n}\n" },
     LibOp { name: "count_of", arity: 1, mog:
 "fn count_of(arr: [i64]) -> i64 {\n    return arr.len;\n}\n" },
+    // ── scalar-consuming binary stages (flow, k) — enable the n-largest /
+    //    take / index class ("first k of the sorted values" = take_first ∘ sorted).
+    LibOp { name: "take_first", arity: 2, mog:
+"fn take_first(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < k {\n        if i < arr.len {\n            out.push(arr[i]);\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "take_last", arity: 2, mog:
+"fn take_last(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    j: i64 = arr.len - k;\n    if j < 0 {\n        j = 0;\n    }\n    while j < arr.len {\n        out.push(arr[j]);\n        j = j + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "drop_first", arity: 2, mog:
+"fn drop_first(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    i: i64 = k;\n    while i < arr.len {\n        out.push(arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "drop_last", arity: 2, mog:
+"fn drop_last(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    limit: i64 = arr.len - k;\n    i: i64 = 0;\n    while i < limit {\n        out.push(arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "element_at", arity: 2, mog:
+"fn element_at(arr: [i64], i: i64) -> i64 {\n    return arr[i];\n}\n" },
+    LibOp { name: "remove_value", arity: 2, mog:
+"fn remove_value(arr: [i64], x: i64) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        if e != x {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
 ];
 
 /// Parse `(input types, output type)` from an op's own Mog signature line
@@ -157,13 +175,19 @@ fn stage_ops() -> Vec<StageOp> {
     COMPOSE_OPS
         .iter()
         .chain(crate::op_library::OPS.iter())
-        .filter(|op| op.arity == 1 && !HEAVY_STAGE_OPS.contains(&op.name))
+        .filter(|op| !HEAVY_STAGE_OPS.contains(&op.name))
         .filter_map(|op| {
             let (ins, out) = parse_sig(op.mog)?;
-            if ins.len() != 1 {
-                return None;
+            match (op.arity, ins.as_slice()) {
+                (1, [input]) => {
+                    Some(StageOp { name: op.name, mog: op.mog, input: *input, output: out, scalar: false })
+                }
+                // Binary stage: second param must be the pass-through scalar.
+                (2, [input, Ty::Int]) => {
+                    Some(StageOp { name: op.name, mog: op.mog, input: *input, output: out, scalar: true })
+                }
+                _ => None,
             }
-            Some(StageOp { name: op.name, mog: op.mog, input: ins[0], output: out })
         })
         .collect()
 }
@@ -215,17 +239,23 @@ fn apply_op(
     op_idx: usize,
     op: &StageOp,
     vals: &[BValue],
+    scalars: Option<&[BValue]>,
     memo: &mut std::collections::HashMap<(usize, String), Option<BValue>>,
     applications: &mut usize,
 ) -> Option<Vec<BValue>> {
     vals.iter()
-        .map(|v| {
-            let key = (op_idx, format!("{v:?}"));
+        .enumerate()
+        .map(|(ex, v)| {
+            let args: Vec<BValue> = match scalars {
+                Some(s) => vec![v.clone(), s[ex].clone()],
+                None => vec![v.clone()],
+            };
+            let key = (op_idx, format!("{args:?}"));
             if let Some(cached) = memo.get(&key) {
                 return cached.clone();
             }
             *applications += 1;
-            let result = execute_function(op.mog, op.name, &[v.clone()], op.name)
+            let result = execute_function(op.mog, op.name, &args, op.name)
                 .ok()
                 .and_then(|out| benchmark_value_from_runtime(&out).ok());
             memo.insert(key, result.clone());
@@ -242,17 +272,27 @@ fn fingerprint(vals: &[BValue]) -> String {
 
 /// Build the full Mog program for a chain (wrapper first — the entry fn is the
 /// first `fn` in the file — then each distinct op def once) and re-check it against
-/// every example as a whole program.
-fn emit_and_check(chain: &[&StageOp], problem: &Problem) -> Option<SolveResult> {
+/// every example as a whole program. `scalar_arity` = the problem passes a second
+/// scalar arg, threaded into the chain's single binary stage.
+fn emit_and_check(chain: &[&StageOp], problem: &Problem, scalar_arity: bool) -> Option<SolveResult> {
     let in_ty = chain.first()?.input;
     let out_ty = chain.last()?.output;
     let mut call = "x".to_string();
     for op in chain {
-        call = format!("{}({})", op.name, call);
+        call = if op.scalar {
+            format!("{}({}, k)", op.name, call)
+        } else {
+            format!("{}({})", op.name, call)
+        };
     }
+    let params = if scalar_arity {
+        format!("x: {}, k: i64", in_ty.mog_name())
+    } else {
+        format!("x: {}", in_ty.mog_name())
+    };
     let mut code = format!(
-        "fn pipeline(x: {}) -> {} {{\n    return {};\n}}\n\n",
-        in_ty.mog_name(),
+        "fn pipeline({}) -> {} {{\n    return {};\n}}\n\n",
+        params,
         out_ty.mog_name(),
         call
     );
@@ -287,9 +327,29 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
     if std::env::var_os("NSYNTH_NO_OP_PIPELINE").is_some() {
         return None;
     }
-    if problem.examples.is_empty() || problem.examples.iter().any(|e| e.inputs.len() != 1) {
+    if problem.examples.is_empty() {
         return None;
     }
+    // Unary problem: chain over the single input. Binary problem whose SECOND
+    // input is a scalar i64: chain over the first input, with exactly one
+    // scalar-consuming stage. Anything else is out of scope.
+    let arity = problem.examples[0].inputs.len();
+    if problem.examples.iter().any(|e| e.inputs.len() != arity) || !(arity == 1 || arity == 2) {
+        return None;
+    }
+    let scalar_arity = arity == 2;
+    let scalars: Vec<BValue> = if scalar_arity {
+        if problem
+            .examples
+            .iter()
+            .any(|e| !matches!(e.inputs[1], BValue::Int(_)))
+        {
+            return None;
+        }
+        problem.examples.iter().map(|e| e.inputs[1].clone()).collect()
+    } else {
+        Vec::new()
+    };
     let in_ty = ty_of_values(problem.examples.iter().map(|e| &e.inputs[0]))?;
     let out_ty = ty_of_values(problem.examples.iter().map(|e| &e.expected))?;
     let ops = stage_ops();
@@ -297,10 +357,11 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
 
     let init: Vec<BValue> = problem.examples.iter().map(|e| e.inputs[0].clone()).collect();
     let mut seen: HashSet<String> = HashSet::new();
-    seen.insert(fingerprint(&init));
+    seen.insert(format!("false|{}", fingerprint(&init)));
 
-    // state: (current type, current value per example, op indices applied so far)
-    let mut frontier: Vec<(Ty, Vec<BValue>, Vec<usize>)> = vec![(in_ty, init, Vec::new())];
+    // state: (current type, current value per example, op path, scalar consumed?)
+    let mut frontier: Vec<(Ty, Vec<BValue>, Vec<usize>, bool)> =
+        vec![(in_ty, init, Vec::new(), false)];
     let mut memo = std::collections::HashMap::new();
     let mut applications = 0usize;
 
@@ -309,39 +370,52 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
         // accept; applying anything else is pure waste.
         let is_last = depth + 1 == MAX_DEPTH;
         let mut next = Vec::new();
-        for (ty, vals, path) in &frontier {
+        for (ty, vals, path, used_scalar) in &frontier {
             for (i, op) in ops.iter().enumerate() {
                 if op.input != *ty {
+                    continue;
+                }
+                // Binary stages: only for scalar-arity problems, at most once.
+                if op.scalar && (!scalar_arity || *used_scalar) {
                     continue;
                 }
                 if is_last && op.output != out_ty {
                     continue;
                 }
+                // A scalar-arity chain must still be able to consume the scalar.
+                if is_last && scalar_arity && !*used_scalar && !op.scalar {
+                    continue;
+                }
                 if applications > MAX_APPLICATIONS || Instant::now() > deadline {
                     return None;
                 }
-                let Some(new_vals) = apply_op(i, op, vals, &mut memo, &mut applications) else {
+                let scalar_args = if op.scalar { Some(scalars.as_slice()) } else { None };
+                let Some(new_vals) =
+                    apply_op(i, op, vals, scalar_args, &mut memo, &mut applications)
+                else {
                     continue;
                 };
-                if !seen.insert(fingerprint(&new_vals)) {
+                let now_used = *used_scalar || op.scalar;
+                if !seen.insert(format!("{now_used}|{}", fingerprint(&new_vals))) {
                     continue;
                 }
                 let mut new_path = path.clone();
                 new_path.push(i);
                 if op.output == out_ty
                     && new_path.len() >= 2
+                    && (!scalar_arity || now_used)
                     && new_vals
                         .iter()
                         .zip(problem.examples.iter())
                         .all(|(v, e)| *v == e.expected)
                 {
                     let chain: Vec<&StageOp> = new_path.iter().map(|&j| &ops[j]).collect();
-                    if let Some(result) = emit_and_check(&chain, problem) {
+                    if let Some(result) = emit_and_check(&chain, problem, scalar_arity) {
                         return Some(result);
                     }
                 }
                 if !is_last && new_vals.iter().all(small_enough) {
-                    next.push((op.output, new_vals, new_path));
+                    next.push((op.output, new_vals, new_path, now_used));
                 }
             }
         }
@@ -401,6 +475,31 @@ mod tests {
     }
 
     #[test]
+    fn every_binary_compose_op_reproduces_its_probe() {
+        let iv = BValue::int_array;
+        let cases: &[(&str, Vec<BValue>, BValue)] = &[
+            ("take_first", vec![iv(&[5, 6, 7]), BValue::Int(2)], iv(&[5, 6])),
+            ("take_first", vec![iv(&[5]), BValue::Int(3)], iv(&[5])),
+            ("take_last", vec![iv(&[5, 6, 7]), BValue::Int(2)], iv(&[6, 7])),
+            ("take_last", vec![iv(&[5]), BValue::Int(3)], iv(&[5])),
+            ("drop_first", vec![iv(&[5, 6, 7]), BValue::Int(1)], iv(&[6, 7])),
+            ("drop_last", vec![iv(&[5, 6, 7]), BValue::Int(1)], iv(&[5, 6])),
+            ("element_at", vec![iv(&[5, 6, 7]), BValue::Int(1)], BValue::Int(6)),
+            ("remove_value", vec![iv(&[1, 2, 1, 3]), BValue::Int(1)], iv(&[2, 3])),
+        ];
+        for (name, args, expect) in cases {
+            let op = COMPOSE_OPS.iter().find(|o| o.name == *name).unwrap();
+            assert!(
+                code_reproduces_examples(
+                    op.mog,
+                    &[Example { inputs: args.clone(), expected: expect.clone() }]
+                ),
+                "binary compose op {name} failed its probe (expected {expect:?})"
+            );
+        }
+    }
+
+    #[test]
     fn stage_ops_parse_their_own_signatures() {
         let ops = stage_ops();
         // Every compose op must be chainable; a sig-parse regression would silently
@@ -414,6 +513,18 @@ mod tests {
         assert_eq!((prime.input, prime.output), (Ty::Int, Ty::Int));
         let vowels = ops.iter().find(|o| o.name == "count_vowels").unwrap();
         assert_eq!((vowels.input, vowels.output), (Ty::Str, Ty::Int));
+        // Binary stages: (flow, i64) signatures parse with scalar=true.
+        let take = ops.iter().find(|o| o.name == "take_first").unwrap();
+        assert!(take.scalar);
+        assert_eq!((take.input, take.output), (Ty::IntArr, Ty::IntArr));
+        let kth = ops.iter().find(|o| o.name == "kth_smallest").unwrap();
+        assert!(kth.scalar);
+        assert_eq!((kth.input, kth.output), (Ty::IntArr, Ty::Int));
+        let gcd = ops.iter().find(|o| o.name == "gcd").unwrap();
+        assert!(gcd.scalar);
+        assert_eq!((gcd.input, gcd.output), (Ty::Int, Ty::Int));
+        // Unary ops stay non-scalar.
+        assert!(!prime.scalar);
     }
 
     #[test]
@@ -493,6 +604,77 @@ mod tests {
             "returned pipeline failed the held-out probe:\n{}",
             r.code
         );
+    }
+
+    #[test]
+    fn pipeline_solves_n_largest_via_scalar_stage() {
+        // heap_queue_largest class: n largest, descending =
+        // take_first(reversed(sorted(arr)), k) — needs the scalar pass-through.
+        let iv = BValue::int_array;
+        let p = problem(vec![]);
+        let mut p = p;
+        p.examples = vec![
+            Example {
+                inputs: vec![iv(&[25, 35, 22, 85, 14, 65, 75, 25]), BValue::Int(3)],
+                expected: iv(&[85, 75, 65]),
+            },
+            Example { inputs: vec![iv(&[1, 2, 3]), BValue::Int(1)], expected: iv(&[3]) },
+            Example { inputs: vec![iv(&[4, 1, 4]), BValue::Int(2)], expected: iv(&[4, 4]) },
+        ];
+        assert!(crate::op_library::try_library(&p).is_none(), "single-op library must miss");
+        let r = try_pipeline(&p).expect("pipeline should solve n-largest");
+        assert!(r.method.starts_with("library-pipeline:"), "method was {}", r.method);
+        // Held-out generalization probe.
+        assert!(
+            code_reproduces_examples(
+                &r.code,
+                &[Example {
+                    inputs: vec![iv(&[9, 1, 5, 7]), BValue::Int(2)],
+                    expected: iv(&[9, 7]),
+                }]
+            ),
+            "returned pipeline failed the held-out probe:\n{}",
+            r.code
+        );
+    }
+
+    #[test]
+    fn pipeline_solves_sum_of_first_k() {
+        let iv = BValue::int_array;
+        let mut p = problem(vec![]);
+        p.examples = vec![
+            Example { inputs: vec![iv(&[1, 2, 3, 4]), BValue::Int(2)], expected: BValue::Int(3) },
+            Example { inputs: vec![iv(&[5, 5, 5]), BValue::Int(1)], expected: BValue::Int(5) },
+            Example { inputs: vec![iv(&[2, 4, 6]), BValue::Int(3)], expected: BValue::Int(12) },
+        ];
+        assert!(crate::op_library::try_library(&p).is_none(), "single-op library must miss");
+        let r = try_pipeline(&p).expect("pipeline should solve sum-of-first-k");
+        assert!(
+            code_reproduces_examples(
+                &r.code,
+                &[Example {
+                    inputs: vec![iv(&[10, 1, 1]), BValue::Int(2)],
+                    expected: BValue::Int(11),
+                }]
+            ),
+            "returned pipeline failed the held-out probe:\n{}",
+            r.code
+        );
+    }
+
+    #[test]
+    fn pipeline_rejects_scalar_ignoring_fit() {
+        // The outputs are plain sums; the scalar argument is irrelevant. A chain
+        // that never consumes the scalar must NOT be returned (ignoring an
+        // argument = overfit laundering), and no scalar-consuming chain fits.
+        let iv = BValue::int_array;
+        let mut p = problem(vec![]);
+        p.examples = vec![
+            Example { inputs: vec![iv(&[1, 2, 3]), BValue::Int(2)], expected: BValue::Int(6) },
+            Example { inputs: vec![iv(&[2, 2]), BValue::Int(3)], expected: BValue::Int(4) },
+            Example { inputs: vec![iv(&[1, 1, 1]), BValue::Int(5)], expected: BValue::Int(3) },
+        ];
+        assert!(try_pipeline(&p).is_none(), "must not solve by ignoring the scalar argument");
     }
 
     #[test]
