@@ -269,6 +269,38 @@ pub const OPS: &[LibOp] = &[
 "fn first_digit_factorial(n: i64) -> i64 {\n    f: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        f = f * i;\n        i = i + 1;\n    }\n    while f >= 10 {\n        f = f / 10;\n    }\n    return f;\n}\n" },
     LibOp { name: "count_unset_bits_upto", arity: 1, mog:
 "fn count_unset_bits_upto(n: i64) -> i64 {\n    total: i64 = 0;\n    k: i64 = 1;\n    while k <= n {\n        x: i64 = k;\n        while x > 0 {\n            if x % 2 == 0 {\n                total = total + 1;\n            }\n            x = x / 2;\n        }\n        k = k + 1;\n    }\n    return total;\n}\n" },
+    // ── batch 10: cube geometry, divisor sums, next-square/power, integer sqrt,
+    // prime/power sums, factorial last-two-digits — remaining scalar cluster.
+    LibOp { name: "volume_cube", arity: 1, mog:
+"fn volume_cube(n: i64) -> i64 {\n    return n * n * n;\n}\n" },
+    LibOp { name: "surface_area_cube", arity: 1, mog:
+"fn surface_area_cube(n: i64) -> i64 {\n    return 6 * n * n;\n}\n" },
+    LibOp { name: "lateral_surface_cube", arity: 1, mog:
+"fn lateral_surface_cube(n: i64) -> i64 {\n    return 4 * n * n;\n}\n" },
+    LibOp { name: "last_digit", arity: 1, mog:
+"fn last_digit(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    return x % 10;\n}\n" },
+    LibOp { name: "last_two_digits_factorial", arity: 1, mog:
+"fn last_two_digits_factorial(n: i64) -> i64 {\n    f: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        f = f * i % 100;\n        i = i + 1;\n    }\n    return f;\n}\n" },
+    LibOp { name: "next_perfect_square", arity: 1, mog:
+"fn next_perfect_square(n: i64) -> i64 {\n    r: i64 = 1;\n    while r * r <= n {\n        r = r + 1;\n    }\n    return r * r;\n}\n" },
+    LibOp { name: "next_power_of_2", arity: 1, mog:
+"fn next_power_of_2(n: i64) -> i64 {\n    p: i64 = 1;\n    while p <= n {\n        p = p * 2;\n    }\n    return p;\n}\n" },
+    LibOp { name: "smallest_divisor", arity: 1, mog:
+"fn smallest_divisor(n: i64) -> i64 {\n    i: i64 = 2;\n    while i * i <= n {\n        if n % i == 0 {\n            return i;\n        }\n        i = i + 1;\n    }\n    return n;\n}\n" },
+    LibOp { name: "integer_sqrt", arity: 1, mog:
+"fn integer_sqrt(n: i64) -> i64 {\n    r: i64 = 0;\n    while (r + 1) * (r + 1) <= n {\n        r = r + 1;\n    }\n    return r;\n}\n" },
+    LibOp { name: "even_square_sum", arity: 1, mog:
+"fn even_square_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        t: i64 = 2 * i;\n        s = s + t * t;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "odd_fourth_power_sum", arity: 1, mog:
+"fn odd_fourth_power_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        t: i64 = 2 * i - 1;\n        s = s + t * t * t * t;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "sum_of_primes_below", arity: 1, mog:
+"fn sum_of_primes_below(n: i64) -> i64 {\n    s: i64 = 0;\n    k: i64 = 2;\n    while k < n {\n        d: i64 = 2;\n        prime: i64 = 1;\n        while d * d <= k {\n            if k % d == 0 {\n                prime = 0;\n            }\n            d = d + 1;\n        }\n        if prime == 1 {\n            s = s + k;\n        }\n        k = k + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "sum_even_factors", arity: 1, mog:
+"fn sum_even_factors(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        if n % i == 0 {\n            if i % 2 == 0 {\n                s = s + i;\n            }\n        }\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "sum_odd_factors", arity: 1, mog:
+"fn sum_odd_factors(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        if n % i == 0 {\n            if i % 2 == 1 {\n                s = s + i;\n            }\n        }\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "proper_divisor_sum", arity: 1, mog:
+"fn proper_divisor_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i < n {\n        if n % i == 0 {\n            s = s + i;\n        }\n        i = i + 1;\n    }\n    return s;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -539,6 +571,49 @@ mod tests {
             ("first_digit_factorial", 10, 3),
             ("count_unset_bits_upto", 2, 1),
             ("count_unset_bits_upto", 5, 4),
+        ];
+        for (name, arg, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![Value::Int(*arg)], Value::Int(*expect)),
+                "op {name}({arg}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch10_ops_reproduce_their_probes() {
+        let cases: &[(&str, i64, i64)] = &[
+            ("volume_cube", 3, 27),
+            ("volume_cube", 2, 8),
+            ("surface_area_cube", 5, 150),
+            ("surface_area_cube", 3, 54),
+            ("lateral_surface_cube", 5, 100),
+            ("lateral_surface_cube", 9, 324),
+            ("last_digit", 123, 3),
+            ("last_digit", 25, 5),
+            ("last_two_digits_factorial", 7, 40),
+            ("last_two_digits_factorial", 5, 20),
+            ("next_perfect_square", 35, 36),
+            ("next_perfect_square", 6, 9),
+            ("next_power_of_2", 0, 1),
+            ("next_power_of_2", 5, 8),
+            ("smallest_divisor", 10, 2),
+            ("smallest_divisor", 25, 5),
+            ("integer_sqrt", 4, 2),
+            ("integer_sqrt", 16, 4),
+            ("even_square_sum", 2, 20),
+            ("even_square_sum", 3, 56),
+            ("odd_fourth_power_sum", 2, 82),
+            ("odd_fourth_power_sum", 3, 707),
+            ("sum_of_primes_below", 10, 17),
+            ("sum_of_primes_below", 20, 77),
+            ("sum_even_factors", 18, 26),
+            ("sum_even_factors", 30, 48),
+            ("sum_odd_factors", 30, 24),
+            ("sum_odd_factors", 18, 13),
+            ("proper_divisor_sum", 8, 7),
+            ("proper_divisor_sum", 12, 16),
         ];
         for (name, arg, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));

@@ -44,13 +44,12 @@ use crate::solver::SolveResult;
 /// global step budget already bounds; [`SEARCH_BUDGET`] below is a pure safety
 /// net over the whole search, not the primary bound.
 ///
-/// Set so a full depth-3 sweep over the CURRENT (unabridged) op set completes —
-/// capability is not traded for speed by dropping reachable ops. With per-op
-/// parsed-program reuse (stages parse their Mog once) a solo depth-3 sweep runs
-/// ~1.5s, so 3s leaves margin for CPU contention while keeping miss cost below
-/// the 4s it was before the reuse optimization. Depth-2 tasks (the common case)
-/// return early well before this.
-const SEARCH_BUDGET: Duration = Duration::from_millis(3000);
+/// Pure safety net. With the curated chain-stage allowlist ([`CHAIN_STAGE_LIBRARY_OPS`])
+/// the search is small and O(1) in library size, so a full depth-3 sweep runs in
+/// ~0.3s regardless of how many terminal library ops exist. This wall only guards
+/// a pathological slow op-application; it is far above the real search cost and
+/// does not grow with the library.
+const SEARCH_BUDGET: Duration = Duration::from_millis(2000);
 
 /// Magnitude gate for FRONTIER states (checked after the accept test, so a chain
 /// whose final values legitimately exceed this can still be returned). Interpreter
@@ -62,26 +61,51 @@ const SEARCH_BUDGET: Duration = Duration::from_millis(3000);
 const MAX_INT_MAGNITUDE: i64 = 10_000;
 const MAX_SEQ_LEN: usize = 512;
 
-/// Ops excluded from CHAIN stages on COST grounds ONLY — each is an O(n) or
-/// O(n·√n) loop over the value 1..n, so as an intermediate it makes EVERY chain
-/// through it slow (and on a large intermediate value, seconds per application).
-/// They remain fully available as single-op `try_library` solves.
+/// Library ops (from [`crate::op_library::OPS`]) that are COMPOSITIONAL PRIMITIVES
+/// — meaningful as an INTERMEDIATE stage in a chain (`sum_of_digits ∘ factorial`,
+/// `is_prime ∘ reverse_number`, `integer_sqrt ∘ …`). Only these join the chain
+/// grammar; [`COMPOSE_OPS`] (reshapes/aggregates/2-arg takes) are always in.
 ///
-/// This list is deliberately COST-only. It does NOT exclude "terminal" sequence
-/// ops (factorial, Lucas, figurate, power-sums): those genuinely compose as
-/// intermediates — `sum_of_digits ∘ factorial` ("sum of digits of n!") is a real
-/// chain — and their cost on large values is already bounded by the frontier
-/// magnitude gate ([`MAX_INT_MAGNITUDE`]). Excluding them was a capability
-/// regression (it broke that factorial chain) and is not repeated here; search
-/// fanout is instead kept tractable by the magnitude gate + OE dedup, not by
-/// dropping reachable ops.
-const HEAVY_STAGE_OPS: &[&str] = &[
-    "count_primes_below",
-    "count_divisors",
-    "sum_divisors",
-    "is_perfect",
-    "total_set_bits",
-    "count_odd_setbits_upto",
+/// This is an ALLOWLIST, not an exclude-list, and it is the key to SUSTAINED
+/// capability: the op library grows every batch, but most new entries are
+/// whole-answer TERMINAL solves (figurate numbers, geometry, divisor sums,
+/// specific sequences) that a chain would never route THROUGH. Those stay fully
+/// available as single-op `try_library` solves — the tasks they target are NOT
+/// lost — they simply don't enlarge the chain search, which would otherwise grow
+/// unboundedly and push genuine deep chains past the wall. Reach for real tasks
+/// is preserved (library solves the terminals; chains use these primitives);
+/// only vanishingly-rare terminal-op compositions are forgone. Add a name here
+/// only when a real task needs it as an intermediate.
+const CHAIN_STAGE_LIBRARY_OPS: &[&str] = &[
+    // digit / number transforms
+    "sum_of_digits",
+    "count_digits",
+    "digit_product",
+    "largest_digit",
+    "reverse_number",
+    "last_digit",
+    "is_even",
+    // predicates useful as filters/intermediates
+    "is_prime",
+    // bit transforms
+    "unset_bits",
+    "decimal_to_binary",
+    "binary_to_decimal",
+    "decimal_to_octal",
+    "octal_to_decimal",
+    "highest_power_of_2",
+    "lowest_set_bit_pos",
+    "next_power_of_2",
+    // roots / small closed transforms that genuinely compose
+    "integer_sqrt",
+    "factorial",
+    // array reductions/aggregations the base engine misses (compose after reshapes)
+    "sum_of_squares",
+    "array_range",
+    "count_evens",
+    "count_odds",
+    "count_positives",
+    "count_negatives",
 ];
 
 /// Maximum chain length. Depth 3 already covers reshape→transform→reduce
@@ -201,7 +225,12 @@ fn stage_ops() -> Vec<StageOp> {
     COMPOSE_OPS
         .iter()
         .chain(crate::op_library::OPS.iter())
-        .filter(|op| !HEAVY_STAGE_OPS.contains(&op.name))
+        // COMPOSE_OPS are always chain stages; library OPS join only if they are
+        // curated compositional primitives (see the allowlist rationale).
+        .filter(|op| {
+            COMPOSE_OPS.iter().any(|c| c.name == op.name)
+                || CHAIN_STAGE_LIBRARY_OPS.contains(&op.name)
+        })
         .filter_map(|op| {
             let (ins, out) = parse_sig(op.mog)?;
             // Every op in OPS/COMPOSE_OPS is valid Mog (guarded by the library's
@@ -578,22 +607,23 @@ mod tests {
         }
         let digits = ops.iter().find(|o| o.name == "digits_of").unwrap();
         assert_eq!((digits.input, digits.output), (Ty::Int, Ty::IntArr));
+        // Allowlisted compositional primitive.
         let prime = ops.iter().find(|o| o.name == "is_prime").unwrap();
         assert_eq!((prime.input, prime.output), (Ty::Int, Ty::Int));
-        let vowels = ops.iter().find(|o| o.name == "count_vowels").unwrap();
-        assert_eq!((vowels.input, vowels.output), (Ty::Str, Ty::Int));
-        // Binary stages: (flow, i64) signatures parse with scalar=true.
+        assert!(!prime.scalar);
+        // Binary compose stage: (flow, i64) parses with scalar=true.
         let take = ops.iter().find(|o| o.name == "take_first").unwrap();
         assert!(take.scalar);
         assert_eq!((take.input, take.output), (Ty::IntArr, Ty::IntArr));
-        let kth = ops.iter().find(|o| o.name == "kth_smallest").unwrap();
-        assert!(kth.scalar);
-        assert_eq!((kth.input, kth.output), (Ty::IntArr, Ty::Int));
-        let gcd = ops.iter().find(|o| o.name == "gcd").unwrap();
-        assert!(gcd.scalar);
-        assert_eq!((gcd.input, gcd.output), (Ty::Int, Ty::Int));
-        // Unary ops stay non-scalar.
-        assert!(!prime.scalar);
+        // CURATION: whole-answer TERMINAL library ops are NOT chain stages (they
+        // stay single-op library solves — full reach, no search bloat). A few
+        // representative terminals must be absent from the chain grammar.
+        for terminal in ["nonagonal_number", "volume_cube", "sum_divisors", "lucas_number"] {
+            assert!(
+                !ops.iter().any(|o| o.name == terminal),
+                "terminal op {terminal} must NOT be a chain stage (library-only)"
+            );
+        }
     }
 
     #[test]
