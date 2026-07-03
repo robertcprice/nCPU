@@ -104,6 +104,54 @@ pub const OPS: &[LibOp] = &[
 "fn count_string_digits(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_digit() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_spaces", arity: 1, mog:
 "fn count_spaces(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch == ' ' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // ── batch 4: targeted at the measured MBPP unsolved clusters (2026-07-03 run:
+    // 55 min/max/select, 35 count/freq, plus base-conversion / bit / recurrence
+    // tasks in "other"). count/freq ops use dict-free O(n²) scans — no Value::Map
+    // needed. Unary ops here also become pipeline chain stages automatically.
+    // ── selection (arr + k, 1-indexed) ─────────────────────────────────────
+    LibOp { name: "kth_smallest", arity: 2, mog:
+"fn kth_smallest(arr: [i64], k: i64) -> i64 {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    return out[k - 1];\n}\n" },
+    LibOp { name: "kth_largest", arity: 2, mog:
+"fn kth_largest(arr: [i64], k: i64) -> i64 {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    return out[out.len - k];\n}\n" },
+    // ── count / frequency without a dict (O(n²) scans) ─────────────────────
+    LibOp { name: "count_distinct", arity: 1, mog:
+"fn count_distinct(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        first: i64 = 1;\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                first = 0;\n            }\n            j = j + 1;\n        }\n        c = c + first;\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "has_duplicates", arity: 1, mog:
+"fn has_duplicates(arr: [i64]) -> i64 {\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                return 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return 0;\n}\n" },
+    LibOp { name: "first_duplicate", arity: 1, mog:
+"fn first_duplicate(arr: [i64]) -> i64 {\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                return arr[i];\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return 0 - 1;\n}\n" },
+    LibOp { name: "most_frequent", arity: 1, mog:
+"fn most_frequent(arr: [i64]) -> i64 {\n    best: i64 = arr[0];\n    bestc: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        c: i64 = 0;\n        for e in arr {\n            if e == arr[i] {\n                c = c + 1;\n            }\n        }\n        if c > bestc {\n            bestc = c;\n            best = arr[i];\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
+    // ── search / membership ────────────────────────────────────────────────
+    LibOp { name: "index_of", arity: 2, mog:
+"fn index_of(arr: [i64], x: i64) -> i64 {\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] == x {\n            return i;\n        }\n        i = i + 1;\n    }\n    return 0 - 1;\n}\n" },
+    LibOp { name: "contains_value", arity: 2, mog:
+"fn contains_value(arr: [i64], x: i64) -> i64 {\n    for e in arr {\n        if e == x {\n            return 1;\n        }\n    }\n    return 0;\n}\n" },
+    LibOp { name: "is_sublist", arity: 2, mog:
+"fn is_sublist(arr: [i64], sub: [i64]) -> i64 {\n    n: i64 = arr.len;\n    m: i64 = sub.len;\n    if m == 0 {\n        return 1;\n    }\n    limit: i64 = n - m;\n    i: i64 = 0;\n    while i <= limit {\n        hit: i64 = 1;\n        j: i64 = 0;\n        while j < m {\n            k: i64 = i + j;\n            if arr[k] != sub[j] {\n                hit = 0;\n            }\n            j = j + 1;\n        }\n        if hit == 1 {\n            return 1;\n        }\n        i = i + 1;\n    }\n    return 0;\n}\n" },
+    // ── bit-level (arithmetic form; MBPP bit tasks are non-negative) ───────
+    LibOp { name: "count_set_bits", arity: 1, mog:
+"fn count_set_bits(n: i64) -> i64 {\n    x: i64 = n;\n    c: i64 = 0;\n    while x > 0 {\n        c = c + x % 2;\n        x = x / 2;\n    }\n    return c;\n}\n" },
+    LibOp { name: "differ_at_one_bit", arity: 2, mog:
+"fn differ_at_one_bit(a: i64, b: i64) -> i64 {\n    x: i64 = a ^ b;\n    c: i64 = 0;\n    while x > 0 {\n        c = c + x % 2;\n        x = x / 2;\n    }\n    if c == 1 {\n        return 1;\n    }\n    return 0;\n}\n" },
+    LibOp { name: "opposite_signs", arity: 2, mog:
+"fn opposite_signs(a: i64, b: i64) -> i64 {\n    if (a ^ b) < 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // ── base conversion (digit-string-as-decimal convention, e.g. 8 -> 1000) ──
+    LibOp { name: "decimal_to_binary", arity: 1, mog:
+"fn decimal_to_binary(n: i64) -> i64 {\n    x: i64 = n;\n    r: i64 = 0;\n    p: i64 = 1;\n    while x > 0 {\n        r = r + (x % 2) * p;\n        p = p * 10;\n        x = x / 2;\n    }\n    return r;\n}\n" },
+    LibOp { name: "binary_to_decimal", arity: 1, mog:
+"fn binary_to_decimal(b: i64) -> i64 {\n    x: i64 = b;\n    r: i64 = 0;\n    p: i64 = 1;\n    while x > 0 {\n        r = r + (x % 10) * p;\n        p = p * 2;\n        x = x / 10;\n    }\n    return r;\n}\n" },
+    LibOp { name: "octal_to_decimal", arity: 1, mog:
+"fn octal_to_decimal(o: i64) -> i64 {\n    x: i64 = o;\n    r: i64 = 0;\n    p: i64 = 1;\n    while x > 0 {\n        r = r + (x % 10) * p;\n        p = p * 8;\n        x = x / 10;\n    }\n    return r;\n}\n" },
+    // ── recurrences / combinatorics (loop-computed, exactly integral) ──────
+    LibOp { name: "pell_number", arity: 1, mog:
+"fn pell_number(n: i64) -> i64 {\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 0;\n    while i < n {\n        t: i64 = 2 * b + a;\n        a = b;\n        b = t;\n        i = i + 1;\n    }\n    return a;\n}\n" },
+    LibOp { name: "catalan_number", arity: 1, mog:
+"fn catalan_number(n: i64) -> i64 {\n    c: i64 = 1;\n    i: i64 = 1;\n    while i <= n {\n        c = c * 2 * (2 * i - 1) / (i + 1);\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "binomial_coeff", arity: 2, mog:
+"fn binomial_coeff(n: i64, k: i64) -> i64 {\n    r: i64 = 1;\n    i: i64 = 1;\n    while i <= k {\n        r = r * (n - k + i) / i;\n        i = i + 1;\n    }\n    return r;\n}\n" },
+    LibOp { name: "is_octagonal", arity: 1, mog:
+"fn is_octagonal(x: i64) -> i64 {\n    n: i64 = 1;\n    while n * (3 * n - 2) < x {\n        n = n + 1;\n    }\n    if n * (3 * n - 2) == x {\n        return 1;\n    }\n    return 0;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -180,6 +228,49 @@ mod tests {
             ("count_lowercase", vec![Value::Str("AbCdE".into())], Value::Int(2)),
             ("count_string_digits", vec![Value::Str("a1b2c3".into())], Value::Int(3)),
             ("count_spaces", vec![Value::Str("a b c".into())], Value::Int(2)),
+        ];
+        for (name, args, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, args.clone(), expect.clone()),
+                "op {name} failed its probe (expected {expect:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch4_ops_reproduce_their_probes() {
+        let iv = Value::int_array;
+        let cases: &[(&str, Vec<Value>, Value)] = &[
+            ("kth_smallest", vec![iv(&[7, 10, 4, 3, 20, 15]), Value::Int(3)], Value::Int(7)),
+            ("kth_largest", vec![iv(&[7, 10, 4, 3, 20, 15]), Value::Int(3)], Value::Int(10)),
+            ("count_distinct", vec![iv(&[1, 2, 2, 3, 1])], Value::Int(3)),
+            ("has_duplicates", vec![iv(&[1, 2, 3])], Value::Int(0)),
+            ("has_duplicates", vec![iv(&[1, 2, 2, 3])], Value::Int(1)),
+            ("first_duplicate", vec![iv(&[1, 2, 3, 4, 4, 5])], Value::Int(4)),
+            ("first_duplicate", vec![iv(&[1, 2, 3])], Value::Int(-1)),
+            ("most_frequent", vec![iv(&[2, 3, 2, 2, 3])], Value::Int(2)),
+            ("index_of", vec![iv(&[5, 6, 7]), Value::Int(6)], Value::Int(1)),
+            ("index_of", vec![iv(&[5, 6, 7]), Value::Int(9)], Value::Int(-1)),
+            ("contains_value", vec![iv(&[1, 2, 3]), Value::Int(2)], Value::Int(1)),
+            ("contains_value", vec![iv(&[1, 2, 3]), Value::Int(7)], Value::Int(0)),
+            ("is_sublist", vec![iv(&[2, 4, 3, 5, 7]), iv(&[4, 3])], Value::Int(1)),
+            ("is_sublist", vec![iv(&[2, 4, 3, 5, 7]), iv(&[3, 7])], Value::Int(0)),
+            ("count_set_bits", vec![Value::Int(13)], Value::Int(3)),
+            ("differ_at_one_bit", vec![Value::Int(13), Value::Int(9)], Value::Int(1)),
+            ("differ_at_one_bit", vec![Value::Int(13), Value::Int(2)], Value::Int(0)),
+            ("opposite_signs", vec![Value::Int(1), Value::Int(-2)], Value::Int(1)),
+            ("opposite_signs", vec![Value::Int(3), Value::Int(2)], Value::Int(0)),
+            ("decimal_to_binary", vec![Value::Int(18)], Value::Int(10010)),
+            ("decimal_to_binary", vec![Value::Int(8)], Value::Int(1000)),
+            ("binary_to_decimal", vec![Value::Int(10010)], Value::Int(18)),
+            ("binary_to_decimal", vec![Value::Int(100)], Value::Int(4)),
+            ("octal_to_decimal", vec![Value::Int(25)], Value::Int(21)),
+            ("pell_number", vec![Value::Int(4)], Value::Int(12)),
+            ("catalan_number", vec![Value::Int(5)], Value::Int(42)),
+            ("binomial_coeff", vec![Value::Int(5), Value::Int(2)], Value::Int(10)),
+            ("is_octagonal", vec![Value::Int(65)], Value::Int(1)),
+            ("is_octagonal", vec![Value::Int(66)], Value::Int(0)),
         ];
         for (name, args, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));

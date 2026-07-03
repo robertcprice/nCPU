@@ -32,10 +32,34 @@ use crate::op_library::LibOp;
 use crate::runtime::{benchmark_value_from_runtime, code_reproduces_examples, execute_function};
 use crate::solver::SolveResult;
 
-/// Wall budget for the whole chain search. The type filter keeps branching ~15 per
-/// stage so typical searches finish in well under a second; the deadline is a hard
-/// backstop so a pathological op×value combination can never stall `solve_problem`.
-const SEARCH_BUDGET: Duration = Duration::from_millis(2500);
+/// Work budget: maximum UNMEMOIZED op applications (each = one interpreted run of
+/// one op on one value) for the whole chain search. Deterministic — the same
+/// problem always searches the same states regardless of machine load, so tests
+/// can't go flaky under CPU contention the way a wall-clock budget did. Sized so a
+/// full depth-3 sweep over the current op set fits, while a MISS costs well under
+/// a second (an earlier 2.5s wall budget starved downstream engines inside the
+/// per-task wall and measurably regressed MBPP).
+const MAX_APPLICATIONS: usize = 6000;
+
+/// Wall backstop only (generous): guards against a pathological single op
+/// application (fuel-heavy interpreted loops), not against normal search size —
+/// [`MAX_APPLICATIONS`] is the real budget.
+const SEARCH_BUDGET: Duration = Duration::from_millis(2000);
+
+/// Magnitude gate for FRONTIER states (checked after the accept test, so a chain
+/// whose final values legitimately exceed this can still be returned). Interpreter
+/// `while` loops are NOT iteration-capped (only `For*` are), so a stage output
+/// like `decimal_to_binary(1234) ≈ 1e10` fed into an O(n) divisor loop runs for
+/// MINUTES inside one application — the wall deadline cannot preempt it. Bounding
+/// intermediate magnitudes keeps every allowed stage application at ≤~10⁴
+/// interpreted steps, which makes [`MAX_APPLICATIONS`] a real time bound.
+const MAX_INT_MAGNITUDE: i64 = 10_000;
+const MAX_SEQ_LEN: usize = 512;
+
+/// Ops excluded from CHAIN stages on cost grounds: O(n·√n)+ interpreted steps even
+/// at the magnitude cap (seconds per application). They remain fully available as
+/// single-op library solves via `try_library`.
+const HEAVY_STAGE_OPS: &[&str] = &["count_primes_below"];
 
 /// Maximum chain length. Depth 3 already covers reshape→transform→reduce
 /// (e.g. digits → unique → sum); deeper chains explode the state space for
@@ -133,7 +157,7 @@ fn stage_ops() -> Vec<StageOp> {
     COMPOSE_OPS
         .iter()
         .chain(crate::op_library::OPS.iter())
-        .filter(|op| op.arity == 1)
+        .filter(|op| op.arity == 1 && !HEAVY_STAGE_OPS.contains(&op.name))
         .filter_map(|op| {
             let (ins, out) = parse_sig(op.mog)?;
             if ins.len() != 1 {
@@ -142,6 +166,17 @@ fn stage_ops() -> Vec<StageOp> {
             Some(StageOp { name: op.name, mog: op.mog, input: ins[0], output: out })
         })
         .collect()
+}
+
+/// May this value participate as an INTERMEDIATE chain state? (See
+/// [`MAX_INT_MAGNITUDE`] — this is a cost bound, not a semantic one.)
+fn small_enough(v: &BValue) -> bool {
+    match v {
+        BValue::Int(i) => i.abs() <= MAX_INT_MAGNITUDE,
+        BValue::Str(s) => s.len() <= MAX_SEQ_LEN,
+        BValue::Array(elems) => elems.len() <= MAX_SEQ_LEN && elems.iter().all(small_enough),
+        _ => false,
+    }
 }
 
 /// The [`Ty`] of a wire value, or `None` for values outside the chainable set.
@@ -181,6 +216,7 @@ fn apply_op(
     op: &StageOp,
     vals: &[BValue],
     memo: &mut std::collections::HashMap<(usize, String), Option<BValue>>,
+    applications: &mut usize,
 ) -> Option<Vec<BValue>> {
     vals.iter()
         .map(|v| {
@@ -188,6 +224,7 @@ fn apply_op(
             if let Some(cached) = memo.get(&key) {
                 return cached.clone();
             }
+            *applications += 1;
             let result = execute_function(op.mog, op.name, &[v.clone()], op.name)
                 .ok()
                 .and_then(|out| benchmark_value_from_runtime(&out).ok());
@@ -246,6 +283,10 @@ fn emit_and_check(chain: &[&StageOp], problem: &Problem) -> Option<SolveResult> 
 /// or no chain fits within the budget. Depth-1 fits are deliberately never
 /// returned (see module docs).
 pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
+    // Ops kill-switch for clean A/B benchmarking and emergency disable.
+    if std::env::var_os("NSYNTH_NO_OP_PIPELINE").is_some() {
+        return None;
+    }
     if problem.examples.is_empty() || problem.examples.iter().any(|e| e.inputs.len() != 1) {
         return None;
     }
@@ -261,6 +302,7 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
     // state: (current type, current value per example, op indices applied so far)
     let mut frontier: Vec<(Ty, Vec<BValue>, Vec<usize>)> = vec![(in_ty, init, Vec::new())];
     let mut memo = std::collections::HashMap::new();
+    let mut applications = 0usize;
 
     for depth in 0..MAX_DEPTH {
         // On the final expansion only ops that PRODUCE the goal type can still
@@ -275,10 +317,12 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
                 if is_last && op.output != out_ty {
                     continue;
                 }
-                if Instant::now() > deadline {
+                if applications > MAX_APPLICATIONS || Instant::now() > deadline {
                     return None;
                 }
-                let Some(new_vals) = apply_op(i, op, vals, &mut memo) else { continue };
+                let Some(new_vals) = apply_op(i, op, vals, &mut memo, &mut applications) else {
+                    continue;
+                };
                 if !seen.insert(fingerprint(&new_vals)) {
                     continue;
                 }
@@ -296,7 +340,7 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
                         return Some(result);
                     }
                 }
-                if !is_last {
+                if !is_last && new_vals.iter().all(small_enough) {
                     next.push((op.output, new_vals, new_path));
                 }
             }
