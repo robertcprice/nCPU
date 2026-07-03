@@ -39,7 +39,10 @@ use crate::solver::SolveResult;
 /// full depth-3 sweep over the current op set fits, while a MISS costs well under
 /// a second (an earlier 2.5s wall budget starved downstream engines inside the
 /// per-task wall and measurably regressed MBPP).
-const MAX_APPLICATIONS: usize = 6000;
+/// Tuned down from 6000 after A/B showed the MISS cost on 2-arg problems (larger
+/// branching with binary stages) displaced borderline slow-engine solves at the
+/// benchmark's per-task wall; every known chain accept lands far below this.
+const MAX_APPLICATIONS: usize = 3500;
 
 /// Wall backstop only (generous): guards against a pathological single op
 /// application (fuel-heavy interpreted loops), not against normal search size —

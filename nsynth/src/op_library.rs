@@ -152,6 +152,38 @@ pub const OPS: &[LibOp] = &[
 "fn binomial_coeff(n: i64, k: i64) -> i64 {\n    r: i64 = 1;\n    i: i64 = 1;\n    while i <= k {\n        r = r * (n - k + i) / i;\n        i = i + 1;\n    }\n    return r;\n}\n" },
     LibOp { name: "is_octagonal", arity: 1, mog:
 "fn is_octagonal(x: i64) -> i64 {\n    n: i64 = 1;\n    while n * (3 * n - 2) < x {\n        n = n + 1;\n    }\n    if n * (3 * n - 2) == x {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // ── batch 5: straight off the 2026-07-03 timeout-kill list (Kadane,
+    // inversions, argmin/argmax, consecutive scans, reorders) ────────────────
+    LibOp { name: "max_subarray_sum", arity: 1, mog:
+"fn max_subarray_sum(arr: [i64]) -> i64 {\n    best: i64 = arr[0];\n    cur: i64 = 0;\n    for e in arr {\n        cur = cur + e;\n        if cur > best {\n            best = cur;\n        }\n        if cur < 0 {\n            cur = 0;\n        }\n    }\n    return best;\n}\n" },
+    LibOp { name: "inversion_count", arity: 1, mog:
+"fn inversion_count(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = i + 1;\n        while j < arr.len {\n            if arr[i] > arr[j] {\n                c = c + 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "argmin_index", arity: 1, mog:
+"fn argmin_index(arr: [i64]) -> i64 {\n    best: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] < arr[best] {\n            best = i;\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
+    LibOp { name: "argmax_index", arity: 1, mog:
+"fn argmax_index(arr: [i64]) -> i64 {\n    best: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] > arr[best] {\n            best = i;\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
+    LibOp { name: "max_diff_after", arity: 1, mog:
+"fn max_diff_after(arr: [i64]) -> i64 {\n    mn: i64 = arr[0];\n    best: i64 = arr[1] - arr[0];\n    i: i64 = 1;\n    while i < arr.len {\n        d: i64 = arr[i] - mn;\n        if d > best {\n            best = d;\n        }\n        if arr[i] < mn {\n            mn = arr[i];\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
+    LibOp { name: "consecutive_sums", arity: 1, mog:
+"fn consecutive_sums(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        j: i64 = i + 1;\n        out.push(arr[i] + arr[j]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "consecutive_diffs", arity: 1, mog:
+"fn consecutive_diffs(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        j: i64 = i + 1;\n        out.push(arr[j] - arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "move_zeros_end", arity: 1, mog:
+"fn move_zeros_end(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        if e != 0 {\n            out.push(e);\n        }\n    }\n    for e in arr {\n        if e == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "move_first_to_last", arity: 1, mog:
+"fn move_first_to_last(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 1;\n    while i < arr.len {\n        out.push(arr[i]);\n        i = i + 1;\n    }\n    if arr.len > 0 {\n        out.push(arr[0]);\n    }\n    return out;\n}\n" },
+    LibOp { name: "move_last_to_first", arity: 1, mog:
+"fn move_last_to_first(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    if arr.len > 0 {\n        last: i64 = arr.len - 1;\n        out.push(arr[last]);\n        i: i64 = 0;\n        while i < last {\n            out.push(arr[i]);\n            i = i + 1;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "swap_adjacent", arity: 1, mog:
+"fn swap_adjacent(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        j: i64 = i + 1;\n        out.push(arr[j]);\n        out.push(arr[i]);\n        i = i + 2;\n    }\n    if i < arr.len {\n        out.push(arr[i]);\n    }\n    return out;\n}\n" },
+    LibOp { name: "armstrong_number", arity: 1, mog:
+"fn armstrong_number(n: i64) -> i64 {\n    d: i64 = 0;\n    x: i64 = n;\n    while x > 0 {\n        d = d + 1;\n        x = x / 10;\n    }\n    s: i64 = 0;\n    x = n;\n    while x > 0 {\n        dig: i64 = x % 10;\n        p: i64 = 1;\n        i: i64 = 0;\n        while i < d {\n            p = p * dig;\n            i = i + 1;\n        }\n        s = s + p;\n        x = x / 10;\n    }\n    if s == n {\n        return 1;\n    }\n    return 0;\n}\n" },
+    LibOp { name: "max_window_sum", arity: 2, mog:
+"fn max_window_sum(arr: [i64], k: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 0;\n    while i < k {\n        s = s + arr[i];\n        i = i + 1;\n    }\n    best: i64 = s;\n    while i < arr.len {\n        j: i64 = i - k;\n        s = s + arr[i] - arr[j];\n        if s > best {\n            best = s;\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
+    LibOp { name: "count_matching_positions", arity: 2, mog:
+"fn count_matching_positions(a: [i64], b: [i64]) -> i64 {\n    n: i64 = a.len;\n    if b.len < n {\n        n = b.len;\n    }\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < n {\n        if a[i] == b[i] {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "max_product_pair", arity: 1, mog:
+"fn max_product_pair(arr: [i64]) -> i64 {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    n: i64 = out.len;\n    a: i64 = out[0] * out[1];\n    b: i64 = out[n - 1] * out[n - 2];\n    if a > b {\n        return a;\n    }\n    return b;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -271,6 +303,37 @@ mod tests {
             ("binomial_coeff", vec![Value::Int(5), Value::Int(2)], Value::Int(10)),
             ("is_octagonal", vec![Value::Int(65)], Value::Int(1)),
             ("is_octagonal", vec![Value::Int(66)], Value::Int(0)),
+        ];
+        for (name, args, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, args.clone(), expect.clone()),
+                "op {name} failed its probe (expected {expect:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch5_ops_reproduce_their_probes() {
+        let iv = Value::int_array;
+        let cases: &[(&str, Vec<Value>, Value)] = &[
+            ("max_subarray_sum", vec![iv(&[-2, 1, -3, 4, -1, 2, 1, -5, 4])], Value::Int(6)),
+            ("max_subarray_sum", vec![iv(&[-3, -1, -2])], Value::Int(-1)),
+            ("inversion_count", vec![iv(&[1, 20, 6, 4, 5])], Value::Int(5)),
+            ("argmin_index", vec![iv(&[4, 2, 7, 2])], Value::Int(1)),
+            ("argmax_index", vec![iv(&[4, 9, 1, 9])], Value::Int(1)),
+            ("max_diff_after", vec![iv(&[2, 3, 10, 6, 4, 8, 1])], Value::Int(8)),
+            ("consecutive_sums", vec![iv(&[1, 2, 3])], iv(&[3, 5])),
+            ("consecutive_diffs", vec![iv(&[5, 2, 9])], iv(&[-3, 7])),
+            ("move_zeros_end", vec![iv(&[0, 1, 0, 2])], iv(&[1, 2, 0, 0])),
+            ("move_first_to_last", vec![iv(&[1, 2, 3])], iv(&[2, 3, 1])),
+            ("move_last_to_first", vec![iv(&[1, 2, 3])], iv(&[3, 1, 2])),
+            ("swap_adjacent", vec![iv(&[1, 2, 3, 4, 5])], iv(&[2, 1, 4, 3, 5])),
+            ("armstrong_number", vec![Value::Int(153)], Value::Int(1)),
+            ("armstrong_number", vec![Value::Int(154)], Value::Int(0)),
+            ("max_window_sum", vec![iv(&[1, 4, 2, 10, 2, 3, 1, 0, 20]), Value::Int(4)], Value::Int(24)),
+            ("count_matching_positions", vec![iv(&[1, 2, 3]), iv(&[1, 5, 3])], Value::Int(2)),
+            ("max_product_pair", vec![iv(&[1, -3, -4, 2, 0])], Value::Int(12)),
         ];
         for (name, args, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
