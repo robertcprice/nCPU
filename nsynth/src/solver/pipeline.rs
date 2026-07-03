@@ -229,6 +229,7 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     if let Some(result) = solve_string_output(problem) {
         if result.success && recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
         }
         return result;
     }
@@ -250,6 +251,7 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
                 );
                 if recordable {
                     crate::solved_cache::record(problem, &result.method, &result.code);
+                    crate::op_library::maybe_record_learned(problem, &result);
                 }
                 return result;
             }
@@ -266,6 +268,9 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
         // don't re-write the same entry. Persisted via `solved_cache::flush`
         // which callers (bench runner, main) invoke at shutdown.
         crate::solved_cache::record(problem, &result.method, &result.code);
+        // Loop 2 flywheel: a novel verified program becomes a runtime library op
+        // (gated on NSYNTH_LEARNED_OPS_PATH; inert otherwise).
+        crate::op_library::maybe_record_learned(problem, &result);
     }
     result
 }

@@ -13,6 +13,8 @@
 //! and a VERIFIED impl satisfies it. Ops here are pure Mog (run by the interpreter,
 //! transpiled by `to_rust` for generated crates).
 
+use std::sync::{Mutex, OnceLock};
+
 use crate::benchmark::Problem;
 use crate::runtime::code_reproduces_examples;
 use crate::solver::SolveResult;
@@ -22,6 +24,112 @@ pub struct LibOp {
     pub name: &'static str,
     pub arity: usize,
     pub mog: &'static str,
+}
+
+// ── The self-growing library tier (Loop 2 of the verified synthesis flywheel) ──
+//
+// `OPS` above is a hand-written, compile-time standard library. This tier lets the
+// library GROW AT RUNTIME from verified solves: a program that solved one task,
+// if it reproduces a *different* task's examples, solves that task too — the
+// engine writes its own teachers. Everything stays sound: a learned op only wins
+// by behaviour-match on the new task's examples, and the caller still strict-
+// verifies against held-out probes, exactly like a hand-written op.
+//
+// Gated on `NSYNTH_LEARNED_OPS_PATH`. Unset ⇒ the store is empty and recording is
+// a no-op, so the default solve path is byte-identical (zero regression risk).
+
+/// A whole-program op learned at runtime from a verified solve.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct LearnedOp {
+    pub name: String,
+    pub arity: usize,
+    pub mog: String,
+}
+
+fn learned_ops_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("NSYNTH_LEARNED_OPS_PATH").map(std::path::PathBuf::from)
+}
+
+/// Process-wide in-memory store, lazily seeded from the on-disk JSONL (so a FRESH
+/// process inherits every op a prior run learned — the cross-run flywheel).
+fn learned_store() -> &'static Mutex<Vec<LearnedOp>> {
+    static STORE: OnceLock<Mutex<Vec<LearnedOp>>> = OnceLock::new();
+    STORE.get_or_init(|| {
+        let mut v = Vec::new();
+        if let Some(path) = learned_ops_path() {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                for line in text.lines() {
+                    if let Ok(op) = serde_json::from_str::<LearnedOp>(line) {
+                        v.push(op);
+                    }
+                }
+            }
+        }
+        Mutex::new(v)
+    })
+}
+
+/// Cap so a runaway store can't unbound `try_library`'s behaviour-match cost.
+const MAX_LEARNED_OPS: usize = 5000;
+/// Skip storing pathologically large programs as ops.
+const MAX_LEARNED_MOG_BYTES: usize = 4000;
+
+/// Append a verified program as a learned op (memory + disk). Deduped by exact
+/// program text. No-op unless `NSYNTH_LEARNED_OPS_PATH` is set. Returns true if a
+/// new op was added.
+pub fn record_learned_op(name: String, arity: usize, mog: String) -> bool {
+    if learned_ops_path().is_none() || mog.len() > MAX_LEARNED_MOG_BYTES {
+        return false;
+    }
+    let mut store = match learned_store().lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    if store.iter().any(|o| o.mog == mog) || store.len() >= MAX_LEARNED_OPS {
+        return false;
+    }
+    let op = LearnedOp { name, arity, mog };
+    if let Some(path) = learned_ops_path() {
+        if let Ok(line) = serde_json::to_string(&op) {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
+    }
+    store.push(op);
+    true
+}
+
+/// Consider recording the program that just solved `problem` as a learned op.
+/// Called from the solve pipeline on every verified success. Only stores GENUINELY
+/// NEW capability: skips library/cache hits (already covered), skips programs an
+/// existing op (hand-written or learned) already reproduces on these examples, so
+/// the store fills with programs from the search/gradient/LLM lanes — the ones
+/// worth generalising. Gated + deduped inside `record_learned_op`.
+pub fn maybe_record_learned(problem: &Problem, result: &SolveResult) {
+    if learned_ops_path().is_none() || !result.success {
+        return;
+    }
+    let m = &result.method;
+    if m.starts_with("library") || m.starts_with("cache") || m.is_empty() {
+        return;
+    }
+    let Some(first) = problem.examples.first() else { return };
+    let arity = first.inputs.len();
+    // Novelty: if the hand-written library already reproduces this, it's covered.
+    if try_library(problem).is_some() {
+        return;
+    }
+    let name = format!("learned_{}", short_hash(&result.code));
+    record_learned_op(name, arity, result.code.clone());
+}
+
+fn short_hash(s: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    format!("{:016x}", h.finish())
 }
 
 /// The library. Single-loop / while / early-return algorithms Mog expresses
@@ -494,6 +602,27 @@ pub fn try_library(problem: &Problem) -> Option<SolveResult> {
             });
         }
     }
+    try_learned(problem, arity)
+}
+
+/// The runtime-grown tier: behaviour-match the learned-op store (see
+/// [`LearnedOp`]). Empty (and free) unless `NSYNTH_LEARNED_OPS_PATH` is set.
+fn try_learned(problem: &Problem, arity: usize) -> Option<SolveResult> {
+    let store = learned_store().lock().ok()?;
+    for op in store.iter() {
+        if op.arity != arity {
+            continue;
+        }
+        if code_reproduces_examples(&op.mog, &problem.examples) {
+            return Some(SolveResult {
+                success: true,
+                code: op.mog.clone(),
+                method: format!("library-learned:{}", op.name),
+                error: None,
+                metadata: Default::default(),
+            });
+        }
+    }
     None
 }
 
@@ -592,6 +721,92 @@ mod tests {
 
     fn op(name: &str) -> &'static str {
         OPS.iter().find(|o| o.name == name).unwrap_or_else(|| panic!("no op {name}")).mog
+    }
+
+    fn problem_with(name: &str, sig: &'static str, examples: Vec<(Vec<Value>, Value)>) -> Problem {
+        let mut p = Problem::default();
+        p.name = name.to_string();
+        p.signature = sig;
+        p.examples = examples
+            .into_iter()
+            .map(|(inputs, expected)| Example { inputs, expected })
+            .collect();
+        p
+    }
+
+    /// The flywheel turns: a verified program recorded at runtime (as if from the
+    /// search/gradient/LLM lanes) generalises to a DIFFERENT task whose examples it
+    /// reproduces — solved via `library-learned`, no hand-written op involved.
+    #[test]
+    fn learned_op_generalises_to_a_new_task() {
+        // A program no hand-written OPS entry provides: n -> n*7 + 3.
+        let mog = "fn f(n: i64) -> i64 {\n    return n * 7 + 3;\n}\n";
+
+        // Task A is what produced it (not needed to store, but realistic).
+        let task_b = problem_with(
+            "affine_b",
+            "fn affine_b(n: i64) -> i64",
+            vec![
+                (vec![Value::Int(0)], Value::Int(3)),
+                (vec![Value::Int(1)], Value::Int(10)),
+                (vec![Value::Int(5)], Value::Int(38)),
+            ],
+        );
+
+        // Precondition: the hand library does NOT solve task B.
+        assert!(try_library(&task_b).is_none(), "hand OPS must not already cover n*7+3");
+
+        // Record the program into the runtime store (bypass the env gate: push
+        // straight into the in-memory store the way a live solve would, so the
+        // test is hermetic and needs no temp file).
+        learned_store()
+            .lock()
+            .unwrap()
+            .push(LearnedOp { name: "affine_a".to_string(), arity: 1, mog: mog.to_string() });
+
+        // Now task B is solved by the learned op, behaviour-matched.
+        let r = try_library(&task_b).expect("learned op should now solve task B");
+        assert!(
+            r.method.starts_with("library-learned:"),
+            "expected library-learned attribution, got {}",
+            r.method
+        );
+        // And it genuinely generalises (held-out input the seeds didn't include).
+        assert!(
+            code_reproduces_examples(
+                &r.code,
+                &[Example { inputs: vec![Value::Int(9)], expected: Value::Int(66) }]
+            ),
+            "learned program must generalise to an unseen input"
+        );
+
+        // Clean up so other tests see an empty store.
+        learned_store().lock().unwrap().clear();
+    }
+
+    /// Soundness: a learned op that does NOT reproduce a task's examples never
+    /// wins it (behaviour-match gate holds for the runtime tier too).
+    #[test]
+    fn learned_op_does_not_false_accept() {
+        let wrong = "fn f(n: i64) -> i64 {\n    return n + 1;\n}\n";
+        let task = problem_with(
+            "square_task",
+            "fn square_task(n: i64) -> i64",
+            vec![
+                (vec![Value::Int(2)], Value::Int(4)),
+                (vec![Value::Int(3)], Value::Int(9)),
+                (vec![Value::Int(4)], Value::Int(16)),
+            ],
+        );
+        learned_store()
+            .lock()
+            .unwrap()
+            .push(LearnedOp { name: "incr".to_string(), arity: 1, mog: wrong.to_string() });
+        assert!(
+            try_library(&task).is_none(),
+            "a learned op that mismatches the examples must not solve the task"
+        );
+        learned_store().lock().unwrap().clear();
     }
 
     #[test]
