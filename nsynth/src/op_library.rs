@@ -343,6 +343,21 @@ pub const OPS: &[LibOp] = &[
 "fn num_common_divisors(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        t: i64 = y;\n        y = x % y;\n        x = t;\n    }\n    c: i64 = 0;\n    i: i64 = 1;\n    while i <= x {\n        if x % i == 0 {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
     LibOp { name: "count_grid_squares", arity: 2, mog:
 "fn count_grid_squares(m: i64, n: i64) -> i64 {\n    lo: i64 = m;\n    if n < m {\n        lo = n;\n    }\n    s: i64 = 0;\n    k: i64 = 0;\n    while k < lo {\n        s = s + (m - k) * (n - k);\n        k = k + 1;\n    }\n    return s;\n}\n" },
+    // ── batch 13: 2-arg ([i64], k)->i. Many competitive-programming signatures
+    // pass n=len(arr) as a redundant 2nd arg — 1-arg algorithms couldn't match
+    // on arity. These wrappers operate on `arr` (the redundant `n` is unused, and
+    // the held-out verify confirms n==arr.len generalizes). Plus true value-arg
+    // ops (last occurrence of x).
+    LibOp { name: "max_subarray_sum_n", arity: 2, mog:
+"fn max_subarray_sum_n(arr: [i64], n: i64) -> i64 {\n    best: i64 = arr[0];\n    cur: i64 = 0;\n    for e in arr {\n        cur = cur + e;\n        if cur > best {\n            best = cur;\n        }\n        if cur < 0 {\n            cur = 0;\n        }\n    }\n    return best;\n}\n" },
+    LibOp { name: "inversion_count_n", arity: 2, mog:
+"fn inversion_count_n(arr: [i64], n: i64) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = i + 1;\n        while j < arr.len {\n            if arr[i] > arr[j] {\n                c = c + 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "distinct_sum", arity: 2, mog:
+"fn distinct_sum(arr: [i64], n: i64) -> i64 {\n    seen: [i64] = [];\n    s: i64 = 0;\n    for e in arr {\n        dup: i64 = 0;\n        for u in seen {\n            if u == e {\n                dup = 1;\n            }\n        }\n        if dup == 0 {\n            seen.push(e);\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
+    LibOp { name: "odd_occurrence", arity: 2, mog:
+"fn odd_occurrence(arr: [i64], n: i64) -> i64 {\n    r: i64 = 0;\n    for e in arr {\n        r = r ^ e;\n    }\n    return r;\n}\n" },
+    LibOp { name: "last_occurrence", arity: 2, mog:
+"fn last_occurrence(arr: [i64], x: i64) -> i64 {\n    idx: i64 = 0 - 1;\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] == x {\n            idx = i;\n        }\n        i = i + 1;\n    }\n    return idx;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -718,6 +733,28 @@ mod tests {
             assert!(
                 runs_to(op.mog, name, vec![Value::Int(*a), Value::Int(*b)], Value::Int(*expect)),
                 "op {name}({a},{b}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch13_arr_scalar_ops_reproduce_their_probes() {
+        let iv = Value::int_array;
+        // (array, scalar, expected). For the len-redundant wrappers the scalar is
+        // arr.len; for last_occurrence it is the value to find.
+        let cases: &[(&str, Vec<i64>, i64, i64)] = &[
+            ("max_subarray_sum_n", vec![-2, -3, 4, -1, -2, 1, 5, -3], 8, 7),
+            ("inversion_count_n", vec![1, 20, 6, 4, 5], 5, 5),
+            ("distinct_sum", vec![1, 2, 3, 1, 1, 4, 5, 6], 8, 21),
+            ("odd_occurrence", vec![1, 2, 3, 1, 2, 3, 1], 7, 1),
+            ("odd_occurrence", vec![2, 3, 5, 4, 5, 2, 4, 3, 5, 2, 4, 4, 2], 13, 5),
+            ("last_occurrence", vec![2, 5, 5, 5, 6, 6, 8, 9, 9, 9], 5, 3),
+        ];
+        for (name, arr, k, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![iv(arr), Value::Int(*k)], Value::Int(*expect)),
+                "op {name}({arr:?},{k}) failed its probe (expected {expect})"
             );
         }
     }
