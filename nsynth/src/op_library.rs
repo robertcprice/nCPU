@@ -358,6 +358,25 @@ pub const OPS: &[LibOp] = &[
 "fn odd_occurrence(arr: [i64], n: i64) -> i64 {\n    r: i64 = 0;\n    for e in arr {\n        r = r ^ e;\n    }\n    return r;\n}\n" },
     LibOp { name: "last_occurrence", arity: 2, mog:
 "fn last_occurrence(arr: [i64], x: i64) -> i64 {\n    idx: i64 = 0 - 1;\n    i: i64 = 0;\n    while i < arr.len {\n        if arr[i] == x {\n            idx = i;\n        }\n        i = i + 1;\n    }\n    return idx;\n}\n" },
+    // ── batch 14: 2-arg ([i64],[i64])->[i64] — two-array element-wise + set ops.
+    // A whole untouched shape: `synthesize_array` is single-array, so these were
+    // unreachable. Behavior-matched; array output verified via output_matches.
+    LibOp { name: "add_lists", arity: 2, mog:
+"fn add_lists(a: [i64], b: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < a.len {\n        out.push(a[i] + b[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "sub_lists", arity: 2, mog:
+"fn sub_lists(a: [i64], b: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < a.len {\n        out.push(a[i] - b[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "mul_lists", arity: 2, mog:
+"fn mul_lists(a: [i64], b: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < a.len {\n        out.push(a[i] * b[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "mod_lists", arity: 2, mog:
+"fn mod_lists(a: [i64], b: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < a.len {\n        out.push(a[i] % b[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "intersection_lists", arity: 2, mog:
+"fn intersection_lists(a: [i64], b: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in a {\n        inb: i64 = 0;\n        for u in b {\n            if u == e {\n                inb = 1;\n            }\n        }\n        if inb == 1 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "remove_elements_in", arity: 2, mog:
+"fn remove_elements_in(a: [i64], b: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in a {\n        inb: i64 = 0;\n        for u in b {\n            if u == e {\n                inb = 1;\n            }\n        }\n        if inb == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "gather_by_indices", arity: 2, mog:
+"fn gather_by_indices(a: [i64], idx: [i64]) -> [i64] {\n    out: [i64] = [];\n    for j in idx {\n        out.push(a[j]);\n    }\n    return out;\n}\n" },
+    LibOp { name: "merge_and_sort", arity: 2, mog:
+"fn merge_and_sort(a: [i64], b: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in a {\n        out.push(e);\n    }\n    for e in b {\n        out.push(e);\n    }\n    out.sort();\n    return out;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -755,6 +774,43 @@ mod tests {
             assert!(
                 runs_to(op.mog, name, vec![iv(arr), Value::Int(*k)], Value::Int(*expect)),
                 "op {name}({arr:?},{k}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch14_two_array_ops_reproduce_their_probes() {
+        let iv = Value::int_array;
+        let cases: &[(&str, Vec<i64>, Vec<i64>, Vec<i64>)] = &[
+            ("add_lists", vec![1, 2, 3], vec![4, 5, 6], vec![5, 7, 9]),
+            ("sub_lists", vec![1, 2, 3], vec![4, 5, 6], vec![-3, -3, -3]),
+            ("mul_lists", vec![1, 2, 3], vec![4, 5, 6], vec![4, 10, 18]),
+            ("mod_lists", vec![4, 5, 6], vec![1, 2, 3], vec![0, 1, 0]),
+            (
+                "intersection_lists",
+                vec![1, 2, 3, 5, 7, 8, 9, 10],
+                vec![1, 2, 4, 8, 9],
+                vec![1, 2, 8, 9],
+            ),
+            (
+                "remove_elements_in",
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                vec![2, 4, 6, 8],
+                vec![1, 3, 5, 7, 9, 10],
+            ),
+            ("gather_by_indices", vec![2, 3, 8, 4, 7, 9], vec![0, 3, 5], vec![2, 4, 9]),
+            (
+                "merge_and_sort",
+                vec![1, 3, 5, 7, 9, 11],
+                vec![0, 2, 4, 6, 8, 10],
+                vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            ),
+        ];
+        for (name, a, b, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![iv(a), iv(b)], iv(expect)),
+                "op {name}({a:?},{b:?}) failed its probe (expected {expect:?})"
             );
         }
     }
