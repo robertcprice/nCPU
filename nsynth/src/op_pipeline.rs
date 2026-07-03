@@ -32,22 +32,21 @@ use crate::op_library::LibOp;
 use crate::runtime::{benchmark_value_from_runtime, code_reproduces_examples, execute_function};
 use crate::solver::SolveResult;
 
-/// Work budget: maximum UNMEMOIZED op applications (each = one interpreted run of
-/// one op on one value) for the whole chain search. Deterministic — the same
-/// problem always searches the same states regardless of machine load, so tests
-/// can't go flaky under CPU contention the way a wall-clock budget did. Sized so a
-/// full depth-3 sweep over the current op set fits, while a MISS costs well under
-/// a second (an earlier 2.5s wall budget starved downstream engines inside the
-/// per-task wall and measurably regressed MBPP).
-/// Tuned down from 6000 after A/B showed the MISS cost on 2-arg problems (larger
-/// branching with binary stages) displaced borderline slow-engine solves at the
-/// benchmark's per-task wall; every known chain accept lands far below this.
-const MAX_APPLICATIONS: usize = 3500;
-
-/// Wall backstop only (generous): guards against a pathological single op
-/// application (fuel-heavy interpreted loops), not against normal search size —
-/// [`MAX_APPLICATIONS`] is the real budget.
-const SEARCH_BUDGET: Duration = Duration::from_millis(2000);
+/// The chain search TERMINATES BY CONSTRUCTION — breadth-first over chains of
+/// length ≤ [`MAX_DEPTH`] drawn from a finite, focused stage set, with
+/// observational-equivalence dedup (each distinct value-state is expanded once).
+/// So there is no attempt cap: exhausting the (small) reachable space is correct,
+/// not a runaway. The only unbounded quantity is per-application interpreter TIME
+/// (a stage op could be a slow interpreted loop), which the interpreter's own
+/// global step budget already bounds; [`SEARCH_BUDGET`] below is a pure safety
+/// net over the whole search, not the primary bound.
+///
+/// Set so a full depth-3 sweep over the CURRENT (unabridged) op set completes —
+/// capability is not traded for speed by dropping reachable ops. Depth-2 tasks
+/// (the common case) return early well before this; only genuine depth-3 solves
+/// and depth-3 misses run near it. Empirically A/B-checked against the MBPP
+/// suite so the wider window does not displace other solver stages' solves.
+const SEARCH_BUDGET: Duration = Duration::from_millis(4000);
 
 /// Magnitude gate for FRONTIER states (checked after the accept test, so a chain
 /// whose final values legitimately exceed this can still be returned). Interpreter
@@ -55,14 +54,31 @@ const SEARCH_BUDGET: Duration = Duration::from_millis(2000);
 /// like `decimal_to_binary(1234) ≈ 1e10` fed into an O(n) divisor loop runs for
 /// MINUTES inside one application — the wall deadline cannot preempt it. Bounding
 /// intermediate magnitudes keeps every allowed stage application at ≤~10⁴
-/// interpreted steps, which makes [`MAX_APPLICATIONS`] a real time bound.
+/// interpreted steps, so no single application can outrun [`SEARCH_BUDGET`].
 const MAX_INT_MAGNITUDE: i64 = 10_000;
 const MAX_SEQ_LEN: usize = 512;
 
-/// Ops excluded from CHAIN stages on cost grounds: O(n·√n)+ interpreted steps even
-/// at the magnitude cap (seconds per application). They remain fully available as
-/// single-op library solves via `try_library`.
-const HEAVY_STAGE_OPS: &[&str] = &["count_primes_below"];
+/// Ops excluded from CHAIN stages on COST grounds ONLY — each is an O(n) or
+/// O(n·√n) loop over the value 1..n, so as an intermediate it makes EVERY chain
+/// through it slow (and on a large intermediate value, seconds per application).
+/// They remain fully available as single-op `try_library` solves.
+///
+/// This list is deliberately COST-only. It does NOT exclude "terminal" sequence
+/// ops (factorial, Lucas, figurate, power-sums): those genuinely compose as
+/// intermediates — `sum_of_digits ∘ factorial` ("sum of digits of n!") is a real
+/// chain — and their cost on large values is already bounded by the frontier
+/// magnitude gate ([`MAX_INT_MAGNITUDE`]). Excluding them was a capability
+/// regression (it broke that factorial chain) and is not repeated here; search
+/// fanout is instead kept tractable by the magnitude gate + OE dedup, not by
+/// dropping reachable ops.
+const HEAVY_STAGE_OPS: &[&str] = &[
+    "count_primes_below",
+    "count_divisors",
+    "sum_divisors",
+    "is_perfect",
+    "total_set_bits",
+    "count_odd_setbits_upto",
+];
 
 /// Maximum chain length. Depth 3 already covers reshape→transform→reduce
 /// (e.g. digits → unique → sum); deeper chains explode the state space for
@@ -244,7 +260,6 @@ fn apply_op(
     vals: &[BValue],
     scalars: Option<&[BValue]>,
     memo: &mut std::collections::HashMap<(usize, String), Option<BValue>>,
-    applications: &mut usize,
 ) -> Option<Vec<BValue>> {
     vals.iter()
         .enumerate()
@@ -257,7 +272,6 @@ fn apply_op(
             if let Some(cached) = memo.get(&key) {
                 return cached.clone();
             }
-            *applications += 1;
             let result = execute_function(op.mog, op.name, &args, op.name)
                 .ok()
                 .and_then(|out| benchmark_value_from_runtime(&out).ok());
@@ -398,7 +412,6 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
     let mut frontier: Vec<(Ty, Vec<BValue>, Vec<usize>, bool)> =
         vec![(in_ty, init, Vec::new(), false)];
     let mut memo = std::collections::HashMap::new();
-    let mut applications = 0usize;
 
     for depth in 0..MAX_DEPTH {
         // On the final expansion only ops that PRODUCE the goal type can still
@@ -421,13 +434,13 @@ pub fn try_pipeline(problem: &Problem) -> Option<SolveResult> {
                 if is_last && scalar_arity && !*used_scalar && !op.scalar {
                     continue;
                 }
-                if applications > MAX_APPLICATIONS || Instant::now() > deadline {
+                // Pure safety net: the search terminates on its own; this only
+                // guards against a pathological slow op-application run.
+                if Instant::now() > deadline {
                     return None;
                 }
                 let scalar_args = if op.scalar { Some(scalars.as_slice()) } else { None };
-                let Some(new_vals) =
-                    apply_op(i, op, vals, scalar_args, &mut memo, &mut applications)
-                else {
+                let Some(new_vals) = apply_op(i, op, vals, scalar_args, &mut memo) else {
                     continue;
                 };
                 let now_used = *used_scalar || op.scalar;

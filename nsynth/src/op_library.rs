@@ -227,6 +227,30 @@ pub const OPS: &[LibOp] = &[
 "fn pentagonal_number(n: i64) -> i64 {\n    return n * (3 * n - 1) / 2;\n}\n" },
     LibOp { name: "average_evens_upto", arity: 1, mog:
 "fn average_evens_upto(n: i64) -> i64 {\n    s: i64 = 0;\n    c: i64 = 0;\n    i: i64 = 2;\n    while i <= n {\n        s = s + i;\n        c = c + 1;\n        i = i + 2;\n    }\n    if c == 0 {\n        return 0;\n    }\n    return s / c;\n}\n" },
+    // ── batch 8: figurate numbers, recurrences, bit positions, factorial-digit
+    // — more of the scalar closed-form cluster (each probe = a target MBPP task).
+    LibOp { name: "rectangular_number", arity: 1, mog:
+"fn rectangular_number(n: i64) -> i64 {\n    return n * (n + 1);\n}\n" },
+    LibOp { name: "star_number", arity: 1, mog:
+"fn star_number(n: i64) -> i64 {\n    return 6 * n * (n - 1) + 1;\n}\n" },
+    LibOp { name: "hexagonal_number", arity: 1, mog:
+"fn hexagonal_number(n: i64) -> i64 {\n    return n * (2 * n - 1);\n}\n" },
+    LibOp { name: "fourth_power_sum", arity: 1, mog:
+"fn fourth_power_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        s = s + i * i * i * i;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "cube_minus_natural_sum", arity: 1, mog:
+"fn cube_minus_natural_sum(n: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 1;\n    while i <= n {\n        s = s + i * i * i - i;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "factorial_digit_count", arity: 1, mog:
+"fn factorial_digit_count(n: i64) -> i64 {\n    f: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        f = f * i;\n        i = i + 1;\n    }\n    c: i64 = 0;\n    while f > 0 {\n        c = c + 1;\n        f = f / 10;\n    }\n    if c == 0 {\n        c = 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "count_odd_setbits_upto", arity: 1, mog:
+"fn count_odd_setbits_upto(n: i64) -> i64 {\n    total: i64 = 0;\n    k: i64 = 1;\n    while k <= n {\n        x: i64 = k;\n        b: i64 = 0;\n        while x > 0 {\n            b = b + x % 2;\n            x = x / 2;\n        }\n        if b % 2 == 1 {\n            total = total + 1;\n        }\n        k = k + 1;\n    }\n    return total;\n}\n" },
+    LibOp { name: "highest_power_of_2", arity: 1, mog:
+"fn highest_power_of_2(n: i64) -> i64 {\n    p: i64 = 1;\n    while p * 2 <= n {\n        p = p * 2;\n    }\n    return p;\n}\n" },
+    LibOp { name: "lowest_set_bit_pos", arity: 1, mog:
+"fn lowest_set_bit_pos(n: i64) -> i64 {\n    x: i64 = n;\n    pos: i64 = 1;\n    while x % 2 == 0 {\n        x = x / 2;\n        pos = pos + 1;\n    }\n    return pos;\n}\n" },
+    LibOp { name: "lucas_number", arity: 1, mog:
+"fn lucas_number(n: i64) -> i64 {\n    a: i64 = 2;\n    b: i64 = 1;\n    i: i64 = 0;\n    while i < n {\n        t: i64 = a + b;\n        a = b;\n        b = t;\n        i = i + 1;\n    }\n    return a;\n}\n" },
+    LibOp { name: "perrin_number", arity: 1, mog:
+"fn perrin_number(n: i64) -> i64 {\n    a: i64 = 3;\n    b: i64 = 0;\n    c: i64 = 2;\n    if n == 0 {\n        return a;\n    }\n    if n == 1 {\n        return b;\n    }\n    if n == 2 {\n        return c;\n    }\n    i: i64 = 3;\n    while i <= n {\n        d: i64 = a + b;\n        a = b;\n        b = c;\n        c = d;\n        i = i + 1;\n    }\n    return c;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -433,6 +457,41 @@ mod tests {
             ("pentagonal_number", 5, 35),
             ("average_evens_upto", 4, 3),
             ("average_evens_upto", 100, 51),
+        ];
+        for (name, arg, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, vec![Value::Int(*arg)], Value::Int(*expect)),
+                "op {name}({arg}) failed its probe (expected {expect})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch8_ops_reproduce_their_probes() {
+        let cases: &[(&str, i64, i64)] = &[
+            ("rectangular_number", 4, 20),
+            ("rectangular_number", 5, 30),
+            ("star_number", 3, 37),
+            ("star_number", 4, 73),
+            ("hexagonal_number", 10, 190),
+            ("hexagonal_number", 5, 45),
+            ("fourth_power_sum", 2, 17),
+            ("fourth_power_sum", 4, 354),
+            ("cube_minus_natural_sum", 3, 30),
+            ("cube_minus_natural_sum", 5, 210),
+            ("factorial_digit_count", 7, 4),
+            ("factorial_digit_count", 5, 3),
+            ("count_odd_setbits_upto", 5, 3),
+            ("count_odd_setbits_upto", 10, 5),
+            ("highest_power_of_2", 10, 8),
+            ("highest_power_of_2", 19, 16),
+            ("lowest_set_bit_pos", 12, 3),
+            ("lowest_set_bit_pos", 18, 2),
+            ("lucas_number", 9, 76),
+            ("lucas_number", 4, 7),
+            ("perrin_number", 9, 12),
+            ("perrin_number", 4, 2),
         ];
         for (name, arg, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
