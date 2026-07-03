@@ -184,6 +184,22 @@ pub const OPS: &[LibOp] = &[
 "fn count_matching_positions(a: [i64], b: [i64]) -> i64 {\n    n: i64 = a.len;\n    if b.len < n {\n        n = b.len;\n    }\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < n {\n        if a[i] == b[i] {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
     LibOp { name: "max_product_pair", arity: 1, mog:
 "fn max_product_pair(arr: [i64]) -> i64 {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e);\n    }\n    out.sort();\n    n: i64 = out.len;\n    a: i64 = out[0] * out[1];\n    b: i64 = out[n - 1] * out[n - 2];\n    if a > b {\n        return a;\n    }\n    return b;\n}\n" },
+    // ── batch 6: (arr, k) reorders — the biggest killed class in the 2026-07-03
+    // run (36/61 kills were 2-arg). Each is also a pipeline scalar stage. ─────
+    LibOp { name: "rotate_left", arity: 2, mog:
+"fn rotate_left(arr: [i64], k: i64) -> [i64] {\n    n: i64 = arr.len;\n    out: [i64] = [];\n    if n == 0 {\n        return out;\n    }\n    s: i64 = k % n;\n    i: i64 = 0;\n    while i < n {\n        j: i64 = (i + s) % n;\n        out.push(arr[j]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "rotate_right", arity: 2, mog:
+"fn rotate_right(arr: [i64], k: i64) -> [i64] {\n    n: i64 = arr.len;\n    out: [i64] = [];\n    if n == 0 {\n        return out;\n    }\n    s: i64 = k % n;\n    i: i64 = 0;\n    while i < n {\n        j: i64 = (i - s + n) % n;\n        out.push(arr[j]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "reverse_upto_k", arity: 2, mog:
+"fn reverse_upto_k(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    i: i64 = k - 1;\n    while i >= 0 {\n        out.push(arr[i]);\n        i = i - 1;\n    }\n    i = k;\n    while i < arr.len {\n        out.push(arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "every_nth", arity: 2, mog:
+"fn every_nth(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    i: i64 = k - 1;\n    while i < arr.len {\n        out.push(arr[i]);\n        i = i + k;\n    }\n    return out;\n}\n" },
+    LibOp { name: "sum_last_k", arity: 2, mog:
+"fn sum_last_k(arr: [i64], k: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = arr.len - k;\n    if i < 0 {\n        i = 0;\n    }\n    while i < arr.len {\n        s = s + arr[i];\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "count_greater_than", arity: 2, mog:
+"fn count_greater_than(arr: [i64], k: i64) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > k {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    LibOp { name: "count_less_than", arity: 2, mog:
+"fn count_less_than(arr: [i64], k: i64) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < k {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -334,6 +350,27 @@ mod tests {
             ("max_window_sum", vec![iv(&[1, 4, 2, 10, 2, 3, 1, 0, 20]), Value::Int(4)], Value::Int(24)),
             ("count_matching_positions", vec![iv(&[1, 2, 3]), iv(&[1, 5, 3])], Value::Int(2)),
             ("max_product_pair", vec![iv(&[1, -3, -4, 2, 0])], Value::Int(12)),
+        ];
+        for (name, args, expect) in cases {
+            let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));
+            assert!(
+                runs_to(op.mog, name, args.clone(), expect.clone()),
+                "op {name} failed its probe (expected {expect:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn batch6_ops_reproduce_their_probes() {
+        let iv = Value::int_array;
+        let cases: &[(&str, Vec<Value>, Value)] = &[
+            ("rotate_left", vec![iv(&[1, 2, 3, 4, 5]), Value::Int(2)], iv(&[3, 4, 5, 1, 2])),
+            ("rotate_right", vec![iv(&[1, 2, 3, 4, 5]), Value::Int(2)], iv(&[4, 5, 1, 2, 3])),
+            ("reverse_upto_k", vec![iv(&[1, 2, 3, 4, 5]), Value::Int(3)], iv(&[3, 2, 1, 4, 5])),
+            ("every_nth", vec![iv(&[10, 20, 30, 40, 50, 60]), Value::Int(2)], iv(&[20, 40, 60])),
+            ("sum_last_k", vec![iv(&[1, 2, 3, 4, 5]), Value::Int(2)], Value::Int(9)),
+            ("count_greater_than", vec![iv(&[1, 5, 2, 8, 3]), Value::Int(3)], Value::Int(2)),
+            ("count_less_than", vec![iv(&[1, 5, 2, 8, 3]), Value::Int(3)], Value::Int(2)),
         ];
         for (name, args, expect) in cases {
             let op = OPS.iter().find(|o| o.name == *name).unwrap_or_else(|| panic!("no op {name}"));

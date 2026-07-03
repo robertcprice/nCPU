@@ -311,6 +311,14 @@ fn emit_and_check(chain: &[&StageOp], problem: &Problem, scalar_arity: bool) -> 
     if !code_reproduces_examples(&code, &problem.examples) {
         return None;
     }
+    // Anti-laundering: a scalar-arity chain must SEMANTICALLY depend on the
+    // scalar, not merely consume it. `sum_values(rotate_left(arr, k))` consumes
+    // k but sum is rotation-invariant, so k is vacuous and the "solve" is a
+    // coincidental scalar-ignoring fit. Reject unless perturbing k changes the
+    // output on at least one example.
+    if scalar_arity && !output_depends_on_scalar(&code, problem) {
+        return None;
+    }
     let names: Vec<&str> = chain.iter().map(|o| o.name).collect();
     Some(SolveResult {
         success: true,
@@ -319,6 +327,30 @@ fn emit_and_check(chain: &[&StageOp], problem: &Problem, scalar_arity: bool) -> 
         error: None,
         metadata: Default::default(),
     })
+}
+
+/// True if the emitted 2-arg `pipeline(x, k)` produces a DIFFERENT output for
+/// some example when `k` is perturbed — i.e. the scalar genuinely matters. A
+/// chain whose output is invariant to `k` (rotation-then-sum, etc.) is a
+/// scalar-ignoring overfit and must be rejected.
+fn output_depends_on_scalar(code: &str, problem: &Problem) -> bool {
+    for ex in &problem.examples {
+        let BValue::Int(k) = ex.inputs[1] else { continue };
+        // Two perturbations so a single unlucky no-op (e.g. k and k+1 coincide
+        // under a modulus) doesn't mask real dependence.
+        for delta in [1i64, 2] {
+            let mut probe = ex.inputs.clone();
+            probe[1] = BValue::Int(k + delta);
+            let base = execute_function(code, "pipeline", &ex.inputs, "pipeline");
+            let alt = execute_function(code, "pipeline", &probe, "pipeline");
+            if let (Ok(b), Ok(a)) = (base, alt) {
+                if benchmark_value_from_runtime(&b) != benchmark_value_from_runtime(&a) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Search for a chain of 2..=[`MAX_DEPTH`] verified unary ops that reproduces
@@ -662,6 +694,30 @@ mod tests {
             ),
             "returned pipeline failed the held-out probe:\n{}",
             r.code
+        );
+    }
+
+    #[test]
+    fn pipeline_rejects_vacuous_scalar_consumption() {
+        // sum is rotation-invariant, so sum_values(rotate_left(arr, k)) CONSUMES
+        // k structurally but the output never depends on it — a scalar-ignoring
+        // overfit dressed up as a scalar chain. The scalar-dependence check must
+        // reject it even though a 3-example fit exists.
+        let iv = BValue::int_array;
+        let mut p = problem(vec![]);
+        // Outputs are the full sum (rotation-invariant), with distinctive values
+        // and k choices so no genuinely-k-dependent op (take/drop/window/count)
+        // coincidentally matches — the ONLY fit is rotate_left∘sum, which the
+        // dependence gate must reject as vacuous.
+        p.examples = vec![
+            Example { inputs: vec![iv(&[10, 20, 30]), BValue::Int(2)], expected: BValue::Int(60) },
+            Example { inputs: vec![iv(&[5, 5, 5, 5]), BValue::Int(3)], expected: BValue::Int(20) },
+            Example { inputs: vec![iv(&[1, 2, 3, 4]), BValue::Int(1)], expected: BValue::Int(10) },
+            Example { inputs: vec![iv(&[7, 8]), BValue::Int(2)], expected: BValue::Int(15) },
+        ];
+        assert!(
+            try_pipeline(&p).is_none(),
+            "must reject a chain whose output is invariant to the scalar"
         );
     }
 
