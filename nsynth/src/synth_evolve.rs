@@ -175,13 +175,161 @@ fn count_task(problem: &Problem) -> Option<CountTask> {
     Some(CountTask { rows, two_arg })
 }
 
-/// Enumerate pair predicates; return a strict-verified program for the first that
+// ── Single-loop conditional-accumulate sketch ───────────────────────────────
+// acc = init; for e in arr { if <pred(e,k)> { acc = <update(acc,e)> } } return acc
+// Covers parameterised count/sum-with-predicate tasks the FIXED library ops don't:
+// sum of e>k, count of e%3==0, product of evens, sum of |e|, …
+
+#[derive(Clone, Copy)]
+enum EFeat { E, AbsE, EMod2, EModK }
+
+#[derive(Clone, Copy)]
+enum ERhs { Zero, K, Const(i64) }
+
+#[derive(Clone, Copy)]
+enum Upd { Count, SumE, SumAbsE, SumSq, ProdE }
+
+fn single_loop_run(
+    init: i64,
+    feat: EFeat,
+    op: Cmp,
+    rhs: ERhs,
+    upd: Upd,
+    arr: &[i64],
+    k: i64,
+) -> Option<i64> {
+    let mut acc = init;
+    for &e in arr {
+        let lhs = match feat {
+            EFeat::E => e,
+            EFeat::AbsE => e.abs(),
+            EFeat::EMod2 => e.rem_euclid(2),
+            EFeat::EModK => {
+                if k == 0 { return None; }
+                e.rem_euclid(k)
+            }
+        };
+        let r = match rhs {
+            ERhs::Zero => 0,
+            ERhs::K => k,
+            ERhs::Const(c) => c,
+        };
+        if cmp(op, lhs, r) {
+            acc = match upd {
+                Upd::Count => acc.checked_add(1)?,
+                Upd::SumE => acc.checked_add(e)?,
+                Upd::SumAbsE => acc.checked_add(e.abs())?,
+                Upd::SumSq => acc.checked_add(e.checked_mul(e)?)?,
+                Upd::ProdE => acc.checked_mul(e)?,
+            };
+        }
+    }
+    Some(acc)
+}
+
+fn single_loop_mog(
+    fn_name: &str,
+    two_arg: bool,
+    init: i64,
+    feat: EFeat,
+    op: Cmp,
+    rhs: ERhs,
+    upd: Upd,
+) -> String {
+    let params = if two_arg { "arr: [i64], k: i64" } else { "arr: [i64]" };
+    let lhs = match feat {
+        EFeat::E => "e".to_string(),
+        EFeat::AbsE => "ae".to_string(),
+        EFeat::EMod2 => "(e % 2)".to_string(),
+        EFeat::EModK => "(e % k)".to_string(),
+    };
+    let need_abs = matches!(feat, EFeat::AbsE);
+    let rhs_s = match rhs {
+        ERhs::Zero => "0".to_string(),
+        ERhs::K => "k".to_string(),
+        ERhs::Const(c) => if c < 0 { format!("(0 - {})", -c) } else { c.to_string() },
+    };
+    let op_s = match op {
+        Cmp::Eq => "==", Cmp::Ne => "!=", Cmp::Lt => "<", Cmp::Le => "<=", Cmp::Gt => ">", Cmp::Ge => ">=",
+    };
+    let upd_s = match upd {
+        Upd::Count => "acc + 1",
+        Upd::SumE => "acc + e",
+        Upd::SumAbsE => "acc + ae",
+        Upd::SumSq => "acc + e * e",
+        Upd::ProdE => "acc * e",
+    };
+    let abs_local = if need_abs || matches!(upd, Upd::SumAbsE) {
+        "        ae: i64 = e;\n        if ae < 0 {\n            ae = 0 - ae;\n        }\n"
+    } else {
+        ""
+    };
+    format!(
+        "fn {fn_name}({params}) -> i64 {{\n    acc: i64 = {init};\n    for e in arr {{\n{abs_local}        if {lhs} {op_s} {rhs_s} {{\n            acc = {upd_s};\n        }}\n    }}\n    return acc;\n}}\n"
+    )
+}
+
+fn try_single_loop(problem: &Problem, task: &CountTask) -> Option<SolveResult> {
+    let feats = [EFeat::E, EFeat::AbsE, EFeat::EMod2, EFeat::EModK];
+    let upds = [Upd::Count, Upd::SumE, Upd::SumAbsE, Upd::SumSq, Upd::ProdE];
+    for &init in &[0i64, 1] {
+        for &feat in &feats {
+            if matches!(feat, EFeat::EModK) && !task.two_arg {
+                continue;
+            }
+            for &op in &CMPS {
+                let mut rhss: Vec<ERhs> = vec![ERhs::Zero];
+                if task.two_arg {
+                    rhss.push(ERhs::K);
+                }
+                rhss.extend(PRED_CONSTS.iter().map(|&c| ERhs::Const(c)));
+                for rhs in rhss {
+                    for &upd in &upds {
+                        // Product with init 0 is degenerate; skip.
+                        if matches!(upd, Upd::ProdE) && init == 0 {
+                            continue;
+                        }
+                        let all = task.rows.iter().all(|(arr, k, out)| {
+                            single_loop_run(init, feat, op, rhs, upd, arr, *k) == Some(*out)
+                        });
+                        if all {
+                            let code = single_loop_mog(
+                                problem.function_name(),
+                                task.two_arg,
+                                init,
+                                feat,
+                                op,
+                                rhs,
+                                upd,
+                            );
+                            if verify_problem_code_strict(problem, &code).is_ok() {
+                                return Some(SolveResult {
+                                    success: true,
+                                    code,
+                                    method: "sketch-single-loop".to_string(),
+                                    error: None,
+                                    metadata: Default::default(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Enumerate sketch holes; return a strict-verified program for the first that
 /// reproduces every example. `None` unless `NSYNTH_SKETCH` is set / not a count task.
 pub fn synthesize_evolve(problem: &Problem) -> Option<SolveResult> {
     if std::env::var_os("NSYNTH_SKETCH").is_none() {
         return None;
     }
     let task = count_task(problem)?;
+    if let Some(r) = try_single_loop(problem, &task) {
+        return Some(r);
+    }
     for &feat in &FEATS {
         for &cmpop in &CMPS {
             // RHS candidates: k (2-arg only), the other element, and small consts.
@@ -266,6 +414,29 @@ mod tests {
             &[Example {
                 inputs: vec![BV::Array(vec![10, 7, 13, 4].into_iter().map(BV::Int).collect()), BV::Int(3)],
                 expected: BV::Int(f(&[10, 7, 13, 4], 3)),
+            }]
+        ), "must generalise:\n{}", r.code);
+    }
+
+    #[test]
+    fn sketch_single_loop_sum_gt_k() {
+        std::env::set_var("NSYNTH_SKETCH", "1");
+        // sum of elements strictly greater than k — parameterised, not a fixed op.
+        let f = |a: &[i64], k: i64| -> i64 { a.iter().filter(|&&x| x > k).sum::<i64>() };
+        let cases: &[(&[i64], i64)] =
+            &[(&[5, 12, 20, 3], 10), (&[1, 2, 3, 4], 2), (&[-5, 8, 0, 9], 0)];
+        let rows: Vec<(Vec<i64>, Option<i64>, i64)> =
+            cases.iter().map(|(a, k)| (a.to_vec(), Some(*k), f(a, *k))).collect();
+        let p = arr_problem("sum_gt", "fn sum_gt(arr: [i64], k: i64) -> i64", rows);
+        let r = synthesize_evolve(&p);
+        std::env::remove_var("NSYNTH_SKETCH");
+        let r = r.expect("sketch should solve sum-of-elements-greater-than-k");
+        assert_eq!(r.method, "sketch-single-loop");
+        assert!(crate::runtime::code_reproduces_examples(
+            &r.code,
+            &[Example {
+                inputs: vec![BV::Array(vec![100, 1, 7, 50].into_iter().map(BV::Int).collect()), BV::Int(9)],
+                expected: BV::Int(f(&[100, 1, 7, 50], 9)),
             }]
         ), "must generalise:\n{}", r.code);
     }
