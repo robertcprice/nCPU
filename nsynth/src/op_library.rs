@@ -686,6 +686,32 @@ pub const OPS: &[LibOp] = &[
     // dominant MBPP dict pattern (element frequency).
     LibOp { name: "element_frequency", arity: 1, mog:
 "fn element_frequency(arr: [i64]) -> [[i64]] {\n    keys: [i64] = [];\n    counts: [i64] = [];\n    for e in arr {\n        found: i64 = 0 - 1;\n        i: i64 = 0;\n        while i < keys.len {\n            if keys[i] == e {\n                found = i;\n            }\n            i = i + 1;\n        }\n        if found < 0 {\n            keys.push(e);\n            counts.push(1);\n        } else {\n            counts[found] = counts[found] + 1;\n        }\n    }\n    out: [[i64]] = [];\n    j: i64 = 0;\n    while j < keys.len {\n        out.push([keys[j], counts[j]]);\n        j = j + 1;\n    }\n    return out;\n}\n" },
+    // ── batch 23: GENERIC pair-array map ops. A map INPUT reaches Mog code as the
+    // canonical array of [key, value] pairs (runtime_value_from_problem), and a
+    // map OUTPUT verifies order-independently — so these ops work for ANY key and
+    // value type the runtime carries (int and string keys both appear in MBPP).
+    // The declared `[[i64]]` param type is nominal; the interpreter is dynamic
+    // and the type gate is permissive on nested types.
+    LibOp { name: "map_values_sum", arity: 1, mog:
+"fn map_values_sum(pairs: [[i64]]) -> i64 {\n    s: i64 = 0;\n    for p in pairs {\n        s = s + p[1];\n    }\n    return s;\n}\n" },
+    LibOp { name: "map_keys", arity: 1, mog:
+"fn map_keys(pairs: [[i64]]) -> [i64] {\n    out: [i64] = [];\n    for p in pairs {\n        out.push(p[0]);\n    }\n    return out;\n}\n" },
+    LibOp { name: "map_has_key", arity: 2, mog:
+"fn map_has_key(pairs: [[i64]], k: i64) -> bool {\n    for p in pairs {\n        if p[0] == k {\n            return true;\n        }\n    }\n    return false;\n}\n" },
+    LibOp { name: "map_all_values_equal", arity: 2, mog:
+"fn map_all_values_equal(pairs: [[i64]], v: i64) -> bool {\n    for p in pairs {\n        if p[1] != v {\n            return false;\n        }\n    }\n    return true;\n}\n" },
+    LibOp { name: "merge_two_maps", arity: 2, mog:
+"fn merge_two_maps(a: [[i64]], b: [[i64]]) -> [[i64]] {\n    out: [[i64]] = [];\n    for p in a {\n        out.push(p);\n    }\n    for q in b {\n        seen: i64 = 0;\n        for p in a {\n            if p[0] == q[0] {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            out.push(q);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "merge_three_maps", arity: 3, mog:
+"fn merge_three_maps(a: [[i64]], b: [[i64]], c: [[i64]]) -> [[i64]] {\n    out: [[i64]] = [];\n    ks: [i64] = [];\n    for p in a {\n        out.push(p);\n        ks.push(p[0]);\n    }\n    for q in b {\n        seen: i64 = 0;\n        for k in ks {\n            if k == q[0] {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            out.push(q);\n            ks.push(q[0]);\n        }\n    }\n    for r in c {\n        seen2: i64 = 0;\n        for k in ks {\n            if k == r[0] {\n                seen2 = 1;\n            }\n        }\n        if seen2 == 0 {\n            out.push(r);\n            ks.push(r[0]);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "merge_maps_sum_values", arity: 2, mog:
+"fn merge_maps_sum_values(a: [[i64]], b: [[i64]]) -> [[i64]] {\n    out: [[i64]] = [];\n    for p in a {\n        v: i64 = p[1];\n        for q in b {\n            if q[0] == p[0] {\n                v = v + q[1];\n            }\n        }\n        out.push([p[0], v]);\n    }\n    for q in b {\n        seen: i64 = 0;\n        for p in a {\n            if p[0] == q[0] {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            out.push(q);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "consecutive_pairs_map", arity: 1, mog:
+"fn consecutive_pairs_map(arr: [i64]) -> [[i64]] {\n    out: [[i64]] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        out.push([arr[i], arr[i + 1]]);\n        i = i + 2;\n    }\n    return out;\n}\n" },
+    LibOp { name: "flatten_frequency", arity: 1, mog:
+"fn flatten_frequency(rows: [[i64]]) -> [[i64]] {\n    flat: [i64] = [];\n    for r in rows {\n        for e in r {\n            flat.push(e);\n        }\n    }\n    keys: [i64] = [];\n    counts: [i64] = [];\n    for e in flat {\n        found: i64 = 0 - 1;\n        i: i64 = 0;\n        while i < keys.len {\n            if keys[i] == e {\n                found = i;\n            }\n            i = i + 1;\n        }\n        if found < 0 {\n            keys.push(e);\n            counts.push(1);\n        } else {\n            counts[found] = counts[found] + 1;\n        }\n    }\n    out: [[i64]] = [];\n    j: i64 = 0;\n    while j < keys.len {\n        out.push([keys[j], counts[j]]);\n        j = j + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "group_pairs_by_key", arity: 1, mog:
+"fn group_pairs_by_key(pairs: [[i64]]) -> [[i64]] {\n    ks: [i64] = [];\n    for p in pairs {\n        seen: i64 = 0;\n        for k in ks {\n            if k == p[0] {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            ks.push(p[0]);\n        }\n    }\n    out: [[i64]] = [];\n    for k in ks {\n        vs: [i64] = [];\n        for p in pairs {\n            if p[0] == k {\n                vs.push(p[1]);\n            }\n        }\n        out.push([k, vs]);\n    }\n    return out;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -966,6 +992,61 @@ mod tests {
             ],
         );
         assert!(try_library(&bad).is_none(), "wrong counts must not verify");
+    }
+
+    #[test]
+    fn batch23_pair_array_map_ops_reproduce_their_probes() {
+        // Generic pair-array ops: int keys probed here; the MBPP acceptance run
+        // proved the same code paths on STRING keys (merge/group tasks 87/174/
+        // 263/653/821) via the runtime's dynamic values.
+        let pairs = |ps: &[(i64, i64)]| {
+            Value::Array(
+                ps.iter()
+                    .map(|(k, v)| Value::Array(vec![Value::Int(*k), Value::Int(*v)]))
+                    .collect(),
+            )
+        };
+        // map_values_sum: 100+200+300
+        assert!(runs_to(
+            op("map_values_sum"),
+            "map_values_sum",
+            vec![pairs(&[(1, 100), (2, 200), (3, 300)])],
+            Value::Int(600)
+        ));
+        // map_keys
+        assert!(runs_to(
+            op("map_keys"),
+            "map_keys",
+            vec![pairs(&[(1, 10), (2, 20)])],
+            Value::int_array(&[1, 2])
+        ));
+        // map_has_key
+        assert!(runs_to(
+            op("map_has_key"),
+            "map_has_key",
+            vec![pairs(&[(1, 10), (5, 50)]), Value::Int(5)],
+            Value::Bool(true)
+        ));
+        assert!(runs_to(
+            op("map_has_key"),
+            "map_has_key",
+            vec![pairs(&[(1, 10), (5, 50)]), Value::Int(9)],
+            Value::Bool(false)
+        ));
+        // merge_maps_sum_values: {a:1,b:2} + {a:3,c:4} -> {a:4,b:2,c:4}
+        assert!(runs_to(
+            op("merge_maps_sum_values"),
+            "merge_maps_sum_values",
+            vec![pairs(&[(1, 1), (2, 2)]), pairs(&[(1, 3), (3, 4)])],
+            pairs(&[(1, 4), (2, 2), (3, 4)])
+        ));
+        // consecutive_pairs_map: [1,5,7,10] -> [[1,5],[7,10]]
+        assert!(runs_to(
+            op("consecutive_pairs_map"),
+            "consecutive_pairs_map",
+            vec![Value::int_array(&[1, 5, 7, 10])],
+            pairs(&[(1, 5), (7, 10)])
+        ));
     }
 
     fn op(name: &str) -> &'static str {
