@@ -475,6 +475,19 @@ impl LinguigenesisBridge {
         // Activate the dormant emergent type-mismatch gate by declaring the value-
         // type vocabulary it compares against (additive, idempotent).
         Self::ensure_value_type_vocabulary(registry);
+        // Repair cross-file synonym danglers: edges DECLARED in coding_registry.json
+        // that point to ops living in mined_capabilities.json (e.g. flip/invert ->
+        // reverse) are dropped at coding load (target absent then). Now that mined is
+        // merged, restore the author-declared edges so those surfaces resolve. Only
+        // already-declared edges are re-linked, so this cannot widen resolution.
+        if let Some(path) = Self::find_coding_registry_path() {
+            match registry.relink_declared_edges_from_json(&path) {
+                Ok(n) if n > 0 => {
+                    eprintln!("[Linguigenesis] relinked {} declared coding synonym edge(s)", n)
+                }
+                _ => {}
+            }
+        }
         if let Err(errors) =
             linguigenesis_core::coding_registry_validate::validate_coding_registry(registry)
         {
