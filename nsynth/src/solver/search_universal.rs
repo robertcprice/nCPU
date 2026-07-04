@@ -342,6 +342,205 @@ pub(super) fn try_universal(problem: &Problem, name: &str) -> Option<SolveResult
             }
         }
     }
+
+    // DIVIDE-AND-CONQUER (EUSolver, Alur TACAS'17): no single expression fits all
+    // examples, but a BRANCHING program might — `if P then A else B`. Point-solve
+    // each example with the pool's terminal expressions (each covers a SUBSET),
+    // enumerate distinguishing boolean predicates (the pool's comparison exprs),
+    // and unify them into a decision tree by greedy coverage. Unlocks the whole
+    // conditional task class (sign, type-preserving max, piecewise) that no single
+    // straight-line expression can express. Sound by construction: each leaf is
+    // verified on its subset and the whole tree re-verified on every example.
+    try_conditional_cover(name, &pool, &expected, &param_ty, ret_ty, problem)
+}
+
+/// Build a branching program covering every example via a greedy decision tree
+/// over the pool's terminal expressions (branch values) and boolean expressions
+/// (predicates). Returns a verified SolveResult or None.
+fn try_conditional_cover(
+    name: &str,
+    pool: &[Expr],
+    expected: &[UV],
+    param_ty: &[&str],
+    ret_ty: &str,
+    problem: &Problem,
+) -> Option<SolveResult> {
+    let n = expected.len();
+    // Branch-value candidates: pool exprs type-compatible with the expected
+    // output, tagged with the set of examples each reproduces (its cover).
+    let mut values: Vec<(Vec<bool>, &str)> = pool
+        .iter()
+        .filter_map(|e| {
+            if e.outs.len() != n {
+                return None;
+            }
+            let cover: Vec<bool> = e.outs.iter().zip(expected).map(|(o, x)| uv_eq(o, x)).collect();
+            if cover.iter().any(|b| *b) {
+                Some((cover, e.ir.as_str()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    values.sort_by_key(|(c, _)| std::cmp::Reverse(c.iter().filter(|b| **b).count()));
+    // Every example must be coverable by SOME value, else no tree can succeed.
+    if !(0..n).all(|i| values.iter().any(|(c, _)| c[i])) {
+        return None;
+    }
+    // Predicate candidates: pool exprs of boolean type, deduped by truth vector,
+    // all-true / all-false dropped (they can't split).
+    let mut preds: Vec<(Vec<bool>, &str)> = Vec::new();
+    let mut pred_seen: HashSet<Vec<bool>> = HashSet::new();
+    for e in pool {
+        // ANTI-OVERFIT: reject equality-against-a-constant predicates (`x == k`).
+        // They isolate individual examples, letting the decision tree MEMORIZE
+        // arbitrary I/O (a lookup table) that reproduces the seeds but fails
+        // hidden tests. Relational (`<`,`>`) and arg-vs-arg predicates express
+        // genuine piecewise STRUCTURE and are kept — that is what D&C is for.
+        if is_memo_pred(e.ir.as_str()) {
+            continue;
+        }
+        let tv: Option<Vec<bool>> = e
+            .outs
+            .iter()
+            .map(|o| if let UV::B(b) = o { Some(*b) } else { None })
+            .collect();
+        if let Some(tv) = tv {
+            let t = tv.iter().filter(|b| **b).count();
+            if t == 0 || t == n {
+                continue;
+            }
+            if pred_seen.insert(tv.clone()) {
+                preds.push((tv, e.ir.as_str()));
+            }
+        }
+    }
+    if preds.is_empty() {
+        return None;
+    }
+
+    let all: Vec<usize> = (0..n).collect();
+    let mut helpers: Vec<String> = Vec::new();
+    let body = build_tree(&all, &values, &preds, 0, &mut helpers)?;
+
+    let params: Vec<String> = param_ty
+        .iter()
+        .enumerate()
+        .map(|(i, t)| format!("a{i}: {t}"))
+        .collect();
+    let mut code = format!("fn {name}({}) -> {ret_ty} {{\n    {body}\n}}\n", params.join(", "));
+    // Dedup helpers (compile may emit the same helper twice across branches).
+    let mut seen_h: HashSet<String> = HashSet::new();
+    for h in helpers {
+        if seen_h.insert(h.clone()) {
+            code.push('\n');
+            code.push_str(&h);
+        }
+    }
+    if crate::runtime::code_reproduces_examples(&code, &problem.examples) {
+        Some(SolveResult {
+            success: true,
+            code,
+            method: "universal-cond".to_string(),
+            error: None,
+            metadata: Default::default(),
+        })
+    } else {
+        None
+    }
+}
+
+/// True if `ir` is a comparison that can MEMORIZE arbitrary examples: any
+/// equality against a literal (`x == #k`), or an inequality against a NON-ZERO
+/// literal (`x < #k`, `x > #k`, k != 0). Comparisons against 0 (sign) and
+/// arg-vs-arg comparisons express genuine structure and are allowed. Excluding
+/// the memorizing predicates keeps the D&C tree from becoming an I/O lookup
+/// table that reproduces the seeds but fails hidden tests.
+fn is_memo_pred(ir: &str) -> bool {
+    let is_const = |s: &str| s.starts_with('#') || s.starts_with('~');
+    for tag in ["Ceq(", "Clt(", "Cgt("] {
+        if let Some(inner) = ir.strip_prefix(tag).and_then(|s| s.strip_suffix(')')) {
+            let (l, r) = split_top(inner);
+            let cside = if is_const(&l) {
+                Some(l)
+            } else if is_const(&r) {
+                Some(r)
+            } else {
+                None
+            };
+            if let Some(c) = cside {
+                if tag == "Ceq(" {
+                    return true; // any equality-against-constant isolates points
+                }
+                if c != "#0" {
+                    return true; // threshold against a mined constant memorizes
+                }
+            }
+        }
+    }
+    false
+}
+
+const MAX_TREE_DEPTH: usize = 3;
+const TREE_TOP_PREDS: usize = 8;
+
+/// Greedy decision-tree builder. Returns a Mog statement sequence that RETURNs
+/// the answer for every example index in `idx`, or None if unreachable within
+/// the depth bound.
+fn build_tree(
+    idx: &[usize],
+    values: &[(Vec<bool>, &str)],
+    preds: &[(Vec<bool>, &str)],
+    depth: usize,
+    helpers: &mut Vec<String>,
+) -> Option<String> {
+    // Leaf: a single value expression that covers every index here.
+    if let Some((_, ir)) = values.iter().find(|(cover, _)| idx.iter().all(|&i| cover[i])) {
+        let expr = compile(ir, helpers);
+        return Some(format!("return {expr};"));
+    }
+    if depth >= MAX_TREE_DEPTH {
+        return None;
+    }
+    // Branch: score predicates by how close each side is to a single-value leaf
+    // (best coverage fraction on the true side + on the false side). Greedy —
+    // try the most-promising few, recurse, take the first fully-solvable split.
+    let best_cover = |sub: &[usize]| -> f64 {
+        if sub.is_empty() {
+            return 1.0;
+        }
+        values
+            .iter()
+            .map(|(cover, _)| sub.iter().filter(|&&i| cover[i]).count() as f64 / sub.len() as f64)
+            .fold(0.0, f64::max)
+    };
+    let mut scored: Vec<(f64, usize)> = Vec::new();
+    for (pi, (tv, _)) in preds.iter().enumerate() {
+        let t: Vec<usize> = idx.iter().copied().filter(|&i| tv[i]).collect();
+        let f: Vec<usize> = idx.iter().copied().filter(|&i| !tv[i]).collect();
+        if t.is_empty() || f.is_empty() {
+            continue; // no split on this subset
+        }
+        scored.push((best_cover(&t) + best_cover(&f), pi));
+    }
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    for (_, pi) in scored.into_iter().take(TREE_TOP_PREDS) {
+        let (tv, pir) = &preds[pi];
+        let t: Vec<usize> = idx.iter().copied().filter(|&i| tv[i]).collect();
+        let f: Vec<usize> = idx.iter().copied().filter(|&i| !tv[i]).collect();
+        let mut h_try = helpers.clone();
+        if let (Some(bt), Some(bf)) = (
+            build_tree(&t, values, preds, depth + 1, &mut h_try),
+            build_tree(&f, values, preds, depth + 1, &mut h_try),
+        ) {
+            let pexpr = compile(pir, &mut h_try);
+            *helpers = h_try;
+            let bt = bt.replace('\n', "\n    ");
+            let bf = bf.replace('\n', "\n    ");
+            return Some(format!("if {pexpr} {{\n    {bt}\n}} else {{\n    {bf}\n}}"));
+        }
+    }
     None
 }
 
@@ -685,5 +884,35 @@ mod tests {
             (vec![Value::Int(4), Value::Int(5)], Value::Int(2)),
         ]);
         assert!(try_universal(&p, "f").is_none());
+    }
+
+    #[test]
+    fn conditional_larger_of_two() {
+        // if a > b then a else b — a BRANCHING program no single expression fits.
+        let p = prob(vec![
+            (vec![Value::Int(1), Value::Int(2)], Value::Int(2)),
+            (vec![Value::Int(7), Value::Int(3)], Value::Int(7)),
+            (vec![Value::Int(5), Value::Int(5)], Value::Int(5)),
+            (vec![Value::Int(2), Value::Int(9)], Value::Int(9)),
+        ]);
+        // Solved either by the straight max atom or by the D&C tree — both valid.
+        let r = try_universal(&p, "larger").expect("must return the larger of two");
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
+    }
+
+    #[test]
+    fn conditional_piecewise_distinct_branches() {
+        // if a>b { a*a } else { b } — DISTINCT operations per branch, so no single
+        // arithmetic expression can fit; the D&C tree is required.
+        let p = prob(vec![
+            (vec![Value::Int(3), Value::Int(1)], Value::Int(9)),
+            (vec![Value::Int(1), Value::Int(4)], Value::Int(4)),
+            (vec![Value::Int(2), Value::Int(2)], Value::Int(2)),
+            (vec![Value::Int(5), Value::Int(1)], Value::Int(25)),
+            (vec![Value::Int(1), Value::Int(7)], Value::Int(7)),
+        ]);
+        let r = try_universal(&p, "pw").expect("must build if a>b then a*a else b");
+        assert_eq!(r.method, "universal-cond", "method={} code=\n{}", r.method, r.code);
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
     }
 }
