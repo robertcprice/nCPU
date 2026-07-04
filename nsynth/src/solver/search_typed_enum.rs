@@ -197,6 +197,66 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                             depth,
                         });
                     }
+                    // FILTER over the word list (second-order) — small
+                    // predicate set; OE keeps duplicates out of the pool.
+                    type WPred = (&'static str, fn(&str) -> bool);
+                    let preds: [WPred; 2] = [
+                        ("w.len % 2 == 0", |w| w.chars().count() % 2 == 0),
+                        ("w.len % 2 != 0", |w| w.chars().count() % 2 != 0),
+                    ];
+                    for (cond, pf) in preds {
+                        let outs: Vec<V> = e
+                            .outs
+                            .iter()
+                            .map(|v| {
+                                let V::L(l) = v else { unreachable!() };
+                                V::L(l.iter().filter(|w| pf(w)).cloned().collect())
+                            })
+                            .collect();
+                        let helper_name = format!("fp{}", hash8(cond));
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(format!(
+                            "fn filter_{helper_name}(ws: [string]) -> [string] {{\n    out: [string] = [];\n    for w in ws {{\n        if {cond} {{\n            out.push(w);\n        }}\n    }}\n    return out;\n}}\n"
+                        ));
+                        fresh.push(Expr {
+                            outs,
+                            mog: format!("filter_{helper_name}({})", e.mog),
+                            helpers,
+                            depth,
+                        });
+                    }
+                    // SORT the word list (alpha asc / by length asc).
+                    for (k_name, asc_alpha) in [("alpha", true), ("len", false)] {
+                        let outs: Vec<V> = e
+                            .outs
+                            .iter()
+                            .map(|v| {
+                                let V::L(l) = v else { unreachable!() };
+                                let mut l = l.clone();
+                                if asc_alpha {
+                                    l.sort();
+                                } else {
+                                    l.sort_by_key(|w| w.chars().count());
+                                }
+                                V::L(l)
+                            })
+                            .collect();
+                        let cmp = if asc_alpha {
+                            "ws[j] < ws[m]"
+                        } else {
+                            "ws[j].len < ws[m].len"
+                        };
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(format!(
+                            "fn sortw_{k_name}(xs: [string]) -> [string] {{\n    ws: [string] = [];\n    for e in xs {{\n        ws.push(e);\n    }}\n    i: i64 = 0;\n    while i < ws.len {{\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < ws.len {{\n            if {cmp} {{\n                m = j;\n            }}\n            j = j + 1;\n        }}\n        t: string = ws[i];\n        ws[i] = ws[m];\n        ws[m] = t;\n        i = i + 1;\n    }}\n    return ws;\n}}\n"
+                        ));
+                        fresh.push(Expr {
+                            outs,
+                            mog: format!("sortw_{k_name}({})", e.mog),
+                            helpers,
+                            depth,
+                        });
+                    }
                     // join with " " -> Str.
                     let outs: Vec<V> = e
                         .outs
