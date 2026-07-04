@@ -6,9 +6,14 @@ set -u
 BENCH="${1:?usage: run_mbpp_bench.sh <bench.jsonl> [timeout_s] [limit]}"
 TMO="${2:-5}"
 LIMIT="${3:-100000}"
-BIN="target/release/mbpp_solve_one"
+BIN="${MBPP_BIN:-target/release/mbpp_solve_one}"
 [ -x "$BIN" ] || BIN="target/debug/mbpp_solve_one"
 [ -x "$BIN" ] || { echo "build first: cargo build --release --bin mbpp_solve_one"; exit 1; }
+# SNAPSHOT the binary: another agent's hygiene loop may `cargo clean` mid-run,
+# which silently turns every remaining task into a spurious "killed" (observed:
+# 764/940 bogus kills). Run from an immutable copy.
+SNAP="$(mktemp -d)/mbpp_solve_one"
+cp "$BIN" "$SNAP" && BIN="$SNAP"
 
 solved=0; unsolved=0; skip=0; killed=0; n=0
 solved_ids=""
