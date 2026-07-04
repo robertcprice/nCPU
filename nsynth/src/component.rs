@@ -139,6 +139,16 @@ fn seed_components() -> Vec<ComponentSpec> {
                 smoke: Some(QUEUE_SMOKE.into()),
             }),
         },
+        ComponentSpec {
+            name: "text_tools".into(),
+            surfaces: s(&["text", "texttools", "normalizer", "normalize"]),
+            leaves: s(&["uppercase", "lowercase", "trim", "reverse_string"]),
+            glue: Some(GlueSpec {
+                module: "text_tools".into(),
+                code: TEXT_TOOLS_GLUE.into(),
+                smoke: Some(TEXT_TOOLS_SMOKE.into()),
+            }),
+        },
     ]
 }
 
@@ -494,6 +504,57 @@ mod queue_behaves {
         }
         assert_eq!(got, vec![1, 2, 3, 4, 5], "FIFO");
         assert_eq!(q.size(), 0);
+    }
+}
+"#;
+
+/// The FIRST STRING component: text utilities whose methods call the VERIFIED
+/// string leaves (uppercase/lowercase/trim/reverse_string, synthesized to
+/// `.to_uppercase()` etc.), plus a composed `normalize` = trim then lowercase.
+/// This is the type-domain widening past i64/Vec into strings.
+const TEXT_TOOLS_GLUE: &str = r#"//! Structural component: text utilities over the verified string leaves.
+
+use crate::uppercase::uppercase;
+use crate::lowercase::lowercase;
+use crate::trim::trim;
+use crate::reverse_string::reverse_string;
+
+pub struct TextTools;
+
+impl TextTools {
+    pub fn shout(s: String) -> String {
+        uppercase(s)
+    }
+    pub fn quiet(s: String) -> String {
+        lowercase(s)
+    }
+    pub fn clean(s: String) -> String {
+        trim(s)
+    }
+    pub fn flip(s: String) -> String {
+        reverse_string(s)
+    }
+    /// Composition of two verified leaves: trim, then lowercase.
+    pub fn normalize(s: String) -> String {
+        lowercase(trim(s))
+    }
+}
+"#;
+
+/// Behavioral contract for `TextTools`: each method matches the native Rust string
+/// operation, proving the SYNTHESIZED string leaves behave (and compose).
+const TEXT_TOOLS_SMOKE: &str = r#"
+#[cfg(test)]
+mod text_tools_behaves {
+    use super::TextTools;
+    #[test]
+    fn matches_native_string_ops() {
+        assert_eq!(TextTools::shout("hello".to_string()), "HELLO");
+        assert_eq!(TextTools::quiet("HELLO".to_string()), "hello");
+        assert_eq!(TextTools::clean("  hi  ".to_string()), "hi");
+        assert_eq!(TextTools::flip("abc".to_string()), "cba");
+        // composition: "  HeLLo  " -> trim -> "HeLLo" -> lowercase -> "hello"
+        assert_eq!(TextTools::normalize("  HeLLo  ".to_string()), "hello");
     }
 }
 "#;
@@ -1136,6 +1197,28 @@ mod tests {
             assert!(glue.contains("pub struct"), "{tag} struct present");
             let _ = std::fs::remove_dir_all(&root);
         }
+    }
+
+    #[test]
+    fn text_tools_string_component_compiles_and_behaves() {
+        // The type-domain widening: a STRING component whose methods call verified
+        // string leaves and compose two of them.
+        let bridge = LinguigenesisBridge::new();
+        let spec = resolve_component("text tools").expect("resolve text_tools");
+        let root = temp_root("texttools");
+        let build = build_component(&bridge, spec, &root).expect("build");
+        for leaf in ["uppercase", "lowercase", "trim", "reverse_string"] {
+            assert!(
+                build.leaves_verified.contains(&leaf.to_string()),
+                "{leaf} verified: {:?}",
+                build.leaves_verified
+            );
+        }
+        assert!(build.produces_structure());
+        assert!(build.outcome.compile.is_ok(), "string component compiles: {:?}", build.outcome.compile);
+        // shout/quiet/clean/flip/normalize match native string ops at runtime.
+        assert!(build.behaves(), "text_tools behavioral contract: {:?}", build.behavior);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

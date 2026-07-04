@@ -293,7 +293,10 @@ fn string_entity(
         "input_types": "string",
         "output_type": "string",
         "nsynth_category": "string",
-        "default_fn_name": "transform",
+        // Each string op gets its OWN fn name (like array_entity_with uses `lemma`),
+        // so it is addressable by name via synthesize_op_by_name — previously all
+        // string ops collided on "transform", making a specific one unselectable.
+        "default_fn_name": lemma,
         "signature_template": "fn {name}({params}) -> {return}",
         // Provenance: the engine codegen body this op corresponds to (e.g.
         // `s.lower()`), and that the example_cases were machine-mined.

@@ -277,6 +277,51 @@ fn transpile(mog: &str, target: Target) -> String {
     if target == Target::Python && out.trim().is_empty() {
         return String::from("pass\n");
     }
+    if target == Target::Rust {
+        return lower_rust_string_methods(&out);
+    }
+    out
+}
+
+/// Lower Mog string methods to their Rust equivalents, SCOPED to `String`-returning
+/// functions so array code (whose `.reverse()` is a loop, not a method) is never
+/// touched. Mog spells string ops `.upper()/.lower()/.trim()/.reverse()`; Rust needs
+/// `.to_uppercase()/.to_lowercase()/.trim().to_string()/.chars().rev().collect()`.
+/// Without this, synthesized string leaves compile-fail (`no method named upper`).
+fn lower_rust_string_methods(rust: &str) -> String {
+    let had_trailing_nl = rust.ends_with('\n');
+    let mut lines: Vec<String> = Vec::new();
+    let mut in_string_fn = false;
+    let mut depth: i32 = 0;
+    for line in rust.lines() {
+        let t = line.trim_start();
+        if t.starts_with("fn ") || t.starts_with("pub fn ") {
+            in_string_fn = line.contains("-> String") || line.contains("-> string");
+        }
+        let mapped = if in_string_fn {
+            line.replace(".upper()", ".to_uppercase()")
+                .replace(".lower()", ".to_lowercase()")
+                .replace(".reverse()", ".chars().rev().collect::<String>()")
+                .replace(".trim()", ".trim().to_string()")
+        } else {
+            line.to_string()
+        };
+        lines.push(mapped);
+        for c in line.chars() {
+            if c == '{' {
+                depth += 1;
+            } else if c == '}' {
+                depth -= 1;
+                if depth <= 0 {
+                    in_string_fn = false;
+                }
+            }
+        }
+    }
+    let mut out = lines.join("\n");
+    if had_trailing_nl {
+        out.push('\n');
+    }
     out
 }
 
