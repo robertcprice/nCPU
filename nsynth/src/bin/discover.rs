@@ -50,4 +50,15 @@ fn main() {
         "done: {total} novel verified compositions logged to {}",
         log.display()
     );
+
+    // FLYWHEEL: --promote <components.json> pushes every logged discovery into
+    // the live component-registry data file (merge by name), so discovered ops
+    // become NL-resolvable + buildable exactly like seeds on the next boot.
+    if let Some(out) = arg_val(&args, "--promote") {
+        let out = std::path::PathBuf::from(out);
+        match mog_synth::component_crawler::promote_discoveries(&log, &out) {
+            Ok(n) => println!("promoted: {n} new component(s) merged into {}", out.display()),
+            Err(e) => eprintln!("promotion failed: {e}"),
+        }
+    }
 }

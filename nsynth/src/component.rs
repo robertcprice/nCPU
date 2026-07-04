@@ -27,7 +27,7 @@ use crate::agent::repo::nl_fixture_harness::{
 };
 use crate::linguigenesis_bridge::LinguigenesisBridge;
 use linguigenesis_core::entity_resolution::{edit_distance, morphological_variants};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -35,7 +35,7 @@ use std::sync::OnceLock;
 /// verified leaves. Written verbatim next to the transpiled leaves and wired into
 /// `lib.rs`, then compile-gated with them. Owned (not `&'static`) so components can
 /// be loaded from DATA, not only baked into the binary.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GlueSpec {
     /// Glue module name (`src/<module>.rs`).
     pub module: String,
@@ -53,7 +53,7 @@ pub struct GlueSpec {
 
 /// A named unit bigger than a single op. Owned + `Deserialize` so the registry can
 /// be grown from a JSON data file (like `coding_registry.json`), not just the seeds.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ComponentSpec {
     /// Module + package name for the emitted component.
     pub name: String,

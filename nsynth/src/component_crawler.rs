@@ -237,6 +237,43 @@ pub fn crawl_once(
     found
 }
 
+/// CLOSE THE FLYWHEEL ACROSS SUBSTRATES: promote every discovery in the crawl
+/// log into the LIVE component-registry data file. Each discovered chain becomes
+/// a full data-driven `ComponentSpec` (same shape `chain_spec` builds when the
+/// crawler verifies it: unique leaves, apply-fn glue, grid-signature smoke),
+/// merged by name into `out_path` — the file `component::registry()` loads via
+/// `NSYNTH_COMPONENTS` / `data/components.json`. So a discovered op like
+/// `compose_square_increment` (x²+1) becomes NL-resolvable and buildable exactly
+/// like a seed component: the crawler literally writes its own teachers into the
+/// registry the front door reads. Returns how many NEW components were added
+/// (existing names are refreshed in place, not duplicated).
+pub fn promote_discoveries(log_path: &Path, out_path: &Path) -> Result<usize, String> {
+    let discovered = known_from_log(log_path);
+    if discovered.is_empty() {
+        return Ok(0);
+    }
+    let mut existing: Vec<crate::component::ComponentSpec> = std::fs::read_to_string(out_path)
+        .ok()
+        .and_then(|t| crate::component::parse_components_json(&t).ok())
+        .unwrap_or_default();
+    let mut added = 0usize;
+    for c in discovered {
+        let spec = chain_spec(&c.chain);
+        if let Some(slot) = existing.iter_mut().find(|e| e.name == spec.name) {
+            *slot = spec; // refresh in place
+        } else {
+            existing.push(spec);
+            added += 1;
+        }
+    }
+    if let Some(parent) = out_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::to_string_pretty(&existing).map_err(|e| e.to_string())?;
+    std::fs::write(out_path, json).map_err(|e| e.to_string())?;
+    Ok(added)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +329,52 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_dir_all(&work);
+    }
+
+    /// THE FLYWHEEL CLOSED: crawl -> promote -> the discovery is a live,
+    /// data-registry component that resolves, builds, compiles, and BEHAVES —
+    /// indistinguishable from a seed. Re-promotion is idempotent (merge by name).
+    #[test]
+    fn promoted_discoveries_become_live_buildable_components() {
+        let bridge = LinguigenesisBridge::new();
+        let tag = std::process::id();
+        let log = std::env::temp_dir().join(format!("nsynth_promo_log_{tag}.jsonl"));
+        let comps = std::env::temp_dir().join(format!("nsynth_promo_comps_{tag}.json"));
+        let work = std::env::temp_dir().join(format!("nsynth_promo_work_{tag}"));
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&comps);
+        let _ = std::fs::remove_dir_all(&work);
+
+        let found = crawl_once(&bridge, &log, &work, 2);
+        assert!(!found.is_empty(), "need discoveries to promote");
+
+        let added = promote_discoveries(&log, &comps).expect("promote");
+        assert_eq!(added, found.len(), "every discovery promoted once");
+
+        // The promoted file parses into full ComponentSpecs...
+        let text = std::fs::read_to_string(&comps).unwrap();
+        let specs = crate::component::parse_components_json(&text).expect("parse promoted");
+        assert_eq!(specs.len(), found.len());
+        let spec = specs
+            .iter()
+            .find(|s| s.name == found[0].name)
+            .expect("promoted spec present");
+        assert!(spec.glue.is_some(), "promoted component is structural");
+
+        // ...and one BUILDS end to end: verified leaves + glue + grid smoke.
+        let croot = work.join("promoted_build");
+        let build =
+            crate::component::build_component(&bridge, spec, &croot).expect("build promoted");
+        assert!(build.outcome.compile.is_ok(), "compiles: {:?}", build.outcome.compile);
+        assert!(build.behaves(), "grid contract passes: {:?}", build.behavior);
+
+        // Idempotent: promoting the same log again adds nothing new.
+        let again = promote_discoveries(&log, &comps).expect("re-promote");
+        assert_eq!(again, 0, "merge by name, no duplicates");
+
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&comps);
         let _ = std::fs::remove_dir_all(&work);
     }
 }
