@@ -75,24 +75,60 @@ pub(super) fn try_combinator(problem: &Problem, name: &str) -> Option<SolveResul
     let mut seen: HashSet<Vec<V>> = HashSet::new();
     seen.insert(seed.outs.clone());
 
-    // Element predicates (fixed, data-agnostic; a mined-threshold variant is a
-    // later increment). Each is (mog-cond-over-`e`, apply).
-    type Pred = (&'static str, fn(i64) -> bool);
-    let preds: [Pred; 5] = [
-        ("e % 2 == 0", |e| e % 2 == 0),
-        ("e % 2 != 0", |e| e % 2 != 0),
-        ("e > 0", |e| e > 0),
-        ("e < 0", |e| e < 0),
-        ("e != 0", |e| e != 0),
+    // Constants MINED from the task's own data: element values seen in the
+    // inputs plus the distinct expected-int outputs. These parametrize the
+    // threshold predicates and arithmetic maps below, so the basis stays
+    // emergent (the DATA supplies the constants, not a hand-list) while covering
+    // "> k", "% k == 0", "+ k", etc.
+    let mut consts: Vec<i64> = Vec::new();
+    for l in &inputs {
+        for &x in l {
+            if x.abs() <= 1000 && !consts.contains(&x) {
+                consts.push(x);
+            }
+        }
+    }
+    for e in &expected {
+        if let V::I(v) = e {
+            if v.abs() <= 1000 && !consts.contains(v) {
+                consts.push(*v);
+            }
+        }
+    }
+    consts.sort_unstable();
+    consts.dedup();
+    consts.truncate(10); // bound fan-out; best-first + budget handle the rest
+
+    // Element predicates: fixed class checks + mined thresholds.
+    let mut preds: Vec<(String, Box<dyn Fn(i64) -> bool>)> = vec![
+        ("e % 2 == 0".to_string(), Box::new(|e: i64| e % 2 == 0)),
+        ("e % 2 != 0".to_string(), Box::new(|e: i64| e % 2 != 0)),
+        ("e > 0".to_string(), Box::new(|e: i64| e > 0)),
+        ("e < 0".to_string(), Box::new(|e: i64| e < 0)),
+        ("e != 0".to_string(), Box::new(|e: i64| e != 0)),
     ];
-    // Element maps.
-    type Map = (&'static str, fn(i64) -> i64);
-    let maps: [Map; 4] = [
-        ("e * e", |e| e.wrapping_mul(e)),
-        ("0 - e", |e| -e),
-        ("e * 2", |e| e.wrapping_mul(2)),
-        ("e + 1", |e| e + 1),
+    for &k in &consts {
+        preds.push((format!("e > {k}"), Box::new(move |e: i64| e > k)));
+        preds.push((format!("e < {k}"), Box::new(move |e: i64| e < k)));
+        preds.push((format!("e == {k}"), Box::new(move |e: i64| e == k)));
+        if k > 1 {
+            preds.push((format!("e % {k} == 0"), Box::new(move |e: i64| e % k == 0)));
+        }
+    }
+    // Element maps: fixed + mined arithmetic.
+    let mut maps: Vec<(String, Box<dyn Fn(i64) -> i64>)> = vec![
+        ("e * e".to_string(), Box::new(|e: i64| e.wrapping_mul(e))),
+        ("0 - e".to_string(), Box::new(|e: i64| -e)),
     ];
+    for &k in &consts {
+        if k != 0 {
+            maps.push((format!("e + {k}"), Box::new(move |e: i64| e.wrapping_add(k))));
+            maps.push((format!("e * {k}"), Box::new(move |e: i64| e.wrapping_mul(k))));
+        }
+        if k > 1 {
+            maps.push((format!("e % {k}"), Box::new(move |e: i64| e % k)));
+        }
+    }
 
     let mut nodes = 0usize;
     for depth in 2..=MAX_DEPTH {
@@ -161,6 +197,64 @@ pub(super) fn try_combinator(problem: &Problem, name: &str) -> Option<SolveResul
                     mog: format!("__SORT[{}]({})", if desc { "desc" } else { "asc" }, e.mog),
                     depth,
                 });
+            }
+            // reverse : IL -> IL
+            {
+                let outs: Vec<V> = e
+                    .outs
+                    .iter()
+                    .map(|v| {
+                        let V::IL(l) = v else { unreachable!() };
+                        V::IL(l.iter().rev().copied().collect())
+                    })
+                    .collect();
+                fresh.push(Expr { outs, mog: format!("__REVERSE[_]({})", e.mog), depth });
+            }
+            // unique (order-preserving) : IL -> IL
+            {
+                let outs: Vec<V> = e
+                    .outs
+                    .iter()
+                    .map(|v| {
+                        let V::IL(l) = v else { unreachable!() };
+                        let mut seen_e = Vec::new();
+                        for &x in l {
+                            if !seen_e.contains(&x) {
+                                seen_e.push(x);
+                            }
+                        }
+                        V::IL(seen_e)
+                    })
+                    .collect();
+                fresh.push(Expr { outs, mog: format!("__UNIQUE[_]({})", e.mog), depth });
+            }
+            // scan (running fold) : IL -> IL  (prefix sum / max / min)
+            for op in ["sum", "max", "min"] {
+                let outs: Vec<V> = e
+                    .outs
+                    .iter()
+                    .map(|v| {
+                        let V::IL(l) = v else { unreachable!() };
+                        let mut acc: Option<i64> = None;
+                        let out: Vec<i64> = l
+                            .iter()
+                            .map(|&x| {
+                                let n = match acc {
+                                    None => x,
+                                    Some(a) => match op {
+                                        "sum" => a + x,
+                                        "max" => a.max(x),
+                                        _ => a.min(x),
+                                    },
+                                };
+                                acc = Some(n);
+                                n
+                            })
+                            .collect();
+                        V::IL(out)
+                    })
+                    .collect();
+                fresh.push(Expr { outs, mog: format!("__SCAN[{op}]({})", e.mog), depth });
             }
             // fold[op] : IL -> I  (sum / product / max / min / count)
             for op in ["sum", "product", "max", "min", "count"] {
@@ -336,6 +430,32 @@ fn compile(ir: &str, helpers: &mut Vec<String>) -> String {
                 _ => "acc: i64 = xs[0];\n    for e in xs {\n        if e < acc {\n            acc = e;\n        }\n    }\n    return acc;",
             };
             helpers.push(format!("fn {fname}(xs: [i64]) -> i64 {{\n    {body}\n}}\n"));
+            format!("{fname}({inner_expr})")
+        }
+        "REVERSE" => {
+            let fname = format!("cr{id}");
+            helpers.push(format!(
+                "fn {fname}(xs: [i64]) -> [i64] {{\n    out: [i64] = [];\n    i: i64 = xs.len - 1;\n    while i >= 0 {{\n        out.push(xs[i]);\n        i = i - 1;\n    }}\n    return out;\n}}\n"
+            ));
+            format!("{fname}({inner_expr})")
+        }
+        "UNIQUE" => {
+            let fname = format!("cu{id}");
+            helpers.push(format!(
+                "fn {fname}(xs: [i64]) -> [i64] {{\n    out: [i64] = [];\n    for e in xs {{\n        hit: i64 = 0;\n        for k in out {{\n            if k == e {{\n                hit = 1;\n            }}\n        }}\n        if hit == 0 {{\n            out.push(e);\n        }}\n    }}\n    return out;\n}}\n"
+            ));
+            format!("{fname}({inner_expr})")
+        }
+        "SCAN" => {
+            let fname = format!("cn{id}");
+            let upd = match param {
+                "sum" => "acc = acc + e;",
+                "max" => "if e > acc {\n                acc = e;\n            }",
+                _ => "if e < acc {\n                acc = e;\n            }",
+            };
+            helpers.push(format!(
+                "fn {fname}(xs: [i64]) -> [i64] {{\n    out: [i64] = [];\n    acc: i64 = 0;\n    first: i64 = 1;\n    for e in xs {{\n        if first == 1 {{\n            acc = e;\n            first = 0;\n        }} else {{\n            {upd}\n        }}\n        out.push(acc);\n    }}\n    return out;\n}}\n"
+            ));
             format!("{fname}({inner_expr})")
         }
         "ANY" | "ALL" => {
