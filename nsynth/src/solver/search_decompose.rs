@@ -211,7 +211,9 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
-    // Single STRING input with LIST output: structural string->list schemas.
+    // Single STRING input with LIST output: structural string->list schemas
+    // (prefixes), then the typed enum's word-splitting ([string] output —
+    // split_words on whitespace, words_string tokenized on commas and spaces).
     if first.inputs.len() == 1
         && matches!(first.inputs[0], Value::Str(_))
         && matches!(first.expected, Value::Array(_))
@@ -223,6 +225,11 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         IN_DECOMPOSE.with(|f| f.set(true));
         let result = try_prefixes(problem, name);
         IN_DECOMPOSE.with(|f| f.set(false));
+        if result.is_none() {
+            if let Some(r) = super::search_typed_enum::try_typed_enum_str(problem, name) {
+                return Some(r);
+            }
+        }
         let (code, method) = result?;
         if crate::runtime::code_reproduces_examples(&code, examples) {
             return Some(SolveResult { success: true, code, method, error: None, metadata: Default::default() });

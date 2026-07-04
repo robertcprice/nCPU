@@ -76,6 +76,13 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
         .map(|ex| match &ex.expected {
             Value::Str(s) => Some(V::S(s.clone())),
             Value::Int(i) => Some(V::I(*i)),
+            // Word-list output (split_words, words_string): a [string] the enum
+            // reaches via split / tokenize_cs.
+            Value::Array(a) => a
+                .iter()
+                .map(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+                .collect::<Option<Vec<String>>>()
+                .map(V::L),
             _ => None,
         })
         .collect::<Option<_>>()?;
@@ -445,6 +452,7 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
             }
             let ret_ty = match expected[0] {
                 V::I(_) => "i64",
+                V::L(_) => "[string]",
                 _ => "string",
             };
             let code = format!(
@@ -634,6 +642,58 @@ mod tests {
             ..Problem::default()
         };
         let r = try_typed_enum_str(&p, "count_upper").expect("must find uvowel-even-count");
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
+    }
+
+    fn prob_list(rows: &[(&str, &[&str])]) -> Problem {
+        Problem {
+            name: "t".to_string(),
+            examples: rows
+                .iter()
+                .map(|(i, o)| Example {
+                    inputs: vec![Value::Str(i.to_string())],
+                    expected: Value::Array(o.iter().map(|s| Value::Str(s.to_string())).collect()),
+                })
+                .collect(),
+            ..Problem::default()
+        }
+    }
+
+    #[test]
+    fn splits_words_on_whitespace() {
+        // split_words -> [string], whitespace split (list OUTPUT).
+        let p = prob_list(&[
+            ("Hello world", &["Hello", "world"]),
+            ("a b c", &["a", "b", "c"]),
+            ("one two", &["one", "two"]),
+        ]);
+        let r = try_typed_enum_str(&p, "split_words").expect("must split on whitespace to a list");
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
+    }
+
+    #[test]
+    fn words_string_real_seed() {
+        // The real HumanEval words_string seed (first 4 examples).
+        let p = prob_list(&[
+            ("Hi, my name is John", &["Hi", "my", "name", "is", "John"]),
+            ("One, two, three, four, five, six", &["One", "two", "three", "four", "five", "six"]),
+            ("Hi, my name", &["Hi", "my", "name"]),
+            ("One,, two, three, four, five, six,", &["One", "two", "three", "four", "five", "six"]),
+        ]);
+        let r = try_typed_enum_str(&p, "words_string");
+        assert!(r.is_some(), "enum returned None on the real words_string seed");
+        assert!(crate::runtime::code_reproduces_examples(&r.unwrap().code, &p.examples));
+    }
+
+    #[test]
+    fn words_string_tokenizes_to_list() {
+        // words_string -> [string], split on commas OR spaces.
+        let p = prob_list(&[
+            ("Hi, my name", &["Hi", "my", "name"]),
+            ("one,two,three", &["one", "two", "three"]),
+            ("a b c", &["a", "b", "c"]),
+        ]);
+        let r = try_typed_enum_str(&p, "words_string").expect("must tokenize to a list");
         assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
     }
 
