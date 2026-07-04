@@ -341,6 +341,15 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
             return result;
         }
     }
+    // Polynomial float lane: affine refuses `πr²` / `(4/3)πr³` / `k·a·b` — the
+    // geometry formulas MBPP's float tasks are made of. Parsimony-laddered power
+    // products, over-determination-gated, same round-then-reverify contract.
+    if let Some(result) = super::search_float::search_float_poly(problem, &problem.function_name())
+    {
+        if result.success {
+            return result;
+        }
+    }
 
     let router_ctx = post_enumerative_context(problem);
 
