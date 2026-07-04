@@ -78,6 +78,16 @@ pub const BUILTIN_COMPONENTS: &[ComponentSpec] = &[
             smoke: Some(COUNTER_SMOKE),
         }),
     },
+    ComponentSpec {
+        name: "accumulator",
+        surfaces: &["accumulator", "accumulate", "accumulation"],
+        leaves: &["add"],
+        glue: Some(GlueSpec {
+            module: "accumulator",
+            code: ACCUMULATOR_GLUE,
+            smoke: Some(ACCUMULATOR_SMOKE),
+        }),
+    },
 ];
 
 /// Behavioral contract for `Counter`: three ticks must land on 3. This asserts the
@@ -93,6 +103,49 @@ mod counter_behaves {
         c.tick();
         c.tick();
         assert_eq!(c.get(), 3);
+    }
+}
+"#;
+
+/// A running total whose `accumulate(x)` folds `x` in via the VERIFIED 2-arg `add`
+/// leaf. Proves the structural pattern generalizes past a nullary tick: the method
+/// takes an ARGUMENT and the backing leaf is binary.
+const ACCUMULATOR_GLUE: &str = r#"//! Structural component: an Accumulator that folds values via the verified `add` leaf.
+
+use crate::add::add;
+
+#[derive(Default)]
+pub struct Accumulator {
+    total: i64,
+}
+
+impl Accumulator {
+    pub fn new() -> Self {
+        Accumulator { total: 0 }
+    }
+    /// Fold a value into the running total using the synthesized + verified `add` op.
+    pub fn accumulate(&mut self, x: i64) {
+        self.total = add(self.total, x);
+    }
+    pub fn total(&self) -> i64 {
+        self.total
+    }
+}
+"#;
+
+/// Behavioral contract for `Accumulator`: 5 + 3 + 10 must total 18 — proving the
+/// synthesized `add` genuinely sums its two arguments.
+const ACCUMULATOR_SMOKE: &str = r#"
+#[cfg(test)]
+mod accumulator_behaves {
+    use super::Accumulator;
+    #[test]
+    fn folds_values_into_the_total() {
+        let mut a = Accumulator::new();
+        a.accumulate(5);
+        a.accumulate(3);
+        a.accumulate(10);
+        assert_eq!(a.total(), 18);
     }
 }
 "#;
@@ -361,11 +414,17 @@ pub struct ProjectBuild {
     /// Glue module names emitted (structural components in the project).
     pub structs: Vec<String>,
     pub outcome: WriteOutcome,
+    /// Behavioral rung for the whole crate: runs every structural component's
+    /// smoke contract in one `cargo test`. `NotRun` when no component declares one.
+    pub behavior: BehaviorStatus,
 }
 
 impl ProjectBuild {
     pub fn compiles(&self) -> bool {
         matches!(self.outcome.compile, CompileStatus::Ok)
+    }
+    pub fn behaves(&self) -> bool {
+        self.behavior.passed()
     }
 }
 
@@ -396,6 +455,7 @@ pub fn build_project(
     let mut outcome = write_synthesized_project(root, &pkg, &components)?;
 
     let mut structs: Vec<String> = Vec::new();
+    let mut any_smoke = false;
     if outcome.compile.is_ok() {
         let mut wired_any = false;
         for spec in specs {
@@ -404,6 +464,7 @@ pub fn build_project(
                     outcome.written.push(format!("src/{}.rs", glue.module));
                     structs.push(glue.module.to_string());
                     wired_any = true;
+                    any_smoke |= glue.smoke.is_some();
                 }
             }
         }
@@ -411,12 +472,19 @@ pub fn build_project(
             outcome.compile = compile_gate(root);
         }
     }
+    // Behavioral rung: one `cargo test` runs every structural smoke contract.
+    let behavior = if any_smoke && outcome.compile.is_ok() {
+        BehaviorStatus::from_gate(behavior_gate(root))
+    } else {
+        BehaviorStatus::NotRun
+    };
 
     Ok(ProjectBuild {
         components: specs.iter().map(|s| s.name.to_string()).collect(),
         leaves_verified,
         structs,
         outcome,
+        behavior,
     })
 }
 
@@ -506,6 +574,22 @@ mod tests {
     }
 
     #[test]
+    fn accumulator_structural_component_folds_via_a_binary_leaf() {
+        // Second structural component: a method that takes an ARGUMENT, backed by
+        // the 2-arg `add` leaf — proves the glue pattern generalizes past Counter.
+        let bridge = LinguigenesisBridge::new();
+        let spec = resolve_component("an accumulator").expect("resolve accumulator");
+        let root = temp_root("accum");
+        let build = build_component(&bridge, spec, &root).expect("build");
+        assert!(build.leaves_verified.contains(&"add".to_string()), "add leaf verified");
+        assert!(build.produces_structure());
+        assert!(build.outcome.compile.is_ok(), "compiles: {:?}", build.outcome.compile);
+        // 5 + 3 + 10 == 18 at runtime -> the synthesized `add` genuinely sums.
+        assert!(build.behaves(), "accumulator behavioral contract: {:?}", build.behavior);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn multi_component_project_wires_struct_and_bundle_into_one_crate() {
         // One prompt naming two concepts resolves to two components...
         let specs = resolve_components("a counter and some array statistics");
@@ -533,6 +617,8 @@ mod tests {
         );
         // one crate, compiles together
         assert!(build.compiles(), "project compiles: {:?}", build.outcome.compile);
+        // and its structural component's behavioral contract runs + passes in-crate.
+        assert!(build.behaves(), "project behavior: {:?}", build.behavior);
         // struct + a bundle leaf share the SAME lib.rs
         let lib = std::fs::read_to_string(root.join("src/lib.rs")).unwrap();
         assert!(
