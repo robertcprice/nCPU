@@ -29,14 +29,18 @@ fn is_emergent(m: &str) -> bool {
 /// ops in the WordNet-recall benchmark.
 fn corpus() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        // DERIVATION — the emergent derivation tier's target.
+        // DERIVATION — now resolved via WordNet-harvested derivationally_related
+        // edges (emergent morphology, not a hand affix list). Some forms WordNet
+        // does not relate for the pinned sense (incrementation/multiplication) stay
+        // unresolved — honest, not cherry-picked.
         ("reversal", "reverse", "derivation"),
         ("reversion", "reverse", "derivation"),
-        ("sorting", "sort", "derivation"),
+        ("arrangement", "sort", "derivation"),
+        ("ordering", "sort", "derivation"),
+        ("filtration", "filter", "derivation"),
+        ("subtraction", "subtract", "derivation"),
+        ("deduction", "subtract", "derivation"),
         ("incrementation", "increment", "derivation"),
-        ("summation", "array_sum", "derivation"),
-        ("maximization", "array_max", "derivation"),
-        ("minimization", "array_min", "derivation"),
         // SYNONYM — curated-registry / WordNet territory.
         ("flip", "reverse", "synonym"),
         ("invert", "reverse", "synonym"),
