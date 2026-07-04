@@ -15,6 +15,21 @@ use crate::benchmark::{generated_holdouts, Problem, Value as BenchmarkValue};
 /// loop arms (`While`, `ForTo`, `ForInRange`, `ForIn`, `ForParallel`) agree.
 const MAX_LOOP_ITERS: usize = 100_000;
 
+/// Global fuel: total loop iterations + user-function calls across ONE
+/// entry-point execution (`call_function` resets it). The per-loop
+/// [`MAX_LOOP_ITERS`] caps compose MULTIPLICATIVELY under nesting — a capped
+/// 100k-iteration outer `while` whose body runs a √n inner `while` is ~3×10⁷
+/// interpreted steps, measured at ~58 wall-seconds for ONE candidate execution —
+/// so only a single global budget actually bounds execution time. Generous:
+/// legitimate synthesized programs use well under 1% of this.
+const MAX_TOTAL_STEPS: u64 = 2_000_000;
+
+/// Per-value size caps. Fuel bounds ITERATIONS, not ALLOCATION: `s = s + s`
+/// doubles per iteration (2^60 bytes in 60 fuel-cheap steps), so growth sites
+/// (string concat, array push) enforce these directly.
+const MAX_VALUE_BYTES: usize = 4_000_000;
+const MAX_VALUE_ELEMS: usize = 1_000_000;
+
 /// Max nested user-function-call recursion depth before a candidate is rejected.
 /// Without this, a non-terminating recursive candidate overflows the native
 /// stack and ABORTS the process — a stack overflow is NOT recoverable via
@@ -826,6 +841,28 @@ pub fn execute_function(
     runtime.call_function(function_name, args)
 }
 
+/// Execute an already-parsed program's entry function. Use when the SAME source
+/// is run many times (e.g. a fixed op set searched over thousands of inputs):
+/// [`execute_function`] re-lexes/parses on every call, which dominates such a
+/// loop; parse once, then call this. The program is cloned into a fresh Runtime
+/// per call (cheaper than re-parsing) so runs stay independent. Not cached
+/// internally on purpose — the caller owns the parsed program, avoiding the
+/// unbounded growth an in-`execute_function` cache would suffer on the
+/// verify path (where every candidate source is distinct and run once).
+pub fn execute_parsed(
+    program: &Program,
+    function_name: &str,
+    args: &[BenchmarkValue],
+    problem_name: &str,
+) -> Result<Value, String> {
+    let runtime = Runtime::new(program.clone());
+    let args = args
+        .iter()
+        .map(|value| runtime_value_from_problem(value, problem_name))
+        .collect::<Result<Vec<_>, _>>()?;
+    runtime.call_function(function_name, args)
+}
+
 /// Install (exactly once, process-wide) a no-op panic hook so a panic caught by
 /// `catch_unwind` on the verify path does not spam stderr with a backtrace.
 /// This keeps the verify output deterministic and quiet; the `Result` returned
@@ -918,6 +955,70 @@ pub fn execute_program(code: &str) -> Result<ExecutionResult, String> {
 /// benchmark value (`benchmark::Value`). Handles int, bool, string, array, and
 /// pair outputs uniformly — this is what lets string/array-output problems
 /// verify through the main pipeline.
+/// Does `code` reproduce EVERY (inputs -> expected) example? Executes the entry fn
+/// per example and checks `output_matches`. The entry fn is the first `fn <name>(`.
+///
+/// This exists because `solve_problem` solves a `synthesis_view()` that CLEARS
+/// `holdouts`/`reference_code` (so the solver never fits them) AND never re-checks
+/// them — so a caller that reserved a held-out generalization probe (the LLM
+/// example lanes) MUST re-verify the solved code against those holdouts HERE,
+/// post-solve, or the probe is cosmetic. Returns false on a parse/exec error or any
+/// mismatch. Empty `examples` -> true (nothing to disprove).
+pub fn code_reproduces_examples(code: &str, examples: &[crate::benchmark::Example]) -> bool {
+    let Some(fn_name) = code
+        .split("fn ")
+        .nth(1)
+        .and_then(|s| s.split('(').next())
+        .map(str::trim)
+    else {
+        return false;
+    };
+    examples.iter().all(|ex| {
+        match execute_function(code, fn_name, &ex.inputs, fn_name) {
+            Ok(got) => output_matches(&got, &ex.expected),
+            Err(_) => false,
+        }
+    })
+}
+
+/// Like [`code_reproduces_examples`] but returns a human-readable description of the
+/// FIRST failure (for an LLM repair loop), or `None` when `code` reproduces every
+/// example. Reports parse errors, runtime errors, and value mismatches concretely
+/// ("f([1,2]) returned 3 but expected 5"), so the model can fix the actual bug.
+pub fn describe_first_failure(
+    code: &str,
+    examples: &[crate::benchmark::Example],
+) -> Option<String> {
+    let fn_name = match code
+        .split("fn ")
+        .nth(1)
+        .and_then(|s| s.split('(').next())
+        .map(str::trim)
+    {
+        Some(n) if !n.is_empty() => n,
+        _ => return Some("no `fn <name>(...)` found — output a single Mog function".to_string()),
+    };
+    for ex in examples {
+        match execute_function(code, fn_name, &ex.inputs, fn_name) {
+            Ok(got) => {
+                if !output_matches(&got, &ex.expected) {
+                    return Some(format!(
+                        "{fn_name}({:?}) returned {:?} but expected {:?}",
+                        ex.inputs, got, ex.expected
+                    ));
+                }
+            }
+            Err(e) => {
+                return Some(format!(
+                    "{fn_name}({:?}) failed to run: {e}",
+                    ex.inputs
+                ));
+            }
+        }
+    }
+    None
+}
+
 fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
     use crate::benchmark::Value as BV;
     match (actual, expected) {
@@ -1107,7 +1208,56 @@ fn tree_struct_matches(fields: &HashMap<String, Value>, nodes: &[crate::benchmar
     })
 }
 
+/// Builtins statically DENIED in any candidate submitted for verification.
+/// The runtime `verify_mode` denial only fires if the call EXECUTES on probe
+/// inputs — a call behind an untriggered branch (`if a == 31337 {
+/// write_file(..) }`) passes every probe and would ship inside a "verified"
+/// program. Verified candidates are pure compute; IO/threading builtins have no
+/// place in one regardless of reachability, so they are rejected by a static
+/// walk over every function body before anything runs.
+const DENIED_VERIFY_BUILTINS: &[&str] =
+    &["open_file", "read_file", "write_file", "close_file", "spawn", "send", "recv"];
+
+/// Static capability check: `Ok(Some(name))` if `code` calls a denied builtin
+/// name anywhere (reachable or not). Deliberately fail-closed on the NAME even
+/// if an in-program function shadows it — the runtime resolves these names to
+/// the builtin regardless (a "shadow" would be denied at execution anyway), and
+/// synthesized code has no legitimate reason to use them. `Err` on parse
+/// failure.
+pub fn code_mentions_denied_builtin(code: &str) -> Result<Option<String>, String> {
+    let program = parse_program(code)?;
+    let denied: std::collections::HashSet<&str> = DENIED_VERIFY_BUILTINS.iter().copied().collect();
+    // Empty "defined"/"builtins" sets: collect EVERY call name, including ones
+    // that resolve to in-program definitions (see fail-closed note above).
+    let no_defined: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let no_builtins: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut calls = Vec::new();
+    for function in program.functions.values() {
+        collect_calls_from_stmts(&function.body, &mut calls, &no_defined, &no_builtins);
+    }
+    for impl_block in &program.impls {
+        for method in &impl_block.methods {
+            collect_calls_from_stmts(&method.body, &mut calls, &no_defined, &no_builtins);
+        }
+    }
+    Ok(calls.into_iter().find(|c| denied.contains(c.as_str())))
+}
+
+/// Reject a candidate that statically mentions a denied builtin. Shared gate for
+/// both verify entry points.
+fn deny_unverifiable_capabilities(code: &str) -> Result<(), String> {
+    if let Some(builtin) = code_mentions_denied_builtin(code)? {
+        return Err(format!(
+            "candidate DENIED: calls IO/threading builtin `{builtin}` — side effects \
+             cannot be verified by I/O probing (a branch-guarded call passes every \
+             probe unexecuted)"
+        ));
+    }
+    Ok(())
+}
+
 pub fn verify_problem_code(problem: &Problem, code: &str) -> Result<(), String> {
+    deny_unverifiable_capabilities(code)?;
     let fn_name = problem.function_name();
     for example in &problem.examples {
         let value = execute_function_for_problem(code, fn_name, &example.inputs, problem)?;
@@ -1122,6 +1272,7 @@ pub fn verify_problem_code(problem: &Problem, code: &str) -> Result<(), String> 
 }
 
 pub fn verify_problem_code_strict(problem: &Problem, code: &str) -> Result<(), String> {
+    deny_unverifiable_capabilities(code)?;
     verify_problem_code_via_main(problem, code)?;
     let fn_name = problem.function_name();
     let holdouts = generated_holdouts(problem);
@@ -1574,6 +1725,17 @@ fn expect_int(value: &Value) -> Result<i64, String> {
     }
 }
 
+/// Total order for the `<`/`>`/`<=`/`>=` operators over comparable value types:
+/// ints numerically and strings lexicographically (so string sorting and char
+/// comparison work). Cross-type / non-orderable operands are an error.
+fn cmp_values(lhs: &Value, rhs: &Value) -> Result<std::cmp::Ordering, String> {
+    match (lhs, rhs) {
+        (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+        (Value::Str(a), Value::Str(b)) => Ok(a.cmp(b)),
+        _ => Err(format!("cannot order {:?} and {:?}", lhs, rhs)),
+    }
+}
+
 /// Coerce an int or float value to `f64` for float arithmetic (an `Int` operand
 /// in a float expression is widened, matching how `1 + 2.5` reads).
 fn as_f64(value: &Value) -> Result<f64, String> {
@@ -1691,6 +1853,34 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                             other => other,
                         };
                         value.push(mapped);
+                    }
+                    other => value.push(other),
+                }
+            }
+            out.push(Token::Str(value));
+            continue;
+        }
+
+        // Char literal `'a'` — sugar for a 1-char string (chars ARE 1-char strings
+        // in Mog), so `ch == 'a'` matches `for ch in s`. Supports the same escapes.
+        if ch == '\'' {
+            chars.next();
+            let mut value = String::new();
+            while let Some(next) = chars.next() {
+                match next {
+                    '\'' => break,
+                    '\\' => {
+                        let esc = chars
+                            .next()
+                            .ok_or_else(|| "unterminated char escape".to_string())?;
+                        value.push(match esc {
+                            'n' => '\n',
+                            't' => '\t',
+                            '\'' => '\'',
+                            '\\' => '\\',
+                            '0' => '\0',
+                            other => other,
+                        });
                     }
                     other => value.push(other),
                 }
@@ -2964,6 +3154,9 @@ struct Runtime {
     /// so a non-terminating recursive candidate is rejected (Err) rather than
     /// allowed to stack-overflow and abort the process during verification.
     call_depth: Cell<u32>,
+    /// Global step counter (loop iterations + user calls) for this execution,
+    /// bounded by [`MAX_TOTAL_STEPS`]. Reset at each `call_function` entry.
+    steps: Cell<u64>,
 }
 
 struct MutexChannel {
@@ -3135,6 +3328,7 @@ impl Runtime {
             type_inference_cache: RefCell::new(HashMap::new()),
             verify_mode: Cell::new(false),
             call_depth: Cell::new(0),
+            steps: Cell::new(0),
         }
     }
 
@@ -3159,6 +3353,10 @@ impl Runtime {
     }
 
     fn call_function(&self, function_name: &str, args: Vec<Value>) -> Result<Value, String> {
+        // Entry point: fresh global step budget for this execution (long-lived
+        // Runtimes call this repeatedly; earlier executions must not starve
+        // later ones).
+        self.steps.set(0);
         // Check for qualified method calls (Type::method)
         if function_name.contains("::") {
             let parts: Vec<&str> = function_name.split("::").collect();
@@ -3305,11 +3503,35 @@ impl Runtime {
         })
     }
 
+    /// Burn one unit of the global step budget; `Err` once [`MAX_TOTAL_STEPS`]
+    /// is exhausted. Called on every loop iteration and user-function call so
+    /// nested loops cannot multiply per-loop caps into unbounded wall time.
+    fn burn_step(&self) -> Result<(), String> {
+        let s = self.steps.get() + 1;
+        if s > MAX_TOTAL_STEPS {
+            return Err(format!(
+                "execution exceeded the global step budget ({MAX_TOTAL_STEPS})"
+            ));
+        }
+        self.steps.set(s);
+        Ok(())
+    }
+
     fn call_decl(&self, function: &Function, args: Vec<Value>, env: Env) -> Result<Value, String> {
         // Bound recursion depth so a non-terminating recursive candidate is
         // rejected rather than overflowing the native stack and aborting the
-        // process (which catch_unwind cannot recover). Increment on entry,
-        // always decrement on exit so the counter is correct across error paths.
+        // process (which catch_unwind cannot recover). The decrement lives in a
+        // Drop guard so it also runs when the body PANICS (a panic caught by
+        // catch_unwind at the verify boundary would otherwise leak the counter
+        // upward and poison every later candidate on this Runtime).
+        struct DepthGuard<'a>(&'a Cell<u32>);
+        impl Drop for DepthGuard<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() - 1);
+            }
+        }
+
+        self.burn_step()?;
         let depth = self.call_depth.get() + 1;
         if depth > MAX_CALL_DEPTH {
             return Err(format!(
@@ -3317,23 +3539,19 @@ impl Runtime {
             ));
         }
         self.call_depth.set(depth);
+        let _guard = DepthGuard(&self.call_depth);
 
-        let result = (|| {
-            let local = env.child();
-            for (idx, param) in function.params.iter().enumerate() {
-                let value = args.get(idx).cloned().unwrap_or(Value::Unit);
-                local.define(param, value);
-            }
-            match self.exec_block(&function.body, local)? {
-                Control::Return(value) => Ok(value),
-                Control::Next => Ok(Value::Unit),
-                Control::Break(_) => Err("break outside loop".to_string()),
-                Control::Continue(_) => Err("continue outside loop".to_string()),
-            }
-        })();
-
-        self.call_depth.set(self.call_depth.get() - 1);
-        result
+        let local = env.child();
+        for (idx, param) in function.params.iter().enumerate() {
+            let value = args.get(idx).cloned().unwrap_or(Value::Unit);
+            local.define(param, value);
+        }
+        match self.exec_block(&function.body, local)? {
+            Control::Return(value) => Ok(value),
+            Control::Next => Ok(Value::Unit),
+            Control::Break(_) => Err("break outside loop".to_string()),
+            Control::Continue(_) => Err("continue outside loop".to_string()),
+        }
     }
 
     fn exec_block(&self, stmts: &[Stmt], env: Env) -> Result<Control, String> {
@@ -3415,6 +3633,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 while truthy(&self.eval_expr(condition, env.clone())?) {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3448,6 +3667,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 for item in start..end {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3482,6 +3702,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 for item in start..end {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3513,11 +3734,15 @@ impl Runtime {
                 let iterable = self.eval_expr(iterable, env.clone())?;
                 let items = match iterable {
                     Value::Array(items) => items,
+                    // A string is iterable as its chars (each a 1-char string), so
+                    // `for ch in s { ... }` works and `ch == "a"` / `ch == 'a'` match.
+                    Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
                     other => return Err(format!("cannot iterate over {:?}", other)),
                 };
                 let mut iters = 0usize;
                 for item in items {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3563,6 +3788,7 @@ impl Runtime {
                 let mut iters = 0usize;
                 for item in range {
                     iters += 1;
+                    self.burn_step()?;
                     if iters > MAX_LOOP_ITERS {
                         return Err("loop exceeded iteration limit".to_string());
                     }
@@ -3936,7 +4162,17 @@ impl Runtime {
                     .checked_add(b)
                     .map(Value::Int)
                     .ok_or_else(|| "integer overflow in +".to_string()),
-                (Value::Str(a), Value::Str(b)) => Ok(Value::Str(a + &b)),
+                (Value::Str(a), Value::Str(b)) => {
+                    // Cap result size: repeated self-concat doubles per loop
+                    // iteration, so a fuel-bounded loop can still amplify to
+                    // exabytes (2^60) of allocation. Reject instead of OOM.
+                    if a.len() + b.len() > MAX_VALUE_BYTES {
+                        return Err(format!(
+                            "string exceeds the {MAX_VALUE_BYTES}-byte value cap"
+                        ));
+                    }
+                    Ok(Value::Str(a + &b))
+                }
                 (a, b) => Err(format!("unsupported + operands {:?} and {:?}", a, b)),
             },
             BinaryOp::Sub => {
@@ -3996,10 +4232,12 @@ impl Runtime {
             BinaryOp::Or => Ok(Value::Bool(truthy(&lhs) || truthy(&rhs))),
             BinaryOp::Eq => Ok(Value::Bool(value_eq(&lhs, &rhs))),
             BinaryOp::Ne => Ok(Value::Bool(!value_eq(&lhs, &rhs))),
-            BinaryOp::Lt => Ok(Value::Bool(expect_int(&lhs)? < expect_int(&rhs)?)),
-            BinaryOp::Gt => Ok(Value::Bool(expect_int(&lhs)? > expect_int(&rhs)?)),
-            BinaryOp::Le => Ok(Value::Bool(expect_int(&lhs)? <= expect_int(&rhs)?)),
-            BinaryOp::Ge => Ok(Value::Bool(expect_int(&lhs)? >= expect_int(&rhs)?)),
+            // Ordering works on ints AND strings (lexicographic), so string sorting
+            // and char comparison (`ch < 'z'`) evaluate.
+            BinaryOp::Lt => Ok(Value::Bool(cmp_values(&lhs, &rhs)? == std::cmp::Ordering::Less)),
+            BinaryOp::Gt => Ok(Value::Bool(cmp_values(&lhs, &rhs)? == std::cmp::Ordering::Greater)),
+            BinaryOp::Le => Ok(Value::Bool(cmp_values(&lhs, &rhs)? != std::cmp::Ordering::Greater)),
+            BinaryOp::Ge => Ok(Value::Bool(cmp_values(&lhs, &rhs)? != std::cmp::Ordering::Less)),
         }
     }
 
@@ -4062,6 +4300,13 @@ impl Runtime {
                         .into_iter()
                         .next()
                         .ok_or_else(|| "push requires one argument".to_string())?;
+                    // Cap array growth (see the string-concat cap: bounded
+                    // iteration count does not bound allocation).
+                    if items.len() >= MAX_VALUE_ELEMS {
+                        return Err(format!(
+                            "array exceeds the {MAX_VALUE_ELEMS}-element value cap"
+                        ));
+                    }
                     items.push(value);
                     Ok(Value::Unit)
                 }
@@ -4233,6 +4478,52 @@ impl Runtime {
                     } else {
                         Ok(Value::Str(chars[start..end].iter().collect()))
                     }
+                }
+                // Char-level surface: iterate/inspect a string as chars (each char
+                // is a 1-char string, consistent with `s[i]` and `for ch in s`).
+                "chars" => Ok(Value::Array(
+                    value.chars().map(|c| Value::Str(c.to_string())).collect(),
+                )),
+                "is_digit" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()),
+                )),
+                "is_alpha" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| c.is_alphabetic()),
+                )),
+                "is_alnum" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| c.is_alphanumeric()),
+                )),
+                "is_space" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| c.is_whitespace()),
+                )),
+                "is_upper" => Ok(Value::Bool(
+                    value.chars().any(|c| c.is_uppercase())
+                        && !value.chars().any(|c| c.is_lowercase()),
+                )),
+                "is_lower" => Ok(Value::Bool(
+                    value.chars().any(|c| c.is_lowercase())
+                        && !value.chars().any(|c| c.is_uppercase()),
+                )),
+                "is_vowel" => Ok(Value::Bool(
+                    !value.is_empty() && value.chars().all(|c| "aeiouAEIOU".contains(c)),
+                )),
+                // `ord` of the FIRST char (char code); `count(sub)` = non-overlapping
+                // occurrences of a substring.
+                "ord" => value
+                    .chars()
+                    .next()
+                    .map(|c| Value::Int(c as i64))
+                    .ok_or_else(|| "ord() of empty string".to_string()),
+                "count" => {
+                    let needle = match args.into_iter().next() {
+                        Some(Value::Str(v)) => v,
+                        other => return Err(format!("count() needs a string, got {:?}", other)),
+                    };
+                    Ok(Value::Int(if needle.is_empty() {
+                        0
+                    } else {
+                        value.matches(&needle).count() as i64
+                    }))
                 }
                 _ => Err(format!("unknown string method {method}")),
             },
@@ -5980,6 +6271,63 @@ fn main() -> i64 {
     }
 
     #[test]
+    fn code_reproduces_examples_bites_on_held_out_mismatch() {
+        use crate::benchmark::Example;
+        let code = "fn f(x: i64) -> i64 {\n    return x * x;\n}\n";
+        // Seed-consistent holdouts pass.
+        let good = [
+            Example { inputs: vec![BmValue::Int(2)], expected: BmValue::Int(4) },
+            Example { inputs: vec![BmValue::Int(3)], expected: BmValue::Int(9) },
+        ];
+        assert!(code_reproduces_examples(code, &good));
+        // A held-out example the program contradicts MUST be rejected — this is the
+        // bug the adversary found (solve_problem strips holdouts; the re-check bites).
+        let contradicting = [Example { inputs: vec![BmValue::Int(2)], expected: BmValue::Int(5) }];
+        assert!(!code_reproduces_examples(code, &contradicting));
+        // Nothing to disprove -> vacuously true.
+        assert!(code_reproduces_examples(code, &[]));
+        // Unparseable code (no `fn`) -> false, never a silent pass.
+        assert!(!code_reproduces_examples("not rust", &good));
+    }
+
+    #[test]
+    fn string_char_level_ops_execute() {
+        let s = |x: &str| BmValue::Str(x.to_string());
+        let run_i = |code: &str, name: &str, arg: BmValue| -> i64 {
+            match execute_function(code, name, &[arg], name) {
+                Ok(Value::Int(i)) => i,
+                other => panic!("{name}: expected Int, got {other:?}"),
+            }
+        };
+        let run_b = |code: &str, name: &str, arg: BmValue| -> bool {
+            match execute_function(code, name, &[arg], name) {
+                Ok(Value::Bool(b)) => b,
+                Ok(Value::Int(i)) => i != 0,
+                other => panic!("{name}: expected Bool, got {other:?}"),
+            }
+        };
+        // for-ch iteration + char literals: count vowels.
+        let vowels = "fn count_vowels(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch == 'a' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        assert_eq!(run_i(vowels, "count_vowels", s("banana")), 3);
+        // is_vowel classification method.
+        let vm = "fn nv(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_vowel() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        assert_eq!(run_i(vm, "nv", s("hello")), 2);
+        // is_palindrome via .reverse() equality (string ==).
+        let pal = "fn is_pal(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n";
+        assert!(run_b(pal, "is_pal", s("racecar")));
+        assert!(!run_b(pal, "is_pal", s("hello")));
+        // .chars() + is_digit.
+        let digits = "fn nd(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s.chars() {\n        if ch.is_digit() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        assert_eq!(run_i(digits, "nd", s("a1b2c3")), 3);
+        // string ordering (<): count chars before 'n'.
+        let ord = "fn cb(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch < 'n' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        assert_eq!(run_i(ord, "cb", s("abcxyz")), 3);
+        // .ord() of first char.
+        let ordf = "fn firstcode(s: string) -> i64 {\n    return s.ord();\n}\n";
+        assert_eq!(run_i(ordf, "firstcode", s("A")), 65);
+    }
+
+    #[test]
     fn runtime_value_tree_converts_and_round_trips() {
         // A tree input converts without error into the canonical Struct shape
         // and round-trips through the equality oracle.
@@ -6451,6 +6799,107 @@ fn main() -> i64 {
             result.unwrap_err().contains("iteration limit"),
             "error should mention the iteration limit"
         );
+    }
+
+    #[test]
+    fn nested_loops_bounded_by_global_step_budget() {
+        // Two individually-capped loops compose to 1e10 potential iterations —
+        // per-loop caps alone let this run for ~a minute (measured 58s on a real
+        // candidate). The GLOBAL step budget must reject it in bounded time.
+        let problem = ident_problem("nested_budget_v0");
+        let code = "fn nested_budget_v0(a: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 0;\n    while i < 100000 {\n        j: i64 = 0;\n        while j < 100000 {\n            s = s + 1;\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return s;\n}\n";
+        let t0 = std::time::Instant::now();
+        let result =
+            execute_function_for_problem(code, "nested_budget_v0", &[BmValue::Int(0)], &problem);
+        assert!(
+            result.is_err(),
+            "nested huge loops must hit the global step budget, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("step budget"),
+            "error should mention the step budget"
+        );
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(10),
+            "budget rejection must be fast, took {:?}",
+            t0.elapsed()
+        );
+    }
+
+    #[test]
+    fn strict_verify_rejects_branch_guarded_io_backdoor() {
+        // The write_file call is behind a branch no example/probe input ever
+        // triggers, so runtime verify_mode denial NEVER fires and every dynamic
+        // check passes — only the static capability walk can reject it.
+        let problem = ident_problem("backdoor_v0");
+        let code = "fn backdoor_v0(a: i64) -> i64 {\n    if a == 31337 {\n        write_file(\"pwned\", \"x\");\n    }\n    return a;\n}\n";
+        let err = verify_problem_code_strict(&problem, code)
+            .expect_err("branch-guarded IO builtin must be statically denied");
+        assert!(err.contains("DENIED"), "unexpected error: {err}");
+        assert!(err.contains("write_file"), "should name the builtin: {err}");
+    }
+
+    #[test]
+    fn strict_verify_still_accepts_pure_candidate() {
+        let problem = ident_problem("pure_v0");
+        let code = "fn pure_v0(a: i64) -> i64 {\n    return a;\n}\n";
+        verify_problem_code_strict(&problem, code)
+            .expect("pure candidate must be unaffected by the capability gate");
+    }
+
+    #[test]
+    fn capability_gate_denies_shadowing_user_function() {
+        // The runtime resolves builtin names to the BUILTIN even when an
+        // in-program fn shadows them, so the static gate fails closed on the
+        // name itself; a synthesized program has no legitimate reason to use it.
+        let problem = ident_problem("shadow_v0");
+        let code = "fn shadow_v0(a: i64) -> i64 {\n    return write_file(a);\n}\n\nfn write_file(x: i64) -> i64 {\n    return x;\n}\n";
+        let err = verify_problem_code_strict(&problem, code)
+            .expect_err("denied builtin names fail closed even when shadowed");
+        assert!(err.contains("DENIED"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn string_doubling_amplification_rejected() {
+        // `s = s + s` doubles per iteration: 60 fuel-cheap iterations = 2^60
+        // bytes. The value cap must reject this quickly instead of OOM-killing
+        // the process.
+        let problem = ident_problem("amplify_v0");
+        let code = "fn amplify_v0(a: i64) -> i64 {\n    s: string = \"xxxxxxxx\";\n    i: i64 = 0;\n    while i < 60 {\n        s = s + s;\n        i = i + 1;\n    }\n    return s.len;\n}\n";
+        let t0 = std::time::Instant::now();
+        let result =
+            execute_function_for_problem(code, "amplify_v0", &[BmValue::Int(0)], &problem);
+        assert!(
+            result.is_err(),
+            "exponential string growth must hit the value cap, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("value cap"),
+            "error should mention the value cap"
+        );
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(10),
+            "value-cap rejection must be fast, took {:?}",
+            t0.elapsed()
+        );
+    }
+
+    #[test]
+    fn step_budget_resets_between_entry_calls() {
+        // A long-lived Runtime serves many executions; earlier runs must not
+        // starve later ones.
+        let code = "fn f(a: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = 0;\n    while i < 50000 {\n        s = s + 1;\n        i = i + 1;\n    }\n    return s;\n}\n";
+        let program = parse_program(code).expect("parse");
+        let runtime = Runtime::new(program);
+        for _ in 0..50 {
+            let got = runtime
+                .call_function("f", vec![Value::Int(0)])
+                .expect("each entry call gets a fresh budget");
+            match got {
+                Value::Int(50000) => {}
+                other => panic!("expected Int(50000), got {other:?}"),
+            }
+        }
     }
 
     #[test]

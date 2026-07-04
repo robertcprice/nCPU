@@ -90,16 +90,29 @@ fn url_port(url: &str) -> Option<u16> {
 /// endpoint. `None` when disabled (no `NSYNTH_LOCAL_LLM_URL`), on any error, or
 /// when the model's chosen op is NOT in `known_ops` (so only a real, synthesizable
 /// op can ever reach the verified pipeline).
-pub fn translate_op(request: &str, known_ops: &[String]) -> Option<String> {
+pub fn translate_op(request: &str, ops: &[(String, String)]) -> Option<String> {
     let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
         .ok()
         .filter(|s| !s.is_empty())?;
     let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
-    let ops = known_ops.join(", ");
+    // Gloss menu: one "fn_name: definition" per line so the model matches a
+    // PARAPHRASE to the exact registered op (bare names leave it guessing).
+    let menu = ops
+        .iter()
+        .map(|(name, gloss)| {
+            if gloss.is_empty() {
+                name.clone()
+            } else {
+                format!("{name}: {gloss}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let sys = format!(
         "You convert a coding request into JSON for a program synthesizer. Output ONLY one \
-         JSON object {{\"op\":\"...\"}}. Choose the single best op from this exact list, or \
-         {{\"op\":\"\"}} if none fits: {ops}."
+         JSON object {{\"op\":\"...\"}} where op is the exact name (the text before the colon) \
+         of the single best match, judged against the description after each colon, or \
+         {{\"op\":\"\"}} if none fits:\n{menu}"
     );
     let body = serde_json::json!({
         "model": model,
@@ -108,14 +121,15 @@ pub fn translate_op(request: &str, known_ops: &[String]) -> Option<String> {
             {"role": "user", "content": format!("Request: \"{}\" ->", request.replace('"', "'"))}
         ],
         "temperature": 0.0,
-        // Enough headroom that a long op menu never truncates the JSON mid-token.
-        "max_tokens": 64
+        // Headroom for a REASONING model (Gemma 4): thinking can consume 100-150
+        // tokens before the JSON, so a low cap returns empty content (finish=length).
+        "max_tokens": 256
     });
     let out = Command::new("curl")
         .args([
             "-s",
             "-m",
-            "30",
+            "40",
             &url,
             "-H",
             "Content-Type: application/json",
@@ -128,10 +142,403 @@ pub fn translate_op(request: &str, known_ops: &[String]) -> Option<String> {
         return None;
     }
     let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let content = resp["choices"][0]["message"]["content"].as_str()?;
-    let op = extract_op(content)?;
+    let msg = &resp["choices"][0]["message"];
+    // Prefer the answer channel; fall back to the reasoning channel (a reasoning
+    // model that ran out of token budget may leave `content` empty but still have
+    // emitted the JSON inside `reasoning`).
+    let op = msg["content"]
+        .as_str()
+        .and_then(extract_op)
+        .or_else(|| msg["reasoning"].as_str().and_then(extract_op))?;
     // Only a KNOWN op may pass — a hallucinated op never enters the pipeline.
-    known_ops.iter().any(|k| k == &op).then_some(op)
+    ops.iter().any(|(k, _)| k == &op).then_some(op)
+}
+
+/// One LLM-proposed I/O example (raw JSON values; the caller maps to runtime
+/// values). Mode B's untrusted spec.
+pub struct ProposedExample {
+    pub inputs: Vec<serde_json::Value>,
+    pub output: serde_json::Value,
+}
+
+/// Mode B (out-of-vocab, RISKIER tier): the LLM proposes I/O EXAMPLES for a task
+/// with no known op. The spec is UNTRUSTED — the caller MUST synthesize from these
+/// + strict-verify (and ideally hold some out): a program that merely matches the
+/// examples can still be wrong if the LLM's examples are wrong. Returns >=4 parsed
+/// examples, or None (disabled / error / too few). max_tokens is generous because
+/// Gemma-class models pretty-print + may use reasoning tokens.
+pub fn propose_examples(request: &str) -> Option<Vec<ProposedExample>> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "Output ONLY a JSON object, no prose: {\"examples\":[{\"in\":[ARG,...],\"out\":RESULT}]}. \
+        Give 6 CORRECT examples for the request — compute each output carefully and cover edge \
+        cases. Each ARG and RESULT is an integer, an array of integers, or a boolean.";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": format!("Request: {}", request.replace('"', "'"))}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 512
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "60", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let content = resp["choices"][0]["message"]["content"].as_str()?;
+    parse_examples(content)
+}
+
+/// Extract `{"examples":[{"in":[..],"out":..}]}` from the model text.
+fn parse_examples(content: &str) -> Option<Vec<ProposedExample>> {
+    let s = content.trim();
+    let start = s.find('{')?;
+    let end = s.rfind('}')? + 1;
+    let parsed: serde_json::Value = serde_json::from_str(&s[start..end]).ok()?;
+    let arr = parsed.get("examples")?.as_array()?;
+    let mut out = Vec::new();
+    for e in arr {
+        let inputs = e.get("in")?.as_array()?.clone();
+        let output = e.get("out")?.clone();
+        if inputs.is_empty() {
+            continue;
+        }
+        out.push(ProposedExample { inputs, output });
+    }
+    (out.len() >= 4).then_some(out)
+}
+
+/// One LLM-proposed sub-function in a project decomposition: a fn name + a single
+/// NL description the per-component synthesis door will independently solve+verify.
+pub struct ProposedComponent {
+    pub name: String,
+    pub description: String,
+}
+
+/// Mode C (project decomposition, RISKIER tier): the LLM breaks an open-ended
+/// build request into a list of named, individually-synthesizable sub-functions.
+/// UNTRUSTED — the LLM only proposes the DECOMPOSITION (names + NL descriptions);
+/// each component is still synthesized + STRICT-VERIFIED downstream, so a bad plan
+/// yields components that either verify (correct leaves) or are dropped, never an
+/// unverified accept. Returns >=2 components, or None (disabled / error / too few).
+/// NOTE: this verifies each PART, not the whole-artifact behavior — there is no
+/// example oracle for "does the assembled program do what was asked".
+pub fn propose_decomposition(request: &str) -> Option<Vec<ProposedComponent>> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "Break a programming request into small INDEPENDENT pure functions, each computing \
+        ONE value from its inputs (integers, arrays of integers, or booleans). Output ONLY a JSON \
+        object, no prose: {\"functions\":[{\"name\":\"snake_case\",\"description\":\"one clear \
+        sentence describing exactly what this function computes\"}]}. Give 2 to 5 functions. Each \
+        description must be self-contained and concrete (e.g. 'the sum of all elements in the \
+        array', 'whether the number is even'), NOT a vague feature.";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": format!("Request: {}", request.replace('"', "'"))}
+        ],
+        "temperature": 0.0,
+        // Decomposition is a harder task than op-selection: Gemma 4's reasoning
+        // channel alone runs ~1900 tokens, so a low cap returns empty content
+        // (finish=length). Give room for reasoning AND the JSON answer.
+        "max_tokens": 1024
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "90", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| msg["reasoning"].as_str())?;
+    parse_decomposition(content)
+}
+
+/// Extract `{"functions":[{"name":..,"description":..}]}` from the model text.
+fn parse_decomposition(content: &str) -> Option<Vec<ProposedComponent>> {
+    let s = content.trim();
+    let start = s.find('{')?;
+    let end = s.rfind('}')? + 1;
+    let parsed: serde_json::Value = serde_json::from_str(&s[start..end]).ok()?;
+    let arr = parsed.get("functions")?.as_array()?;
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for e in arr {
+        let name = e.get("name")?.as_str()?.trim().to_string();
+        let description = e.get("description")?.as_str()?.trim().to_string();
+        if name.is_empty() || description.is_empty() || !seen.insert(name.clone()) {
+            continue;
+        }
+        out.push(ProposedComponent { name, description });
+    }
+    (out.len() >= 2).then_some(out)
+}
+
+/// Mode D (verify-and-repair): the LLM writes a WHOLE Mog program for a task no
+/// known op / example-search can produce (arbitrary algorithms). UNTRUSTED — the
+/// caller MUST run it against the tests and accept ONLY on a full pass; `prior` =
+/// (previous code, concrete failure) drives a fix on the next iteration. Returns the
+/// extracted Mog function source, or None. This is the lever that scales to
+/// arbitrary algorithms (the model knows sort/DP/recursion); verification keeps the
+/// guarantee (a wrong program never passes the tests).
+/// The Mog-writing system prompt. Shared by `propose_program` (inference) AND the
+/// training-corpus harvester (`training_record`), so fine-tuning optimizes the EXACT
+/// inference distribution — the model learns to answer this prompt with valid Mog.
+pub const MOG_SYSTEM_PROMPT: &str =
+    "You write MOG, a small imperative language. RULES (critical — Mog is NOT Rust):\n\
+        - Declare a variable with `name: TYPE = EXPR;` — NEVER `let`, NEVER `mut`. \
+        TYPE is i64, [i64], bool, or string.\n\
+        - Reassign with `name = EXPR;`. Use EXACTLY the given function signature.\n\
+        - Control flow: `if C { } else { }`, `while C { }`, `for e in arr { }` (e = each element), \
+        `for ch in s { }` (ch = a 1-char string), `return EXPR;`.\n\
+        - Operators: + - * / % == != < > <= >= && || . Integer arithmetic only.\n\
+        - Arrays: arr[i] (index), arr.len (length, NO parens). For index loops: \
+        `i: i64 = 0; while i < arr.len { ... arr[i] ...; i = i + 1; }`. BUILD an array by \
+        starting empty and pushing: `out: [i64] = []; for e in arr { out.push(e * 2); } return out;` \
+        — or a fixed literal `[a, b]`. This is how you RETURN a list.\n\
+        - Strings: s.len, s[i], s.upper(), s.lower(), s.reverse(), s.chars(), s.split(x), \
+        s.contains(x), s.slice(a,b); per char: `for ch in s`, ch.is_vowel(), ch.is_digit(), \
+        ch.is_alpha(), ch.ord(); a char is a 1-char string — compare with `ch == 'a'`.\n\
+        - NO imports, NO `let`, NO helper functions — ONE self-contained function.\n\
+        Output ONLY the function in a ```mog code block, no prose.\n\n\
+        EXAMPLE (count elements greater than ten):\n\
+        ```mog\n\
+        fn solve(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > 10 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n\
+        ```";
+
+/// Build the user message for a Mog task (task text + optional signature + examples),
+/// matching what the repair loop sends. Shared so a harvested training pair has the
+/// SAME user turn the model will see at inference.
+pub fn mog_user_message(request: &str) -> String {
+    format!("Task:\n{request}\n\nWrite the Mog function.")
+}
+
+/// A single fine-tuning example in `mlx_lm.lora` chat format: the shared Mog system
+/// prompt + the task user turn + the VERIFIED Mog program as the assistant answer.
+/// Only ever built from a program that passed the verifier, so the corpus is
+/// guaranteed-correct (the STaR / rejection-sampling property).
+pub fn training_record(request: &str, verified_code: &str) -> serde_json::Value {
+    serde_json::json!({
+        "messages": [
+            {"role": "system", "content": MOG_SYSTEM_PROMPT},
+            {"role": "user", "content": mog_user_message(request)},
+            {"role": "assistant", "content": format!("```mog\n{}\n```", verified_code.trim())}
+        ]
+    })
+}
+
+pub fn propose_program(
+    request: &str,
+    prior: Option<(&str, &str)>,
+    temperature: f64,
+) -> Option<String> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = MOG_SYSTEM_PROMPT;
+    let user = match prior {
+        None => format!("Task:\n{request}\n\nWrite the Mog function."),
+        Some((code, err)) => format!(
+            "Task:\n{request}\n\nYour previous attempt:\n{code}\n\nIt FAILED: {err}\n\n\
+             Fix the bug and output ONLY the corrected Mog function."
+        ),
+    };
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user}
+        ],
+        "temperature": temperature,
+        "max_tokens": 1200
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "120", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| msg["reasoning"].as_str())?;
+    extract_code(content)
+}
+
+/// Extract a Mog function from the model output: prefer a fenced ``` block; else
+/// take from the first `fn ` through its balanced closing brace.
+fn extract_code(content: &str) -> Option<String> {
+    // Fenced block: between the first ``` (optionally ```mog) and the next ```.
+    if let Some(start) = content.find("```") {
+        let after = &content[start + 3..];
+        let after = after.strip_prefix("mog").unwrap_or(after);
+        let after = after.strip_prefix('\n').unwrap_or(after);
+        if let Some(end) = after.find("```") {
+            let code = after[..end].trim();
+            if code.contains("fn ") {
+                return Some(code.to_string());
+            }
+        }
+    }
+    // Fallback: from `fn ` to the matching closing brace.
+    let fn_pos = content.find("fn ")?;
+    let rest = &content[fn_pos..];
+    let mut depth = 0i32;
+    let mut seen_open = false;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '{' => {
+                depth += 1;
+                seen_open = true;
+            }
+            '}' => {
+                depth -= 1;
+                if seen_open && depth == 0 {
+                    return Some(rest[..=i].trim().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// One LLM-proposed sub-function with an embedded I/O CONTRACT: a fn name, a NL
+/// description, AND >=3 example rows. Unlike `ProposedComponent` (Mode C, which
+/// re-derives examples downstream), this carries the examples directly so the
+/// bridge can build a real Problem (seed + holdout), strict-verify, and emit
+/// reproduction tests. UNTRUSTED — the examples are the LLM's claim, never an
+/// oracle; the synthesis door is the sole authority.
+pub struct ProposedComponentSpec {
+    pub name: String,
+    pub description: String,
+    pub examples: Vec<ProposedExample>,
+}
+
+/// Mode C+ (contract-bearing decomposition). Successor to `propose_decomposition`:
+/// asks for name + description + >=3 I/O examples per fn IN ONE CALL, so the bridge
+/// can build a real Problem (seed+holdout) and strict-verify each component AND
+/// emit reproduction tests. Untrusted; gated downstream by NSYNTH_LOCAL_LLM_PROJECT.
+/// Returns >=2 functions (each with >=3 examples), or None (disabled / error /
+/// too few).
+pub fn propose_decomposition_with_contracts(request: &str) -> Option<Vec<ProposedComponentSpec>> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "Break a programming request into small INDEPENDENT pure functions, each computing \
+        ONE value from its inputs. Inputs and outputs are integers, arrays of integers, or booleans. \
+        For EACH function give a name (snake_case), a one-sentence description, AND at least 4 \
+        correct input/output examples — compute each output carefully and include an edge case. \
+        IMPORTANT: \"in\" is the ARGUMENT LIST. A function that takes a single LIST has ONE array \
+        argument, written as a NESTED array: {\"in\":[[1,2,3]],\"out\":6} for the sum of a list. A \
+        function of two numbers is {\"in\":[3,4],\"out\":7}. Never use an empty \"in\"; include an \
+        edge case such as a single-element list or a negative number. Output ONLY a JSON object, no prose: \
+        {\"functions\":[{\"name\":\"snake_case\",\"description\":\"one clear sentence\",\
+        \"examples\":[{\"in\":[ARG,...],\"out\":RESULT}]}]}. Give 2 to 5 functions, each with at \
+        least 4 examples.";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": format!("Request: {}", request.replace('"', "'"))}
+        ],
+        "temperature": 0.0,
+        // Decomposition WITH per-fn examples (nested-array list args, 4+ examples each)
+        // is the heaviest Mode-C variant; Gemma 4 reasons longer here, so give ample
+        // headroom or the JSON answer truncates (finish=length -> unparseable).
+        "max_tokens": 2048
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "150", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| msg["reasoning"].as_str())?;
+    parse_decomposition_with_contracts(content)
+}
+
+/// Extract `{"functions":[{"name":..,"description":..,"examples":[{"in":..,"out":..}]}]}`
+/// from the model text. Keeps only functions with >=3 valid example rows; returns
+/// >=2 functions or None. Values are left as raw `serde_json::Value` — the bridge's
+/// `json_to_bench_value` is the sole type authority.
+fn parse_decomposition_with_contracts(content: &str) -> Option<Vec<ProposedComponentSpec>> {
+    let s = content.trim();
+    let start = s.find('{')?;
+    let end = s.rfind('}')? + 1;
+    let parsed: serde_json::Value = serde_json::from_str(&s[start..end]).ok()?;
+    let arr = parsed.get("functions")?.as_array()?;
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for e in arr {
+        let name = match e.get("name").and_then(|v| v.as_str()) {
+            Some(n) => n.trim().to_string(),
+            None => continue,
+        };
+        let description = match e.get("description").and_then(|v| v.as_str()) {
+            Some(d) => d.trim().to_string(),
+            None => continue,
+        };
+        if name.is_empty() || description.is_empty() || !seen.insert(name.clone()) {
+            continue;
+        }
+        let rows = match e.get("examples").and_then(|v| v.as_array()) {
+            Some(r) => r,
+            None => continue,
+        };
+        let mut examples = Vec::new();
+        for row in rows {
+            let inputs = match row.get("in").and_then(|v| v.as_array()) {
+                Some(i) if !i.is_empty() => i.clone(),
+                _ => continue,
+            };
+            let output = match row.get("out") {
+                Some(o) => o.clone(),
+                None => continue,
+            };
+            examples.push(ProposedExample { inputs, output });
+        }
+        // A component without enough examples cannot form a seed+holdout split.
+        if examples.len() < 3 {
+            continue;
+        }
+        out.push(ProposedComponentSpec { name, description, examples });
+    }
+    (out.len() >= 2).then_some(out)
 }
 
 /// Rewrite an arbitrary request into ONE short CANONICAL sentence the symbolic
@@ -462,7 +869,10 @@ mod tests {
         // With no NSYNTH_LOCAL_LLM_URL set, the path is inert (returns None).
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
         assert_eq!(
-            translate_op("add up all the elements", &["array_sum".to_string()]),
+            translate_op(
+                "add up all the elements",
+                &[("array_sum".to_string(), "sum of all elements".to_string())]
+            ),
             None
         );
     }
@@ -478,5 +888,105 @@ mod tests {
     fn ensure_server_inert_without_url() {
         std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
         assert!(!ensure_server());
+    }
+
+    #[test]
+    fn training_record_is_valid_chat_format() {
+        let r = training_record("count vowels in a string", "fn f(s: string) -> i64 {\n    return 0;\n}");
+        let msgs = r.get("messages").and_then(|m| m.as_array()).expect("messages array");
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert!(msgs[0]["content"].as_str().unwrap().contains("MOG"));
+        assert!(msgs[1]["content"].as_str().unwrap().contains("count vowels"));
+        // assistant answer is the fenced verified program (the label).
+        let a = msgs[2]["content"].as_str().unwrap();
+        assert!(a.starts_with("```mog") && a.contains("fn f(") && a.trim_end().ends_with("```"));
+    }
+
+    #[test]
+    fn extract_code_from_fence_and_bare() {
+        let fenced = "Here:\n```mog\nfn f(x: i64) -> i64 {\n    return x + 1;\n}\n```\ndone";
+        let c = extract_code(fenced).expect("fenced");
+        assert!(c.starts_with("fn f(") && c.trim_end().ends_with('}'), "got: {c}");
+        // bare (no fence) — balanced-brace extraction, trailing prose dropped.
+        let bare = "fn g(a: i64) -> i64 { return a; } and then some words";
+        let c2 = extract_code(bare).expect("bare");
+        assert_eq!(c2, "fn g(a: i64) -> i64 { return a; }");
+        // nested braces close correctly.
+        let nested = "```\nfn h(a: i64) -> i64 {\n    if a > 0 {\n        return 1;\n    }\n    return 0;\n}\n```";
+        assert!(extract_code(nested).unwrap().contains("if a > 0"));
+        assert!(extract_code("no code here").is_none());
+    }
+
+    #[test]
+    fn parse_decomposition_extracts_functions() {
+        let s = "```json\n{\"functions\":[{\"name\":\"sum_all\",\"description\":\"the sum of all elements\"},\
+                 {\"name\":\"count_pos\",\"description\":\"how many are positive\"}]}\n```";
+        let c = parse_decomposition(s).expect("2 components");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].name, "sum_all");
+        assert_eq!(c[1].description, "how many are positive");
+        // fewer than 2 distinct → None
+        assert!(parse_decomposition("{\"functions\":[{\"name\":\"a\",\"description\":\"x\"}]}").is_none());
+        // duplicate names dedup below the floor → None
+        assert!(parse_decomposition(
+            "{\"functions\":[{\"name\":\"a\",\"description\":\"x\"},{\"name\":\"a\",\"description\":\"y\"}]}"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn parse_decomposition_with_contracts_extracts_functions_and_examples() {
+        // Happy path: 2 functions, 3 examples each.
+        let s = "```json\n{\"functions\":[\
+            {\"name\":\"sum_all\",\"description\":\"the sum of all elements\",\"examples\":[\
+                {\"in\":[[1,2,3]],\"out\":6},\
+                {\"in\":[[4,5]],\"out\":9},\
+                {\"in\":[[0]],\"out\":0}]},\
+            {\"name\":\"is_positive\",\"description\":\"whether the value is positive\",\"examples\":[\
+                {\"in\":[1],\"out\":true},\
+                {\"in\":[-2],\"out\":false},\
+                {\"in\":[5],\"out\":true}]}]}\n```";
+        let specs = parse_decomposition_with_contracts(s).expect("2 components");
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].name, "sum_all");
+        assert_eq!(specs[0].examples.len(), 3);
+        assert_eq!(specs[0].examples[0].inputs, vec![serde_json::json!([1, 2, 3])]);
+        assert_eq!(specs[0].examples[0].output, serde_json::json!(6));
+        assert_eq!(specs[1].examples[2].output, serde_json::json!(true));
+
+        // One function only → below the >=2 floor → None.
+        assert!(parse_decomposition_with_contracts(
+            "{\"functions\":[{\"name\":\"a\",\"description\":\"x\",\"examples\":[\
+                {\"in\":[1],\"out\":1},{\"in\":[2],\"out\":2},{\"in\":[3],\"out\":3}]}]}"
+        )
+        .is_none());
+
+        // Two functions but one has only 2 examples → that fn is dropped → <2 → None.
+        assert!(parse_decomposition_with_contracts(
+            "{\"functions\":[\
+                {\"name\":\"a\",\"description\":\"x\",\"examples\":[\
+                    {\"in\":[1],\"out\":1},{\"in\":[2],\"out\":2},{\"in\":[3],\"out\":3}]},\
+                {\"name\":\"b\",\"description\":\"y\",\"examples\":[\
+                    {\"in\":[1],\"out\":1},{\"in\":[2],\"out\":2}]}]}"
+        )
+        .is_none());
+
+        // No JSON → None.
+        assert!(parse_decomposition_with_contracts("no json here").is_none());
+    }
+
+    #[test]
+    fn parse_examples_extracts_in_out() {
+        let s = "```json\n{\"examples\":[{\"in\":[1],\"out\":8},{\"in\":[2],\"out\":11},\
+                 {\"in\":[0],\"out\":5},{\"in\":[3],\"out\":14}]}\n```";
+        let ex = parse_examples(s).expect("4 examples");
+        assert_eq!(ex.len(), 4);
+        assert_eq!(ex[0].inputs, vec![serde_json::json!(1)]);
+        assert_eq!(ex[0].output, serde_json::json!(8));
+        // fewer than 4 → None
+        assert!(parse_examples("{\"examples\":[{\"in\":[1],\"out\":2}]}").is_none());
     }
 }

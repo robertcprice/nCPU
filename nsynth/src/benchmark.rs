@@ -187,6 +187,39 @@ pub struct Example {
     pub expected: Value,
 }
 
+/// Validate + dedup a proposed example set as a single function's spec. Returns
+/// `None` when the set is NOT a well-formed function, so a caller can reject a
+/// malformed proposed spec instead of trying to synthesize an impossible mapping:
+///   * MIXED ARITY — examples disagree on the number of arguments (e.g. the
+///     nested-array ambiguity leaking: some `[[1,2,3]]` one-arg, some `[1,2,3]`
+///     three-arg). A function has ONE arity.
+///   * INCONSISTENT — some input appears with two different outputs (not a function).
+/// Exact duplicates (same input AND output) are collapsed to one, which ALSO stops
+/// a later seed/holdout split from degenerating into an identical seed and holdout
+/// (a vacuous held-out probe). Order of first appearance is preserved. `Value` is
+/// `Ord`, so the input-vector keys live in a `BTreeMap` (no `Hash` needed). An empty
+/// input set returns `Some(vec![])`.
+pub fn dedup_consistent_examples(examples: &[Example]) -> Option<Vec<Example>> {
+    use std::collections::BTreeMap;
+    let arity = examples.first().map(|e| e.inputs.len());
+    let mut seen: BTreeMap<Vec<Value>, Value> = BTreeMap::new();
+    let mut out: Vec<Example> = Vec::with_capacity(examples.len());
+    for ex in examples {
+        if Some(ex.inputs.len()) != arity {
+            return None; // mixed arity -> not a single function
+        }
+        match seen.get(&ex.inputs) {
+            Some(prev) if *prev != ex.expected => return None, // input -> two outputs
+            Some(_) => {}                                      // exact duplicate, drop
+            None => {
+                seen.insert(ex.inputs.clone(), ex.expected.clone());
+                out.push(ex.clone());
+            }
+        }
+    }
+    Some(out)
+}
+
 impl Example {
     /// The expected output as an i64. Numeric solvers operate only on integer
     /// problems, so this returns the int payload (0 for non-int outputs, which
@@ -5062,6 +5095,28 @@ fn make_convolution_1d_sum(variant: usize) -> Problem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dedup_consistent_examples_guards_function_property() {
+        let ex = |i: i64, o: i64| Example { inputs: vec![Value::Int(i)], expected: Value::Int(o) };
+        // Exact duplicate collapses; distinct inputs preserved in order.
+        let got = dedup_consistent_examples(&[ex(1, 1), ex(2, 4), ex(1, 1), ex(3, 9)]).unwrap();
+        assert_eq!(got, vec![ex(1, 1), ex(2, 4), ex(3, 9)]);
+        // Same input -> two different outputs is NOT a function -> rejected.
+        assert!(dedup_consistent_examples(&[ex(1, 1), ex(1, 2)]).is_none());
+        // All-identical collapses to one (so a seed/holdout split can't be vacuous).
+        assert_eq!(dedup_consistent_examples(&[ex(5, 25), ex(5, 25), ex(5, 25)]).unwrap().len(), 1);
+        // Array-keyed inputs dedup correctly (Value is Ord -> BTreeMap key).
+        let av = |a: &[i64], o: i64| Example { inputs: vec![Value::int_array(a)], expected: Value::Int(o) };
+        assert!(dedup_consistent_examples(&[av(&[1, 2], 3), av(&[1, 2], 99)]).is_none());
+        assert_eq!(dedup_consistent_examples(&[av(&[1, 2], 3), av(&[1, 2], 3), av(&[4], 4)]).unwrap().len(), 2);
+        // Mixed arity (one array-arg vs two int-args) is not one function -> rejected.
+        let two = |a: i64, b: i64, o: i64| Example {
+            inputs: vec![Value::Int(a), Value::Int(b)],
+            expected: Value::Int(o),
+        };
+        assert!(dedup_consistent_examples(&[av(&[1, 2, 3], 6), two(1, 2, 3)]).is_none());
+    }
 
     #[test]
     fn problem_from_reference_double_synthesizes_and_verifies() {

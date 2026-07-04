@@ -487,9 +487,63 @@ pub(super) fn search_tree_leaf_count(problem: &Problem, fn_name: &str) -> Option
     verified_tree_result(problem, code, "search_tree_leaf_count")
 }
 
-// TODO: Tree teacher tests incomplete - Problem struct initialization needs all fields.
-// Tree teachers are functional but tests deferred to Stage 5 integration test suite.
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Source-level invariant. A 2026-06-30 audit claimed these five families
+    /// BYPASS the verifier. That is refuted: every family returns solely via
+    /// `verified_tree_result`, which calls `verify_problem_code_strict`. This
+    /// tripwire keeps it that way. Scans only the pre-test portion of the file
+    /// so the assertion strings here cannot skew the counts.
+    #[test]
+    fn tree_families_return_only_via_strict_verifier() {
+        let full = include_str!("search_tree_families.rs");
+        let code = full.split("#[cfg(test)]").next().unwrap();
+        // Match the struct FIELD (trailing comma) so the doc comment's prose
+        // mention of `success: true` doesn't count.
+        assert_eq!(
+            code.matches("success: true,").count(),
+            1,
+            "the ONLY SolveResult construction must be inside verified_tree_result"
+        );
+        assert!(
+            code.contains("crate::runtime::verify_problem_code_strict(problem, &code)"),
+            "verified_tree_result must call the strict oracle"
+        );
+        assert_eq!(
+            code.matches("verified_tree_result(problem,").count(),
+            5,
+            "all five tree families must return via verified_tree_result"
+        );
+    }
+
+    /// Fail-closed proof: these families emit a STALE tree representation
+    /// (`tree.nodes.length`, `[i32; 1000]`) the interpreter no longer supports,
+    /// so `verify_problem_code_strict` rejects the emitted code and the family
+    /// returns `None` — dead, but SOUND (never a fake "verified"). If someone
+    /// later fixes the codegen this test flips to a solve+verify; until then it
+    /// documents the honest state instead of asserting a phantom capability.
+    #[test]
+    fn tree_count_nodes_is_dead_but_fail_closed() {
+        let tree = vec![
+            TreeNode { value: 1, left: 1, right: 2 },
+            TreeNode { value: 2, left: -1, right: -1 },
+            TreeNode { value: 3, left: -1, right: -1 },
+        ];
+        let mut p = Problem::default();
+        p.name = "tree_count_v0".to_string();
+        p.signature = "fn tree_count_v0(t: Tree) -> i64";
+        p.examples = vec![Example {
+            inputs: vec![Value::Tree(tree)],
+            expected: Value::Int(3),
+        }];
+        // The Rust recognizer matches (3 nodes == expected 3), so any result it
+        // returned would be gated by strict verify. It returns None because the
+        // emitted Mog cannot pass that gate — proving there is no bypass path.
+        assert!(
+            search_tree_count_nodes(&p, "tree_count_v0").is_none(),
+            "stale-codegen family must fail closed to None, never a fake verified"
+        );
+    }
+}

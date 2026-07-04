@@ -493,6 +493,33 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     if let Some(result) = solve_string_output(problem) {
         if result.success && recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
+        }
+        return result;
+    }
+
+    // Verified reference-op library FIRST — a known algorithm that reproduces
+    // every example returns instantly (behaviour-matched, cheap). Runs here,
+    // AHEAD of the array-frontier search below, because many array->array tasks
+    // (move-zeros, swap-adjacent, consecutive-sums, rotate, …) have an exact
+    // library op but were timing out inside `synthesize_array`'s frontier before
+    // `try_library` (which lived only in the scalar `solve_problem_inner`) could
+    // run. Non-array problems still hit the scalar-path `try_library` too — a
+    // second call is a few ms and never changes the result.
+    if let Some(result) = crate::op_library::try_library(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+        }
+        return result;
+    }
+
+    // Fitness-guided evolutionary synthesis (no model; gated NSYNTH_EVOLVE): hill-
+    // climbs an accumulator-loop program for fold-shaped tasks the library/search
+    // miss. Verifier-gated; feeds the flywheel via the success hooks below.
+    if let Some(result) = crate::synth_evolve::synthesize_evolve(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
         }
         return result;
     }
@@ -536,6 +563,7 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
                 );
                 if recordable {
                     crate::solved_cache::record(problem, &result.method, &result.code);
+                    crate::op_library::maybe_record_learned(problem, &result);
                 }
                 return result;
             }
@@ -552,12 +580,41 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
         // don't re-write the same entry. Persisted via `solved_cache::flush`
         // which callers (bench runner, main) invoke at shutdown.
         crate::solved_cache::record(problem, &result.method, &result.code);
+        // Loop 2 flywheel: a novel verified program becomes a runtime library op
+        // (gated on NSYNTH_LEARNED_OPS_PATH; inert otherwise).
+        crate::op_library::maybe_record_learned(problem, &result);
     }
     result
 }
 
+/// Optional global per-solve budget (ms). When set, stages are skipped once it is
+/// exhausted so a solve degrades gracefully instead of spinning (profiling showed
+/// doomed searches burning 15-30s without solving). Also caps the teacher stage
+/// (see `strategy::teacher_budget_sec`). Unset -> unbounded (legacy behavior).
+fn solve_budget_ms() -> Option<u128> {
+    std::env::var("NSYNTH_SOLVE_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+}
+
+fn budget_miss() -> SolveResult {
+    SolveResult {
+        success: false,
+        code: String::new(),
+        method: "budget-exhausted".to_string(),
+        error: Some("NSYNTH_SOLVE_BUDGET_MS exhausted".to_string()),
+        metadata: DifferentiableMetadata::default(),
+    }
+}
+
 fn solve_problem_inner(problem: &Problem) -> SolveResult {
     let t0 = std::time::Instant::now();
+    let over_budget = |t: &std::time::Instant| solve_budget_ms().is_some_and(|b| t.elapsed().as_millis() > b);
+    // Under a global budget, cap ALL gradient training (the array/native cores are
+    // the dominant time-sink — profiling showed synthesize_array burning ~11s on a
+    // doomed task) via the thread-local train deadline. RAII: held for this solve.
+    let _train_deadline = solve_budget_ms()
+        .map(|ms| crate::synthesis::common::TrainDeadline::set(std::time::Duration::from_millis(ms as u64)));
 
     // Float (continuous) lane first: a `-> f64` problem is least-squares affine
     // regression, a different regime from the exact-integer machinery below
@@ -601,6 +658,33 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
                 metadata: DifferentiableMetadata::default(),
             };
         }
+    }
+
+    // Verified reference-op library FIRST (after the exact cache): a KNOWN algorithm
+    // (is_prime / gcd / factorial / power / count_value / …) whose impl reproduces
+    // EVERY example. Runs before the search/affine/gradient stages because those can
+    // OVERFIT a tiny example set (2 seed points fit spuriously by a single-branch
+    // affine) and short-circuit the correct algorithm. Behavior-matched + example-
+    // verified, so it fires ONLY on a genuine match; a spurious partial match is
+    // caught by the caller's holdout re-verification.
+    if let Some(result) = crate::op_library::try_library(problem) {
+        eprintln!("[solve] library OK in {:.3}s — {}", t0.elapsed().as_secs_f32(), result.method);
+        return result;
+    }
+
+    // Composition tier: a CHAIN of 2-3 verified library ops (typed, value-level,
+    // OE-pruned — see `op_pipeline`). Runs right after the single-op library and
+    // before the search/affine/gradient stages for the same reason: a genuine
+    // known-algorithm composition ("sum of digits of n!") must not be starved or
+    // overfit-shadowed by bounded expression search. Never fires for a single-op
+    // fit, so library/search attribution is unaffected.
+    if let Some(result) = crate::op_pipeline::try_pipeline(problem) {
+        eprintln!(
+            "[solve] library-pipeline OK in {:.3}s — {}",
+            t0.elapsed().as_secs_f32(),
+            result.method
+        );
+        return result;
     }
 
     // Exact multi-argument linear family first: a 2-3 arg affine or
@@ -714,6 +798,10 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
     // Skipped for inputs this enumerator cannot express (Str, Pair, struct):
     // those are handled by downstream search teachers and would otherwise
     // burn the full enumerative budget only to miss.
+    if over_budget(&t0) {
+        eprintln!("[solve] budget exhausted before enumerative in {:.1}s", t0.elapsed().as_secs_f32());
+        return budget_miss();
+    }
     if should_try_enumerative(
         problem,
         &router_ctx,
@@ -758,6 +846,19 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    if over_budget(&t0) {
+        eprintln!("[solve] budget exhausted before post-enumeration in {:.1}s", t0.elapsed().as_secs_f32());
+        if let Some(cached) = cached_fallback {
+            return SolveResult {
+                success: true,
+                code: cached.code,
+                method: cached.method,
+                error: None,
+                metadata: DifferentiableMetadata::default(),
+            };
+        }
+        return budget_miss();
+    }
     let result = solve_problem_after_enumeration(problem, t0, preemptive_search_result);
     if result.success {
         return result;

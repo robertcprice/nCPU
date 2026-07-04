@@ -6,7 +6,7 @@
 
 mod array;
 pub mod array_transform;
-mod common;
+pub(crate) mod common;
 /// Reflective stateful-reducer capability surface (UNWALL-1-STATEFUL-NL): exposes
 /// the engine's `(state, arr) -> state` per-tick reducer family as mineable NL
 /// capabilities, bound to the engine op surface via an exhaustive guard.

@@ -4,6 +4,39 @@
 //! (mlx_lm.server / LM Studio) — CI without a model is unaffected.
 use mog_synth::linguigenesis_bridge::LinguigenesisBridge;
 
+/// Mode D (verify-and-repair): a task the LLM-free engine CANNOT synthesize
+/// (contains-duplicate needs a nested scan / set, not an example-inducible fold).
+/// The LLM writes a whole Mog program, verified against every example with repair
+/// retries. Gated by NSYNTH_LOCAL_LLM_URL + set NSYNTH_LOCAL_LLM_REPAIR.
+#[test]
+fn local_llm_repair_loop_solves_engine_miss() {
+    if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
+        eprintln!("[REPAIR] skipped (no url)");
+        return;
+    }
+    std::env::set_var("NSYNTH_LOCAL_LLM_REPAIR", "1");
+    use mog_synth::benchmark::{Example, Value};
+    let ex = |a: &[i64], b: bool| Example { inputs: vec![Value::int_array(a)], expected: Value::Bool(b) };
+    let exs = vec![
+        ex(&[1, 2, 3, 4, 5], false),
+        ex(&[1, 2, 3, 2, 5], true),
+        ex(&[7, 7], true),
+        ex(&[1, 2, 3], false),
+        ex(&[4, 5, 6, 4], true),
+    ];
+    let r = LinguigenesisBridge::synthesize_via_repair_loop(
+        "whether a given array of integers contains any duplicate",
+        &exs,
+    );
+    let r = r.unwrap_or_else(|| panic!("[REPAIR] repair loop returned None (server up + model capable?)"));
+    eprintln!("[REPAIR] method={}\n{}", r.method, r.code);
+    assert!(r.success, "must be a verified result");
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(&r.code, &exs),
+        "the accepted program must reproduce EVERY example"
+    );
+}
+
 #[test]
 fn local_llm_translates_failing_phrasing_to_verified_program() {
     if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
@@ -54,6 +87,31 @@ fn local_llm_composition_via_rephrase() {
         res.method,
         res.code
     );
+}
+
+/// Mode B (out-of-vocab, RISKIER): no known op fits, so the LLM proposes I/O
+/// EXAMPLES; the engine synthesizes from them with a held-out generalization
+/// probe + strict-verify. Gated by NSYNTH_LOCAL_LLM_EXAMPLES *and* a served model.
+/// Tested in isolation (Mode A can pre-empt composites with a partial op).
+#[test]
+fn local_llm_mode_b_out_of_vocab_examples() {
+    if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
+        eprintln!("[MODE-B] skipped (no url)");
+        return;
+    }
+    std::env::set_var("NSYNTH_LOCAL_LLM_EXAMPLES", "1");
+    let bridge = LinguigenesisBridge::new();
+    // Composite affine (3n+5) — no single registry op computes it, so only the
+    // example-driven lane can. The held-out LLM examples guard against an
+    // inconsistent spec; strict-verify guards against an unverifiable program.
+    let req = "triple a number then add five";
+    let res = bridge.synthesize_via_llm_examples(req);
+    eprintln!(
+        "[MODE-B] {req:?} → {:?}",
+        res.as_ref().map(|r| (r.success, r.method.clone(), r.code.clone()))
+    );
+    let res = res.unwrap_or_else(|| panic!("[MODE-B] {req:?} → None (server up + examples valid?)"));
+    assert!(res.success, "Mode B must yield a strict-verified program");
 }
 
 /// The agent's NL entry (synthesize_from_description) AUTO-falls-back to the LLM

@@ -3,6 +3,7 @@
 //! Each fixture is a real `cargo test` oracle instead of grep-on-source.
 
 use crate::agent::repo::gencode_normalize::{escape_module_name, normalize_component};
+use crate::agent::repo::gencode_tests::{emit_main_demo, emit_tests_module};
 use crate::agent::repo::nl_fixture_wrong_stub;
 use crate::agent::repo::GuardrailPolicy;
 use crate::agent::tools::{FsTool, SecureToolRuntime, Tool, ToolCall};
@@ -41,6 +42,55 @@ impl WriteOutcome {
     pub fn succeeded(&self) -> bool {
         self.compile.is_ok()
     }
+}
+
+/// Result of the post-compile `cargo test` gate on a verified crate (PIECE 4).
+///
+/// Distinct from [`CompileStatus`]: a crate can compile clean (`CompileStatus::Ok`)
+/// yet its generated reproduction tests can FAIL (the fn does not reproduce its
+/// own examples). That failure is exactly what this gate exists to catch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestStatus {
+    /// `cargo test` ran and every generated test passed.
+    Ok,
+    /// `cargo test` ran and at least one test FAILED; carries the test output.
+    Failed(String),
+    /// cargo was unavailable / could not be run, or the test gate was skipped
+    /// because compilation failed — NOT a success.
+    Unverified(String),
+}
+
+impl TestStatus {
+    pub fn is_ok(&self) -> bool {
+        matches!(self, TestStatus::Ok)
+    }
+}
+
+/// Outcome of writing a *verified* multi-file project: the same write +
+/// compile-gate result as [`WriteOutcome`], PLUS the result of running the
+/// generated reproduction tests (`cargo test`).
+///
+/// SOUNDNESS CAVEAT: `test == Ok` proves only that each fn reproduces its OWN
+/// proposed examples (a self-consistency oracle). It does NOT prove the
+/// whole-artifact behaves correctly — the components were already strict-verified
+/// upstream by the solver; this gate is a defense-in-depth reproduction check on
+/// the emitted Rust, not an independent correctness proof.
+#[derive(Debug, Clone)]
+pub struct VerifiedOutcome {
+    /// Relative paths written, in write order.
+    pub written: Vec<String>,
+    /// Whether the generated crate compiles (the first gate).
+    pub compile: CompileStatus,
+    /// Whether the generated reproduction tests pass (the second gate; only run
+    /// when `compile` is `Ok`).
+    pub test: TestStatus,
+    /// Components that got a real execution test (>=1 renderable example) — their
+    /// behavior is checked by `cargo test`, not just compilation.
+    pub tested: Vec<String>,
+    /// Components with NO renderable example, so they are COMPILE-ONLY (no
+    /// behavioral test). Surfaced so a green `test` gate never falsely implies
+    /// every component is execution-verified ("no silent caps").
+    pub compile_only: Vec<String>,
 }
 
 const CARGO_TOML_TEMPLATE: &str = r#"[package]
@@ -197,6 +247,163 @@ pub fn write_synthesized_project(
     Ok(WriteOutcome { written, compile })
 }
 
+/// (PIECE 4) VERIFIED PRODUCT writer: like [`write_synthesized_project`] but each
+/// component carries the verifying [`crate::benchmark::Example`]s it was solved
+/// against, so the emitted crate ALSO carries:
+///   * a `#[cfg(test)] mod tests` (from [`emit_tests_module`]) appended to each
+///     `src/<module>.rs`, asserting the fn reproduces its own examples, and
+///   * a `src/main.rs` demo (from [`emit_main_demo`]) calling each fn on its
+///     first example, plus a `[[bin]]` target so cargo actually builds it.
+///
+/// After writing, it runs TWO gates: `cargo check` (compile) and — only if that
+/// passes — `cargo test` (reproduction). Both go through the same traversal-
+/// guarded [`FsTool`] / secure runtime as [`write_synthesized_project`], which is
+/// left UNCHANGED (this is purely additive).
+///
+/// Emission guards (no false-green): if [`emit_tests_module`] returns `""` for a
+/// component, no test module is appended; if [`emit_main_demo`] returns `""`, no
+/// `src/main.rs` is written AND no `[[bin]]` is emitted (a dangling bin path
+/// would fail the build).
+pub fn write_verified_project(
+    root: &Path,
+    package_name: &str,
+    components: &[(String, String, Vec<crate::benchmark::Example>)],
+) -> Result<VerifiedOutcome, String> {
+    if components.is_empty() {
+        return Err("no verified components to write".to_string());
+    }
+    let fs_tool = FsTool::new(root.to_path_buf());
+    let write = |rel: &str, content: &str| -> Result<(), String> {
+        fs_tool
+            .invoke(&ToolCall::new("write").arg("path", rel).arg("content", content))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    };
+
+    let mut written = Vec::new();
+    let mut modules: Vec<String> = Vec::with_capacity(components.len());
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut tested: Vec<String> = Vec::new();
+    let mut compile_only: Vec<String> = Vec::new();
+
+    // Same module-naming passes as `write_synthesized_project`: sanitize ->
+    // keyword-escape -> dedup on the FINAL module name; record fn -> module for
+    // sibling use-injection.
+    let mut fn_to_module: Vec<(String, String)> = Vec::with_capacity(components.len());
+    let mut module_for: Vec<String> = Vec::with_capacity(components.len());
+    for (name, _, _) in components {
+        let base = escape_module_name(&sanitize_module_name(name));
+        let module = dedup_module_name(base, &mut used);
+        fn_to_module.push((name.clone(), module.clone()));
+        module_for.push(module);
+    }
+
+    for (idx, (name, mog_code, examples)) in components.iter().enumerate() {
+        let module = module_for[idx].clone();
+
+        let rust = to_rust(mog_code);
+        let rust = normalize_component(&rust);
+
+        // Sibling use-injection (identical to `write_synthesized_project`).
+        let mut uses: Vec<String> = Vec::new();
+        for (sib_fn, sib_mod) in &fn_to_module {
+            if sib_fn == name {
+                continue;
+            }
+            if body_calls_fn(&rust, sib_fn) {
+                uses.push(format!("use crate::{sib_mod}::{sib_fn};"));
+            }
+        }
+        let prelude = if uses.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n\n", uses.join("\n"))
+        };
+
+        let mut body = format!(
+            "//! Synthesized component `{module}`.\n\n{prelude}{}\n",
+            rust.trim_end()
+        );
+
+        // ADDITIVE: append the reproduction-test module next to the fn. The fn is
+        // now `pub` (normalize_component), so `use super::*;` re-exports it.
+        // Guard (D7): empty string means nothing rendered -> append nothing
+        // (never an empty `mod tests {}` or an always-true test).
+        let tests = emit_tests_module(name, examples);
+        if tests.is_empty() {
+            compile_only.push(name.clone());
+        } else {
+            body.push_str(&tests);
+            tested.push(name.clone());
+        }
+
+        let rel = format!("src/{module}.rs");
+        write(&rel, &body)?;
+        written.push(rel);
+        modules.push(module);
+    }
+
+    let mut lib =
+        String::from("//! Generated multi-file program (independent sibling components).\n\n");
+    for m in &modules {
+        lib.push_str(&format!("mod {m};\npub use {m}::*;\n"));
+    }
+    write("src/lib.rs", &lib)?;
+    written.push("src/lib.rs".to_string());
+
+    // Package name computed EXACTLY as `write_synthesized_project` does (dashes).
+    let pkg = if package_name.trim().is_empty() {
+        "generated".to_string()
+    } else {
+        fixture_package_name(&sanitize_module_name(package_name))
+    };
+    // The Rust crate identifier for `use <crate>::*;` needs UNDERSCORES (cargo
+    // maps a `foo-bar` package to the `foo_bar` crate ident).
+    let crate_ident = pkg.replace('-', "_");
+
+    // src/main.rs demo + [[bin]] target — ONLY if the demo renders.
+    let main_components: Vec<(String, Vec<crate::benchmark::Example>)> = components
+        .iter()
+        .map(|(n, _, ex)| (n.clone(), ex.clone()))
+        .collect();
+    let main_body = emit_main_demo(&main_components);
+    let has_bin = !main_body.is_empty();
+    if has_bin {
+        // emit_main_demo yields only `fn main() {...}`; inject the lib `use`.
+        let main_src = format!("use {crate_ident}::*;\n\n{main_body}");
+        write("src/main.rs", &main_src)?;
+        written.push("src/main.rs".to_string());
+    }
+
+    // Cargo.toml: always a [lib]; add a [[bin]] ONLY when a main.rs was written.
+    // Built locally so the shared CARGO_TOML_TEMPLATE stays untouched.
+    let mut cargo_toml = format!(
+        "[package]\nname = \"{pkg}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n"
+    );
+    if has_bin {
+        cargo_toml.push_str(&format!(
+            "\n[[bin]]\nname = \"{crate_ident}_demo\"\npath = \"src/main.rs\"\n"
+        ));
+    }
+    write("Cargo.toml", &cargo_toml)?;
+    written.push("Cargo.toml".to_string());
+
+    // GATE 1: compile. GATE 2: tests — only if compile passed.
+    let compile = compile_gate(root);
+    let test = if compile.is_ok() {
+        test_gate(root)
+    } else {
+        TestStatus::Unverified("skipped: compile failed".into())
+    };
+    Ok(VerifiedOutcome {
+        written,
+        compile,
+        test,
+        tested,
+        compile_only,
+    })
+}
+
 /// TENSOR REACH (NL-BRIDGE-3B-TENSOR-FORWARD): write a self-contained tensor
 /// crate (its `Cargo.toml` + `src/lib.rs` come from
 /// [`crate::tensor_nl::tensor_crate_files`], including a path dep on the
@@ -305,6 +512,32 @@ pub fn compile_gate(root: &Path) -> CompileStatus {
             }
         }
         Err(e) => CompileStatus::Unverified(e),
+    }
+}
+
+/// (PIECE 4) Run a sandboxed `cargo test` on the generated crate. Mirrors
+/// [`compile_gate`] but runs the test oracle (`cargo test` is on the SAME
+/// secure-runtime allowlist as `cargo check`, see `secure_runtime.rs`). Returns
+/// [`TestStatus::Unverified`] (NOT success) if cargo cannot be run at all; the
+/// caller only invokes this when the compile gate already passed.
+fn test_gate(root: &Path) -> TestStatus {
+    let runtime = SecureToolRuntime::for_repo_repair(root.to_path_buf(), GuardrailPolicy::default());
+    match runtime.run_verification_command("cargo test") {
+        Ok(v) => {
+            if v.success {
+                TestStatus::Ok
+            } else {
+                // Surface the failing-test output (cargo prints failures to
+                // stdout; stderr carries compiler/link errors if any).
+                let err = if v.stderr.trim().is_empty() {
+                    v.stdout
+                } else {
+                    v.stderr
+                };
+                TestStatus::Failed(err)
+            }
+        }
+        Err(e) => TestStatus::Unverified(e),
     }
 }
 
@@ -729,6 +962,143 @@ mod tests {
             "good crate must pass the gate: {:?}",
             outcome.compile
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // ---- PIECE 4: write_verified_project (compile + test gates) ----
+
+    use crate::benchmark::{Example as BenchExample, Value as BenchValue};
+
+    /// A well-formed two-component verified project compiles clean AND its
+    /// generated reproduction tests pass (tolerate cargo-absent -> Unverified).
+    #[test]
+    fn write_verified_project_good_components_compile_ok() {
+        let root = fresh("verified_good");
+        let components = vec![
+            (
+                "negate".to_string(),
+                "fn negate(x: i64) -> i64 {\n    return (-1 * x);\n}\n".to_string(),
+                vec![
+                    BenchExample { inputs: vec![BenchValue::Int(5)], expected: BenchValue::Int(-5) },
+                    BenchExample { inputs: vec![BenchValue::Int(-3)], expected: BenchValue::Int(3) },
+                ],
+            ),
+            (
+                "triple".to_string(),
+                "fn triple(x: i64) -> i64 {\n    return (3 * x);\n}\n".to_string(),
+                vec![
+                    BenchExample { inputs: vec![BenchValue::Int(2)], expected: BenchValue::Int(6) },
+                    BenchExample { inputs: vec![BenchValue::Int(5)], expected: BenchValue::Int(15) },
+                ],
+            ),
+        ];
+        let outcome = write_verified_project(&root, "verified_good", &components).expect("write");
+        // HARD: must compile.
+        assert!(
+            outcome.compile.is_ok(),
+            "verified crate must compile clean: {:?}",
+            outcome.compile
+        );
+        // A main.rs + [[bin]] must have been emitted (both fns render).
+        assert!(
+            outcome.written.iter().any(|p| p == "src/main.rs"),
+            "main.rs should be written: {:?}",
+            outcome.written
+        );
+        // Tests must pass OR cargo be absent (Unverified) — never Failed for good code.
+        assert!(
+            outcome.test.is_ok() || matches!(outcome.test, TestStatus::Unverified(_)),
+            "good code must not FAIL its own reproduction tests: {:?}",
+            outcome.test
+        );
+        // COVERAGE HONESTY: both components render -> both execution-tested, none compile-only.
+        assert_eq!(outcome.tested.len(), 2, "both components should be execution-tested");
+        assert!(outcome.compile_only.is_empty(), "no compile-only component here");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// THE GATE MUST BITE: identical (correct) code, but one component is handed a
+    /// deliberately WRONG example, so `emit_tests_module` writes a false
+    /// `assert_eq!`. The crate still type-checks (compile Ok) but `cargo test`
+    /// must FAIL — proving the test gate catches a non-reproducing claim.
+    /// (If cargo cannot run here, tolerate Unverified — but on any real cargo run
+    /// the wrong assert makes it Failed.)
+    #[test]
+    fn write_verified_project_wrong_example_makes_test_fail() {
+        let root = fresh("verified_wrong");
+        let components = vec![(
+            "triple".to_string(),
+            "fn triple(x: i64) -> i64 {\n    return (3 * x);\n}\n".to_string(),
+            vec![
+                // triple(2) == 6, but we assert 999 -> the generated test must fail.
+                BenchExample { inputs: vec![BenchValue::Int(2)], expected: BenchValue::Int(999) },
+            ],
+        )];
+        let outcome = write_verified_project(&root, "verified_wrong", &components).expect("write");
+        // It still type-checks (the assert is valid Rust, just false at runtime).
+        assert!(
+            outcome.compile.is_ok(),
+            "crate with a false assert still compiles: {:?}",
+            outcome.compile
+        );
+        match &outcome.test {
+            TestStatus::Failed(_) => { /* the gate BIT — exactly what we want */ }
+            TestStatus::Unverified(_) => { /* cargo unavailable in this env: tolerated */ }
+            TestStatus::Ok => panic!(
+                "test gate FAILED TO BITE: a wrong assert_eq! must not pass cargo test"
+            ),
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A component whose examples are all unrenderable (e.g. `Str`) yields NO test
+    /// module (no always-true test), the crate still compiles, and the test gate
+    /// is Ok/Unverified (never Failed) — proving we never emit a false-green test.
+    #[test]
+    fn write_verified_project_skips_unrenderable_examples() {
+        let root = fresh("verified_skip");
+        let components = vec![(
+            "echo".to_string(),
+            "fn echo(x: i64) -> i64 {\n    return x;\n}\n".to_string(),
+            vec![
+                // Str examples don't render -> emit_tests_module returns "" ->
+                // no test module appended, no main demo for this component.
+                BenchExample {
+                    inputs: vec![BenchValue::Str("a".to_string())],
+                    expected: BenchValue::Str("a".to_string()),
+                },
+            ],
+        )];
+        let outcome = write_verified_project(&root, "verified_skip", &components).expect("write");
+        assert!(
+            outcome.compile.is_ok(),
+            "crate must compile without a test module: {:?}",
+            outcome.compile
+        );
+        // The module file must NOT contain a `mod tests` (nothing rendered).
+        let module_src = fs::read_to_string(root.join("src/echo.rs")).unwrap();
+        assert!(
+            !module_src.contains("mod tests"),
+            "no test module must be emitted for unrenderable examples: {module_src}"
+        );
+        // No main.rs (no component's first example renders) -> no [[bin]].
+        assert!(
+            !outcome.written.iter().any(|p| p == "src/main.rs"),
+            "no main.rs when nothing renders: {:?}",
+            outcome.written
+        );
+        let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(!cargo.contains("[[bin]]"), "no dangling bin target: {cargo}");
+        // No tests to fail -> Ok or Unverified, never Failed.
+        assert!(
+            !matches!(outcome.test, TestStatus::Failed(_)),
+            "no false-green/failing test when nothing renders: {:?}",
+            outcome.test
+        );
+        // COVERAGE HONESTY: `echo` had no renderable example, so it is COMPILE-ONLY,
+        // not execution-tested — a green `test` gate must not imply otherwise.
+        assert_eq!(outcome.compile_only, vec!["echo".to_string()], "must be flagged compile-only");
+        assert!(outcome.tested.is_empty(), "no component is execution-tested here");
         let _ = fs::remove_dir_all(root);
     }
 
