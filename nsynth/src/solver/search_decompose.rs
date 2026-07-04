@@ -504,6 +504,44 @@ fn try_sort_by(problem: &Problem, name: &str) -> Option<(String, String)> {
         );
         return Some((code, format!("decompose-sort-{k_name}")));
     }
+
+    // STRING keys: lexicographic asc/desc and the COMPOUND len-then-alpha
+    // (HumanEval 149 class). Mog `<`/`>` are lexicographic on strings by design.
+    let str_keys: [(&str, fn(&str, &str) -> std::cmp::Ordering); 3] = [
+        ("alpha_asc", |a, b| a.cmp(b)),
+        ("alpha_desc", |a, b| b.cmp(a)),
+        ("len_alpha_asc", |a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b))),
+    ];
+    'skey: for (k_name, ord) in str_keys {
+        for ex in &problem.examples {
+            let Value::Array(input) = &ex.inputs[0] else { return None };
+            let Value::Array(output) = &ex.expected else { return None };
+            let ins: Option<Vec<&str>> = input
+                .iter()
+                .map(|v| if let Value::Str(s) = v { Some(s.as_str()) } else { None })
+                .collect();
+            let Some(mut ins) = ins else { continue 'skey };
+            ins.sort_by(|a, b| ord(a, b));
+            let outs: Option<Vec<&str>> = output
+                .iter()
+                .map(|v| if let Value::Str(s) = v { Some(s.as_str()) } else { None })
+                .collect();
+            let Some(outs) = outs else { continue 'skey };
+            if ins != outs {
+                continue 'skey;
+            }
+        }
+        let list_ty = mog_type(&problem.examples[0].inputs[0], true)?;
+        let swap_cond = match k_name {
+            "alpha_asc" => "if out[j] < out[m] {\n                m = j;\n            }".to_string(),
+            "alpha_desc" => "if out[j] > out[m] {\n                m = j;\n            }".to_string(),
+            _ => "if out[j].len < out[m].len {\n                m = j;\n            } else {\n                if out[j].len == out[m].len {\n                    if out[j] < out[m] {\n                        m = j;\n                    }\n                }\n            }".to_string(),
+        };
+        let code = format!(
+            "fn {name}(xs: {list_ty}) -> {list_ty} {{\n    out: {list_ty} = [];\n    for e in xs {{\n        out.push(e);\n    }}\n    i: i64 = 0;\n    while i < out.len {{\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < out.len {{\n            {swap_cond}\n            j = j + 1;\n        }}\n        t: string = out[i];\n        out[i] = out[m];\n        out[m] = t;\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+        );
+        return Some((code, format!("decompose-sort-{k_name}")));
+    }
     None
 }
 
@@ -621,6 +659,24 @@ fn try_filter_sort(problem: &Problem, name: &str) -> Option<(String, String)> {
         ("len_asc", &len_key, false),
         ("len_desc", &len_key, true),
     ];
+    // Compound len-then-alpha (HumanEval 149 class): monotone under (len, str).
+    let compound_ok = problem.examples.iter().all(|ex| {
+        let Value::Array(output) = &ex.expected else { return false };
+        let outs: Option<Vec<&str>> = output
+            .iter()
+            .map(|v| if let Value::Str(s) = v { Some(s.as_str()) } else { None })
+            .collect();
+        let Some(outs) = outs else { return false };
+        outs.windows(2)
+            .all(|w| w[0].len() < w[1].len() || (w[0].len() == w[1].len() && w[0] <= w[1]))
+    });
+    if compound_ok {
+        let list_ty = mog_type(&problem.examples[0].inputs[0], true)?;
+        let code = format!(
+            "fn {name}(xs: {list_ty}) -> {list_ty} {{\n    out: {list_ty} = [];\n    for e in xs {{\n        if pred(e) {{\n            out.push(e);\n        }}\n    }}\n    i: i64 = 0;\n    while i < out.len {{\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < out.len {{\n            if out[j].len < out[m].len {{\n                m = j;\n            }} else {{\n                if out[j].len == out[m].len {{\n                    if out[j] < out[m] {{\n                        m = j;\n                    }}\n                }}\n            }}\n            j = j + 1;\n        }}\n        t: string = out[i];\n        out[i] = out[m];\n        out[m] = t;\n        i = i + 1;\n    }}\n    return out;\n}}\n\n{pred_fn}"
+        );
+        return Some((code, "decompose-filter-sort-len_alpha".to_string()));
+    }
     'key: for (k_name, key, desc) in keys {
         for ex in &problem.examples {
             let Value::Array(output) = &ex.expected else { return None };
@@ -812,6 +868,8 @@ fn synthesize_predicate_with_text(kept: &[Value], dropped: &[Value], text: &str)
             };
             let k = strs(kept)?;
             let d = strs(dropped)?;
+            candidates.push("x.len % 2 == 0".into());
+            candidates.push("x.len % 2 != 0".into());
             // Length thresholds mined from the observed lengths.
             for l in k.iter().chain(d.iter()).map(|s| s.len()) {
                 candidates.push(format!("x.len >= {l}"));
