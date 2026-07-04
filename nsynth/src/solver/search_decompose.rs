@@ -46,14 +46,15 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
     // shape hypotheses + data-mined holes + end-to-end verification.
     if first.inputs.len() == 2
         && matches!(first.inputs[0], Value::Array(_))
-        && matches!(first.inputs[1], Value::Int(_))
+        && matches!(first.inputs[1], Value::Int(_) | Value::Float(_))
     {
         let name = {
             let n = problem.function_name();
             if n.is_empty() { "f" } else { n }
         };
         IN_DECOMPOSE.with(|f| f.set(true));
-        let result = try_intersperse(problem, name)
+        let result = try_has_close(problem, name)
+            .or_else(|| try_intersperse(problem, name))
             .or_else(|| try_map_scalar(problem, name))
             .or_else(|| try_filter_scalar(problem, name));
         IN_DECOMPOSE.with(|f| f.set(false));
@@ -273,6 +274,8 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| try_select_pair(problem, name))
         .or_else(|| try_filter(problem, name))
         .or_else(|| try_filter_sort(problem, name))
+        .or_else(|| try_exists_sum_zero(problem, name))
+        .or_else(|| try_below_zero(problem, name))
         .or_else(|| try_concat(problem, name))
         .or_else(|| try_select(problem, name));
     IN_DECOMPOSE.with(|f| f.set(false));
@@ -962,6 +965,109 @@ fn try_select_pair(problem: &Problem, name: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+// ─────────────────────── existence / pairwise-predicate schemas ───────────────────────
+
+fn as_f64(v: &Value) -> Option<f64> {
+    match v {
+        Value::Int(i) => Some(*i as f64),
+        Value::Float(b) => Some(f64::from_bits(*b)),
+        _ => None,
+    }
+}
+
+/// (list) -> bool: exist a PAIR (i<j) or a TRIPLE (i<j<k) of DISTINCT elements
+/// summing to zero (pairs_sum_to_zero / triples_sum_to_zero).
+fn try_exists_sum_zero(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for arity in [2usize, 3] {
+        let mut ok = true;
+        for ex in &problem.examples {
+            let Value::Array(input) = &ex.inputs[0] else { return None };
+            let Value::Bool(out) = &ex.expected else { return None };
+            let xs: Option<Vec<i64>> = input
+                .iter()
+                .map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+                .collect();
+            let Some(xs) = xs else { return None };
+            let found = exists_zero_sum(&xs, arity);
+            if found != *out {
+                ok = false;
+                break;
+            }
+        }
+        if !ok {
+            continue;
+        }
+        let code = if arity == 2 {
+            format!("fn {name}(xs: [i64]) -> bool {{\n    i: i64 = 0;\n    while i < xs.len {{\n        j: i64 = i + 1;\n        while j < xs.len {{\n            if xs[i] + xs[j] == 0 {{\n                return true;\n            }}\n            j = j + 1;\n        }}\n        i = i + 1;\n    }}\n    return false;\n}}\n")
+        } else {
+            format!("fn {name}(xs: [i64]) -> bool {{\n    i: i64 = 0;\n    while i < xs.len {{\n        j: i64 = i + 1;\n        while j < xs.len {{\n            k: i64 = j + 1;\n            while k < xs.len {{\n                if xs[i] + xs[j] + xs[k] == 0 {{\n                    return true;\n                }}\n                k = k + 1;\n            }}\n            j = j + 1;\n        }}\n        i = i + 1;\n    }}\n    return false;\n}}\n")
+        };
+        return Some((code, format!("decompose-exists-sum-zero-{arity}")));
+    }
+    None
+}
+
+fn exists_zero_sum(xs: &[i64], arity: usize) -> bool {
+    let n = xs.len();
+    match arity {
+        2 => (0..n).any(|i| (i + 1..n).any(|j| xs[i] + xs[j] == 0)),
+        3 => (0..n).any(|i| {
+            (i + 1..n).any(|j| (j + 1..n).any(|k| xs[i] + xs[j] + xs[k] == 0))
+        }),
+        _ => false,
+    }
+}
+
+/// (list) -> bool: does the running prefix sum ever go strictly below zero
+/// (below_zero).
+fn try_below_zero(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Bool(out) = &ex.expected else { return None };
+        let xs: Option<Vec<i64>> = input
+            .iter()
+            .map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+            .collect();
+        let Some(xs) = xs else { return None };
+        let mut acc = 0i64;
+        let mut below = false;
+        for x in xs {
+            acc += x;
+            if acc < 0 {
+                below = true;
+            }
+        }
+        if below != *out {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(xs: [i64]) -> bool {{\n    acc: i64 = 0;\n    for x in xs {{\n        acc = acc + x;\n        if acc < 0 {{\n            return true;\n        }}\n    }}\n    return false;\n}}\n"
+    );
+    Some((code, "decompose-below-zero".to_string()))
+}
+
+/// (list, threshold) -> bool: exist two elements whose absolute difference is
+/// strictly less than the threshold (has_close_elements).
+fn try_has_close(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Bool(out) = &ex.expected else { return None };
+        let t = as_f64(&ex.inputs[1])?;
+        let xs: Option<Vec<f64>> = input.iter().map(as_f64).collect();
+        let Some(xs) = xs else { return None };
+        let n = xs.len();
+        let found = (0..n).any(|i| (i + 1..n).any(|j| (xs[i] - xs[j]).abs() < t));
+        if found != *out {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(xs: [i64], t: f64) -> bool {{\n    i: i64 = 0;\n    while i < xs.len {{\n        j: i64 = i + 1;\n        while j < xs.len {{\n            d: f64 = xs[i] - xs[j];\n            if d < 0.0 {{\n                d = 0.0 - d;\n            }}\n            if d < t {{\n                return true;\n            }}\n            j = j + 1;\n        }}\n        i = i + 1;\n    }}\n    return false;\n}}\n"
+    );
+    Some((code, "decompose-has-close".to_string()))
 }
 
 // ─────────────────────── base-conversion / bit-string schemas ───────────────────────
