@@ -41,8 +41,33 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
     }
     let examples = &problem.examples;
     let first = examples.first()?;
-    // v1 scope: exactly one input, and it is a list. (Scalar pass-through args
-    // and multi-list inputs are later increments.)
+    // (list, int-scalar) inputs route to the two-arg schemas: the scalar is a
+    // THRESHOLD/OPERAND ("greater than k", "multiply by k"). Same contract:
+    // shape hypotheses + data-mined holes + end-to-end verification.
+    if first.inputs.len() == 2
+        && matches!(first.inputs[0], Value::Array(_))
+        && matches!(first.inputs[1], Value::Int(_))
+    {
+        let name = {
+            let n = problem.function_name();
+            if n.is_empty() { "f" } else { n }
+        };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_map_scalar(problem, name).or_else(|| try_filter_scalar(problem, name));
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method,
+                error: None,
+                metadata: Default::default(),
+            });
+        }
+        return None;
+    }
+    // Single-input tier: exactly one input, and it is a list.
     if first.inputs.len() != 1 {
         return None;
     }
@@ -77,6 +102,107 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
             error: None,
             metadata: Default::default(),
         });
+    }
+    None
+}
+
+// ──────────────────────── H-MAP-SCALAR (2-arg) ────────────────────────
+
+/// (list, k) with same-length list output: out[i] = affine(x, k) — "multiply
+/// each by k", "add k to every element". Reuses the exact integer 3-unknown
+/// solve with k in the index slot; evidence multiplication applies as usual.
+fn try_map_scalar(problem: &Problem, name: &str) -> Option<(String, String)> {
+    let mut pairs: Vec<(i64, i64, i64)> = Vec::new(); // (x, k, out)
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Int(k) = &ex.inputs[1] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        if input.len() != output.len() {
+            return None;
+        }
+        for (x, o) in input.iter().zip(output.iter()) {
+            let (Value::Int(x), Value::Int(o)) = (x, o) else { return None };
+            pairs.push((*x, *k, *o));
+        }
+    }
+    if pairs.len() < 4 {
+        return None;
+    }
+    let fits = |f: &dyn Fn(i64, i64) -> i64| pairs.iter().all(|&(x, k, o)| f(x, k) == o);
+    let body: String = if fits(&|x, k| x * k) {
+        "x * k".to_string()
+    } else {
+        let (a, b, c) = solve_affine3(&pairs)?;
+        if !fits(&|x, k| a + b * x + c * k) {
+            return None;
+        }
+        let mut terms = Vec::new();
+        if b != 0 {
+            terms.push(if b == 1 { "x".to_string() } else { format!("{b} * x") });
+        }
+        if c != 0 {
+            terms.push(if c == 1 { "k".to_string() } else { format!("{c} * k") });
+        }
+        if a != 0 || terms.is_empty() {
+            terms.push(a.to_string());
+        }
+        terms.join(" + ")
+    };
+    let code = format!(
+        "fn {name}(xs: [i64], k: i64) -> [i64] {{\n    out: [i64] = [];\n    for x in xs {{\n        out.push({body});\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-map-scalar".to_string()))
+}
+
+// ─────────────────────── H-FILTER-SCALAR (2-arg) ───────────────────────
+
+/// (list, k) with a filtered-subsequence output: the predicate compares each
+/// element against the SCALAR ARGUMENT — x > k, x < k, x >= k, x <= k,
+/// x == k, x != k, x % k == 0. Labels come per-example (each example carries
+/// its own k), so the candidate must separate kept/dropped under EVERY k.
+fn try_filter_scalar(problem: &Problem, name: &str) -> Option<(String, String)> {
+    // (x, k, kept?) labeled triples from the subsequence walk.
+    let mut labeled: Vec<(i64, i64, bool)> = Vec::new();
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Int(k) = &ex.inputs[1] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        if output.len() >= input.len() {
+            return None;
+        }
+        let mut oi = 0;
+        for v in input {
+            let Value::Int(x) = v else { return None };
+            if oi < output.len() && v == &output[oi] {
+                labeled.push((*x, *k, true));
+                oi += 1;
+            } else {
+                labeled.push((*x, *k, false));
+            }
+        }
+        if oi != output.len() {
+            return None;
+        }
+    }
+    if !labeled.iter().any(|l| l.2) || !labeled.iter().any(|l| !l.2) {
+        return None;
+    }
+    let candidates: [(&str, fn(i64, i64) -> bool); 7] = [
+        ("x > k", |x, k| x > k),
+        ("x < k", |x, k| x < k),
+        ("x >= k", |x, k| x >= k),
+        ("x <= k", |x, k| x <= k),
+        ("x == k", |x, k| x == k),
+        ("x != k", |x, k| x != k),
+        ("x % k == 0", |x, k| k != 0 && x % k == 0),
+    ];
+    for (cond, f) in candidates {
+        if labeled.iter().all(|&(x, k, kept)| f(x, k) == kept) {
+            let code = format!(
+                "fn {name}(xs: [i64], k: i64) -> [i64] {{\n    out: [i64] = [];\n    for x in xs {{\n        if {cond} {{\n            out.push(x);\n        }}\n    }}\n    return out;\n}}\n"
+            );
+            return Some((code, "decompose-filter-scalar".to_string()));
+        }
     }
     None
 }
