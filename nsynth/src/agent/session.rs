@@ -380,6 +380,95 @@ impl CodingAgentSession {
         let _ = self.persist(Some(query), Some(result));
     }
 
+    /// COMPONENT LAYER product entry point (opt-in; not yet in the auto-router,
+    /// which would need tight NL gating to avoid hijacking op requests like
+    /// "count the array"). Build the KNOWN component(s) an NL phrase names into the
+    /// session root as ONE verified crate: resolve -> synthesize verified leaf ops
+    /// -> compose (+ raw-Rust struct glue for structural components) -> compile-gate
+    /// -> behavioral-gate. Returns `None` when the phrase names no known component,
+    /// so a caller can fall back to normal routing.
+    pub fn try_build_components(&mut self, query: &str) -> Option<AgentQueryResult> {
+        let specs = crate::component::resolve_components(query);
+        if specs.is_empty() {
+            return None;
+        }
+        let result = self.run_build_components(&specs);
+        self.record_result(query, &result);
+        Some(result)
+    }
+
+    fn run_build_components(
+        &mut self,
+        specs: &[&'static crate::component::ComponentSpec],
+    ) -> AgentQueryResult {
+        use crate::component::BehaviorStatus;
+        let bridge = LinguigenesisBridge::new();
+        let names: Vec<String> = specs.iter().map(|s| s.name.to_string()).collect();
+        match crate::component::build_project(&bridge, specs, &self.root) {
+            Ok(build) => {
+                let mut tool_trace: Vec<(String, String)> = build
+                    .outcome
+                    .written
+                    .iter()
+                    .map(|p| (format!("fs.write:{p}"), "ok".to_string()))
+                    .collect();
+                let compile_ok = build.outcome.compile.is_ok();
+                tool_trace.push((
+                    "cargo.check".to_string(),
+                    if compile_ok { "ok" } else { "failed" }.to_string(),
+                ));
+                let behavior_note = match &build.behavior {
+                    BehaviorStatus::Passed => {
+                        tool_trace.push(("cargo.test".to_string(), "ok".to_string()));
+                        " behavior: PASSED".to_string()
+                    }
+                    BehaviorStatus::Failed(e) => {
+                        tool_trace.push(("cargo.test".to_string(), "failed".to_string()));
+                        format!(" behavior: FAILED\n{e}")
+                    }
+                    BehaviorStatus::Unverified(e) => {
+                        tool_trace.push(("cargo.test".to_string(), "unverified".to_string()));
+                        format!(" behavior: UNVERIFIED ({e})")
+                    }
+                    BehaviorStatus::NotRun => String::new(),
+                };
+                // Success requires a clean compile AND that no declared behavioral
+                // contract FAILED (NotRun/Unverified don't sink a bundle).
+                let success = compile_ok && build.behavior.not_failed();
+                let response = format!(
+                    "Built {} component(s) [{}] into a verified crate: {} verified leaf op(s), \
+                     {} struct(s), compile {}.{}",
+                    names.len(),
+                    names.join(", "),
+                    build.leaves_verified.len(),
+                    build.structs.len(),
+                    if compile_ok { "OK" } else { "FAILED" },
+                    behavior_note,
+                );
+                AgentQueryResult {
+                    route: QueryRoute::GreenfieldProject,
+                    success,
+                    response,
+                    workflow: "component.build".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("component-layer".to_string()),
+                    repo_result: None,
+                    tool_trace,
+                }
+            }
+            Err(e) => AgentQueryResult {
+                route: QueryRoute::GreenfieldProject,
+                success: false,
+                response: format!("component build failed: {e}"),
+                workflow: "component.build".to_string(),
+                clarification_questions: Vec::new(),
+                synthesis_method: Some("component-layer".to_string()),
+                repo_result: None,
+                tool_trace: Vec::new(),
+            },
+        }
+    }
+
     /// Invoke a tool through the session's secure runtime.
     pub fn invoke_tool(&self, tool: &str, call: &ToolCall) -> Result<ToolOutput, String> {
         self.tools
