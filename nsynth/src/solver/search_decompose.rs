@@ -123,6 +123,37 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
+    // (string, string) -> int schema (overlapping-substring count).
+    if first.inputs.len() == 2
+        && matches!(first.inputs[0], Value::Str(_))
+        && matches!(first.inputs[1], Value::Str(_))
+        && matches!(first.expected, Value::Int(_))
+    {
+        let name = { let n = problem.function_name(); if n.is_empty() { "f" } else { n } };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_substring_count(problem, name);
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult { success: true, code, method, error: None, metadata: Default::default() });
+        }
+        return None;
+    }
+    // Single STRING input with INT output: str->int closed forms.
+    if first.inputs.len() == 1
+        && matches!(first.inputs[0], Value::Str(_))
+        && matches!(first.expected, Value::Int(_))
+    {
+        let name = { let n = problem.function_name(); if n.is_empty() { "f" } else { n } };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_count_distinct_chars(problem, name);
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult { success: true, code, method, error: None, metadata: Default::default() });
+        }
+        return None;
+    }
     // Single STRING input with LIST output: structural string->list schemas.
     if first.inputs.len() == 1
         && matches!(first.inputs[0], Value::Str(_))
@@ -884,6 +915,76 @@ fn try_select_pair(problem: &Problem, name: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+// ─────────────────────── numeric/string closed-form schemas ───────────────────────
+
+/// (int n) -> "0 1 2 ... n" space-joined inclusive range (string_sequence).
+/// DORMANT: emit needs an int->string builtin the Mog interpreter lacks (adding
+/// `str(int)` next unblocks this + decimal_to_binary/change_base/solve).
+#[allow(dead_code)]
+fn try_int_range_string(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Int(n) = &ex.inputs[0] else { return None };
+        let Value::Str(out) = &ex.expected else { return None };
+        if *n < 0 || *n > 10_000 {
+            return None;
+        }
+        let want: String = (0..=*n).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+        if &want != out {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(n: i64) -> string {{\n    out: string = \"0\";\n    i: i64 = 1;\n    while i <= n {{\n        out = out + \" \";\n        out = out + str(i);\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-int-range-string".to_string()))
+}
+
+/// (string) -> count of DISTINCT characters, case-insensitive
+/// (count_distinct_characters).
+fn try_count_distinct_chars(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Str(s) = &ex.inputs[0] else { return None };
+        let Value::Int(out) = &ex.expected else { return None };
+        let set: std::collections::BTreeSet<char> =
+            s.chars().flat_map(|c| c.to_lowercase()).collect();
+        if set.len() as i64 != *out {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(s: string) -> i64 {{\n    seen: [string] = [];\n    for ch in s {{\n        c: string = ch.lower();\n        hit: i64 = 0;\n        for k in seen {{\n            if k == c {{\n                hit = 1;\n            }}\n        }}\n        if hit == 0 {{\n            seen.push(c);\n        }}\n    }}\n    return seen.len;\n}}\n"
+    );
+    Some((code, "decompose-count-distinct-chars".to_string()))
+}
+
+/// (string, substring) -> count of OVERLAPPING occurrences (how_many_times).
+fn try_substring_count(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let (Value::Str(s), Value::Str(sub)) = (&ex.inputs[0], &ex.inputs[1]) else { return None };
+        let Value::Int(out) = &ex.expected else { return None };
+        if sub.is_empty() {
+            return None;
+        }
+        let sc: Vec<char> = s.chars().collect();
+        let subc: Vec<char> = sub.chars().collect();
+        let mut c = 0i64;
+        if sc.len() >= subc.len() {
+            for i in 0..=(sc.len() - subc.len()) {
+                if sc[i..i + subc.len()] == subc[..] {
+                    c += 1;
+                }
+            }
+        }
+        if c != *out {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(s: string, sub: string) -> i64 {{\n    c: i64 = 0;\n    n: i64 = s.len;\n    m: i64 = sub.len;\n    i: i64 = 0;\n    while i + m <= n {{\n        ok: i64 = 1;\n        j: i64 = 0;\n        while j < m {{\n            if s[i + j] != sub[j] {{\n                ok = 0;\n            }}\n            j = j + 1;\n        }}\n        if ok == 1 {{\n            c = c + 1;\n        }}\n        i = i + 1;\n    }}\n    return c;\n}}\n"
+    );
+    Some((code, "decompose-substring-count".to_string()))
 }
 
 // ─────────────────────── list-compose structural schemas ───────────────────────
