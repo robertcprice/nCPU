@@ -680,6 +680,12 @@ pub const OPS: &[LibOp] = &[
 "fn pairs_count_sum(arr: [i64], n: i64, s: i64) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = i + 1;\n        while j < arr.len {\n            if arr[i] + arr[j] == s {\n                c = c + 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
     LibOp { name: "array_product_mod", arity: 3, mog:
 "fn array_product_mod(arr: [i64], n: i64, m: i64) -> i64 {\n    p: i64 = 1;\n    for e in arr {\n        p = p * e % m;\n    }\n    return p;\n}\n" },
+    // ── batch 22: MAP-shape emitters. A Python-dict expected output verifies via
+    // the runtime's order-independent array-of-[key,value]-pairs bridge, so these
+    // ops return plain nested arrays — no interpreter map type needed. Covers the
+    // dominant MBPP dict pattern (element frequency).
+    LibOp { name: "element_frequency", arity: 1, mog:
+"fn element_frequency(arr: [i64]) -> [[i64]] {\n    keys: [i64] = [];\n    counts: [i64] = [];\n    for e in arr {\n        found: i64 = 0 - 1;\n        i: i64 = 0;\n        while i < keys.len {\n            if keys[i] == e {\n                found = i;\n            }\n            i = i + 1;\n        }\n        if found < 0 {\n            keys.push(e);\n            counts.push(1);\n        } else {\n            counts[found] = counts[found] + 1;\n        }\n    }\n    out: [[i64]] = [];\n    j: i64 = 0;\n    while j < keys.len {\n        out.push([keys[j], counts[j]]);\n        j = j + 1;\n    }\n    return out;\n}\n" },
 ];
 
 /// Return the first library impl that reproduces EVERY example of `problem`
@@ -926,6 +932,40 @@ mod tests {
                 "op {name}({arr:?}) failed (expected {expect:?})"
             );
         }
+    }
+
+    #[test]
+    fn batch22_element_frequency_solves_a_map_task_via_the_pairs_bridge() {
+        // A dict-output MBPP task (task 88 shape): expected is a wire Value::Map;
+        // the op emits an array of [value, count] pairs and must verify through
+        // the order-independent Map bridge in output_matches.
+        let m = |pairs: &[(i64, i64)]| {
+            Value::map_from_pairs(
+                pairs.iter().map(|(k, v)| (Value::Int(*k), Value::Int(*v))).collect(),
+            )
+        };
+        let p = problem_with(
+            "freq_count",
+            "fn freq_count(arr: [i64]) -> Map",
+            vec![
+                (vec![Value::int_array(&[10, 10, 20, 20, 20, 30])], m(&[(10, 2), (20, 3), (30, 1)])),
+                (vec![Value::int_array(&[1, 2, 2, 1, 1])], m(&[(1, 3), (2, 2)])),
+                (vec![Value::int_array(&[5])], m(&[(5, 1)])),
+            ],
+        );
+        let r = try_library(&p).expect("element_frequency should solve the map task");
+        assert_eq!(r.method, "library:element_frequency");
+        // Soundness: a WRONG count must not pass the bridge.
+        let bad = problem_with(
+            "freq_count_bad",
+            "fn freq_count(arr: [i64]) -> Map",
+            vec![
+                (vec![Value::int_array(&[10, 10, 20])], m(&[(10, 2), (20, 2)])), // 20 count wrong
+                (vec![Value::int_array(&[1, 2, 2])], m(&[(1, 1), (2, 2)])),
+                (vec![Value::int_array(&[5])], m(&[(5, 1)])),
+            ],
+        );
+        assert!(try_library(&bad).is_none(), "wrong counts must not verify");
     }
 
     fn op(name: &str) -> &'static str {

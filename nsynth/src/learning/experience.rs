@@ -555,6 +555,7 @@ impl ProblemSnapshot {
                         Value::Tuple(_) => 'U',
                         Value::Struct(_) => 'C',
                         Value::Tensor { .. } => 'N',
+                        Value::Map(_) => 'M',
                     })
                     .collect()
             })
@@ -572,6 +573,7 @@ impl ProblemSnapshot {
             Some(Value::Tuple(_)) => "Tuple",
             Some(Value::Struct(_)) => "Struct",
             Some(Value::Tensor { .. }) => "Tensor",
+            Some(Value::Map(_)) => "Map",
             None => "Unknown",
         }
         .to_string();

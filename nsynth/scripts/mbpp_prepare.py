@@ -54,7 +54,22 @@ def representable(v):
         return True
     if isinstance(v, (list, tuple)):
         return all(representable(x) for x in v)  # nested; empty list ok
+    if isinstance(v, dict):
+        # Value::Map: keys and values must themselves be representable.
+        return all(representable(k) and representable(x) for k, x in v.items())
     return False
+
+
+def encode(v):
+    """Wire-encode for the bench jsonl. Dicts become {"__map__": [[k, v], ...]}
+    (NOT a JSON object — json.dumps would stringify int keys and lose the key
+    type); the solver binary decodes that marker into Value::Map. Everything else
+    passes through, recursing into containers."""
+    if isinstance(v, dict):
+        return {"__map__": [[encode(k), encode(x)] for k, x in v.items()]}
+    if isinstance(v, (list, tuple)):
+        return [encode(x) for x in v]
+    return v
 
 
 def parse_assert(a):
@@ -91,7 +106,7 @@ def main():
     in_scope = (lambda x: classify(x) is not None) if domain == "int" else representable
 
     kept, reasons = [], {"dict/other": 0, "unparseable": 0}
-    domains = {"int": 0, "string": 0, "float": 0}
+    domains = {"int": 0, "string": 0, "float": 0, "dict": 0}
     for t in tasks:
         ios, fn, ok, bad = [], None, True, None
         for a in t["test_list"]:
@@ -109,8 +124,13 @@ def main():
                 break
             ios.append((args, exp))
         if ok and fn and len(ios) >= 3:
-            kept.append({"id": t["task_id"], "fn": fn, "examples": [{"in": a, "out": o} for a, o in ios]})
-            if any(_has_float(a) or _has_float(o) for a, o in ios):
+            kept.append({
+                "id": t["task_id"], "fn": fn,
+                "examples": [{"in": [encode(x) for x in a], "out": encode(o)} for a, o in ios],
+            })
+            if any(_has_dict(a) or _has_dict(o) for a, o in ios):
+                domains["dict"] += 1
+            elif any(_has_float(a) or _has_float(o) for a, o in ios):
                 domains["float"] += 1
             elif any(_has_str(a) or _has_str(o) for a, o in ios):
                 domains["string"] += 1
@@ -125,8 +145,8 @@ def main():
     print(f"total MBPP tasks: {len(tasks)}")
     print(f"ATTEMPTABLE (engine-representable, >=3 tests, domain={domain}): {len(kept)} -> {out_path}")
     print(f"  by domain: int/bool/list {domains['int']}  |  string-involving {domains['string']}"
-          f"  |  float-involving {domains['float']}")
-    print(f"OUT-OF-SCOPE: dict/other {reasons['dict/other']} (no Value::Map)  |  "
+          f"  |  float-involving {domains['float']}  |  dict-involving {domains['dict']}")
+    print(f"OUT-OF-SCOPE: other {reasons['dict/other']} (set/None/custom types)  |  "
           f"unparseable {reasons['unparseable']}")
 
 
@@ -145,6 +165,14 @@ def _has_str(v):
         return True
     if isinstance(v, (list, tuple)):
         return any(_has_str(x) for x in v)
+    return False
+
+
+def _has_dict(v):
+    if isinstance(v, dict):
+        return True
+    if isinstance(v, (list, tuple)):
+        return any(_has_dict(x) for x in v)
     return False
 
 

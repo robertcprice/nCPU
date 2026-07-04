@@ -3899,6 +3899,10 @@ pub fn infer_signature(fn_name: &str, examples: &[Example]) -> String {
             Value::Tuple(_) => "Tuple",
             Value::Struct(_) => "Struct",
             Value::Tensor { .. } => "Tensor",
+            // A map INPUT is handed to Mog code as an array of [key, value]
+            // pairs (the same shape the output bridge verifies), so the declared
+            // param type is the nested-array form.
+            Value::Map(_) => "[[i64]]",
         };
         param_idx += 1;
         param_types.push(format!("{}: {}", param_names(param_idx), type_str));
@@ -3916,6 +3920,10 @@ pub fn infer_signature(fn_name: &str, examples: &[Example]) -> String {
         Value::Tuple(_) => "Tuple",
         Value::Struct(_) => "Struct",
         Value::Tensor { .. } => "Tensor",
+        // Map RETURN: the program emits an array of [key, value] pairs; the
+        // verifier's array-of-pairs bridge compares it to the expected Map
+        // order-independently.
+        Value::Map(_) => "Map",
     };
 
     format!(
