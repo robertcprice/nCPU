@@ -49,6 +49,12 @@ struct Expr {
 
 const MAX_POOL_PER_TYPE: usize = 600;
 const MAX_DEPTH: usize = 4;
+/// DETERMINISTIC work budget: total expressions generated across all depths.
+/// The narrow surface stayed small by luck; a wider one blew past the per-task
+/// wall and STARVED downstream solvers (46->32 regression, reverted). A node
+/// counter (not wall-clock — CPU-load-flaky) bounds the search so widening the
+/// operator set can never again cost the whole time budget.
+const MAX_NODES: usize = 6000;
 
 /// Solve a single-STRING-input problem whose output is a string, by typed
 /// enumeration. Returns a full Mog program (entry + helpers) on success.
@@ -100,11 +106,19 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
         ("identity", |w| w.to_string()),
     ];
 
+    let mut nodes = 0usize;
     for depth in 2..=MAX_DEPTH {
+        if nodes >= MAX_NODES {
+            break;
+        }
         let prev: Vec<Expr> = pool.iter().filter(|e| e.depth == depth - 1).cloned().collect();
         let mut fresh: Vec<Expr> = Vec::new();
 
         for e in &prev {
+            if nodes >= MAX_NODES {
+                break;
+            }
+            nodes += 1;
             match &e.outs[0] {
                 V::S(_) => {
                     // Unary string transforms.
@@ -196,6 +210,30 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                             helpers,
                             depth,
                         });
+                    }
+                    // SORT the word list (alpha asc / by length asc) — bounded
+                    // by the node budget so it cannot blow up the search.
+                    for (k_name, alpha) in [("alpha", true), ("len", false)] {
+                        let outs: Vec<V> = e
+                            .outs
+                            .iter()
+                            .map(|v| {
+                                let V::L(l) = v else { unreachable!() };
+                                let mut l = l.clone();
+                                if alpha {
+                                    l.sort();
+                                } else {
+                                    l.sort_by_key(|w| w.chars().count());
+                                }
+                                V::L(l)
+                            })
+                            .collect();
+                        let cmp = if alpha { "ws[j] < ws[m]" } else { "ws[j].len < ws[m].len" };
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(format!(
+                            "fn sortw_{k_name}(xs: [string]) -> [string] {{\n    ws: [string] = [];\n    for e in xs {{\n        ws.push(e);\n    }}\n    i: i64 = 0;\n    while i < ws.len {{\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < ws.len {{\n            if {cmp} {{\n                m = j;\n            }}\n            j = j + 1;\n        }}\n        t: string = ws[i];\n        ws[i] = ws[m];\n        ws[m] = t;\n        i = i + 1;\n    }}\n    return ws;\n}}\n"
+                        ));
+                        fresh.push(Expr { outs, mog: format!("sortw_{k_name}({})", e.mog), helpers, depth });
                     }
                     // join with " " -> Str.
                     let outs: Vec<V> = e
@@ -314,5 +352,17 @@ mod tests {
         // Arbitrary unrelated outputs must not be fitted.
         let p = prob(&[("abc", "qqq"), ("de", "zz9"), ("f", "!!")]);
         assert!(try_typed_enum_str(&p, "f").is_none());
+    }
+
+    #[test]
+    fn enumerates_word_sort_join() {
+        // join(sortw_alpha(split(s, " ")), " ") — the bounded sort-words op.
+        let p = prob(&[
+            ("c a b", "a b c"),
+            ("zzz aaa mmm", "aaa mmm zzz"),
+            ("one two", "one two"),
+        ]);
+        let r = try_typed_enum_str(&p, "sortwords").expect("must enumerate word-sort");
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
     }
 }
