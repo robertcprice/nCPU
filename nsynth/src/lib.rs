@@ -11,6 +11,7 @@ pub mod backend_p2c;
 pub mod backend_repair;
 pub mod capability_miner;
 pub mod bidirectional;
+pub mod component;
 pub mod comprehension;
 pub mod db;
 pub mod differentiable;
