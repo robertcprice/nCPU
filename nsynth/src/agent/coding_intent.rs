@@ -154,6 +154,10 @@ fn literal_to_coding_value(lit: &LiteralValue) -> CodingValue {
         LiteralValue::Bool(b) => CodingValue::Bool(*b),
         LiteralValue::Array(a) => CodingValue::Array(a.clone()),
         LiteralValue::Pair(a, b) => CodingValue::Pair(*a, *b),
+        // Struct literals postdate this intake path and have no CodingValue
+        // representation; they never occur in the PBE benchmarks. Map to 0 to
+        // keep the conversion total (pre-Struct behavior: unreachable).
+        LiteralValue::Struct(_) => CodingValue::Int(0),
     }
 }
 

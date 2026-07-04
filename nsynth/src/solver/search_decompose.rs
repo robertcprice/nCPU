@@ -187,7 +187,11 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
-    // Single STRING input with INT output: str->int closed forms.
+    // Single STRING input with INT output: str->int closed forms, then the typed
+    // enum's char-class AGGREGATE atoms (count_upper = upper vowels at even
+    // indices, vowel/digit counts, ASCII sums). This block owns string->int, so
+    // the enum must be invoked HERE — the string->string block below is never
+    // reached for Int output.
     if first.inputs.len() == 1
         && matches!(first.inputs[0], Value::Str(_))
         && matches!(first.expected, Value::Int(_))
@@ -196,6 +200,11 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         IN_DECOMPOSE.with(|f| f.set(true));
         let result = try_count_distinct_chars(problem, name);
         IN_DECOMPOSE.with(|f| f.set(false));
+        if result.is_none() {
+            if let Some(r) = super::search_typed_enum::try_typed_enum_str(problem, name) {
+                return Some(r);
+            }
+        }
         let (code, method) = result?;
         if crate::runtime::code_reproduces_examples(&code, examples) {
             return Some(SolveResult { success: true, code, method, error: None, metadata: Default::default() });
@@ -220,22 +229,32 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
-    // Single STRING input with string output: CHAR-LEVEL schemas (a string is a
-    // char list — remove_vowels is a char-filter with a mined char set).
+    // Single STRING input with string OR INT output: CHAR-LEVEL schemas (a string
+    // is a char list — remove_vowels is a char-filter with a mined char set) plus
+    // the typed enum. Int output is admitted so the char-class AGGREGATE atoms
+    // (count_upper = count of upper vowels at even indices, digit/vowel counts,
+    // ASCII sums) actually reach the enum — the char schemas are string→string so
+    // they only run for string output.
     if first.inputs.len() == 1
         && matches!(first.inputs[0], Value::Str(_))
-        && matches!(first.expected, Value::Str(_))
+        && matches!(first.expected, Value::Str(_) | Value::Int(_))
     {
         let name = {
             let n = problem.function_name();
             if n.is_empty() { "f" } else { n }
         };
+        let str_out = matches!(first.expected, Value::Str(_));
         IN_DECOMPOSE.with(|f| f.set(true));
-        let result = try_char_shift(problem, name).or_else(|| try_char_filter(problem, name));
+        let result = if str_out {
+            try_char_shift(problem, name).or_else(|| try_char_filter(problem, name))
+        } else {
+            None
+        };
         IN_DECOMPOSE.with(|f| f.set(false));
         if result.is_none() {
             // Typed bottom-up enumeration (power-arc move 1): reaches the
-            // split→map→join compositions no char schema covers. Self-verifies.
+            // split→map→join compositions no char schema covers, and the char-
+            // class Int aggregates. Self-verifies.
             if let Some(r) = super::search_typed_enum::try_typed_enum_str(problem, name) {
                 return Some(r);
             }

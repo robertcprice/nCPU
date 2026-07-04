@@ -1262,6 +1262,9 @@ impl LinguigenesisBridge {
                 LiteralValue::Bool(b) => Value::Bool(*b),
                 LiteralValue::Array(v) => Value::int_array(v),
                 LiteralValue::Pair(a, b) => Value::Pair(*a, *b),
+                // Struct literals postdate this path; map to an empty struct so
+                // the closure stays total (it never equals a real expected value).
+                LiteralValue::Struct(_) => Value::Struct(Vec::new()),
             }
         };
         let examples: Vec<crate::benchmark::Example> = specs
@@ -3877,6 +3880,13 @@ fn literal_to_value(lit: &LiteralValue) -> Result<Value, BridgeError> {
         LiteralValue::Bool(b) => Value::Bool(*b),
         LiteralValue::Array(a) => Value::int_array(a),
         LiteralValue::Pair(a, b) => Value::Pair(*a, *b),
+        // Struct literals postdate this conversion and are not representable as
+        // a benchmark example value; reject rather than fabricate one.
+        LiteralValue::Struct(_) => {
+            return Err(BridgeError::ParseError(
+                "struct literals are unsupported in example conversion".to_string(),
+            ))
+        }
     })
 }
 

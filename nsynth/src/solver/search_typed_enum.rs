@@ -79,6 +79,8 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
             _ => None,
         })
         .collect::<Option<_>>()?;
+    // Char-class aggregate atoms only make sense for Int-output tasks.
+    let expected_has_int = expected.iter().any(|v| matches!(v, V::I(_)));
 
     // Depth-1 seeds: the input itself.
     let seed = Expr {
@@ -217,6 +219,85 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                         outs,
                         mog: format!("{}.len", e.mog),
                         helpers: e.helpers.clone(),
+                        depth,
+                    });
+                    // CHARACTER-CLASS AGGREGATES -> Int (guarded to Int-output
+                    // tasks). A PRINCIPLED closed basis — the standard char
+                    // classes {upper,lower,digit,alpha,vowel,upper-vowel,
+                    // consonant} crossed with index parity {all,even,odd} and
+                    // aggregate {count, sum-of-ord} — NOT task-specific ops. This
+                    // makes count_upper (upper vowels at even indices), digit/
+                    // ASCII sums, and vowel/consonant counts EMERGE as depth-2
+                    // terminals. Only fires when some example expects an Int, so
+                    // string-output tasks pay nothing.
+                    if expected_has_int {
+                        for (cname, cpred, ccond) in CHAR_CLASSES {
+                            for (iname, ipar) in [("all", 2i64), ("even", 0), ("odd", 1)] {
+                                for (aname, sum_ord) in [("count", false), ("ordsum", true)] {
+                                    let outs: Vec<V> = e
+                                        .outs
+                                        .iter()
+                                        .map(|v| {
+                                            let V::S(s) = v else { unreachable!() };
+                                            let mut acc = 0i64;
+                                            for (i, ch) in s.chars().enumerate() {
+                                                if ipar != 2 && (i as i64) % 2 != ipar {
+                                                    continue;
+                                                }
+                                                let o = ch as i64;
+                                                if cpred(o) {
+                                                    acc += if sum_ord { o } else { 1 };
+                                                }
+                                            }
+                                            V::I(acc)
+                                        })
+                                        .collect();
+                                    let fname = format!("cc_{cname}_{iname}_{aname}");
+                                    let idx_guard = match iname {
+                                        "even" => "if i % 2 == 0 {\n            ",
+                                        "odd" => "if i % 2 == 1 {\n            ",
+                                        _ => "",
+                                    };
+                                    let idx_close = if iname == "all" { "" } else { "\n        }" };
+                                    let incr = if sum_ord { "o" } else { "1" };
+                                    let helper = format!(
+                                        "fn {fname}(s: string) -> i64 {{\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < s.len {{\n        ch: string = s[i];\n        o: i64 = ch.ord();\n        {idx_guard}if {ccond} {{\n            c = c + {incr};\n        }}{idx_close}\n        i = i + 1;\n    }}\n    return c;\n}}\n"
+                                    );
+                                    let mut helpers = e.helpers.clone();
+                                    helpers.push(helper);
+                                    fresh.push(Expr {
+                                        outs,
+                                        mog: format!("{fname}({})", e.mog),
+                                        helpers,
+                                        depth,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    // Tokenize on commas AND spaces (drop empties) -> StrList.
+                    // The core split is space-only; comma-separated word tasks
+                    // (words_string) need separator-set tokenization.
+                    let outs: Vec<V> = e
+                        .outs
+                        .iter()
+                        .map(|v| {
+                            let V::S(s) = v else { unreachable!() };
+                            V::L(s
+                                .split(|c| c == ',' || c == ' ')
+                                .filter(|w| !w.is_empty())
+                                .map(str::to_string)
+                                .collect())
+                        })
+                        .collect();
+                    fresh.push(Expr {
+                        outs,
+                        mog: format!("tokenize_cs({})", e.mog),
+                        helpers: {
+                            let mut h = e.helpers.clone();
+                            h.push(TOKENIZE_CS_FN.to_string());
+                            h
+                        },
                         depth,
                     });
                 }
@@ -385,8 +466,50 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
     None
 }
 
+// ─────────────────────── CHARACTER-CLASS BASIS ───────────────────────
+// Principled closed set of character classes (Rust predicate on codepoint +
+// the equivalent Mog condition over `o = ch.ord()`), NOT task-specific ops.
+fn cls_upper(o: i64) -> bool { (65..=90).contains(&o) }
+fn cls_lower(o: i64) -> bool { (97..=122).contains(&o) }
+fn cls_digit(o: i64) -> bool { (48..=57).contains(&o) }
+fn cls_alpha(o: i64) -> bool { cls_upper(o) || cls_lower(o) }
+fn cls_vowel(o: i64) -> bool {
+    matches!(o, 97 | 101 | 105 | 111 | 117 | 65 | 69 | 73 | 79 | 85)
+}
+fn cls_uvowel(o: i64) -> bool { matches!(o, 65 | 69 | 73 | 79 | 85) }
+fn cls_conso(o: i64) -> bool { cls_alpha(o) && !cls_vowel(o) }
+
+const CHAR_CLASSES: [(&str, fn(i64) -> bool, &str); 7] = [
+    ("upper", cls_upper, "(o >= 65) && (o <= 90)"),
+    ("lower", cls_lower, "(o >= 97) && (o <= 122)"),
+    ("digit", cls_digit, "(o >= 48) && (o <= 57)"),
+    (
+        "alpha",
+        cls_alpha,
+        "((o >= 65) && (o <= 90)) || ((o >= 97) && (o <= 122))",
+    ),
+    (
+        "vowel",
+        cls_vowel,
+        "(o == 97) || (o == 101) || (o == 105) || (o == 111) || (o == 117) || (o == 65) || (o == 69) || (o == 73) || (o == 79) || (o == 85)",
+    ),
+    (
+        "uvowel",
+        cls_uvowel,
+        "(o == 65) || (o == 69) || (o == 73) || (o == 79) || (o == 85)",
+    ),
+    (
+        "conso",
+        cls_conso,
+        "(((o >= 65) && (o <= 90)) || ((o >= 97) && (o <= 122))) && ((o != 97) && (o != 101) && (o != 105) && (o != 111) && (o != 117) && (o != 65) && (o != 69) && (o != 73) && (o != 79) && (o != 85))",
+    ),
+];
+
+/// Tokenize a string on commas and spaces, dropping empty tokens.
+const TOKENIZE_CS_FN: &str = "fn tokenize_cs(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    for ch in s {\n        if ch == \",\" {\n            if cur.len > 0 {\n                out.push(cur);\n            }\n            cur = \"\";\n        } else {\n            if ch == \" \" {\n                if cur.len > 0 {\n                    out.push(cur);\n                }\n                cur = \"\";\n            } else {\n                cur = cur + ch;\n            }\n        }\n    }\n    if cur.len > 0 {\n        out.push(cur);\n    }\n    return out;\n}\n";
+
 /// Sort the chars of a string — emitted once per program when used.
-const SORTCHARS_FN: &str = "fn sortchars(w: string) -> string {\n    cs: [string] = [];\n    for ch in w {\n        cs.push(ch);\n    }\n    i: i64 = 0;\n    while i < cs.len {\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < cs.len {\n            if cs[j] < cs[m] {\n                m = j;\n            }\n            j = j + 1;\n        }\n        t: string = cs[i];\n        cs[i] = cs[m];\n        cs[m] = t;\n        i = i + 1;\n    }\n    out: string = \"\";\n    for c in cs {\n        out = out + c;\n    }\n    return out;\n}\n";
+const SORTCHARS_FN: &str ="fn sortchars(w: string) -> string {\n    cs: [string] = [];\n    for ch in w {\n        cs.push(ch);\n    }\n    i: i64 = 0;\n    while i < cs.len {\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < cs.len {\n            if cs[j] < cs[m] {\n                m = j;\n            }\n            j = j + 1;\n        }\n        t: string = cs[i];\n        cs[i] = cs[m];\n        cs[m] = t;\n        i = i + 1;\n    }\n    out: string = \"\";\n    for c in cs {\n        out = out + c;\n    }\n    return out;\n}\n";
 
 /// Join a word list with single spaces.
 const JOINWORDS_FN: &str = "fn joinwords(ws: [string]) -> string {\n    out: string = \"\";\n    i: i64 = 0;\n    while i < ws.len {\n        out = out + ws[i];\n        if i < ws.len - 1 {\n            out = out + \" \";\n        }\n        i = i + 1;\n    }\n    return out;\n}\n";
@@ -495,6 +618,35 @@ mod tests {
         // Arbitrary unrelated outputs must not be fitted.
         let p = prob(&[("abc", "qqq"), ("de", "zz9"), ("f", "!!")]);
         assert!(try_typed_enum_str(&p, "f").is_none());
+    }
+
+    #[test]
+    fn counts_upper_vowels_at_even_indices() {
+        // count_upper: number of uppercase vowels at even indices — emerges from
+        // the char-class basis (uvowel × even × count), no hand op.
+        let p = Problem {
+            name: "count_upper".to_string(),
+            examples: vec![
+                Example { inputs: vec![Value::Str("aBCdEf".into())], expected: Value::Int(1) },
+                Example { inputs: vec![Value::Str("abcdefg".into())], expected: Value::Int(0) },
+                Example { inputs: vec![Value::Str("dBBE".into())], expected: Value::Int(0) },
+            ],
+            ..Problem::default()
+        };
+        let r = try_typed_enum_str(&p, "count_upper").expect("must find uvowel-even-count");
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
+    }
+
+    #[test]
+    fn tokenizes_on_commas_and_spaces() {
+        // words_string: split on commas OR spaces, then join back with " ".
+        let p = prob(&[
+            ("Hi, my name", "Hi my name"),
+            ("one,two,three", "one two three"),
+            ("a b c", "a b c"),
+        ]);
+        let r = try_typed_enum_str(&p, "words_string").expect("must tokenize on comma+space");
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
     }
 
     #[test]
