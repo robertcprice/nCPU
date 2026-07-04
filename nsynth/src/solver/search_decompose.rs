@@ -53,7 +53,9 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
             if n.is_empty() { "f" } else { n }
         };
         IN_DECOMPOSE.with(|f| f.set(true));
-        let result = try_map_scalar(problem, name).or_else(|| try_filter_scalar(problem, name));
+        let result = try_intersperse(problem, name)
+            .or_else(|| try_map_scalar(problem, name))
+            .or_else(|| try_filter_scalar(problem, name));
         IN_DECOMPOSE.with(|f| f.set(false));
         let (code, method) = result?;
         if crate::runtime::code_reproduces_examples(&code, examples) {
@@ -121,6 +123,24 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
+    // Single STRING input with LIST output: structural string->list schemas.
+    if first.inputs.len() == 1
+        && matches!(first.inputs[0], Value::Str(_))
+        && matches!(first.expected, Value::Array(_))
+    {
+        let name = {
+            let n = problem.function_name();
+            if n.is_empty() { "f" } else { n }
+        };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_prefixes(problem, name);
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult { success: true, code, method, error: None, metadata: Default::default() });
+        }
+        return None;
+    }
     // Single STRING input with string output: CHAR-LEVEL schemas (a string is a
     // char list — remove_vowels is a char-filter with a mined char set).
     if first.inputs.len() == 1
@@ -175,6 +195,7 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| try_select_pair(problem, name))
         .or_else(|| try_filter(problem, name))
         .or_else(|| try_filter_sort(problem, name))
+        .or_else(|| try_concat(problem, name))
         .or_else(|| try_select(problem, name));
     IN_DECOMPOSE.with(|f| f.set(false));
 
@@ -863,6 +884,96 @@ fn try_select_pair(problem: &Problem, name: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+// ─────────────────────── list-compose structural schemas ───────────────────────
+
+/// (list, k) -> list with k inserted BETWEEN consecutive elements (intersperse).
+fn try_intersperse(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Int(k) = &ex.inputs[1] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        let mut want: Vec<Value> = Vec::new();
+        for (i, v) in input.iter().enumerate() {
+            if i > 0 {
+                want.push(Value::Int(*k));
+            }
+            want.push(v.clone());
+        }
+        if &want != output {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(xs: [i64], k: i64) -> [i64] {{\n    out: [i64] = [];\n    i: i64 = 0;\n    for x in xs {{\n        if i > 0 {{\n            out.push(k);\n        }}\n        out.push(x);\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-intersperse".to_string()))
+}
+
+/// (mixed list) -> list keeping only the integer elements (filter_integers).
+/// DORMANT: needs a runtime `.is_int()` type guard the Mog interpreter lacks.
+#[allow(dead_code)]
+fn try_filter_int_type(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        let want: Vec<&Value> = input.iter().filter(|v| matches!(v, Value::Int(_))).collect();
+        if want.len() != output.len() || want.iter().zip(output.iter()).any(|(a, b)| *a != b) {
+            return None;
+        }
+        // Only meaningful if SOME element is non-int (else it's identity).
+        if input.iter().all(|v| matches!(v, Value::Int(_))) {
+            return None;
+        }
+    }
+    // The interpreter's `is_int()`-style check: Mog for-loop over a heterogeneous
+    // array; keep numeric elements. Emitted via the value's runtime type guard.
+    let code = format!(
+        "fn {name}(xs: [i64]) -> [i64] {{\n    out: [i64] = [];\n    for x in xs {{\n        if x.is_int() {{\n            out.push(x);\n        }}\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-filter-int-type".to_string()))
+}
+
+/// ([string]) -> string, concatenated with no separator (concatenate).
+fn try_concat(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Str(output) = &ex.expected else { return None };
+        let joined: Option<String> = input
+            .iter()
+            .map(|v| if let Value::Str(s) = v { Some(s.as_str()) } else { None })
+            .collect::<Option<Vec<_>>>()
+            .map(|v| v.concat());
+        if joined.as_deref() != Some(output.as_str()) {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(xs: [string]) -> string {{\n    out: string = \"\";\n    for x in xs {{\n        out = out + x;\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-concat".to_string()))
+}
+
+/// (string) -> [string] of cumulative prefixes (all_prefixes).
+fn try_prefixes(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Str(input) = &ex.inputs[0] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        let chars: Vec<char> = input.chars().collect();
+        let want: Vec<String> = (1..=chars.len()).map(|i| chars[..i].iter().collect()).collect();
+        let got: Option<Vec<String>> = output
+            .iter()
+            .map(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+            .collect();
+        if got.as_deref() != Some(want.as_slice()) {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(s: string) -> [string] {{\n    out: [string] = [];\n    cur: string = \"\";\n    for ch in s {{\n        cur = cur + ch;\n        out.push(cur);\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-prefixes".to_string()))
 }
 
 // ─────────────────────────── H-CHAR-SHIFT ───────────────────────────
