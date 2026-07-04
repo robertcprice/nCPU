@@ -251,6 +251,119 @@ fn solve_struct_output(problem: &Problem) -> Option<SolveResult> {
     })
 }
 
+/// STRUCT-INPUT synthesis: FLATTEN-AND-WRAP. v1 scope: exactly ONE input, a
+/// flat struct of Int fields, non-struct output. The fields become the params
+/// of a flat sub-problem handed to the FULL pipeline; the assembly
+///
+///   struct Rect { h: i64, w: i64 }
+///   fn area_core(h: i64, w: i64) -> T { <verified flat solve> }
+///   fn area(r: Rect) -> T { return area_core(r.h, r.w); }
+///
+/// is strict-verified WHOLE (the wrapper harness renders struct arguments as
+/// typed literals; the interpreter constructs + field-accesses them). Declines
+/// honestly on any failure — never fabricates.
+fn solve_struct_input(problem: &Problem) -> Option<SolveResult> {
+    use crate::benchmark::Example;
+    // Gate: one struct input with identical Int field names across examples.
+    let field_names: Vec<String> = match problem.examples.first()?.inputs.as_slice() {
+        [Value::Struct(fs)] if !fs.is_empty() => fs.iter().map(|(n, _)| n.clone()).collect(),
+        _ => return None,
+    };
+    for e in &problem.examples {
+        match e.inputs.as_slice() {
+            [Value::Struct(fs)]
+                if fs.len() == field_names.len()
+                    && fs.iter().zip(&field_names).all(|((n, _), f)| n == f)
+                    && fs.iter().all(|(_, v)| matches!(v, Value::Int(_))) => {}
+            _ => return None,
+        }
+        if matches!(e.expected, Value::Struct(_)) {
+            return None; // struct->struct: out of v1 scope
+        }
+    }
+
+    let fn_name = problem.function_name();
+    // Struct name from the signature's first param type, else a derived default.
+    let struct_name = problem
+        .signature
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(')'))
+        .and_then(|(params, _)| params.split(',').next()?.split_once(':'))
+        .map(|(_, ty)| ty.trim().to_string())
+        .filter(|ty| ty.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+        .unwrap_or_else(|| {
+            let mut n = fn_name.to_string();
+            if let Some(c) = n.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            format!("{n}In")
+        });
+    let ret_ty = problem
+        .signature
+        .rsplit("->")
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "i64".to_string());
+
+    // Flat sub-problem: the fields ARE the params.
+    let core_name: &'static str = Box::leak(format!("{fn_name}_core").into_boxed_str());
+    let params_src = field_names
+        .iter()
+        .map(|f| format!("{f}: i64"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let core_sig: &'static str =
+        Box::leak(format!("fn {core_name}({params_src}) -> {ret_ty}").into_boxed_str());
+    let sub = Problem {
+        name: core_name.to_string(),
+        category: "struct-input",
+        description: "flattened struct-input core",
+        signature: core_sig,
+        examples: problem
+            .examples
+            .iter()
+            .map(|e| Example {
+                inputs: match e.inputs.as_slice() {
+                    [Value::Struct(fs)] => fs.iter().map(|(_, v)| v.clone()).collect(),
+                    _ => unreachable!("gated above"),
+                },
+                expected: e.expected.clone(),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let r = solve_problem(&sub);
+    if !r.success {
+        return None;
+    }
+
+    let decl_fields = field_names
+        .iter()
+        .map(|f| format!("    {f}: i64,"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let access = field_names
+        .iter()
+        .map(|f| format!("r.{f}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let code = format!(
+        "struct {struct_name} {{\n{decl_fields}\n}}\n\n{}\n\nfn {fn_name}(r: {struct_name}) -> {ret_ty} {{\n    return {core_name}({access});\n}}\n",
+        r.code.trim_end(),
+    );
+    if crate::runtime::verify_problem_code_strict(problem, &code).is_err() {
+        return None;
+    }
+    Some(SolveResult {
+        success: true,
+        code,
+        method: format!("struct_input_flatten({})", r.method),
+        error: None,
+        metadata: Default::default(),
+    })
+}
+
 fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
     if !problem
         .signature
@@ -389,6 +502,17 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // program (struct decl + verified per-field helpers + a constructor fn) is
     // strict-verified as a whole before being accepted.
     if let Some(result) = solve_struct_output(problem) {
+        if result.success && recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+        }
+        return result;
+    }
+
+    // Struct-INPUT problems: FLATTEN-AND-WRAP. The struct's fields become the
+    // params of a flat sub-problem solved by this whole pipeline; a wrapper fn
+    // destructures the struct (r.w, r.h) into the verified core, and the whole
+    // (decl + core + wrapper) is strict-verified before acceptance.
+    if let Some(result) = solve_struct_input(problem) {
         if result.success && recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
         }

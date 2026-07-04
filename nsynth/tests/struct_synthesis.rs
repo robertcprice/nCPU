@@ -75,3 +75,31 @@ fn synthesizes_array_reducer_struct() {
     assert!(r.code.contains("struct Stats"), "{}", r.code);
     mog_synth::runtime::verify_problem_code_strict(&problem, &r.code).expect("strict");
 }
+
+/// STRUCT-INPUT synthesis (flatten-and-wrap): area(Rect{h,w}) = w*h from
+/// examples alone. The engine flattens the fields into a flat core solved by
+/// the full pipeline, wraps it with field access, and strict-verifies the whole.
+#[test]
+fn synthesizes_struct_input_function() {
+    let ex = |w: i64, h: i64| Example {
+        inputs: vec![Value::Struct(vec![
+            ("h".to_string(), Value::Int(h)),
+            ("w".to_string(), Value::Int(w)),
+        ])],
+        expected: Value::Int(w * h),
+    };
+    let problem = Problem {
+        name: "area".into(),
+        category: "struct-accept",
+        description: "rect area",
+        signature: "fn area(r: Rect) -> i64",
+        examples: vec![ex(3, 4), ex(2, 5), ex(7, 1), ex(6, 6)],
+        ..Default::default()
+    };
+    let r = solve_problem(&problem);
+    assert!(r.success, "err: {:?}", r.error);
+    assert!(r.method.starts_with("struct_input_flatten"), "method: {}", r.method);
+    assert!(r.code.contains("struct Rect"), "{}", r.code);
+    assert!(r.code.contains("r.h") && r.code.contains("r.w"), "field access: {}", r.code);
+    mog_synth::runtime::verify_problem_code_strict(&problem, &r.code).expect("strict");
+}

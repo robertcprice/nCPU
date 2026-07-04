@@ -319,7 +319,26 @@ impl Problem {
             let mut args = example
                 .inputs
                 .iter()
-                .map(|value| render_value(self, value))
+                .enumerate()
+                .map(|(idx, value)| {
+                    // A struct-typed ARGUMENT must render as a TYPED literal
+                    // (`Rect { h: 4, w: 3 }`): a bare `{...}` is not an
+                    // expression the parser accepts. The type name comes from
+                    // the signature's parameter at this position.
+                    if let Value::Struct(fields) = value {
+                        if let Some(ty) = param_type_name(self.signature, idx) {
+                            let rendered = fields
+                                .iter()
+                                .map(|(k, v)| {
+                                    render_value(self, v).map(|s| format!("{k}: {s}"))
+                                })
+                                .collect::<Result<Vec<_>, _>>()?
+                                .join(", ");
+                            return Ok(format!("{ty} {{ {rendered} }}"));
+                        }
+                    }
+                    render_value(self, value)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
 
             // Append synthetic args if present
@@ -484,6 +503,15 @@ fn tree_size(tree: &[TreeNode]) -> usize {
 
 fn render_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The declared type name of the `idx`-th parameter in a `fn name(a: T, b: U)`
+/// signature, when it is a capitalized (struct-like) type.
+fn param_type_name(signature: &str, idx: usize) -> Option<String> {
+    let params = signature.split_once('(')?.1.split_once(')')?.0;
+    let p = params.split(',').nth(idx)?;
+    let ty = p.split_once(':')?.1.trim();
+    (ty.chars().next()?.is_ascii_uppercase()).then(|| ty.to_string())
 }
 
 fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
