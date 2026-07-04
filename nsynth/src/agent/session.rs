@@ -348,6 +348,26 @@ impl CodingAgentSession {
             }
         }
 
+        // COMPONENT INTAKE (component layer front door): a CONSTRUCTION request
+        // naming known component(s) — "build a counter", "an accumulator", "give me
+        // array statistics" — builds a verified crate directly (resolve ->
+        // synthesize verified leaves -> compose + struct glue -> compile-gate ->
+        // behavior-gate). Double-gated to never hijack an OPERATION request:
+        // `route_component_build` requires a construction cue AND that the matching
+        // surface token resolves to NO coding op (so "count the array" — count ->
+        // array_sum — and "sort a list of counters" both fall through untouched).
+        // These phrases currently dead-end at Clarification, so this strictly
+        // rescues them; anything it declines routes exactly as before.
+        {
+            let bridge = LinguigenesisBridge::new();
+            let specs = crate::component::route_component_build(&bridge, query);
+            if !specs.is_empty() {
+                let result = self.run_build_components(&specs);
+                self.record_result(query, &result);
+                return result;
+            }
+        }
+
         let bridge = LinguigenesisBridge::new();
         let result = match bridge.comprehend_outcome(query) {
             Ok(ComprehensionOutcome::Ready(req)) => self.dispatch(query, &req, true),

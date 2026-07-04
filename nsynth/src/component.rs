@@ -407,6 +407,49 @@ pub fn resolve_components(text: &str) -> Vec<&'static ComponentSpec> {
         .collect()
 }
 
+/// Router-intent cue: does the phrase ASK to build a thing (vs perform an op)?
+/// Kept minimal + deliberately about ROUTING, not NL resolution (which stays
+/// emergent). A short article-led phrase ("a counter") also counts as a request to
+/// construct that noun.
+fn has_construction_cue(tokens: &[&str]) -> bool {
+    const CUES: &[&str] = &[
+        "build", "create", "make", "implement", "generate", "construct", "want",
+        "need", "component", "struct", "module", "give",
+    ];
+    tokens.iter().any(|t| CUES.contains(t))
+        || (tokens.len() <= 3 && matches!(tokens.first(), Some(&"a") | Some(&"an")))
+}
+
+/// ROUTER-SAFE component resolution for the auto-dispatcher. Stricter than
+/// `resolve_components`: fires ONLY when the phrase carries a construction cue AND
+/// the matching surface token resolves to NO coding op. The op filter is emergent
+/// (asks the op resolver), so an ambiguous word like "count" — which resolves to
+/// `array_sum` — never triggers a Counter build, while the distinctive noun
+/// "counter" (resolves to no op) does. This is what makes it safe to hang off the
+/// main router without hijacking operation requests.
+pub fn route_component_build(
+    bridge: &LinguigenesisBridge,
+    query: &str,
+) -> Vec<&'static ComponentSpec> {
+    let lower = query.to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !has_construction_cue(&tokens) {
+        return Vec::new();
+    }
+    BUILTIN_COMPONENTS
+        .iter()
+        .filter(|comp| {
+            tokens.iter().any(|tok| {
+                comp.surfaces.iter().any(|s| surface_match(tok, s) > 0)
+                    && bridge.probe_resolution(tok).is_none()
+            })
+        })
+        .collect()
+}
+
 /// Outcome of a multi-component project build.
 pub struct ProjectBuild {
     pub components: Vec<String>,

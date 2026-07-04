@@ -67,3 +67,57 @@ fn session_declines_unknown_component() {
     assert!(session.try_build_components("reverse an array").is_none());
     let _ = fs::remove_dir_all(&root);
 }
+
+// ---- AUTO-ROUTER (handle_query) integration + false-positive guards ----
+
+fn route(root: &std::path::Path, q: &str) -> mog_synth::agent::AgentQueryResult {
+    let mut s = CodingAgentSession::new(root, GuardrailPolicy::default());
+    s.handle_query(q)
+}
+
+/// AUTO-ROUTE: the real handle_query front door builds a Counter from a plain
+/// construction request — a phrase that used to dead-end at Clarification.
+#[test]
+fn handle_query_auto_routes_build_a_counter() {
+    let root = fresh_root("auto_counter");
+    let r = route(&root, "build a counter");
+    assert!(r.success, "response: {}", r.response);
+    assert_eq!(r.workflow, "component.build", "routed to component layer");
+    assert!(root.join("src/counter.rs").is_file(), "Counter struct written");
+    assert!(r.response.contains("behavior: PASSED"), "{}", r.response);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn handle_query_auto_routes_an_accumulator() {
+    let root = fresh_root("auto_accum");
+    let r = route(&root, "an accumulator");
+    assert!(r.success, "response: {}", r.response);
+    assert_eq!(r.workflow, "component.build");
+    assert!(root.join("src/accumulator.rs").is_file());
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// FALSE-POSITIVE GUARD 1 (ambiguous surface): "count" resolves to an op
+/// (array_sum), so an operation request that merely contains it must NOT build a
+/// Counter — it routes exactly as before (no component crate).
+#[test]
+fn handle_query_does_not_hijack_count_operation() {
+    let root = fresh_root("count_op");
+    let r = route(&root, "count the elements of an array");
+    assert_ne!(r.workflow, "component.build", "must NOT build a component: {}", r.response);
+    assert!(!root.join("src/counter.rs").exists(), "no Counter struct written");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// FALSE-POSITIVE GUARD 2 (incidental distinctive noun): "counter" appears but the
+/// head verb is "sort" — no construction of a Counter. The construction-cue gate
+/// keeps this from building. (Belt-and-suspenders atop the op filter.)
+#[test]
+fn handle_query_does_not_hijack_incidental_counter_noun() {
+    let root = fresh_root("incidental");
+    let r = route(&root, "sort the list of names then reverse it");
+    assert_ne!(r.workflow, "component.build");
+    assert!(!root.join("src/counter.rs").exists());
+    let _ = fs::remove_dir_all(&root);
+}
