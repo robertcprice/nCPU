@@ -485,7 +485,7 @@ fn try_filter_sort(problem: &Problem, name: &str) -> Option<(String, String)> {
     if kept.is_empty() || dropped.is_empty() {
         return None; // degenerate — pure sort (H-SORT-BY) or pure identity
     }
-    let pred_fn = synthesize_predicate(&kept, &dropped)?;
+    let pred_fn = synthesize_predicate_with_text(&kept, &dropped, problem.description)?;
     // Stage 2: which sort key arranges each example's kept-set into the output?
     let val_key = |v: &Value| if let Value::Int(i) = v { Some(*i) } else { None };
     let len_key = |v: &Value| if let Value::Str(s) = v { Some(s.len() as i64) } else { None };
@@ -558,7 +558,7 @@ fn try_filter(problem: &Problem, name: &str) -> Option<(String, String)> {
     if kept.is_empty() || dropped.is_empty() {
         return None; // degenerate labeling cannot pin a predicate
     }
-    let pred_fn = synthesize_predicate(&kept, &dropped)?;
+    let pred_fn = synthesize_predicate_with_text(&kept, &dropped, problem.description)?;
     let elem_ty = mog_type(&problem.examples[0].inputs[0], true)?;
     let code = format!(
         "fn {name}(xs: {elem_ty}) -> {elem_ty} {{\n    out: {elem_ty} = [];\n    for x in xs {{\n        if pred(x) {{\n            out.push(x);\n        }}\n    }}\n    return out;\n}}\n\n{pred_fn}"
@@ -590,7 +590,7 @@ fn try_select(problem: &Problem, name: &str) -> Option<(String, String)> {
     if kept.is_empty() || dropped.is_empty() {
         return None;
     }
-    let pred_fn = synthesize_predicate(&kept, &dropped)?;
+    let pred_fn = synthesize_predicate_with_text(&kept, &dropped, problem.description)?;
     let elem_ty = mog_type(&problem.examples[0].inputs[0], true)?;
     let inner = elem_scalar_type(&problem.examples[0].inputs[0])?;
     let code = format!(
@@ -641,6 +641,13 @@ fn solve_element_fn(elem_examples: &[Example], fn_name: &str) -> Option<String> 
 ///   string elements: x.len cmp k (k mined) | all-chars class | contains char c
 ///                    (c mined from the kept/dropped character sets)
 fn synthesize_predicate(kept: &[Value], dropped: &[Value]) -> Option<String> {
+    synthesize_predicate_with_text(kept, dropped, "")
+}
+
+/// Like `synthesize_predicate` but also mines integer constants from the task
+/// DESCRIPTION (outside-audit lever #1: the text is part of the spec — "greater
+/// than 3" puts 3 in the candidate pool even when no labeled element equals 3).
+fn synthesize_predicate_with_text(kept: &[Value], dropped: &[Value], text: &str) -> Option<String> {
     let mut candidates: Vec<String> = Vec::new();
     match kept.first()? {
         Value::Int(_) => {
@@ -654,6 +661,15 @@ fn synthesize_predicate(kept: &[Value], dropped: &[Value]) -> Option<String> {
             candidates.push("x > 0".into());
             candidates.push("x < 0".into());
             candidates.push("x >= 0".into());
+            // Text-mined constants: integers named in the task description.
+            for tok in text.split(|c: char| !c.is_ascii_digit() && c != '-') {
+                if let Ok(c) = tok.parse::<i64>() {
+                    candidates.push(format!("x < {c}"));
+                    candidates.push(format!("x > {c}"));
+                    candidates.push(format!("x == {c}"));
+                    candidates.push(format!("x % {} == 0", c.max(2)));
+                }
+            }
             // Mined thresholds: the boundary values between the two sets.
             for &c in k.iter().chain(d.iter()) {
                 candidates.push(format!("x < {c}"));

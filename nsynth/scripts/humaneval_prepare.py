@@ -149,6 +149,7 @@ def main():
         kept.append({
             "id": tid,
             "fn": t["entry_point"],
+            "text": t.get("prompt", ""),
             "examples": [{"in": [encode(x) for x in a], "out": encode(e)} for a, e in ios],
         })
 

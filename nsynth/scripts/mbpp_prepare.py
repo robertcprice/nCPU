@@ -126,6 +126,7 @@ def main():
         if ok and fn and len(ios) >= 3:
             kept.append({
                 "id": t["task_id"], "fn": fn,
+                "text": t.get("text", ""),
                 "examples": [{"in": [encode(x) for x in a], "out": encode(o)} for a, o in ios],
             })
             if any(_has_dict(a) or _has_dict(o) for a, o in ios):

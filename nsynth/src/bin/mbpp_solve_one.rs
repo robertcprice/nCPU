@@ -86,12 +86,19 @@ fn main() {
     let split = exs.len().saturating_sub(2).max(2);
     let seed = &exs[..split];
     let fname = task.get("fn").and_then(|v| v.as_str()).unwrap_or("f");
+    // Task TEXT (outside-audit lever #1): half the spec lives in the description
+    // and was previously dropped by the harness. Leaked into Problem.description
+    // so solver tiers can use no-model text signals (keyword schema priors,
+    // text-mined constants). Empty when the bench file predates the text field.
+    let desc_static: &'static str = Box::leak(
+        task.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string().into_boxed_str(),
+    );
     let sig: &'static str =
         Box::leak(mog_synth::linguigenesis_bridge::infer_signature(fname, seed).into_boxed_str());
     let problem = Problem {
         name: fname.to_string(),
         category: "mbpp",
-        description: "mbpp task",
+        description: desc_static,
         signature: sig,
         examples: seed.to_vec(),
         ..Default::default()
