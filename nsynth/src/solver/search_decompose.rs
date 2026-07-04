@@ -95,6 +95,21 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
+    // Single INT input with STRING output: int->string closed forms.
+    if first.inputs.len() == 1
+        && matches!(first.inputs[0], Value::Int(_))
+        && matches!(first.expected, Value::Str(_))
+    {
+        let name = { let n = problem.function_name(); if n.is_empty() { "f" } else { n } };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_int_range_string(problem, name);
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult { success: true, code, method, error: None, metadata: Default::default() });
+        }
+        return None;
+    }
     // Single INT input with int output: SUM-RECURRENCE schema — a(n) = sum of
     // the previous r terms (r in 2..=4), seeds SEARCHED from a small grid and
     // pinned by the examples themselves (fib4's (0,0,2,0) is discovered, not
@@ -920,9 +935,7 @@ fn try_select_pair(problem: &Problem, name: &str) -> Option<(String, String)> {
 // ─────────────────────── numeric/string closed-form schemas ───────────────────────
 
 /// (int n) -> "0 1 2 ... n" space-joined inclusive range (string_sequence).
-/// DORMANT: emit needs an int->string builtin the Mog interpreter lacks (adding
-/// `str(int)` next unblocks this + decimal_to_binary/change_base/solve).
-#[allow(dead_code)]
+/// Now emittable via the `.to_str()` int->string builtin.
 fn try_int_range_string(problem: &Problem, name: &str) -> Option<(String, String)> {
     for ex in &problem.examples {
         let Value::Int(n) = &ex.inputs[0] else { return None };
@@ -936,7 +949,7 @@ fn try_int_range_string(problem: &Problem, name: &str) -> Option<(String, String
         }
     }
     let code = format!(
-        "fn {name}(n: i64) -> string {{\n    out: string = \"0\";\n    i: i64 = 1;\n    while i <= n {{\n        out = out + \" \";\n        out = out + str(i);\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+        "fn {name}(n: i64) -> string {{\n    out: string = \"0\";\n    i: i64 = 1;\n    while i <= n {{\n        out = out + \" \";\n        out = out + i.to_str();\n        i = i + 1;\n    }}\n    return out;\n}}\n"
     );
     Some((code, "decompose-int-range-string".to_string()))
 }

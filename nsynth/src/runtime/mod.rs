@@ -4572,6 +4572,11 @@ impl Runtime {
                 }
                 _ => Err(format!("unknown string method {method}")),
             },
+            // int/float -> string. A fundamental interpreter capability (like
+            // ord()), unblocking the whole int->string task class (number
+            // sequences, base conversion, decimal rendering). `to_str` on Int is
+            // exact; on Float it renders the shortest round-tripping form.
+            Value::Int(i) if method == "to_str" => Ok(Value::Str(i.to_string())),
             other => Err(format!("cannot call method {method} on {:?}", other)),
         }
     }
