@@ -2255,6 +2255,22 @@ impl LinguigenesisBridge {
             .collect()
     }
 
+    /// TEST-SUPPORT: top op resolution for a surface as `(fn_name, score, method)`,
+    /// following synonym/similar edges to the canonical example-bearing op (as
+    /// `resolve_operation_surface` does), so the fn-name is the real synthesis
+    /// target. The `method` distinguishes an emergent lens from a curated scorer.
+    pub fn probe_resolution(&self, word: &str) -> Option<(String, f32, String)> {
+        let registry = self.registry_clone().ok()?;
+        let resolver = EntityResolver::new(registry);
+        let r = resolver.resolve_operation_surface(word)?;
+        let fnn = r
+            .entity
+            .get_property("default_fn_name")
+            .cloned()
+            .unwrap_or_else(|| r.entity.lemma.clone());
+        Some((fnn, r.evidence.score, r.evidence.method.to_string()))
+    }
+
     /// TEST-SUPPORT: resolve a single surface word to its highest-confidence
     /// programming op via the SAME emergent resolver the gate uses
     /// ([`resolved_content_ops`]). Returns `(default_fn_name, score)` for the
