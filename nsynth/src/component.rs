@@ -617,6 +617,54 @@ fn surface_match(token: &str, surface: &str) -> u8 {
     0
 }
 
+/// PHRASE surface: every word of a multi-word surface must match some token
+/// IN ORDER (subsequence), each word by the usual emergent tiers. Score = the
+/// weakest word's tier. "square then increment" matches "please square it and
+/// then increment the result" but not "increment then square".
+fn phrase_match(tokens: &[&str], phrase: &str) -> u8 {
+    let words: Vec<&str> = phrase.split_whitespace().collect();
+    if words.len() < 2 {
+        return 0;
+    }
+    let mut pos = 0usize;
+    let mut weakest = u8::MAX;
+    for w in words {
+        let mut found = None;
+        for (i, tok) in tokens.iter().enumerate().skip(pos) {
+            let m = surface_match(tok, w);
+            if m > 0 {
+                found = Some((i, m));
+                break;
+            }
+        }
+        match found {
+            Some((i, m)) => {
+                pos = i + 1;
+                weakest = weakest.min(m);
+            }
+            None => return 0,
+        }
+    }
+    weakest
+}
+
+/// Best match of one spec's surfaces against the token list: single-word
+/// surfaces via per-token emergent tiers, multi-word surfaces via in-order
+/// phrase matching. The unit both resolvers and the router share.
+pub fn spec_match(spec: &ComponentSpec, tokens: &[&str]) -> u8 {
+    let mut score = 0u8;
+    for surf in &spec.surfaces {
+        if surf.contains(' ') {
+            score = score.max(phrase_match(tokens, surf));
+        } else {
+            for tok in tokens {
+                score = score.max(surface_match(tok, surf));
+            }
+        }
+    }
+    score
+}
+
 /// Resolve a natural-language phrase to a component. Emergent: every seed surface
 /// is expanded by morphology + tight fuzzy at match time, so inflections and typos
 /// resolve without enumerating them. Best (component, tier) wins; ties keep
@@ -629,12 +677,7 @@ pub fn resolve_component(text: &str) -> Option<&'static ComponentSpec> {
         .collect();
     let mut best: Option<(&'static ComponentSpec, u8)> = None;
     for comp in registry() {
-        let mut score = 0u8;
-        for tok in &tokens {
-            for surf in &comp.surfaces {
-                score = score.max(surface_match(tok, surf));
-            }
-        }
+        let score = spec_match(comp, &tokens);
         if score > 0 && best.map(|(_, b)| score > b).unwrap_or(true) {
             best = Some((comp, score));
         }
@@ -809,9 +852,7 @@ pub fn resolve_components(text: &str) -> Vec<&'static ComponentSpec> {
     registry()
         .iter()
         .filter(|comp| {
-            tokens
-                .iter()
-                .any(|tok| comp.surfaces.iter().any(|s| surface_match(tok, s) > 0))
+            spec_match(comp, &tokens) > 0
         })
         .collect()
 }

@@ -115,7 +115,11 @@ fn chain_spec(chain: &[String]) -> ComponentSpec {
     };
     ComponentSpec {
         name: name.clone(),
-        surfaces: vec![name.clone()],
+        // NL surfaces derived from the chain itself (emergent — no hand list):
+        // the machine name plus the ordered phrase "a then b [then c]", matched
+        // by the resolver's in-order phrase matcher, so "square then increment
+        // the value" reaches this discovery by describing its behavior.
+        surfaces: vec![name.clone(), chain.join(" then ")],
         leaves,
         glue: Some(GlueSpec {
             module: name,
@@ -330,6 +334,39 @@ mod tests {
 
         let _ = std::fs::remove_file(&log);
         let _ = std::fs::remove_dir_all(&work);
+    }
+
+    /// PHRASE surfaces: a discovered chain is reachable by DESCRIBING its
+    /// behavior in order ("square then increment ..."), matched emergently
+    /// (morphology per word, in-order subsequence) — and the reversed order
+    /// does NOT match. Derived from the chain itself, no hand list.
+    #[test]
+    fn discovered_chain_resolves_by_ordered_phrase() {
+        let spec = chain_spec(&["square".to_string(), "increment".to_string()]);
+        assert!(
+            spec.surfaces.iter().any(|s| s == "square then increment"),
+            "phrase surface derived: {:?}",
+            spec.surfaces
+        );
+        let toks = |s: &str| -> Vec<String> {
+            s.to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+        let m = |text: &str| {
+            let owned = toks(text);
+            let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+            crate::component::spec_match(&spec, &refs)
+        };
+        // In-order description matches (morphology: "squares"/"incrementing").
+        assert!(m("please square it and then increment the result") > 0);
+        assert!(m("squares the value then incrementing it") > 0);
+        // Reversed order must NOT match the a-then-b phrase.
+        assert_eq!(m("increment then square the value"), 0);
+        // Unrelated prose doesn't match.
+        assert_eq!(m("sort the list of names"), 0);
     }
 
     /// THE FLYWHEEL CLOSED: crawl -> promote -> the discovery is a live,
