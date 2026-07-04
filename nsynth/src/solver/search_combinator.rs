@@ -75,6 +75,14 @@ pub(super) fn try_combinator(problem: &Problem, name: &str) -> Option<SolveResul
     let mut seen: HashSet<Vec<V>> = HashSet::new();
     seen.insert(seed.outs.clone());
 
+    // DOCSTRING COMPREHENSION (no LLM): the task text NAMES the operations. Map
+    // its keywords to the atom IR substrings they license, so the best-first
+    // search PREFERS the composition the prose describes — turning a task that
+    // is underdetermined by 3 examples into a determined one. Pure lexical
+    // grounding, no model. `wanted` holds the IR fragments the text asks for.
+    let desc = problem.description.to_lowercase();
+    let wanted = keyword_atoms(&desc);
+
     // Constants MINED from the task's own data: element values seen in the
     // inputs plus the distinct expected-int outputs. These parametrize the
     // threshold predicates and arithmetic maps below, so the basis stays
@@ -300,7 +308,13 @@ pub(super) fn try_combinator(problem: &Problem, name: &str) -> Option<SolveResul
             pool.push(win);
         } else {
             fresh.retain(|e| seen.insert(e.outs.clone()));
-            fresh.sort_by(|a, b| goal(&b.outs, &expected).cmp(&goal(&a.outs, &expected)));
+            // Best-first, biased by docstring intent: an expression whose atoms
+            // the prose named gets a bonus, so the intended composition survives
+            // the prune and is expanded first.
+            let score = |e: &Expr| -> i64 {
+                goal(&e.outs, &expected) + 50 * kw_bonus(&e.mog, &wanted)
+            };
+            fresh.sort_by(|a, b| score(b).cmp(&score(a)));
             fresh.truncate(KEEP_PER_DEPTH);
             pool.append(&mut fresh);
         }
@@ -451,6 +465,52 @@ fn as_f(v: &Value) -> Option<f64> {
         Value::Float(b) => Some(f64::from_bits(*b)),
         _ => None,
     }
+}
+
+/// Docstring keyword -> atom-IR fragments the text licenses. Lexical, no model:
+/// each (keyword, ir-fragment) fires when the keyword appears in the lowercased
+/// task description, marking the atom the prose asked for.
+fn keyword_atoms(desc: &str) -> Vec<&'static str> {
+    const MAP: &[(&str, &str)] = &[
+        ("even", "% 2 == 0"),
+        ("odd", "% 2 != 0"),
+        ("positive", "e > 0"),
+        ("negative", "e < 0"),
+        ("nonzero", "e != 0"),
+        ("sum", "FOLD[sum"),
+        ("total", "FOLD[sum"),
+        ("add up", "FOLD[sum"),
+        ("product", "FOLD[product"),
+        ("multiply", "FOLD[product"),
+        ("count", "FOLD[count"),
+        ("number of", "FOLD[count"),
+        ("how many", "FOLD[count"),
+        ("largest", "FOLD[max"),
+        ("maximum", "FOLD[max"),
+        ("max", "FOLD[max"),
+        ("smallest", "FOLD[min"),
+        ("minimum", "FOLD[min"),
+        ("min", "FOLD[min"),
+        ("square", "e * e"),
+        ("sort", "SORT["),
+        ("order", "SORT["),
+        ("reverse", "REVERSE"),
+        ("unique", "UNIQUE"),
+        ("distinct", "UNIQUE"),
+        ("duplicate", "UNIQUE"),
+        ("running", "SCAN["),
+        ("cumulative", "SCAN["),
+        ("prefix", "SCAN["),
+        ("filter", "FILTER["),
+        ("keep", "FILTER["),
+        ("only", "FILTER["),
+    ];
+    MAP.iter().filter(|(k, _)| desc.contains(k)).map(|(_, ir)| *ir).collect()
+}
+
+/// Number of docstring-wanted atom fragments present in an expression's IR.
+fn kw_bonus(mog: &str, wanted: &[&str]) -> i64 {
+    wanted.iter().filter(|frag| mog.contains(**frag)).count() as i64
 }
 
 fn fold(l: &[i64], op: &str) -> Option<i64> {
