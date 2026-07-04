@@ -41,6 +41,41 @@ fn every_op_resolves_from_its_own_lemma() {
 }
 
 #[test]
+fn known_synonyms_resolve_to_the_correct_op() {
+    // POSITIVE coverage: common paraphrases must resolve to their intended op at
+    // the gate. Locks in the WordNet-closure + cross-file-relink + derivational
+    // wins against resolution regressions. Each pair is a distinct-word -> fn the
+    // engine is expected to handle (curated synonym, WordNet edge, or morphology).
+    let bridge = LinguigenesisBridge::new();
+    const PAIRS: &[(&str, &str)] = &[
+        // array reducers
+        ("maximum", "array_max"), ("minimum", "array_min"),
+        ("largest", "array_max"), ("smallest", "array_min"),
+        ("total", "array_sum"), ("aggregate", "array_sum"),
+        // cross-file relink (flip/invert live in coding_registry, reverse in mined)
+        ("flip", "reverse"), ("invert", "reverse"),
+        // WordNet synonym / derivational closure
+        ("arrange", "sort"), ("arrangement", "sort"),
+        ("quotient", "divide"), ("multiplication", "multiply"),
+        ("deduct", "subtract"), ("increase", "increment"), ("decrease", "decrement"),
+    ];
+    let mut misses = Vec::new();
+    for (w, expected) in PAIRS {
+        match bridge.probe_resolution(w) {
+            Some((f, s, _)) if &f == expected && s >= GATE => {}
+            other => misses.push(format!("{w} -> {expected}, but resolved {other:?}")),
+        }
+    }
+    assert!(
+        misses.is_empty(),
+        "{}/{} known synonyms no longer resolve to their op at the {GATE} gate:\n{}",
+        misses.len(),
+        PAIRS.len(),
+        misses.join("\n")
+    );
+}
+
+#[test]
 fn generic_imperative_verbs_and_fillers_do_not_resolve_to_ops() {
     // Generic imperatives ("compute", "calculate", …) and structural fillers are
     // NOT operations; if one leaks to an op at the gate it pollutes composition
