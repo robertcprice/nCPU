@@ -98,6 +98,24 @@ fn handle_query_auto_routes_an_accumulator() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// MULTI-COMPONENT AUTO-ROUTE (symbolic planner v0): one construction request
+/// naming two components builds ONE crate with both structs, compiled + behaviorally
+/// verified together — through the real handle_query front door.
+#[test]
+fn handle_query_auto_routes_multi_component_construction() {
+    let root = fresh_root("auto_multi");
+    let r = route(&root, "build a counter and a scaler");
+    assert!(r.success, "response: {}", r.response);
+    assert_eq!(r.workflow, "component.build");
+    assert!(root.join("src/counter.rs").is_file(), "Counter struct");
+    assert!(root.join("src/scaler.rs").is_file(), "Scaler struct");
+    assert!(root.join("src/increment.rs").is_file(), "increment leaf");
+    assert!(root.join("src/multiply.rs").is_file(), "multiply leaf");
+    assert!(r.response.contains("2 component"), "{}", r.response);
+    assert!(r.response.contains("behavior: PASSED"), "{}", r.response);
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// FALSE-POSITIVE GUARD 1 (ambiguous surface): "count" resolves to an op
 /// (array_sum), so an operation request that merely contains it must NOT build a
 /// Counter — it routes exactly as before (no component crate).
