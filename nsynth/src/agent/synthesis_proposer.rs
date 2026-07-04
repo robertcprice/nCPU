@@ -402,7 +402,46 @@ fn locate_described_fn(
             }
         }
     }
-    best.map(|(path, name, _)| (path, name))
+    if best.is_some() {
+        return best.map(|(path, name, _)| (path, name));
+    }
+
+    // CONTENT-GREP fallback (the ReAct slice): no defined fn NAME matches the
+    // prose — search file CONTENT for the description's tokens instead
+    // ("fix the tripling helper" finds the file whose comment says "tripling
+    // helper" even though the fn is called `mul3`). The file with the most
+    // distinct token hits wins; within it, only an UNAMBIGUOUS target is
+    // accepted — exactly one non-test fn — otherwise decline (never guess
+    // among several).
+    let mut best_file: Option<(String, usize)> = None;
+    for file in &context.files {
+        if !file.path.ends_with(".rs") {
+            continue;
+        }
+        let text = file.text.as_deref().unwrap_or("").to_lowercase();
+        let hits = tokens.iter().filter(|t| t.len() >= 4 && text.contains(t.as_str())).count();
+        if hits == 0 {
+            continue;
+        }
+        let rank = hits + usize::from(is_preferred(&file.path));
+        if best_file.as_ref().map(|(_, b)| rank > *b).unwrap_or(true) {
+            best_file = Some((file.path.clone(), rank));
+        }
+    }
+    let (path, _) = best_file?;
+    let text = context
+        .files
+        .iter()
+        .find(|f| f.path == path)?
+        .text
+        .as_deref()
+        .unwrap_or("")
+        .to_string();
+    let fns = defined_fn_names(&text);
+    if fns.len() == 1 {
+        return Some((path, fns.into_iter().next()?));
+    }
+    None
 }
 
 /// Every `fn NAME(` defined in `text`, EXCLUDING test code: fns annotated
@@ -1573,6 +1612,66 @@ mod tests {
         // The original content is preserved (append, not replace).
         assert!(new_text.contains("mod tests"), "existing content kept: {new_text}");
         fs::write(root.join(&patch.edits[0].path), new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// CONTENT-GREP localization (ReAct slice), end to end: the fn is called
+    /// `mul3` — NO name/morphology relation to the prose — but its file's
+    /// comment says "tripling helper". Content search finds the file, the
+    /// single-fn rule targets `mul3`, emergent comprehension synthesizes the
+    /// tripling body under the repo's fn name, cargo goes green.
+    #[test]
+    fn content_grep_localizes_fn_whose_name_shares_nothing_with_prose() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_grep_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"grepfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod maths;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn mul3_triples() {\n        assert_eq!(crate::maths::mul3(4), 12);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        // The fn name shares NOTHING with the prose; the comment carries the link.
+        fs::write(
+            root.join("src/maths.rs"),
+            "// The tripling helper used by the pricing code.\npub fn mul3(x: i64) -> i64 {\n    x + 3\n}\n",
+        )
+        .expect("maths.rs");
+
+        let task = RepoTaskSpec {
+            id: "grep-mul3".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the tripling helper should triple the number".into(),
+            test_command: "cargo test mul3_triples".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken");
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // Name matching alone must FAIL here...
+        let desc = "the tripling helper should triple the number";
+        let patch = try_emergent_synthesis_patch(&task, &context, desc, None)
+            .expect("content-grep localized patch");
+        assert_eq!(patch.edits[0].path, "src/maths.rs", "found via content, not name");
+        assert!(patch.edits[0].new_text.contains("fn mul3"), "repo fn name kept: {}", patch.edits[0].new_text);
+        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
         let after = RepairVerifier::new(&root, GuardrailPolicy::default())
             .verify(&task.test_command)
             .expect("verify after");
