@@ -253,6 +253,46 @@ Do not let near-term packaging reduce the ambition. A G9 release can ship a narr
 
 **Loop exit = U1–U8 all merged to canonical with their accept gates green, OR a phase blocks on a genuine design decision needing the user (then: log it, skip to next independent phase, surface at wake).** Research-grade depth (full recursion-scheme coverage, real-LM NL) is unbounded — the loop lands each *gated increment*, never fakes completion. UTBUS Phase D (learned cost model) + E (release harness) follow U-phases.
 
+### 0.058 "EVERYTHING WE CAN TRY" — no-model lever map (2026-07-04, dual research pass: external SOTA survey + internal solver inventory)
+
+**Framing (both reports agree):** the bottleneck is SEARCH/PROPOSER-side, not the interpreter (Mog already does loops, shallow recursion, closures, HOFs, structs, floats, bitwise — far more than any tier targets). Our ~57% MBPP zero-FP ≈ a 2021 137B LM's few-shot MBPP (~59.6%) WITHOUT a model or false positives; there is essentially NO published pure-non-LLM MBPP/HumanEval number — we're near the leading edge of the no-model regime. **Honest no-model ceiling ≈ MBPP 65-72% / HumanEval 40-45%**, all proof-carrying; the last ~30% of MBPP is a genuine PROSE-comprehension wall (specific constants, "the n-th X", tie-breaks the 3 asserts underdetermine) where a gated small-LLM PROPOSER (verifier still the sole acceptor) is the right lever — not a bigger enumerator. **The real risk is not soundness but OVERFIT: passing 3 visible asserts ≠ correct on MBPP's hidden tests** → every ranking lever must add MDL/Occam + held-out-example rejection + property-signature consistency.
+
+**Every lever, tagged [state] × leverage × effort × sound. Class-unlockers move the needle; steering levers historically net-0 here (misses are class gaps, not ordering).**
+
+CLASS-UNLOCKERS (expressiveness — highest EV):
+1. **Divide-and-conquer / decision-tree conditional synthesis (EUSolver/E3Solver, Alur TACAS'17)** — [UNBUILT] HIGH / Med / sound-by-construction. Point-solve each example, enumerate distinguishing predicates over existing atoms, unify into `if P then A else B` via info-gain decision tree. Unlocks the BRANCHING class we structurally miss (huge MBPP/HumanEval shape). E3Solver: 0→750 PBE-BitVec where plain enum solved 0. **⭐ TOP PICK — build next.**
+2. **HOF combinators (fold/scanl/map/filter) + bounded lambda-body synth (LambdaBeam model-free core)** — [PARTIAL: combinator has fold/filter/map atoms, no lambda bodies] HIGH / Med. Iteration/accumulation INSIDE bottom-up enum, no net.
+3. **Angelic recursive decomposition (BURST, POPL'22)** — [UNBUILT] HIGH / Med-High. Execute the recursive call angelically to split the spec; drops into bottom-up+OE (94% on its suite). Reaches the recursion tail.
+4. **GP fallback (down-sampled-lexicase PushGP / typed G3P)** — [UNBUILT] breadth / HIGH cost. Only no-model route to EVOLVED control flow; fitness=examples, champion re-verified. Add held-out rejection (GP overfits).
+
+SELF-COMPOUNDING INFRA:
+5. **Wire the `fe8007d` anti-unification schema miner into try_decompose's hypothesis list** — [BUILT-UNWIRED] the single most-cited internal lever ("until this lands, I am the search algorithm"). Med. Scalar/array-AST only today → extend to string/list.
+6. **Stitch/babble library compression over the ~582 solved corpus** — [PARTIAL: enumerative ComponentLibrary mines scalar/int/array only] Med. Mine reusable abstractions (not whole programs) → shrink future search depth; offline, symbolic, sound.
+7. **Learned-op flywheel ON (`NSYNTH_LEARNED_OPS_PATH`)** — [BUILT-DORMANT] LOW (env). Verified solves become runtime ops, compounding. Consensus-gated (sound). Measurement caveat: cross-task learning = order-dependent bench.
+8. **Self-supervised PHOG/Euphony tabular prior on solved corpus** — [UNBUILT] Med. ~10× in-domain enum speedup, non-neural.
+
+STEERING / SEARCH-CHEAPENING (accelerate, rarely unlock — net-0 risk given our history):
+9. **Probe JIT PCFG reweighting** (subset-satisfaction bumps production weights mid-run) — [best-first exists] LOW / ~2× SyGuS / sound (reorders only).
+10. **Neo conflict-driven lemma learning** (failed partial → reusable prune) — [rejected-hash cache exists] Med.
+11. **λ² deductive example-pushing through HOFs** (hypothesize map/fold → deduce hole sub-examples, refute on length/type mismatch) — [PARTIAL] Med.
+12. **Property signatures (Odena ICLR'20) as OE keys + non-neural (GBDT/logistic) reweighter (BUSTLE model-free)** — [UNBUILT] Med. ALSO the held-out overfit guard.
+13. **Witness-function / inverse-semantics (FlashMeta VSA) for invertible ops** (concat/arith-inverse/slice) — [UNBUILT] Med. Deduce sub-example specs vs blind enum.
+
+DORMANT TIERS TO A/B (near-zero code; historically ~net-0 on MBPP, low priority):
+14. `NSYNTH_SKETCH` nested-loop pair-counting · `NSYNTH_STOCHASTIC` deep pipeline · `NSYNTH_ANALOGY` transfer · `NSYNTH_UTBUS` typed bottom-up — [BUILT-DORMANT] LOW each. Batch A/B before building; harvest any free solves.
+
+PROSE-WALL BREAKERS (the real ceiling; also the anti-overfit levers):
+15. **Learned keyword→atom grounding + type-directed grounded enum + MDL ranking (Desai ICSE'16: top-3 ≈90% in-DSL)** — [PARTIAL: hand table] Med. Weight word↔op by how often grounding led to a VERIFIED accept (flywheel over solves). Primary anti-overfit mechanism.
+16. **CNL/template docstring pre-pass (EARS/FRETISH/ACE)** — [UNBUILT] Low-Med. Deterministically mine constants/"n-th"/bounds/quantifiers the 3 asserts underdetermine.
+17. **Gated small-LLM PROPOSER (verifier still sole acceptor)** — [BUILT-DORMANT: local_llm / Mode D] the acknowledged >30%-tail breaker. User mandate = no-model → keep as optional side door, not headline.
+
+EXACT/LOGICAL LANE:
+18. **SMT/Rosette backend for the arithmetic/bitvector decidable slice** — [UNBUILT] Med-High / full-spec sound (stronger than example-sound). z3/cvc5 = classical solver, preserves no-model.
+19. **CEGIS refinement** (fail holdout → refine next constant/key instead of dropping) — [UNBUILT] Low-Med / sound.
+20. **ILP (Popper/Metagol) / miniKanren relational** for small recursive relational tasks — [UNBUILT] niche.
+
+**EXECUTION ORDER (chosen):** (1) D&C conditional synthesis [#1, biggest new class] → (2) wire schema miner [#5, compounding] → (3) HOF+lambda iteration [#2] → (4) property-signatures + MDL/held-out anti-overfit [#12/#15, protects hidden-test correctness] → then exact/SMT lane [#18] for the arithmetic tail. Steering levers (#9-11) folded in opportunistically. Each gated on the full sweep; commit only if ≥ prior. Sources: BURST, EUSolver/E3Solver, LambdaBeam, Probe, Stitch, Neo, Desai ICSE'16, Property Signatures, FlashMeta — full citation list in session transcript.
+
 ### 0.056 AUTONOMOUS ULTRACODE LOOP PROTOCOL (overnight; how each U-phase runs safely)
 
 Driver = the main loop (re-invoked on each workflow completion). **Per iteration:**
