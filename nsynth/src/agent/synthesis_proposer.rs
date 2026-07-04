@@ -48,7 +48,7 @@ pub fn nl_synthesis_proposer(
     // the first .rs file, and write a brand-new `fn double` — wrong file, wrong
     // fn. When the description names no existing fn (feature work, inline-
     // example specs), this declines and the primary proceeds unchanged.
-    if let Some(patch) = try_emergent_synthesis_patch(task, context, &description) {
+    if let Some(patch) = try_emergent_synthesis_patch(task, context, &description, analysis) {
         return Ok(patch);
     }
 
@@ -167,28 +167,42 @@ pub fn try_emergent_synthesis_patch(
     task: &RepoTaskSpec,
     context: &RepairContext,
     description: &str,
+    analysis: Option<&FailureAnalysis>,
 ) -> Option<RepairPatch> {
     let _ = task;
+    // OBSERVATION-DRIVEN localization: the failure-implicated file (compile
+    // error / trace `file:line` from FailureAnalysis) outranks walk order when
+    // several files define a matching fn — the compiler told us where it hurts.
+    let preferred = analysis.and_then(|a| a.file.clone());
+    let (target, repo_fn) = locate_described_fn(context, description, preferred.as_deref())?;
+    let observation_grounded = preferred
+        .as_deref()
+        .map(|p| p.ends_with(&target) || target.ends_with(p))
+        .unwrap_or(false);
+
     // DEFER to the example-driven primary whenever its localization is GROUNDED:
     // the comprehended intent's fn name is genuinely defined in the repo (e.g. an
     // inline-example spec "triple(2)=6 ..." over an existing `fn triple` — the
-    // user's demonstrated I/O is the stronger spec). The emergent stage leads
-    // only when the intent name misses (renamed fn: intent says `double`, repo
-    // defines `twice`) or no intent parses at all.
-    if let Ok(intent) = CodingIntent::from_nl_lenient(description) {
-        let primary_name = intent
-            .function_name
-            .strip_prefix("nl_")
-            .unwrap_or(&intent.function_name);
-        let grounded = context.files.iter().any(|f| {
-            f.path.ends_with(".rs")
-                && file_defines_function(f.text.as_deref().unwrap_or(""), primary_name)
-        });
-        if grounded && !intent.examples.is_empty() {
-            return None;
+    // user's demonstrated I/O is the stronger spec). Two exceptions lead here:
+    // the intent name misses (renamed fn: intent says `double`, repo defines
+    // `twice`), or the OBSERVATION localizes to the failure-implicated file —
+    // the failing trace is stronger evidence than a name guess (two files may
+    // define the described fn; only the implicated one is broken).
+    if !observation_grounded {
+        if let Ok(intent) = CodingIntent::from_nl_lenient(description) {
+            let primary_name = intent
+                .function_name
+                .strip_prefix("nl_")
+                .unwrap_or(&intent.function_name);
+            let grounded = context.files.iter().any(|f| {
+                f.path.ends_with(".rs")
+                    && file_defines_function(f.text.as_deref().unwrap_or(""), primary_name)
+            });
+            if grounded && !intent.examples.is_empty() {
+                return None;
+            }
         }
     }
-    let (target, repo_fn) = locate_described_fn(context, description)?;
     let bridge = crate::linguigenesis_bridge::LinguigenesisBridge::new();
     let result = bridge
         .synthesize_from_description(description, Some(&repo_fn))
@@ -223,8 +237,14 @@ pub fn try_emergent_synthesis_patch(
 /// the name against the description's tokens emergently (exact or shared
 /// morphological stem). A fn matches only when ALL its parts are matched (so an
 /// incidental "number" in the prose can't select `fn number_cruncher` unless
-/// "cruncher" appears too); the most specific match (most parts) wins.
-fn locate_described_fn(context: &RepairContext, description: &str) -> Option<(String, String)> {
+/// "cruncher" appears too). Ranking: a candidate in the `preferred` file (the
+/// failure-implicated one) outranks all others; then the most specific match
+/// (most parts) wins.
+fn locate_described_fn(
+    context: &RepairContext,
+    description: &str,
+    preferred: Option<&str>,
+) -> Option<(String, String)> {
     use linguigenesis_core::entity_resolution::morphological_variants;
     let lower = description.to_lowercase();
     let tokens: Vec<String> = lower
@@ -244,7 +264,14 @@ fn locate_described_fn(context: &RepairContext, description: &str) -> Option<(St
             tv.iter().any(|v| pv.contains(v))
         })
     };
-    let mut best: Option<(String, String, usize)> = None;
+    // Rank = (in the failure-implicated file, specificity). Paths compared
+    // suffix-wise both ways since the compiler may print an absolute path.
+    let is_preferred = |path: &str| -> bool {
+        preferred
+            .map(|p| p.ends_with(path) || path.ends_with(p))
+            .unwrap_or(false)
+    };
+    let mut best: Option<(String, String, (bool, usize))> = None;
     for file in &context.files {
         if !file.path.ends_with(".rs") {
             continue;
@@ -255,9 +282,9 @@ fn locate_described_fn(context: &RepairContext, description: &str) -> Option<(St
             if parts.is_empty() || !parts.iter().all(|p| token_matches(p)) {
                 continue;
             }
-            let specificity = parts.len();
-            if best.as_ref().map(|(_, _, s)| specificity > *s).unwrap_or(true) {
-                best = Some((file.path.clone(), fn_name, specificity));
+            let rank = (is_preferred(&file.path), parts.len());
+            if best.as_ref().map(|(_, _, b)| rank > *b).unwrap_or(true) {
+                best = Some((file.path.clone(), fn_name, rank));
             }
         }
     }
@@ -1328,6 +1355,7 @@ mod tests {
             &task,
             &context,
             "the shout function should uppercase the text",
+            None,
         )
         .expect("emergent string patch");
         assert_eq!(patch.edits[0].path, "src/text_utils.rs");
@@ -1336,6 +1364,73 @@ mod tests {
             "verified string body: {}",
             patch.edits[0].new_text
         );
+        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// OBSERVATION-DRIVEN disambiguation: two files define a `double`; walk
+    /// order alone would patch the healthy one (aaa.rs) and leave the broken one
+    /// (zzz.rs) failing forever. The failure-implicated file from FailureAnalysis
+    /// must outrank walk order, and the repair must land + verify green.
+    #[test]
+    fn failure_file_outranks_walk_order_in_localization() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_obsloc_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"obsfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod aaa;\npub mod zzz;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn zzz_doubles() {\n        assert_eq!(crate::zzz::double(4), 8);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        // aaa: healthy double — walk order would pick this one first.
+        fs::write(root.join("src/aaa.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
+            .expect("aaa");
+        // zzz: the BROKEN double the failing test actually exercises.
+        fs::write(root.join("src/zzz.rs"), "pub fn double(x: i64) -> i64 {\n    x + 1\n}\n")
+            .expect("zzz");
+
+        let task = RepoTaskSpec {
+            id: "obs-double".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the double function should double the number".into(),
+            test_command: "cargo test zzz_doubles".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let desc = "the double function should double the number";
+
+        // WITHOUT analysis: walk order picks aaa.rs (the healthy file) — the
+        // blind spot this feature closes.
+        let (blind_path, _) = locate_described_fn(&context, desc, None).expect("blind");
+        assert_eq!(blind_path, "src/aaa.rs", "walk order picks the wrong file");
+
+        // WITH the failure-implicated file: zzz.rs wins.
+        let analysis = FailureAnalysis {
+            kind: crate::agent::repo::FailureKind::TestFailure,
+            file: Some("src/zzz.rs".to_string()),
+            line: Some(2),
+            message: "assertion failed".into(),
+            likely_cause: String::new(),
+            suggested_action: String::new(),
+        };
+        let patch = try_emergent_synthesis_patch(&task, &context, desc, Some(&analysis))
+            .expect("observation-driven patch");
+        assert_eq!(patch.edits[0].path, "src/zzz.rs", "failure file outranks walk order");
         fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
         let after = RepairVerifier::new(&root, GuardrailPolicy::default())
             .verify(&task.test_command)
@@ -1357,13 +1452,13 @@ mod tests {
         .unwrap();
         let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
         // morphology: "doubling" -> double
-        let (_, f) = locate_described_fn(&context, "fix the doubling function").expect("found");
+        let (_, f) = locate_described_fn(&context, "fix the doubling function", None).expect("found");
         assert_eq!(f, "double");
         // multi-part fn: every part must be matched
-        let (_, f) = locate_described_fn(&context, "reverse the list please").expect("found");
+        let (_, f) = locate_described_fn(&context, "reverse the list please", None).expect("found");
         assert_eq!(f, "reverse_list");
         // incidental "number" alone must NOT select number_cruncher
-        assert!(locate_described_fn(&context, "the number should be bigger").is_none());
+        assert!(locate_described_fn(&context, "the number should be bigger", None).is_none());
         let _ = fs::remove_dir_all(root);
     }
 
