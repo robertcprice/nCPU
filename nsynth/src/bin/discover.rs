@@ -38,8 +38,10 @@ fn main() {
         }
         for d in &found {
             println!(
-                "DISCOVERED {}  ::  {} of {}  ::  signature={:?}",
-                d.name, d.outer, d.inner, d.signature
+                "DISCOVERED {}  ::  {}  ::  signature={:?}",
+                d.name,
+                d.chain.join(" -> "),
+                d.signature
             );
         }
         total += found.len();
