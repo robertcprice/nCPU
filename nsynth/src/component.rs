@@ -23,7 +23,7 @@
 //! verified builds ("writes its own teachers" at the component grain).
 
 use crate::agent::repo::nl_fixture_harness::{
-    compile_gate, write_synthesized_project, CompileStatus, WriteOutcome,
+    behavior_gate, compile_gate, write_synthesized_project, CompileStatus, WriteOutcome,
 };
 use crate::linguigenesis_bridge::LinguigenesisBridge;
 use linguigenesis_core::entity_resolution::{edit_distance, morphological_variants};
@@ -38,6 +38,12 @@ pub struct GlueSpec {
     /// Raw Rust: a struct + impl that `use`s the leaf functions (each leaf `foo`
     /// is available as `crate::foo::foo`).
     pub code: &'static str,
+    /// Optional behavioral contract: a raw-Rust `#[cfg(test)]` module that
+    /// constructs the struct, exercises its methods, and ASSERTS runtime output.
+    /// Appended to the glue module and run with `cargo test` — the rung above
+    /// compilation. A struct that type-checks but whose synthesized logic
+    /// misbehaves (e.g. `increment` that didn't actually add 1) fails here.
+    pub smoke: Option<&'static str>,
 }
 
 /// A named unit bigger than a single op.
@@ -69,9 +75,27 @@ pub const BUILTIN_COMPONENTS: &[ComponentSpec] = &[
         glue: Some(GlueSpec {
             module: "counter",
             code: COUNTER_GLUE,
+            smoke: Some(COUNTER_SMOKE),
         }),
     },
 ];
+
+/// Behavioral contract for `Counter`: three ticks must land on 3. This asserts the
+/// SYNTHESIZED `increment` genuinely adds 1 each call — runtime proof, not types.
+const COUNTER_SMOKE: &str = r#"
+#[cfg(test)]
+mod counter_behaves {
+    use super::Counter;
+    #[test]
+    fn three_ticks_reach_three() {
+        let mut c = Counter::new();
+        c.tick();
+        c.tick();
+        c.tick();
+        assert_eq!(c.get(), 3);
+    }
+}
+"#;
 
 /// A counter whose `tick` uses the VERIFIED `increment` leaf (x -> x+1). The struct
 /// SHAPE is templated; the increment LOGIC is synthesized + verified; the whole
@@ -164,6 +188,40 @@ pub struct ComponentBuild {
     pub leaves_total: usize,
     pub has_struct: bool,
     pub outcome: WriteOutcome,
+    /// Behavioral rung: `NotRun` when the component declares no smoke contract,
+    /// else the `cargo test` result for its asserted runtime behavior.
+    pub behavior: BehaviorStatus,
+}
+
+/// Result of the behavioral (`cargo test`) rung for a component.
+#[derive(Debug)]
+pub enum BehaviorStatus {
+    /// The component declared no behavioral contract (bundle, or glue w/o smoke).
+    NotRun,
+    /// Smoke test ran and passed.
+    Passed,
+    /// Smoke test ran and failed (assertion or panic); carries the output.
+    Failed(String),
+    /// The gate could not run (infra error).
+    Unverified(String),
+}
+
+impl BehaviorStatus {
+    pub fn passed(&self) -> bool {
+        matches!(self, BehaviorStatus::Passed)
+    }
+    /// True unless the smoke test actually ran and FAILED. `NotRun`/`Unverified`
+    /// don't count as a behavioral failure.
+    pub fn not_failed(&self) -> bool {
+        !matches!(self, BehaviorStatus::Failed(_))
+    }
+    fn from_gate(status: CompileStatus) -> Self {
+        match status {
+            CompileStatus::Ok => BehaviorStatus::Passed,
+            CompileStatus::Failed(e) => BehaviorStatus::Failed(e),
+            CompileStatus::Unverified(e) => BehaviorStatus::Unverified(e),
+        }
+    }
 }
 
 impl ComponentBuild {
@@ -175,6 +233,11 @@ impl ComponentBuild {
     /// True iff this component emitted a struct (structural component).
     pub fn produces_structure(&self) -> bool {
         self.has_struct
+    }
+    /// True iff the behavioral smoke test PASSED (the strongest guarantee: the
+    /// assembled struct's runtime output is correct, not merely well-typed).
+    pub fn behaves(&self) -> bool {
+        self.behavior.passed()
     }
 }
 
@@ -216,7 +279,14 @@ fn write_and_wire_glue(root: &Path, glue: &GlueSpec) -> Result<Option<String>, S
     if lib.contains(&decl) {
         return Ok(None); // already wired
     }
-    std::fs::write(root.join(&glue_rel), glue.code).map_err(|e| e.to_string())?;
+    // Write the struct glue plus its behavioral contract (if any) in one file:
+    // `cargo check` ignores the `#[cfg(test)]` module, `cargo test` runs it.
+    let mut body = glue.code.to_string();
+    if let Some(smoke) = glue.smoke {
+        body.push('\n');
+        body.push_str(smoke);
+    }
+    std::fs::write(root.join(&glue_rel), &body).map_err(|e| e.to_string())?;
     lib.push_str(&format!("\nmod {m};\npub use {m}::*;\n", m = glue.module));
     std::fs::write(&lib_path, &lib).map_err(|e| e.to_string())?;
     Ok(Some(glue_rel))
@@ -239,12 +309,18 @@ pub fn build_component(
     let mut outcome = write_synthesized_project(root, spec.name, &components)?;
 
     // Structural glue: only when the leaves themselves compiled (a struct over a
-    // broken leaf would just fail again). Re-gate the WHOLE crate after wiring.
+    // broken leaf would just fail again). Re-gate the WHOLE crate after wiring,
+    // then — if the component declares a behavioral contract — run it (`cargo
+    // test`), the rung above compilation.
+    let mut behavior = BehaviorStatus::NotRun;
     if let Some(glue) = &spec.glue {
         if outcome.compile.is_ok() {
             if let Some(rel) = write_and_wire_glue(root, glue)? {
                 outcome.written.push(rel);
                 outcome.compile = compile_gate(root);
+                if glue.smoke.is_some() && outcome.compile.is_ok() {
+                    behavior = BehaviorStatus::from_gate(behavior_gate(root));
+                }
             }
         }
     }
@@ -255,6 +331,7 @@ pub fn build_component(
         leaves_total: spec.leaves.len(),
         has_struct: spec.glue.is_some(),
         outcome,
+        behavior,
     })
 }
 
@@ -414,6 +491,13 @@ mod tests {
             build.outcome.compile.is_ok(),
             "structural component must compile: {:?}",
             build.outcome.compile
+        );
+        // BEHAVIORAL RUNG: the smoke test ran and PASSED — three ticks reached 3,
+        // proving the synthesized `increment` actually adds 1 (runtime, not types).
+        assert!(
+            build.behaves(),
+            "counter must pass its behavioral contract: {:?}",
+            build.behavior
         );
         // The struct is genuinely emitted, not stubbed.
         let glue = std::fs::read_to_string(root.join("src/counter.rs")).unwrap();

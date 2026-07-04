@@ -265,6 +265,29 @@ fn dedup_module_name(base: String, used: &mut std::collections::HashSet<String>)
 /// (C) Run a sandboxed `cargo check` on the generated crate. Reuses the
 /// secure_runtime cargo-check capability (allowlist + guardrails). Returns
 /// [`CompileStatus::Unverified`] (NOT success) if cargo cannot be run at all.
+/// The behavioral rung above `compile_gate`: run the generated crate's tests
+/// (`cargo test`) via the same allowlisted secure runner. A crate that type-checks
+/// but whose synthesized logic misbehaves fails HERE. Reuses `CompileStatus`
+/// (Ok/Failed/Unverified) as a generic pass/fail-with-error.
+pub fn behavior_gate(root: &Path) -> CompileStatus {
+    let runtime = SecureToolRuntime::for_repo_repair(root.to_path_buf(), GuardrailPolicy::default());
+    match runtime.run_verification_command("cargo test") {
+        Ok(v) => {
+            if v.success {
+                CompileStatus::Ok
+            } else {
+                let err = if v.stderr.trim().is_empty() {
+                    v.stdout
+                } else {
+                    v.stderr
+                };
+                CompileStatus::Failed(err)
+            }
+        }
+        Err(e) => CompileStatus::Unverified(e),
+    }
+}
+
 pub fn compile_gate(root: &Path) -> CompileStatus {
     let runtime = SecureToolRuntime::for_repo_repair(root.to_path_buf(), GuardrailPolicy::default());
     match runtime.run_verification_command("cargo check") {
