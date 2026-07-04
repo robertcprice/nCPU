@@ -139,6 +139,23 @@ impl LinguigenesisBridge {
     /// Find Linguigenesis registry path (location-independent; see
     /// [`locate_data_file`]).
     fn find_registry_path() -> Option<PathBuf> {
+        // Opt-in override: point the base registry at any entities-format file
+        // (e.g. a large word graph) via NSYNTH_BASE_REGISTRY — an absolute/relative
+        // path or a bare filename resolved under the data dir. Default behaviour
+        // (look for `registry.json`) is unchanged when unset, so the large 108MB
+        // dump is never loaded unless explicitly requested.
+        if let Ok(spec) = std::env::var("NSYNTH_BASE_REGISTRY") {
+            let spec = spec.trim();
+            if !spec.is_empty() {
+                let direct = PathBuf::from(spec);
+                if direct.exists() {
+                    return Some(direct);
+                }
+                if let Some(found) = Self::locate_data_file(spec) {
+                    return Some(found);
+                }
+            }
+        }
         Self::locate_data_file("registry.json")
     }
 
@@ -2189,6 +2206,53 @@ impl LinguigenesisBridge {
             "fn {name}(s: string) -> string {{\n    return {expr};\n}}\n"
         ));
         Ok(out)
+    }
+
+    /// TEST-SUPPORT: (lemma, default_fn_name) for every example-bearing op in the
+    /// merged registry. Lets a harness build data-driven derivational paraphrases
+    /// from the real op vocabulary instead of a hand list.
+    pub fn op_lemmas(&self) -> Vec<(String, String)> {
+        use linguigenesis_core::entity::EntityType;
+        let registry = match self.registry_clone() {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        for e in registry.get_by_type(&EntityType::Function) {
+            if e.get_property("example_cases").is_some() {
+                let fnn = e
+                    .get_property("default_fn_name")
+                    .cloned()
+                    .unwrap_or_else(|| e.lemma.clone());
+                out.push((e.lemma.clone(), fnn));
+            }
+        }
+        out
+    }
+
+    /// TEST-SUPPORT: ranked op candidates `(fn_name, score, method)` for a surface,
+    /// highest first, via the SAME resolver the gate uses. The `method` string
+    /// separates emergent-lens contributions (frame/prime/root/phonestheme) from
+    /// the curated scorers, so a harness can attribute and measure recall lift.
+    pub fn probe_op_candidates(&self, word: &str) -> Vec<(String, f32, String)> {
+        let registry = match self.registry_clone() {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let resolver = EntityResolver::new(registry);
+        resolver
+            .rank_candidates(word)
+            .into_iter()
+            .filter(|c| linguigenesis_core::entity_resolution::is_operation(&c.entity))
+            .map(|c| {
+                let fnn = c
+                    .entity
+                    .get_property("default_fn_name")
+                    .cloned()
+                    .unwrap_or_else(|| c.entity.lemma.clone());
+                (fnn, c.evidence.score, c.evidence.method.to_string())
+            })
+            .collect()
     }
 
     /// TEST-SUPPORT: resolve a single surface word to its highest-confidence

@@ -176,10 +176,20 @@ fn recall_lift_is_positive() {
         m > n,
         "expected recall LIFT (M>N), got baseline N={n} post-WordNet M={m}"
     );
-    // The whole point is sort/reverse went from ZERO synonyms to several.
-    assert_eq!(
-        n, 0,
-        "baseline (registry-only) should resolve NONE of these WordNet-only paraphrases, got {n}"
+    // NOTE (2026-07): the emergent DERIVATION lens (`linguigenesis_core::nl_signals`)
+    // now resolves the *derivational* paraphrases ("reversal"/"reversion" → reverse)
+    // via morphology, INDEPENDENT of the WordNet edges — a legitimate recall path
+    // added after this benchmark was written. So the registry-only baseline is no
+    // longer strictly zero (n counts those morphology-covered derivations). The
+    // benchmark's real invariant — WordNet edges lift recall for the
+    // NON-derivational synonyms (arrange/order/turnabout/aggregate/…) — is
+    // preserved as M > N above, and `unsupported_and_gibberish_still_refused`
+    // still guarantees the derivation lens opens no false accepts. The lift
+    // attributable purely to WordNet is M − n.
+    assert!(
+        m - n >= 3,
+        "WordNet edges must still lift >=3 non-derivational synonyms, got M-n={}",
+        m - n
     );
 }
 
