@@ -100,6 +100,157 @@ fn solve_string_lexicon(
 /// Route string-output problems (signature `-> string`) to the string-program
 /// path: the fast morphology specialist, then the general enumerative string
 /// synthesizer. Returns None for non-string problems so the numeric pipeline runs.
+/// FIELD-WISE STRUCT SYNTHESIS — the first path that PRODUCES a `Value::Struct`
+/// output (previously the type was representable, renderable, and verifiable,
+/// but nothing emitted it; struct_of_state benchmarks faked it with `Quad` +
+/// hand-named structs).
+///
+/// Decomposition: a struct output is a TUPLE of independent functions of the
+/// same inputs. For each field we project the examples onto that field and hand
+/// the sub-problem to the FULL existing pipeline (`solve_problem` — scalar,
+/// array, string machinery all apply), so every helper is independently
+/// synthesized + verified. The assembled program is
+///
+///   struct S { f1: T1, ... }
+///   fn name_f1(params) -> T1 { <verified sub-solve> }
+///   fn name(params) -> S { return S { f1: name_f1(params), ... }; }
+///
+/// and the WHOLE assembly is strict-verified (interpreter executes the struct
+/// constructor; `output_matches` compares runtime Struct vs wire Struct) before
+/// being accepted — no fabrication on any failure. v1 scope: flat structs whose
+/// fields are Int/Bool/Str/Array (nested structs decline honestly).
+fn solve_struct_output(problem: &Problem) -> Option<SolveResult> {
+    use crate::benchmark::Example;
+    // Gate: every example's expected is a Struct with identical field names.
+    let field_names: Vec<String> = match &problem.examples.first()?.expected {
+        Value::Struct(fs) if !fs.is_empty() => fs.iter().map(|(n, _)| n.clone()).collect(),
+        _ => return None,
+    };
+    for e in &problem.examples {
+        match &e.expected {
+            Value::Struct(fs)
+                if fs.len() == field_names.len()
+                    && fs.iter().zip(&field_names).all(|((n, _), fname)| n == fname) => {}
+            _ => return None,
+        }
+    }
+    // FUNCTIONAL-CONSISTENCY pre-gate: identical inputs must map to identical
+    // outputs — a spec violating this is not a function and no search can save
+    // it, so decline instantly instead of exhausting every stage per field.
+    for (i, a) in problem.examples.iter().enumerate() {
+        for b in problem.examples.iter().skip(i + 1) {
+            if a.inputs == b.inputs && a.expected != b.expected {
+                return None;
+            }
+        }
+    }
+    let field_type = |v: &Value| -> Option<&'static str> {
+        match v {
+            Value::Int(_) => Some("i64"),
+            Value::Bool(_) => Some("bool"),
+            Value::Str(_) => Some("string"),
+            Value::Array(_) => Some("[i64]"),
+            _ => None, // nested structs / exotic carriers: decline in v1
+        }
+    };
+
+    let fn_name = problem.function_name();
+    // Struct name from the signature's return type; a lowercase/absent one gets
+    // a capitalized default derived from the fn name.
+    let struct_name = problem
+        .signature
+        .rsplit("->")
+        .next()
+        .map(|s| s.trim().trim_end_matches('{').trim().to_string())
+        .filter(|s| !s.is_empty() && s.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+        .unwrap_or_else(|| {
+            let mut n = fn_name.to_string();
+            if let Some(c) = n.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            format!("{n}Out")
+        });
+    // Params: keep the repo signature's parameter list verbatim.
+    let params_src = problem
+        .signature
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(')'))
+        .map(|(p, _)| p.trim().to_string())
+        .unwrap_or_default();
+    let param_names: Vec<String> = params_src
+        .split(',')
+        .filter_map(|p| p.split(':').next().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+        .collect();
+    if param_names.is_empty() {
+        return None;
+    }
+
+    // One verified helper per field, via the FULL pipeline.
+    let mut helpers = String::new();
+    let mut decl_fields = Vec::new();
+    let mut ctor_fields = Vec::new();
+    let mut methods = Vec::new();
+    for (idx, fname) in field_names.iter().enumerate() {
+        let fvals: Vec<Value> = problem
+            .examples
+            .iter()
+            .map(|e| match &e.expected {
+                Value::Struct(fs) => fs[idx].1.clone(),
+                _ => unreachable!("gated above"),
+            })
+            .collect();
+        let fty = field_type(&fvals[0])?;
+        let helper_name: &'static str =
+            Box::leak(format!("{fn_name}_{fname}").into_boxed_str());
+        let helper_sig: &'static str =
+            Box::leak(format!("fn {helper_name}({params_src}) -> {fty}").into_boxed_str());
+        let sub = Problem {
+            name: helper_name.to_string(),
+            category: "struct-field",
+            description: "field-wise struct decomposition",
+            signature: helper_sig,
+            examples: problem
+                .examples
+                .iter()
+                .zip(fvals.iter())
+                .map(|(e, fv)| Example {
+                    inputs: e.inputs.clone(),
+                    expected: fv.clone(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let r = solve_problem(&sub);
+        if !r.success {
+            return None; // a field the engine can't synthesize ⇒ decline whole
+        }
+        helpers.push_str(r.code.trim_end());
+        helpers.push_str("\n\n");
+        decl_fields.push(format!("    {fname}: {fty},"));
+        ctor_fields.push(format!("{fname}: {helper_name}({})", param_names.join(", ")));
+        methods.push(r.method);
+    }
+
+    let code = format!(
+        "struct {struct_name} {{\n{}\n}}\n\n{helpers}fn {fn_name}({params_src}) -> {struct_name} {{\n    return {struct_name} {{ {} }};\n}}\n",
+        decl_fields.join("\n"),
+        ctor_fields.join(", "),
+    );
+    // The WHOLE assembly must strict-verify — helpers were verified per-field,
+    // but the constructor wiring is proven here, not assumed.
+    if crate::runtime::verify_problem_code_strict(problem, &code).is_err() {
+        return None;
+    }
+    Some(SolveResult {
+        success: true,
+        code,
+        method: format!("struct_fieldwise({})", methods.join("+")),
+        error: None,
+        metadata: Default::default(),
+    })
+}
+
 fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
     if !problem
         .signature
@@ -227,6 +378,17 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // String-output problems take the additive string-program path (the i64
     // gradient/search pipeline cannot express string outputs).
     if let Some(result) = solve_string_output(problem) {
+        if result.success && recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+        }
+        return result;
+    }
+
+    // Struct-output problems: FIELD-WISE DECOMPOSITION. Each field becomes an
+    // independent sub-problem solved by this whole pipeline; the assembled
+    // program (struct decl + verified per-field helpers + a constructor fn) is
+    // strict-verified as a whole before being accepted.
+    if let Some(result) = solve_struct_output(problem) {
         if result.success && recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
         }
@@ -545,5 +707,63 @@ mod string_lexicon_tests {
         assert!(result.code.contains("return \"has\";"));
         // The regular majority is the default sentinel, not an explicit branch.
         assert!(!result.code.contains("if s == \"walk\""));
+    }
+}
+
+#[cfg(test)]
+mod struct_output_tests {
+    use super::solve_struct_output;
+    use crate::benchmark::{Example, Problem, Value};
+
+    /// NO FABRICATION, instantly: a spec that is not a FUNCTION (identical
+    /// input demanding different structs) is declined by the functional-
+    /// consistency pre-gate — no search, no made-up constructor.
+    #[test]
+    fn struct_path_declines_non_functional_spec_instantly() {
+        let mk = |x: i64, noise: i64| Example {
+            inputs: vec![Value::Int(x)],
+            expected: Value::Struct(vec![
+                ("ok".to_string(), Value::Int(x + 1)),
+                ("noise".to_string(), Value::Int(noise)),
+            ]),
+        };
+        let problem = Problem {
+            name: "chaos".into(),
+            category: "struct-unit",
+            description: "non-functional spec",
+            signature: "fn chaos(x: i64) -> Chaos",
+            // SAME input x=1 demands noise=17 AND noise=-940: not a function.
+            examples: vec![mk(1, 17), mk(1, -940), mk(3, 5)],
+            ..Default::default()
+        };
+        let started = std::time::Instant::now();
+        assert!(solve_struct_output(&problem).is_none(), "must decline");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "decline must be the pre-gate, not budget exhaustion"
+        );
+    }
+
+    /// Mixed field types + inconsistent field NAMES across examples decline.
+    #[test]
+    fn struct_path_declines_inconsistent_field_names() {
+        let problem = Problem {
+            name: "shape".into(),
+            category: "struct-unit",
+            description: "inconsistent fields",
+            signature: "fn shape(x: i64) -> Shape",
+            examples: vec![
+                Example {
+                    inputs: vec![Value::Int(1)],
+                    expected: Value::Struct(vec![("a".to_string(), Value::Int(2))]),
+                },
+                Example {
+                    inputs: vec![Value::Int(2)],
+                    expected: Value::Struct(vec![("b".to_string(), Value::Int(3))]),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(solve_struct_output(&problem).is_none());
     }
 }

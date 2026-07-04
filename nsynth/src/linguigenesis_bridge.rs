@@ -914,16 +914,9 @@ impl LinguigenesisBridge {
         if specs.len() < 2 {
             return None;
         }
+        // Struct fields convert recursively through the shared converter.
         let lit = |l: &LiteralValue| -> crate::benchmark::Value {
-            use crate::benchmark::Value;
-            match l {
-                LiteralValue::Int(i) => Value::Int(*i),
-                LiteralValue::Float(f) => Value::Float(f.to_bits()),
-                LiteralValue::Str(s) => Value::Str(s.clone()),
-                LiteralValue::Bool(b) => Value::Bool(*b),
-                LiteralValue::Array(v) => Value::int_array(v),
-                LiteralValue::Pair(a, b) => Value::Pair(*a, *b),
-            }
+            literal_to_value(l).unwrap_or(crate::benchmark::Value::Int(0))
         };
         let examples: Vec<crate::benchmark::Example> = specs
             .iter()
@@ -3607,6 +3600,14 @@ fn literal_to_value(lit: &LiteralValue) -> Result<Value, BridgeError> {
         LiteralValue::Bool(b) => Value::Bool(*b),
         LiteralValue::Array(a) => Value::int_array(a),
         LiteralValue::Pair(a, b) => Value::Pair(*a, *b),
+        // Named-field struct: fields convert recursively (flat structs of
+        // scalar/array fields; the parser canonicalized field order).
+        LiteralValue::Struct(fields) => Value::Struct(
+            fields
+                .iter()
+                .map(|(n, v)| Ok((n.clone(), literal_to_value(v)?)))
+                .collect::<Result<Vec<_>, BridgeError>>()?,
+        ),
     })
 }
 
