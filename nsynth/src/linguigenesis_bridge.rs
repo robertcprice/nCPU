@@ -1408,7 +1408,7 @@ impl LinguigenesisBridge {
         //     fits `y=-x+4`), fall back to matching the op's REGISTRY example_cases
         //     (its verified output spec) against the candidate transforms. Both
         //     paths are output-grounded, not name-keyed.
-        let array_xfm = match &plan.array_transform {
+        let array_xfm = match plan.array_transforms.first() {
             Some(t) => {
                 let by_exec = self
                     .synthesize_primitive(t)
@@ -1483,7 +1483,7 @@ impl LinguigenesisBridge {
             description: description.to_string(),
             fn_name: composed_name.clone(),
             map_fns: plan.maps.iter().map(|m| m.fn_name.clone()).collect(),
-            array_xfm_fn: plan.array_transform.as_ref().map(|t| t.fn_name.clone()),
+            array_xfm_fn: plan.array_transforms.first().map(|t| t.fn_name.clone()),
             array_xfm,
             reduce_fn: plan.reduce.as_ref().map(|r| r.fn_name.clone()),
             fold,
@@ -3480,7 +3480,7 @@ fn pipeline_fn_name(plan: &CompositionPlan) -> String {
     } else {
         name.push_str("_maps");
     }
-    if let Some(t) = &plan.array_transform {
+    for t in &plan.array_transforms {
         name.push('_');
         name.push_str(&t.fn_name);
     }
@@ -3502,9 +3502,13 @@ fn describe_plan(plan: &CompositionPlan) -> String {
     } else {
         maps.join(" ∘ ")
     };
-    let xfm = match &plan.array_transform {
-        Some(t) => format!(" arrayxfm={}", t.fn_name),
-        None => String::new(),
+    let xfm = if plan.array_transforms.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " arrayxfm={}",
+            plan.array_transforms.iter().map(|t| t.fn_name.as_str()).collect::<Vec<_>>().join("∘")
+        )
     };
     let filt = match &plan.filter {
         Some(f) => format!(" filter={}({} {})", f.word, f.cmp, f.value),

@@ -59,6 +59,8 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| try_scan(problem, name))
         .or_else(|| try_context_map(problem, name))
         .or_else(|| try_sort_by(problem, name))
+        .or_else(|| try_interleave(problem, name))
+        .or_else(|| try_median(problem, name))
         .or_else(|| try_filter(problem, name))
         .or_else(|| try_select(problem, name));
     IN_DECOMPOSE.with(|f| f.set(false));
@@ -376,6 +378,79 @@ fn try_sort_by(problem: &Problem, name: &str) -> Option<(String, String)> {
         return Some((code, format!("decompose-sort-{k_name}")));
     }
     None
+}
+
+// ─────────────────────────── H-INTERLEAVE ───────────────────────────
+
+/// Permutation output built by alternately taking the MIN then MAX of the
+/// remaining elements (`strange_sort_list`). Checked directly against every
+/// example; emitted as a used-flag selection loop.
+fn try_interleave(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        if input.len() != output.len() {
+            return None;
+        }
+        let mut rest: Vec<i64> = input
+            .iter()
+            .map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+            .collect::<Option<_>>()?;
+        for (k, o) in output.iter().enumerate() {
+            let Value::Int(o) = o else { return None };
+            let pick = if k % 2 == 0 {
+                *rest.iter().min()?
+            } else {
+                *rest.iter().max()?
+            };
+            if pick != *o {
+                return None;
+            }
+            let pos = rest.iter().position(|&x| x == pick)?;
+            rest.remove(pos);
+        }
+    }
+    let code = format!(
+        "fn {name}(xs: [i64]) -> [i64] {{\n    rest: [i64] = [];\n    for e in xs {{\n        rest.push(e);\n    }}\n    out: [i64] = [];\n    take_min: i64 = 1;\n    while rest.len > 0 {{\n        m: i64 = 0;\n        j: i64 = 1;\n        while j < rest.len {{\n            if take_min == 1 {{\n                if rest[j] < rest[m] {{\n                    m = j;\n                }}\n            }} else {{\n                if rest[j] > rest[m] {{\n                    m = j;\n                }}\n            }}\n            j = j + 1;\n        }}\n        out.push(rest[m]);\n        nr: [i64] = [];\n        k: i64 = 0;\n        while k < rest.len {{\n            if k != m {{\n                nr.push(rest[k]);\n            }}\n            k = k + 1;\n        }}\n        rest = nr;\n        take_min = 1 - take_min;\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-interleave-minmax".to_string()))
+}
+
+// ───────────────────────────── H-MEDIAN ─────────────────────────────
+
+/// Scalar output equal to the middle of the SORTED input (odd n), or the mean
+/// of the two middles (even n — float). A positional idiom, not an element
+/// predicate, so H-SELECT cannot express it.
+fn try_median(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        if input.is_empty() || matches!(ex.expected, Value::Array(_)) {
+            return None;
+        }
+        let mut xs: Vec<i64> = input
+            .iter()
+            .map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+            .collect::<Option<_>>()?;
+        xs.sort_unstable();
+        let n = xs.len();
+        let want = match &ex.expected {
+            Value::Int(o) => *o as f64,
+            Value::Float(b) => f64::from_bits(*b),
+            _ => return None,
+        };
+        let got = if n % 2 == 1 {
+            xs[n / 2] as f64
+        } else {
+            (xs[n / 2 - 1] + xs[n / 2]) as f64 / 2.0
+        };
+        if (got - want).abs() > 1e-9 * want.abs().max(1.0) {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(xs: [i64]) -> f64 {{\n    s: [i64] = [];\n    for e in xs {{\n        s.push(e);\n    }}\n    s.sort();\n    n: i64 = s.len;\n    if n % 2 == 1 {{\n        return 1.0 * s[n / 2];\n    }}\n    return (s[n / 2 - 1] + s[n / 2]) / 2.0;\n}}\n"
+    );
+    Some((code, "decompose-median".to_string()))
 }
 
 // ──────────────────────────── H-FILTER ────────────────────────────
