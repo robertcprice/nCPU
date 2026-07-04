@@ -821,6 +821,17 @@ pub const OPS: &[LibOp] = &[
 "fn split_at_uppercase_drop(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    for ch in s {\n        if ch.is_upper() {\n            if cur.len > 0 {\n                out.push(cur);\n            }\n            cur = \"\";\n        } else {\n            cur = cur + ch;\n        }\n    }\n    if cur.len > 0 {\n        out.push(cur);\n    }\n    return out;\n}\n" },
     LibOp { name: "extract_quoted", arity: 1, mog:
 "fn extract_quoted(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    inq: i64 = 0;\n    for ch in s {\n        if ch == '\"' {\n            if inq == 1 {\n                out.push(cur);\n                cur = \"\";\n                inq = 0;\n            } else {\n                inq = 1;\n            }\n        } else {\n            if inq == 1 {\n                cur = cur + ch;\n            }\n        }\n    }\n    return out;\n}\n" },
+    // ── batch 29: FLOAT loop closed-forms (F3/F4 in the wall analysis). Mog
+    // float arithmetic + division are live; `1.0 * x` promotes int math to
+    // float where a float result is required.
+    LibOp { name: "product_div_len", arity: 1, mog:
+"fn product_div_len(arr: [i64]) -> f64 {\n    p: f64 = 1.0;\n    for e in arr {\n        p = p * e;\n    }\n    return p / arr.len;\n}\n" },
+    LibOp { name: "harmonic_sum_n", arity: 1, mog:
+"fn harmonic_sum_n(n: i64) -> f64 {\n    s: f64 = 0.0;\n    i: i64 = 1;\n    while i <= n {\n        s = s + 1.0 / i;\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    LibOp { name: "babylonian_sqrt", arity: 1, mog:
+"fn babylonian_sqrt(n: i64) -> f64 {\n    x: f64 = 1.0 * n;\n    if x <= 0.0 {\n        return 0.0;\n    }\n    i: i64 = 0;\n    while i < 40 {\n        x = (x + n / x) / 2.0;\n        i = i + 1;\n    }\n    return x;\n}\n" },
+    LibOp { name: "hypotenuse", arity: 2, mog:
+"fn hypotenuse(a: i64, b: i64) -> f64 {\n    s: f64 = 1.0 * a * a + b * b;\n    x: f64 = s;\n    if x <= 0.0 {\n        return 0.0;\n    }\n    i: i64 = 0;\n    while i < 60 {\n        x = (x + s / x) / 2.0;\n        i = i + 1;\n    }\n    return x;\n}\n" },
     // ── batch 26: map filter/append/constructor shapes.
     LibOp { name: "filter_pairs_value_ge", arity: 2, mog:
 "fn filter_pairs_value_ge(pairs: [[i64]], t: i64) -> [[i64]] {\n    out: [[i64]] = [];\n    for p in pairs {\n        if p[1] >= t {\n            out.push(p);\n        }\n    }\n    return out;\n}\n" },

@@ -231,6 +231,10 @@ pub(super) fn search_float_poly(problem: &Problem, fn_name: &str) -> Option<Solv
         ],
         2 => vec![
             vec![vec![1, 1]],                              // c·a·b
+            vec![vec![2, 1]],                              // c·a²·b   (πr²h cylinder)
+            vec![vec![1, 2]],                              // c·a·b²
+            vec![vec![2, 0]],                              // c·a²
+            vec![vec![0, 2]],                              // c·b²
             vec![vec![2, 0], vec![0, 2]],                  // c1·a² + c2·b²
             vec![vec![1, 0], vec![0, 1], vec![1, 1]],      // bilinear
         ],

@@ -133,7 +133,30 @@ fn solve_column(problem: &Problem, i: usize) -> Option<String> {
         return Some(code);
     }
 
-    // 2. Reuse the verified reference-op library + composition pipeline on the
+    // 2. FLOAT column: route to the float lanes (affine then poly) — they
+    //    self-gate on a `-> f64` signature, carry over-determination guards,
+    //    and re-verify the emitted program. Covers parabola-vertex-style pairs.
+    if col_examples.iter().any(|e| matches!(e.expected, Value::Float(_))) {
+        let sub = Problem {
+            name: format!("{}_col{i}", problem.name),
+            signature: "fn col() -> f64",
+            examples: col_examples,
+            ..Problem::default()
+        };
+        if let Some(res) = super::search_float::search_float_affine(&sub, "col") {
+            if res.success {
+                return Some(res.code);
+            }
+        }
+        if let Some(res) = super::search_float::search_float_poly(&sub, "col") {
+            if res.success {
+                return Some(res.code);
+            }
+        }
+        return None;
+    }
+
+    // 3. Reuse the verified reference-op library + composition pipeline on the
     //    projected sub-problem. Each already runs a full example verification.
     let sub = Problem {
         name: format!("{}_col{i}", problem.name),
@@ -191,7 +214,9 @@ fn rename_entry_fn(code: &str, new: &str) -> String {
 }
 
 fn is_scalar(v: &Value) -> bool {
-    matches!(v, Value::Int(_) | Value::Bool(_))
+    // Float columns are solved by the float lanes (affine/poly) per column —
+    // parabola vertex/focus tasks return fixed pairs of floats.
+    matches!(v, Value::Int(_) | Value::Bool(_) | Value::Float(_))
 }
 
 /// Mog type string for an input value, or `None` for a shape we can't declare.
@@ -201,6 +226,7 @@ fn value_type_str(v: &Value) -> Option<&'static str> {
         Value::Bool(_) => Some("bool"),
         Value::Str(_) => Some("string"),
         Value::Array(_) => Some("[i64]"),
+        Value::Float(_) => Some("f64"),
         _ => None,
     }
 }
