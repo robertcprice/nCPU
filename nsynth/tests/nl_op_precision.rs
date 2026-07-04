@@ -41,6 +41,33 @@ fn every_op_resolves_from_its_own_lemma() {
 }
 
 #[test]
+fn generic_imperative_verbs_and_fillers_do_not_resolve_to_ops() {
+    // Generic imperatives ("compute", "calculate", …) and structural fillers are
+    // NOT operations; if one leaks to an op at the gate it pollutes composition
+    // (e.g. "compute" -> "cmp" via the emergent root lens broke "compute the
+    // total"). They must be stop-worded, not resolved.
+    let bridge = LinguigenesisBridge::new();
+    const FILLERS: &[&str] = &[
+        "compute", "calculate", "determine", "return", "produce", "obtain",
+        "perform", "give", "make", "use", "get", "find", "then", "some",
+    ];
+    let mut leaks = Vec::new();
+    for w in FILLERS {
+        if let Some((f, s, m)) = bridge.probe_resolution(w) {
+            if s >= GATE {
+                leaks.push(format!("{w} -> {f} @{s:.2} [{m}]"));
+            }
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "generic imperative/filler words leaked to an operation at the {GATE} gate \
+         (add them to grammar_stop_words):\n{}",
+        leaks.join("\n")
+    );
+}
+
+#[test]
 fn generic_operand_nouns_do_not_resolve_to_ops() {
     let bridge = LinguigenesisBridge::new();
     // Generic programming nouns a user names as OPERANDS, never as the operation.
