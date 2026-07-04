@@ -182,6 +182,32 @@ Driver = the main loop (re-invoked on each workflow completion). **Per iteration
 5. **Hygiene:** `cargo clean` / remove the worktree's target between phases (disk ~20Gi headroom). Arm a fallback `ScheduleWakeup` (≥1200s) so a hung/silent workflow doesn't stall the loop.
 6. **Stop** when the queue is exhausted or every remaining phase is blocked; write a wake-up summary ledger (landed vs blocked vs remaining) for the user.
 
+### 0.057 CODING-AGENT GAP-CLOSING PLAN (2026-07-04; grounded in a 4-agent harness/domain audit)
+
+Goal: from the verified COMPONENT layer + RLVR proposer + crawler (see memory `component-layer`, `rlvr-proposer-and-crawler`) to a real filesystem-navigating coding agent. Four parallel read-only audits mapped what EXISTS so nothing is rebuilt. Headline: the substrate is far deeper than "i64 utilities" — durable self-extension, a repair pipeline, planning toposort, and reference-oracle harness generation all already exist. The gaps are specific and connectable.
+
+**What already EXISTS (reuse, do NOT rebuild) — file:line:**
+- Tool harness: `Tool`/`ToolRegistry`/`ToolCall` (`agent/tools/registry.rs`), `FsTool` (`agent/tools/fs.rs` — now incl grep/glob/read_range/move, commit d9ed142), `SecureToolRuntime` deny-by-default (`agent/tools/secure_runtime.rs`), `GuardrailPolicy` (`agent/repo/guardrails.rs`).
+- Edit/verify loop: `EditTransaction` exact-match apply+rollback (`agent/edit/transaction.rs`), `IsolatedRepoSession` worktree (`agent/edit/worktree.rs`), `RepoAgent::run` index→localize→isolate→repair→verify→promote (`agent/repo/repo_agent.rs:58`), `RepairLoop::run_inner` (`agent/repo/repair_loop.rs:252`), acceptance oracle `run_verification_command` cargo test/check only (`secure_runtime.rs:145`).
+- Planning: `DependencyResolver` real petgraph toposort (`agent/dependencies.rs`), `TaskDecomposer` (`agent/planning.rs`), `Executor` (`agent/executor.rs`) — used by `--agentic`, not the repo path yet.
+- Self-improvement: `self_improve::extend::self_extend` synth→gate→persist (`self_improve/extend.rs:182`), `store::save_one` durable JSONL + `Engine::new()` reload+re-gate (`self_improve/store.rs:273`), `regression_gate` golden+soundness (`self_improve/gate.rs:294`), `learn_nl` teach-by-example/composition (`learn_nl.rs`), `enumerative::dream` subtree mining→library (`enumerative.rs:1444,4654`), `meta_learner` online ranker + `meta/recursive` bounded RSI, `Mind::study` self-directed gap→curriculum loop.
+- Harness generation: `benchmark::generated_holdouts` samples fresh inputs + runs a reference oracle to label (`benchmark.rs:796`), `problem_from_reference` (`benchmark.rs:1010`).
+- Value carrier is WIDE already: `Value::{Str,Struct(Vec<(String,Value)>),Tuple,Array(Vec<Value>),...}` (`benchmark.rs:11-52`). Full FlashFill string synth (`string_synth.rs`), `solve_string_output` (`solver/pipeline.rs:103`).
+
+**The gaps + the plan (ordered by leverage):**
+
+1. **STRINGS into the verified component domain — SMALL, do first.** String synth + `Value::Str` + `solve_string_output` all exist. Missing: (a) string ops surfaced as named leaves — widen `mineable_string_ops()` (`string_synth.rs:161`; only 4 unary exported; Concat/Slice/Replace/Split already in the grammar), ensure `synthesize_op_by_name` resolves them (mined_capabilities.json must be generated+loaded — VERIFY, a probe found uppercase/lowercase returning NONE at runtime); (b) ONE string glue template in `component.rs` mirroring `ACCUMULATOR_GLUE` → a string structural component. Unlocks the largest slice of everyday code.
+
+2. **General EDIT DRIVER (the biggest agent lever).** The repair loop is real but its proposer only does example-synthesis→exact-string-edit and dead-ends at "no supported proposer" for non-example tasks (`agent/repo/run_supervisor.rs:89`). Plug the local_llm proposer (now wired, `local_llm::propose_component`/marker protocol) in as an EDIT proposer on top of the EXISTING cargo-test-gated `RepairLoop` — mirror the RLVR pattern: LLM proposes an edit (old_text→new_text), `EditTransaction` applies, `run_verification_command` disposes. Content-localize with the new `fs.grep` + `FailureAnalysis` file:line (`agent/repo/failure_parser.rs:162`, currently unused by the proposer).
+
+3. **Observation-driven tool loop (ReAct).** No component selects the next `ToolCall` from prior `ToolOutput` — workflows call fixed sequences. Build a bounded loop: model reads goal + tool outputs → picks next fs/git/shell/verify tool → observes → repeats, gated. Reuse `SecureToolRuntime` + `RepoAgent` budget.
+
+4. **Multi-field STRUCTS — research-grade, plan not rush.** 4 coordinated edits: add `Struct`/`Tuple` variant to `LiteralValue` (`linguigenesis/.../coding_requirements.rs:35`), map in both bridge converters (`linguigenesis_bridge.rs:917,3602`), emit struct decl from signature in `render_value` (`benchmark.rs:489`, currently hardcoded to Point/Quad names), and — the real work — a synthesizer that PRODUCES a `Value::Struct`. The component-glue path sidesteps this for now (hand struct + verified leaves), so prioritize #1/#2/#3 first.
+
+5. **Self-scaffolding / "builds its own harness" — mostly EXISTS; connect it.** Promote crawler discoveries + `enumerative` mined abstractions into `self_improve::store` as first-class named leaves that reload + become proposer/registry leaves (close the flywheel across substrates — today `enumerative` library and `self_improve` store are separate). Generalize per-program property generation beyond the fixed soundness oracle (the component layer's smoke/property contracts are the model).
+
+**Sequencing:** #1 (strings) → #2 (LLM edit driver on the gated repair loop) → #3 (ReAct tool loop) → #5 (flywheel across substrates) → #4 (struct synthesis). Every step commits verified; reuse the spine above.
+
 ## 0. Agent Start Protocol
 
 Follow these steps in order at the beginning of every coding-agent session:
