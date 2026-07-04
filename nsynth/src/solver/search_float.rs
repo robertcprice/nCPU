@@ -101,12 +101,15 @@ fn least_squares_affine(rows: &[Vec<f64>], targets: &[f64], arity: usize) -> Opt
     solve_f64(ata, atb)
 }
 
-/// Format a float coefficient compactly: round to 6 decimals, trim trailing
+/// Format a float coefficient compactly: round to 12 decimals, trim trailing
 /// zeros, and keep at least one fractional digit so it lexes as a float literal
-/// (`2.0`, not `2`). Negative values are emitted bare; the renderer wraps terms.
+/// (`2.0`, not `2`). 12 decimals (not 6) because the OUTER verification gate
+/// (`output_matches`/`float_eq`) compares at 1e-9 relative — a 6-decimal π
+/// (3.141593) leaves ~1e-7 relative error: the lane accepted what the gate then
+/// rejected. Negative values are emitted bare; the renderer wraps terms.
 fn fmt_coeff(c: f64) -> String {
-    let r = (c * 1e6).round() / 1e6;
-    let mut s = format!("{r:.6}");
+    let r = (c * 1e12).round() / 1e12;
+    let mut s = format!("{r:.12}");
     while s.ends_with('0') {
         s.pop();
     }
@@ -129,8 +132,10 @@ fn predict(coeffs: &[f64], row: &[f64]) -> f64 {
 /// magnitude, with an absolute floor. Continuous fits are never bit-exact, so
 /// "correct" means within this band on every example.
 fn tolerance(targets: &[f64]) -> f64 {
+    // Aligned with the OUTER verification gate (`float_eq`: 1e-9 relative with a
+    // 1e-9 absolute floor) so a lane-accepted model is never gate-rejected.
     let max_abs = targets.iter().fold(0.0f64, |m, &y| m.max(y.abs()));
-    (max_abs * 1e-6).max(1e-6)
+    (max_abs * 1e-9).max(1e-9)
 }
 
 /// Recover `f(x) = c0 + Σ c_j·x_j` over f64 by least squares, verify to
@@ -144,7 +149,7 @@ pub(super) fn search_float_affine(problem: &Problem, fn_name: &str) -> Option<So
     let coeffs = least_squares_affine(&rows, &targets, arity)?;
     // Round the coefficients to the finite precision we will print, then verify
     // the ROUNDED model — so the formula we emit is exactly the one we checked.
-    let rounded: Vec<f64> = coeffs.iter().map(|&c| (c * 1e6).round() / 1e6).collect();
+    let rounded: Vec<f64> = coeffs.iter().map(|&c| (c * 1e12).round() / 1e12).collect();
     let eps = tolerance(&targets);
     for (row, &y) in rows.iter().zip(targets.iter()) {
         if (predict(&rounded, row) - y).abs() > eps {
@@ -251,7 +256,7 @@ pub(super) fn search_float_poly(problem: &Problem, fn_name: &str) -> Option<Solv
         let frows: Vec<Vec<f64>> =
             rows.iter().map(|r| feats.iter().map(|f| feat_val(f, r)).collect()).collect();
         let Some(coeffs) = least_squares_affine(&frows, &targets, feats.len()) else { continue };
-        let rounded: Vec<f64> = coeffs.iter().map(|&c| (c * 1e6).round() / 1e6).collect();
+        let rounded: Vec<f64> = coeffs.iter().map(|&c| (c * 1e12).round() / 1e12).collect();
         let eps = tolerance(&targets);
         let fits = rows.iter().zip(targets.iter()).all(|(row, &y)| {
             let frow: Vec<f64> = feats.iter().map(|f| feat_val(f, row)).collect();
@@ -408,7 +413,7 @@ mod tests {
         assert!(search_float_affine(&p, "circle_area").is_none());
         let r = search_float_poly(&p, "circle_area").expect("must recover πr²");
         assert_eq!(r.method, "search_float_poly");
-        assert!(r.code.contains("3.141593"), "code: {}", r.code);
+        assert!(r.code.contains("3.14159265"), "code: {}", r.code);
     }
 
     #[test]
@@ -420,6 +425,20 @@ mod tests {
         let p = pf("fn tri(b: f64, h: f64) -> f64", &rows);
         let r = search_float_poly(&p, "tri").expect("must recover 0.5·b·h");
         assert!(r.code.contains("0.5"), "code: {}", r.code);
+    }
+
+    #[test]
+    fn float_poly_circle_area_solves_through_the_full_pipeline() {
+        // Regression probe for the end-to-end path: the direct-call test above
+        // passes while the BINARY missed circle_area — this pins the pipeline
+        // route (solve_problem), not just the lane.
+        let f = |r: f64| std::f64::consts::PI * r * r;
+        let rows: Vec<(Vec<f64>, f64)> =
+            [1.0, 2.0, 3.0].iter().map(|&r| (vec![r], f(r))).collect();
+        let p = pf("fn circle_area(a: f64) -> f64", &rows);
+        let r = crate::solver::solve_problem(&p);
+        assert!(r.success, "pipeline must route circle_area to the poly lane: {:?}", r.error);
+        assert_eq!(r.method, "search_float_poly", "method: {}", r.method);
     }
 
     #[test]
