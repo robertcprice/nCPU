@@ -40,6 +40,7 @@ fn corpus() -> Vec<(&'static str, &'static str, &'static str)> {
         ("filtration", "filter", "derivation"),
         ("subtraction", "subtract", "derivation"),
         ("deduction", "subtract", "derivation"),
+        ("multiplication", "multiply", "derivation"),
         ("incrementation", "increment", "derivation"),
         // SYNONYM — curated-registry / WordNet territory.
         ("flip", "reverse", "synonym"),
