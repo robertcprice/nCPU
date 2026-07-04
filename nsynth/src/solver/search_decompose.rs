@@ -277,7 +277,8 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| try_exists_sum_zero(problem, name))
         .or_else(|| try_below_zero(problem, name))
         .or_else(|| try_concat(problem, name))
-        .or_else(|| try_select(problem, name));
+        .or_else(|| try_select(problem, name))
+        .or_else(|| super::search_combinator::try_combinator(problem, name).map(|r| (r.code, r.method)));
     IN_DECOMPOSE.with(|f| f.set(false));
 
     let (code, method) = result?;
