@@ -179,6 +179,219 @@ pub fn canonical_rephrase(request: &str) -> Option<String> {
     (!line.is_empty() && line.len() < 200).then_some(line)
 }
 
+/// Propose a full COMPONENT spec (JSON) for an arbitrary request, using ONLY the
+/// given verified leaf ops. UNTRUSTED — the returned JSON is a hypothesis the
+/// caller MUST run through the compile + behavior gates
+/// (`component::verify_component_proposal`); a hallucinated leaf, mistyped glue, or
+/// lying contract is rejected there. This is the PROPOSER half of RLVR; the model
+/// may be as unreliable as it likes because the verifier ships only what survives.
+/// `None` when disabled (no URL) / on error / empty.
+pub fn propose_component(request: &str, known_leaves: &[String]) -> Option<String> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let leaves = known_leaves.join(", ");
+    // MARKER protocol, not JSON-embedded code: small models can't reliably escape
+    // quotes+newlines inside a JSON string. We take raw code between markers and
+    // build the JSON ourselves (serde escapes it correctly), so the only failures
+    // left are REAL ones the compile/behavior gates judge.
+    let sys = "You design a tiny Rust component for a program synthesizer. Respond in EXACTLY this \
+        format and nothing else:\n\
+        NAME: <snake_case_name>\n\
+        LEAVES: <comma-separated ops you use, from the allowed list>\n\
+        CODE:\n\
+        <rust here>\n\
+        SMOKE:\n\
+        <rust here>\n\
+        Rules:\n\
+        - Use ONLY the allowed ops as leaves. Each op is a free function imported with its name \
+        TWICE: `use crate::negate::negate;` for op `negate`. Never import from the module you write.\n\
+        - CODE: a short `pub struct` plus an `impl` whose methods call the leaf functions. Only i64 \
+        and Vec<i64>. No external crates, no std collections beyond Vec.\n\
+        - SMOKE: `#[cfg(test)] mod name_behaves { use super::*; #[test] fn t() { /* construct, call \
+        methods, assert_eq! exact expected values */ } }` that PROVES the behavior.\n\
+        - Write real newlines in the code (this is NOT JSON). No markdown fences, no prose.";
+    let user = format!(
+        "Allowed ops: {leaves}\nRequest: {}",
+        request.replace('"', "'")
+    );
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user}
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1400
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "180", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let content = resp["choices"][0]["message"]["content"].as_str()?;
+    // Preferred: marker protocol -> build valid JSON from raw fields.
+    if let Some(json) = marker_component_to_json(content) {
+        return Some(json);
+    }
+    // Fallback: the model emitted JSON directly (tolerate raw control chars).
+    extract_json_array(content).map(|j| escape_control_chars_in_strings(&j))
+}
+
+/// Parse the NAME/LEAVES/CODE/SMOKE marker reply into a proper components JSON doc.
+/// Raw code goes through serde (correct escaping), so the emitted JSON always
+/// parses; the compile/behavior gates then judge the substance. `None` if required
+/// markers are missing.
+fn marker_component_to_json(content: &str) -> Option<String> {
+    let name = marker_line(content, "NAME:")?;
+    let name = sanitize_ident(&name);
+    if name.is_empty() {
+        return None;
+    }
+    let raw_leaves: Vec<String> = marker_line(content, "LEAVES:")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    // Dedup (models repeat a leaf).
+    let mut seen = std::collections::HashSet::new();
+    let leaves: Vec<String> = raw_leaves.into_iter().filter(|l| seen.insert(l.clone())).collect();
+    let code = marker_block(content, "CODE:", &["SMOKE:"])?;
+    let smoke = marker_block(content, "SMOKE:", &[]);
+    if leaves.is_empty() || code.trim().is_empty() {
+        return None;
+    }
+    // Auto-inject the `use crate::<op>::<op>;` imports the model reliably omits.
+    // Each declared leaf is re-exported at crate root, so this always resolves; the
+    // model supplies the LOGIC, the harness completes the wiring (like a linker).
+    let mut prelude = String::new();
+    for leaf in &leaves {
+        if !code.contains(&format!("use crate::{leaf}")) {
+            prelude.push_str(&format!("use crate::{leaf}::{leaf};\n"));
+        }
+    }
+    let code = format!("{prelude}{code}");
+    let glue = if smoke.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+        serde_json::json!({ "module": name, "code": code, "smoke": smoke })
+    } else {
+        serde_json::json!({ "module": name, "code": code })
+    };
+    Some(
+        serde_json::json!([{
+            "name": name,
+            "surfaces": [name],
+            "leaves": leaves,
+            "glue": glue,
+        }])
+        .to_string(),
+    )
+}
+
+/// Value on the line beginning `marker` (inline value after the marker).
+fn marker_line(content: &str, marker: &str) -> Option<String> {
+    content
+        .lines()
+        .find(|l| l.trim_start().starts_with(marker))
+        .map(|l| l.trim_start()[marker.len()..].trim().to_string())
+}
+
+/// Raw text from the line AFTER `marker` up to the first line starting with any of
+/// `stops` (or end of input). Preserves interior newlines.
+fn marker_block(content: &str, marker: &str, stops: &[&str]) -> Option<String> {
+    let mut lines = content.lines();
+    // advance to the marker line
+    for l in lines.by_ref() {
+        if l.trim_start().starts_with(marker) {
+            break;
+        }
+    }
+    let mut out: Vec<&str> = Vec::new();
+    for l in lines {
+        if stops.iter().any(|s| l.trim_start().starts_with(s)) {
+            break;
+        }
+        out.push(l);
+    }
+    let joined = out.join("\n");
+    let trimmed = joined.trim_matches('`').trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Reduce to a valid snake identifier.
+fn sanitize_ident(s: &str) -> String {
+    let mut out: String = s
+        .trim()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .collect();
+    out = out.trim_matches('_').to_string();
+    if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        out.insert(0, '_');
+    }
+    out
+}
+
+/// Small models routinely emit multi-line Rust inside a JSON string value with RAW
+/// newlines/tabs, which is invalid JSON. Escape any control char that appears while
+/// INSIDE a `"`-delimited string (respecting backslash escapes) so the proposal
+/// parses; content outside strings is untouched. This is a tolerance for the
+/// PROPOSER's sloppiness only — the strict `parse_components_json` used for real
+/// data files is unchanged, and the compile/behavior gates still judge the result.
+fn escape_control_chars_in_strings(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 16);
+    let mut in_str = false;
+    let mut escaped = false;
+    for c in s.chars() {
+        if in_str {
+            if escaped {
+                out.push(c);
+                escaped = false;
+            } else if c == '\\' {
+                out.push(c);
+                escaped = true;
+            } else if c == '"' {
+                out.push(c);
+                in_str = false;
+            } else if c == '\n' {
+                out.push_str("\\n");
+            } else if c == '\r' {
+                out.push_str("\\r");
+            } else if c == '\t' {
+                out.push_str("\\t");
+            } else if (c as u32) < 0x20 {
+                // drop other unprintable control chars
+            } else {
+                out.push(c);
+            }
+        } else {
+            if c == '"' {
+                in_str = true;
+            }
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Pull the first top-level JSON array out of the model's reply, tolerating
+/// ```json fences / surrounding prose.
+fn extract_json_array(content: &str) -> Option<String> {
+    let s = content.trim();
+    let start = s.find('[')?;
+    let end = s.rfind(']')?;
+    if end < start {
+        return None;
+    }
+    Some(s[start..=end].to_string())
+}
+
 /// Pull the `op` field out of the model's reply, tolerating ```json fences /
 /// surrounding prose by scanning for the first `{...}` JSON object.
 fn extract_op(content: &str) -> Option<String> {
@@ -193,6 +406,44 @@ fn extract_op(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marker_reply_becomes_valid_component_json() {
+        let reply = "NAME: squarer\nLEAVES: square\nCODE:\nuse crate::square::square;\npub struct Squarer { v: i64 }\nimpl Squarer { pub fn new(v: i64) -> Self { Squarer { v } } pub fn go(&self) -> i64 { square(self.v) } }\nSMOKE:\n#[cfg(test)] mod m { use super::*; #[test] fn t() { assert_eq!(Squarer::new(4).go(), 16); } }\n";
+        let json = marker_component_to_json(reply).expect("parsed");
+        // Always valid JSON (serde escaped the raw code).
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(v[0]["name"], "squarer");
+        assert_eq!(v[0]["leaves"][0], "square");
+        assert!(v[0]["glue"]["code"].as_str().unwrap().contains("use crate::square::square;"));
+        assert!(v[0]["glue"]["smoke"].as_str().unwrap().contains("assert_eq!"));
+    }
+
+    #[test]
+    fn escape_control_chars_only_inside_strings() {
+        // Raw newline inside a string value -> escaped; structure newline untouched.
+        let raw = "[{\"code\":\"line1\nline2\"}]";
+        let fixed = escape_control_chars_in_strings(raw);
+        assert!(serde_json::from_str::<serde_json::Value>(&fixed).is_ok(), "{fixed}");
+        assert!(fixed.contains("line1\\nline2"));
+        // An already-escaped \n is preserved (backslash respected).
+        let ok = "[{\"code\":\"a\\nb\"}]";
+        assert_eq!(escape_control_chars_in_strings(ok), ok);
+    }
+
+    #[test]
+    fn extract_json_array_handles_fences_and_prose() {
+        assert_eq!(
+            extract_json_array("[{\"name\":\"x\"}]").as_deref(),
+            Some("[{\"name\":\"x\"}]")
+        );
+        assert_eq!(
+            extract_json_array("```json\n[{\"a\":1}]\n```").as_deref(),
+            Some("[{\"a\":1}]")
+        );
+        assert_eq!(extract_json_array("Sure, here: [1,2,3] done").as_deref(), Some("[1,2,3]"));
+        assert_eq!(extract_json_array("no array"), None);
+    }
 
     #[test]
     fn extract_op_handles_fences_and_prose() {

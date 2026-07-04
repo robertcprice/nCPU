@@ -950,6 +950,34 @@ pub fn verify_component_proposal(
     }
 }
 
+/// The verified leaf ops the LLM proposer may use — each synthesizes with >=2
+/// examples (confirmed by the leaf probe). Keeps the model from naming ops that
+/// won't synthesize; anything off-menu is rejected by the verifier anyway.
+pub fn proposable_leaves() -> Vec<String> {
+    [
+        "increment", "decrement", "add", "subtract", "multiply", "double", "triple",
+        "negate", "square", "array_sum", "array_max", "array_min", "length",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// The RLVR loop CLOSED: ask the untrusted local model to PROPOSE a component for
+/// `request` (using only verified leaves), then dispose of the proposal through the
+/// same compile + behavior gates a seed component faces. Returns the verdict, or
+/// `None` when the model lane is disabled/unreachable (nothing to verify). The
+/// model can be arbitrarily unreliable — only an Accepted proposal is real.
+pub fn propose_and_verify(
+    bridge: &LinguigenesisBridge,
+    request: &str,
+    root: &Path,
+) -> Option<ProposalVerdict> {
+    let leaves = proposable_leaves();
+    let json = crate::local_llm::propose_component(request, &leaves)?;
+    Some(verify_component_proposal(bridge, &json, root))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1322,6 +1350,18 @@ mod tests {
         let root = temp_root("prop_garbage");
         let v = verify_component_proposal(&bridge, "{ not json", &root);
         assert!(matches!(v, ProposalVerdict::RejectedParse(_)), "{v:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn propose_and_verify_is_inert_without_a_model() {
+        // With no model endpoint the RLVR loop yields None (nothing proposed), so
+        // the CI path never depends on a running server.
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("propose_inert");
+        assert!(propose_and_verify(&bridge, "a thing that squares numbers", &root).is_none());
+        assert!(!proposable_leaves().is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
