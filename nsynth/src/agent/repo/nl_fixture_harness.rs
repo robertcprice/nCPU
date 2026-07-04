@@ -265,7 +265,7 @@ fn dedup_module_name(base: String, used: &mut std::collections::HashSet<String>)
 /// (C) Run a sandboxed `cargo check` on the generated crate. Reuses the
 /// secure_runtime cargo-check capability (allowlist + guardrails). Returns
 /// [`CompileStatus::Unverified`] (NOT success) if cargo cannot be run at all.
-fn compile_gate(root: &Path) -> CompileStatus {
+pub fn compile_gate(root: &Path) -> CompileStatus {
     let runtime = SecureToolRuntime::for_repo_repair(root.to_path_buf(), GuardrailPolicy::default());
     match runtime.run_verification_command("cargo check") {
         Ok(v) => {

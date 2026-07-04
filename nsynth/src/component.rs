@@ -2,27 +2,44 @@
 //! up from single ops.
 //!
 //! An op is a single verified function (`array_sum`). A COMPONENT is a named unit
-//! that bundles several verified leaf ops into ONE compile-gated module, resolved
-//! from ONE natural-language phrase ("array statistics"). This is the foundation
-//! for the planner (symbolic + neural): a prompt resolves to component(s), each
-//! component's leaves are synthesized + verified via the trusted op path, the
-//! verified leaves are composed into a module, and the whole is compile-verified by
-//! the same `cargo check` gate the greenfield writer uses. Every leaf keeps the
-//! engine's 0-false-positive guarantee; the assembly is verified by compilation.
-//! Nothing is trusted-but-unverified.
+//! resolved from ONE natural-language phrase. Two shapes:
 //!
-//! FIRST SLICE: leaves-only bundles + literal surface resolution. It extends to
-//! struct defs, glue templates, and emergent NL resolution (reusing the op
-//! resolver's morphology/graph/WordNet machinery) — and the registry migrates from
-//! this Rust const to data so it can be GROWN by mining verified builds ("writes
-//! its own teachers" at the component grain).
+//!   * **Bundle** — several verified leaf ops composed into one compile-gated
+//!     module (`array_stats` = sum/max/min/average/length).
+//!   * **Structural** — a bundle PLUS a raw-Rust glue module (a struct + methods)
+//!     whose bodies call the verified leaves (`Counter` = a struct whose `tick`
+//!     uses the verified `increment` op). This is the genuine capability lift: the
+//!     greenfield writer alone cannot emit structs; a structural component pairs a
+//!     hand-glue *shape* with synthesized+verified *logic*, exactly the game/backend
+//!     builder pattern generalized into a reusable unit.
+//!
+//! Every leaf keeps the engine's 0-false-positive guarantee; the WHOLE assembly
+//! (leaves + struct glue) is verified by the same `cargo check` gate the greenfield
+//! writer uses. Nothing is trusted-but-unverified — a struct that references a leaf
+//! that didn't synthesize, or glue that mis-types, fails compilation and is caught.
+//!
+//! FIRST SLICES done: bundle + structural + literal resolution. Extends to emergent
+//! NL resolution (reusing the op resolver) and a DATA registry grown by mining
+//! verified builds ("writes its own teachers" at the component grain).
 
-use crate::agent::repo::nl_fixture_harness::{write_synthesized_project, CompileStatus, WriteOutcome};
+use crate::agent::repo::nl_fixture_harness::{
+    compile_gate, write_synthesized_project, CompileStatus, WriteOutcome,
+};
 use crate::linguigenesis_bridge::LinguigenesisBridge;
 use std::path::Path;
 
-/// A named unit bigger than a single op: a curated bundle of leaf ops composed into
-/// one module. (First slice: leaves only.)
+/// A raw-Rust glue module (struct + methods) whose bodies call the component's
+/// verified leaves. Written verbatim next to the transpiled leaves and wired into
+/// `lib.rs`, then compile-gated with them.
+pub struct GlueSpec {
+    /// Glue module name (`src/<module>.rs`).
+    pub module: &'static str,
+    /// Raw Rust: a struct + impl that `use`s the leaf functions (each leaf `foo`
+    /// is available as `crate::foo::foo`).
+    pub code: &'static str,
+}
+
+/// A named unit bigger than a single op.
 pub struct ComponentSpec {
     /// Module + package name for the emitted component.
     pub name: &'static str,
@@ -31,20 +48,59 @@ pub struct ComponentSpec {
     /// `default_fn_name`s of the leaf ops this component bundles. Each is
     /// independently verified-synthesizable via the trusted op path.
     pub leaves: &'static [&'static str],
+    /// Optional struct/method glue over the leaves (structural component).
+    pub glue: Option<GlueSpec>,
 }
 
 /// The built-in component registry. First slice: a Rust const; migrates to data +
 /// emergent resolution, like `coding_registry.json`.
-pub const BUILTIN_COMPONENTS: &[ComponentSpec] = &[ComponentSpec {
-    name: "array_stats",
-    surfaces: &["stats", "statistics", "statistic", "summary"],
-    leaves: &["array_sum", "array_max", "array_min", "average", "length"],
-}];
+pub const BUILTIN_COMPONENTS: &[ComponentSpec] = &[
+    ComponentSpec {
+        name: "array_stats",
+        surfaces: &["stats", "statistics", "statistic", "summary"],
+        leaves: &["array_sum", "array_max", "array_min", "average", "length"],
+        glue: None,
+    },
+    ComponentSpec {
+        name: "counter",
+        surfaces: &["counter", "count", "tally"],
+        leaves: &["increment"],
+        glue: Some(GlueSpec {
+            module: "counter",
+            code: COUNTER_GLUE,
+        }),
+    },
+];
+
+/// A counter whose `tick` uses the VERIFIED `increment` leaf (x -> x+1). The struct
+/// SHAPE is templated; the increment LOGIC is synthesized + verified; the whole
+/// compiles together or is rejected.
+const COUNTER_GLUE: &str = r#"//! Structural component: a Counter whose tick uses the verified `increment` leaf.
+
+use crate::increment::increment;
+
+#[derive(Default)]
+pub struct Counter {
+    count: i64,
+}
+
+impl Counter {
+    pub fn new() -> Self {
+        Counter { count: 0 }
+    }
+    /// Advance the counter using the synthesized + verified `increment` op.
+    pub fn tick(&mut self) {
+        self.count = increment(self.count);
+    }
+    pub fn get(&self) -> i64 {
+        self.count
+    }
+}
+"#;
 
 /// Resolve a natural-language phrase to a component by surface-word match. First
 /// slice: literal, case-insensitive token match; graduates to the emergent op
-/// resolver (morphology / graph / WordNet), the same machinery `EntityResolver`
-/// uses for ops.
+/// resolver (morphology / graph / WordNet).
 pub fn resolve_component(text: &str) -> Option<&'static ComponentSpec> {
     let lower = text.to_lowercase();
     let tokens: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
@@ -53,29 +109,35 @@ pub fn resolve_component(text: &str) -> Option<&'static ComponentSpec> {
         .find(|c| c.surfaces.iter().any(|s| tokens.contains(s)))
 }
 
-/// Outcome of building a component: which leaves verified, plus the write +
-/// compile-gate result for the assembled module.
+/// Outcome of building a component: which leaves verified, whether it emits a
+/// struct, plus the write + compile-gate result for the assembled module(s).
 pub struct ComponentBuild {
     pub name: String,
     pub leaves_verified: Vec<String>,
     pub leaves_total: usize,
+    pub has_struct: bool,
     pub outcome: WriteOutcome,
 }
 
 impl ComponentBuild {
-    /// True iff EVERY leaf verified AND the assembled module compiles — the
-    /// component is fully verified end-to-end.
+    /// True iff EVERY leaf verified AND the assembled module(s) compile.
     pub fn fully_verified(&self) -> bool {
         self.leaves_verified.len() == self.leaves_total
             && matches!(self.outcome.compile, CompileStatus::Ok)
     }
+    /// True iff this component emitted a struct (structural component).
+    pub fn produces_structure(&self) -> bool {
+        self.has_struct
+    }
 }
 
 /// Build a component: synthesize each leaf (verified via the trusted op path),
-/// compose the verified leaves into one module, and compile-gate the whole. A leaf
-/// that fails to synthesize is DROPPED (reported via `leaves_verified`) — never
-/// fabricated — and the component still assembles from what verified. Returns `Err`
-/// only on write/infra failure or when nothing verified.
+/// compose the verified leaves into a module, and — for a structural component —
+/// also emit the raw-Rust struct glue and wire it in. The WHOLE crate is compiled
+/// (`cargo check`); a struct referencing a leaf that failed, or mis-typed glue,
+/// fails compilation and is caught. A leaf that fails to synthesize is DROPPED
+/// (reported), never fabricated. Returns `Err` only on write/infra failure or when
+/// nothing verified.
 pub fn build_component(
     bridge: &LinguigenesisBridge,
     spec: &ComponentSpec,
@@ -94,11 +156,29 @@ pub fn build_component(
     if components.is_empty() {
         return Err(format!("component '{}': no leaf verified", spec.name));
     }
-    let outcome = write_synthesized_project(root, spec.name, &components)?;
+    let mut outcome = write_synthesized_project(root, spec.name, &components)?;
+
+    // Structural glue: only when the leaves themselves compiled (a struct over a
+    // broken leaf would just fail again). Write the raw-Rust glue module, wire it
+    // into lib.rs, and re-gate the WHOLE crate.
+    if let Some(glue) = &spec.glue {
+        if outcome.compile.is_ok() {
+            let glue_rel = format!("src/{}.rs", glue.module);
+            std::fs::write(root.join(&glue_rel), glue.code).map_err(|e| e.to_string())?;
+            let lib_path = root.join("src").join("lib.rs");
+            let mut lib = std::fs::read_to_string(&lib_path).map_err(|e| e.to_string())?;
+            lib.push_str(&format!("\nmod {m};\npub use {m}::*;\n", m = glue.module));
+            std::fs::write(&lib_path, &lib).map_err(|e| e.to_string())?;
+            outcome.written.push(glue_rel);
+            outcome.compile = compile_gate(root);
+        }
+    }
+
     Ok(ComponentBuild {
         name: spec.name.to_string(),
         leaves_verified,
         leaves_total: spec.leaves.len(),
+        has_struct: spec.glue.is_some(),
         outcome,
     })
 }
@@ -108,7 +188,6 @@ mod tests {
     use super::*;
 
     fn temp_root(tag: &str) -> std::path::PathBuf {
-        // Unique per (process, tag); cleaned before use.
         let mut p = std::env::temp_dir();
         p.push(format!("nsynth_component_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
@@ -116,31 +195,56 @@ mod tests {
     }
 
     #[test]
-    fn resolves_array_stats_from_prose() {
-        let c = resolve_component("give me some array statistics please").expect("resolve");
-        assert_eq!(c.name, "array_stats");
+    fn resolves_components_from_prose() {
+        assert_eq!(
+            resolve_component("give me some array statistics").unwrap().name,
+            "array_stats"
+        );
+        assert_eq!(resolve_component("build a counter").unwrap().name, "counter");
         assert!(resolve_component("reverse an array").is_none());
     }
 
     #[test]
-    fn array_stats_component_synthesizes_and_compiles() {
+    fn array_stats_bundle_synthesizes_and_compiles() {
         let bridge = LinguigenesisBridge::new();
         let spec = resolve_component("an array statistics module").expect("resolve stats");
         let root = temp_root("stats");
         let build = build_component(&bridge, spec, &root).expect("build");
-        // The array-reducer leaves all carry >=2 example_cases → most verify.
         assert!(
             build.leaves_verified.len() >= 4,
             "expected >=4 verified leaves, got {:?}",
             build.leaves_verified
         );
-        // The assembled multi-leaf component compiles (cargo-check gate) — the
-        // whole is verified, not just the leaves.
+        assert!(!build.produces_structure());
         assert!(
             build.outcome.compile.is_ok(),
             "component must compile: {:?}",
             build.outcome.compile
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn counter_structural_component_emits_a_struct_that_compiles() {
+        let bridge = LinguigenesisBridge::new();
+        let spec = resolve_component("a counter").expect("resolve counter");
+        assert!(spec.glue.is_some(), "counter is structural");
+        let root = temp_root("counter");
+        let build = build_component(&bridge, spec, &root).expect("build");
+        assert!(
+            build.leaves_verified.contains(&"increment".to_string()),
+            "increment leaf verified"
+        );
+        assert!(build.produces_structure(), "counter emits a struct");
+        // The struct glue + the verified increment leaf compile TOGETHER.
+        assert!(
+            build.outcome.compile.is_ok(),
+            "structural component must compile: {:?}",
+            build.outcome.compile
+        );
+        // The struct is genuinely emitted, not stubbed.
+        let glue = std::fs::read_to_string(root.join("src/counter.rs")).unwrap();
+        assert!(glue.contains("pub struct Counter"), "struct present: {glue}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
