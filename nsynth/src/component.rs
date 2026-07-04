@@ -178,46 +178,74 @@ impl ComponentBuild {
     }
 }
 
-/// Build a component: synthesize each leaf (verified via the trusted op path),
-/// compose the verified leaves into a module, and — for a structural component —
-/// also emit the raw-Rust struct glue and wire it in. The WHOLE crate is compiled
-/// (`cargo check`); a struct referencing a leaf that failed, or mis-typed glue,
-/// fails compilation and is caught. A leaf that fails to synthesize is DROPPED
-/// (reported), never fabricated. Returns `Err` only on write/infra failure or when
-/// nothing verified.
+/// Synthesize the verified `(name, code)` pairs for a set of leaves via the
+/// TRUSTED op path, de-duplicated by name (sibling components may share a leaf).
+/// A leaf that fails to synthesize is DROPPED, never fabricated. Also returns the
+/// verified leaf names in encounter order.
+fn synth_leaves(
+    bridge: &LinguigenesisBridge,
+    leaf_sets: &[&[&'static str]],
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut components: Vec<(String, String)> = Vec::new();
+    let mut verified: Vec<String> = Vec::new();
+    for leaves in leaf_sets {
+        for leaf in *leaves {
+            if !seen.insert((*leaf).to_string()) {
+                continue;
+            }
+            if let Some(r) = bridge.synthesize_op_by_name(leaf) {
+                if r.success {
+                    verified.push((*leaf).to_string());
+                    components.push(((*leaf).to_string(), r.code));
+                }
+            }
+        }
+    }
+    (components, verified)
+}
+
+/// Write a glue module verbatim and wire it into the crate's lib.rs. Idempotent on
+/// the module name (a repeated glue module is skipped). Returns the written rel path
+/// if it was newly wired.
+fn write_and_wire_glue(root: &Path, glue: &GlueSpec) -> Result<Option<String>, String> {
+    let glue_rel = format!("src/{}.rs", glue.module);
+    let lib_path = root.join("src").join("lib.rs");
+    let mut lib = std::fs::read_to_string(&lib_path).map_err(|e| e.to_string())?;
+    let decl = format!("mod {};", glue.module);
+    if lib.contains(&decl) {
+        return Ok(None); // already wired
+    }
+    std::fs::write(root.join(&glue_rel), glue.code).map_err(|e| e.to_string())?;
+    lib.push_str(&format!("\nmod {m};\npub use {m}::*;\n", m = glue.module));
+    std::fs::write(&lib_path, &lib).map_err(|e| e.to_string())?;
+    Ok(Some(glue_rel))
+}
+
+/// Build ONE component: synthesize its leaves, compose them into a module, and —
+/// for a structural component — also emit the raw-Rust struct glue and wire it in.
+/// The WHOLE crate is compiled (`cargo check`); a struct referencing a leaf that
+/// failed, or mis-typed glue, fails compilation and is caught. Returns `Err` only
+/// on write/infra failure or when nothing verified.
 pub fn build_component(
     bridge: &LinguigenesisBridge,
     spec: &ComponentSpec,
     root: &Path,
 ) -> Result<ComponentBuild, String> {
-    let mut components: Vec<(String, String)> = Vec::new();
-    let mut leaves_verified: Vec<String> = Vec::new();
-    for leaf in spec.leaves {
-        if let Some(r) = bridge.synthesize_op_by_name(leaf) {
-            if r.success {
-                leaves_verified.push((*leaf).to_string());
-                components.push(((*leaf).to_string(), r.code));
-            }
-        }
-    }
+    let (components, leaves_verified) = synth_leaves(bridge, &[spec.leaves]);
     if components.is_empty() {
         return Err(format!("component '{}': no leaf verified", spec.name));
     }
     let mut outcome = write_synthesized_project(root, spec.name, &components)?;
 
     // Structural glue: only when the leaves themselves compiled (a struct over a
-    // broken leaf would just fail again). Write the raw-Rust glue module, wire it
-    // into lib.rs, and re-gate the WHOLE crate.
+    // broken leaf would just fail again). Re-gate the WHOLE crate after wiring.
     if let Some(glue) = &spec.glue {
         if outcome.compile.is_ok() {
-            let glue_rel = format!("src/{}.rs", glue.module);
-            std::fs::write(root.join(&glue_rel), glue.code).map_err(|e| e.to_string())?;
-            let lib_path = root.join("src").join("lib.rs");
-            let mut lib = std::fs::read_to_string(&lib_path).map_err(|e| e.to_string())?;
-            lib.push_str(&format!("\nmod {m};\npub use {m}::*;\n", m = glue.module));
-            std::fs::write(&lib_path, &lib).map_err(|e| e.to_string())?;
-            outcome.written.push(glue_rel);
-            outcome.compile = compile_gate(root);
+            if let Some(rel) = write_and_wire_glue(root, glue)? {
+                outcome.written.push(rel);
+                outcome.compile = compile_gate(root);
+            }
         }
     }
 
@@ -226,6 +254,91 @@ pub fn build_component(
         leaves_verified,
         leaves_total: spec.leaves.len(),
         has_struct: spec.glue.is_some(),
+        outcome,
+    })
+}
+
+/// Resolve ALL components a phrase mentions (each with a positive emergent match),
+/// in registry order — the multi-component front door. "a counter and array
+/// statistics" -> [counter, array_stats].
+pub fn resolve_components(text: &str) -> Vec<&'static ComponentSpec> {
+    let lower = text.to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    BUILTIN_COMPONENTS
+        .iter()
+        .filter(|comp| {
+            tokens
+                .iter()
+                .any(|tok| comp.surfaces.iter().any(|s| surface_match(tok, s) > 0))
+        })
+        .collect()
+}
+
+/// Outcome of a multi-component project build.
+pub struct ProjectBuild {
+    pub components: Vec<String>,
+    pub leaves_verified: Vec<String>,
+    /// Glue module names emitted (structural components in the project).
+    pub structs: Vec<String>,
+    pub outcome: WriteOutcome,
+}
+
+impl ProjectBuild {
+    pub fn compiles(&self) -> bool {
+        matches!(self.outcome.compile, CompileStatus::Ok)
+    }
+}
+
+/// Build a MULTI-component project into ONE crate: the union of all components'
+/// verified leaves plus each structural component's struct glue, wired into a
+/// single lib.rs and compile-gated together. This is the planner's first symbolic
+/// form — a prompt naming several concepts becomes one verified crate. Leaves are
+/// synthesized once even when shared; glue modules are de-duplicated. Returns `Err`
+/// only on write/infra failure or when no leaf across any component verified.
+pub fn build_project(
+    bridge: &LinguigenesisBridge,
+    specs: &[&ComponentSpec],
+    root: &Path,
+) -> Result<ProjectBuild, String> {
+    if specs.is_empty() {
+        return Err("build_project: no components".to_string());
+    }
+    let leaf_sets: Vec<&[&'static str]> = specs.iter().map(|s| s.leaves).collect();
+    let (components, leaves_verified) = synth_leaves(bridge, &leaf_sets);
+    if components.is_empty() {
+        return Err("build_project: no leaf verified across any component".to_string());
+    }
+    let pkg = specs
+        .iter()
+        .map(|s| s.name)
+        .collect::<Vec<_>>()
+        .join("_");
+    let mut outcome = write_synthesized_project(root, &pkg, &components)?;
+
+    let mut structs: Vec<String> = Vec::new();
+    if outcome.compile.is_ok() {
+        let mut wired_any = false;
+        for spec in specs {
+            if let Some(glue) = &spec.glue {
+                if write_and_wire_glue(root, glue)?.is_some() {
+                    outcome.written.push(format!("src/{}.rs", glue.module));
+                    structs.push(glue.module.to_string());
+                    wired_any = true;
+                }
+            }
+        }
+        if wired_any {
+            outcome.compile = compile_gate(root);
+        }
+    }
+
+    Ok(ProjectBuild {
+        components: specs.iter().map(|s| s.name.to_string()).collect(),
+        leaves_verified,
+        structs,
         outcome,
     })
 }
@@ -305,6 +418,43 @@ mod tests {
         // The struct is genuinely emitted, not stubbed.
         let glue = std::fs::read_to_string(root.join("src/counter.rs")).unwrap();
         assert!(glue.contains("pub struct Counter"), "struct present: {glue}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn multi_component_project_wires_struct_and_bundle_into_one_crate() {
+        // One prompt naming two concepts resolves to two components...
+        let specs = resolve_components("a counter and some array statistics");
+        let names: Vec<_> = specs.iter().map(|s| s.name).collect();
+        assert!(
+            names.contains(&"counter") && names.contains(&"array_stats"),
+            "resolved both components: {names:?}"
+        );
+        // ...and builds into ONE verified crate.
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("project");
+        let build = build_project(&bridge, &specs, &root).expect("build");
+        // union of leaves: increment (counter) + array reducers (stats)
+        assert!(build.leaves_verified.contains(&"increment".to_string()), "{:?}", build.leaves_verified);
+        assert!(
+            build.leaves_verified.iter().any(|l| l == "array_sum"),
+            "stats leaves present: {:?}",
+            build.leaves_verified
+        );
+        // the structural component contributed its struct
+        assert!(
+            build.structs.contains(&"counter".to_string()),
+            "counter struct emitted: {:?}",
+            build.structs
+        );
+        // one crate, compiles together
+        assert!(build.compiles(), "project compiles: {:?}", build.outcome.compile);
+        // struct + a bundle leaf share the SAME lib.rs
+        let lib = std::fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(
+            lib.contains("mod counter;") && lib.contains("mod increment;"),
+            "one lib wires both: {lib}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
