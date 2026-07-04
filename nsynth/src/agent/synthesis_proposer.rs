@@ -39,6 +39,19 @@ pub fn nl_synthesis_proposer(
 ) -> Result<RepairPatch, String> {
     let description = nl_description_from_issue(&task.issue).unwrap_or_else(|| task.issue.clone());
 
+    // EMERGENT bare-NL stage FIRST: grounded localization beats guessed. It
+    // fires only when the described fn genuinely EXISTS in the repo (content
+    // scan + emergent morphology match), then swaps that fn's body with the
+    // bridge-comprehended, verified synthesis. This is what repairs a repo fn
+    // whose NAME differs from the op ("the twice function should double the
+    // number"): the intent-name path below would miss `fn twice`, fall back to
+    // the first .rs file, and write a brand-new `fn double` — wrong file, wrong
+    // fn. When the description names no existing fn (feature work, inline-
+    // example specs), this declines and the primary proceeds unchanged.
+    if let Some(patch) = try_emergent_synthesis_patch(task, context, &description) {
+        return Ok(patch);
+    }
+
     // Primary path: genuine verified synthesis through the bridge + solver.
     // Generalizes to any demonstrated function (registry op or inline examples),
     // not just the canned scalar shapes the keyword fast-patch can express.
@@ -133,6 +146,146 @@ pub fn try_real_synthesis_patch(
             .with_metadata("proposer", "nl_real_synthesis")
             .with_metadata("synthesis_method", result.method.clone()),
     )
+}
+
+/// EMERGENT NL edit driver (no examples, no LLM): "the double function should
+/// double the number" carries no I/O pairs, yet becomes a verified patch.
+///
+///   WHAT  — `bridge.synthesize_from_description` comprehends the description
+///           through the emergent resolver (morphology / graph / WordNet over the
+///           registry) and synthesizes + strict-verifies from the resolved op's
+///           own example_cases. Purely symbolic by default: the local-LLM lane
+///           inside is env-gated OFF (`NSYNTH_LOCAL_LLM_URL` unset ⇒ inert).
+///   WHERE — the repo fn to replace is localized by CONTENT: scan defined fn
+///           names in context files and match them emergently against the
+///           description (exact token or shared morphological stem, every
+///           snake_case part matched — so "the doubling function" finds
+///           `fn double`, "reverse the list" finds `fn reverse_list`).
+///   GATE  — same as the primary: plain-Rust check, signature-preserving
+///           reshape, and the caller's cargo-test acceptance oracle.
+pub fn try_emergent_synthesis_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+) -> Option<RepairPatch> {
+    let _ = task;
+    // DEFER to the example-driven primary whenever its localization is GROUNDED:
+    // the comprehended intent's fn name is genuinely defined in the repo (e.g. an
+    // inline-example spec "triple(2)=6 ..." over an existing `fn triple` — the
+    // user's demonstrated I/O is the stronger spec). The emergent stage leads
+    // only when the intent name misses (renamed fn: intent says `double`, repo
+    // defines `twice`) or no intent parses at all.
+    if let Ok(intent) = CodingIntent::from_nl_lenient(description) {
+        let primary_name = intent
+            .function_name
+            .strip_prefix("nl_")
+            .unwrap_or(&intent.function_name);
+        let grounded = context.files.iter().any(|f| {
+            f.path.ends_with(".rs")
+                && file_defines_function(f.text.as_deref().unwrap_or(""), primary_name)
+        });
+        if grounded && !intent.examples.is_empty() {
+            return None;
+        }
+    }
+    let (target, repo_fn) = locate_described_fn(context, description)?;
+    let bridge = crate::linguigenesis_bridge::LinguigenesisBridge::new();
+    let result = bridge
+        .synthesize_from_description(description, Some(&repo_fn))
+        .ok()?;
+    if !result.success {
+        return None;
+    }
+    let synthesized = rust_code_for_repo_synthesis(&result.code);
+    if !is_plain_rust_body(&synthesized) {
+        return None;
+    }
+    let old_text = read_relative_file(context, &target).ok()?;
+    let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+    if new_text == old_text {
+        return None;
+    }
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                old_text,
+                new_text,
+                "emergent NL synthesis proposer (bridge comprehension, verified; no examples, no LLM)",
+            ))
+            .with_metadata("proposer", "nl_emergent_synthesis")
+            .with_metadata("synthesis_method", result.method.clone()),
+    )
+}
+
+/// CONTENT-based localization: which repo fn does the description talk about?
+/// Scans every `.rs` file's defined fn names and matches each snake_case part of
+/// the name against the description's tokens emergently (exact or shared
+/// morphological stem). A fn matches only when ALL its parts are matched (so an
+/// incidental "number" in the prose can't select `fn number_cruncher` unless
+/// "cruncher" appears too); the most specific match (most parts) wins.
+fn locate_described_fn(context: &RepairContext, description: &str) -> Option<(String, String)> {
+    use linguigenesis_core::entity_resolution::morphological_variants;
+    let lower = description.to_lowercase();
+    let tokens: Vec<String> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| t.len() >= 3)
+        .map(str::to_string)
+        .collect();
+    let token_matches = |part: &str| -> bool {
+        tokens.iter().any(|t| {
+            if t == part {
+                return true;
+            }
+            let mut tv = morphological_variants(t);
+            tv.push(t.clone());
+            let mut pv = morphological_variants(part);
+            pv.push(part.to_string());
+            tv.iter().any(|v| pv.contains(v))
+        })
+    };
+    let mut best: Option<(String, String, usize)> = None;
+    for file in &context.files {
+        if !file.path.ends_with(".rs") {
+            continue;
+        }
+        let text = file.text.as_deref().unwrap_or("");
+        for fn_name in defined_fn_names(text) {
+            let parts: Vec<&str> = fn_name.split('_').filter(|p| !p.is_empty()).collect();
+            if parts.is_empty() || !parts.iter().all(|p| token_matches(p)) {
+                continue;
+            }
+            let specificity = parts.len();
+            if best.as_ref().map(|(_, _, s)| specificity > *s).unwrap_or(true) {
+                best = Some((file.path.clone(), fn_name, specificity));
+            }
+        }
+    }
+    best.map(|(path, name, _)| (path, name))
+}
+
+/// Every `fn NAME(` defined at any nesting in `text` (test fns included — the
+/// all-parts rule keeps them from matching ordinary prose).
+fn defined_fn_names(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim_start();
+        let rest = t
+            .strip_prefix("pub fn ")
+            .or_else(|| t.strip_prefix("fn "))
+            .or_else(|| t.strip_prefix("pub(crate) fn "));
+        if let Some(rest) = rest {
+            if let Some(name) = rest.split('(').next() {
+                let name = name.trim();
+                if !name.is_empty()
+                    && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Reshape synthesized Rust to fit the repo's target function.
@@ -1056,6 +1209,162 @@ mod tests {
         let max_body = repo_rust_body_for_nl(&max, "", Some(max_hint)).expect("max stub");
         assert!(max_body.contains("max_of"));
         assert!(max_body.contains("if a > b"));
+    }
+
+    /// THE DIFFERENTIATOR, end to end and un-gameable: a repo fn whose NAME
+    /// differs from the op it should implement ("the twice function should
+    /// double the number", fn is `twice`, op is `double`).
+    ///   * no I/O examples in the issue; LLM lane explicitly OFF (env removed) —
+    ///     comprehension is the linguigenesis emergent resolver alone;
+    ///   * the intent-name primary MISLOCALIZES here (proven during dev: it
+    ///     wrote a brand-new `fn double` into lib.rs, leaving `twice` broken);
+    ///   * the emergent stage CONTENT-localizes `fn twice` in src/ops.rs (prose
+    ///     token "twice" matches the defined fn), synthesizes the doubling body
+    ///     via the bridge, and preserves the repo fn name;
+    ///   * driven through the REAL proposer chain (nl_synthesis_proposer), and
+    ///     acceptance is behavioral: the failing cargo test passes after.
+    #[test]
+    fn emergent_proposer_repairs_renamed_fn_bare_nl_no_llm() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL"); // no model in the loop
+        let root = std::env::temp_dir().join(format!("nsynth_emergent_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"twicefix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "mod ops;\npub use ops::twice;\n\n#[cfg(test)]\nmod tests {\n    use super::twice;\n    #[test]\n    fn twice_doubles() {\n        assert_eq!(twice(4), 8);\n        assert_eq!(twice(-3), -6);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        fs::write(
+            root.join("src/ops.rs"),
+            "pub fn twice(x: i64) -> i64 {\n    x + 1\n}\n",
+        )
+        .expect("ops.rs");
+
+        let task = RepoTaskSpec {
+            id: "emergent-twice".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the twice function should double the number".into(),
+            test_command: "cargo test twice_doubles".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken");
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // Through the REAL chain — the emergent stage must win the ordering.
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_emergent_synthesis"),
+            "emergent stage should produce this patch: {:?}",
+            patch.metadata
+        );
+        assert_eq!(patch.edits[0].path, "src/ops.rs", "content-localized to the defining file");
+        assert!(
+            patch.edits[0].new_text.contains("fn twice"),
+            "repo fn name preserved: {}",
+            patch.edits[0].new_text
+        );
+        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// STRING repair through the emergent stage: "the shout function should
+    /// uppercase the text" — the type-domain widening reaching the repair path.
+    #[test]
+    fn emergent_proposer_repairs_string_fn_bare_nl_no_llm() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_emstr_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"strfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "mod text_utils;\npub use text_utils::shout;\n\n#[cfg(test)]\nmod tests {\n    use super::shout;\n    #[test]\n    fn shouts() {\n        assert_eq!(shout(\"hello\".to_string()), \"HELLO\");\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        fs::write(
+            root.join("src/text_utils.rs"),
+            "pub fn shout(s: String) -> String {\n    s\n}\n",
+        )
+        .expect("text_utils.rs");
+
+        let task = RepoTaskSpec {
+            id: "emergent-shout".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the shout function should uppercase the text".into(),
+            test_command: "cargo test shouts".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = try_emergent_synthesis_patch(
+            &task,
+            &context,
+            "the shout function should uppercase the text",
+        )
+        .expect("emergent string patch");
+        assert_eq!(patch.edits[0].path, "src/text_utils.rs");
+        assert!(
+            patch.edits[0].new_text.contains("to_uppercase"),
+            "verified string body: {}",
+            patch.edits[0].new_text
+        );
+        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn locate_described_fn_matches_emergently_and_specifically() {
+        let root = std::env::temp_dir().join(format!("nsynth_locate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
+        fs::write(
+            root.join("src/util.rs"),
+            "pub fn double(x: i64) -> i64 { x }\npub fn reverse_list(v: Vec<i64>) -> Vec<i64> { v }\npub fn number_cruncher(x: i64) -> i64 { x }\n",
+        )
+        .unwrap();
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // morphology: "doubling" -> double
+        let (_, f) = locate_described_fn(&context, "fix the doubling function").expect("found");
+        assert_eq!(f, "double");
+        // multi-part fn: every part must be matched
+        let (_, f) = locate_described_fn(&context, "reverse the list please").expect("found");
+        assert_eq!(f, "reverse_list");
+        // incidental "number" alone must NOT select number_cruncher
+        assert!(locate_described_fn(&context, "the number should be bigger").is_none());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
