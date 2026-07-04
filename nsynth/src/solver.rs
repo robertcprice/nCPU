@@ -46,6 +46,7 @@ mod search_runtime;
 mod search_scalar_families;
 mod search_text_families;
 mod search_combinator;
+mod search_universal;
 mod search_decompose;
 mod search_time_families;
 mod search_tree_families;

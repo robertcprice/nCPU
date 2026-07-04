@@ -252,8 +252,19 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
-    // Single-input tier: exactly one input, and it is a list.
+    // Arity-polymorphic tier: binds EVERY argument as a typed leaf and composes
+    // scalar arithmetic / comparison / boolean / list ops over them, so tasks
+    // that take several arguments (add(x,y), triangle_area(a,h), compare_one,
+    // add_elements(arr,k)) are reachable — not limited by the number of inputs.
+    // Runs before the single-list gate because multi-arg tasks bypass it.
     if first.inputs.len() != 1 {
+        let name = {
+            let n = problem.function_name();
+            if n.is_empty() { "f" } else { n }
+        };
+        if let Some(r) = super::search_universal::try_universal(problem, name) {
+            return Some(r);
+        }
         return None;
     }
     let Value::Array(_) = &first.inputs[0] else { return None };
