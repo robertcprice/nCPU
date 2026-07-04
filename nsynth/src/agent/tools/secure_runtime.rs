@@ -50,7 +50,8 @@ impl SecureToolRuntime {
             allowed_actions: HashSet::new(),
         };
         for action in [
-            "read", "write", "append", "list", "exists", "mkdir", "remove",
+            "read", "read_range", "write", "append", "list", "glob", "grep",
+            "exists", "mkdir", "remove", "move",
         ] {
             runtime.allow("fs", action);
         }
@@ -106,7 +107,8 @@ impl SecureToolRuntime {
             allowed_actions: HashSet::new(),
         };
         for action in [
-            "read", "write", "append", "list", "exists", "mkdir", "remove",
+            "read", "read_range", "write", "append", "list", "glob", "grep",
+            "exists", "mkdir", "remove", "move",
         ] {
             runtime.allow("fs", action);
         }
@@ -192,6 +194,12 @@ impl SecureToolRuntime {
     fn preflight(&self, tool: &str, call: &ToolCall) -> Result<(), ToolError> {
         match tool {
             "fs" => {
+                // `move` guards both endpoints (read source, write dest); every
+                // other action guards its single `path` (grep/glob default to ".").
+                if call.action == "move" {
+                    self.guardrail_path(call.optional("from").unwrap_or("."), false)?;
+                    return self.guardrail_path(call.optional("to").unwrap_or("."), true);
+                }
                 let path = call.optional("path").unwrap_or(".");
                 let writable = matches!(
                     call.action.as_str(),

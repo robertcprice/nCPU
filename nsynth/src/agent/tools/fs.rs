@@ -52,12 +52,13 @@ impl Tool for FsTool {
     }
 
     fn description(&self) -> &str {
-        "Sandboxed filesystem access: read, write, append, list, exists, mkdir, remove"
+        "Sandboxed filesystem access: read, read_range, write, append, list, glob, grep, exists, mkdir, remove, move"
     }
 
     fn actions(&self) -> Vec<&'static str> {
         vec![
-            "read", "write", "append", "list", "exists", "mkdir", "remove",
+            "read", "read_range", "write", "append", "list", "glob", "grep",
+            "exists", "mkdir", "remove", "move",
         ]
     }
 
@@ -68,6 +69,25 @@ impl Tool for FsTool {
                 let content =
                     fs::read_to_string(&path).map_err(|e| ToolError::Io(e.to_string()))?;
                 Ok(ToolOutput::new(content))
+            }
+            "read_range" => {
+                // 1-indexed inclusive line range — partial read for large files.
+                let path = self.safe_path(call.require("path")?)?;
+                let start: usize = call
+                    .require("start")?
+                    .parse()
+                    .map_err(|_| ToolError::Io("start must be a line number".to_string()))?;
+                let end: usize = call
+                    .require("end")?
+                    .parse()
+                    .map_err(|_| ToolError::Io("end must be a line number".to_string()))?;
+                let content =
+                    fs::read_to_string(&path).map_err(|e| ToolError::Io(e.to_string()))?;
+                let lines: Vec<&str> = content.lines().collect();
+                let s = start.max(1);
+                let e = end.min(lines.len());
+                let slice = if s <= e { lines[s - 1..e].join("\n") } else { String::new() };
+                Ok(ToolOutput::new(slice).with_meta("range", format!("{s}-{e}")))
             }
             "write" => {
                 let path = self.safe_path(call.require("path")?)?;
@@ -106,6 +126,59 @@ impl Tool for FsTool {
                 names.sort();
                 Ok(ToolOutput::new(names.join("\n")).with_meta("count", names.len().to_string()))
             }
+            "glob" => {
+                // Find files whose relative path matches a wildcard pattern (* and
+                // ?). `*` spans directories, so `*.rs` finds every Rust file.
+                let pattern = call.require("pattern")?;
+                let mut all: Vec<String> = Vec::new();
+                walk_files(&self.root, &self.root, &mut all, 20_000);
+                let mut matched: Vec<String> = all
+                    .into_iter()
+                    .filter(|rel| wildcard_match(pattern.as_bytes(), rel.as_bytes()))
+                    .collect();
+                matched.sort();
+                matched.truncate(500);
+                Ok(ToolOutput::new(matched.join("\n"))
+                    .with_meta("count", matched.len().to_string()))
+            }
+            "grep" => {
+                // Content search: return `relpath:lineno:line` for lines containing
+                // `query`, optionally under `path` and case-insensitively.
+                let query = call.require("query")?;
+                let ignore_case = matches!(call.optional("ignore_case"), Some("true") | Some("1"));
+                let base = self.safe_path(call.optional("path").unwrap_or("."))?;
+                let needle = if ignore_case { query.to_lowercase() } else { query.to_string() };
+                let mut files: Vec<String> = Vec::new();
+                walk_files(&self.root, &base, &mut files, 20_000);
+                let mut hits: Vec<String> = Vec::new();
+                'files: for rel in &files {
+                    let abs = self.root.join(rel);
+                    if fs::metadata(&abs).map(|m| m.len() > 1_000_000).unwrap_or(true) {
+                        continue; // skip large/unstattable files
+                    }
+                    let Ok(text) = fs::read_to_string(&abs) else { continue };
+                    for (i, line) in text.lines().enumerate() {
+                        let hay = if ignore_case { line.to_lowercase() } else { line.to_string() };
+                        if hay.contains(&needle) {
+                            let shown: String = line.chars().take(200).collect();
+                            hits.push(format!("{rel}:{}:{}", i + 1, shown.trim_end()));
+                            if hits.len() >= 300 {
+                                break 'files;
+                            }
+                        }
+                    }
+                }
+                Ok(ToolOutput::new(hits.join("\n")).with_meta("count", hits.len().to_string()))
+            }
+            "move" => {
+                let from = self.safe_path(call.require("from")?)?;
+                let to = self.safe_path(call.require("to")?)?;
+                if let Some(parent) = to.parent() {
+                    fs::create_dir_all(parent).map_err(|e| ToolError::Io(e.to_string()))?;
+                }
+                fs::rename(&from, &to).map_err(|e| ToolError::Io(e.to_string()))?;
+                Ok(ToolOutput::new("ok"))
+            }
             "exists" => {
                 let path = self.safe_path(call.require("path")?)?;
                 Ok(ToolOutput::new(path.exists().to_string()))
@@ -130,6 +203,61 @@ impl Tool for FsTool {
             }),
         }
     }
+}
+
+/// Recursively collect file paths under `dir` (relative to `root`), skipping
+/// hidden entries, `target`, and `node_modules`, deterministic + bounded by `max`.
+fn walk_files(root: &Path, dir: &Path, out: &mut Vec<String>, max: usize) {
+    if out.len() >= max {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let mut items: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    items.sort_by_key(|e| e.file_name());
+    for entry in items {
+        if out.len() >= max {
+            return;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "target" || name == "node_modules" {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            walk_files(root, &path, out, max);
+        } else if path.is_file() {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().to_string());
+            }
+        }
+    }
+}
+
+/// Classic wildcard match: `*` matches any run of chars (incl. `/`), `?` matches
+/// one. Iterative with backtracking — no regex dependency.
+fn wildcard_match(pat: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0usize, 0usize);
+    let (mut star, mut mark) = (usize::MAX, 0usize);
+    while t < text.len() {
+        if p < pat.len() && (pat[p] == b'?' || pat[p] == text[t]) {
+            p += 1;
+            t += 1;
+        } else if p < pat.len() && pat[p] == b'*' {
+            star = p;
+            mark = t;
+            p += 1;
+        } else if star != usize::MAX {
+            p = star + 1;
+            mark += 1;
+            t = mark;
+        } else {
+            return false;
+        }
+    }
+    while p < pat.len() && pat[p] == b'*' {
+        p += 1;
+    }
+    p == pat.len()
 }
 
 #[cfg(test)]
@@ -205,6 +333,63 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ToolError::PermissionDenied(_)));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_glob_grep_read_range_move() {
+        let root = temp_sandbox("nav");
+        let tool = FsTool::new(&root);
+        let w = |p: &str, c: &str| {
+            tool.invoke(&ToolCall::new("write").arg("path", p).arg("content", c)).unwrap();
+        };
+        w("src/main.rs", "fn main() {\n    let x = 1;\n    println!(\"hi\");\n}\n");
+        w("src/util.rs", "pub fn helper() -> i64 { 42 }\n");
+        w("notes.txt", "todo: fix helper\n");
+
+        // glob: * spans directories
+        let rs = tool.invoke(&ToolCall::new("glob").arg("pattern", "*.rs")).unwrap();
+        assert!(rs.content.contains("src/main.rs") && rs.content.contains("src/util.rs"));
+        assert!(!rs.content.contains("notes.txt"));
+
+        // grep: content search across the tree, path:line:text
+        let hits = tool.invoke(&ToolCall::new("grep").arg("query", "helper")).unwrap();
+        assert!(hits.content.contains("src/util.rs:1:"), "{}", hits.content);
+        assert!(hits.content.contains("notes.txt:1:"), "{}", hits.content);
+
+        // grep scoped to a subdir
+        let scoped = tool
+            .invoke(&ToolCall::new("grep").arg("query", "helper").arg("path", "src"))
+            .unwrap();
+        assert!(scoped.content.contains("src/util.rs:1:"));
+        assert!(!scoped.content.contains("notes.txt"), "scoped out: {}", scoped.content);
+
+        // read_range: 1-indexed inclusive
+        let r = tool
+            .invoke(&ToolCall::new("read_range").arg("path", "src/main.rs").arg("start", "2").arg("end", "3"))
+            .unwrap();
+        assert_eq!(r.content, "    let x = 1;\n    println!(\"hi\");");
+
+        // move
+        tool.invoke(&ToolCall::new("move").arg("from", "notes.txt").arg("to", "docs/notes.txt")).unwrap();
+        assert_eq!(
+            tool.invoke(&ToolCall::new("exists").arg("path", "notes.txt")).unwrap().content,
+            "false"
+        );
+        assert_eq!(
+            tool.invoke(&ToolCall::new("exists").arg("path", "docs/notes.txt")).unwrap().content,
+            "true"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_wildcard_matcher() {
+        assert!(wildcard_match(b"*.rs", b"src/a/b.rs"));
+        assert!(wildcard_match(b"src/*/mod.rs", b"src/agent/mod.rs"));
+        assert!(wildcard_match(b"*session*", b"src/agent/session.rs"));
+        assert!(!wildcard_match(b"*.rs", b"src/a/b.txt"));
+        assert!(wildcard_match(b"a?c", b"abc"));
+        assert!(!wildcard_match(b"a?c", b"ac"));
     }
 
     #[test]
