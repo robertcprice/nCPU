@@ -185,13 +185,15 @@ const COUNTER_SMOKE: &str = r#"
 #[cfg(test)]
 mod counter_behaves {
     use super::Counter;
+    // PROPERTY: after k ticks the count is exactly k, for all k in 1..=100 — proves
+    // the synthesized `increment` is +1 across a range, not just one example.
     #[test]
-    fn three_ticks_reach_three() {
+    fn every_tick_increments_by_one() {
         let mut c = Counter::new();
-        c.tick();
-        c.tick();
-        c.tick();
-        assert_eq!(c.get(), 3);
+        for k in 1..=100i64 {
+            c.tick();
+            assert_eq!(c.get(), k, "after {k} ticks");
+        }
     }
 }
 "#;
@@ -228,13 +230,18 @@ const ACCUMULATOR_SMOKE: &str = r#"
 #[cfg(test)]
 mod accumulator_behaves {
     use super::Accumulator;
+    // PROPERTY (differential): the running total equals the native running sum
+    // across a varied sequence incl. negatives and large magnitudes — proves the
+    // synthesized `add` matches `+` beyond one example.
     #[test]
-    fn folds_values_into_the_total() {
+    fn total_matches_native_running_sum() {
         let mut a = Accumulator::new();
-        a.accumulate(5);
-        a.accumulate(3);
-        a.accumulate(10);
-        assert_eq!(a.total(), 18);
+        let mut expected = 0i64;
+        for x in [5, 3, 10, -2, 0, 100, -50, 999, -1000, 7] {
+            a.accumulate(x);
+            expected += x;
+            assert_eq!(a.total(), expected, "after adding {x}");
+        }
     }
 }
 "#;
@@ -267,11 +274,17 @@ const SCALER_SMOKE: &str = r#"
 #[cfg(test)]
 mod scaler_behaves {
     use super::Scaler;
+    // PROPERTY (differential): scale(x) equals f*x across a grid of factors and
+    // inputs (incl. negatives and zero) — proves the synthesized `multiply` matches
+    // `*` beyond one example.
     #[test]
-    fn scales_by_the_configured_factor() {
-        let s = Scaler::new(3);
-        assert_eq!(s.scale(5), 15);
-        assert_eq!(s.scale(0), 0);
+    fn scale_matches_native_product() {
+        for f in [-3i64, 0, 1, 3, 7, 50] {
+            let s = Scaler::new(f);
+            for x in [-4i64, 0, 1, 5, 9, 123] {
+                assert_eq!(s.scale(x), f * x, "factor {f} times {x}");
+            }
+        }
     }
 }
 "#;
@@ -330,18 +343,25 @@ const AGGREGATOR_SMOKE: &str = r#"
 #[cfg(test)]
 mod aggregator_behaves {
     use super::Aggregator;
+    // PROPERTY (differential): every query equals the native Rust reduction over
+    // the same inputs — proves the synthesized reducers match std across an
+    // unsorted set with duplicates and negatives, not one hand-picked case.
     #[test]
-    fn aggregates_via_verified_reducers() {
+    fn queries_match_native_reductions() {
+        let inputs = [7i64, 2, 9, 4, 2, 100, -3, 50, 0, 9];
         let mut a = Aggregator::new();
-        a.push(2);
-        a.push(4);
-        a.push(6);
-        a.push(8);
-        assert_eq!(a.sum(), 20);
-        assert_eq!(a.max(), 8);
-        assert_eq!(a.min(), 2);
-        assert_eq!(a.count(), 4);
-        assert_eq!(a.mean(), 5);
+        for &x in inputs.iter() {
+            a.push(x);
+        }
+        let native_sum: i64 = inputs.iter().sum();
+        let native_max = *inputs.iter().max().unwrap();
+        let native_min = *inputs.iter().min().unwrap();
+        let n = inputs.len() as i64;
+        assert_eq!(a.sum(), native_sum);
+        assert_eq!(a.max(), native_max);
+        assert_eq!(a.min(), native_min);
+        assert_eq!(a.count(), n);
+        assert_eq!(a.mean(), native_sum / n);
     }
 }
 "#;
