@@ -466,11 +466,11 @@ fn arrtransform_compositions_synthesize_and_strict_verify() {
                 // A genuine array-transform stage (sort/reverse) over a map.
                 assert!(
                     outcome.has_array_transform(),
-                    "{phrase:?}: accepted but has NO array-transform stage (xfm_fn={:?})",
-                    outcome.array_xfm_fn
+                    "{phrase:?}: accepted but has NO array-transform stage (xfm_fns={:?})",
+                    outcome.array_xfm_fns
                 );
                 assert!(
-                    outcome.array_xfm.is_some(),
+                    !outcome.array_xfms.is_empty(),
                     "{phrase:?}: array transform not behaviour-classified"
                 );
                 assert!(

@@ -1053,8 +1053,8 @@ impl LinguigenesisBridge {
                 description: description.to_string(),
                 fn_name: composed_name.clone(),
                 map_fns: plan.maps.iter().map(|m| m.fn_name.clone()).collect(),
-                array_xfm_fn: None,
-                array_xfm: None,
+                array_xfm_fns: Vec::new(),
+                array_xfms: Vec::new(),
                 reduce_fn: plan.reduce.as_ref().map(|r| r.fn_name.clone()),
                 fold,
                 code: solved.code,
@@ -1069,26 +1069,25 @@ impl LinguigenesisBridge {
         //     fits `y=-x+4`), fall back to matching the op's REGISTRY example_cases
         //     (its verified output spec) against the candidate transforms. Both
         //     paths are output-grounded, not name-keyed.
-        let array_xfm = match &plan.array_transform {
-            Some(t) => {
-                let by_exec = self
-                    .synthesize_primitive(t)
-                    .ok()
-                    .and_then(|code| classify_array_transform_by_exec(&code, &t.fn_name));
-                let kind = match by_exec {
-                    Some(k) => k,
-                    None => self.classify_array_transform_by_spec(t).ok_or_else(|| {
-                        format!(
-                            "could not classify array transform '{}' as sort/reverse \
-                             (neither execution nor registry example_cases matched)",
-                            t.fn_name
-                        )
-                    })?,
-                };
-                Some(kind)
-            }
-            None => None,
-        };
+        let mut array_xfms: Vec<ArrayTransformKind> =
+            Vec::with_capacity(plan.array_transforms.len());
+        for t in &plan.array_transforms {
+            let by_exec = self
+                .synthesize_primitive(t)
+                .ok()
+                .and_then(|code| classify_array_transform_by_exec(&code, &t.fn_name));
+            let kind = match by_exec {
+                Some(k) => k,
+                None => self.classify_array_transform_by_spec(t).ok_or_else(|| {
+                    format!(
+                        "could not classify array transform '{}' as sort/reverse \
+                         (neither execution nor registry example_cases matched)",
+                        t.fn_name
+                    )
+                })?,
+            };
+            array_xfms.push(kind);
+        }
 
         // 3. Emit the composed REFERENCE: the map fn bodies (chained), then the
         //    optional array transform on the built array, then either a fused fold
@@ -1096,7 +1095,7 @@ impl LinguigenesisBridge {
         //    This is an INDEPENDENT implementation of the pipeline, used only to
         //    LABEL fresh holdouts.
         let composed_name = pipeline_fn_name(plan);
-        let reference = emit_pipeline_reference(&composed_name, fold, array_xfm, &map_chain);
+        let reference = emit_pipeline_reference(&composed_name, fold, &array_xfms, &map_chain);
         let reference: &'static str = Box::leak(reference.into_boxed_str());
         // Scalar output when a reduce is present; array output for a pure map chain.
         let ret = if fold.is_some() { "i64" } else { "[i64]" };
@@ -1144,8 +1143,8 @@ impl LinguigenesisBridge {
             description: description.to_string(),
             fn_name: composed_name.clone(),
             map_fns: plan.maps.iter().map(|m| m.fn_name.clone()).collect(),
-            array_xfm_fn: plan.array_transform.as_ref().map(|t| t.fn_name.clone()),
-            array_xfm,
+            array_xfm_fns: plan.array_transforms.iter().map(|t| t.fn_name.clone()).collect(),
+            array_xfms,
             reduce_fn: plan.reduce.as_ref().map(|r| r.fn_name.clone()),
             fold,
             code: solved.code,
@@ -3143,9 +3142,9 @@ pub struct PipelineOutcome {
     pub map_fns: Vec<String>,
     /// Array-transform op function name, if the pipeline has a sort/reverse stage
     /// between the map chain and any reduce. `None` when no array transform.
-    pub array_xfm_fn: Option<String>,
-    /// The array transform kind (behaviour-classified), if present.
-    pub array_xfm: Option<ArrayTransformKind>,
+    pub array_xfm_fns: Vec<String>,
+    /// The array transform kinds (behaviour-classified), in chain order.
+    pub array_xfms: Vec<ArrayTransformKind>,
     /// Aggregate (reduce) op function name, if the pipeline has a reduce stage
     /// (shape a). `None` for an array-output map chain (shape b).
     pub reduce_fn: Option<String>,
@@ -3168,14 +3167,14 @@ impl PipelineOutcome {
         // non-req array transform is genuinely multi-stage. A lone single map
         // with no reduce never reaches acceptance (classify_pipeline returns None
         // for the plain single op).
-        self.reduce_fn.is_some() || self.map_fns.len() >= 2 || self.array_xfm_fn.is_some()
+        self.reduce_fn.is_some() || self.map_fns.len() >= 2 || !self.array_xfm_fns.is_empty()
     }
 
     /// True iff this pipeline contains a genuine array-transform stage (sort /
     /// reverse) composed over a map chain — the >=2-stage array→array shape the
     /// NL-COMPOSE-ARRTRANSFORM accept-criterion requires.
     pub fn has_array_transform(&self) -> bool {
-        self.array_xfm_fn.is_some()
+        !self.array_xfm_fns.is_empty()
     }
 
     /// Length of the element-transform chain (number of composed ScalarMaps).
@@ -3204,7 +3203,7 @@ fn pipeline_fn_name(plan: &CompositionPlan) -> String {
     } else {
         name.push_str("_maps");
     }
-    if let Some(t) = &plan.array_transform {
+    for t in &plan.array_transforms {
         name.push('_');
         name.push_str(&t.fn_name);
     }
@@ -3226,9 +3225,11 @@ fn describe_plan(plan: &CompositionPlan) -> String {
     } else {
         maps.join(" ∘ ")
     };
-    let xfm = match &plan.array_transform {
-        Some(t) => format!(" arrayxfm={}", t.fn_name),
-        None => String::new(),
+    let xfm = if plan.array_transforms.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<&str> = plan.array_transforms.iter().map(|t| t.fn_name.as_str()).collect();
+        format!(" arrayxfm={}", names.join("→"))
     };
     let filt = match &plan.filter {
         Some(f) => format!(" filter={}({} {})", f.word, f.cmp, f.value),
@@ -3400,10 +3401,37 @@ fn emit_filter_pipeline_reference(
     out
 }
 
+/// Emit Mog applying an ordered array-transform CHAIN to `start_var`; returns
+/// (code, final_var_name). Sort mutates in place (var unchanged); reverse builds a
+/// fresh array. Stage-indexed names (`xfm{i}`/`k{i}`) avoid collisions across a
+/// multi-transform chain. A single transform emits code equivalent to the prior
+/// single-transform path.
+fn emit_transform_chain(start_var: &str, xfms: &[ArrayTransformKind]) -> (String, String) {
+    let mut code = String::new();
+    let mut cur = start_var.to_string();
+    for (i, kind) in xfms.iter().enumerate() {
+        match kind {
+            ArrayTransformKind::Sort => {
+                code.push_str(&format!("    {cur}.sort();\n"));
+            }
+            ArrayTransformKind::Reverse => {
+                let next = format!("xfm{i}");
+                code.push_str(&format!(
+                    "    {next}: [i64] = [];\n    k{i}: i64 = {cur}.len - 1;\n    \
+                     while k{i} >= 0 {{\n        {next}.push({cur}[k{i}]);\n        \
+                     k{i} = k{i} - 1;\n    }}\n"
+                ));
+                cur = next;
+            }
+        }
+    }
+    (code, cur)
+}
+
 fn emit_pipeline_reference(
     composed_name: &str,
     fold: Option<FoldKind>,
-    array_xfm: Option<ArrayTransformKind>,
+    array_xfms: &[ArrayTransformKind],
     map_chain: &[(String, String)],
 ) -> String {
     let mut out = String::new();
@@ -3434,54 +3462,30 @@ fn emit_pipeline_reference(
     // ── ARRAY-TRANSFORM present: materialize mapped array, reorder, then fold or
     //    return. The reorder uses the SAME DSL the dedicated sort/reverse
     //    array_transform candidates emit (`mapped.sort()` / index-loop reverse). ──
-    if let Some(kind) = array_xfm {
+    // ── ARRAY-TRANSFORM chain present: materialize the mapped array, apply each
+    //    transform in request order (sort then reverse, …), then fold to a scalar
+    //    or return the array. Uses the SAME DSL the dedicated sort/reverse
+    //    candidates emit, via `emit_transform_chain`. ──
+    if !array_xfms.is_empty() {
         let elem_item = elem("item");
-        // Build the mapped array, then apply the array transform into `xfm`.
         let build = format!(
             "    mapped: [i64] = [];\n    for item in arr {{\n        mapped.push({elem_item});\n    }}\n"
         );
-        let reorder = match kind {
-            ArrayTransformKind::Sort => {
-                // sort in place; the reordered array is `mapped`.
-                "    mapped.sort();\n".to_string()
-            }
-            ArrayTransformKind::Reverse => String::new(), // handled per-shape below
-        };
+        let (chain, final_var) = emit_transform_chain("mapped", array_xfms);
         match fold {
-            // Shape (a): reduce over the reordered array.
+            // Shape (a): reduce over the transformed array.
             Some(fk) => {
-                // Reverse does not change sum/max/min/product, but we still emit a
-                // faithful reorder so the reference is an honest independent impl.
-                let reordered_array = match kind {
-                    ArrayTransformKind::Sort => {
-                        format!("{build}{reorder}")
-                    }
-                    ArrayTransformKind::Reverse => format!(
-                        "{build}    xfm: [i64] = [];\n    i: i64 = mapped.len - 1;\n    while i >= 0 {{\n        xfm.push(mapped[i]);\n        i = i - 1;\n    }}\n"
-                    ),
-                };
-                let arr_name = match kind {
-                    ArrayTransformKind::Sort => "mapped",
-                    ArrayTransformKind::Reverse => "xfm",
-                };
-                let body = emit_fold_over_named_array(fk, arr_name);
+                let body = emit_fold_over_named_array(fk, &final_var);
                 out.push_str(&format!(
-                    "fn {composed_name}(arr: [i64]) -> i64 {{\n{reordered_array}{body}}}\n"
+                    "fn {composed_name}(arr: [i64]) -> i64 {{\n{build}{chain}{body}}}\n"
                 ));
             }
-            // Shape (b): return the reordered mapped array.
-            None => match kind {
-                ArrayTransformKind::Sort => {
-                    out.push_str(&format!(
-                        "fn {composed_name}(arr: [i64]) -> [i64] {{\n{build}{reorder}    return mapped;\n}}\n"
-                    ));
-                }
-                ArrayTransformKind::Reverse => {
-                    out.push_str(&format!(
-                        "fn {composed_name}(arr: [i64]) -> [i64] {{\n{build}    result: [i64] = [];\n    i: i64 = mapped.len - 1;\n    while i >= 0 {{\n        result.push(mapped[i]);\n        i = i - 1;\n    }}\n    return result;\n}}\n"
-                    ));
-                }
-            },
+            // Shape (b): return the transformed array.
+            None => {
+                out.push_str(&format!(
+                    "fn {composed_name}(arr: [i64]) -> [i64] {{\n{build}{chain}    return {final_var};\n}}\n"
+                ));
+            }
         }
         return out;
     }
