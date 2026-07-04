@@ -260,6 +260,19 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
         return result;
     }
 
+    // Structural decomposition FIRST for list problems: ms-scale, self-gating,
+    // and the int-array frontier below burns the whole per-task budget — the
+    // measured reason decompose shapes (derivative, rolling_max) timed out
+    // before ever being attempted. Same starvation disease as the library/
+    // float lanes, same cure: run the cheap sound tier before the expensive one.
+    if let Some(result) = super::search_decompose::try_decompose(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
+        }
+        return result;
+    }
+
     // Array-output problems (`[i64] -> [i64]`): exact array_transform before scalar paths.
     let array_io = problem.examples.first().is_some_and(|ex| {
         ex.inputs.len() == 1

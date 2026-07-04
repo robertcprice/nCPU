@@ -261,6 +261,7 @@ pub fn solve_problem(problem: &Problem) -> SolveResult {
     pipeline::solve_problem(&problem.synthesis_view())
 }
 
+
 /// Build a whole-word string->string lookup-table program from single-arg
 /// examples (irregular inflection and similar arbitrary lexicons), or None if
 /// the mapping is not such a lexicon. Exposed so the `--problem-json` CLI shares

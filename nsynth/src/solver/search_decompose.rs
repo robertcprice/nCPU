@@ -55,6 +55,10 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
 
     IN_DECOMPOSE.with(|f| f.set(true));
     let result = try_map(problem, name)
+        .or_else(|| try_index_map(problem, name))
+        .or_else(|| try_scan(problem, name))
+        .or_else(|| try_context_map(problem, name))
+        .or_else(|| try_sort_by(problem, name))
         .or_else(|| try_filter(problem, name))
         .or_else(|| try_select(problem, name));
     IN_DECOMPOSE.with(|f| f.set(false));
@@ -83,12 +87,16 @@ fn try_map(problem: &Problem, name: &str) -> Option<(String, String)> {
     for ex in &problem.examples {
         let Value::Array(input) = &ex.inputs[0] else { return None };
         let Value::Array(output) = &ex.expected else { return None };
-        if input.len() != output.len() || input.is_empty() {
+        if input.len() != output.len() {
             return None;
         }
+        // Empty lists are vacuous (any program matches []) — skip, don't refuse.
         for (i, o) in input.iter().zip(output.iter()) {
             elem_examples.push(Example { inputs: vec![i.clone()], expected: o.clone() });
         }
+    }
+    if elem_examples.is_empty() {
+        return None; // every example was the empty list — nothing to pin a fn
     }
     // The evidence multiplication: elem_examples.len() >> examples.len().
     let body = solve_element_fn(&elem_examples, "elem")?;
@@ -98,6 +106,276 @@ fn try_map(problem: &Problem, name: &str) -> Option<(String, String)> {
         "fn {name}(xs: {elem_ty}) -> {out_ty} {{\n    out: {out_ty} = [];\n    for x in xs {{\n        out.push(elem(x));\n    }}\n    return out;\n}}\n\n{body}"
     );
     Some((code, "decompose-map".to_string()))
+}
+
+// ─────────────────────────── H-INDEX-MAP ───────────────────────────
+
+/// Same-length list output where the element depends on BOTH value and
+/// POSITION: out[i] = f(x, i). The element hole is an exact integer affine
+/// c0 + c1·x + c2·i (+ the c1·x·i bilinear special case `derivative`), fitted
+/// over the FLATTENED (x, i) -> out pairs — the evidence-multiplication case
+/// where a 3-example task hands the fit dozens of points.
+fn try_index_map(problem: &Problem, name: &str) -> Option<(String, String)> {
+    let mut pairs: Vec<(i64, i64, i64)> = Vec::new(); // (x, i, out)
+    let mut skip_first = usize::MAX;
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        // Allow out.len == in.len (offset 0) or in.len - 1 (offset 1 — the
+        // `derivative` shape drops the constant term).
+        let off = input.len().checked_sub(output.len())?;
+        if off > 1 || output.is_empty() {
+            return None;
+        }
+        if skip_first == usize::MAX {
+            skip_first = off;
+        } else if skip_first != off {
+            return None;
+        }
+        for (k, o) in output.iter().enumerate() {
+            let idx = k + skip_first;
+            let (Value::Int(x), Value::Int(o)) = (&input[idx], o) else { return None };
+            pairs.push((*x, idx as i64, *o));
+        }
+    }
+    if pairs.len() < 4 {
+        return None; // affine over (x, i) has 3 unknowns — need a spare point
+    }
+    // Candidate element bodies over (x, i): the bilinear x·i (derivative),
+    // then integer affine c0 + c1·x + c2·i solved exactly from 3 points and
+    // verified on ALL points.
+    let fits = |f: &dyn Fn(i64, i64) -> i64| pairs.iter().all(|&(x, i, o)| f(x, i) == o);
+    let body: String = if fits(&|x, i| x * i) {
+        "x * i".to_string()
+    } else {
+        // Solve the 3-unknown integer system from three spanning points.
+        let (a, b, c) = solve_affine3(&pairs)?;
+        if !fits(&|x, i| a + b * x + c * i) {
+            return None;
+        }
+        let mut terms = Vec::new();
+        if b != 0 {
+            terms.push(if b == 1 { "x".to_string() } else { format!("{b} * x") });
+        }
+        if c != 0 {
+            terms.push(if c == 1 { "i".to_string() } else { format!("{c} * i") });
+        }
+        if a != 0 || terms.is_empty() {
+            terms.push(a.to_string());
+        }
+        terms.join(" + ")
+    };
+    let start = skip_first;
+    let code = format!(
+        "fn {name}(xs: [i64]) -> [i64] {{\n    out: [i64] = [];\n    i: i64 = {start};\n    while i < xs.len {{\n        x: i64 = xs[i];\n        out.push({body});\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-index-map".to_string()))
+}
+
+/// Exact integer solve of out = a + b·x + c·i from the first three points that
+/// span the space (Cramer over i64; None if singular or non-integral).
+fn solve_affine3(pairs: &[(i64, i64, i64)]) -> Option<(i64, i64, i64)> {
+    for w in 0..pairs.len().saturating_sub(2) {
+        let (x1, i1, o1) = pairs[w];
+        let (x2, i2, o2) = pairs[w + 1];
+        let (x3, i3, o3) = pairs[w + 2];
+        let det = (x2 - x1) * (i3 - i1) - (x3 - x1) * (i2 - i1);
+        if det == 0 {
+            continue;
+        }
+        let bn = (o2 - o1) * (i3 - i1) - (o3 - o1) * (i2 - i1);
+        let cn = (x2 - x1) * (o3 - o1) - (x3 - x1) * (o2 - o1);
+        if bn % det != 0 || cn % det != 0 {
+            return None;
+        }
+        let b = bn / det;
+        let c = cn / det;
+        let a = o1 - b * x1 - c * i1;
+        return Some((a, b, c));
+    }
+    None
+}
+
+// ───────────────────────────── H-SCAN ─────────────────────────────
+
+/// Same-length output where out[i] = fold of xs[0..=i] under an associative
+/// op — running max/min/sum/product (`rolling_max`). Four candidates checked
+/// directly against every prefix; no sub-solve needed.
+fn try_scan(problem: &Problem, name: &str) -> Option<(String, String)> {
+    let ops: [(&str, fn(i64, i64) -> i64); 4] = [
+        ("max", |a, b| a.max(b)),
+        ("min", |a, b| a.min(b)),
+        ("sum", |a, b| a + b),
+        ("prod", |a, b| a.wrapping_mul(b)),
+    ];
+    'op: for (op_name, f) in ops {
+        for ex in &problem.examples {
+            let Value::Array(input) = &ex.inputs[0] else { return None };
+            let Value::Array(output) = &ex.expected else { return None };
+            if input.len() != output.len() {
+                return None;
+            }
+            let mut acc: Option<i64> = None;
+            for (x, o) in input.iter().zip(output.iter()) {
+                let (Value::Int(x), Value::Int(o)) = (x, o) else { return None };
+                let next = match acc {
+                    None => *x,
+                    Some(a) => f(a, *x),
+                };
+                if next != *o {
+                    continue 'op;
+                }
+                acc = Some(next);
+            }
+        }
+        let update = match op_name {
+            "max" => "if x > acc {\n            acc = x;\n        }",
+            "min" => "if x < acc {\n            acc = x;\n        }",
+            "sum" => "acc = acc + x;",
+            _ => "acc = acc * x;",
+        };
+        let code = format!(
+            "fn {name}(xs: [i64]) -> [i64] {{\n    out: [i64] = [];\n    acc: i64 = 0;\n    first: i64 = 1;\n    for x in xs {{\n        if first == 1 {{\n            acc = x;\n            first = 0;\n        }} else {{\n            {update}\n        }}\n        out.push(acc);\n    }}\n    return out;\n}}\n"
+        );
+        return Some((code, format!("decompose-scan-{op_name}")));
+    }
+    None
+}
+
+// ─────────────────────────── H-CONTEXT-MAP ───────────────────────────
+
+/// Same-length float/int map where the element transform needs WHOLE-LIST
+/// context (min/max/sum/len): generic math idioms tried as fixed templates —
+/// rescale-to-unit (x-min)/(max-min), normalize x/sum, x/max, shift x-min.
+/// These are universal numeric idioms, not task-shaped ops.
+fn try_context_map(problem: &Problem, name: &str) -> Option<(String, String)> {
+    let as_f = |v: &Value| -> Option<f64> {
+        match v {
+            Value::Int(i) => Some(*i as f64),
+            Value::Float(b) => Some(f64::from_bits(*b)),
+            _ => None,
+        }
+    };
+    // Gather (x, min, max, sum, out) rows.
+    let mut rows: Vec<(f64, f64, f64, f64, f64)> = Vec::new();
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        if input.len() != output.len() {
+            return None;
+        }
+        if input.is_empty() {
+            continue; // vacuous example
+        }
+        let xs: Option<Vec<f64>> = input.iter().map(as_f).collect();
+        let os: Option<Vec<f64>> = output.iter().map(as_f).collect();
+        let (xs, os) = (xs?, os?);
+        let (mn, mx, sm) = (
+            xs.iter().cloned().fold(f64::INFINITY, f64::min),
+            xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            xs.iter().sum::<f64>(),
+        );
+        for (x, o) in xs.iter().zip(os.iter()) {
+            rows.push((*x, mn, mx, sm, *o));
+        }
+    }
+    if rows.len() < 4 {
+        return None;
+    }
+    let eps = 1e-9
+        * rows.iter().map(|r| r.4.abs()).fold(1.0f64, f64::max);
+    let templates: [(&str, fn(f64, f64, f64, f64) -> f64); 4] = [
+        ("rescale", |x, mn, mx, _| (x - mn) / (mx - mn)),
+        ("div_sum", |x, _, _, sm| x / sm),
+        ("div_max", |x, _, mx, _| x / mx),
+        ("sub_min", |x, mn, _, _| x - mn),
+    ];
+    for (t_name, f) in templates {
+        if rows.iter().all(|&(x, mn, mx, sm, o)| {
+            let v = f(x, mn, mx, sm);
+            v.is_finite() && (v - o).abs() <= eps
+        }) {
+            let body = match t_name {
+                "rescale" => "(x - mn) / (mx - mn)",
+                "div_sum" => "x / sm",
+                "div_max" => "x / mx",
+                _ => "x - mn",
+            };
+            let code = format!(
+                "fn {name}(xs: [i64]) -> [i64] {{\n    mn: f64 = xs[0];\n    mx: f64 = xs[0];\n    sm: f64 = 0.0;\n    for e in xs {{\n        if e < mn {{\n            mn = e;\n        }}\n        if e > mx {{\n            mx = e;\n        }}\n        sm = sm + e;\n    }}\n    out: [i64] = [];\n    for x in xs {{\n        out.push({body});\n    }}\n    return out;\n}}\n"
+            );
+            return Some((code, format!("decompose-context-{t_name}")));
+        }
+    }
+    None
+}
+
+// ──────────────────────────── H-SORT-BY ────────────────────────────
+
+/// Output is a PERMUTATION of the input on every example → try sort keys:
+/// value asc/desc, abs asc, and (for strings) length asc/desc. Emitted as a
+/// selection sort with the key comparison inlined.
+fn try_sort_by(problem: &Problem, name: &str) -> Option<(String, String)> {
+    // Permutation check (multiset equality).
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        if input.len() != output.len() {
+            return None;
+        }
+        let mut a: Vec<String> = input.iter().map(|v| format!("{v:?}")).collect();
+        let mut b: Vec<String> = output.iter().map(|v| format!("{v:?}")).collect();
+        a.sort();
+        b.sort();
+        if a != b {
+            return None;
+        }
+    }
+    // Key candidates evaluated in Rust; the winner is emitted as Mog.
+    type Key = fn(&Value) -> Option<i64>;
+    let val_key: Key = |v| if let Value::Int(i) = v { Some(*i) } else { None };
+    let abs_key: Key = |v| if let Value::Int(i) = v { Some(i.abs()) } else { None };
+    let len_key: Key = |v| if let Value::Str(s) = v { Some(s.len() as i64) } else { None };
+    let candidates: [(&str, Key, bool); 5] = [
+        ("val_asc", val_key, false),
+        ("val_desc", val_key, true),
+        ("abs_asc", abs_key, false),
+        ("len_asc", len_key, false),
+        ("len_desc", len_key, true),
+    ];
+    'cand: for (k_name, key, desc) in candidates {
+        for ex in &problem.examples {
+            let Value::Array(input) = &ex.inputs[0] else { return None };
+            let Value::Array(output) = &ex.expected else { return None };
+            let mut sorted: Vec<&Value> = input.iter().collect();
+            let keyed: Option<Vec<i64>> = sorted.iter().map(|v| key(v)).collect();
+            if keyed.is_none() {
+                continue 'cand;
+            }
+            // Stable sort by key preserves original order of equal keys.
+            sorted.sort_by_key(|v| {
+                let k = key(v).unwrap_or(0);
+                if desc { -k } else { k }
+            });
+            let got: Vec<&Value> = sorted;
+            if !got.iter().zip(output.iter()).all(|(g, o)| **g == *o) {
+                continue 'cand;
+            }
+        }
+        let elem_ty = elem_scalar_type(&problem.examples[0].inputs[0])?;
+        let list_ty = mog_type(&problem.examples[0].inputs[0], true)?;
+        let key_expr = match k_name {
+            "len_asc" | "len_desc" => "out[j].len",
+            _ => "out[j]",
+        };
+        let key_expr_min = key_expr.replace("[j]", "[m]");
+        let cmp = if desc { ">" } else { "<" };
+        let code = format!(
+            "fn {name}(xs: {list_ty}) -> {list_ty} {{\n    out: {list_ty} = [];\n    for e in xs {{\n        out.push(e);\n    }}\n    i: i64 = 0;\n    while i < out.len {{\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < out.len {{\n            if {key_expr} {cmp} {key_expr_min} {{\n                m = j;\n            }}\n            j = j + 1;\n        }}\n        t: {elem_ty} = out[i];\n        out[i] = out[m];\n        out[m] = t;\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+        );
+        return Some((code, format!("decompose-sort-{k_name}")));
+    }
+    None
 }
 
 // ──────────────────────────── H-FILTER ────────────────────────────
