@@ -106,6 +106,30 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
         ("identity", |w| w.to_string()),
     ];
 
+    // HOLE POWER (emergent): additional (string)->string transforms drawn from
+    // the EXISTING verified op library, applied by execution. No hand-list — the
+    // library IS the surface, and it grows with the corpus. GUIDED best-first
+    // pruning (below) keeps the combined 5-core + N-library set within budget.
+    let lib_str_ops: Vec<(&'static str, &'static str)> = crate::op_library::OPS
+        .iter()
+        .filter(|op| op.arity == 1 && op_returns(op.mog, "string") && op_takes_string(op.mog))
+        .map(|op| (op.name, op.mog))
+        .collect();
+    let apply_lib = |mog: &str, name: &str, s: &str| -> Option<String> {
+        match crate::runtime::execute_function(mog, name, &[Value::Str(s.to_string())], name) {
+            Ok(crate::runtime::Value::Str(out)) => Some(out),
+            _ => None,
+        }
+    };
+    // Expected strings for goal scoring (empty for non-Str outputs).
+    let expected_str: Vec<String> = expected
+        .iter()
+        .map(|v| match v {
+            V::S(s) => s.clone(),
+            _ => String::new(),
+        })
+        .collect();
+
     let mut nodes = 0usize;
     for depth in 2..=MAX_DEPTH {
         if nodes >= MAX_NODES {
@@ -143,6 +167,27 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                             helpers.push(SORTCHARS_FN.to_string());
                         }
                         fresh.push(Expr { outs, mog, helpers, depth });
+                    }
+                    // Library (string)->string ops (hole power), applied by exec.
+                    for &(op_name, op_mog) in &lib_str_ops {
+                        let mut outs = Vec::with_capacity(e.outs.len());
+                        let mut ok = true;
+                        for v in &e.outs {
+                            let V::S(s) = v else { unreachable!() };
+                            match apply_lib(op_mog, op_name, s) {
+                                Some(o) => outs.push(V::S(o)),
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if !ok {
+                            continue;
+                        }
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(op_mog.to_string());
+                        fresh.push(Expr { outs, mog: format!("{op_name}({})", e.mog), helpers, depth });
                     }
                     // split on " " -> StrList.
                     let outs: Vec<V> = e
@@ -211,6 +256,35 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
                             depth,
                         });
                     }
+                    // map(library op) over the word list — hole power via exec.
+                    for &(op_name, op_mog) in &lib_str_ops {
+                        let mut outs = Vec::with_capacity(e.outs.len());
+                        let mut ok = true;
+                        for v in &e.outs {
+                            let V::L(l) = v else { unreachable!() };
+                            let mut mapped = Vec::with_capacity(l.len());
+                            for w in l {
+                                match apply_lib(op_mog, op_name, w) {
+                                    Some(o) => mapped.push(o),
+                                    None => {
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !ok {
+                                break;
+                            }
+                            outs.push(V::L(mapped));
+                        }
+                        if !ok {
+                            continue;
+                        }
+                        let mut helpers = e.helpers.clone();
+                        helpers.push(op_mog.to_string());
+                        helpers.push(MAPWORDS_TEMPLATE.replace("NAME", op_name));
+                        fresh.push(Expr { outs, mog: format!("map_{op_name}({})", e.mog), helpers, depth });
+                    }
                     // SORT the word list (alpha asc / by length asc) — bounded
                     // by the node budget so it cannot blow up the search.
                     for (k_name, alpha) in [("alpha", true), ("len", false)] {
@@ -257,11 +331,24 @@ pub(super) fn try_typed_enum_str(problem: &Problem, name: &str) -> Option<SolveR
             }
         }
 
-        for e in fresh {
-            if pool.len() >= MAX_POOL_PER_TYPE * 3 {
-                break;
-            }
-            if seen.insert(e.outs.clone()) {
+        // Winner (exact match) is pushed to the pool DIRECTLY, bypassing the
+        // dedup/prune so best-first can never discard it.
+        if let Some(win) = fresh.iter().find(|e| e.outs == expected).cloned() {
+            pool.push(win);
+        } else {
+            // GUIDED best-first: keep only the top-K fresh expressions by goal
+            // similarity to the target (char-multiset overlap of each rendered
+            // output with the expected string). This is what makes hole power
+            // affordable — 5-core + N-library ops fan out wide, but only the most
+            // promising survive to expand, so depth-4 compositions (anti_shuffle)
+            // stay reachable within the node budget. Emergent: the DATA (distance
+            // to target), not a hand op-list, decides which branches live.
+            fresh.retain(|e| seen.insert(e.outs.clone()));
+            fresh.sort_by(|a, b| {
+                goal_score(&b.outs, &expected_str).cmp(&goal_score(&a.outs, &expected_str))
+            });
+            fresh.truncate(MAX_POOL_PER_TYPE);
+            for e in fresh {
                 pool.push(e);
             }
         }
@@ -307,6 +394,62 @@ const JOINWORDS_FN: &str = "fn joinwords(ws: [string]) -> string {\n    out: str
 /// Map a helper over a word list. NAME is substituted per element fn.
 const MAPWORDS_TEMPLATE: &str = "fn map_NAME(ws: [string]) -> [string] {\n    out: [string] = [];\n    for w in ws {\n        out.push(NAME(w));\n    }\n    return out;\n}\n";
 
+/// True if the op's signature line returns the given type (`-> string`/`-> i64`).
+fn op_returns(mog: &str, ty: &str) -> bool {
+    mog.lines()
+        .next()
+        .map(|l| l.replace(' ', "").contains(&format!("->{ty}")))
+        .unwrap_or(false)
+}
+
+/// True if the op's single parameter is a `string` (so it composes on Str exprs).
+fn op_takes_string(mog: &str) -> bool {
+    let Some(open) = mog.find('(') else { return false };
+    let Some(close) = mog[open..].find(')') else { return false };
+    let params = &mog[open + 1..open + close];
+    params.replace(' ', "").contains(":string")
+}
+
+/// Goal-similarity score: summed char-MULTISET overlap of each rendered output
+/// with its expected string. Higher = closer to the target; a list renders as
+/// its space-join; non-string expected examples score 0 (they steer via exact
+/// match, not this heuristic).
+fn goal_score(outs: &[V], expected_str: &[String]) -> usize {
+    outs.iter()
+        .zip(expected_str.iter())
+        .map(|(o, exp)| {
+            if exp.is_empty() {
+                return 0;
+            }
+            let s = match o {
+                V::S(s) => s.clone(),
+                V::L(l) => l.join(" "),
+                V::I(_) => return 0,
+            };
+            char_multiset_overlap(&s, exp)
+        })
+        .sum()
+}
+
+/// Size of the char multiset intersection of two strings.
+fn char_multiset_overlap(a: &str, b: &str) -> usize {
+    use std::collections::HashMap;
+    let mut counts: HashMap<char, i32> = HashMap::new();
+    for c in a.chars() {
+        *counts.entry(c).or_insert(0) += 1;
+    }
+    let mut shared = 0usize;
+    for c in b.chars() {
+        let e = counts.entry(c).or_insert(0);
+        if *e > 0 {
+            *e -= 1;
+            shared += 1;
+        }
+    }
+    shared
+}
+
+#[allow(dead_code)]
 fn hash8(s: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
