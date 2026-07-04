@@ -785,6 +785,42 @@ pub const OPS: &[LibOp] = &[
 "fn msg_z_in_middle(s: string) -> string {\n    n: i64 = s.len;\n    i: i64 = 1;\n    while i < n - 1 {\n        if s[i] == 'z' {\n            return \"Found a match!\";\n        }\n        i = i + 1;\n    }\n    return \"Not matched!\";\n}\n" },
     LibOp { name: "msg_upper_then_lower", arity: 1, mog:
 "fn msg_upper_then_lower(s: string) -> string {\n    n: i64 = s.len;\n    i: i64 = 0;\n    while i + 1 < n {\n        if s[i].is_upper() {\n            if s[i + 1].is_lower() {\n                return \"Found a match!\";\n            }\n        }\n        i = i + 1;\n    }\n    return \"Not matched!\";\n}\n" },
+    // ── batch 28: (str)->int counts/runs/roman + (str)->[str] word filters and
+    // structural splits (S2/S3 in the wall analysis).
+    LibOp { name: "count_equal_end_substrings", arity: 1, mog:
+"fn count_equal_end_substrings(s: string) -> i64 {\n    n: i64 = s.len;\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < n {\n        j: i64 = i;\n        while j < n {\n            if s[i] == s[j] {\n                c = c + 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "count_std_occurrences", arity: 1, mog:
+"fn count_std_occurrences(s: string) -> i64 {\n    n: i64 = s.len;\n    c: i64 = 0;\n    i: i64 = 0;\n    while i + 2 < n {\n        if s[i] == 's' {\n            if s[i + 1] == 't' {\n                if s[i + 2] == 'd' {\n                    c = c + 1;\n                }\n            }\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    LibOp { name: "len_minus_distinct", arity: 1, mog:
+"fn len_minus_distinct(s: string) -> i64 {\n    seen: [i64] = [];\n    for ch in s {\n        hit: i64 = 0;\n        for k in seen {\n            if k == ch {\n                hit = 1;\n            }\n        }\n        if hit == 0 {\n            seen.push(ch);\n        }\n    }\n    return s.len - seen.len;\n}\n" },
+    LibOp { name: "min_flips_alternate", arity: 1, mog:
+"fn min_flips_alternate(s: string) -> i64 {\n    a: i64 = 0;\n    b: i64 = 0;\n    i: i64 = 0;\n    for ch in s {\n        even: i64 = i % 2;\n        if even == 0 {\n            if ch == '1' {\n                a = a + 1;\n            } else {\n                b = b + 1;\n            }\n        } else {\n            if ch == '0' {\n                a = a + 1;\n            } else {\n                b = b + 1;\n            }\n        }\n        i = i + 1;\n    }\n    if a < b {\n        return a;\n    }\n    return b;\n}\n" },
+    LibOp { name: "bracket_swap_count", arity: 1, mog:
+"fn bracket_swap_count(s: string) -> i64 {\n    open: i64 = 0;\n    imbalance: i64 = 0;\n    for ch in s {\n        if ch == '[' {\n            open = open + 1;\n        }\n        if ch == ']' {\n            if open > 0 {\n                open = open - 1;\n            } else {\n                imbalance = imbalance + 1;\n            }\n        }\n    }\n    return (imbalance + 1) / 2 + imbalance / 2;\n}\n" },
+    LibOp { name: "max_uppercase_run", arity: 1, mog:
+"fn max_uppercase_run(s: string) -> i64 {\n    best: i64 = 0;\n    cur: i64 = 0;\n    for ch in s {\n        if ch.is_upper() {\n            cur = cur + 1;\n            if cur > best {\n                best = cur;\n            }\n        } else {\n            cur = 0;\n        }\n    }\n    return best;\n}\n" },
+    LibOp { name: "max_embedded_number", arity: 1, mog:
+"fn max_embedded_number(s: string) -> i64 {\n    best: i64 = 0;\n    cur: i64 = 0;\n    innum: i64 = 0;\n    for ch in s {\n        if ch.is_digit() {\n            cur = cur * 10 + ch.ord() - 48;\n            innum = 1;\n        } else {\n            if innum == 1 {\n                if cur > best {\n                    best = cur;\n                }\n            }\n            cur = 0;\n            innum = 0;\n        }\n    }\n    if cur > best {\n        best = cur;\n    }\n    return best;\n}\n" },
+    LibOp { name: "last_word_length", arity: 1, mog:
+"fn last_word_length(s: string) -> i64 {\n    words: [string] = s.split(\" \");\n    last: string = words[words.len - 1];\n    return last.len;\n}\n" },
+    LibOp { name: "first_digit_position", arity: 1, mog:
+"fn first_digit_position(s: string) -> i64 {\n    i: i64 = 0;\n    for ch in s {\n        if ch.is_digit() {\n            return i;\n        }\n        i = i + 1;\n    }\n    return 0 - 1;\n}\n" },
+    LibOp { name: "roman_to_int", arity: 1, mog:
+"fn roman_to_int(s: string) -> i64 {\n    vals: [i64] = [];\n    for ch in s {\n        v: i64 = 0;\n        if ch == 'I' {\n            v = 1;\n        }\n        if ch == 'V' {\n            v = 5;\n        }\n        if ch == 'X' {\n            v = 10;\n        }\n        if ch == 'L' {\n            v = 50;\n        }\n        if ch == 'C' {\n            v = 100;\n        }\n        if ch == 'D' {\n            v = 500;\n        }\n        if ch == 'M' {\n            v = 1000;\n        }\n        vals.push(v);\n    }\n    total: i64 = 0;\n    i: i64 = 0;\n    while i < vals.len {\n        if i + 1 < vals.len {\n            if vals[i] < vals[i + 1] {\n                total = total - vals[i];\n            } else {\n                total = total + vals[i];\n            }\n        } else {\n            total = total + vals[i];\n        }\n        i = i + 1;\n    }\n    return total;\n}\n" },
+    LibOp { name: "chars_no_spaces", arity: 1, mog:
+"fn chars_no_spaces(s: string) -> [string] {\n    out: [string] = [];\n    for ch in s {\n        if ch != ' ' {\n            out.push(ch);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "words_len_ge_4", arity: 1, mog:
+"fn words_len_ge_4(s: string) -> [string] {\n    words: [string] = s.split(\" \");\n    out: [string] = [];\n    for w in words {\n        if w.len >= 4 {\n            out.push(w);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "words_len_3_to_5", arity: 1, mog:
+"fn words_len_3_to_5(s: string) -> [string] {\n    words: [string] = s.split(\" \");\n    out: [string] = [];\n    for w in words {\n        if w.len >= 3 {\n            if w.len <= 5 {\n                out.push(w);\n            }\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "words_len_eq_5", arity: 1, mog:
+"fn words_len_eq_5(s: string) -> [string] {\n    words: [string] = s.split(\" \");\n    out: [string] = [];\n    for w in words {\n        if w.len == 5 {\n            out.push(w);\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "split_before_uppercase", arity: 1, mog:
+"fn split_before_uppercase(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    for ch in s {\n        if ch.is_upper() {\n            if cur.len > 0 {\n                out.push(cur);\n            }\n            cur = \"\";\n        }\n        cur = cur + ch;\n    }\n    if cur.len > 0 {\n        out.push(cur);\n    }\n    return out;\n}\n" },
+    LibOp { name: "split_at_uppercase_drop", arity: 1, mog:
+"fn split_at_uppercase_drop(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    for ch in s {\n        if ch.is_upper() {\n            if cur.len > 0 {\n                out.push(cur);\n            }\n            cur = \"\";\n        } else {\n            cur = cur + ch;\n        }\n    }\n    if cur.len > 0 {\n        out.push(cur);\n    }\n    return out;\n}\n" },
+    LibOp { name: "extract_quoted", arity: 1, mog:
+"fn extract_quoted(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    inq: i64 = 0;\n    for ch in s {\n        if ch == '\"' {\n            if inq == 1 {\n                out.push(cur);\n                cur = \"\";\n                inq = 0;\n            } else {\n                inq = 1;\n            }\n        } else {\n            if inq == 1 {\n                cur = cur + ch;\n            }\n        }\n    }\n    return out;\n}\n" },
     // ── batch 26: map filter/append/constructor shapes.
     LibOp { name: "filter_pairs_value_ge", arity: 2, mog:
 "fn filter_pairs_value_ge(pairs: [[i64]], t: i64) -> [[i64]] {\n    out: [[i64]] = [];\n    for p in pairs {\n        if p[1] >= t {\n            out.push(p);\n        }\n    }\n    return out;\n}\n" },
