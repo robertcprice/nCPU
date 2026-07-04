@@ -67,6 +67,32 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
+    // Single INT input with list output: GENERATOR schemas — index-generate
+    // (make_a_pile: out[i] = affine(n, i), length n) and range-filter
+    // (count_up_to: keep x in 0..n satisfying a mined predicate).
+    if first.inputs.len() == 1
+        && matches!(first.inputs[0], Value::Int(_))
+        && matches!(first.expected, Value::Array(_))
+    {
+        let name = {
+            let n = problem.function_name();
+            if n.is_empty() { "f" } else { n }
+        };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_index_generate(problem, name).or_else(|| try_range_filter(problem, name));
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method,
+                error: None,
+                metadata: Default::default(),
+            });
+        }
+        return None;
+    }
     // Single STRING input with string output: CHAR-LEVEL schemas (a string is a
     // char list — remove_vowels is a char-filter with a mined char set).
     if first.inputs.len() == 1
@@ -853,6 +879,107 @@ fn try_char_filter(problem: &Problem, name: &str) -> Option<(String, String)> {
         "fn {name}(s: string) -> string {{\n    out: string = \"\";\n    for ch in s {{\n        if {cond} {{\n        }} else {{\n            out = out + ch;\n        }}\n    }}\n    return out;\n}}\n"
     );
     Some((code, "decompose-char-filter".to_string()))
+}
+
+// ─────────────────────────── H-INDEX-GENERATE ───────────────────────────
+
+/// n -> a list of length n with out[i] = affine(n, i) — the make_a_pile shape
+/// (n + 2i). Exact integer solve over the flattened (n, i, out[i]) triples.
+fn try_index_generate(problem: &Problem, name: &str) -> Option<(String, String)> {
+    let mut triples: Vec<(i64, i64, i64)> = Vec::new(); // (n, i, out)
+    for ex in &problem.examples {
+        let Value::Int(n) = &ex.inputs[0] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        if output.len() as i64 != *n || output.is_empty() {
+            return None;
+        }
+        for (i, o) in output.iter().enumerate() {
+            let Value::Int(o) = o else { return None };
+            triples.push((*n, i as i64, *o));
+        }
+    }
+    if triples.len() < 4 {
+        return None;
+    }
+    let (a, b, c) = solve_affine3(&triples)?;
+    if !triples.iter().all(|&(n, i, o)| a + b * n + c * i == o) {
+        return None;
+    }
+    let mut terms = Vec::new();
+    if b != 0 {
+        terms.push(if b == 1 { "n".to_string() } else { format!("{b} * n") });
+    }
+    if c != 0 {
+        terms.push(if c == 1 { "i".to_string() } else { format!("{c} * i") });
+    }
+    if a != 0 || terms.is_empty() {
+        terms.push(a.to_string());
+    }
+    let body = terms.join(" + ");
+    let code = format!(
+        "fn {name}(n: i64) -> [i64] {{\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < n {{\n        out.push({body});\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-index-generate".to_string()))
+}
+
+// ─────────────────────────── H-RANGE-FILTER ───────────────────────────
+
+/// n -> the increasing list of x in 0..n satisfying a predicate — the
+/// count_up_to shape (primes below n). Candidates {prime, even, odd}; each is
+/// checked by regenerating the expected list for EVERY example, and the prime
+/// case emits an inline trial-division test.
+fn try_range_filter(problem: &Problem, name: &str) -> Option<(String, String)> {
+    fn is_prime(x: i64) -> bool {
+        if x < 2 {
+            return false;
+        }
+        let mut d = 2;
+        while d * d <= x {
+            if x % d == 0 {
+                return false;
+            }
+            d += 1;
+        }
+        true
+    }
+    type Pred = (&'static str, fn(i64) -> bool);
+    let preds: [Pred; 3] =
+        [("prime", is_prime), ("even", |x| x % 2 == 0 && x >= 0), ("odd", |x| x % 2 != 0 && x >= 0)];
+    for (p_name, pred) in preds {
+        let mut all = true;
+        for ex in &problem.examples {
+            let Value::Int(n) = &ex.inputs[0] else { return None };
+            let Value::Array(output) = &ex.expected else { return None };
+            let want: Vec<i64> = (0..*n).filter(|&x| pred(x)).collect();
+            let got: Option<Vec<i64>> = output
+                .iter()
+                .map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+                .collect();
+            if got.as_deref() != Some(want.as_slice()) {
+                all = false;
+                break;
+            }
+        }
+        if !all {
+            continue;
+        }
+        let cond = match p_name {
+            "even" => "x % 2 == 0".to_string(),
+            "odd" => "x % 2 != 0".to_string(),
+            _ => String::new(), // prime handled with its own emit below
+        };
+        let code = if p_name == "prime" {
+            format!(
+                "fn {name}(n: i64) -> [i64] {{\n    out: [i64] = [];\n    x: i64 = 2;\n    while x < n {{\n        p: i64 = 1;\n        d: i64 = 2;\n        while d * d <= x {{\n            if x % d == 0 {{\n                p = 0;\n            }}\n            d = d + 1;\n        }}\n        if p == 1 {{\n            out.push(x);\n        }}\n        x = x + 1;\n    }}\n    return out;\n}}\n"
+            )
+        } else {
+            format!(
+                "fn {name}(n: i64) -> [i64] {{\n    out: [i64] = [];\n    x: i64 = 0;\n    while x < n {{\n        if {cond} {{\n            out.push(x);\n        }}\n        x = x + 1;\n    }}\n    return out;\n}}\n"
+            )
+        };
+        return Some((code, format!("decompose-range-filter-{p_name}")));
+    }
+    None
 }
 
 // ──────────────────────────── H-FILTER ────────────────────────────
