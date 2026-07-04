@@ -122,6 +122,19 @@ fn main() {
             println!("SOLVED {id} {}", res.method);
             return;
         }
+        // FULL-EXAMPLE fallback: the seed split leaves 1-2 examples for a
+        // 3-example task, which STARVES multi-parameter fits — a 2-arg float
+        // affine has 3 unknowns and is underdetermined on 2 points, so the lane
+        // fails before it can generalize. Retry on every example. The acceptance
+        // bar is unchanged (the program must reproduce EVERY test case — MBPP's
+        // own pass criterion), so this adds reach, not looseness.
+        let full = Problem { examples: exs.clone(), ..problem };
+        let res = mog_synth::solver::solve_problem(&full);
+        if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
+            harvest(&res.code);
+            println!("SOLVED {id} {}-full", res.method);
+            return;
+        }
     }
     // Mode D fallback (gated by NSYNTH_LOCAL_LLM_REPAIR + a served model): the LLM
     // writes a whole program from the DESCRIPTION + examples, verified against the

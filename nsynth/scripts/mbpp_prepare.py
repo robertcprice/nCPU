@@ -41,18 +41,16 @@ def classify(v):
 
 
 def representable(v):
-    """True if v maps to a benchmark::Value the interpreter runs: int/bool/str and
-    arbitrarily-nested lists/TUPLES thereof (a Python tuple serializes to a JSON
+    """True if v maps to a benchmark::Value the interpreter runs: int/float/bool/str
+    and arbitrarily-nested lists/TUPLES thereof (a Python tuple serializes to a JSON
     array, and Mog builds fixed arrays with `[a, b]`, so an int-tuple return like
-    (min,max) is solvable). Excludes float (`Value::Float` stores bits but the
-    exact-integer + string engine has no continuous-arithmetic solver) and dict
-    (no `Value::Map` variant), which is why those tasks are counted as out-of-scope
-    rather than attempted."""
+    (min,max) is solvable). Float is IN scope: `Value::Float` + the float affine
+    lane (`solver::search_float`) + the sound float/int output bridge are real.
+    Excludes only dict (no `Value::Map` variant), so those tasks are counted as a
+    named out-of-scope gap rather than silently dropped."""
     if isinstance(v, bool):
         return True
-    if isinstance(v, float):
-        return False  # no continuous solver — genuinely out of scope
-    if isinstance(v, (int, str)):
+    if isinstance(v, (int, float, str)):
         return True
     if isinstance(v, (list, tuple)):
         return all(representable(x) for x in v)  # nested; empty list ok
@@ -92,8 +90,8 @@ def main():
     domain = os.environ.get("MBPP_DOMAIN", "all")
     in_scope = (lambda x: classify(x) is not None) if domain == "int" else representable
 
-    kept, reasons = [], {"float": 0, "dict/other": 0, "unparseable": 0}
-    domains = {"int": 0, "string": 0}
+    kept, reasons = [], {"dict/other": 0, "unparseable": 0}
+    domains = {"int": 0, "string": 0, "float": 0}
     for t in tasks:
         ios, fn, ok, bad = [], None, True, None
         for a in t["test_list"]:
@@ -105,15 +103,19 @@ def main():
             for x in list(args) + [exp]:
                 if not in_scope(x):
                     ok = False
-                    bad = "float" if _has_float(x) else "dict/other"
+                    bad = "dict/other"
                     break
             if not ok:
                 break
             ios.append((args, exp))
         if ok and fn and len(ios) >= 3:
             kept.append({"id": t["task_id"], "fn": fn, "examples": [{"in": a, "out": o} for a, o in ios]})
-            has_str = any(_has_str(a) or _has_str(o) for a, o in ios)
-            domains["string" if has_str else "int"] += 1
+            if any(_has_float(a) or _has_float(o) for a, o in ios):
+                domains["float"] += 1
+            elif any(_has_str(a) or _has_str(o) for a, o in ios):
+                domains["string"] += 1
+            else:
+                domains["int"] += 1
         elif bad in reasons:
             reasons[bad] += 1
 
@@ -122,9 +124,10 @@ def main():
             f.write(json.dumps(k) + "\n")
     print(f"total MBPP tasks: {len(tasks)}")
     print(f"ATTEMPTABLE (engine-representable, >=3 tests, domain={domain}): {len(kept)} -> {out_path}")
-    print(f"  by domain: int/bool/list {domains['int']}  |  string-involving {domains['string']}")
-    print(f"OUT-OF-SCOPE: float {reasons['float']} (no continuous solver)  |  "
-          f"dict/other {reasons['dict/other']} (no Value::Map)  |  unparseable {reasons['unparseable']}")
+    print(f"  by domain: int/bool/list {domains['int']}  |  string-involving {domains['string']}"
+          f"  |  float-involving {domains['float']}")
+    print(f"OUT-OF-SCOPE: dict/other {reasons['dict/other']} (no Value::Map)  |  "
+          f"unparseable {reasons['unparseable']}")
 
 
 def _has_float(v):
