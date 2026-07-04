@@ -747,6 +747,77 @@ pub fn build_project(
     })
 }
 
+/// Verdict from verifying an UNTRUSTED component proposal (e.g. one emitted by an
+/// LLM planner). It is disposed of by the SAME compile + property gates a seed
+/// component faces — this is the RLVR verifier that makes an untrusted proposer
+/// safe: a hallucinated leaf, mistyped glue, a missing contract, or a lying
+/// behavioral claim is REJECTED with a reason, never shipped.
+#[derive(Debug)]
+pub enum ProposalVerdict {
+    Accepted {
+        name: String,
+        has_struct: bool,
+        leaves: Vec<String>,
+    },
+    RejectedParse(String),
+    RejectedNoLeaf(String),
+    RejectedNoContract(String),
+    RejectedCompile(String),
+    RejectedBehavior(String),
+}
+
+impl ProposalVerdict {
+    pub fn accepted(&self) -> bool {
+        matches!(self, ProposalVerdict::Accepted { .. })
+    }
+}
+
+/// Verify ONE untrusted component proposal (JSON for a single component) end to
+/// end. Accepts ONLY if it parses, at least one leaf synthesizes, the crate
+/// compiles, AND — for a structural proposal — it carries a behavioral contract
+/// that PASSES. A structural proposal with no contract is rejected outright:
+/// untrusted code doesn't get to skip proving itself. Untrusted in,
+/// verified-or-rejected out — the safety property the whole LLM planner rests on.
+pub fn verify_component_proposal(
+    bridge: &LinguigenesisBridge,
+    proposal_json: &str,
+    root: &Path,
+) -> ProposalVerdict {
+    let specs = match parse_components_json(proposal_json) {
+        Ok(s) => s,
+        Err(e) => return ProposalVerdict::RejectedParse(e),
+    };
+    let spec = match specs.first() {
+        Some(s) => s,
+        None => return ProposalVerdict::RejectedParse("empty proposal".to_string()),
+    };
+    if let Some(glue) = &spec.glue {
+        if glue.smoke.is_none() {
+            return ProposalVerdict::RejectedNoContract(format!(
+                "structural component '{}' ships no behavioral contract",
+                spec.name
+            ));
+        }
+    }
+    let build = match build_component(bridge, spec, root) {
+        Ok(b) => b,
+        Err(e) => return ProposalVerdict::RejectedNoLeaf(e),
+    };
+    match &build.outcome.compile {
+        CompileStatus::Failed(e) => return ProposalVerdict::RejectedCompile(e.clone()),
+        CompileStatus::Unverified(e) => return ProposalVerdict::RejectedCompile(e.clone()),
+        CompileStatus::Ok => {}
+    }
+    if spec.glue.is_some() && !build.behaves() {
+        return ProposalVerdict::RejectedBehavior(format!("{:?}", build.behavior));
+    }
+    ProposalVerdict::Accepted {
+        name: build.name,
+        has_struct: build.has_struct,
+        leaves: build.leaves_verified,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -976,6 +1047,128 @@ mod tests {
         assert!(build.behaves(), "data component behaves: {:?}", build.behavior);
         let glue = std::fs::read_to_string(root.join("src/countdown.rs")).unwrap();
         assert!(glue.contains("pub struct Countdown"), "struct present: {glue}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- RLVR verifier: untrusted proposal in -> verified-or-rejected out ----
+    // Every hallucination class an LLM planner could emit is disposed of by the
+    // SAME compile + behavior gates. These are the safety proofs.
+
+    fn countdown_proposal(leaves: serde_json::Value, code: &str, smoke: serde_json::Value) -> String {
+        serde_json::json!([{
+            "name": "countdown",
+            "surfaces": ["countdown"],
+            "leaves": leaves,
+            "glue": { "module": "countdown", "code": code, "smoke": smoke }
+        }])
+        .to_string()
+    }
+
+    const GOOD_CODE: &str = "use crate::decrement::decrement;\n\npub struct Countdown { n: i64 }\nimpl Countdown {\n    pub fn new(start: i64) -> Self { Countdown { n: start } }\n    pub fn step(&mut self) { self.n = decrement(self.n); }\n    pub fn get(&self) -> i64 { self.n }\n}\n";
+
+    fn smoke_expecting(v: i64) -> serde_json::Value {
+        serde_json::Value::String(format!(
+            "\n#[cfg(test)]\nmod cd {{\n    use super::Countdown;\n    #[test]\n    fn t() {{\n        let mut c = Countdown::new(3);\n        c.step();\n        c.step();\n        assert_eq!(c.get(), {v});\n    }}\n}}\n"
+        ))
+    }
+
+    #[test]
+    fn proposal_accepted_when_it_survives_every_gate() {
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("prop_ok");
+        let json = countdown_proposal(
+            serde_json::json!(["decrement"]),
+            GOOD_CODE,
+            smoke_expecting(1), // 3 -> step -> step -> 1: true
+        );
+        let v = verify_component_proposal(&bridge, &json, &root);
+        assert!(v.accepted(), "should accept a correct proposal: {v:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn proposal_rejected_when_it_lies_about_behavior() {
+        // Correct glue, but the contract asserts a FALSE result (99). Compiles, but
+        // the behavior gate catches the lie.
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("prop_lie");
+        let json = countdown_proposal(
+            serde_json::json!(["decrement"]),
+            GOOD_CODE,
+            smoke_expecting(99),
+        );
+        let v = verify_component_proposal(&bridge, &json, &root);
+        assert!(
+            matches!(v, ProposalVerdict::RejectedBehavior(_)),
+            "must reject a lying contract: {v:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn proposal_rejected_when_glue_calls_a_leaf_it_did_not_declare() {
+        // Glue calls `increment`, but only `decrement` is declared/synthesized -> the
+        // increment module is absent -> compile fails.
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("prop_badglue");
+        let bad_code = "use crate::increment::increment;\n\npub struct Countdown { n: i64 }\nimpl Countdown {\n    pub fn new(start: i64) -> Self { Countdown { n: start } }\n    pub fn step(&mut self) { self.n = increment(self.n); }\n    pub fn get(&self) -> i64 { self.n }\n}\n";
+        let json = countdown_proposal(
+            serde_json::json!(["decrement"]),
+            bad_code,
+            smoke_expecting(1),
+        );
+        let v = verify_component_proposal(&bridge, &json, &root);
+        assert!(
+            matches!(v, ProposalVerdict::RejectedCompile(_)),
+            "must reject glue that references an undeclared leaf: {v:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn proposal_rejected_when_leaf_does_not_synthesize() {
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("prop_noleaf");
+        // Bundle (no glue) whose only leaf is not a real op.
+        let json = serde_json::json!([{
+            "name": "phantom",
+            "surfaces": ["phantom"],
+            "leaves": ["totally_not_an_op_xyz"]
+        }])
+        .to_string();
+        let v = verify_component_proposal(&bridge, &json, &root);
+        assert!(
+            matches!(v, ProposalVerdict::RejectedNoLeaf(_)),
+            "must reject an unsynthesizable leaf: {v:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn proposal_rejected_when_structural_ships_no_contract() {
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("prop_nocontract");
+        let json = serde_json::json!([{
+            "name": "countdown",
+            "surfaces": ["countdown"],
+            "leaves": ["decrement"],
+            "glue": { "module": "countdown", "code": GOOD_CODE }
+        }])
+        .to_string();
+        let v = verify_component_proposal(&bridge, &json, &root);
+        assert!(
+            matches!(v, ProposalVerdict::RejectedNoContract(_)),
+            "structural code must prove itself: {v:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn proposal_rejected_when_json_is_garbage() {
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("prop_garbage");
+        let v = verify_component_proposal(&bridge, "{ not json", &root);
+        assert!(matches!(v, ProposalVerdict::RejectedParse(_)), "{v:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
