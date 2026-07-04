@@ -421,6 +421,17 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         return result;
     }
 
+    // Structural DECOMPOSITION tier (emergent-ops step 1): map/filter/select
+    // hypotheses over list I/O, element holes solved by reusing the verified op
+    // library as a COMPONENT basis + data-mined predicates. Self-gates to
+    // single-list-input problems; end-to-end re-verified inside. Runs early for
+    // the same reason as the tuple tier — its shapes must not be starved by the
+    // int-array machinery below (string-element lists especially).
+    if let Some(result) = super::search_decompose::try_decompose(problem) {
+        eprintln!("[solve] decompose OK in {:.3}s — {}", t0.elapsed().as_secs_f32(), result.method);
+        return result;
+    }
+
     // Exact multi-argument linear family first: a 2-3 arg affine or
     // single-threshold-affine rule is solved by a direct integer linear solve in
     // microseconds and verified against every example, so it must short-circuit
