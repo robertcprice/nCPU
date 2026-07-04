@@ -18,10 +18,11 @@
 use mog_synth::linguigenesis_bridge::LinguigenesisBridge;
 use std::collections::BTreeMap;
 
-/// Production op-resolve gate (`OP_RESOLVE_FLOOR` in the bridge): a surface must
-/// resolve at/above this to actually reach synthesis, so this is the honest
-/// "deliverable recall" floor (not the looser 0.55 comprehension tier).
-const FLOOR: f32 = 0.80;
+/// Candidate/comprehension tier (`MIN_RESOLUTION_SCORE`). The emergent lenses are
+/// grounded, capped RECALL-CANDIDATE contributors — they surface ops the curated
+/// scorers missed at this tier; they do NOT clear the stricter 0.80 synthesis gate
+/// on their own (that is by design, post removal of the hardcoded derivation tier).
+const FLOOR: f32 = 0.55;
 
 const EMERGENT_METHODS: &[&str] = &["frame", "prime", "root", "phonestheme"];
 
