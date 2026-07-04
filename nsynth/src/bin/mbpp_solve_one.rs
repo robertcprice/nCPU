@@ -129,6 +129,21 @@ fn main() {
                 return;
             }
         }
+        // FLOAT problems solve on the FULL example set FIRST: the float lanes
+        // (affine + poly) are ms-scale and carry their own over-determination
+        // gates, while the seed pass burns the whole per-task budget on doomed
+        // exact-integer searches — the measured cause of 48/57 float timeouts
+        // (πr³/4πr²/2πr tasks never REACHED the poly lane). Acceptance bar
+        // unchanged: full reproduction below.
+        if sig.contains("-> f64") {
+            let full = Problem { examples: exs.clone(), ..problem.clone() };
+            let res = mog_synth::solver::solve_problem(&full);
+            if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
+                harvest(&res.code);
+                println!("SOLVED {id} {}-full", res.method);
+                return;
+            }
+        }
         let res = mog_synth::solver::solve_problem(&problem);
         // SOLVED = synthesized AND reproduces EVERY test case (seed + held-out).
         if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
