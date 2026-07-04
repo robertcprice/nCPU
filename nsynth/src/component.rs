@@ -109,6 +109,16 @@ fn seed_components() -> Vec<ComponentSpec> {
                 smoke: Some(SCALER_SMOKE.into()),
             }),
         },
+        ComponentSpec {
+            name: "aggregator".into(),
+            surfaces: s(&["aggregator", "aggregate", "aggregation"]),
+            leaves: s(&["array_sum", "array_max", "array_min", "length"]),
+            glue: Some(GlueSpec {
+                module: "aggregator".into(),
+                code: AGGREGATOR_GLUE.into(),
+                smoke: Some(AGGREGATOR_SMOKE.into()),
+            }),
+        },
     ]
 }
 
@@ -262,6 +272,76 @@ mod scaler_behaves {
         let s = Scaler::new(3);
         assert_eq!(s.scale(5), 15);
         assert_eq!(s.scale(0), 0);
+    }
+}
+"#;
+
+/// A collection-state component: the state is a Vec (not a scalar), `push` is
+/// trivial std plumbing, and the QUERY methods delegate to the VERIFIED array
+/// reducers. `mean` composes two verified leaves (array_sum / length). This is the
+/// fourth structural SHAPE — aggregate state answered by synthesized logic.
+const AGGREGATOR_GLUE: &str = r#"//! Structural component: an Aggregator over a Vec, answered by the verified array reducers.
+
+use crate::array_sum::array_sum;
+use crate::array_max::array_max;
+use crate::array_min::array_min;
+use crate::length::length;
+
+#[derive(Default)]
+pub struct Aggregator {
+    data: Vec<i64>,
+}
+
+impl Aggregator {
+    pub fn new() -> Self {
+        Aggregator { data: Vec::new() }
+    }
+    /// Trivial std plumbing — the interesting logic is in the verified reducers.
+    pub fn push(&mut self, x: i64) {
+        self.data.push(x);
+    }
+    pub fn sum(&self) -> i64 {
+        array_sum(self.data.clone())
+    }
+    pub fn max(&self) -> i64 {
+        array_max(self.data.clone())
+    }
+    pub fn min(&self) -> i64 {
+        array_min(self.data.clone())
+    }
+    pub fn count(&self) -> i64 {
+        length(self.data.clone())
+    }
+    /// Integer mean = sum / count, both VERIFIED leaves; 0 on empty.
+    pub fn mean(&self) -> i64 {
+        let n = length(self.data.clone());
+        if n == 0 {
+            0
+        } else {
+            array_sum(self.data.clone()) / n
+        }
+    }
+}
+"#;
+
+/// Behavioral contract for `Aggregator`: over [2,4,6,8] sum=20, max=8, min=2,
+/// count=4, mean=5 — proving the synthesized reducers answer aggregate state.
+const AGGREGATOR_SMOKE: &str = r#"
+#[cfg(test)]
+mod aggregator_behaves {
+    use super::Aggregator;
+    #[test]
+    fn aggregates_via_verified_reducers() {
+        let mut a = Aggregator::new();
+        a.push(2);
+        a.push(4);
+        a.push(6);
+        a.push(8);
+        assert_eq!(a.sum(), 20);
+        assert_eq!(a.max(), 8);
+        assert_eq!(a.min(), 2);
+        assert_eq!(a.count(), 4);
+        assert_eq!(a.mean(), 5);
     }
 }
 "#;
@@ -761,6 +841,28 @@ mod tests {
         assert!(build.outcome.compile.is_ok(), "compiles: {:?}", build.outcome.compile);
         // factor 3: 5 -> 15, proving the synthesized multiply behaves.
         assert!(build.behaves(), "scaler behavioral contract: {:?}", build.behavior);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn aggregator_collection_state_component_delegates_to_verified_reducers() {
+        // Fourth structural shape: state is a COLLECTION (Vec), queries delegate to
+        // the verified array reducers, and mean composes two verified leaves.
+        let bridge = LinguigenesisBridge::new();
+        let spec = resolve_component("an aggregator").expect("resolve aggregator");
+        let root = temp_root("aggregator");
+        let build = build_component(&bridge, spec, &root).expect("build");
+        for leaf in ["array_sum", "array_max", "array_min", "length"] {
+            assert!(
+                build.leaves_verified.contains(&leaf.to_string()),
+                "{leaf} verified: {:?}",
+                build.leaves_verified
+            );
+        }
+        assert!(build.produces_structure());
+        assert!(build.outcome.compile.is_ok(), "compiles: {:?}", build.outcome.compile);
+        // sum=20,max=8,min=2,count=4,mean=5 over [2,4,6,8] at runtime.
+        assert!(build.behaves(), "aggregator behavioral contract: {:?}", build.behavior);
         let _ = std::fs::remove_dir_all(&root);
     }
 
