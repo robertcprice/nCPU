@@ -119,6 +119,26 @@ fn seed_components() -> Vec<ComponentSpec> {
                 smoke: Some(AGGREGATOR_SMOKE.into()),
             }),
         },
+        ComponentSpec {
+            name: "stack".into(),
+            surfaces: s(&["stack", "lifo"]),
+            leaves: s(&["length"]),
+            glue: Some(GlueSpec {
+                module: "stack".into(),
+                code: STACK_GLUE.into(),
+                smoke: Some(STACK_SMOKE.into()),
+            }),
+        },
+        ComponentSpec {
+            name: "queue".into(),
+            surfaces: s(&["queue", "fifo"]),
+            leaves: s(&["length"]),
+            glue: Some(GlueSpec {
+                module: "queue".into(),
+                code: QUEUE_GLUE.into(),
+                smoke: Some(QUEUE_SMOKE.into()),
+            }),
+        },
     ]
 }
 
@@ -362,6 +382,118 @@ mod aggregator_behaves {
         assert_eq!(a.min(), native_min);
         assert_eq!(a.count(), n);
         assert_eq!(a.mean(), native_sum / n);
+    }
+}
+"#;
+
+/// A LIFO Stack. push/pop are std plumbing (correct by construction); the LIFO
+/// ORDER is proven behaviorally by the contract, and `size` uses the verified
+/// `length` leaf. Collection-state shape with data-structure semantics.
+const STACK_GLUE: &str = r#"//! Structural component: a LIFO Stack; order behaviorally verified, size via the verified `length` leaf.
+
+use crate::length::length;
+
+#[derive(Default)]
+pub struct Stack {
+    items: Vec<i64>,
+}
+
+impl Stack {
+    pub fn new() -> Self {
+        Stack { items: Vec::new() }
+    }
+    pub fn push(&mut self, x: i64) {
+        self.items.push(x);
+    }
+    pub fn pop(&mut self) -> Option<i64> {
+        self.items.pop()
+    }
+    /// Size via the verified `length` leaf.
+    pub fn size(&self) -> i64 {
+        length(self.items.clone())
+    }
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+"#;
+
+/// Behavioral contract for `Stack`: pop returns reverse insertion order (LIFO) and
+/// `size` (verified `length` leaf) tracks the count.
+const STACK_SMOKE: &str = r#"
+#[cfg(test)]
+mod stack_behaves {
+    use super::Stack;
+    #[test]
+    fn lifo_order_and_verified_size() {
+        let mut s = Stack::new();
+        assert!(s.is_empty());
+        for x in [1, 2, 3, 4, 5] {
+            s.push(x);
+        }
+        assert_eq!(s.size(), 5);
+        let mut got = Vec::new();
+        while let Some(v) = s.pop() {
+            got.push(v);
+        }
+        assert_eq!(got, vec![5, 4, 3, 2, 1], "LIFO");
+        assert_eq!(s.size(), 0);
+        assert!(s.is_empty());
+    }
+}
+"#;
+
+/// A FIFO Queue over a VecDeque. enqueue/dequeue are std plumbing; the FIFO ORDER
+/// is proven behaviorally, `size` uses the verified `length` leaf.
+const QUEUE_GLUE: &str = r#"//! Structural component: a FIFO Queue; order behaviorally verified, size via the verified `length` leaf.
+
+use std::collections::VecDeque;
+use crate::length::length;
+
+#[derive(Default)]
+pub struct Queue {
+    items: VecDeque<i64>,
+}
+
+impl Queue {
+    pub fn new() -> Self {
+        Queue { items: VecDeque::new() }
+    }
+    pub fn enqueue(&mut self, x: i64) {
+        self.items.push_back(x);
+    }
+    pub fn dequeue(&mut self) -> Option<i64> {
+        self.items.pop_front()
+    }
+    /// Size via the verified `length` leaf.
+    pub fn size(&self) -> i64 {
+        length(self.items.iter().copied().collect::<Vec<i64>>())
+    }
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+"#;
+
+/// Behavioral contract for `Queue`: dequeue returns insertion order (FIFO) and
+/// `size` (verified `length` leaf) tracks the count.
+const QUEUE_SMOKE: &str = r#"
+#[cfg(test)]
+mod queue_behaves {
+    use super::Queue;
+    #[test]
+    fn fifo_order_and_verified_size() {
+        let mut q = Queue::new();
+        for x in [1, 2, 3, 4, 5] {
+            q.enqueue(x);
+        }
+        assert_eq!(q.size(), 5);
+        let mut got = Vec::new();
+        while let Some(v) = q.dequeue() {
+            got.push(v);
+        }
+        assert_eq!(got, vec![1, 2, 3, 4, 5], "FIFO");
+        assert_eq!(q.size(), 0);
     }
 }
 "#;
@@ -955,6 +1087,27 @@ mod tests {
         // sum=20,max=8,min=2,count=4,mean=5 over [2,4,6,8] at runtime.
         assert!(build.behaves(), "aggregator behavioral contract: {:?}", build.behavior);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stack_and_queue_collection_components_compile_and_behave() {
+        let bridge = LinguigenesisBridge::new();
+        for (phrase, tag, module) in [
+            ("a stack", "stack", "stack"),
+            ("a queue", "queue", "queue"),
+        ] {
+            let spec = resolve_component(phrase).unwrap_or_else(|| panic!("resolve {phrase}"));
+            let root = temp_root(tag);
+            let build = build_component(&bridge, spec, &root).expect("build");
+            assert!(build.leaves_verified.contains(&"length".to_string()), "length verified");
+            assert!(build.produces_structure());
+            assert!(build.outcome.compile.is_ok(), "{tag} compiles: {:?}", build.outcome.compile);
+            // LIFO/FIFO order + verified size proven at runtime.
+            assert!(build.behaves(), "{tag} behavioral contract: {:?}", build.behavior);
+            let glue = std::fs::read_to_string(root.join(format!("src/{module}.rs"))).unwrap();
+            assert!(glue.contains("pub struct"), "{tag} struct present");
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 
     #[test]
