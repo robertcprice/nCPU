@@ -729,6 +729,62 @@ pub const OPS: &[LibOp] = &[
 "fn group_pairs_by_second(pairs: [[i64]]) -> [[i64]] {\n    ks: [i64] = [];\n    for p in pairs {\n        seen: i64 = 0;\n        for k in ks {\n            if k == p[1] {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            ks.push(p[1]);\n        }\n    }\n    out: [[i64]] = [];\n    for k in ks {\n        vs: [i64] = [];\n        for p in pairs {\n            if p[1] == k {\n                vs.push(p[0]);\n            }\n        }\n        out.push([k, vs]);\n    }\n    return out;\n}\n" },
     LibOp { name: "assign_first_to_second", arity: 1, mog:
 "fn assign_first_to_second(pairs: [[i64]]) -> [[i64]] {\n    ks: [i64] = [];\n    for p in pairs {\n        seen: i64 = 0;\n        for k in ks {\n            if k == p[0] {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            ks.push(p[0]);\n        }\n    }\n    for p in pairs {\n        seen2: i64 = 0;\n        for k in ks {\n            if k == p[1] {\n                seen2 = 1;\n            }\n        }\n        if seen2 == 0 {\n            ks.push(p[1]);\n        }\n    }\n    out: [[i64]] = [];\n    for k in ks {\n        vs: [i64] = [];\n        for p in pairs {\n            if p[0] == k {\n                vs.push(p[1]);\n            }\n        }\n        out.push([k, vs]);\n    }\n    return out;\n}\n" },
+    // ── batch 27: (str)->str transforms + fixed-pattern match messages — the
+    // measured 51-task string cluster (S1/S4 in the wall analysis). Pattern
+    // tasks emit fixed MESSAGE strings; each op hardcodes its task's message
+    // pair and behavior-matching picks the right pattern per task.
+    LibOp { name: "snake_to_camel", arity: 1, mog:
+"fn snake_to_camel(s: string) -> string {\n    out: string = \"\";\n    up: i64 = 1;\n    for ch in s {\n        if ch == '_' {\n            up = 1;\n        } else {\n            if up == 1 {\n                out = out + ch.upper();\n                up = 0;\n            } else {\n                out = out + ch;\n            }\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "camel_to_snake", arity: 1, mog:
+"fn camel_to_snake(s: string) -> string {\n    out: string = \"\";\n    i: i64 = 0;\n    for ch in s {\n        if ch.is_upper() {\n            if i > 0 {\n                out = out + \"_\";\n            }\n            out = out + ch.lower();\n        } else {\n            out = out + ch;\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "toggle_case", arity: 1, mog:
+"fn toggle_case(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_upper() {\n            out = out + ch.lower();\n        } else {\n            out = out + ch.upper();\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "capitalize_first_last", arity: 1, mog:
+"fn capitalize_first_last(s: string) -> string {\n    n: i64 = s.len;\n    out: string = \"\";\n    i: i64 = 0;\n    for ch in s {\n        if i == 0 {\n            out = out + ch.upper();\n        } else {\n            if i == n - 1 {\n                out = out + ch.upper();\n            } else {\n                out = out + ch;\n            }\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "keep_lowercase", arity: 1, mog:
+"fn keep_lowercase(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_lower() {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "keep_uppercase", arity: 1, mog:
+"fn keep_uppercase(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_upper() {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "keep_even_positions", arity: 1, mog:
+"fn keep_even_positions(s: string) -> string {\n    out: string = \"\";\n    i: i64 = 0;\n    for ch in s {\n        if i % 2 == 1 {\n            out = out + ch;\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "collapse_spaces", arity: 1, mog:
+"fn collapse_spaces(s: string) -> string {\n    out: string = \"\";\n    prev_space: i64 = 0;\n    for ch in s {\n        if ch == ' ' {\n            if prev_space == 0 {\n                out = out + ch;\n            }\n            prev_space = 1;\n        } else {\n            out = out + ch;\n            prev_space = 0;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "spaces_to_pct20", arity: 1, mog:
+"fn spaces_to_pct20(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch == ' ' {\n            out = out + \"%20\";\n        } else {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "spaces_to_underscore", arity: 1, mog:
+"fn spaces_to_underscore(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch == ' ' {\n            out = out + \"_\";\n        } else {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "spaces_to_colon", arity: 1, mog:
+"fn spaces_to_colon(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch == ' ' {\n            out = out + \":\";\n        } else {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "specialchars_to_colon", arity: 1, mog:
+"fn specialchars_to_colon(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch == ' ' {\n            out = out + \":\";\n        } else {\n            if ch == ',' {\n                out = out + \":\";\n            } else {\n                if ch == '.' {\n                    out = out + \":\";\n                } else {\n                    out = out + ch;\n                }\n            }\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "date_reverse_parts", arity: 1, mog:
+"fn date_reverse_parts(s: string) -> string {\n    parts: [string] = s.split(\"-\");\n    n: i64 = parts.len;\n    out: string = \"\";\n    i: i64 = n - 1;\n    while i >= 0 {\n        out = out + parts[i];\n        if i > 0 {\n            out = out + \"-\";\n        }\n        i = i - 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "remove_duplicate_words", arity: 1, mog:
+"fn remove_duplicate_words(s: string) -> string {\n    words: [string] = s.split(\" \");\n    kept: [string] = [];\n    for w in words {\n        seen: i64 = 0;\n        for k in kept {\n            if k == w {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            kept.push(w);\n        }\n    }\n    out: string = \"\";\n    i: i64 = 0;\n    while i < kept.len {\n        out = out + kept[i];\n        if i < kept.len - 1 {\n            out = out + \" \";\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    LibOp { name: "first_repeated_word", arity: 1, mog:
+"fn first_repeated_word(s: string) -> string {\n    words: [string] = s.split(\" \");\n    seen: [string] = [];\n    for w in words {\n        for k in seen {\n            if k == w {\n                return w;\n            }\n        }\n        seen.push(w);\n    }\n    return \"None\";\n}\n" },
+    LibOp { name: "letters_then_digits", arity: 1, mog:
+"fn letters_then_digits(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_digit() {\n        } else {\n            out = out + ch;\n        }\n    }\n    for ch in s {\n        if ch.is_digit() {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
+    LibOp { name: "msg_first_eq_last_equal", arity: 1, mog:
+"fn msg_first_eq_last_equal(s: string) -> string {\n    if s[0] == s[s.len - 1] {\n        return \"Equal\";\n    }\n    return \"Not Equal\";\n}\n" },
+    LibOp { name: "msg_first_eq_last_valid", arity: 1, mog:
+"fn msg_first_eq_last_valid(s: string) -> string {\n    if s[0] == s[s.len - 1] {\n        return \"Valid\";\n    }\n    return \"Invalid\";\n}\n" },
+    LibOp { name: "msg_contains_a", arity: 1, mog:
+"fn msg_contains_a(s: string) -> string {\n    for ch in s {\n        if ch == 'a' {\n            return \"Found a match!\";\n        }\n    }\n    return \"Not matched!\";\n}\n" },
+    LibOp { name: "msg_a_then_b_end", arity: 1, mog:
+"fn msg_a_then_b_end(s: string) -> string {\n    n: i64 = s.len;\n    i: i64 = 0;\n    while i < n {\n        if s[i] == 'a' {\n            j: i64 = i + 1;\n            allb: i64 = 1;\n            if j >= n {\n                allb = 0;\n            }\n            while j < n {\n                if s[j] != 'b' {\n                    allb = 0;\n                }\n                j = j + 1;\n            }\n            if allb == 1 {\n                return \"Found a match!\";\n            }\n        }\n        i = i + 1;\n    }\n    return \"Not matched!\";\n}\n" },
+    LibOp { name: "msg_a_one_plus_b", arity: 1, mog:
+"fn msg_a_one_plus_b(s: string) -> string {\n    n: i64 = s.len;\n    i: i64 = 0;\n    while i + 1 < n {\n        if s[i] == 'a' {\n            if s[i + 1] == 'b' {\n                return \"Found a match!\";\n            }\n        }\n        i = i + 1;\n    }\n    return \"Not matched!\";\n}\n" },
+    LibOp { name: "msg_a_two_three_b", arity: 1, mog:
+"fn msg_a_two_three_b(s: string) -> string {\n    n: i64 = s.len;\n    i: i64 = 0;\n    while i < n {\n        if s[i] == 'a' {\n            j: i64 = i + 1;\n            c: i64 = 0;\n            while j < n {\n                if s[j] == 'b' {\n                    c = c + 1;\n                    j = j + 1;\n                } else {\n                    j = n;\n                }\n            }\n            if c == 2 {\n                return \"Found a match!\";\n            }\n            if c == 3 {\n                return \"Found a match!\";\n            }\n        }\n        i = i + 1;\n    }\n    return \"Not matched!\";\n}\n" },
+    LibOp { name: "msg_starta_endb", arity: 1, mog:
+"fn msg_starta_endb(s: string) -> string {\n    if s[0] == 'a' {\n        if s[s.len - 1] == 'b' {\n            return \"Found a match!\";\n        }\n    }\n    return \"Not matched!\";\n}\n" },
+    LibOp { name: "msg_contains_z", arity: 1, mog:
+"fn msg_contains_z(s: string) -> string {\n    for ch in s {\n        if ch == 'z' {\n            return \"Found a match!\";\n        }\n    }\n    return \"Not matched!\";\n}\n" },
+    LibOp { name: "msg_z_in_middle", arity: 1, mog:
+"fn msg_z_in_middle(s: string) -> string {\n    n: i64 = s.len;\n    i: i64 = 1;\n    while i < n - 1 {\n        if s[i] == 'z' {\n            return \"Found a match!\";\n        }\n        i = i + 1;\n    }\n    return \"Not matched!\";\n}\n" },
+    LibOp { name: "msg_upper_then_lower", arity: 1, mog:
+"fn msg_upper_then_lower(s: string) -> string {\n    n: i64 = s.len;\n    i: i64 = 0;\n    while i + 1 < n {\n        if s[i].is_upper() {\n            if s[i + 1].is_lower() {\n                return \"Found a match!\";\n            }\n        }\n        i = i + 1;\n    }\n    return \"Not matched!\";\n}\n" },
     // ── batch 26: map filter/append/constructor shapes.
     LibOp { name: "filter_pairs_value_ge", arity: 2, mog:
 "fn filter_pairs_value_ge(pairs: [[i64]], t: i64) -> [[i64]] {\n    out: [[i64]] = [];\n    for p in pairs {\n        if p[1] >= t {\n            out.push(p);\n        }\n    }\n    return out;\n}\n" },

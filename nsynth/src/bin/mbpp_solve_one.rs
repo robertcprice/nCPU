@@ -133,9 +133,21 @@ fn main() {
         // (affine + poly) are ms-scale and carry their own over-determination
         // gates, while the seed pass burns the whole per-task budget on doomed
         // exact-integer searches — the measured cause of 48/57 float timeouts
-        // (πr³/4πr²/2πr tasks never REACHED the poly lane). Acceptance bar
-        // unchanged: full reproduction below.
-        if sig.contains("-> f64") {
+        // (πr³/4πr²/2πr tasks never REACHED the poly lane). Gate on ANY float
+        // in the examples (not just a `-> f64` signature): float-ARRAY
+        // reductions and float-TUPLE outputs (parabola vertex) starve the same
+        // way. Acceptance bar unchanged: full reproduction below.
+        let any_float = exs.iter().any(|e| {
+            fn hasf(v: &Value) -> bool {
+                match v {
+                    Value::Float(_) => true,
+                    Value::Array(xs) | Value::Tuple(xs) => xs.iter().any(hasf),
+                    _ => false,
+                }
+            }
+            e.inputs.iter().any(hasf) || hasf(&e.expected)
+        });
+        if sig.contains("-> f64") || any_float {
             let full = Problem { examples: exs.clone(), ..problem.clone() };
             let res = mog_synth::solver::solve_problem(&full);
             if res.success && mog_synth::runtime::code_reproduces_examples(&res.code, &exs) {
