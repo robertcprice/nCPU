@@ -52,6 +52,7 @@ fn corpus() -> Vec<(&'static str, &'static str, &'static str)> {
         ("deduct", "subtract", "synonym"),
         ("filtrate", "filter", "synonym"),
         ("strain", "filter", "synonym"),
+        ("decrease", "decrement", "synonym"),
         // DIRECT — sanity anchor.
         ("reverse", "reverse", "direct"),
         ("sort", "sort", "direct"),
