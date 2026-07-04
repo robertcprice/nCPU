@@ -67,6 +67,31 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
+    // Single STRING input with string output: CHAR-LEVEL schemas (a string is a
+    // char list — remove_vowels is a char-filter with a mined char set).
+    if first.inputs.len() == 1
+        && matches!(first.inputs[0], Value::Str(_))
+        && matches!(first.expected, Value::Str(_))
+    {
+        let name = {
+            let n = problem.function_name();
+            if n.is_empty() { "f" } else { n }
+        };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_char_filter(problem, name);
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method,
+                error: None,
+                metadata: Default::default(),
+            });
+        }
+        return None;
+    }
     // Single-input tier: exactly one input, and it is a list.
     if first.inputs.len() != 1 {
         return None;
@@ -777,6 +802,57 @@ fn try_select_pair(problem: &Problem, name: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+// ─────────────────────────── H-CHAR-FILTER ───────────────────────────
+
+/// String output whose chars are an order-preserving subsequence of the input's
+/// chars → a char-level filter. The DROPPED char set is mined from the labeled
+/// walk (remove_vowels drops exactly {a,e,i,o,u,A,E,I,O,U}); the predicate is
+/// membership in that mined set, emitted as an ||-chain. Refused when the same
+/// char appears in BOTH labeled sets (not a pure char filter).
+fn try_char_filter(problem: &Problem, name: &str) -> Option<(String, String)> {
+    use std::collections::BTreeSet;
+    let mut kept: BTreeSet<char> = BTreeSet::new();
+    let mut dropped: BTreeSet<char> = BTreeSet::new();
+    for ex in &problem.examples {
+        let Value::Str(input) = &ex.inputs[0] else { return None };
+        let Value::Str(output) = &ex.expected else { return None };
+        let out_chars: Vec<char> = output.chars().collect();
+        let mut oi = 0;
+        for ch in input.chars() {
+            if oi < out_chars.len() && ch == out_chars[oi] {
+                kept.insert(ch);
+                oi += 1;
+            } else {
+                dropped.insert(ch);
+            }
+        }
+        if oi != out_chars.len() {
+            return None;
+        }
+    }
+    if dropped.is_empty() || !kept.is_disjoint(&dropped) {
+        return None; // identity, or the same char is both kept and dropped
+    }
+    if dropped.len() > 24 {
+        return None; // an ||-chain this long is memorization, not a filter
+    }
+    let cond = dropped
+        .iter()
+        .map(|c| {
+            if *c == '\'' {
+                "ch == '\\''".to_string()
+            } else {
+                format!("ch == '{c}'")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let code = format!(
+        "fn {name}(s: string) -> string {{\n    out: string = \"\";\n    for ch in s {{\n        if {cond} {{\n        }} else {{\n            out = out + ch;\n        }}\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-char-filter".to_string()))
 }
 
 // ──────────────────────────── H-FILTER ────────────────────────────

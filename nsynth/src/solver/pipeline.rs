@@ -224,6 +224,19 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // it is (under the real query's fingerprint, outside this guard).
     let recordable = !super::analogy::in_refit() && !crate::learning_freeze::is_frozen();
 
+    // Structural decomposition at the VERY TOP: ms-scale, self-gating, and both
+    // the string-output path (string_synth enumerative burn) and the int-array
+    // frontier below it consume the whole per-task budget before a cheap
+    // decompose shape (char-filter, derivative, rolling_max) is ever attempted —
+    // the same starvation disease as the library/float lanes, same cure.
+    if let Some(result) = super::search_decompose::try_decompose(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
+        }
+        return result;
+    }
+
     // String-output problems take the additive string-program path (the i64
     // gradient/search pipeline cannot express string outputs).
     if let Some(result) = solve_string_output(problem) {
@@ -253,19 +266,6 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // climbs an accumulator-loop program for fold-shaped tasks the library/search
     // miss. Verifier-gated; feeds the flywheel via the success hooks below.
     if let Some(result) = crate::synth_evolve::synthesize_evolve(problem) {
-        if recordable {
-            crate::solved_cache::record(problem, &result.method, &result.code);
-            crate::op_library::maybe_record_learned(problem, &result);
-        }
-        return result;
-    }
-
-    // Structural decomposition FIRST for list problems: ms-scale, self-gating,
-    // and the int-array frontier below burns the whole per-task budget — the
-    // measured reason decompose shapes (derivative, rolling_max) timed out
-    // before ever being attempted. Same starvation disease as the library/
-    // float lanes, same cure: run the cheap sound tier before the expensive one.
-    if let Some(result) = super::search_decompose::try_decompose(problem) {
         if recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
             crate::op_library::maybe_record_learned(problem, &result);
