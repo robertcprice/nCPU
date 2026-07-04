@@ -62,6 +62,7 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| try_interleave(problem, name))
         .or_else(|| try_median(problem, name))
         .or_else(|| try_filter(problem, name))
+        .or_else(|| try_filter_sort(problem, name))
         .or_else(|| try_select(problem, name));
     IN_DECOMPOSE.with(|f| f.set(false));
 
@@ -451,6 +452,79 @@ fn try_median(problem: &Problem, name: &str) -> Option<(String, String)> {
         "fn {name}(xs: [i64]) -> f64 {{\n    s: [i64] = [];\n    for e in xs {{\n        s.push(e);\n    }}\n    s.sort();\n    n: i64 = s.len;\n    if n % 2 == 1 {{\n        return 1.0 * s[n / 2];\n    }}\n    return (s[n / 2 - 1] + s[n / 2]) / 2.0;\n}}\n"
     );
     Some((code, "decompose-median".to_string()))
+}
+
+// ─────────────────────── H-FILTER∘SORT (composed) ───────────────────────
+
+/// First composed schema (depth-2): output is a SORTED, FILTERED subset of the
+/// input — `keep the evens, sorted` / sorted_list_sum shapes. The pure filter
+/// hypothesis requires an order-preserving subsequence and refuses these; here
+/// the labels come from MULTISET difference (order-free), the predicate is
+/// synthesized as usual, and the second stage checks the output is the kept
+/// elements under one of the sort keys.
+fn try_filter_sort(problem: &Problem, name: &str) -> Option<(String, String)> {
+    let mut kept: Vec<Value> = Vec::new();
+    let mut dropped: Vec<Value> = Vec::new();
+    for ex in &problem.examples {
+        let Value::Array(input) = &ex.inputs[0] else { return None };
+        let Value::Array(output) = &ex.expected else { return None };
+        if output.len() > input.len() {
+            return None;
+        }
+        // Multiset difference: every output element must come from the input.
+        let mut pool: Vec<&Value> = input.iter().collect();
+        for o in output {
+            let pos = pool.iter().position(|v| *v == o)?;
+            pool.remove(pos);
+            kept.push(o.clone());
+        }
+        for v in pool {
+            dropped.push(v.clone());
+        }
+    }
+    if kept.is_empty() || dropped.is_empty() {
+        return None; // degenerate — pure sort (H-SORT-BY) or pure identity
+    }
+    let pred_fn = synthesize_predicate(&kept, &dropped)?;
+    // Stage 2: which sort key arranges each example's kept-set into the output?
+    let val_key = |v: &Value| if let Value::Int(i) = v { Some(*i) } else { None };
+    let len_key = |v: &Value| if let Value::Str(s) = v { Some(s.len() as i64) } else { None };
+    let keys: [(&str, &dyn Fn(&Value) -> Option<i64>, bool); 4] = [
+        ("val_asc", &val_key, false),
+        ("val_desc", &val_key, true),
+        ("len_asc", &len_key, false),
+        ("len_desc", &len_key, true),
+    ];
+    'key: for (k_name, key, desc) in keys {
+        for ex in &problem.examples {
+            let Value::Array(output) = &ex.expected else { return None };
+            let mut ks: Vec<i64> = Vec::with_capacity(output.len());
+            for o in output {
+                ks.push(key(o)?);
+            }
+            let sorted_ok = if desc {
+                ks.windows(2).all(|w| w[0] >= w[1])
+            } else {
+                ks.windows(2).all(|w| w[0] <= w[1])
+            };
+            if !sorted_ok {
+                continue 'key;
+            }
+        }
+        let elem_ty = elem_scalar_type(&problem.examples[0].inputs[0])?;
+        let list_ty = mog_type(&problem.examples[0].inputs[0], true)?;
+        let key_expr = match k_name {
+            "len_asc" | "len_desc" => "out[j].len",
+            _ => "out[j]",
+        };
+        let key_expr_min = key_expr.replace("[j]", "[m]");
+        let cmp = if desc { ">" } else { "<" };
+        let code = format!(
+            "fn {name}(xs: {list_ty}) -> {list_ty} {{\n    out: {list_ty} = [];\n    for e in xs {{\n        if pred(e) {{\n            out.push(e);\n        }}\n    }}\n    i: i64 = 0;\n    while i < out.len {{\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < out.len {{\n            if {key_expr} {cmp} {key_expr_min} {{\n                m = j;\n            }}\n            j = j + 1;\n        }}\n        t: {elem_ty} = out[i];\n        out[i] = out[m];\n        out[m] = t;\n        i = i + 1;\n    }}\n    return out;\n}}\n\n{pred_fn}"
+        );
+        return Some((code, format!("decompose-filter-sort-{k_name}")));
+    }
+    None
 }
 
 // ──────────────────────────── H-FILTER ────────────────────────────
