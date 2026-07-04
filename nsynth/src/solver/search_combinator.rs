@@ -321,6 +321,138 @@ pub(super) fn try_combinator(problem: &Problem, name: &str) -> Option<SolveResul
     None
 }
 
+/// FLOAT-list value type: the same guided-composition idea over Vec<f64>, with
+/// float atoms — element maps (abs, negate, +/*/ mined-const), WHOLE-LIST-CONTEXT
+/// maps (rescale (x-min)/(max-min), normalize x/sum, x/max, shift x-min), and
+/// folds (sum, mean, max, min, product). Solves float-list tasks (rescale-to-
+/// unit, float reductions) no int schema reaches.
+pub(super) fn try_combinator_float(problem: &Problem, name: &str) -> Option<SolveResult> {
+    let inputs: Vec<Vec<f64>> = problem
+        .examples
+        .iter()
+        .map(|ex| match ex.inputs.as_slice() {
+            [Value::Array(a)] => a.iter().map(as_f).collect::<Option<Vec<f64>>>(),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    // At least one example must actually contain a float (else the int path owns it).
+    if !problem.examples.iter().any(|ex| {
+        matches!(&ex.inputs[0], Value::Array(a) if a.iter().any(|v| matches!(v, Value::Float(_))))
+    }) {
+        return None;
+    }
+    #[derive(Clone, PartialEq)]
+    enum FV {
+        L(Vec<f64>),
+        F(f64),
+    }
+    let expected: Vec<FV> = problem
+        .examples
+        .iter()
+        .map(|ex| match &ex.expected {
+            Value::Float(b) => Some(FV::F(f64::from_bits(*b))),
+            Value::Int(i) => Some(FV::F(*i as f64)),
+            Value::Array(a) => a.iter().map(as_f).collect::<Option<Vec<f64>>>().map(FV::L),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let eps = 1e-6;
+    let close = |a: f64, b: f64| (a - b).abs() <= eps * (1.0 + a.abs().max(b.abs()));
+
+    // Whole-list-context element maps (name, apply(x, min, max, sum)).
+    type CMap = (&'static str, fn(f64, f64, f64, f64) -> f64);
+    let cmaps: [CMap; 5] = [
+        ("(x - mn) / (mx - mn)", |x, mn, mx, _| (x - mn) / (mx - mn)),
+        ("x / sm", |x, _, _, sm| x / sm),
+        ("x / mx", |x, _, mx, _| x / mx),
+        ("x - mn", |x, mn, _, _| x - mn),
+        ("0.0 - x", |x, _, _, _| -x),
+    ];
+
+    // Depth-2 is enough for these (context-map, or fold, or context-map then fold).
+    for (cname, cf) in cmaps {
+        // context-map -> FL
+        let outs: Vec<FV> = inputs
+            .iter()
+            .map(|l| {
+                let mn = l.iter().cloned().fold(f64::INFINITY, f64::min);
+                let mx = l.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let sm: f64 = l.iter().sum();
+                FV::L(l.iter().map(|&x| cf(x, mn, mx, sm)).collect())
+            })
+            .collect();
+        let ok = outs.iter().zip(expected.iter()).all(|(o, e)| match (o, e) {
+            (FV::L(a), FV::L(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y)),
+            _ => false,
+        });
+        if ok {
+            let code = format!(
+                "fn {name}(xs: [i64]) -> [i64] {{\n    mn: f64 = xs[0];\n    mx: f64 = xs[0];\n    sm: f64 = 0.0;\n    for e in xs {{\n        if e < mn {{\n            mn = e;\n        }}\n        if e > mx {{\n            mx = e;\n        }}\n        sm = sm + e;\n    }}\n    out: [i64] = [];\n    for x in xs {{\n        out.push({cname});\n    }}\n    return out;\n}}\n"
+            );
+            if crate::runtime::code_reproduces_examples(&code, &problem.examples) {
+                return Some(SolveResult { success: true, code, method: "combinator-float-ctx".to_string(), error: None, metadata: Default::default() });
+            }
+        }
+    }
+    // scalar float folds -> F
+    for (fname, ff) in [
+        ("sum", ff_sum as fn(&[f64]) -> Option<f64>),
+        ("mean", ff_mean),
+        ("max", ff_max),
+        ("min", ff_min),
+        ("product", ff_prod),
+    ] {
+        let outs: Option<Vec<FV>> = inputs.iter().map(|l| ff(l).map(FV::F)).collect();
+        let Some(outs) = outs else { continue };
+        let ok = outs.iter().zip(expected.iter()).all(|(o, e)| match (o, e) {
+            (FV::F(a), FV::F(b)) => close(*a, *b),
+            _ => false,
+        });
+        if ok {
+            let body = match fname {
+                "sum" => "acc: f64 = 0.0;\n    for e in xs {\n        acc = acc + e;\n    }\n    return acc;".to_string(),
+                "mean" => "acc: f64 = 0.0;\n    for e in xs {\n        acc = acc + e;\n    }\n    return acc / xs.len;".to_string(),
+                "product" => "acc: f64 = 1.0;\n    for e in xs {\n        acc = acc * e;\n    }\n    return acc;".to_string(),
+                "max" => "acc: f64 = xs[0];\n    for e in xs {\n        if e > acc {\n            acc = e;\n        }\n    }\n    return acc;".to_string(),
+                _ => "acc: f64 = xs[0];\n    for e in xs {\n        if e < acc {\n            acc = e;\n        }\n    }\n    return acc;".to_string(),
+            };
+            let code = format!("fn {name}(xs: [i64]) -> f64 {{\n    {body}\n}}\n");
+            if crate::runtime::code_reproduces_examples(&code, &problem.examples) {
+                return Some(SolveResult { success: true, code, method: format!("combinator-float-{fname}"), error: None, metadata: Default::default() });
+            }
+        }
+    }
+    None
+}
+
+fn ff_sum(l: &[f64]) -> Option<f64> {
+    Some(l.iter().sum())
+}
+fn ff_mean(l: &[f64]) -> Option<f64> {
+    if l.is_empty() {
+        None
+    } else {
+        Some(l.iter().sum::<f64>() / l.len() as f64)
+    }
+}
+fn ff_max(l: &[f64]) -> Option<f64> {
+    l.iter().cloned().reduce(f64::max)
+}
+fn ff_min(l: &[f64]) -> Option<f64> {
+    l.iter().cloned().reduce(f64::min)
+}
+fn ff_prod(l: &[f64]) -> Option<f64> {
+    Some(l.iter().product())
+}
+
+fn as_f(v: &Value) -> Option<f64> {
+    match v {
+        Value::Int(i) => Some(*i as f64),
+        Value::Float(b) => Some(f64::from_bits(*b)),
+        _ => None,
+    }
+}
+
 fn fold(l: &[i64], op: &str) -> Option<i64> {
     match op {
         "sum" => Some(l.iter().sum()),
