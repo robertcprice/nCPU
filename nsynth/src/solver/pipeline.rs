@@ -401,6 +401,17 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         return result;
     }
 
+    // Fixed-K TUPLE output tier: `(min, max)`-style tasks whose every output is a
+    // constant-length scalar array. Solves each output column by reusing the
+    // library/pipeline tiers above, then assembles a verified multi-fn program.
+    // Self-gates (instant None) for any non-fixed-array output, so scalar/array
+    // problems are untouched. Runs here so a genuine tuple task is not first
+    // mangled by the variable-length array machinery below.
+    if let Some(result) = super::search_tuple::try_tuple(problem) {
+        eprintln!("[solve] tuple-columns OK in {:.3}s — {}", t0.elapsed().as_secs_f32(), result.method);
+        return result;
+    }
+
     // Exact multi-argument linear family first: a 2-3 arg affine or
     // single-threshold-affine rule is solved by a direct integer linear solve in
     // microseconds and verified against every example, so it must short-circuit
