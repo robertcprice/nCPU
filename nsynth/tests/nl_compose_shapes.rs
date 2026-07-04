@@ -21,6 +21,9 @@ struct Shape {
 const SHAPES: &[Shape] = &[
     // map + reduce
     Shape { phrase: "sum of the negated values", maps: &["negate"], reduce: Some("add"), n_xfms: 0 },
+    Shape { phrase: "sum of the doubled values", maps: &["double"], reduce: Some("add"), n_xfms: 0 },
+    // map + transform
+    Shape { phrase: "double each then reverse the array", maps: &["double"], reduce: None, n_xfms: 1 },
     Shape { phrase: "largest of the negated values", maps: &["negate"], reduce: Some("array_max"), n_xfms: 0 },
     // map-chain + reduce
     Shape { phrase: "sum of the negated incremented values", maps: &["increment", "negate"], reduce: Some("add"), n_xfms: 0 },
