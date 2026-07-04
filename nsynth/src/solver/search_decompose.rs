@@ -93,6 +93,34 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
+    // Single INT input with int output: SUM-RECURRENCE schema — a(n) = sum of
+    // the previous r terms (r in 2..=4), seeds SEARCHED from a small grid and
+    // pinned by the examples themselves (fib4's (0,0,2,0) is discovered, not
+    // encoded). Fires only when one (order, seeds) combo reproduces EVERY
+    // example; emitted as a rolling-window loop.
+    if first.inputs.len() == 1
+        && matches!(first.inputs[0], Value::Int(_))
+        && matches!(first.expected, Value::Int(_))
+    {
+        let name = {
+            let n = problem.function_name();
+            if n.is_empty() { "f" } else { n }
+        };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_sum_recurrence(problem, name);
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method,
+                error: None,
+                metadata: Default::default(),
+            });
+        }
+        return None;
+    }
     // Single STRING input with string output: CHAR-LEVEL schemas (a string is a
     // char list — remove_vowels is a char-filter with a mined char set).
     if first.inputs.len() == 1
@@ -978,6 +1006,71 @@ fn try_range_filter(problem: &Problem, name: &str) -> Option<(String, String)> {
             )
         };
         return Some((code, format!("decompose-range-filter-{p_name}")));
+    }
+    None
+}
+
+// ────────────────────────── H-SUM-RECURRENCE ──────────────────────────
+
+/// a(n) = a(n-1) + … + a(n-r) with r in 2..=4 and seed vector searched over
+/// {0, 1, 2}^r — tribonacci/fib4-class sequences whose seeds are DISCOVERED
+/// from the task's own examples rather than encoded. All example n must be
+/// small enough to roll forward cheaply.
+fn try_sum_recurrence(problem: &Problem, name: &str) -> Option<(String, String)> {
+    let mut points: Vec<(i64, i64)> = Vec::new();
+    for ex in &problem.examples {
+        let (Value::Int(n), Value::Int(o)) = (&ex.inputs[0], &ex.expected) else { return None };
+        if *n < 0 || *n > 64 {
+            return None;
+        }
+        points.push((*n, *o));
+    }
+    if points.len() < 3 {
+        return None;
+    }
+    let max_n = points.iter().map(|p| p.0).max()? as usize;
+    for r in 2..=4usize {
+        // Seed grids: {0,1,2}^r — 9..81 combos, each rolled once.
+        let combos = 3usize.pow(r as u32);
+        'combo: for mask in 0..combos {
+            let mut seeds = Vec::with_capacity(r);
+            let mut m = mask;
+            for _ in 0..r {
+                seeds.push((m % 3) as i64);
+                m /= 3;
+            }
+            let mut seq: Vec<i64> = seeds.clone();
+            while seq.len() <= max_n {
+                let s: i64 = seq[seq.len() - r..].iter().sum();
+                seq.push(s);
+            }
+            for &(n, o) in &points {
+                if seq[n as usize] != o {
+                    continue 'combo;
+                }
+            }
+            // Emit: rolling window with the DISCOVERED seeds.
+            let seed_inits: String = seeds
+                .iter()
+                .enumerate()
+                .map(|(i, v)| format!("    w{i}: i64 = {v};\n"))
+                .collect();
+            let names: Vec<String> = (0..r).map(|i| format!("w{i}")).collect();
+            let sum_expr = names.join(" + ");
+            let shifts: String = (0..r - 1)
+                .map(|i| format!("        w{i} = w{};\n", i + 1))
+                .collect();
+            let last = r - 1;
+            let ret_cases: String = seeds
+                .iter()
+                .enumerate()
+                .map(|(i, v)| format!("    if n == {i} {{\n        return {v};\n    }}\n"))
+                .collect();
+            let code = format!(
+                "fn {name}(n: i64) -> i64 {{\n{ret_cases}{seed_inits}    i: i64 = {r};\n    nxt: i64 = 0;\n    while i <= n {{\n        nxt = {sum_expr};\n{shifts}        w{last} = nxt;\n        i = i + 1;\n    }}\n    return nxt;\n}}\n"
+            );
+            return Some((code, format!("decompose-sum-recurrence-r{r}")));
+        }
     }
     None
 }
