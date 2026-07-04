@@ -88,6 +88,16 @@ pub const BUILTIN_COMPONENTS: &[ComponentSpec] = &[
             smoke: Some(ACCUMULATOR_SMOKE),
         }),
     },
+    ComponentSpec {
+        name: "scaler",
+        surfaces: &["scaler", "scale", "scaling", "multiplier"],
+        leaves: &["multiply"],
+        glue: Some(GlueSpec {
+            module: "scaler",
+            code: SCALER_GLUE,
+            smoke: Some(SCALER_SMOKE),
+        }),
+    },
 ];
 
 /// Behavioral contract for `Counter`: three ticks must land on 3. This asserts the
@@ -146,6 +156,43 @@ mod accumulator_behaves {
         a.accumulate(3);
         a.accumulate(10);
         assert_eq!(a.total(), 18);
+    }
+}
+"#;
+
+/// A scaler whose factor is set at CONSTRUCTION and applied via the VERIFIED 2-arg
+/// `multiply` leaf. A third structural SHAPE: state is a configured operand (not an
+/// accumulator), and the constructor takes an argument.
+const SCALER_GLUE: &str = r#"//! Structural component: a Scaler that multiplies by a configured factor via the verified `multiply` leaf.
+
+use crate::multiply::multiply;
+
+pub struct Scaler {
+    factor: i64,
+}
+
+impl Scaler {
+    pub fn new(factor: i64) -> Self {
+        Scaler { factor }
+    }
+    /// Scale a value by the configured factor using the synthesized + verified `multiply` op.
+    pub fn scale(&self, x: i64) -> i64 {
+        multiply(x, self.factor)
+    }
+}
+"#;
+
+/// Behavioral contract for `Scaler`: factor 3 scales 5 -> 15 and 0 -> 0, proving
+/// the synthesized `multiply` genuinely multiplies its two arguments.
+const SCALER_SMOKE: &str = r#"
+#[cfg(test)]
+mod scaler_behaves {
+    use super::Scaler;
+    #[test]
+    fn scales_by_the_configured_factor() {
+        let s = Scaler::new(3);
+        assert_eq!(s.scale(5), 15);
+        assert_eq!(s.scale(0), 0);
     }
 }
 "#;
@@ -629,6 +676,22 @@ mod tests {
         assert!(build.outcome.compile.is_ok(), "compiles: {:?}", build.outcome.compile);
         // 5 + 3 + 10 == 18 at runtime -> the synthesized `add` genuinely sums.
         assert!(build.behaves(), "accumulator behavioral contract: {:?}", build.behavior);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scaler_structural_component_configures_state_and_multiplies() {
+        // Third structural shape: constructor takes an argument; state is a
+        // configured operand applied via the 2-arg `multiply` leaf.
+        let bridge = LinguigenesisBridge::new();
+        let spec = resolve_component("a scaler").expect("resolve scaler");
+        let root = temp_root("scaler");
+        let build = build_component(&bridge, spec, &root).expect("build");
+        assert!(build.leaves_verified.contains(&"multiply".to_string()), "multiply verified");
+        assert!(build.produces_structure());
+        assert!(build.outcome.compile.is_ok(), "compiles: {:?}", build.outcome.compile);
+        // factor 3: 5 -> 15, proving the synthesized multiply behaves.
+        assert!(build.behaves(), "scaler behavioral contract: {:?}", build.behavior);
         let _ = std::fs::remove_dir_all(&root);
     }
 
