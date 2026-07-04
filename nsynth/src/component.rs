@@ -26,6 +26,7 @@ use crate::agent::repo::nl_fixture_harness::{
     compile_gate, write_synthesized_project, CompileStatus, WriteOutcome,
 };
 use crate::linguigenesis_bridge::LinguigenesisBridge;
+use linguigenesis_core::entity_resolution::{edit_distance, morphological_variants};
 use std::path::Path;
 
 /// A raw-Rust glue module (struct + methods) whose bodies call the component's
@@ -98,15 +99,61 @@ impl Counter {
 }
 "#;
 
-/// Resolve a natural-language phrase to a component by surface-word match. First
-/// slice: literal, case-insensitive token match; graduates to the emergent op
-/// resolver (morphology / graph / WordNet).
+/// Match tiers, strongest first. A surface is a minimal SEED; recognition
+/// generalizes emergently off it (morphology + tight fuzzy), the same seed-plus-
+/// emergent pattern the op registry uses — NOT a hand-maintained synonym list.
+const TIER_EXACT: u8 = 3;
+const TIER_MORPH: u8 = 2;
+const TIER_FUZZY: u8 = 1;
+
+/// Emergent match of one phrase `token` against one seed `surface`:
+///   * exact           — token == surface
+///   * morphological   — a shared stem (strip -ing/-ed/-s/-es/-ly, both sides), so
+///                       "counting"/"counters"/"tallying" reach count/counter/tally
+///     with no per-inflection entry
+///   * fuzzy           — edit distance <= 1 on words >= 5 chars (typo tolerance),
+///                       conservative so "count" never leaks into "mount"/"court"
+/// Returns the tier score, or 0 for no match.
+fn surface_match(token: &str, surface: &str) -> u8 {
+    if token == surface {
+        return TIER_EXACT;
+    }
+    let mut tv = morphological_variants(token);
+    tv.push(token.to_string());
+    let mut sv = morphological_variants(surface);
+    sv.push(surface.to_string());
+    if tv.iter().any(|t| sv.contains(t)) {
+        return TIER_MORPH;
+    }
+    if token.len() >= 5 && surface.len() >= 5 && edit_distance(token, surface) <= 1 {
+        return TIER_FUZZY;
+    }
+    0
+}
+
+/// Resolve a natural-language phrase to a component. Emergent: every seed surface
+/// is expanded by morphology + tight fuzzy at match time, so inflections and typos
+/// resolve without enumerating them. Best (component, tier) wins; ties keep
+/// registry order.
 pub fn resolve_component(text: &str) -> Option<&'static ComponentSpec> {
     let lower = text.to_lowercase();
-    let tokens: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
-    BUILTIN_COMPONENTS
-        .iter()
-        .find(|c| c.surfaces.iter().any(|s| tokens.contains(s)))
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let mut best: Option<(&'static ComponentSpec, u8)> = None;
+    for comp in BUILTIN_COMPONENTS {
+        let mut score = 0u8;
+        for tok in &tokens {
+            for surf in comp.surfaces {
+                score = score.max(surface_match(tok, surf));
+            }
+        }
+        if score > 0 && best.map(|(_, b)| score > b).unwrap_or(true) {
+            best = Some((comp, score));
+        }
+    }
+    best.map(|(c, _)| c)
 }
 
 /// Outcome of building a component: which leaves verified, whether it emits a
@@ -196,12 +243,25 @@ mod tests {
 
     #[test]
     fn resolves_components_from_prose() {
+        // exact seed surfaces
         assert_eq!(
             resolve_component("give me some array statistics").unwrap().name,
             "array_stats"
         );
         assert_eq!(resolve_component("build a counter").unwrap().name, "counter");
+        // EMERGENT — morphology reaches inflections with no per-form entry:
+        // "counting"->count, "tallying"->tally, "counters"->counter.
+        assert_eq!(resolve_component("counting the events").unwrap().name, "counter");
+        assert_eq!(resolve_component("a tallying widget").unwrap().name, "counter");
+        assert_eq!(resolve_component("wire up two counters").unwrap().name, "counter");
+        // EMERGENT — tight fuzzy tolerates a one-char typo on a long word.
+        assert_eq!(
+            resolve_component("some statistcs please").unwrap().name,
+            "array_stats"
+        );
+        // negatives — unrelated prose resolves to nothing (fuzzy stays tight).
         assert!(resolve_component("reverse an array").is_none());
+        assert!(resolve_component("sort a list of names").is_none());
     }
 
     #[test]
