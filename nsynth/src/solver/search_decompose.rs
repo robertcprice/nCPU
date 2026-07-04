@@ -86,6 +86,7 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         .or_else(|| try_sort_by(problem, name))
         .or_else(|| try_interleave(problem, name))
         .or_else(|| try_median(problem, name))
+        .or_else(|| try_select_pair(problem, name))
         .or_else(|| try_filter(problem, name))
         .or_else(|| try_filter_sort(problem, name))
         .or_else(|| try_select(problem, name));
@@ -705,6 +706,75 @@ fn try_filter_sort(problem: &Problem, name: &str) -> Option<(String, String)> {
             "fn {name}(xs: {list_ty}) -> {list_ty} {{\n    out: {list_ty} = [];\n    for e in xs {{\n        if pred(e) {{\n            out.push(e);\n        }}\n    }}\n    i: i64 = 0;\n    while i < out.len {{\n        m: i64 = i;\n        j: i64 = i + 1;\n        while j < out.len {{\n            if {key_expr} {cmp} {key_expr_min} {{\n                m = j;\n            }}\n            j = j + 1;\n        }}\n        t: {elem_ty} = out[i];\n        out[i] = out[m];\n        out[m] = t;\n        i = i + 1;\n    }}\n    return out;\n}}\n\n{pred_fn}"
         );
         return Some((code, format!("decompose-filter-sort-{k_name}")));
+    }
+    None
+}
+
+// ─────────────────────────── H-SELECT-PAIR ───────────────────────────
+
+/// Output is the PAIR [value, index] of an extremum-under-predicate — the
+/// `pluck` class: "smallest even value and its index", empty list when nothing
+/// satisfies the predicate. Candidates = {even, odd, positive, negative, any}
+/// × {min, max}; every example must match (including the []-when-none cases).
+fn try_select_pair(problem: &Problem, name: &str) -> Option<(String, String)> {
+    type Pred = (&'static str, fn(i64) -> bool);
+    let preds: [Pred; 5] = [
+        ("x % 2 == 0", |x| x % 2 == 0),
+        ("x % 2 != 0", |x| x % 2 != 0),
+        ("x > 0", |x| x > 0),
+        ("x < 0", |x| x < 0),
+        ("x == x", |_| true),
+    ];
+    for (pred_src, pred) in preds {
+        for want_min in [true, false] {
+            let mut all_match = true;
+            for ex in &problem.examples {
+                let Value::Array(input) = &ex.inputs[0] else { return None };
+                let Value::Array(output) = &ex.expected else { return None };
+                let xs: Option<Vec<i64>> = input
+                    .iter()
+                    .map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+                    .collect();
+                let Some(xs) = xs else { return None };
+                // Best value + FIRST index under the predicate.
+                let mut best: Option<(i64, usize)> = None;
+                for (i, &x) in xs.iter().enumerate() {
+                    if !pred(x) {
+                        continue;
+                    }
+                    let better = match best {
+                        None => true,
+                        Some((bv, _)) => {
+                            if want_min { x < bv } else { x > bv }
+                        }
+                    };
+                    if better {
+                        best = Some((x, i));
+                    }
+                }
+                let expect: Vec<i64> = match best {
+                    Some((v, i)) => vec![v, i as i64],
+                    None => vec![],
+                };
+                let got: Option<Vec<i64>> = output
+                    .iter()
+                    .map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+                    .collect();
+                if got.as_deref() != Some(expect.as_slice()) {
+                    all_match = false;
+                    break;
+                }
+            }
+            if !all_match {
+                continue;
+            }
+            let cmp = if want_min { "<" } else { ">" };
+            let code = format!(
+                "fn {name}(xs: [i64]) -> [i64] {{\n    found: i64 = 0;\n    best: i64 = 0;\n    bi: i64 = 0;\n    i: i64 = 0;\n    while i < xs.len {{\n        x: i64 = xs[i];\n        if {pred_src} {{\n            if found == 0 {{\n                best = x;\n                bi = i;\n                found = 1;\n            }} else {{\n                if x {cmp} best {{\n                    best = x;\n                    bi = i;\n                }}\n            }}\n        }}\n        i = i + 1;\n    }}\n    out: [i64] = [];\n    if found == 1 {{\n        out.push(best);\n        out.push(bi);\n    }}\n    return out;\n}}\n"
+            );
+            let kind = if want_min { "min" } else { "max" };
+            return Some((code, format!("decompose-select-pair-{kind}")));
+        }
     }
     None
 }
