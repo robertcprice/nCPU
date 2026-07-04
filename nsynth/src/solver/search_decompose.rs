@@ -132,7 +132,7 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
             if n.is_empty() { "f" } else { n }
         };
         IN_DECOMPOSE.with(|f| f.set(true));
-        let result = try_char_filter(problem, name);
+        let result = try_char_shift(problem, name).or_else(|| try_char_filter(problem, name));
         IN_DECOMPOSE.with(|f| f.set(false));
         if result.is_none() {
             // Typed bottom-up enumeration (power-arc move 1): reaches the
@@ -863,6 +863,64 @@ fn try_select_pair(problem: &Problem, name: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+// ─────────────────────────── H-CHAR-SHIFT ───────────────────────────
+
+/// (str)->str Caesar shift: every letter rotates by a CONSTANT k within its
+/// case ring (a-z / A-Z), non-letters unchanged. k is MINED from the examples
+/// (the ordinal delta of the first shifted letter), then verified on every
+/// char of every example. Emitted with alphabet-string indexing since Mog has
+/// `.ord()` but no `chr()`. This is a parametrized primitive — the parameter is
+/// discovered from data, not hand-coded per task.
+fn try_char_shift(problem: &Problem, name: &str) -> Option<(String, String)> {
+    // Mine k from the first (input_char, output_char) letter pair.
+    let mut mined_k: Option<i64> = None;
+    for ex in &problem.examples {
+        let (Value::Str(inp), Value::Str(out)) = (&ex.inputs[0], &ex.expected) else { return None };
+        let ins: Vec<char> = inp.chars().collect();
+        let outs: Vec<char> = out.chars().collect();
+        if ins.len() != outs.len() {
+            return None;
+        }
+        for (i, o) in ins.iter().zip(outs.iter()) {
+            let k = ring_shift(*i, *o)?; // None if non-letter maps to something / mismatch
+            if let Some(kk) = k {
+                match mined_k {
+                    None => mined_k = Some(kk),
+                    Some(prev) if prev != kk => return None,
+                    _ => {}
+                }
+            }
+        }
+    }
+    let k = mined_k?; // no shifted letter at all -> not a cipher (identity)
+    let k = ((k % 26) + 26) % 26;
+    if k == 0 {
+        return None;
+    }
+    let code = format!(
+        "fn {name}(s: string) -> string {{\n    lo: string = \"abcdefghijklmnopqrstuvwxyz\";\n    up: string = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ\";\n    out: string = \"\";\n    for ch in s {{\n        o: i64 = ch.ord();\n        if o >= 97 {{\n            if o <= 122 {{\n                out = out + lo[(o - 97 + {k}) % 26];\n            }} else {{\n                out = out + ch;\n            }}\n        }} else {{\n            if o >= 65 {{\n                if o <= 90 {{\n                    out = out + up[(o - 65 + {k}) % 26];\n                }} else {{\n                    out = out + ch;\n                }}\n            }} else {{\n                out = out + ch;\n            }}\n        }}\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, format!("decompose-char-shift-{k}")))
+}
+
+/// The shift of `o` relative to `i` within its case ring, or:
+///   Ok(Some(k))  both are letters of the SAME case, shifted by k (mod 26)
+///   Ok(None)     both are the SAME non-letter (unchanged) — no constraint
+///   None (Err)   inconsistent (case change, letter<->non-letter, etc.)
+fn ring_shift(i: char, o: char) -> Option<Option<i64>> {
+    let lower = |c: char| c.is_ascii_lowercase();
+    let upper = |c: char| c.is_ascii_uppercase();
+    if lower(i) && lower(o) {
+        Some(Some(((o as i64 - 97) - (i as i64 - 97) + 26) % 26))
+    } else if upper(i) && upper(o) {
+        Some(Some(((o as i64 - 65) - (i as i64 - 65) + 26) % 26))
+    } else if !i.is_ascii_alphabetic() && i == o {
+        Some(None)
+    } else {
+        None
+    }
 }
 
 // ─────────────────────────── H-CHAR-FILTER ───────────────────────────
