@@ -95,6 +95,38 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         }
         return None;
     }
+    // (int, int) -> string: base conversion.
+    if first.inputs.len() == 2
+        && matches!(first.inputs[0], Value::Int(_))
+        && matches!(first.inputs[1], Value::Int(_))
+        && matches!(first.expected, Value::Str(_))
+    {
+        let name = { let n = problem.function_name(); if n.is_empty() { "f" } else { n } };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_change_base(problem, name);
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult { success: true, code, method, error: None, metadata: Default::default() });
+        }
+        return None;
+    }
+    // (string, string) -> string: char-wise bit ops.
+    if first.inputs.len() == 2
+        && matches!(first.inputs[0], Value::Str(_))
+        && matches!(first.inputs[1], Value::Str(_))
+        && matches!(first.expected, Value::Str(_))
+    {
+        let name = { let n = problem.function_name(); if n.is_empty() { "f" } else { n } };
+        IN_DECOMPOSE.with(|f| f.set(true));
+        let result = try_string_xor(problem, name);
+        IN_DECOMPOSE.with(|f| f.set(false));
+        let (code, method) = result?;
+        if crate::runtime::code_reproduces_examples(&code, examples) {
+            return Some(SolveResult { success: true, code, method, error: None, metadata: Default::default() });
+        }
+        return None;
+    }
     // Single INT input with STRING output: int->string closed forms.
     if first.inputs.len() == 1
         && matches!(first.inputs[0], Value::Int(_))
@@ -930,6 +962,62 @@ fn try_select_pair(problem: &Problem, name: &str) -> Option<(String, String)> {
         }
     }
     None
+}
+
+// ─────────────────────── base-conversion / bit-string schemas ───────────────────────
+
+/// (int x, int base) -> string of x in the given base (base <= 10), via repeated
+/// division (change_base).
+fn try_change_base(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let (Value::Int(x), Value::Int(base)) = (&ex.inputs[0], &ex.inputs[1]) else { return None };
+        let Value::Str(out) = &ex.expected else { return None };
+        if *base < 2 || *base > 10 || *x < 0 {
+            return None;
+        }
+        let mut n = *x;
+        let mut digits = Vec::new();
+        if n == 0 {
+            digits.push('0');
+        }
+        while n > 0 {
+            digits.push((b'0' + (n % base) as u8) as char);
+            n /= base;
+        }
+        let want: String = digits.iter().rev().collect();
+        if &want != out {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(x: i64, base: i64) -> string {{\n    if x == 0 {{\n        return \"0\";\n    }}\n    rev: string = \"\";\n    n: i64 = x;\n    while n > 0 {{\n        d: i64 = n % base;\n        rev = rev + d.to_str();\n        n = n / base;\n    }}\n    out: string = \"\";\n    i: i64 = rev.len - 1;\n    while i >= 0 {{\n        out = out + rev[i];\n        i = i - 1;\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-change-base".to_string()))
+}
+
+/// (bin-string a, bin-string b) -> char-wise XOR (string_xor).
+fn try_string_xor(problem: &Problem, name: &str) -> Option<(String, String)> {
+    for ex in &problem.examples {
+        let (Value::Str(a), Value::Str(b)) = (&ex.inputs[0], &ex.inputs[1]) else { return None };
+        let Value::Str(out) = &ex.expected else { return None };
+        let ac: Vec<char> = a.chars().collect();
+        let bc: Vec<char> = b.chars().collect();
+        if ac.len() != bc.len() {
+            return None;
+        }
+        let want: String = ac
+            .iter()
+            .zip(bc.iter())
+            .map(|(x, y)| if x == y { '0' } else { '1' })
+            .collect();
+        if &want != out {
+            return None;
+        }
+    }
+    let code = format!(
+        "fn {name}(a: string, b: string) -> string {{\n    out: string = \"\";\n    i: i64 = 0;\n    while i < a.len {{\n        if a[i] == b[i] {{\n            out = out + \"0\";\n        }} else {{\n            out = out + \"1\";\n        }}\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+    );
+    Some((code, "decompose-string-xor".to_string()))
 }
 
 // ─────────────────────── numeric/string closed-form schemas ───────────────────────
