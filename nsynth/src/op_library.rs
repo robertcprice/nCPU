@@ -821,6 +821,13 @@ pub const OPS: &[LibOp] = &[
 "fn split_at_uppercase_drop(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    for ch in s {\n        if ch.is_upper() {\n            if cur.len > 0 {\n                out.push(cur);\n            }\n            cur = \"\";\n        } else {\n            cur = cur + ch;\n        }\n    }\n    if cur.len > 0 {\n        out.push(cur);\n    }\n    return out;\n}\n" },
     LibOp { name: "extract_quoted", arity: 1, mog:
 "fn extract_quoted(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    inq: i64 = 0;\n    for ch in s {\n        if ch == '\"' {\n            if inq == 1 {\n                out.push(cur);\n                cur = \"\";\n                inq = 0;\n            } else {\n                inq = 1;\n            }\n        } else {\n            if inq == 1 {\n                cur = cur + ch;\n            }\n        }\n    }\n    return out;\n}\n" },
+    // ── batch 28b: split-semantics + frequency variants for the named batch-28
+    // misses (15 split_lowerstring: a segment is a lowercase char plus its
+    // trailing UPPERCASE run; 350 minimum_Length: the minimum per-char count).
+    LibOp { name: "lower_then_upper_runs", arity: 1, mog:
+"fn lower_then_upper_runs(s: string) -> [string] {\n    out: [string] = [];\n    cur: string = \"\";\n    for ch in s {\n        if ch.is_lower() {\n            if cur.len > 0 {\n                out.push(cur);\n            }\n            cur = \"\";\n            cur = cur + ch;\n        } else {\n            if cur.len > 0 {\n                cur = cur + ch;\n            }\n        }\n    }\n    if cur.len > 0 {\n        out.push(cur);\n    }\n    return out;\n}\n" },
+    LibOp { name: "min_char_frequency", arity: 1, mog:
+"fn min_char_frequency(s: string) -> i64 {\n    keys: [i64] = [];\n    counts: [i64] = [];\n    for ch in s {\n        found: i64 = 0 - 1;\n        i: i64 = 0;\n        while i < keys.len {\n            if keys[i] == ch {\n                found = i;\n            }\n            i = i + 1;\n        }\n        if found < 0 {\n            keys.push(ch);\n            counts.push(1);\n        } else {\n            counts[found] = counts[found] + 1;\n        }\n    }\n    mn: i64 = counts[0];\n    for c in counts {\n        if c < mn {\n            mn = c;\n        }\n    }\n    return mn;\n}\n" },
     // ── batch 29: FLOAT loop closed-forms (F3/F4 in the wall analysis). Mog
     // float arithmetic + division are live; `1.0 * x` promotes int math to
     // float where a float result is required.
