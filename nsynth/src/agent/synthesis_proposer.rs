@@ -52,6 +52,15 @@ pub fn nl_synthesis_proposer(
         return Ok(patch);
     }
 
+    // FEATURE-ADD stage: an ADDITIVE request ("add a function that triples a
+    // number") whose fn does NOT exist yet — synthesize it via emergent
+    // comprehension and APPEND it (TDD shape: a failing test referencing the
+    // missing fn compiles+passes after). Declines for non-additive prose or
+    // when the fn already exists (that's the edit stage above).
+    if let Some(patch) = try_emergent_addition_patch(task, context, &description, analysis) {
+        return Ok(patch);
+    }
+
     // Primary path: genuine verified synthesis through the bridge + solver.
     // Generalizes to any demonstrated function (registry op or inline examples),
     // not just the canned scalar shapes the keyword fast-patch can express.
@@ -232,6 +241,111 @@ pub fn try_emergent_synthesis_patch(
     )
 }
 
+/// FEATURE-ADD (no LLM): synthesize a NEW function from bare NL and append it to
+/// the repo — the TDD shape, where a failing test already references the missing
+/// fn. Gates, in order:
+///   * additive cue required (add/create/new/implement/write/need) so edit
+///     requests never route here;
+///   * the bridge must comprehend + verify the description (emergent resolver);
+///   * the synthesized fn's name must NOT be defined anywhere (else it's an
+///     edit, handled upstream);
+///   * target file: the failure-implicated file when it's a repo .rs (the
+///     compile error fires where the missing fn is CALLED — appending there
+///     puts it in scope), else src/lib.rs, else the first .rs.
+/// Output is plain Rust (Mog transpiled + pub'd) appended whole-file, gated by
+/// the caller's cargo-test oracle like every other patch.
+pub fn try_emergent_addition_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+    analysis: Option<&FailureAnalysis>,
+) -> Option<RepairPatch> {
+    let _ = task;
+    let lower = description.to_lowercase();
+    const ADDITIVE: [&str; 6] = ["add ", "create ", "new ", "implement ", "write ", "need "];
+    if !ADDITIVE.iter().any(|c| lower.contains(c)) {
+        return None;
+    }
+    // Synthesize from the SEMANTIC CORE: "add a function that triples a number"
+    // → "triples a number", so the imperative "add" can't shadow the real op.
+    let synth_desc = lower
+        .split_once(" that ")
+        .map(|(_, rest)| rest.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| description.to_string());
+    let bridge = crate::linguigenesis_bridge::LinguigenesisBridge::new();
+    let result = bridge.synthesize_from_description(&synth_desc, None).ok()?;
+    if !result.success {
+        return None;
+    }
+    let synthesized = rust_code_for_repo_synthesis(&result.code);
+    if !is_plain_rust_body(&synthesized) {
+        return None;
+    }
+    // The new fn's name, from the synthesized code itself.
+    let fn_name = synthesized
+        .lines()
+        .find_map(|l| {
+            let t = l.trim_start();
+            t.strip_prefix("pub fn ")
+                .or_else(|| t.strip_prefix("fn "))
+                .and_then(|r| r.split('(').next())
+                .map(|n| n.trim().to_string())
+        })
+        .filter(|n| !n.is_empty())?;
+    // Must be genuinely NEW — an existing definition means this is an edit.
+    if context.files.iter().any(|f| {
+        f.path.ends_with(".rs")
+            && file_defines_function(f.text.as_deref().unwrap_or(""), &fn_name)
+    }) {
+        return None;
+    }
+    // Target file: failure-implicated .rs > src/lib.rs > first .rs.
+    let target = analysis
+        .and_then(|a| a.file.clone())
+        .filter(|p| p.ends_with(".rs") && context.files.iter().any(|f| p.ends_with(&f.path)))
+        .map(|p| {
+            context
+                .files
+                .iter()
+                .find(|f| p.ends_with(&f.path))
+                .map(|f| f.path.clone())
+                .unwrap_or(p)
+        })
+        .or_else(|| {
+            context
+                .files
+                .iter()
+                .find(|f| f.path == "src/lib.rs")
+                .map(|f| f.path.clone())
+        })
+        .or_else(|| {
+            context
+                .files
+                .iter()
+                .find(|f| f.path.ends_with(".rs"))
+                .map(|f| f.path.clone())
+        })?;
+    let old_text = read_relative_file(context, &target).ok()?;
+    // Append the new fn, pub'd so sibling modules/tests can call it.
+    let mut appended = synthesized.trim().to_string();
+    if !appended.starts_with("pub ") && appended.starts_with("fn ") {
+        appended = format!("pub {appended}");
+    }
+    let new_text = format!("{}\n\n{}\n", old_text.trim_end(), appended);
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                old_text,
+                new_text,
+                "emergent NL addition proposer (new fn appended; verified synthesis, no LLM)",
+            ))
+            .with_metadata("proposer", "nl_emergent_addition")
+            .with_metadata("synthesis_method", result.method.clone()),
+    )
+}
+
 /// CONTENT-based localization: which repo fn does the description talk about?
 /// Scans every `.rs` file's defined fn names and matches each snake_case part of
 /// the name against the description's tokens emergently (exact or shared
@@ -291,25 +405,56 @@ fn locate_described_fn(
     best.map(|(path, name, _)| (path, name))
 }
 
-/// Every `fn NAME(` defined at any nesting in `text` (test fns included — the
-/// all-parts rule keeps them from matching ordinary prose).
+/// Every `fn NAME(` defined in `text`, EXCLUDING test code: fns annotated
+/// `#[test]` and everything inside a `#[cfg(test)]` block. Tests are the
+/// acceptance ORACLE — a fn named in prose must never localize to the test that
+/// checks it (observed: "add a function that triples" matched the test fn
+/// `triples()` and the edit stage rewrote the oracle instead of adding the fn).
 fn defined_fn_names(text: &str) -> Vec<String> {
     let mut out = Vec::new();
+    let mut prev_nonempty = "";
+    let mut test_block_depth: Option<i32> = None; // brace depth inside #[cfg(test)]
+    let mut depth: i32 = 0;
+    let mut pending_test_block = false;
     for line in text.lines() {
         let t = line.trim_start();
+        if t.starts_with("#[cfg(test)") {
+            pending_test_block = true;
+        }
+        let in_test_block = test_block_depth.is_some();
+        let fn_annotated_test = prev_nonempty.trim_start().starts_with("#[test]");
         let rest = t
             .strip_prefix("pub fn ")
             .or_else(|| t.strip_prefix("fn "))
             .or_else(|| t.strip_prefix("pub(crate) fn "));
         if let Some(rest) = rest {
-            if let Some(name) = rest.split('(').next() {
-                let name = name.trim();
-                if !name.is_empty()
-                    && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                {
-                    out.push(name.to_string());
+            if !in_test_block && !fn_annotated_test {
+                if let Some(name) = rest.split('(').next() {
+                    let name = name.trim();
+                    if !name.is_empty()
+                        && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    {
+                        out.push(name.to_string());
+                    }
                 }
             }
+        }
+        for c in line.chars() {
+            if c == '{' {
+                depth += 1;
+                if pending_test_block && test_block_depth.is_none() {
+                    test_block_depth = Some(depth);
+                    pending_test_block = false;
+                }
+            } else if c == '}' {
+                if test_block_depth == Some(depth) {
+                    test_block_depth = None;
+                }
+                depth -= 1;
+            }
+        }
+        if !t.is_empty() {
+            prev_nonempty = line;
         }
     }
     out
@@ -1365,6 +1510,69 @@ mod tests {
             patch.edits[0].new_text
         );
         fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// FEATURE-ADD end to end (TDD shape, no examples, no LLM): a failing test
+    /// references a fn that does NOT exist; "add a function that triples a
+    /// number" synthesizes `triple` via emergent comprehension and APPENDS it —
+    /// the compile-failing crate goes green.
+    #[test]
+    fn emergent_addition_adds_missing_fn_from_bare_nl() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_addfn_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"addfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // TDD: the test exists, the fn does not — baseline is a COMPILE failure.
+        fs::write(
+            root.join("src/lib.rs"),
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn triples() {\n        assert_eq!(crate::triple(4), 12);\n        assert_eq!(crate::triple(-2), -6);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+
+        let task = RepoTaskSpec {
+            id: "add-triple".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Feature,
+            issue: "nl: add a function that triples a number".into(),
+            test_command: "cargo test triples".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken (missing fn)");
+        let analysis = FailureParser::default().parse(&before.failure_output());
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // Through the REAL chain.
+        let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_emergent_addition"),
+            "addition stage should fire: {:?}",
+            patch.metadata
+        );
+        let new_text = &patch.edits[0].new_text;
+        assert!(new_text.contains("pub fn triple"), "new fn appended: {new_text}");
+        // The original content is preserved (append, not replace).
+        assert!(new_text.contains("mod tests"), "existing content kept: {new_text}");
+        fs::write(root.join(&patch.edits[0].path), new_text).expect("apply");
         let after = RepairVerifier::new(&root, GuardrailPolicy::default())
             .verify(&task.test_command)
             .expect("verify after");

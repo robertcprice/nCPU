@@ -2993,6 +2993,15 @@ fn array_domain_word(input: &str, registry: &Registry, req_fn: &str) -> Option<S
     let resolver = EntityResolver::new(registry.clone());
     for tok in tokenize_lower(input) {
         // The token must be a genuine DOMAIN word, not a structural / stop word.
+        // Consult the DATA stop set directly (coding_registry grammar_stop_words):
+        // meta words like "function"/"number" must never count as domain evidence.
+        // (Previously this leaned on resolve_surface returning a GrammarMarker for
+        // stop words, but a content entity at the same 0.51 tier can outcompete it
+        // nondeterministically — e.g. "function"→map via definition overlap once
+        // the merge stopped losing entities.)
+        if resolver.is_stop_word(&tok) {
+            continue;
+        }
         // `resolve_operation_surface` fuzzily links almost ANY token to SOME op at
         // ~0.51 (e.g. "function"→map, "array"→array_max BOTH score 0.51), so the
         // weak op-link alone cannot tell a real array operand ("array") from meta
