@@ -2618,7 +2618,13 @@ fn unsound_confident_solve_categorized(
     // names against the resolved op's domain; it is NOT a value-noun wordlist.
     // (A genuinely array-typed req op — array_sum, reverse — carries an array type
     // in its own signature, so this never fires for them.)
-    let req_sig_is_array = sig_lower.contains('[') || sig_lower.contains("vec<");
+    // `string`/`str`/`&str` are Collection-domain in the type lattice (a
+    // string→string op is a Collection→Collection transform, exactly like
+    // vec→vec), so a string signature is ARRAY-domain, not scalar — otherwise the
+    // guard below wrongly rejects string ops (e.g. lowercase: fn transform(string)
+    // -> string) as scalar-vs-array mismatches.
+    let req_sig_is_array =
+        sig_lower.contains('[') || sig_lower.contains("vec<") || sig_lower.contains("str");
     if !req_sig_is_array {
         if let Some(arr_word) = array_domain_word(input, registry, &req.function_name) {
             return Some(GateRefusal {
