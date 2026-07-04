@@ -138,6 +138,61 @@ pub(super) fn try_combinator(problem: &Problem, name: &str) -> Option<SolveResul
         }
     }
 
+    // LIBRARY HOLE-POWER (emergent): draw single-arg VERIFIED ops from the op
+    // library as atoms, applied by EXECUTION — `[i64]->i64` reductions (many are
+    // number-theory: largest prime, digit operations) and `i64->i64` scalar
+    // transforms (digit_sum, factorial) that chain onto fold/reduction results.
+    // The library IS the surface and grows with the flywheel, so this is
+    // emergent, not a hand-list. Node budget + best-first keep the wider fan-out
+    // affordable; the outer re-verify keeps it sound.
+    // Parse each op's Mog ONCE (re-parsing per call is ~all the cost; parsing
+    // once turned a 16s task into sub-second). i64->i64 memoized on the input
+    // value, since small ints repeat heavily across examples/expressions.
+    let lib_reduce: Vec<(&str, crate::runtime::Program)> = crate::op_library::OPS
+        .iter()
+        .filter(|o| o.arity == 1 && matches!(op1_sig(o.mog), Some((ref p, ref r)) if p == "[i64]" && r == "i64"))
+        .filter_map(|o| crate::runtime::parse_program(o.mog).ok().map(|prog| (o.name, prog)))
+        .collect();
+    let lib_scalar: Vec<(&str, crate::runtime::Program)> = crate::op_library::OPS
+        .iter()
+        .filter(|o| o.arity == 1 && matches!(op1_sig(o.mog), Some((ref p, ref r)) if p == "i64" && r == "i64"))
+        .filter_map(|o| crate::runtime::parse_program(o.mog).ok().map(|prog| (o.name, prog)))
+        .collect();
+    let int_cache: std::cell::RefCell<std::collections::HashMap<(usize, i64), Option<i64>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    // HARD exec budget: each op execution clones the op's AST, so an unbounded
+    // fan-out (120 ops × many exprs × examples) blows past the per-task wall.
+    // Cap the total number of distinct executions; once spent, lib atoms are
+    // skipped so the fixed-atom search still runs to completion.
+    const MAX_LIB_EXECS: usize = 1200;
+    let lib_execs = std::cell::Cell::new(0usize);
+    let apply1_int = |idx: usize, prog: &crate::runtime::Program, name: &str, x: i64| -> Option<i64> {
+        if let Some(v) = int_cache.borrow().get(&(idx, x)) {
+            return *v;
+        }
+        if lib_execs.get() >= MAX_LIB_EXECS {
+            return None;
+        }
+        lib_execs.set(lib_execs.get() + 1);
+        let r = match crate::runtime::execute_parsed(prog, name, &[Value::Int(x)], name) {
+            Ok(crate::runtime::Value::Int(i)) => Some(i),
+            _ => None,
+        };
+        int_cache.borrow_mut().insert((idx, x), r);
+        r
+    };
+    let apply1_list = |prog: &crate::runtime::Program, name: &str, l: &[i64]| -> Option<i64> {
+        if lib_execs.get() >= MAX_LIB_EXECS {
+            return None;
+        }
+        lib_execs.set(lib_execs.get() + 1);
+        let arr = Value::Array(l.iter().map(|&x| Value::Int(x)).collect());
+        match crate::runtime::execute_parsed(prog, name, &[arr], name) {
+            Ok(crate::runtime::Value::Int(i)) => Some(i),
+            _ => None,
+        }
+    };
+
     let mut nodes = 0usize;
     for depth in 2..=MAX_DEPTH {
         if nodes >= MAX_NODES {
@@ -151,7 +206,40 @@ pub(super) fn try_combinator(problem: &Problem, name: &str) -> Option<SolveResul
                 break;
             }
             nodes += 1;
+            // I -> I library transforms: chain scalar ops (digit_sum, factorial,
+            // …) onto fold / reduction results.
+            if let V::I(_) = &e.outs[0] {
+                for (idx, (nm, prog)) in lib_scalar.iter().enumerate() {
+                    let outs: Option<Vec<V>> = e
+                        .outs
+                        .iter()
+                        .map(|v| {
+                            let V::I(x) = v else { unreachable!() };
+                            apply1_int(idx, prog, nm, *x).map(V::I)
+                        })
+                        .collect();
+                    if let Some(outs) = outs {
+                        fresh.push(Expr { outs, mog: format!("__LIB[{nm}]({})", e.mog), depth });
+                    }
+                }
+                continue;
+            }
             let V::IL(_) = &e.outs[0] else { continue };
+
+            // IL -> I library reductions (number-theory list ops), applied by exec.
+            for (nm, prog) in &lib_reduce {
+                let outs: Option<Vec<V>> = e
+                    .outs
+                    .iter()
+                    .map(|v| {
+                        let V::IL(l) = v else { unreachable!() };
+                        apply1_list(prog, nm, l).map(V::I)
+                    })
+                    .collect();
+                if let Some(outs) = outs {
+                    fresh.push(Expr { outs, mog: format!("__LIB[{nm}]({})", e.mog), depth });
+                }
+            }
 
             // filter[pred] : IL -> IL
             for (cond, pf) in &preds {
@@ -669,8 +757,39 @@ fn compile(ir: &str, helpers: &mut Vec<String>) -> String {
             ));
             format!("{fname}({inner_expr})")
         }
+        "LIB" => {
+            // Library hole-power atom: emit the verified op's Mog as a helper and
+            // call it. `param` is the op name.
+            if let Some(m) = lib_mog(param) {
+                helpers.push(m.to_string());
+                format!("{param}({inner_expr})")
+            } else {
+                inner_expr
+            }
+        }
         _ => inner_expr,
     }
+}
+
+/// Look up a verified op's Mog source by name (library hole-power emission).
+fn lib_mog(name: &str) -> Option<&'static str> {
+    crate::op_library::OPS
+        .iter()
+        .find(|o| o.name == name)
+        .map(|o| o.mog)
+}
+
+/// Parse an arity-1 op's `(param_ty, ret_ty)` from its Mog signature line
+/// (`fn name(p: TY) -> RET { … }`). Whitespace-insensitive.
+fn op1_sig(mog: &str) -> Option<(String, String)> {
+    let l: String = mog.lines().next()?.chars().filter(|c| !c.is_whitespace()).collect();
+    let open = l.find('(')?;
+    let close = l.find(')')?;
+    let params = &l[open + 1..close];
+    let pty = params.split(':').nth(1)?.to_string();
+    let rs = l.find("->")? + 2;
+    let re = l[rs..].find('{').map(|i| rs + i).unwrap_or(l.len());
+    Some((pty, l[rs..re].to_string()))
 }
 
 #[cfg(test)]
@@ -724,5 +843,19 @@ mod tests {
             (vec![4, 5, 6], Value::Int(2)),
         ]);
         assert!(try_combinator(&p, "f").is_none());
+    }
+
+    #[test]
+    fn library_hole_power_digit_sum_of_sum() {
+        // sum_of_digits(fold_sum(xs)) — a VERIFIED library op (sum_of_digits,
+        // i64->i64) chained onto a fold, discovered by search, no hand schema.
+        let p = prob(vec![
+            (vec![12, 10], Value::Int(4)),   // 22 -> 4
+            (vec![5, 5, 5], Value::Int(6)),  // 15 -> 6
+            (vec![100, 23], Value::Int(6)),  // 123 -> 6
+            (vec![9], Value::Int(9)),        // 9 -> 9
+        ]);
+        let r = try_combinator(&p, "dsos").expect("must compose sum_of_digits(sum(xs))");
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
     }
 }
