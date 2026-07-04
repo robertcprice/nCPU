@@ -220,12 +220,17 @@ pub(super) fn search_float_poly(problem: &Problem, fn_name: &str) -> Option<Solv
     let (rows, targets, arity) = extract_float(problem)?;
     let n = rows.len();
 
-    // Each feature is the per-argument power vector of a monomial:
+    // Each feature is the per-argument power vector of a monomial. NEGATIVE
+    // powers are RATIOS (F5 in the wall analysis): [-1, 1] = b/a, so a single
+    // 2-unknown model like `c·b/a` (parabola vertex -b/2a) still fits a
+    // 3-example task under the over-determination gate. A zero denominator on
+    // any example makes the feature non-finite and the fit check refuses.
     // arity 2, [1,1] = a·b; arity 1, [2] = x². The ladder is ordered by size.
-    let ladder: Vec<Vec<Vec<u32>>> = match arity {
+    let ladder: Vec<Vec<Vec<i32>>> = match arity {
         1 => vec![
             vec![vec![2]],                     // c·x²      (+c0)
             vec![vec![3]],                     // c·x³
+            vec![vec![-1]],                    // c/x
             vec![vec![1], vec![2]],            // c1·x + c2·x²
             vec![vec![1], vec![2], vec![3]],   // full cubic
         ],
@@ -235,18 +240,24 @@ pub(super) fn search_float_poly(problem: &Problem, fn_name: &str) -> Option<Solv
             vec![vec![1, 2]],                              // c·a·b²
             vec![vec![2, 0]],                              // c·a²
             vec![vec![0, 2]],                              // c·b²
+            vec![vec![1, -1]],                             // c·a/b    (ratios)
+            vec![vec![-1, 1]],                             // c·b/a
             vec![vec![2, 0], vec![0, 2]],                  // c1·a² + c2·b²
             vec![vec![1, 0], vec![0, 1], vec![1, 1]],      // bilinear
         ],
         3 => vec![
             vec![vec![1, 1, 1]],                                       // c·a·b·c
+            vec![vec![0, 1, -1]],                                      // c·b/c ratios
+            vec![vec![1, -1, 0]],
+            vec![vec![-1, 1, 0]],                                      // c·b/a (-b/2a vertex)
+            vec![vec![0, -1, 1]],
             vec![vec![1, 1, 0], vec![1, 0, 1], vec![0, 1, 1]],         // pairwise products
         ],
         _ => return None,
     };
 
-    let feat_val = |pows: &[u32], row: &[f64]| -> f64 {
-        pows.iter().zip(row).map(|(&p, &x)| x.powi(p as i32)).product()
+    let feat_val = |pows: &[i32], row: &[f64]| -> f64 {
+        pows.iter().zip(row).map(|(&p, &x)| x.powi(p)).product()
     };
     let param_names = scalar_param_names(arity);
 
@@ -264,21 +275,32 @@ pub(super) fn search_float_poly(problem: &Problem, fn_name: &str) -> Option<Solv
         let eps = tolerance(&targets);
         let fits = rows.iter().zip(targets.iter()).all(|(row, &y)| {
             let frow: Vec<f64> = feats.iter().map(|f| feat_val(f, row)).collect();
-            (predict(&rounded, &frow) - y).abs() <= eps
+            frow.iter().all(|v| v.is_finite()) && (predict(&rounded, &frow) - y).abs() <= eps
         });
         if !fits || rounded[1..].iter().all(|&c| c.abs() < 1e-9) {
             continue;
         }
 
-        // Emit `c0 + c1*a*a + c2*a*b …` — each monomial as repeated multiplication.
-        let mono = |pows: &[u32]| -> String {
-            let mut parts = Vec::new();
+        // Emit `c0 + c1*a*a + c2*a/b …` — positive powers as repeated
+        // multiplication, negative powers as division (left-assoc precedence
+        // makes `c * b / a` evaluate ((c·b)/a), which is the fitted feature).
+        let mono = |pows: &[i32]| -> String {
+            let mut out = String::new();
             for (j, &p) in pows.iter().enumerate() {
-                for _ in 0..p {
-                    parts.push(param_names[j].clone());
+                for _ in 0..p.max(0) {
+                    if !out.is_empty() {
+                        out.push_str(" * ");
+                    }
+                    out.push_str(&param_names[j]);
                 }
             }
-            parts.join(" * ")
+            for (j, &p) in pows.iter().enumerate() {
+                for _ in 0..(-p).max(0) {
+                    out.push_str(" / ");
+                    out.push_str(&param_names[j]);
+                }
+            }
+            out
         };
         let mut terms: Vec<String> = Vec::new();
         for (i, f) in feats.iter().enumerate() {
@@ -456,5 +478,18 @@ mod tests {
             search_float_poly(&p, "f").is_none(),
             "arbitrary 3 points must not be fitted"
         );
+    }
+
+    #[test]
+    fn float_poly_recovers_ratio_of_arguments() {
+        // -0.5·b/a (the parabola-vertex x-coordinate shape): a RATIO feature
+        // ([-1, 1] negative power), 2 unknowns, fits 3 examples with a spare.
+        let f = |a: f64, b: f64| -0.5 * b / a;
+        let raw = [(5.0, 3.0), (2.0, 8.0), (4.0, 6.0)];
+        let rows: Vec<(Vec<f64>, f64)> = raw.iter().map(|&(a, b)| (vec![a, b], f(a, b))).collect();
+        let p = pf("fn vx(a: f64, b: f64) -> f64", &rows);
+        let r = search_float_poly(&p, "vx").expect("must recover -0.5*b/a");
+        assert!(r.code.contains("/ a"), "code must divide by a: {}", r.code);
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
     }
 }
