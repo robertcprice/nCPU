@@ -49,6 +49,7 @@ mod search_decompose;
 mod search_time_families;
 mod search_tree_families;
 mod search_tuple;
+mod search_typed_enum;
 mod signature;
 
 use self::helpers::{

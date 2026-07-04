@@ -134,6 +134,13 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
         IN_DECOMPOSE.with(|f| f.set(true));
         let result = try_char_filter(problem, name);
         IN_DECOMPOSE.with(|f| f.set(false));
+        if result.is_none() {
+            // Typed bottom-up enumeration (power-arc move 1): reaches the
+            // split→map→join compositions no char schema covers. Self-verifies.
+            if let Some(r) = super::search_typed_enum::try_typed_enum_str(problem, name) {
+                return Some(r);
+            }
+        }
         let (code, method) = result?;
         if crate::runtime::code_reproduces_examples(&code, examples) {
             return Some(SolveResult {
