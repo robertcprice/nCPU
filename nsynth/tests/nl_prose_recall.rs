@@ -47,6 +47,11 @@ fn corpus() -> Vec<(&'static str, &'static str, &'static str)> {
         ("amount", "array_sum", "synonym"),
         ("maximum", "array_max", "synonym"),
         ("minimum", "array_min", "synonym"),
+        // SYNONYM (newly-seeded WordNet closure: increment/subtract/filter).
+        ("increase", "increment", "synonym"),
+        ("deduct", "subtract", "synonym"),
+        ("filtrate", "filter", "synonym"),
+        ("strain", "filter", "synonym"),
         // DIRECT — sanity anchor.
         ("reverse", "reverse", "direct"),
         ("sort", "sort", "direct"),
