@@ -64,19 +64,26 @@ fn math_utils_request_writes_real_multifile_program() {
     // lib.rs wires BOTH component modules (re-export glob).
     assert!(lib_src.contains("mod square;"), "lib wires square: {lib_src}");
     assert!(lib_src.contains("pub use square::*;"), "lib re-exports square");
-    // The double component is comprehended as the registry defines "double"
-    // (element-wise *2), emitted as module `map`.
-    assert!(lib_src.contains("mod map;"), "lib wires the doubling module: {lib_src}");
+    // "a function that doubles a NUMBER" comprehends to the scalar `double` op
+    // (x -> 2x; `double` is now a proper scalar op parallel to square, not the old
+    // verb-stub-to-map), emitted as module `double`.
+    assert!(lib_src.contains("mod double;"), "lib wires the doubling module: {lib_src}");
 
     // square.rs: a REAL synthesized scalar square (x * x), made pub for re-export.
     let square_src = fs::read_to_string(root.join("src/square.rs")).unwrap();
     assert!(square_src.contains("pub fn square"), "square is pub: {square_src}");
     assert!(square_src.contains("x * x"), "square synthesized as x*x: {square_src}");
 
-    // map.rs: the doubling component, doubling each element (item * 2).
-    let map_src = fs::read_to_string(root.join("src/map.rs")).unwrap();
-    assert!(map_src.contains("pub fn map"), "double-as-map is pub: {map_src}");
-    assert!(map_src.contains("item * 2"), "doubles each element: {map_src}");
+    // double.rs: a REAL synthesized scalar double (x*2 / x+x / 2*x), pub for re-export.
+    let double_src = fs::read_to_string(root.join("src/double.rs")).unwrap();
+    assert!(double_src.contains("pub fn double"), "double is pub: {double_src}");
+    assert!(
+        double_src.contains("* 2")
+            || double_src.contains("2 *")
+            || double_src.contains("+ x")
+            || double_src.contains("x +"),
+        "doubles the input: {double_src}"
+    );
 
     // Exactly two component modules were written (no spurious files).
     let module_files: Vec<_> = fs::read_dir(root.join("src"))
