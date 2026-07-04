@@ -27,78 +27,147 @@ use crate::agent::repo::nl_fixture_harness::{
 };
 use crate::linguigenesis_bridge::LinguigenesisBridge;
 use linguigenesis_core::entity_resolution::{edit_distance, morphological_variants};
+use serde::Deserialize;
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// A raw-Rust glue module (struct + methods) whose bodies call the component's
 /// verified leaves. Written verbatim next to the transpiled leaves and wired into
-/// `lib.rs`, then compile-gated with them.
+/// `lib.rs`, then compile-gated with them. Owned (not `&'static`) so components can
+/// be loaded from DATA, not only baked into the binary.
+#[derive(Clone, Deserialize)]
 pub struct GlueSpec {
     /// Glue module name (`src/<module>.rs`).
-    pub module: &'static str,
+    pub module: String,
     /// Raw Rust: a struct + impl that `use`s the leaf functions (each leaf `foo`
     /// is available as `crate::foo::foo`).
-    pub code: &'static str,
+    pub code: String,
     /// Optional behavioral contract: a raw-Rust `#[cfg(test)]` module that
     /// constructs the struct, exercises its methods, and ASSERTS runtime output.
     /// Appended to the glue module and run with `cargo test` — the rung above
     /// compilation. A struct that type-checks but whose synthesized logic
     /// misbehaves (e.g. `increment` that didn't actually add 1) fails here.
-    pub smoke: Option<&'static str>,
+    #[serde(default)]
+    pub smoke: Option<String>,
 }
 
-/// A named unit bigger than a single op.
+/// A named unit bigger than a single op. Owned + `Deserialize` so the registry can
+/// be grown from a JSON data file (like `coding_registry.json`), not just the seeds.
+#[derive(Clone, Deserialize)]
 pub struct ComponentSpec {
     /// Module + package name for the emitted component.
-    pub name: &'static str,
+    pub name: String,
     /// Natural-language surface words that resolve to this component.
-    pub surfaces: &'static [&'static str],
+    pub surfaces: Vec<String>,
     /// `default_fn_name`s of the leaf ops this component bundles. Each is
     /// independently verified-synthesizable via the trusted op path.
-    pub leaves: &'static [&'static str],
+    pub leaves: Vec<String>,
     /// Optional struct/method glue over the leaves (structural component).
+    #[serde(default)]
     pub glue: Option<GlueSpec>,
 }
 
-/// The built-in component registry. First slice: a Rust const; migrates to data +
-/// emergent resolution, like `coding_registry.json`.
-pub const BUILTIN_COMPONENTS: &[ComponentSpec] = &[
-    ComponentSpec {
-        name: "array_stats",
-        surfaces: &["stats", "statistics", "statistic", "summary"],
-        leaves: &["array_sum", "array_max", "array_min", "average", "length"],
-        glue: None,
-    },
-    ComponentSpec {
-        name: "counter",
-        surfaces: &["counter", "count", "tally"],
-        leaves: &["increment"],
-        glue: Some(GlueSpec {
-            module: "counter",
-            code: COUNTER_GLUE,
-            smoke: Some(COUNTER_SMOKE),
-        }),
-    },
-    ComponentSpec {
-        name: "accumulator",
-        surfaces: &["accumulator", "accumulate", "accumulation"],
-        leaves: &["add"],
-        glue: Some(GlueSpec {
-            module: "accumulator",
-            code: ACCUMULATOR_GLUE,
-            smoke: Some(ACCUMULATOR_SMOKE),
-        }),
-    },
-    ComponentSpec {
-        name: "scaler",
-        surfaces: &["scaler", "scale", "scaling", "multiplier"],
-        leaves: &["multiply"],
-        glue: Some(GlueSpec {
-            module: "scaler",
-            code: SCALER_GLUE,
-            smoke: Some(SCALER_SMOKE),
-        }),
-    },
-];
+/// The built-in SEED components — the baseline that ships in the binary. The live
+/// registry is `seed_components()` merged with any DATA-defined components (by
+/// name), so seeds can be extended or overridden without a recompile.
+fn seed_components() -> Vec<ComponentSpec> {
+    let s = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    vec![
+        ComponentSpec {
+            name: "array_stats".into(),
+            surfaces: s(&["stats", "statistics", "statistic", "summary"]),
+            leaves: s(&["array_sum", "array_max", "array_min", "average", "length"]),
+            glue: None,
+        },
+        ComponentSpec {
+            name: "counter".into(),
+            surfaces: s(&["counter", "count", "tally"]),
+            leaves: s(&["increment"]),
+            glue: Some(GlueSpec {
+                module: "counter".into(),
+                code: COUNTER_GLUE.into(),
+                smoke: Some(COUNTER_SMOKE.into()),
+            }),
+        },
+        ComponentSpec {
+            name: "accumulator".into(),
+            surfaces: s(&["accumulator", "accumulate", "accumulation"]),
+            leaves: s(&["add"]),
+            glue: Some(GlueSpec {
+                module: "accumulator".into(),
+                code: ACCUMULATOR_GLUE.into(),
+                smoke: Some(ACCUMULATOR_SMOKE.into()),
+            }),
+        },
+        ComponentSpec {
+            name: "scaler".into(),
+            surfaces: s(&["scaler", "scale", "scaling", "multiplier"]),
+            leaves: s(&["multiply"]),
+            glue: Some(GlueSpec {
+                module: "scaler".into(),
+                code: SCALER_GLUE.into(),
+                smoke: Some(SCALER_SMOKE.into()),
+            }),
+        },
+    ]
+}
+
+/// Parse a components JSON document (`[{name, surfaces, leaves, glue?}, ...]`) into
+/// specs. Pure — the unit of DATA extensibility, tested directly without touching
+/// the process-wide cached registry.
+pub fn parse_components_json(text: &str) -> Result<Vec<ComponentSpec>, String> {
+    serde_json::from_str::<Vec<ComponentSpec>>(text).map_err(|e| e.to_string())
+}
+
+/// Load DATA-defined components from a JSON file: `NSYNTH_COMPONENTS` env path if
+/// set, else a couple of conventional locations. Returns `None` when absent or
+/// unparseable (the seeds are always the floor — a bad data file never breaks the
+/// built-ins).
+fn load_data_components() -> Option<Vec<ComponentSpec>> {
+    let candidates: Vec<std::path::PathBuf> = std::env::var("NSYNTH_COMPONENTS")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .into_iter()
+        .chain(
+            [
+                "data/components.json",
+                "../linguigenesis/data/components.json",
+                "../../linguigenesis/data/components.json",
+            ]
+            .iter()
+            .map(std::path::PathBuf::from),
+        )
+        .collect();
+    for path in candidates {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(specs) = parse_components_json(&text) {
+                return Some(specs);
+            }
+        }
+    }
+    None
+}
+
+/// The live component registry: seeds merged with DATA-defined components (merge by
+/// name — data overrides a seed, new names extend). Cached once per process; returns
+/// a `'static` slice so every accessor keeps returning `&'static ComponentSpec`.
+pub fn registry() -> &'static [ComponentSpec] {
+    static REG: OnceLock<Vec<ComponentSpec>> = OnceLock::new();
+    REG.get_or_init(|| {
+        let mut comps = seed_components();
+        if let Some(extra) = load_data_components() {
+            for c in extra {
+                if let Some(slot) = comps.iter_mut().find(|x| x.name == c.name) {
+                    *slot = c;
+                } else {
+                    comps.push(c);
+                }
+            }
+        }
+        comps
+    })
+    .as_slice()
+}
 
 /// Behavioral contract for `Counter`: three ticks must land on 3. This asserts the
 /// SYNTHESIZED `increment` genuinely adds 1 each call — runtime proof, not types.
@@ -266,10 +335,10 @@ pub fn resolve_component(text: &str) -> Option<&'static ComponentSpec> {
         .filter(|t| !t.is_empty())
         .collect();
     let mut best: Option<(&'static ComponentSpec, u8)> = None;
-    for comp in BUILTIN_COMPONENTS {
+    for comp in registry() {
         let mut score = 0u8;
         for tok in &tokens {
-            for surf in comp.surfaces {
+            for surf in &comp.surfaces {
                 score = score.max(surface_match(tok, surf));
             }
         }
@@ -347,20 +416,20 @@ impl ComponentBuild {
 /// verified leaf names in encounter order.
 fn synth_leaves(
     bridge: &LinguigenesisBridge,
-    leaf_sets: &[&[&'static str]],
+    leaf_sets: &[&[String]],
 ) -> (Vec<(String, String)>, Vec<String>) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut components: Vec<(String, String)> = Vec::new();
     let mut verified: Vec<String> = Vec::new();
     for leaves in leaf_sets {
         for leaf in *leaves {
-            if !seen.insert((*leaf).to_string()) {
+            if !seen.insert(leaf.clone()) {
                 continue;
             }
             if let Some(r) = bridge.synthesize_op_by_name(leaf) {
                 if r.success {
-                    verified.push((*leaf).to_string());
-                    components.push(((*leaf).to_string(), r.code));
+                    verified.push(leaf.clone());
+                    components.push((leaf.clone(), r.code));
                 }
             }
         }
@@ -381,8 +450,8 @@ fn write_and_wire_glue(root: &Path, glue: &GlueSpec) -> Result<Option<String>, S
     }
     // Write the struct glue plus its behavioral contract (if any) in one file:
     // `cargo check` ignores the `#[cfg(test)]` module, `cargo test` runs it.
-    let mut body = glue.code.to_string();
-    if let Some(smoke) = glue.smoke {
+    let mut body = glue.code.clone();
+    if let Some(smoke) = &glue.smoke {
         body.push('\n');
         body.push_str(smoke);
     }
@@ -402,11 +471,11 @@ pub fn build_component(
     spec: &ComponentSpec,
     root: &Path,
 ) -> Result<ComponentBuild, String> {
-    let (components, leaves_verified) = synth_leaves(bridge, &[spec.leaves]);
+    let (components, leaves_verified) = synth_leaves(bridge, &[spec.leaves.as_slice()]);
     if components.is_empty() {
         return Err(format!("component '{}': no leaf verified", spec.name));
     }
-    let mut outcome = write_synthesized_project(root, spec.name, &components)?;
+    let mut outcome = write_synthesized_project(root, &spec.name, &components)?;
 
     // Structural glue: only when the leaves themselves compiled (a struct over a
     // broken leaf would just fail again). Re-gate the WHOLE crate after wiring,
@@ -426,7 +495,7 @@ pub fn build_component(
     }
 
     Ok(ComponentBuild {
-        name: spec.name.to_string(),
+        name: spec.name.clone(),
         leaves_verified,
         leaves_total: spec.leaves.len(),
         has_struct: spec.glue.is_some(),
@@ -444,7 +513,7 @@ pub fn resolve_components(text: &str) -> Vec<&'static ComponentSpec> {
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
         .collect();
-    BUILTIN_COMPONENTS
+    registry()
         .iter()
         .filter(|comp| {
             tokens
@@ -486,7 +555,7 @@ pub fn route_component_build(
     if !has_construction_cue(&tokens) {
         return Vec::new();
     }
-    BUILTIN_COMPONENTS
+    registry()
         .iter()
         .filter(|comp| {
             tokens.iter().any(|tok| {
@@ -532,14 +601,14 @@ pub fn build_project(
     if specs.is_empty() {
         return Err("build_project: no components".to_string());
     }
-    let leaf_sets: Vec<&[&'static str]> = specs.iter().map(|s| s.leaves).collect();
+    let leaf_sets: Vec<&[String]> = specs.iter().map(|s| s.leaves.as_slice()).collect();
     let (components, leaves_verified) = synth_leaves(bridge, &leaf_sets);
     if components.is_empty() {
         return Err("build_project: no leaf verified across any component".to_string());
     }
     let pkg = specs
         .iter()
-        .map(|s| s.name)
+        .map(|s| s.name.as_str())
         .collect::<Vec<_>>()
         .join("_");
     let mut outcome = write_synthesized_project(root, &pkg, &components)?;
@@ -552,7 +621,7 @@ pub fn build_project(
             if let Some(glue) = &spec.glue {
                 if write_and_wire_glue(root, glue)?.is_some() {
                     outcome.written.push(format!("src/{}.rs", glue.module));
-                    structs.push(glue.module.to_string());
+                    structs.push(glue.module.clone());
                     wired_any = true;
                     any_smoke |= glue.smoke.is_some();
                 }
@@ -570,7 +639,7 @@ pub fn build_project(
     };
 
     Ok(ProjectBuild {
-        components: specs.iter().map(|s| s.name.to_string()).collect(),
+        components: specs.iter().map(|s| s.name.clone()).collect(),
         leaves_verified,
         structs,
         outcome,
@@ -699,7 +768,7 @@ mod tests {
     fn multi_component_project_wires_struct_and_bundle_into_one_crate() {
         // One prompt naming two concepts resolves to two components...
         let specs = resolve_components("a counter and some array statistics");
-        let names: Vec<_> = specs.iter().map(|s| s.name).collect();
+        let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         assert!(
             names.contains(&"counter") && names.contains(&"array_stats"),
             "resolved both components: {names:?}"
@@ -731,6 +800,60 @@ mod tests {
             lib.contains("mod counter;") && lib.contains("mod increment;"),
             "one lib wires both: {lib}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn registry_includes_seeds_and_parse_rejects_garbage() {
+        // The live registry is at least the four seeds.
+        let names: Vec<&str> = registry().iter().map(|c| c.name.as_str()).collect();
+        for n in ["array_stats", "counter", "accumulator", "scaler"] {
+            assert!(names.contains(&n), "seed {n} present: {names:?}");
+        }
+        // A malformed data doc never poisons the registry — it just fails to parse.
+        assert!(parse_components_json("{ not json").is_err());
+        assert!(parse_components_json("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn data_defined_structural_component_synthesizes_compiles_and_behaves() {
+        // A component authored purely in DATA (JSON) — no Rust const — builds a
+        // verified crate end to end: proves the registry is genuinely data-driven.
+        let doc = serde_json::json!([{
+            "name": "countdown",
+            "surfaces": ["countdown", "countdowns"],
+            "leaves": ["decrement"],
+            "glue": {
+                "module": "countdown",
+                "code": "use crate::decrement::decrement;\n\npub struct Countdown { n: i64 }\nimpl Countdown {\n    pub fn new(start: i64) -> Self { Countdown { n: start } }\n    pub fn step(&mut self) { self.n = decrement(self.n); }\n    pub fn get(&self) -> i64 { self.n }\n}\n",
+                "smoke": "\n#[cfg(test)]\nmod countdown_behaves {\n    use super::Countdown;\n    #[test]\n    fn steps_down_to_one() {\n        let mut c = Countdown::new(3);\n        c.step();\n        c.step();\n        assert_eq!(c.get(), 1);\n    }\n}\n"
+            }
+        }])
+        .to_string();
+
+        let specs = parse_components_json(&doc).expect("parse data component");
+        assert_eq!(specs.len(), 1);
+        let spec = &specs[0];
+        assert_eq!(spec.name, "countdown");
+        assert!(spec.glue.is_some(), "data component is structural");
+
+        let bridge = LinguigenesisBridge::new();
+        let root = temp_root("countdown_data");
+        let build = build_component(&bridge, spec, &root).expect("build");
+        assert!(
+            build.leaves_verified.contains(&"decrement".to_string()),
+            "decrement leaf verified: {:?}",
+            build.leaves_verified
+        );
+        assert!(
+            build.outcome.compile.is_ok(),
+            "data component compiles: {:?}",
+            build.outcome.compile
+        );
+        // 3 -> step -> step -> 1: the synthesized decrement genuinely subtracts 1.
+        assert!(build.behaves(), "data component behaves: {:?}", build.behavior);
+        let glue = std::fs::read_to_string(root.join("src/countdown.rs")).unwrap();
+        assert!(glue.contains("pub struct Countdown"), "struct present: {glue}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
