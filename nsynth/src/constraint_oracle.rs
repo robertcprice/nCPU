@@ -35,6 +35,12 @@ pub enum Property {
     IsNonNegative,
     /// output array is sorted non-decreasing AND a permutation of the input
     IsSortedAscending,
+    /// output == sum of the single int-array input
+    IsSum,
+    /// output == product of the single int-array input
+    IsProduct,
+    /// output array is the input reversed (same multiset, reversed order)
+    IsReversed,
 }
 
 impl Property {
@@ -47,6 +53,9 @@ impl Property {
             "min" | "minimum" | "array_min" => Some(Property::IsMin),
             "abs" | "absolute" | "absolute_value" | "magnitude" => Some(Property::IsNonNegative),
             "sort" | "sorted" | "sort_ascending" => Some(Property::IsSortedAscending),
+            "sum" | "total" | "array_sum" => Some(Property::IsSum),
+            "product" | "array_product" => Some(Property::IsProduct),
+            "reverse" | "reversed" | "reverse_array" => Some(Property::IsReversed),
             _ => None,
         }
     }
@@ -55,7 +64,12 @@ impl Property {
     fn wants_array(&self) -> bool {
         matches!(
             self,
-            Property::IsMax | Property::IsMin | Property::IsSortedAscending
+            Property::IsMax
+                | Property::IsMin
+                | Property::IsSortedAscending
+                | Property::IsSum
+                | Property::IsProduct
+                | Property::IsReversed
         )
     }
 
@@ -104,6 +118,30 @@ impl Property {
                     ));
                 }
                 Ok(())
+            }
+            Property::IsSum | Property::IsProduct => {
+                let arr = input_array(inputs).ok_or("expected an int-array input")?;
+                let out = rint(output).ok_or("expected an int output")?;
+                let want: i64 = if *self == Property::IsSum {
+                    arr.iter().fold(0i64, |a, &x| a.wrapping_add(x))
+                } else {
+                    arr.iter().fold(1i64, |a, &x| a.wrapping_mul(x))
+                };
+                if out == want {
+                    Ok(())
+                } else {
+                    Err(format!("{self:?}: got {out}, expected {want} for {arr:?}"))
+                }
+            }
+            Property::IsReversed => {
+                let arr = input_array(inputs).ok_or("expected an int-array input")?;
+                let out = rarr(output).ok_or("expected an int-array output")?;
+                let want: Vec<i64> = arr.iter().rev().copied().collect();
+                if out == want {
+                    Ok(())
+                } else {
+                    Err(format!("IsReversed: output {out:?} != reverse of input {arr:?}"))
+                }
             }
         }
     }
@@ -263,6 +301,18 @@ mod tests {
             check_op_contract(SORT_OK, "sort_ascending", "sort", &arr_input()).is_ok(),
             "a real sort honors the ascending+permutation contract"
         );
+    }
+
+    const SUM_OK: &str = "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n";
+    // Overfit: returns first element. Matches single-element or crafted examples.
+    const SUM_FAKE: &str = "fn array_sum(arr: [i64]) -> i64 {\n    return arr[0];\n}\n";
+
+    #[test]
+    fn correct_sum_passes_fake_is_caught() {
+        assert!(check_op_contract(SUM_OK, "array_sum", "sum", &arr_input()).is_ok());
+        let caught = check_op_contract(SUM_FAKE, "array_sum", "sum", &arr_input());
+        assert!(caught.is_err(), "fake sum must be rejected: {caught:?}");
+        assert!(caught.unwrap_err().contains("IsSum"));
     }
 
     #[test]
