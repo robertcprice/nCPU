@@ -188,6 +188,71 @@ pub fn verify_static_serving(
     ))
 }
 
+/// MULTI-PAGE serving: boot once with `--static <dir>` and GET every
+/// (path, marker) pair, each requiring 200 text/html containing its marker.
+/// Proves a multi-page site is fully served (inter-page nav targets resolve
+/// over HTTP), not just the index.
+pub fn verify_static_pages(
+    bin: &Path,
+    static_dir: &Path,
+    pages: &[(&str, &str)],
+    max_attempts: usize,
+) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..max_attempts {
+        match probe_static_pages_once(bin, static_dir, pages) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_err = err;
+                if attempt + 1 < max_attempts {
+                    thread::sleep(Duration::from_millis(50 * (attempt as u64 + 1)));
+                }
+            }
+        }
+    }
+    Err(format!(
+        "generated backend multi-page serving failed after {max_attempts} attempts: {last_err}"
+    ))
+}
+
+fn probe_static_pages_once(
+    bin: &Path,
+    static_dir: &Path,
+    pages: &[(&str, &str)],
+) -> Result<(), String> {
+    let mut child = Command::new(bin)
+        .arg("--port")
+        .arg("0")
+        .arg("--static")
+        .arg(static_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn generated backend: {e}"))?;
+
+    let addr = read_ready_addr(&mut child)?;
+    thread::sleep(Duration::from_millis(25));
+
+    let result = (|| {
+        for (path, marker) in pages {
+            let resp = http_get(&addr, path)?;
+            if !resp.contains("200 OK") {
+                return Err(format!("GET {path} not 200: {resp}"));
+            }
+            if !resp.contains("text/html") {
+                return Err(format!("GET {path} missing text/html: {resp}"));
+            }
+            if !resp.contains(*marker) {
+                return Err(format!("GET {path} missing marker {marker:?}: {resp}"));
+            }
+        }
+        Ok(())
+    })();
+
+    stop_child(&mut child);
+    result
+}
+
 fn probe_static_once(bin: &Path, static_dir: &Path, expect: &str) -> Result<(), String> {
     let mut child = Command::new(bin)
         .arg("--port")

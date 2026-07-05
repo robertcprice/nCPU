@@ -187,6 +187,40 @@ fn handle_query_wires_contact_form_to_the_api() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// MULTI-PAGE served, nav resolves over HTTP: two prompts build a two-page
+/// site (nav rewired site-wide), the provisioned backend serves BOTH pages,
+/// and the index's nav link to the second page is a real 200 over HTTP — the
+/// inter-page navigation actually works when served, not just in the files.
+#[test]
+fn provisioned_backend_serves_every_page_with_working_nav() {
+    let root = fresh_root("multipage");
+    let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
+    // Page 1 provisions the backend (api-wired) and creates index.html.
+    let r1 = s.handle_query(
+        "add a new page called index to my website with a hero and a contact form that posts to my api",
+    );
+    assert!(r1.success, "page1: {}", r1.response);
+    // Page 2 extends the site; nav is rewired in every page to include both.
+    let r2 = s.handle_query("add a new page called about to my website with an about section");
+    assert!(r2.success, "page2: {}", r2.response);
+    let index = fs::read_to_string(root.join("site/index.html")).expect("index");
+    assert!(index.contains("href=\"about.html\""), "index nav links to page 2: {index}");
+
+    let backend = fs::read_to_string(root.join("backend/main.rs")).expect("provisioned backend");
+    let (src, bin) =
+        mog_synth::backend_http::compile_to_temp_bin(&backend, false).expect("compile backend");
+    // Both pages serve over HTTP; the index carries the working nav link.
+    let served = mog_synth::backend_http::verify_static_pages(
+        &bin,
+        &root.join("site"),
+        &[("/", "href=\"about.html\""), ("/about.html", "<title")],
+        2,
+    );
+    mog_synth::backend_http::cleanup_temp_artifacts(&src, &bin);
+    served.expect("both pages served over HTTP with the nav link resolving");
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// SINGLE ARTIFACT: the provisioned backend serves the generated SITE and its
 /// api from one binary. One prompt yields both; booting the backend with
 /// `--static <site>` serves the page over HTTP (text/html) while /health still
