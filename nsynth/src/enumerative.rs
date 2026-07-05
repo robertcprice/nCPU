@@ -980,11 +980,12 @@ fn collect_scalar_subtrees<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// [`collect_scalar_subtrees`], every Var seen here is a free parameter, so
 /// `x*x` -> (`Var0*Var0`, 1) and `a-b` -> (`Var0-Var1`, 2).
 fn canonicalize(e: &Expr) -> (Expr, usize) {
-    // ALGEBRAIC normal form FIRST (semantics-preserving), THEN dense-var renaming.
-    // Composing the two means algebraically-equal subtrees merge into one library
-    // op: `a+2` and `2+a` both normalize to `Const(2)+Var0`, so the flywheel
-    // compresses them together instead of mining two look-alike ops.
-    let e = &algebraic_normalize(e);
+    // E-GRAPH minimal form FIRST (equality saturation over the algebraic laws),
+    // THEN dense-var renaming. This merges a whole EQUIVALENCE CLASS — including
+    // factored forms (`a*b+a*c` and `a*(b+c)`) the greedy normalizer misses —
+    // into ONE library op, so the flywheel compresses look-alikes maximally.
+    // Sound (only true equalities) and node-capped for termination.
+    let e = &crate::egraph::simplify(e);
     let mut map: BTreeMap<usize, usize> = BTreeMap::new();
     // First pass: assign dense slots in first-encounter (left-to-right) order.
     fn assign(e: &Expr, map: &mut BTreeMap<usize, usize>, next: &mut usize) {
