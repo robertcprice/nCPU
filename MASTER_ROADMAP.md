@@ -415,6 +415,8 @@ Timeout lever SPENT: 5s→10s converted only 3 kills (582→585). The wall is re
 **UNSOLVED (164):** string-domain 101/164; out-shapes list 49 + nested-list 45 + str-list 22 (= 116/164 produce LISTS); keywords: string(s), tuple(s), lists, extract, length, count. → The unsolved wall is STRING-LIST + TUPLE/PAIR-LIST manipulation, not scalar logic.
 **KILLED (198):** int/list 106 + string 64; out=int 74, str 48; keywords: array, maximum, count, check, pairs. → Genuinely hard aggregate/predicate searches (deep conditionals, pairwise logic), not budget starvation.
 
+**UNBLOCK for your NL-breadth mining (1bd23e3 "compound-name lemmas lose to shorter ops"):** lg-core now has `entity_resolution::resolve_phrase_operation(resolver, tokens)` — PHRASE-level op resolution (in-order per-word morphology over the op's own underscore-split lemma + a `phrase_surfaces` property seam). It resolves compound-name lemmas the per-token path shadows (bridge consumer: `resolve_phrase_op`; already the front door's refusal fallback). Also: load-time `default_fn_name` normalization in the registry loader makes the transform-collision regen war moot.
+
 **RANKED LEVERS (universal agent's lane per 0.0591 split; sized by task counts):**
 1. **String-list basis in the combinator** (~60-80 tasks): split/join/words/extract/filter-string atoms producing [str]; str→[str]→str chains. The 57a50c9 dispatch fix was the seam — widen the atom set.
 2. **Pair/tuple-list atoms** (~50-60 tasks): zip, enumerate, pair-normalize/sort, dedup-pairs, pair-fold — generalize the sorted_pair_occurrences direction into composable atoms over [[i64]].
