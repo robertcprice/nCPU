@@ -273,6 +273,15 @@ pub fn algebraic_normalize(e: &Expr) -> Expr {
 }
 
 fn algebra_step(e: &Expr) -> Expr {
+    // CONSTANT FOLDING, sound BY CONSTRUCTION: a closed (Var-free) subexpr is
+    // replaced by its value computed with `eval` ITSELF — so the fold can never
+    // diverge from eval — and an undefined closed expr (e.g. `n/0` -> None, or a
+    // `Call` with no registry) is left as-is, never fabricating a Const. `eval`
+    // on a Var short-circuits to None, so non-constant nodes fall straight
+    // through cheaply.
+    if let Some(v) = e.eval(&[]) {
+        return Expr::Const(v);
+    }
     match e {
         Expr::Var(_) | Expr::Const(_) => e.clone(),
         Expr::UnaryOp(op, inner) => {
@@ -4940,6 +4949,27 @@ mod tests {
         );
         let expect = Expr::BinOp(BinOp::Min, Box::new(a.clone()), Box::new(b.clone()));
         assert_eq!(algebraic_normalize(&mn), expect, "min(a,min(b,a)) -> min(a,b)");
+    }
+
+    /// CONSTANT FOLDING via eval: a closed subexpr folds to its value; a
+    /// non-constant expr keeps its variable subtree; an UNDEFINED closed expr
+    /// (div by zero) is NOT folded (no fabricated Const).
+    #[test]
+    fn algebraic_normalize_folds_constants_soundly() {
+        let add = |x: Expr, y: Expr| Expr::BinOp(BinOp::Add, Box::new(x), Box::new(y));
+        // 2 + 3 -> 5
+        assert_eq!(algebraic_normalize(&add(Expr::Const(2), Expr::Const(3))), Expr::Const(5));
+        // x + (2 + 3) -> x + 5 (order-canonical: Const then Var)
+        let x = Expr::Var(0);
+        let folded = algebraic_normalize(&add(x.clone(), add(Expr::Const(2), Expr::Const(3))));
+        assert_eq!(folded, add(Expr::Const(5), x.clone()));
+        // 6 / 0 is a closed but UNDEFINED expr -> left as-is (eval -> None).
+        let divz = Expr::BinOp(BinOp::Div, Box::new(Expr::Const(6)), Box::new(Expr::Const(0)));
+        assert_eq!(algebraic_normalize(&divz), divz, "n/0 never folds to a Const");
+        // eval preserved on the folded form.
+        for i in [-3, 0, 7] {
+            assert_eq!(add(x.clone(), add(Expr::Const(2), Expr::Const(3))).eval(&[i]), folded.eval(&[i]));
+        }
     }
 
     /// COMPOSITE OUTPUT: a Pair-returning function `(a,b) -> (a+b, a-b)` is
