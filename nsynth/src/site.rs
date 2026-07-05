@@ -332,37 +332,13 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     reg
 }
 
-/// Derive an archetype's implied composition EMERGENTLY by comprehending its
-/// own DEFINITION: resolve each word of the definition against the section
-/// registry and collect the sections it names, in order. This is what lets the
-/// system LEARN new archetypes for free — a taught archetype ("teach web: a
-/// portfolio archetype means a page with a hero, a gallery, an about story and
-/// a contact form") composes from the definition it was taught with, no code
-/// change. Domain-agnostic: the same mechanism composes any domain's archetype
-/// from its definition against that domain's part vocabulary.
-fn composition_from_definition(
-    resolver: &linguigenesis_core::entity_resolution::EntityResolver,
-    registry: &linguigenesis_core::registry::Registry,
-    definition: &str,
-    part_kind: &str,
-) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    for tok in definition
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|t| !t.is_empty())
-    {
-        if let Some((kind, lemma, _score)) = resolve_web_token(resolver, registry, tok) {
-            if kind == part_kind && !parts.contains(&lemma) {
-                parts.push(lemma);
-            }
-        }
-    }
-    parts
-}
-
-/// The composition an archetype implies for a page, derived from the archetype
-/// entity's own definition in the (taught-merged) web registry.
+/// The composition an archetype implies for a page: derived from the archetype
+/// entity's own DEFINITION via the DOMAIN-AGNOSTIC hub mechanism
+/// (`registry_hub::compose_from_definition`) — web parts are "section" entities
+/// under "web_kind". The identical hub call composes a BACKEND archetype from
+/// routes/stores, so archetypes are not web-bound. Deriving from the definition
+/// (not a hardcoded list) is what lets a TAUGHT or self-MINTED archetype compose
+/// for free from the prose it carries.
 fn archetype_sections(
     resolver: &linguigenesis_core::entity_resolution::EntityResolver,
     registry: &linguigenesis_core::registry::Registry,
@@ -372,7 +348,7 @@ fn archetype_sections(
         return Vec::new();
     };
     let def = entity.definitions.first().cloned().unwrap_or_default();
-    composition_from_definition(resolver, registry, &def, "section")
+    crate::registry_hub::compose_from_definition(resolver, registry, &def, "web_kind", "section")
 }
 
 /// Resolve one token to a web entity (section/theme) through the REAL resolver.

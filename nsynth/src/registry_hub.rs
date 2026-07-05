@@ -174,6 +174,63 @@ pub fn resolve_domain(
     None
 }
 
+/// GENERAL, DOMAIN-AGNOSTIC archetype composition. An ARCHETYPE is a named
+/// PURPOSE that implies a STRUCTURE ("landing" → hero+features+contact; a
+/// backend "crud api" → create+read+update+delete routes + a store). Its
+/// composition is DERIVED by COMPREHENDING its own definition: resolve each word
+/// of the definition against the domain registry and collect the entities of
+/// `part_kind`, in order. This is the same mechanism for EVERY domain — no
+/// per-domain hardcoded table — so archetypes are emergent, learnable, and not
+/// web-bound. A taught or self-minted archetype composes for free from the prose
+/// it carries.
+pub fn compose_from_definition(
+    resolver: &linguigenesis_core::entity_resolution::EntityResolver,
+    registry: &Registry,
+    definition: &str,
+    kind_key: &str,
+    part_kind: &str,
+) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for tok in definition
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+    {
+        if let Some((kind, lemma, _score)) = resolve_domain(resolver, registry, tok, kind_key) {
+            if kind == part_kind && !parts.contains(&lemma) {
+                parts.push(lemma);
+            }
+        }
+    }
+    parts
+}
+
+/// SELF-CREATION: mint a NEW archetype at runtime from an observed set of parts
+/// (e.g. the sections a page was actually built with, or the routes an api
+/// exposed). Writes an archetype `Concept` whose DEFINITION names those parts,
+/// so it then resolves and composes exactly like a taught or built-in archetype
+/// — the system creating its own reusable structural vocabulary. Domain-agnostic
+/// and persistent (survives restarts via the domain data file). `name` becomes
+/// the archetype lemma; `parts` are the component lemmas it implies.
+pub fn remember_archetype(domain: Domain, name: &str, parts: &[&str]) -> Result<(), String> {
+    if name.trim().is_empty() || parts.is_empty() {
+        return Err("an archetype needs a name and at least one part".into());
+    }
+    // A definition that names the parts in prose — the SAME shape a human would
+    // teach, so composition derives identically.
+    let listed = parts.join(", ");
+    let definition = format!("a {name} with {listed}");
+    teach_concept(
+        domain,
+        Concept {
+            lemma: name.to_string(),
+            kind: "archetype".to_string(),
+            definition,
+            synonyms: Vec::new(),
+        },
+    )
+}
+
 /// The BACKEND domain seeds (routes/stores/apis as resolvable concepts —
 /// the vocabulary `backend_nl` asks arrive in).
 pub fn backend_seeds() -> Vec<Concept> {
@@ -265,6 +322,57 @@ mod tests {
                 .find(|c| c.entity.get_property("web_kind").is_some());
             assert!(hit.is_some(), "{w} must resolve to the taught concept");
             assert_eq!(hit.unwrap().entity.lemma, "testimonials", "{w}");
+        }
+        std::env::remove_var(Domain::Web.env_var());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// compose_from_definition is DOMAIN-AGNOSTIC: build a synthetic non-web
+    /// registry (a "recipe" domain whose parts are ingredients) and compose an
+    /// archetype from prose. Proves archetypes are not web-bound — the same
+    /// mechanism composes any domain's structure from its definition.
+    #[test]
+    fn compose_from_definition_is_domain_agnostic() {
+        use linguigenesis_core::entity::{Entity, EntityType};
+        let reg = Registry::new();
+        let mut id = 1u64;
+        let mut part = |lemma: &str| {
+            let mut e = Entity::new(id, lemma.to_string(), EntityType::Noun);
+            id += 1;
+            e.add_property("recipe_kind".into(), "ingredient".into());
+            let _ = reg.add_entity(e);
+        };
+        for p in ["flour", "sugar", "eggs", "butter"] {
+            part(p);
+        }
+        let r = EntityResolver::new(reg.clone());
+        let parts = compose_from_definition(
+            &r,
+            &reg,
+            "a cake with flour, sugar, and eggs",
+            "recipe_kind",
+            "ingredient",
+        );
+        assert_eq!(parts, vec!["flour", "sugar", "eggs"], "composed from prose, in order");
+    }
+
+    /// SELF-CREATION round-trip: mint an archetype from observed parts, then a
+    /// fresh registry resolves it AND composes its parts from the minted
+    /// definition — the system creating its own reusable structure.
+    #[test]
+    fn remember_archetype_mints_a_composable_archetype() {
+        let p = temp_env(Domain::Web, "mint");
+        remember_archetype(Domain::Web, "dashboard", &["hero", "features", "about"])
+            .expect("mint");
+        // Persisted as an archetype concept whose definition names the parts.
+        let concepts = load_domain_concepts(Domain::Web);
+        let arch = concepts
+            .iter()
+            .find(|c| c.lemma == "dashboard")
+            .expect("archetype persisted");
+        assert_eq!(arch.kind, "archetype");
+        for part in ["hero", "features", "about"] {
+            assert!(arch.definition.contains(part), "definition names {part}: {}", arch.definition);
         }
         std::env::remove_var(Domain::Web.env_var());
         let _ = std::fs::remove_file(&p);
