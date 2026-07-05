@@ -94,7 +94,18 @@ fn mined_lowercase_synthesizes_end_to_end() {
         "must NOT be a memorizing lexicon lookup, got:\n{}",
         r.response
     );
-    assert_eq!(r.synthesis_method.as_deref(), Some("string_synth"));
+    // BEHAVIOR over method label: the exact tier that wins drifts; assert the
+    // program actually lower-cases (and generalizes to an unseen input) instead.
+    let mk = |i: &str, o: &str| mog_synth::benchmark::Example {
+        inputs: vec![mog_synth::benchmark::Value::Str(i.to_string())],
+        expected: mog_synth::benchmark::Value::Str(o.to_string()),
+    };
+    let spec = [mk("Hello", "hello"), mk("AbC", "abc"), mk("MiXeD", "mixed")];
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(&r.response, &spec),
+        "synthesized program must lower-case its input, got:\n{}",
+        r.response
+    );
 }
 
 /// NL-REACHABILITY #2 — `trim` (NEVER a hand seed): "trim a string" synthesizes
