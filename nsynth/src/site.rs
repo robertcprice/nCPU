@@ -322,6 +322,16 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     canonical("storefront", "archetype", "a shop store page with a hero, a gallery, and a contact form", &["shop", "store", "storefront", "ecommerce", "catalog"]);
     canonical("blog", "archetype", "a blog journal page with a hero, features, and an about story", &["journal", "articles", "posts"]);
     canonical("documentation", "archetype", "a documentation reference page with a hero and an about overview", &["docs", "manual", "guide"]);
+    // MOODS — an aesthetic TONE that implies a PALETTE and a style, composed
+    // from the mood's definition exactly like an archetype composes structure
+    // (colors via the CSS vocabulary, theme via the resolver). This is how an
+    // abstract AESTHETIC prompt ("a warm inviting page") becomes a concrete
+    // palette + theme. Lemmas avoid collision with theme/color words.
+    canonical("warm", "mood", "a warm inviting cozy classic look with coral, gold, and cream tones", &["cozy", "inviting"]);
+    canonical("cool", "mood", "a cool calm fresh modern look with teal, azure, and navy tones", &["chill"]);
+    canonical("earthy", "mood", "an earthy natural organic classic look with olive, brown, and tan tones", &["natural", "organic", "rustic"]);
+    canonical("bold", "mood", "a bold energetic vibrant modern look with crimson, orange, and gold tones", &["energetic", "vibrant", "punchy"]);
+    canonical("calm", "mood", "a calm serene soothing minimal look with azure, lavender, and mint tones", &["serene", "soothing", "tranquil"]);
     // GROWTH: merge every TAUGHT concept from the hub's web data registry —
     // runtime-taught vocabulary resolves exactly like the seeds (entities +
     // synonym edges through the same resolver).
@@ -414,7 +424,14 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
     let mut theme: Option<String> = None;
     let mut sections: Vec<String> = Vec::new();
     let mut archetype: Option<String> = None;
+    let mut mood: Option<String> = None;
     for t in &tokens {
+        // Routing tokens (construction cues, web nouns) are NOT content — skip
+        // them so e.g. the cue "build" can never fuzzy-resolve to the mood
+        // "bold". Routing vs resolution stays cleanly separated.
+        if CUES.iter().any(|c| morph_eq(t, c)) || WEB.iter().any(|w| morph_eq(t, w)) {
+            continue;
+        }
         if let Some((kind, lemma, _score)) = resolve_web_token(&resolver, &registry, t) {
             match kind.as_str() {
                 "theme" => {
@@ -430,6 +447,11 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
                 "archetype" => {
                     if archetype.is_none() {
                         archetype = Some(lemma);
+                    }
+                }
+                "mood" => {
+                    if mood.is_none() {
+                        mood = Some(lemma);
                     }
                 }
                 _ => {}
@@ -452,6 +474,21 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
             }
         }
     }
+    // AESTHETIC FROM MOOD: a mood implies a theme (its style word) — derived
+    // from the mood's own definition, only when no explicit theme was named.
+    let mood_def = mood
+        .as_ref()
+        .and_then(|m| registry.get_by_lemma(m))
+        .and_then(|e| e.definitions.first().cloned());
+    if theme.is_none() {
+        if let Some(def) = &mood_def {
+            theme = crate::registry_hub::compose_from_definition(
+                &resolver, &registry, def, "web_kind", "theme",
+            )
+            .into_iter()
+            .next();
+        }
+    }
     let theme = theme.unwrap_or_else(|| "modern".to_string());
     // SITE+BACKEND: any token resolving through the hub's BACKEND domain to a
     // route/server concept ("posts to my api", "sends to the endpoint") wires
@@ -467,8 +504,20 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
                     .unwrap_or(false)
             })
     };
-    // Colors: the platform's own vocabulary (CSS named colors + hex).
-    let colors: Vec<String> = tokens.iter().filter_map(|t| css_color_value(t)).collect();
+    // Colors: the platform's own vocabulary (CSS named colors + hex). When the
+    // prompt named NO explicit color, a resolved mood supplies the palette,
+    // derived from the mood's own definition (its named color words). Explicit
+    // colors always win.
+    let mut colors: Vec<String> = tokens.iter().filter_map(|t| css_color_value(t)).collect();
+    if colors.is_empty() {
+        if let Some(def) = &mood_def {
+            colors = def
+                .split(|c: char| !c.is_alphanumeric() && c != '#')
+                .filter_map(css_color_value)
+                .take(2)
+                .collect();
+        }
+    }
     if !sections.contains(&"nav".to_string()) {
         sections.insert(0, "nav".to_string());
     }
@@ -1304,6 +1353,35 @@ mod real_nl_tests {
         assert!(!r3.sections.contains(&"features".to_string()), "archetype did NOT override explicit: {:?}", r3.sections);
     }
 
+    /// AESTHETIC FROM MOOD: an abstract prompt naming a TONE (but no explicit
+    /// colors/theme) derives a palette and a style from the mood's own
+    /// definition — the same compose-from-definition mechanism as archetypes,
+    /// for visual tokens. Explicit colors/theme always win.
+    #[test]
+    fn abstract_aesthetic_prompt_derives_palette_and_theme_from_mood() {
+        // Purpose + tone, nothing explicit: structure AND aesthetic both inferred.
+        let r = comprehend_site_request("build a warm inviting landing page")
+            .expect("comprehends");
+        assert!(r.colors.contains(&"coral".to_string()), "warm -> coral palette: {:?}", r.colors);
+        assert_eq!(r.theme, "classic", "warm mood implies a classic style: {}", r.theme);
+        assert!(r.sections.contains(&"hero".to_string()), "landing still composes structure");
+
+        // Explicit color + theme override the mood.
+        let r2 = comprehend_site_request("build a warm modern landing page with a teal color scheme")
+            .expect("comprehends");
+        assert!(r2.colors.contains(&"teal".to_string()), "explicit teal wins: {:?}", r2.colors);
+        assert!(!r2.colors.contains(&"coral".to_string()), "mood palette suppressed by explicit");
+        assert_eq!(r2.theme, "modern", "explicit modern wins over mood: {}", r2.theme);
+
+        // A cool mood yields a cool palette.
+        let r3 = comprehend_site_request("make a cool serene landing page").expect("comprehends");
+        assert!(
+            r3.colors.iter().any(|c| c == "teal" || c == "azure"),
+            "cool -> teal/azure palette: {:?}",
+            r3.colors
+        );
+    }
+
     /// LEARN A NEW ARCHETYPE: a runtime-taught archetype composes for free from
     /// the definition it was taught with — no code change. This is the emergent
     /// "make its own archetypes" path: the composition is COMPREHENDED, not coded.
@@ -1491,4 +1569,5 @@ mod mine_tests {
         let _ = std::fs::remove_file(&p);
     }
 }
+
 
