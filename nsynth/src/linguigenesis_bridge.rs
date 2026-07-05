@@ -3460,6 +3460,31 @@ fn consensus_trust_gate(
     if !result.success || !is_examples_only(problem) {
         return result;
     }
+    // INDEPENDENT SEMANTIC ORACLE (runs before consensus — cheaper and decisive):
+    // if the task's operation carries a decidable output contract
+    // (max/min/abs/sort/sum/product/reverse), a candidate that reproduces the
+    // examples but VIOLATES that contract on a fresh input is PROVEN wrong — a
+    // direct refutation, stronger than a consensus divergence. Refuse rather than
+    // present it. Shape-guarded and op-scoped, so it never false-refuses a
+    // non-contract task. Closes the NoConsensus tail for contract-bearing ops,
+    // which previously shipped :tentative.
+    if let Some(first) = problem.examples.first() {
+        let fn_name = problem.function_name();
+        if let Err(why) = crate::constraint_oracle::check_op_contract(
+            &result.code,
+            &fn_name,
+            &fn_name,
+            &first.inputs,
+        ) {
+            result.success = false;
+            result.error = Some(format!(
+                "candidate reproduces the given examples but violates the '{fn_name}' \
+                 contract on a fresh input ({why}) — it does not compute the requested \
+                 operation"
+            ));
+            return result;
+        }
+    }
     match differential_consensus(problem, &result.code) {
         // A divergence witness PROVES the examples don't determine the function.
         // Refuse — never a confident wrong.
@@ -4289,6 +4314,63 @@ mod tests {
         assert!(json_to_bench_value(&serde_json::json!([1, "x"])).is_none());
         // Float is not bool/i64/array/str → None.
         assert!(json_to_bench_value(&serde_json::json!(1.5)).is_none());
+    }
+
+    /// TRUST GATE + constraint-oracle: an examples-only max task whose seeds all
+    /// happen to have arr[0] as the maximum lets a fake max (`return arr[0]`) fit
+    /// every example. The independent semantic oracle refutes it on a fresh input
+    /// and the gate REFUSES it; the real max survives the oracle.
+    #[test]
+    fn trust_gate_refuses_contract_violating_presented_solve() {
+        use crate::benchmark::{Example, Problem, Value};
+        use crate::differentiable::DifferentiableMetadata;
+        use crate::solver::SolveResult;
+        let mk = |code: &str| SolveResult {
+            success: true,
+            code: code.to_string(),
+            method: "test".to_string(),
+            error: None,
+            metadata: DifferentiableMetadata::default(),
+        };
+        // Every seed has arr[0] as the max -> a fake max fits all of them.
+        let problem = Problem {
+            name: "array_max".to_string(),
+            category: "test",
+            description: "maximum of an array",
+            signature: "fn array_max(arr: [i64]) -> i64",
+            examples: vec![
+                Example { inputs: vec![Value::int_array(&[5, 1, 2])], expected: Value::Int(5) },
+                Example { inputs: vec![Value::int_array(&[9, 3, 0])], expected: Value::Int(9) },
+                Example { inputs: vec![Value::int_array(&[7, 7, 1])], expected: Value::Int(7) },
+            ],
+            holdouts: vec![],
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        };
+        let fake = "fn array_max(arr: [i64]) -> i64 {\n    return arr[0];\n}\n";
+        let gated = consensus_trust_gate(&problem, mk(fake));
+        assert!(!gated.success, "fake max must be refused by the contract oracle");
+        assert!(
+            gated.error.as_deref().unwrap_or("").contains("contract"),
+            "refusal cites the contract violation: {:?}",
+            gated.error
+        );
+
+        // The real max is not refused by the oracle (it honors the contract).
+        let real = "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n";
+        let gated_real = consensus_trust_gate(&problem, mk(real));
+        // The oracle never refuses the real max; only consensus may tag it, never
+        // on a contract violation.
+        assert!(
+            gated_real.error.as_deref().map_or(true, |e| !e.contains("contract")),
+            "real max must not be refused on a contract basis: {:?}",
+            gated_real.error
+        );
     }
 
     /// UNWALL-1B EMERGENT left-identity derivation: the non-additive stateful
