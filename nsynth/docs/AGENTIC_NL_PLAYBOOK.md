@@ -4,6 +4,33 @@ The three-layer plan to make this a powerful *and trustworthy* coding agent, eac
 layer preserving the zero-false-positive guarantee (the LLM proposes; the verified
 engine judges).
 
+## THE ARCHITECTURE (decided, research-grounded)
+
+**Train a small model to USE nsynth via RLVR — do NOT bake nsynth into weights.**
+Distilling nsynth into a model loses the zero-false-positive guarantee (a distilled
+model hallucinates out-of-distribution) and a permanent 3–10% capability gap; the
+correctness argument must stay INDEPENDENT of the model, i.e. the verifier runs at
+inference. nsynth is a proof-carrying verifier → a strictly stronger, **un-hackable
+RLVR reward** than raw unit tests, and the inference-time guarantee. A small model
+(SmolLM3-3B / Phi-4-mini, local MLX) suffices because the verifier does correctness.
+
+**Landed (`src/rlvr.rs` + `src/bin/nsynth_tool.rs`):** the seam the RL loop drives.
+- `ToolRequest` (a model proposal: `Examples` | `Reference` | `VerifyProgram`) →
+  `run_tool` → `ToolResponse` (`Verified` | `Tentative` | `Refused`), routed through
+  real synthesis + strict-verify + the consensus trust gate (nothing bypasses the
+  verifier).
+- `rlvr_reward(req, hidden)` = 1.0 iff nsynth returns a Verified program that also
+  passes the held-out oracle (actual-task correctness, not self-consistency).
+- `nsynth_tool` bin = the RL ENVIRONMENT: stdin JSON proposal → stdout
+  `{verdict, reward, code}` (clean JSON; solver logs on stderr). One process/rollout.
+
+**Training pipeline (offline, on the Mac):**
+1. SFT warm-start SmolLM3 on `NSYNTH_HARVEST` verified traces (mlx_lm.lora format).
+2. RLVR (GRPO/PPO), reward = `nsynth_tool` — multi-turn propose→verify→revise.
+3. Inference: best-of-N with `run_tool` verify-reject → verified, else tentative/refuse.
+
+The three layers below are the components this architecture composes.
+
 ## Where we are (measured, 2026-07-05)
 
 Agentic NL = feed the *literal prompt* to `handle_query` with NO examples handed
