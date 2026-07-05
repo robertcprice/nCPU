@@ -353,14 +353,12 @@ pub fn solve_from_description(
     bridge.synthesize_from_description(description, fn_name)
 }
 
-/// Solve from natural language description (`nl` feature alias).
-#[cfg(feature = "nl")]
+/// Solve from natural language description (compat alias for `solve_from_description`).
 pub fn solve_from_nl(description: &str, fn_name: Option<&str>) -> Result<SolveResult, String> {
     solve_from_description(description, fn_name)
 }
 
 /// Get belief state from NL (for debugging/analysis)
-#[cfg(feature = "nl")]
 pub fn analyze_nl(
     description: &str,
 ) -> Result<crate::linguigenesis_bridge::BridgeBeliefState, String> {
