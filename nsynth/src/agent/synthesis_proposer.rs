@@ -61,6 +61,13 @@ pub fn nl_synthesis_proposer(
         return Ok(patch);
     }
 
+    // RENAME refactor: "rename X to Y" — a COORDINATED multi-file edit touching
+    // the definition and every call site (tests excluded: they are the oracle,
+    // and in the TDD shape they already reference the NEW name).
+    if let Some(patch) = try_rename_patch(context, &description) {
+        return Ok(patch);
+    }
+
     // Primary path: genuine verified synthesis through the bridge + solver.
     // Generalizes to any demonstrated function (registry op or inline examples),
     // not just the canned scalar shapes the keyword fast-patch can express.
@@ -388,6 +395,138 @@ pub fn try_emergent_addition_patch(
             .with_metadata("proposer", "nl_emergent_addition")
             .with_metadata("synthesis_method", result.method.clone()),
     )
+}
+
+/// RENAME refactor (coordinated multi-file EDIT, no synthesis needed): parse
+/// "rename X to Y" STRUCTURALLY (the two identifiers around the rename…to shape),
+/// then rewrite every word-boundary occurrence of X across every non-test-only
+/// `.rs` file — definition and all call sites in ONE atomic patch. Gates:
+///   * X must be a defined fn (outside test code); Y must be a valid ident not
+///     already defined;
+///   * the ORACLE stays honest: occurrences inside `#[cfg(test)]` blocks are
+///     left untouched (in the TDD shape the tests already call Y, which is what
+///     makes the rename verifiable — cargo goes green only if every production
+///     reference was updated).
+pub fn try_rename_patch(context: &RepairContext, description: &str) -> Option<RepairPatch> {
+    // Structural parse: identifier after "rename", identifier after "to".
+    let lower = description.to_lowercase();
+    let toks: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+        .collect();
+    let rpos = toks.iter().position(|t| *t == "rename")?;
+    let tpos = toks.iter().rposition(|t| *t == "to")?;
+    if tpos <= rpos + 1 {
+        return None;
+    }
+    let is_ident =
+        |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    // X: first token after "rename" that is a DEFINED fn; Y: first ident after "to".
+    let defined: Vec<String> = context
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with(".rs"))
+        .flat_map(|f| defined_fn_names(f.text.as_deref().unwrap_or("")))
+        .collect();
+    let old = toks[rpos + 1..tpos]
+        .iter()
+        .find(|t| defined.iter().any(|d| d == *t))?
+        .to_string();
+    let new = toks[tpos + 1..]
+        .iter()
+        .find(|t| is_ident(t) && !["a", "the", "function", "fn"].contains(t))?
+        .to_string();
+    if new == old || defined.iter().any(|d| *d == new) {
+        return None; // no-op or collision with an existing fn
+    }
+
+    // Rewrite every word-boundary occurrence OUTSIDE test blocks, per file.
+    let mut patch = RepairPatch::new().with_metadata("proposer", "nl_rename_refactor");
+    let mut touched = 0usize;
+    for file in &context.files {
+        if !file.path.ends_with(".rs") {
+            continue;
+        }
+        let text = file.text.as_deref().unwrap_or("");
+        let rewritten = rename_outside_tests(text, &old, &new);
+        if rewritten != text {
+            touched += 1;
+            patch = patch.with_edit(RepairEdit::new(
+                file.path.clone(),
+                text.to_string(),
+                rewritten,
+                "rename refactor (definition + call sites; tests untouched)",
+            ));
+        }
+    }
+    (touched > 0).then_some(patch)
+}
+
+/// Word-boundary rename of `old` → `new` in `text`, skipping `#[cfg(test)]`
+/// blocks (brace-tracked) and `#[test]`-annotated fns' lines — the oracle is
+/// never edited.
+fn rename_outside_tests(text: &str, old: &str, new: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut test_block_depth: Option<i32> = None;
+    let mut pending_test_block = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("#[cfg(test)") {
+            pending_test_block = true;
+        }
+        let in_test = test_block_depth.is_some();
+        let rewritten = if in_test {
+            line.to_string()
+        } else {
+            replace_word(line, old, new)
+        };
+        out.push(rewritten);
+        for c in line.chars() {
+            if c == '{' {
+                depth += 1;
+                if pending_test_block && test_block_depth.is_none() {
+                    test_block_depth = Some(depth);
+                    pending_test_block = false;
+                }
+            } else if c == '}' {
+                if test_block_depth == Some(depth) {
+                    test_block_depth = None;
+                }
+                depth -= 1;
+            }
+        }
+    }
+    let mut s = out.join("\n");
+    if text.ends_with('\n') {
+        s.push('\n');
+    }
+    s
+}
+
+/// Replace whole-word (identifier-boundary) occurrences of `old` with `new`.
+fn replace_word(line: &str, old: &str, new: &str) -> String {
+    let bytes = line.as_bytes();
+    let ob = old.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let boundary_before =
+            i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+        if boundary_before && bytes[i..].starts_with(ob) {
+            let j = i + ob.len();
+            let boundary_after =
+                j >= bytes.len() || !(bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_');
+            if boundary_after {
+                out.push_str(new);
+                i = j;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// CONTENT-based localization: which repo fn does the description talk about?
@@ -1720,6 +1859,106 @@ mod tests {
             .verify(&task.test_command)
             .expect("verify after");
         assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// COORDINATED MULTI-FILE RENAME, end to end: definition in one file, call
+    /// site in another, both rewritten in ONE atomic patch; the TDD oracle
+    /// (tests already call the NEW name) goes green. Tests are never edited.
+    #[test]
+    fn rename_refactor_updates_definition_and_call_sites() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_rename_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"renamefix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod maths;\npub mod report;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn twice_works() {\n        assert_eq!(crate::maths::twice(4), 8);\n        assert_eq!(crate::report::doubled_len(3), 6);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        // Definition file...
+        fs::write(root.join("src/maths.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
+            .expect("maths");
+        // ...and a CALLER in a different file.
+        fs::write(
+            root.join("src/report.rs"),
+            "use crate::maths::double;\n\npub fn doubled_len(n: i64) -> i64 {\n    double(n)\n}\n",
+        )
+        .expect("report");
+
+        let task = RepoTaskSpec {
+            id: "rename-double".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Refactor,
+            issue: "nl: rename double to twice".into(),
+            test_command: "cargo test twice_works".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken (tests call twice)");
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_rename_refactor"),
+            "rename stage should fire: {:?}",
+            patch.metadata
+        );
+        let paths: Vec<&str> = patch.edits.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"src/maths.rs"), "definition file edited: {paths:?}");
+        assert!(paths.contains(&"src/report.rs"), "caller file edited: {paths:?}");
+        // The oracle is untouched: no edit rewrites the tests module's calls.
+        for e in &patch.edits {
+            assert!(
+                !e.new_text.contains("crate::maths::double"),
+                "no stale references left: {}",
+                e.new_text
+            );
+        }
+
+        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
+        tx.apply_repair_patch(&patch).expect("apply");
+        tx.commit().expect("commit");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rename_declines_undefined_source_and_collisions() {
+        let root = std::env::temp_dir().join(format!("nsynth_renneg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn double(x: i64) -> i64 { 2 * x }\npub fn triple(x: i64) -> i64 { 3 * x }\n",
+        )
+        .unwrap();
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // Undefined source fn declines.
+        assert!(try_rename_patch(&context, "rename quadruple to quint").is_none());
+        // Collision with an existing fn declines.
+        assert!(try_rename_patch(&context, "rename double to triple").is_none());
+        // Word-boundary safety: renaming double must not touch doubled identifiers.
+        let p = try_rename_patch(&context, "rename double to twice").expect("patch");
+        assert!(p.edits[0].new_text.contains("pub fn twice"));
+        assert!(p.edits[0].new_text.contains("pub fn triple"), "others untouched");
         let _ = fs::remove_dir_all(root);
     }
 
