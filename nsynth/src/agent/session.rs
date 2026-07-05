@@ -348,6 +348,28 @@ impl CodingAgentSession {
             }
         }
 
+        // STRUCTURE-SCAFFOLD INTAKE: "make a new project organized like
+        // structure.md" — a construction request naming ORGANIZATION plus a spec
+        // FILE that exists in the root. The spec is the oracle: the generated
+        // tree is walk-asserted against it; .html nodes become real verified
+        // pages. Declines without both the cue and a resolvable file.
+        {
+            let lower = query.to_lowercase();
+            let wants_structure = ["organize", "organized", "structure", "layout"]
+                .iter()
+                .any(|w| lower.contains(w));
+            let has_cue = ["make", "create", "build", "new", "generate", "scaffold"]
+                .iter()
+                .any(|w| lower.contains(w));
+            if wants_structure && has_cue {
+                if let Some(spec_path) = crate::site::structure_file_from_prose(&self.root, query) {
+                    let result = self.run_scaffold_structure(&spec_path);
+                    self.record_result(query, &result);
+                    return result;
+                }
+            }
+        }
+
         // SITE INTAKE (web-artifact front door): a construction request naming a
         // page/site — "add a new page called portfolio, modern theme, hero and
         // gallery, teal and charcoal" — builds the page with request-derived
@@ -432,6 +454,55 @@ impl CodingAgentSession {
     /// Build a comprehended site/page request into the session root, reporting
     /// the request-fidelity verification in the tool trace. Fail-closed: an
     /// emission that doesn't verify against the request is a failed result.
+    /// Scaffold the session root from a structure-spec file; the SPEC IS THE
+    /// ORACLE (walk-asserted inside scaffold_from_structure — fail-closed).
+    fn run_scaffold_structure(&mut self, spec_path: &std::path::Path) -> AgentQueryResult {
+        let spec = match std::fs::read_to_string(spec_path) {
+            Ok(s) => s,
+            Err(e) => {
+                return AgentQueryResult {
+                    route: QueryRoute::GreenfieldProject,
+                    success: false,
+                    response: format!("structure spec unreadable: {e}"),
+                    workflow: "site.scaffold".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("structure-scaffold".to_string()),
+                    repo_result: None,
+                    tool_trace: Vec::new(),
+                }
+            }
+        };
+        match crate::site::scaffold_from_structure(&self.root, &spec) {
+            Ok(written) => AgentQueryResult {
+                route: QueryRoute::GreenfieldProject,
+                success: true,
+                response: format!(
+                    "Scaffolded {} node(s) from {} — structure oracle verified (every spec node exists; .html nodes are generated verified pages)",
+                    written.len(),
+                    spec_path.file_name().unwrap_or_default().to_string_lossy(),
+                ),
+                workflow: "site.scaffold".to_string(),
+                clarification_questions: Vec::new(),
+                synthesis_method: Some("structure-scaffold".to_string()),
+                repo_result: None,
+                tool_trace: written
+                    .iter()
+                    .map(|p| (format!("fs.write:{p}"), "ok".to_string()))
+                    .collect(),
+            },
+            Err(e) => AgentQueryResult {
+                route: QueryRoute::GreenfieldProject,
+                success: false,
+                response: format!("scaffold failed: {e}"),
+                workflow: "site.scaffold".to_string(),
+                clarification_questions: Vec::new(),
+                synthesis_method: Some("structure-scaffold".to_string()),
+                repo_result: None,
+                tool_trace: Vec::new(),
+            },
+        }
+    }
+
     fn run_build_site(&mut self, req: &crate::site::SiteRequest) -> AgentQueryResult {
         // EXTEND when a site already exists (follow its conventions, rewire the
         // nav in every page, whole-site link integrity); CREATE otherwise.

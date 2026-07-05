@@ -63,3 +63,37 @@ fn handle_query_extends_existing_site() {
     assert!(mog_synth::site::verify_site_links(&root.join("site")).is_empty());
     let _ = fs::remove_dir_all(&root);
 }
+
+/// THE SECOND LITERAL ASK: "make this new project and organize based on this
+/// file containing structure" — the spec file is the oracle.
+#[test]
+fn handle_query_scaffolds_project_from_structure_file() {
+    let root = fresh_root("scaffold");
+    fs::write(
+        root.join("structure.md"),
+        "src/\n  core/\n    engine.rs\n  main.rs\nsite/\n  index.html\ndocs/\n  README.md\n",
+    )
+    .expect("spec");
+    let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
+    let r = s.handle_query(
+        "hey make this new project and organize it based on structure.md please",
+    );
+    assert!(r.success, "response: {}", r.response);
+    assert_eq!(r.workflow, "site.scaffold");
+    assert!(root.join("src/core/engine.rs").is_file());
+    assert!(root.join("src/main.rs").is_file());
+    assert!(root.join("docs/README.md").is_file());
+    let idx = fs::read_to_string(root.join("site/index.html")).expect("real page");
+    assert!(idx.contains("<!DOCTYPE html>"), "generated page, not a stub");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// No spec file -> the structure intake declines (falls through, no scaffold).
+#[test]
+fn structure_intake_declines_without_a_spec_file() {
+    let root = fresh_root("noscaffold");
+    let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
+    let r = s.handle_query("make a new project organized like structure.md");
+    assert_ne!(r.workflow, "site.scaffold", "no spec file on disk: {}", r.response);
+    let _ = fs::remove_dir_all(&root);
+}

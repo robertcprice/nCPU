@@ -537,3 +537,188 @@ mod extend_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+/// One node of a parsed structure spec.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructureNode {
+    pub path: String,
+    pub is_dir: bool,
+}
+
+/// Parse a STRUCTURE SPEC (indented tree or markdown bullets) into nodes.
+/// Rules: indentation (2 spaces or one `-`/`*` bullet level) = depth; names
+/// ending in `/` are directories; names with an extension are files; bare
+/// names are directories. Purely structural — no vocabulary needed.
+pub fn parse_structure_spec(spec: &str) -> Vec<StructureNode> {
+    let mut nodes: Vec<StructureNode> = Vec::new();
+    let mut stack: Vec<(usize, String)> = Vec::new(); // (depth, dir path)
+    for raw in spec.lines() {
+        let line = raw.trim_end();
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let no_bullet = line.replace(['-', '*'], " ");
+        let indent = no_bullet.len() - no_bullet.trim_start().len();
+        let depth = indent / 2;
+        let name = line
+            .trim_start_matches([' ', '-', '*'])
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        while stack.last().map(|(d, _)| *d >= depth).unwrap_or(false) {
+            stack.pop();
+        }
+        let parent = stack.last().map(|(_, p)| p.clone()).unwrap_or_default();
+        let clean = name.trim_end_matches('/').to_string();
+        let path = if parent.is_empty() {
+            clean.clone()
+        } else {
+            format!("{parent}/{clean}")
+        };
+        let is_dir = name.ends_with('/') || !clean.contains('.');
+        nodes.push(StructureNode { path: path.clone(), is_dir });
+        if is_dir {
+            stack.push((depth, path));
+        }
+    }
+    nodes
+}
+
+/// Scaffold a project from a structure spec. Directories are created; `.html`
+/// files become REAL generated pages (emit_page, per-page verified); other
+/// files are created with an honest scaffold header (organization is the
+/// deliverable; unknown content is never fabricated). Closing gate: WALK-ASSERT
+/// — every spec node must exist on disk with the right kind. THE SPEC IS THE
+/// ORACLE.
+pub fn scaffold_from_structure(root: &Path, spec: &str) -> Result<Vec<String>, String> {
+    let nodes = parse_structure_spec(spec);
+    if nodes.is_empty() {
+        return Err("structure spec parsed to zero nodes".into());
+    }
+    let mut written = Vec::new();
+    for n in &nodes {
+        let p = root.join(&n.path);
+        if n.is_dir {
+            std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            if n.path.ends_with(".html") {
+                let stem = p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "page".into());
+                let req = SiteRequest {
+                    page: stem.clone(),
+                    title: {
+                        let mut t = stem.clone();
+                        if let Some(c) = t.get_mut(0..1) {
+                            c.make_ascii_uppercase();
+                        }
+                        t
+                    },
+                    theme: "modern".into(),
+                    colors: vec![],
+                    sections: vec!["nav".into(), "hero".into(), "footer".into()],
+                };
+                let (html, css) = emit_page(&req);
+                let fails = verify_page(&req, &html, &css);
+                if !fails.is_empty() {
+                    return Err(format!("page '{}' failed fidelity: {fails:?}", n.path));
+                }
+                std::fs::write(&p, html).map_err(|e| e.to_string())?;
+                // one stylesheet per page's directory (idempotent)
+                let cssp = p.parent().unwrap().join("styles.css");
+                if !cssp.exists() {
+                    std::fs::write(&cssp, css).map_err(|e| e.to_string())?;
+                }
+            } else if !p.exists() {
+                std::fs::write(
+                    &p,
+                    format!("// scaffold: {} (generated from structure spec; content TODO)\n", n.path),
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        written.push(n.path.clone());
+    }
+    // WALK-ASSERT: the spec is the oracle.
+    let mut fails = Vec::new();
+    for n in &nodes {
+        let p = root.join(&n.path);
+        if n.is_dir && !p.is_dir() {
+            fails.push(format!("missing dir {}", n.path));
+        }
+        if !n.is_dir && !p.is_file() {
+            fails.push(format!("missing file {}", n.path));
+        }
+    }
+    if !fails.is_empty() {
+        return Err(format!("structure oracle failed: {fails:?}"));
+    }
+    Ok(written)
+}
+
+/// Find a structure-spec FILE named in the prose ("based on structure.md",
+/// "like the layout in plan.txt") that exists under `root`.
+pub fn structure_file_from_prose(root: &Path, text: &str) -> Option<std::path::PathBuf> {
+    for tok in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
+        let t = tok.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '/'));
+        if t.ends_with(".md") || t.ends_with(".txt") || t.ends_with(".json") {
+            let p = root.join(t);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod structure_tests {
+    use super::*;
+
+    const SPEC: &str = "\
+# my project
+src/
+  core/
+    engine.rs
+  main.rs
+site/
+  index.html
+  about.html
+docs/
+  README.md
+";
+
+    #[test]
+    fn parses_indented_tree_with_dirs_and_files() {
+        let nodes = parse_structure_spec(SPEC);
+        let paths: Vec<&str> = nodes.iter().map(|n| n.path.as_str()).collect();
+        assert!(paths.contains(&"src/core/engine.rs"));
+        assert!(paths.contains(&"src/main.rs"));
+        assert!(paths.contains(&"site/about.html"));
+        assert!(paths.contains(&"docs/README.md"));
+        assert!(nodes.iter().find(|n| n.path == "src/core").unwrap().is_dir);
+        assert!(!nodes.iter().find(|n| n.path == "src/main.rs").unwrap().is_dir);
+    }
+
+    #[test]
+    fn scaffolds_and_walk_asserts_the_spec() {
+        let root = std::env::temp_dir().join(format!("nsynth_scaffold_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let written = scaffold_from_structure(&root, SPEC).expect("scaffold");
+        assert!(written.len() >= 7, "{written:?}");
+        // The spec is the oracle — and html files are REAL generated pages.
+        assert!(root.join("src/core/engine.rs").is_file());
+        let idx = std::fs::read_to_string(root.join("site/index.html")).unwrap();
+        assert!(idx.contains("<!DOCTYPE html>") && idx.contains("class=\"hero\""));
+        assert!(root.join("site/styles.css").is_file());
+        // Re-scaffold is idempotent (no error, oracle still green).
+        scaffold_from_structure(&root, SPEC).expect("idempotent");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
