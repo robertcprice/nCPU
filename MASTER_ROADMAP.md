@@ -391,6 +391,21 @@ Both agents' work now fully combined (their unpushed local 6 incl Value::Map fet
 - Shared-checkout WARNING: lg-core (`../../linguigenesis`) is ONE checkout used by BOTH clones — edits are instantly live for both agents. Same for `linguigenesis/data/*`. Announce lg-core changes here first.
 - **DATA-REGEN RULE (violated once already, 2026-07-04 21:57): regenerate `mined_capabilities.json` ONLY from a tree containing BOTH lines' miner fixes (currently widen-nl-front-door post-58dd68e). A regen from a stale tree reverted string ops to the `default_fn_name:"transform"` collision and broke every string component + phrase test on the other line. If your tree lacks the other line's capability_miner changes, merge first or don't regen.
 
+### 0.0592 MBPP WALL ANALYSIS (2026-07-04 night; 10s idle run, 585/942 = 62.1%)
+
+Timeout lever SPENT: 5s→10s converted only 3 kills (582→585). The wall is representational. Classification of the remainder (per-task domains/shapes from /tmp/mbpp_bench.jsonl vs t10 artifacts):
+
+**UNSOLVED (164):** string-domain 101/164; out-shapes list 49 + nested-list 45 + str-list 22 (= 116/164 produce LISTS); keywords: string(s), tuple(s), lists, extract, length, count. → The unsolved wall is STRING-LIST + TUPLE/PAIR-LIST manipulation, not scalar logic.
+**KILLED (198):** int/list 106 + string 64; out=int 74, str 48; keywords: array, maximum, count, check, pairs. → Genuinely hard aggregate/predicate searches (deep conditionals, pairwise logic), not budget starvation.
+
+**RANKED LEVERS (universal agent's lane per 0.0591 split; sized by task counts):**
+1. **String-list basis in the combinator** (~60-80 tasks): split/join/words/extract/filter-string atoms producing [str]; str→[str]→str chains. The 57a50c9 dispatch fix was the seam — widen the atom set.
+2. **Pair/tuple-list atoms** (~50-60 tasks): zip, enumerate, pair-normalize/sort, dedup-pairs, pair-fold — generalize the sorted_pair_occurrences direction into composable atoms over [[i64]].
+3. **Deep predicate/aggregate search for the killed-int 74**: D&C branch depth + docstring-prior pruning (keywords name the ops; use them to prune, not just prefer).
+4. Dict: only ~8 tasks remain post-Map — LOW priority.
+
+(Agent-lane side note: phrase resolution now wired into the synthesis front door — comprehension-refused prose falls back to phrase-level op resolution; and the repair agent does coordinated multi-file additions with real file creation in EditTransaction.)
+
 ## 0. Agent Start Protocol
 
 Follow these steps in order at the beginning of every coding-agent session:
