@@ -16,6 +16,7 @@ pub mod package_b_gate;
 pub mod g5_gate;
 pub mod g6_gate;
 pub mod planning;
+pub mod provenance;
 pub mod repo;
 pub mod repository;
 pub mod runtime;
