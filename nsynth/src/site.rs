@@ -79,6 +79,7 @@ fn css_color_value(word: &str) -> Option<String> {
     match word {
         "charcoal" => Some("#36454f".to_string()),
         "mint" => Some("#98ff98".to_string()),
+        "cream" => Some("#fffdd0".to_string()),
         w if CSS_COLORS.contains(&w) => Some(w.to_string()),
         w if w.starts_with('#') && (w.len() == 4 || w.len() == 7)
             && w[1..].chars().all(|c| c.is_ascii_hexdigit()) =>
@@ -141,26 +142,82 @@ pub struct SiteRequest {
     pub sections: Vec<String>,    // resolved section names, request order
 }
 
-/// Emergent comprehension of a page request: theme words resolve against the
-/// theme registry, color words against the CSS vocabulary, section nouns
-/// against the section registry (morphology per word). Returns None when the
-/// prose carries no page/site construction intent.
+/// The WEB REGISTRY: sections and themes as ENTITIES with synonym edges and
+/// definitions, resolved by the REAL lg-core `EntityResolver` — the same
+/// emergent stack the coding registry rides (direct lemma, synonym edges,
+/// morphology, fuzzy, definition overlap). "sleek" reaches `modern` through a
+/// synonym edge; "photos" reaches `gallery`; an unlisted paraphrase can still
+/// land via definition-overlap on the entity's own description. Data-shaped
+/// seeds — extensible exactly like coding_registry.
+fn web_registry() -> linguigenesis_core::registry::Registry {
+    use linguigenesis_core::entity::{Entity, EntityType, RelationType};
+    use linguigenesis_core::registry::Registry;
+    let reg = Registry::new();
+    let mut id: u64 = 1;
+    let mut canonical = |lemma: &str, kind: &str, def: &str, syns: &[&str]| {
+        let mut e = Entity::new(id, lemma.to_string(), EntityType::Noun);
+        id += 1;
+        e.add_definition(def.to_string());
+        e.add_property("web_kind".into(), kind.into());
+        let _ = reg.add_entity(e);
+        for syn in syns {
+            let se = Entity::new(id, syn.to_string(), EntityType::Noun);
+            id += 1;
+            let _ = reg.add_entity(se);
+            let _ = reg.link_lemma_relation(syn, RelationType::Synonym, lemma);
+            let _ = reg.link_lemma_relation(lemma, RelationType::Synonym, syn);
+        }
+    };
+    // Sections.
+    canonical("nav", "section", "a navigation menu bar with links at the top of the page", &["menu", "navigation", "navbar"]);
+    canonical("hero", "section", "a large banner header splash welcoming visitors at the top", &["banner", "splash", "jumbotron", "header"]);
+    canonical("features", "section", "a grid of feature cards highlighting benefits and services", &["benefits", "highlights", "services"]);
+    canonical("gallery", "section", "a grid of photos images and pictures to showcase work", &["photos", "images", "pictures", "showcase", "portfolio"]);
+    canonical("contact", "section", "a form where visitors reach out send a message or email to get in touch", &["form", "message", "email", "reach"]);
+    canonical("about", "section", "an about section telling the story bio and background", &["bio", "story", "background"]);
+    canonical("footer", "section", "a footer at the bottom with copyright", &["bottom", "copyright"]);
+    // Themes.
+    canonical("modern", "theme", "a modern sleek contemporary fresh design style", &["sleek", "contemporary", "fresh"]);
+    canonical("minimal", "theme", "a minimal simple plain clean design style", &["simple", "plain", "clean", "minimalist"]);
+    canonical("classic", "theme", "a classic traditional elegant vintage serif design style", &["traditional", "elegant", "vintage"]);
+    reg
+}
+
+/// Resolve one token to a web entity (section/theme) through the REAL resolver.
+/// Returns (kind, canonical_lemma, score). Floor 0.5 admits the
+/// definition-overlap tier; the canonical entity carries `web_kind`.
+fn resolve_web_token(
+    resolver: &linguigenesis_core::entity_resolution::EntityResolver,
+    token: &str,
+) -> Option<(String, String, f32)> {
+    // Scan the RANKED candidates for the first that carries web_kind: a synonym
+    // surface ("banner") direct-matches its own entity first, but the canonical
+    // ("hero") arrives via the synonym-edge lens right behind it.
+    resolver
+        .rank_candidates(token)
+        .into_iter()
+        .filter(|r| r.evidence.score >= 0.5)
+        .find_map(|r| {
+            let kind = r.entity.get_property("web_kind")?.clone();
+            Some((kind, r.entity.lemma.clone(), r.evidence.score))
+        })
+}
+
+/// Emergent comprehension of a page request: routing gate = a construction cue
+/// plus a web noun (token-level, morphology-aware); CONTENT resolution rides
+/// the real EntityResolver over the web registry (synonym edges, morphology,
+/// fuzzy, definition overlap) for sections and themes, and the CSS named-color
+/// standard for palettes. Returns None when the prose carries no page/site
+/// construction intent.
 pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
+    use linguigenesis_core::entity_resolution::EntityResolver;
     let lower = text.to_lowercase();
     let tokens: Vec<String> = lower
         .split(|c: char| !c.is_alphanumeric() && c != '#' && c != '_')
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect();
-    // Gate: a construction cue + a web noun.
-    const CUES: [&str; 7] = ["add", "create", "make", "build", "new", "generate", "want"];
-    const WEB: [&str; 4] = ["page", "website", "site", "webpage"];
-    let has_cue = tokens.iter().any(|t| CUES.contains(&t.as_str()));
-    let has_web = tokens.iter().any(|t| WEB.contains(&t.as_str()));
-    if !has_cue || !has_web {
-        return None;
-    }
-    let word_matches = |tok: &str, name: &str| -> bool {
+    let morph_eq = |tok: &str, name: &str| -> bool {
         if tok == name {
             return true;
         }
@@ -170,7 +227,15 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
         nv.push(name.to_string());
         tv.iter().any(|v| nv.contains(v))
     };
-    // Page name: the token after "called"/"named", else "page".
+    // Routing gate (token-level + morphology; routing, not resolution).
+    const CUES: [&str; 8] = ["add", "create", "make", "build", "new", "generate", "want", "put"];
+    const WEB: [&str; 6] = ["page", "website", "site", "webpage", "homepage", "web"];
+    let has_cue = tokens.iter().any(|t| CUES.iter().any(|c| morph_eq(t, c)));
+    let has_web = tokens.iter().any(|t| WEB.iter().any(|w| morph_eq(t, w)));
+    if !has_cue || !has_web {
+        return None;
+    }
+    // Page name: the token after "called"/"named" (structural cue).
     let page = tokens
         .iter()
         .position(|t| t == "called" || t == "named")
@@ -181,24 +246,30 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
     if let Some(c) = title.get_mut(0..1) {
         c.make_ascii_uppercase();
     }
-    // Theme: first theme-registry name matched (morphology).
-    let theme = theme_registry()
-        .iter()
-        .find(|th| tokens.iter().any(|t| word_matches(t, th.name)))
-        .map(|th| th.name.to_string())
-        .unwrap_or_else(|| "modern".to_string());
-    // Colors: every token resolving in the CSS vocabulary, request order.
-    let colors: Vec<String> = tokens.iter().filter_map(|t| css_color_value(t)).collect();
-    // Sections: every token resolving in the section registry, request order,
-    // deduped. Always ensure nav + footer bracket the page.
+    // CONTENT resolution through the REAL resolver over the web registry.
+    let resolver = EntityResolver::new(web_registry());
+    let mut theme: Option<String> = None;
     let mut sections: Vec<String> = Vec::new();
     for t in &tokens {
-        for s in section_registry() {
-            if word_matches(t, s.name) && !sections.contains(&s.name.to_string()) {
-                sections.push(s.name.to_string());
+        if let Some((kind, lemma, _score)) = resolve_web_token(&resolver, t) {
+            match kind.as_str() {
+                "theme" => {
+                    if theme.is_none() {
+                        theme = Some(lemma);
+                    }
+                }
+                "section" => {
+                    if !sections.contains(&lemma) {
+                        sections.push(lemma);
+                    }
+                }
+                _ => {}
             }
         }
     }
+    let theme = theme.unwrap_or_else(|| "modern".to_string());
+    // Colors: the platform's own vocabulary (CSS named colors + hex).
+    let colors: Vec<String> = tokens.iter().filter_map(|t| css_color_value(t)).collect();
     if !sections.contains(&"nav".to_string()) {
         sections.insert(0, "nav".to_string());
     }
@@ -720,5 +791,52 @@ docs/
         // Re-scaffold is idempotent (no error, oracle still green).
         scaffold_from_structure(&root, SPEC).expect("idempotent");
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod real_nl_tests {
+    use super::*;
+
+    /// THE ACID TEST: phrasings that share NO literal keyword with the
+    /// registries — reachable only through the REAL resolver's synonym edges
+    /// and morphology. This is the difference between keyword matching and the
+    /// actual system.
+    #[test]
+    fn unseen_phrasings_resolve_through_the_real_resolver() {
+        let r = comprehend_site_request(
+            "put together a sleek new page called studio for my website with a big banner, \
+             a photo showcase, and a way for people to send a message — navy and cream colors",
+        )
+        .expect("comprehends unseen phrasing");
+        assert_eq!(r.theme, "modern", "sleek -> modern via synonym edge");
+        assert!(r.sections.contains(&"hero".to_string()), "banner -> hero: {:?}", r.sections);
+        assert!(r.sections.contains(&"gallery".to_string()), "photo/showcase -> gallery: {:?}", r.sections);
+        assert!(r.sections.contains(&"contact".to_string()), "message -> contact: {:?}", r.sections);
+        assert_eq!(r.colors, vec!["navy".to_string(), "#fffdd0".to_string()]);
+
+        let r2 = comprehend_site_request(
+            "create a simple webpage called docs with highlights and our story",
+        )
+        .expect("comprehends");
+        assert_eq!(r2.theme, "minimal", "simple -> minimal: {:?}", r2.theme);
+        assert!(r2.sections.contains(&"features".to_string()), "highlights -> features");
+        assert!(r2.sections.contains(&"about".to_string()), "story -> about");
+
+        let r3 = comprehend_site_request(
+            "build an elegant page called menu-page for the site with a navigation menu and pictures",
+        )
+        .expect("comprehends");
+        assert_eq!(r3.theme, "classic", "elegant -> classic");
+        assert!(r3.sections.contains(&"gallery".to_string()), "pictures -> gallery");
+    }
+
+    /// Precision: web-ish words in OP requests still never comprehend as sites,
+    /// and gibberish resolves nothing.
+    #[test]
+    fn precision_holds_under_the_resolver() {
+        assert!(comprehend_site_request("paginate the results array").is_none());
+        assert!(comprehend_site_request("add a function that triples a number").is_none());
+        assert!(comprehend_site_request("frobnicate the zorp").is_none());
     }
 }

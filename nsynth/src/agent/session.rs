@@ -354,13 +354,32 @@ impl CodingAgentSession {
         // tree is walk-asserted against it; .html nodes become real verified
         // pages. Declines without both the cue and a resolvable file.
         {
+            use linguigenesis_core::entity_resolution::morphological_variants;
             let lower = query.to_lowercase();
-            let wants_structure = ["organize", "organized", "structure", "layout"]
-                .iter()
-                .any(|w| lower.contains(w));
-            let has_cue = ["make", "create", "build", "new", "generate", "scaffold"]
-                .iter()
-                .any(|w| lower.contains(w));
+            let toks: Vec<&str> = lower
+                .split(|c: char| !c.is_alphanumeric() && c != '.' && c != '/')
+                .filter(|t| !t.is_empty())
+                .collect();
+            // Token-level + morphology (never substring): "organized"->organize
+            // via the shared morphological stemmer; "disorganized" does NOT match.
+            let morph_eq = |tok: &str, name: &str| -> bool {
+                if tok == name {
+                    return true;
+                }
+                let mut tv = morphological_variants(tok);
+                tv.push(tok.to_string());
+                let mut nv = morphological_variants(name);
+                nv.push(name.to_string());
+                tv.iter().any(|v| nv.contains(v))
+            };
+            let wants_structure = toks.iter().any(|t| {
+                ["organize", "structure", "layout"].iter().any(|w| morph_eq(t, w))
+            });
+            let has_cue = toks.iter().any(|t| {
+                ["make", "create", "build", "new", "generate", "scaffold"]
+                    .iter()
+                    .any(|w| morph_eq(t, w))
+            });
             if wants_structure && has_cue {
                 if let Some(spec_path) = crate::site::structure_file_from_prose(&self.root, query) {
                     let result = self.run_scaffold_structure(&spec_path);
