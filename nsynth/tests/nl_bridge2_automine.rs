@@ -94,7 +94,18 @@ fn mined_lowercase_synthesizes_end_to_end() {
         "must NOT be a memorizing lexicon lookup, got:\n{}",
         r.response
     );
-    assert_eq!(r.synthesis_method.as_deref(), Some("string_synth"));
+    // BEHAVIOR over method label: the exact tier that wins drifts; assert the
+    // program actually lower-cases (and generalizes to an unseen input) instead.
+    let mk = |i: &str, o: &str| mog_synth::benchmark::Example {
+        inputs: vec![mog_synth::benchmark::Value::Str(i.to_string())],
+        expected: mog_synth::benchmark::Value::Str(o.to_string()),
+    };
+    let spec = [mk("Hello", "hello"), mk("AbC", "abc"), mk("MiXeD", "mixed")];
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(&r.response, &spec),
+        "synthesized program must lower-case its input, got:\n{}",
+        r.response
+    );
 }
 
 /// NL-REACHABILITY #2 — `trim` (NEVER a hand seed): "trim a string" synthesizes
@@ -124,7 +135,24 @@ fn mined_sort_synthesizes_end_to_end() {
         "must emit the i64 array sort program, got:\n{}",
         r.response
     );
-    assert_eq!(r.synthesis_method.as_deref(), Some("array_transform_sort"));
+    // BEHAVIOR, not method label: the synthesized program must actually SORT. The
+    // exact internal method that wins ("array_transform_sort" vs a decompose tier)
+    // drifts as the solver evolves and is not a correctness property — assert the
+    // program reproduces the sort spec instead of hardcoding the label.
+    let mk = |xs: &[i64]| {
+        let mut v = xs.to_vec();
+        v.sort();
+        mog_synth::benchmark::Example {
+            inputs: vec![mog_synth::benchmark::Value::int_array(xs)],
+            expected: mog_synth::benchmark::Value::int_array(&v),
+        }
+    };
+    let spec = [mk(&[3, 1, 2]), mk(&[5, 4, 6, 4]), mk(&[9, -1, 0, 2])];
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(&r.response, &spec),
+        "synthesized program must SORT its input, got:\n{}",
+        r.response
+    );
 }
 
 /// EMERGENCE: the COMMITTED mined JSON the bridge loads is byte-identical to a
@@ -172,10 +200,23 @@ fn regression_float_i64_and_refusal_intact() {
     let f = run(&fresh_root("fahr"), "convert celsius to fahrenheit");
     assert!(f.success && f.response.contains("-> f64"), "float intact: {}", f.response);
 
+    // i64 add intact — assert BEHAVIOR (adds two numbers), not "a + b" codegen: the
+    // arity-polymorphic search names params a0/a1, so the literal string drifts.
     let a = run(&fresh_root("add"), "add two numbers");
+    assert!(a.success && a.response.contains("-> i64"), "i64 add intact: {}", a.response);
+    let add_spec = [
+        mog_synth::benchmark::Example {
+            inputs: vec![mog_synth::benchmark::Value::Int(2), mog_synth::benchmark::Value::Int(3)],
+            expected: mog_synth::benchmark::Value::Int(5),
+        },
+        mog_synth::benchmark::Example {
+            inputs: vec![mog_synth::benchmark::Value::Int(5), mog_synth::benchmark::Value::Int(7)],
+            expected: mog_synth::benchmark::Value::Int(12),
+        },
+    ];
     assert!(
-        a.success && a.response.contains("-> i64") && a.response.contains("a + b"),
-        "i64 add intact: {}",
+        mog_synth::runtime::code_reproduces_examples(&a.response, &add_spec),
+        "synthesized program must add its two arguments, got:\n{}",
         a.response
     );
 

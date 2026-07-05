@@ -44,6 +44,13 @@ const STRING_PROBES: &[&str] = &[
     "MiXeD ",
     " nSynth ",
     "  Xy  ",
+    // Interior whitespace, already trimmed at the ends. These DISCRIMINATE real
+    // `trim` (strip leading/trailing only → unchanged) from the two overfits the
+    // solver would otherwise accept: "a b c" rules out remove-ALL-spaces (→"abc"),
+    // and "a  b" (DOUBLE interior space) rules out tokenize+join-with-single-space
+    // (→"a b"). Only leading/trailing stripping reproduces every row, pinning trim.
+    "a b c",
+    "a  b",
 ];
 
 /// Canonical input arrays the array order ops are exercised on.

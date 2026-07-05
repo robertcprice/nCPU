@@ -892,7 +892,7 @@ impl LinguigenesisBridge {
         let problem = self
             .problem_from_requirement(&req, fn_name)
             .map_err(|e| e.to_string())?;
-        Ok(crate::solver::solve_problem(&problem))
+        Ok(solve_verifying_holdouts(&problem))
     }
 
     /// The synthesizable op names (default_fn_name of every Function entity) —
@@ -1627,7 +1627,7 @@ impl LinguigenesisBridge {
         let problem = self
             .problem_from_requirement(req, fn_name)
             .map_err(|e| e.to_string())?;
-        Ok(crate::solver::solve_problem(&problem))
+        Ok(solve_verifying_holdouts(&problem))
     }
 
     /// Structural multi-component signal: does this request DESCRIBE >=2 component
@@ -3041,7 +3041,7 @@ fn unsound_confident_solve_categorized(
     let req_sig_is_array =
         sig_lower.contains('[') || sig_lower.contains("vec<") || sig_lower.contains("str");
     if !req_sig_is_array {
-        if let Some(arr_word) = array_domain_word(input, registry, &req.function_name) {
+        if let Some(arr_word) = array_domain_word(input, registry, &req.function_name, &req.signature) {
             return Some(GateRefusal {
                 category: GateCategory::Hard,
                 reason: format!(
@@ -3408,12 +3408,72 @@ const ARRAY_DOMAIN_FLOOR: f32 = 0.50;
 /// whose declared `input_types` contains a vector type) other than `req_fn`.
 /// Returns the surface word so the gate can report the domain mismatch. Emergent:
 /// the operand domain is read from the resolved entity's signature, not a list.
-fn array_domain_word(input: &str, registry: &Registry, req_fn: &str) -> Option<String> {
+/// Solve `problem`, then re-verify the emitted code against the FULL spec
+/// (examples + holdouts). `problem_from_requirement` reserves the last distinct
+/// row as a fresh holdout, and `solve_problem` solves a `synthesis_view()` that
+/// CLEARS holdouts — so the holdout never bites INSIDE the solver. Without this
+/// post-solve re-check an overfit that fits the seed but contradicts the holdout
+/// is wrongly accepted (e.g. "trim" synthesized as remove-ALL-spaces, which fits
+/// the leading/trailing-space seed rows but fails "a b c" -> "a b c"). This is the
+/// SOUNDNESS gate for the single-op NL door — mirrors the LLM-examples path.
+fn solve_verifying_holdouts(problem: &crate::benchmark::Problem) -> crate::solver::SolveResult {
+    let res = crate::solver::solve_problem(problem);
+    if res.success && !problem.holdouts.is_empty() {
+        let full: Vec<crate::benchmark::Example> = problem
+            .examples
+            .iter()
+            .chain(problem.holdouts.iter())
+            .cloned()
+            .collect();
+        if !crate::runtime::code_reproduces_examples(&res.code, &full) {
+            // The seed-fit is an OVERFIT — it contradicts the holdout (e.g. "trim"
+            // as remove-ALL-spaces, which fits the leading/trailing seed rows but
+            // fails "a b c" -> "a b c"). COMPLETENESS: re-solve with the holdout
+            // FOLDED INTO the examples so the solver's own verification rejects the
+            // overfit and continues to a GENERALIZING program (string_synth's real
+            // s.trim()). The retry is re-checked against the full spec, so
+            // acceptance stays sound — only a program that reproduces EVERY row wins.
+            let mut full_problem = problem.clone();
+            full_problem.examples = full.clone();
+            full_problem.holdouts = Vec::new();
+            let res2 = crate::solver::solve_problem(&full_problem);
+            if res2.success && crate::runtime::code_reproduces_examples(&res2.code, &full) {
+                return res2;
+            }
+            return crate::solver::SolveResult {
+                success: false,
+                code: res.code,
+                method: res.method,
+                error: Some("solved code fails the held-out probe (overfit)".to_string()),
+                metadata: Default::default(),
+            };
+        }
+    }
+    res
+}
+
+fn array_domain_word(
+    input: &str,
+    registry: &Registry,
+    req_fn: &str,
+    req_sig: &str,
+) -> Option<String> {
     use linguigenesis_core::entity::EntityType;
     use linguigenesis_core::nl_tokens::tokenize_lower;
 
     let resolver = EntityResolver::new(registry.clone());
+    // A token that merely names the resolved op's OWN type — "string" for a
+    // `string -> string` op, "array" for a genuine array op — is CONSISTENT with
+    // the op, not a foreign-domain operand, so it must not trip the array/scalar
+    // mismatch guard. The resolved op's signature carries its type words, so skip
+    // any operand token that appears in it (emergent, no hardcoded type list).
+    // This fixes the false positive where "trim a string" was rejected because
+    // "string" fuzzily op-links to a vec-input op.
+    let sig_l = req_sig.to_lowercase();
     for tok in tokenize_lower(input) {
+        if tok.len() >= 3 && sig_l.contains(tok.as_str()) {
+            continue; // token names a type in the op's own signature — not a mismatch
+        }
         // The token must be a genuine DOMAIN word, not a structural / stop word.
         // Consult the DATA stop set directly (coding_registry grammar_stop_words):
         // meta words like "function"/"number" must never count as domain evidence.
