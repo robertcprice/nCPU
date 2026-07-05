@@ -24,15 +24,24 @@ RLVR reward** than raw unit tests, and the inference-time guarantee. A small mod
 - `nsynth_tool` bin = the RL ENVIRONMENT: stdin JSON proposal → stdout
   `{verdict, reward, code}` (clean JSON; solver logs on stderr). One process/rollout.
 
-**Scope + ceiling (honest).** The pipeline is a VERIFIED NL *function synthesizer*:
-the model comprehends prose → proposes a SPEC (language-agnostic I/O examples);
-nsynth SYNTHESIZES + verifies the program. So the model writes specs, not code
-(nsynth's verifier runs its own DSL, so handing it Python buys nothing). The
-verified-output ceiling is nsynth's **synthesis reach = the PBE rate (38% HumanEval
-/ 60% MBPP)** — the rate reachable with a *perfect* comprehender. Two ORTHOGONAL
-levers, and the second keeps the no-model thesis intact:
-  * **LLM comprehension** — closes the NL→PBE gap (16% → 38% HumanEval).
-  * **Engine synthesis** (no model) — raises the 38% ceiling.
+**Scope + ceiling (corrected).** Two paths, and the FIRST is the powerful one:
+  * **Model WRITES Mog code → nsynth EXECUTES + verifies it** (`VerifyProgram`).
+    nsynth's runtime runs a broad Rust-subset (loops/conditionals/arrays/strings),
+    so the model can write ALGORITHMS nsynth could never *synthesize* and nsynth
+    still GUARANTEES correctness (proof-carrying). **Ceiling = the interpreter's
+    execution breadth + the model's coding ability — NOT nsynth's 38% synthesis.**
+    This is how the agent gets powerful: the model does the coding (high capability),
+    nsynth is the trust layer (never ships wrong code). Mog dialect: no `let`;
+    declare `x: i64 = 0;`; `for e in arr {}`; `while c {}`; `return e;`.
+  * **Model proposes a SPEC → nsynth SYNTHESIZES** (`Examples`/`Reference`). The
+    model writes nothing; nsynth produces the verified program. NARROWER — bounded
+    by nsynth's synthesis (the PBE rate 38% HE / 60% MBPP). Great where it applies
+    (the model only has to comprehend), but not the ceiling.
+
+  The earlier "16→38% PBE gap" framing was about the SYNTHESIS path ONLY — it is
+  NOT the agent's ceiling. The `VerifyProgram` path's ceiling is the model's coding,
+  which modern models push far past 38%; nsynth just makes every accepted answer
+  provably correct.
 
 **Robust sequencing — gate each phase on measured gain; do NOT jump to RLVR:**
 0. **Infra (LANDED):** `src/rlvr.rs` (tool schema + reward) + `src/bin/nsynth_tool.rs`

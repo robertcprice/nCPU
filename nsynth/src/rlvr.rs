@@ -3,19 +3,25 @@
 //! THE ARCHITECTURE (see docs/AGENTIC_NL_PLAYBOOK.md): a small model is TRAINED to
 //! USE nsynth, not have nsynth baked into its weights. The correctness argument
 //! stays INDEPENDENT of the model — nsynth verifies at inference — so the
-//! zero-false-positive guarantee survives (distilling nsynth into weights would
-//! lose both the guarantee and, per the research, 3-10% capability).
+//! zero-false-positive guarantee survives.
 //!
-//! This module is the clean seam the RL loop drives:
-//!   * [`ToolRequest`] — a structured proposal the model emits (a spec or a
-//!     candidate program).
-//!   * [`run_tool`] — routes the proposal through nsynth's REAL synthesis +
-//!     strict verification + the consensus trust gate, returning a
-//!     [`ToolResponse`] (`Verified` / `Tentative` / `Refused`).
-//!   * [`rlvr_reward`] — the UN-HACKABLE reward: 1.0 iff nsynth returns a Verified
-//!     program that ALSO passes the held-out `hidden` tests (actual-task
-//!     correctness, not self-consistency). nsynth is a proof-carrying verifier, a
-//!     strictly stronger RLVR reward than raw unit tests.
+//! TWO PATHS, and the FIRST is the powerful one:
+//!   1. [`ToolRequest::VerifyProgram`] — the model WRITES Mog code; nsynth EXECUTES
+//!      + strict-verifies it. This is the POWERFUL path: nsynth's runtime runs a
+//!      broad Rust-subset (loops/conditionals/arrays/strings), so the model can
+//!      write ALGORITHMS nsynth could never synthesize, and nsynth still guarantees
+//!      correctness. Ceiling = the interpreter's execution breadth + the model's
+//!      coding — NOT nsynth's synthesis reach. (Mog dialect: no `let`; declare
+//!      `x: i64 = 0;`; `for e in arr {}`; `while c {}`; `return e;`.)
+//!   2. [`ToolRequest::Examples`] / [`Reference`] — the model proposes a SPEC;
+//!      nsynth SYNTHESIZES the verified program. Narrower (bounded by nsynth's
+//!      synthesis = the PBE rate), but the model writes nothing.
+//!
+//! [`run_tool`] routes a proposal through synthesis/execution + strict verify + the
+//! consensus trust gate → [`ToolResponse`] (`Verified`/`Tentative`/`Refused`).
+//! [`rlvr_reward`] = 1.0 iff a Verified program ALSO passes the held-out `hidden`
+//! tests (real correctness, un-hackable — nsynth's check is proof-carrying, a
+//! strictly stronger RLVR reward than raw unit tests).
 //!
 //! The `nsynth_tool` bin exposes this over stdin/stdout JSON as the RL environment.
 

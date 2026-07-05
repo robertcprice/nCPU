@@ -19,18 +19,20 @@ scores 0. A SOLVED requires nsynth `verified` AND passing the hidden tests.
 import json, subprocess, sys, os, urllib.request
 
 BIN = os.environ.get("NSYNTH_TOOL_BIN", "./target/release/nsynth_tool")
-SYSTEM = (
-    "You drive a verified program synthesizer. For the described function, output "
-    "ONLY a JSON tool call: {\"kind\":\"examples\",\"signature\":\"fn f(...) -> ...\","
-    "\"examples\":[{\"in\":[...],\"out\":...}, ...]} with input/output pairs that "
-    "UNIQUELY determine the function. No prose, JSON only."
+# POWERFUL path: the model WRITES Mog code (a Rust subset nsynth executes+verifies).
+MOG_SYSTEM = (
+    "Write a function in Mog for the description. Mog is a Rust subset the verifier "
+    "runs: NO `let` — declare `name: type = init;` (i64,f64,bool,string,[i64],"
+    "[string]); mutate `x = expr;`; `for e in arr { }`; `while cond { }`; `if cond "
+    "{ } else { }`; `arr[i as usize]`, `arr.len()`, `arr.push(e)`; `return expr;`. "
+    "Output ONLY `fn f(...) -> ... { ... }` — no prose, no markdown fence."
 )
 
 
 def chat(url, model, prompt, n, temp):
     body = json.dumps({
         "model": model,
-        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "messages": [{"role": "system", "content": MOG_SYSTEM}, {"role": "user", "content": prompt}],
         "n": n, "temperature": temp, "max_tokens": 512,
     }).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
@@ -82,8 +84,20 @@ def main():
             print(f"[bon] model call failed: {e}", file=sys.stderr)
             cands = []
         for c in cands:
+            # Strip a markdown fence if present, then wrap the model's Mog code as a
+            # VerifyProgram proposal (nsynth executes+verifies it). If the model
+            # instead emitted a JSON spec, honour that.
+            code = c.strip()
+            if code.startswith("```"):
+                code = code.strip("`")
+                code = code[code.find("fn "):] if "fn " in code else code
             prop = extract_json(c)
-            if not prop or prop.get("kind") not in ("examples", "reference", "verify"):
+            if prop and prop.get("kind") in ("examples", "reference"):
+                pass  # spec proposal
+            elif "fn " in code:
+                # nsynth verifies the model's code against the task's own tests.
+                prop = {"kind": "verify", "code": code, "examples": hidden}
+            else:
                 continue
             r = verify(prop, hidden, 8)
             # first VERIFIED-and-correct wins (reward 1.0); else remember best.

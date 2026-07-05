@@ -19,11 +19,24 @@ Then SFT:
 import json, subprocess, sys, os
 
 BIN = os.environ.get("NSYNTH_TOOL_BIN", "./target/release/nsynth_tool")
-SYSTEM = (
-    "You drive a verified program synthesizer. For the described function, output "
-    "ONLY a JSON tool call: {\"kind\":\"examples\",\"signature\":\"fn f(...) -> ...\","
-    "\"examples\":[{\"in\":[...],\"out\":...}, ...]} giving input/output pairs that "
-    "UNIQUELY determine the function. The synthesizer writes and verifies the code."
+
+# The POWERFUL path: teach the model to WRITE Mog code; nsynth EXECUTES + verifies
+# it (ceiling = the interpreter's execution breadth + the model's coding, NOT
+# nsynth's synthesis reach). Mog is a small Rust-subset the verifier runs.
+MOG_SYSTEM = (
+    "Write a function in Mog to satisfy the description. Mog is a Rust subset the "
+    "verifier executes. Rules: NO `let` — declare with `name: type = init;` (types "
+    "i64, f64, bool, string, [i64], [string]); mutate with `x = expr;`; loops "
+    "`for e in arr { ... }` and `while cond { ... }`; `if cond { ... } else { ... }`; "
+    "index `arr[i as usize]`, length `arr.len()`; `return expr;`. Output ONLY the "
+    "`fn f(...) -> ... { ... }` body, no prose, no markdown fence."
+)
+# The SECONDARY path: the model proposes I/O; nsynth SYNTHESIZES (verified) — only
+# for tasks in nsynth's synthesis domain.
+SPEC_SYSTEM = (
+    "For the described function output ONLY a JSON tool call "
+    "{\"kind\":\"examples\",\"examples\":[{\"in\":[...],\"out\":...}, ...]} whose I/O "
+    "pairs UNIQUELY determine the function. A verified synthesizer writes the code."
 )
 
 
@@ -59,28 +72,33 @@ def main():
             except Exception:
                 dropped += 1
                 continue
-            # REJECTION SAMPLING: keep proposals that lead to a CORRECT program
-            # (reward > 0 on the oracle). `verified` vs `tentative` is a trust label
-            # for the user, not a training filter — a tentative-but-correct proposal
-            # is a valid gold trace (the model proposed a spec that nsynth solved
-            # correctly; the weak corroborator just couldn't independently confirm).
+            # REJECTION SAMPLING: keep only when the proposal led to a CORRECT
+            # program (reward > 0 on the oracle). `verified` vs `tentative` is a user
+            # trust label, not a training filter — a tentative-but-correct trace is
+            # valid (the weak corroborator just couldn't independently confirm).
             if r.get("reward", 0) <= 0:
                 dropped += 1
                 continue
-            # Gold completion the model learns to emit: kind + the characterizing
-            # I/O. No signature — nsynth infers it from the example value types, so a
-            # (possibly-wrong) signature guess would only teach noise.
-            gold = json.dumps({"kind": "examples", "examples": exs})
-            trace = {
-                "messages": [
-                    {"role": "system", "content": SYSTEM},
+            code = r.get("code")
+            # PRIMARY: teach the model to WRITE the (verified) Mog code. nsynth
+            # executes+verifies at inference — ceiling = interpreter breadth + the
+            # model's coding, not nsynth's synthesis reach.
+            if code:
+                out.write(json.dumps({"messages": [
+                    {"role": "system", "content": MOG_SYSTEM},
                     {"role": "user", "content": text},
-                    {"role": "assistant", "content": gold},
-                ]
-            }
-            out.write(json.dumps(trace) + "\n")
+                    {"role": "assistant", "content": code.strip()},
+                ]}) + "\n")
+                kept += 1
+            # SECONDARY: teach the model to propose a determining spec (nsynth
+            # synthesizes) — the verified-synthesis path for nsynth's own domain.
+            out.write(json.dumps({"messages": [
+                {"role": "system", "content": SPEC_SYSTEM},
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": json.dumps({"kind": "examples", "examples": exs})},
+            ]}) + "\n")
             kept += 1
-    print(f"[rlvr-data] kept {kept} verified traces, dropped {dropped} -> {out_path}")
+    print(f"[rlvr-data] kept {kept} traces (code+spec), dropped {dropped} -> {out_path}")
 
 
 if __name__ == "__main__":
