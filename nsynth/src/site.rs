@@ -341,7 +341,7 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
         req.title, body
     );
     if req.api_form {
-        html = wire_form_action(&html, "/rules/contact/evaluate");
+        html = wire_form_action(&html, "/events");
     }
     let css = format!(
         ":root {{\n  --primary: {primary};\n  --neutral: {neutral};\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n}}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: {}; color: var(--neutral); }}\nh1, h2, h3 {{ font-weight: {}; }}\n.site-nav {{ display: flex; justify-content: space-between; align-items: center; padding: var(--spacing); background: var(--primary); color: white; }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1rem; margin: 0; }}\n.site-nav a {{ color: white; text-decoration: none; }}\n.hero {{ padding: calc(var(--spacing) * 2) var(--spacing); text-align: center; }}\n.cta {{ display: inline-block; padding: 0.75rem 1.5rem; background: var(--primary); color: white; border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--spacing); padding: var(--spacing); }}\n.card {{ border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--spacing); }}\n.ph {{ height: 120px; background: var(--primary); opacity: 0.25; border-radius: var(--radius); }}\n.contact form {{ display: grid; gap: 1rem; padding: var(--spacing); max-width: 480px; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.5rem; border-radius: var(--radius); border: 1px solid var(--neutral); }}\nbutton {{ padding: 0.75rem 1.5rem; background: var(--primary); color: white; border: 0; border-radius: var(--radius); }}\n.site-footer {{ padding: var(--spacing); text-align: center; opacity: 0.8; }}\n",
@@ -385,7 +385,7 @@ pub fn verify_page(req: &SiteRequest, html: &str, css: &str) -> Vec<String> {
             fails.push(format!("requested color '{c}' not applied in css"));
         }
     }
-    if req.api_form && !html.contains("action=\"/rules/") {
+    if req.api_form && !html.contains("action=\"/events\"") {
         fails.push("requested api-wired form has no action".into());
     }
     fails

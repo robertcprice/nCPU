@@ -152,9 +152,12 @@ fn handle_query_builds_backend_from_prose() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// SITE + BACKEND MEET: "a contact form that posts to my api" wires the form's
-/// action to the generated server's route — comprehended through the hub's
-/// backend domain, emitted, and fidelity-verified.
+/// SITE + BACKEND MEET, CLOSED LOOP: "a contact form that posts to my api"
+/// (1) wires the form's action to POST /events (comprehended through the
+/// hub's backend domain, emitted, fidelity-verified), (2) PROVISIONS a real
+/// structural backend in the same action when none exists (compile+serve
+/// gated), and (3) the promise is smoke-proven end to end: boot the
+/// provisioned server, submit the form body, see the stored submission.
 #[test]
 fn handle_query_wires_contact_form_to_the_api() {
     let root = fresh_root("meet");
@@ -165,13 +168,21 @@ fn handle_query_wires_contact_form_to_the_api() {
     assert!(r.success, "response: {}", r.response);
     let html = fs::read_to_string(root.join("site/reach.html")).expect("page");
     assert!(
-        html.contains("action=\"/rules/contact/evaluate\"") && html.contains("method=\"post\""),
+        html.contains("action=\"/events\"") && html.contains("method=\"post\""),
         "form wired to the api: {html}"
     );
-    // Without the api phrase, the form stays unwired.
+    // The wired target is REAL: the same ask provisioned a backend...
+    let backend = fs::read_to_string(root.join("backend/main.rs")).expect("provisioned backend");
+    // ...and the loop closes live: boot it, POST the form body, see it stored.
+    let (src, bin) =
+        mog_synth::backend_http::compile_to_temp_bin(&backend, false).expect("compile backend");
+    let smoke = mog_synth::backend_http::verify_submission_intake(&bin, 2);
+    mog_synth::backend_http::cleanup_temp_artifacts(&src, &bin);
+    smoke.expect("form submission accepted and stored by the provisioned backend");
+    // Without the api phrase, the form stays unwired and nothing is provisioned.
     let r2 = s.handle_query("add a new page called plain to my website with a contact form");
     assert!(r2.success, "{}", r2.response);
     let html2 = fs::read_to_string(root.join("site/plain.html")).expect("page2");
-    assert!(!html2.contains("action=\"/rules/"), "unrequested wiring must not appear");
+    assert!(!html2.contains("action=\"/events\""), "unrequested wiring must not appear");
     let _ = fs::remove_dir_all(&root);
 }

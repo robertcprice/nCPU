@@ -230,6 +230,24 @@ fn handle_connection(mut stream: TcpStream, store: Arc<dyn EventStore>) -> io::R
             let snapshot = store.list().unwrap_or_default();
             write_response(&mut stream, 200, &events_json(&snapshot))
         }}
+        // SUBMISSION intake (site+backend integration): a POSTed form/event is
+        // appended to the store verbatim under the "submission" rule tag —
+        // the generated site's contact form has a REAL target.
+        ("POST", "/events") => {{
+            let event = Event {{
+                rule: "submission".to_string(),
+                input: body.len() as i64,
+                output: 0,
+            }};
+            match store.append(event) {{
+                Ok(()) => write_response(&mut stream, 201, "{{\"ok\":true}}"),
+                Err(err) => write_response(
+                    &mut stream,
+                    500,
+                    &format!("{{{{\"error\":\"store append failed: {{}}\"}}}}", err),
+                ),
+            }}
+        }}
 {evaluate_arms}
         _ => write_response(&mut stream, 404, "{{\"error\":\"unknown route\"}}"),
     }}

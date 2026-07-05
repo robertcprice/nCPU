@@ -612,7 +612,39 @@ impl CodingAgentSession {
             crate::site::build_site_page(&self.root, req)
         };
         match build {
-            Ok(written) => {
+            Ok(mut written) => {
+                // SITE+BACKEND CLOSED LOOP: an api-wired form promises a live
+                // target (POST /events). If no backend exists yet, PROVISION a
+                // structural one through the same compile+serve gate — the
+                // promise is verified, never aspirational. Fail-closed: a
+                // wired form with no provisionable target fails the ask.
+                if req.api_form && !self.root.join("backend/main.rs").exists() {
+                    let ask = crate::backend_intake::BackendAsk {
+                        store: crate::backend_ir::StoreKind::Memory,
+                        rule_names: Vec::new(),
+                    };
+                    let english = format!(
+                        "backend accepting form submissions from site page '{}'",
+                        req.page
+                    );
+                    match crate::backend_intake::build_backend_ask(&self.root, &english, &ask) {
+                        Ok(mut backend_written) => written.append(&mut backend_written),
+                        Err(e) => {
+                            return AgentQueryResult {
+                                route: QueryRoute::GreenfieldProject,
+                                success: false,
+                                response: format!(
+                                    "site pages written but api target provision failed: {e}"
+                                ),
+                                workflow: "site.build".to_string(),
+                                clarification_questions: Vec::new(),
+                                synthesis_method: Some("site-domain".to_string()),
+                                repo_result: None,
+                                tool_trace: Vec::new(),
+                            }
+                        }
+                    }
+                }
                 let mut tool_trace: Vec<(String, String)> = written
                     .iter()
                     .map(|p| (format!("fs.write:{p}"), "ok".to_string()))

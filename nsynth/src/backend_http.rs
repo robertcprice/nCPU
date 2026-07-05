@@ -110,6 +110,57 @@ fn probe_backend_once(bin: &Path, checks: &[HttpRuleCheck]) -> Result<(), String
     result
 }
 
+/// SUBMISSION-INTAKE smoke for the site+backend closed loop: boot the
+/// generated backend, POST a form-shaped body to /events (the target every
+/// api-wired site form carries), require 201 + ok, then require the stored
+/// submission to be visible via GET /events. This is the "form has a REAL,
+/// live target" verification — end to end, no mocks.
+pub fn verify_submission_intake(bin: &Path, max_attempts: usize) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..max_attempts {
+        match probe_submission_once(bin) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_err = err;
+                if attempt + 1 < max_attempts {
+                    thread::sleep(Duration::from_millis(50 * (attempt as u64 + 1)));
+                }
+            }
+        }
+    }
+    Err(format!(
+        "generated backend submission intake failed after {max_attempts} attempts: {last_err}"
+    ))
+}
+
+fn probe_submission_once(bin: &Path) -> Result<(), String> {
+    let mut child = Command::new(bin)
+        .arg("--port")
+        .arg("0")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn generated backend: {e}"))?;
+
+    let addr = read_ready_addr(&mut child)?;
+    thread::sleep(Duration::from_millis(25));
+
+    let result = (|| {
+        let resp = http_post(&addr, "/events", "name=ada&message=hello")?;
+        if !resp.contains("201") || !resp.contains("\"ok\":true") {
+            return Err(format!("POST /events unexpected response: {resp}"));
+        }
+        let listed = http_get(&addr, "/events")?;
+        if !listed.contains("\"rule\":\"submission\"") {
+            return Err(format!("submission not visible via GET /events: {listed}"));
+        }
+        Ok(())
+    })();
+
+    stop_child(&mut child);
+    result
+}
+
 fn read_ready_addr(child: &mut Child) -> Result<String, String> {
     let stdout = child
         .stdout
