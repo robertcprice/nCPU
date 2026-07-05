@@ -150,7 +150,7 @@ pub fn maybe_record_learned(problem: &Problem, result: &SolveResult) {
     // out of the self-growing library (where a false accept would compound).
     let fn_name = problem.function_name();
     let sample_inputs = &first.inputs;
-    if crate::constraint_oracle::check_op_contract(&result.code, &fn_name, &fn_name, sample_inputs)
+    if crate::constraint_oracle::check_op_semantics(&result.code, &fn_name, &fn_name, sample_inputs)
         .is_err()
     {
         return;

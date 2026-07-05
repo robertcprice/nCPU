@@ -3470,7 +3470,7 @@ fn consensus_trust_gate(
     // which previously shipped :tentative.
     if let Some(first) = problem.examples.first() {
         let fn_name = problem.function_name();
-        if let Err(why) = crate::constraint_oracle::check_op_contract(
+        if let Err(why) = crate::constraint_oracle::check_op_semantics(
             &result.code,
             &fn_name,
             &fn_name,

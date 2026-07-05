@@ -195,10 +195,16 @@ pub fn verify_candidate(
 /// Deterministic fresh inputs for a property's input shape. Deterministic (LCG,
 /// caller-seeded) so verification is reproducible and never flaky.
 pub fn fresh_inputs(prop: &Property, n: usize, seed: u64) -> Vec<Vec<Value>> {
+    fresh_shaped(prop.wants_array(), n, seed)
+}
+
+/// Deterministic fresh single-argument inputs: an int array (`wants_array`) or a
+/// scalar int. Shared by the property and metamorphic harnesses.
+fn fresh_shaped(wants_array: bool, n: usize, seed: u64) -> Vec<Vec<Value>> {
     let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
-        if prop.wants_array() {
+        if wants_array {
             let len = 3 + (lcg(&mut state) % 6) as usize; // 3..=8
             let arr: Vec<i64> = (0..len)
                 .map(|_| (lcg(&mut state) % 61) as i64 - 30) // -30..=30
@@ -210,6 +216,19 @@ pub fn fresh_inputs(prop: &Property, n: usize, seed: u64) -> Vec<Vec<Value>> {
         }
     }
     out
+}
+
+/// Deterministic fresh PAIRS of scalar ints (for two-argument relations like
+/// commutativity).
+fn fresh_scalar_pairs(n: usize, seed: u64) -> Vec<(i64, i64)> {
+    let mut state = seed ^ 0x1234_5678_9abc_def0;
+    (0..n)
+        .map(|_| {
+            let a = (lcg(&mut state) % 101) as i64 - 50;
+            let b = (lcg(&mut state) % 101) as i64 - 50;
+            (a, b)
+        })
+        .collect()
 }
 
 fn lcg(state: &mut u64) -> u64 {
@@ -244,6 +263,219 @@ fn rarr(v: &RValue) -> Option<Vec<i64>> {
         RValue::Array(xs) => xs.iter().map(rint).collect(),
         _ => None,
     }
+}
+
+/// Convert a runtime output back into a benchmark input value, so a candidate's
+/// OUTPUT can be fed back as its INPUT (idempotence / involution checks). Only
+/// the shapes the oracle reasons about (int, int-array).
+fn bench_from_runtime(v: &RValue) -> Option<Value> {
+    match v {
+        RValue::Int(i) => Some(Value::Int(*i)),
+        RValue::Array(_) => rarr(v).map(|xs| Value::int_array(&xs)),
+        _ => None,
+    }
+}
+
+/// Structural equality of two runtime outputs over the oracle's shapes.
+fn rt_eq(a: &RValue, b: &RValue) -> bool {
+    match (a, b) {
+        (RValue::Int(x), RValue::Int(y)) => x == y,
+        (RValue::Array(_), RValue::Array(_)) => rarr(a) == rarr(b),
+        _ => false,
+    }
+}
+
+// ── METAMORPHIC RELATIONS ────────────────────────────────────────────────────
+// A metamorphic relation is an ALGEBRAIC LAW the operation must satisfy — checked
+// by running the candidate on RELATED inputs and comparing outputs, with NO
+// reference oracle. This is the widest solver-independent, proof-carrying rung:
+// it covers any op carrying a law (sort is idempotent + order-invariant, reverse
+// is an involution, add/mul are commutative, sum/max are order-invariant), rather
+// than a fixed list of named contracts.
+
+/// A law the operation's outputs must obey across related executions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MetamorphicRelation {
+    /// f(f(x)) == f(x) — sort, dedupe, abs, clamp, normalize.
+    Idempotent,
+    /// f(f(x)) == x — reverse, negate, transpose (self-inverse).
+    Involutive,
+    /// f(a, b) == f(b, a) — add, multiply, max, min, gcd (two scalar args).
+    Commutative,
+    /// f(xs) == f(permute(xs)) — sum, product, max, min, count (order-blind reduce).
+    OrderInvariant,
+    /// len(f(xs)) == len(xs) — sort, reverse, map (shape-preserving array op).
+    LengthPreserving,
+}
+
+impl MetamorphicRelation {
+    /// The laws an operation is expected to satisfy, derived from its lemma — the
+    /// same emergent source (the resolver's chosen op) as the output contracts.
+    pub fn for_op(op_lemma: &str) -> Vec<MetamorphicRelation> {
+        use MetamorphicRelation::*;
+        match op_lemma.trim().to_ascii_lowercase().as_str() {
+            "sort" | "sorted" | "sort_ascending" => vec![Idempotent, OrderInvariant, LengthPreserving],
+            "reverse" | "reversed" | "reverse_array" => vec![Involutive, LengthPreserving],
+            "abs" | "absolute" | "absolute_value" | "magnitude" => vec![Idempotent],
+            "negate" | "neg" | "negative" => vec![Involutive],
+            "sum" | "total" | "array_sum" | "product" | "array_product" | "max" | "maximum"
+            | "min" | "minimum" => vec![OrderInvariant],
+            "add" | "plus" | "multiply" | "times" | "gcd" | "lcm" => vec![Commutative],
+            _ => vec![],
+        }
+    }
+}
+
+/// Verify a candidate against every metamorphic law its operation should obey, on
+/// fresh inputs. Each law is SHAPE-GUARDED — a law that does not fit the task's
+/// real signature is skipped, never a false rejection. `Ok(())` = all applicable
+/// laws held (or none applied); `Err` = a decidable law violation or a crash.
+pub fn check_op_metamorphic(
+    code: &str,
+    fn_name: &str,
+    op_lemma: &str,
+    sample_inputs: &[Value],
+) -> Result<(), String> {
+    for rel in MetamorphicRelation::for_op(op_lemma) {
+        verify_relation(code, fn_name, rel, sample_inputs, 24, 0x517e_1a30)?;
+    }
+    Ok(())
+}
+
+fn run(code: &str, fn_name: &str, inputs: &[Value]) -> Result<RValue, String> {
+    execute_function(code, fn_name, inputs, "constraint_oracle")
+        .map_err(|e| format!("candidate errored on fresh input {inputs:?}: {e}"))
+}
+
+fn verify_relation(
+    code: &str,
+    fn_name: &str,
+    rel: MetamorphicRelation,
+    sample_inputs: &[Value],
+    n: usize,
+    seed: u64,
+) -> Result<(), String> {
+    use MetamorphicRelation::*;
+    let one_array =
+        sample_inputs.len() == 1 && matches!(sample_inputs.first(), Some(Value::Array(_)));
+    let one_scalar =
+        sample_inputs.len() == 1 && matches!(sample_inputs.first(), Some(Value::Int(_)));
+    let two_scalar = sample_inputs.len() == 2
+        && sample_inputs.iter().all(|v| matches!(v, Value::Int(_)));
+
+    match rel {
+        Idempotent => {
+            // Endomorphism: f's output must be feedable as its input. Applies to
+            // array->array (sort) and scalar->scalar (abs); skip otherwise.
+            if !one_array && !one_scalar {
+                return Ok(());
+            }
+            for inputs in fresh_shaped(one_array, n, seed) {
+                let y = run(code, fn_name, &inputs)?;
+                let Some(y_in) = bench_from_runtime(&y) else {
+                    return Ok(()); // output shape not feedable — law N/A
+                };
+                let z = run(code, fn_name, &[y_in])?;
+                if !rt_eq(&y, &z) {
+                    return Err(format!(
+                        "Idempotent: f(f(x)) != f(x) — f({inputs:?})={y:?} but reapplying gives {z:?}"
+                    ));
+                }
+            }
+        }
+        Involutive => {
+            if !one_array && !one_scalar {
+                return Ok(());
+            }
+            for inputs in fresh_shaped(one_array, n, seed) {
+                let y = run(code, fn_name, &inputs)?;
+                let Some(y_in) = bench_from_runtime(&y) else {
+                    return Ok(());
+                };
+                let z = run(code, fn_name, &[y_in])?;
+                // f(f(x)) must equal x (the original input, as a runtime value).
+                let x_rt = match &inputs[0] {
+                    Value::Int(i) => RValue::Int(*i),
+                    Value::Array(_) => {
+                        let Some(xs) = input_array(&inputs) else { return Ok(()) };
+                        RValue::Array(xs.into_iter().map(RValue::Int).collect())
+                    }
+                    _ => return Ok(()),
+                };
+                if !rt_eq(&z, &x_rt) {
+                    return Err(format!(
+                        "Involutive: f(f(x)) != x — f(f({inputs:?}))={z:?}"
+                    ));
+                }
+            }
+        }
+        Commutative => {
+            if !two_scalar {
+                return Ok(());
+            }
+            for (a, b) in fresh_scalar_pairs(n, seed) {
+                let r1 = run(code, fn_name, &[Value::Int(a), Value::Int(b)])?;
+                let r2 = run(code, fn_name, &[Value::Int(b), Value::Int(a)])?;
+                if !rt_eq(&r1, &r2) {
+                    return Err(format!(
+                        "Commutative: f({a},{b})={r1:?} != f({b},{a})={r2:?}"
+                    ));
+                }
+            }
+        }
+        OrderInvariant => {
+            if !one_array {
+                return Ok(());
+            }
+            for inputs in fresh_shaped(true, n, seed) {
+                let Some(xs) = input_array(&inputs) else { continue };
+                let mut rev = xs.clone();
+                rev.reverse(); // reversal is a valid permutation
+                let r1 = run(code, fn_name, &inputs)?;
+                let r2 = run(code, fn_name, &[Value::int_array(&rev)])?;
+                if !rt_eq(&r1, &r2) {
+                    return Err(format!(
+                        "OrderInvariant: f({xs:?})={r1:?} != f(permute)={r2:?}"
+                    ));
+                }
+            }
+        }
+        LengthPreserving => {
+            if !one_array {
+                return Ok(());
+            }
+            for inputs in fresh_shaped(true, n, seed) {
+                let Some(xs) = input_array(&inputs) else { continue };
+                let y = run(code, fn_name, &inputs)?;
+                let Some(ys) = rarr(&y) else {
+                    return Ok(()); // not an array output — law N/A
+                };
+                if ys.len() != xs.len() {
+                    return Err(format!(
+                        "LengthPreserving: len(f(xs))={} != len(xs)={}",
+                        ys.len(),
+                        xs.len()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The FULL semantic gate: an operation's output CONTRACT (decidable output
+/// property) AND its metamorphic LAWS, both checked on fresh inputs. This is the
+/// single call the trust gate and the flywheel gate use — the widest
+/// solver-independent, proof-carrying refutation available for an op.
+pub fn check_op_semantics(
+    code: &str,
+    fn_name: &str,
+    op_lemma: &str,
+    sample_inputs: &[Value],
+) -> Result<(), String> {
+    check_op_contract(code, fn_name, op_lemma, sample_inputs)?;
+    check_op_metamorphic(code, fn_name, op_lemma, sample_inputs)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -319,6 +551,61 @@ mod tests {
     fn no_contract_op_is_not_applicable() {
         // An op with no cheap property never rejects on its own.
         assert!(check_op_contract(MAX_OK, "array_max", "some_unknown_op", &arr_input()).is_ok());
+    }
+
+    // ── Metamorphic laws ─────────────────────────────────────────────────────
+    const NEG_OK: &str = "fn negate(x: i64) -> i64 {\n    return 0 - x;\n}\n";
+    // Overfit: |x| passes as an "involution" on non-negative inputs only.
+    const NEG_FAKE_ABS: &str = "fn negate(x: i64) -> i64 {\n    if x < 0 {\n        return 0 - x;\n    }\n    return x;\n}\n";
+    const ADD_OK: &str = "fn add(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n";
+    const SUB_FAKE: &str = "fn add(a: i64, b: i64) -> i64 {\n    return a - b;\n}\n";
+
+    #[test]
+    fn metamorphic_laws_map_to_ops() {
+        use MetamorphicRelation::*;
+        assert_eq!(MetamorphicRelation::for_op("sort"), vec![Idempotent, OrderInvariant, LengthPreserving]);
+        assert_eq!(MetamorphicRelation::for_op("reverse"), vec![Involutive, LengthPreserving]);
+        assert_eq!(MetamorphicRelation::for_op("add"), vec![Commutative]);
+        assert_eq!(MetamorphicRelation::for_op("sum"), vec![OrderInvariant]);
+        assert!(MetamorphicRelation::for_op("frobnicate").is_empty());
+    }
+
+    #[test]
+    fn sort_obeys_idempotence_order_invariance_length() {
+        // The real sort honors all three of its laws on fresh inputs.
+        assert!(check_op_metamorphic(SORT_OK, "sort_ascending", "sort", &arr_input()).is_ok());
+    }
+
+    #[test]
+    fn reverse_is_an_involution_but_identity_is_not() {
+        const REV_OK: &str = "fn reverse_array(arr: [i64]) -> [i64] {\n    out := arr;\n    n := len(arr);\n    for i in 0..n {\n        out[i] = arr[n - 1 - i];\n    }\n    return out;\n}\n";
+        assert!(check_op_metamorphic(REV_OK, "reverse_array", "reverse", &arr_input()).is_ok());
+        // Identity-as-reverse: f(f(x))==x holds for identity too, BUT it fails the
+        // OUTPUT contract (IsReversed) — caught by check_op_semantics.
+        const IDENT: &str = "fn reverse_array(arr: [i64]) -> [i64] {\n    return arr;\n}\n";
+        let caught = check_op_semantics(IDENT, "reverse_array", "reverse", &arr_input());
+        assert!(caught.is_err(), "identity is not a reverse: {caught:?}");
+    }
+
+    #[test]
+    fn commutativity_passes_add_catches_subtract() {
+        assert!(check_op_metamorphic(ADD_OK, "add", "add", &two_scalar_input()).is_ok());
+        let caught = check_op_metamorphic(SUB_FAKE, "add", "add", &two_scalar_input());
+        assert!(caught.is_err(), "subtraction is not commutative: {caught:?}");
+        assert!(caught.unwrap_err().contains("Commutative"));
+    }
+
+    #[test]
+    fn involution_catches_a_non_involutive_negate() {
+        assert!(check_op_metamorphic(NEG_OK, "negate", "negate", &scalar_input()).is_ok());
+        // |x| is not an involution: f(f(-3)) = f(3) = 3 != -3.
+        let caught = check_op_metamorphic(NEG_FAKE_ABS, "negate", "negate", &scalar_input());
+        assert!(caught.is_err(), "abs is not a negation: {caught:?}");
+        assert!(caught.unwrap_err().contains("Involutive"));
+    }
+
+    fn two_scalar_input() -> Vec<Value> {
+        vec![Value::Int(3), Value::Int(7)]
     }
 
     #[test]
