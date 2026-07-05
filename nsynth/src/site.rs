@@ -212,6 +212,9 @@ fn on_color(bg: (u8, u8, u8)) -> (&'static str, (u8, u8, u8)) {
 /// text and UI components is 3.0). Body text on white targets 4.5.
 pub const MIN_UI_CONTRAST: f64 = 3.0;
 
+/// WCAG AA minimum contrast for normal body text.
+pub const MIN_BODY_CONTRAST: f64 = 4.5;
+
 /// A page section: registry unit with emission + its structural assertion.
 #[derive(Clone)]
 pub struct Section {
@@ -473,8 +476,17 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
         .and_then(|c| color_rgb(c))
         .map(|rgb| on_color(rgb).0)
         .unwrap_or("#ffffff");
+    // Body copy sits on the page's default white background. The requested
+    // neutral doubles as the body text color, but a light neutral would be
+    // illegible on white — so body text uses the neutral only when it clears
+    // the WCAG body floor, else falls back to ink. (--neutral stays as-is for
+    // borders/accents.) Contrast-verified below; holds for any palette.
+    let body_text = color_rgb(&neutral)
+        .filter(|&rgb| contrast_ratio(rgb, (255, 255, 255)) >= MIN_BODY_CONTRAST)
+        .map(|_| neutral.clone())
+        .unwrap_or_else(|| "#111111".to_string());
     let css = format!(
-        ":root {{\n  --primary: {primary};\n  --neutral: {neutral};\n  --on-primary: {on_primary};\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n}}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: {}; color: var(--neutral); }}\nh1, h2, h3 {{ font-weight: {}; }}\n.site-nav {{ display: flex; justify-content: space-between; align-items: center; padding: var(--spacing); background: var(--primary); color: var(--on-primary); }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1rem; margin: 0; }}\n.site-nav a {{ color: var(--on-primary); text-decoration: none; }}\n.hero {{ padding: calc(var(--spacing) * 2) var(--spacing); text-align: center; }}\n.cta {{ display: inline-block; padding: 0.75rem 1.5rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--spacing); padding: var(--spacing); }}\n.card {{ border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--spacing); }}\n.ph {{ height: 120px; background: var(--primary); opacity: 0.25; border-radius: var(--radius); }}\n.contact form {{ display: grid; gap: 1rem; padding: var(--spacing); max-width: 480px; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.5rem; border-radius: var(--radius); border: 1px solid var(--neutral); }}\nbutton {{ padding: 0.75rem 1.5rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); }}\n.site-footer {{ padding: var(--spacing); text-align: center; opacity: 0.8; }}\n",
+        ":root {{\n  --primary: {primary};\n  --neutral: {neutral};\n  --on-primary: {on_primary};\n  --text: {body_text};\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n}}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: {}; color: var(--text); }}\nh1, h2, h3 {{ font-weight: {}; }}\n.site-nav {{ display: flex; justify-content: space-between; align-items: center; padding: var(--spacing); background: var(--primary); color: var(--on-primary); }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1rem; margin: 0; }}\n.site-nav a {{ color: var(--on-primary); text-decoration: none; }}\n.hero {{ padding: calc(var(--spacing) * 2) var(--spacing); text-align: center; }}\n.cta {{ display: inline-block; padding: 0.75rem 1.5rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--spacing); padding: var(--spacing); }}\n.card {{ border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--spacing); }}\n.ph {{ height: 120px; background: var(--primary); opacity: 0.25; border-radius: var(--radius); }}\n.contact form {{ display: grid; gap: 1rem; padding: var(--spacing); max-width: 480px; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.5rem; border-radius: var(--radius); border: 1px solid var(--neutral); }}\nbutton {{ padding: 0.75rem 1.5rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); }}\n.site-footer {{ padding: var(--spacing); text-align: center; opacity: 0.8; }}\n",
         theme.radius, theme.shadow, theme.spacing, theme.font_stack, theme.heading_weight
     );
     (html, css)
@@ -530,6 +542,107 @@ pub fn verify_page(req: &SiteRequest, html: &str, css: &str) -> Vec<String> {
                 "text on primary color has contrast {ratio:.2} < {MIN_UI_CONTRAST:.1} (illegible)"
             ));
         }
+    }
+    // CONTRAST MATRIX (second pair): body copy sits on the page's white
+    // background. Its color (`--text`, auto-picked in emit_page) must clear the
+    // WCAG body-text floor. By construction it does; a failure means the
+    // auto-pick regressed.
+    if let Some(text) = parse_css_var(css, "--text").and_then(|v| color_rgb(&v)) {
+        let ratio = contrast_ratio(text, (255, 255, 255));
+        if ratio < MIN_BODY_CONTRAST {
+            fails.push(format!(
+                "body text has contrast {ratio:.2} < {MIN_BODY_CONTRAST:.1} on white (illegible)"
+            ));
+        }
+    }
+    // ACCESSIBILITY: objective structural invariants over the emitted HTML —
+    // decidable predicates in the spirit of the contrast check (aesthetics are
+    // unverifiable; a11y structure is not).
+    fails.extend(verify_accessibility(html));
+    fails
+}
+
+/// Read the value of a CSS custom property (`--name: value;`) from a stylesheet.
+fn parse_css_var(css: &str, name: &str) -> Option<String> {
+    let key = format!("{name}:");
+    let start = css.find(&key)? + key.len();
+    let rest = &css[start..];
+    let end = rest.find(';')?;
+    Some(rest[..end].trim().to_string())
+}
+
+/// ACCESSIBILITY structural invariants — objectively checkable, decidable over
+/// the emitted HTML (the natural generalization of section-marker presence):
+///   * at most one `<h1>` (a single top-level heading);
+///   * no heading-level SKIP in document order (h1 -> h3 without an h2);
+///   * every `<img>` carries an `alt` attribute;
+///   * every form control (input/textarea/select, excluding submit/button/
+///     hidden) has an accessible name — wrapped in a `<label>` or `aria-label`.
+/// Returns the list of failures (empty = accessible). Fail-closed in verify_page.
+pub fn verify_accessibility(html: &str) -> Vec<String> {
+    let mut fails = Vec::new();
+    let mut h1_count = 0usize;
+    let mut prev_level: Option<u32> = None;
+    let mut in_label = false;
+    let b = html.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let Some(close) = html[i..].find('>').map(|p| i + p) else { break };
+        let tag = &html[i..=close]; // includes < and >
+        let inner = tag.trim_start_matches('<').trim_end_matches('>').trim();
+        let is_close = inner.starts_with('/');
+        let name: String = inner
+            .trim_start_matches('/')
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase();
+
+        if name == "label" {
+            in_label = !is_close && !inner.ends_with('/');
+        }
+        if !is_close {
+            // Heading hierarchy.
+            if name.len() == 2 && name.starts_with('h') {
+                if let Some(level) = name[1..].parse::<u32>().ok().filter(|l| (1..=6).contains(l)) {
+                    if level == 1 {
+                        h1_count += 1;
+                    }
+                    if let Some(prev) = prev_level {
+                        if level > prev + 1 {
+                            fails.push(format!(
+                                "heading level skip: h{prev} -> h{level} (no h{} between)",
+                                prev + 1
+                            ));
+                        }
+                    }
+                    prev_level = Some(level);
+                }
+            }
+            // Images need alt text.
+            if name == "img" && !tag.contains("alt=") {
+                fails.push("an <img> is missing its alt attribute".into());
+            }
+            // Form controls need an accessible name.
+            if matches!(name.as_str(), "input" | "textarea" | "select") {
+                let t = tag.to_ascii_lowercase();
+                let excluded = t.contains("type=\"submit\"")
+                    || t.contains("type=\"button\"")
+                    || t.contains("type=\"hidden\"");
+                let named = in_label || t.contains("aria-label=") || t.contains("aria-labelledby=");
+                if !excluded && !named {
+                    fails.push(format!("<{name}> has no accessible name (label/aria-label)"));
+                }
+            }
+        }
+        i = close + 1;
+    }
+    if h1_count > 1 {
+        fails.push(format!("page has {h1_count} <h1> elements (at most one allowed)"));
     }
     fails
 }
@@ -1110,6 +1223,61 @@ mod real_nl_tests {
         let req2 = SiteRequest { colors: vec!["navy".into()], ..req.clone() };
         let (_h2, css2) = emit_page(&req2);
         assert!(css2.contains("--on-primary: #ffffff"), "navy -> white text: {css2}");
+    }
+
+    /// ACCESSIBILITY invariants are real and pass on emitted pages but CATCH
+    /// synthetic violations — the natural generalization of the contrast check
+    /// to objective a11y structure.
+    #[test]
+    fn accessibility_invariants_hold_and_catch_violations() {
+        // A real generated page with a form is accessible (inputs wrapped in
+        // labels, one h1, no img/heading issues).
+        let req = SiteRequest {
+            page: "reach".into(),
+            title: "Reach".into(),
+            theme: "modern".into(),
+            colors: vec!["teal".into()],
+            sections: vec!["nav".into(), "hero".into(), "contact".into(), "footer".into()],
+            api_form: false,
+        };
+        let (html, css) = emit_page(&req);
+        assert!(verify_accessibility(&html).is_empty(), "generated page must be accessible");
+        assert!(verify_page(&req, &html, &css).is_empty(), "page verifies clean");
+
+        // Each violation class is caught.
+        assert!(
+            verify_accessibility("<h1>A</h1><h1>B</h1>")
+                .iter()
+                .any(|f| f.contains("<h1>")),
+            "two h1s caught"
+        );
+        assert!(
+            verify_accessibility("<h1>A</h1><h3>skip</h3>")
+                .iter()
+                .any(|f| f.contains("skip")),
+            "heading skip h1->h3 caught"
+        );
+        assert!(
+            verify_accessibility("<img src=\"x.png\">")
+                .iter()
+                .any(|f| f.contains("alt")),
+            "img without alt caught"
+        );
+        assert!(
+            verify_accessibility("<form><input type=\"text\" name=\"n\"></form>")
+                .iter()
+                .any(|f| f.contains("accessible name")),
+            "unlabeled input caught"
+        );
+        // A labeled input and an alt'd img are accepted.
+        assert!(
+            verify_accessibility("<label>Name <input type=\"text\"></label>").is_empty(),
+            "labeled input passes"
+        );
+        assert!(
+            verify_accessibility("<img src=\"x.png\" alt=\"a cat\">").is_empty(),
+            "alt'd img passes"
+        );
     }
 
     /// Precision: web-ish words in OP requests still never comprehend as sites,
