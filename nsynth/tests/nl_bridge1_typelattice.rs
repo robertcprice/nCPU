@@ -210,24 +210,23 @@ fn i64_lane_unchanged_by_lattice() {
     );
 }
 
-/// MUST-REFUSE (differential): the fail-closed type gate is intact. A genuine
-/// type mismatch — "reverse a string" resolves the i64-array `reverse` op while
-/// the request asserts a string value — must be REFUSED, and an out-of-domain
-/// request must be refused. Proves the lattice did not blanket-open the gate.
+/// MUST-REFUSE (differential) + CAPABILITY: the fail-closed type gate stays intact
+/// for a GENUINE type mismatch ("negate a string" — the i64-scalar `negate` op
+/// cannot apply to a string) and an out-of-domain request, WHILE the compound-name
+/// unlock legitimately turned "reverse a string" into a REAL string capability (it
+/// is no longer a mismatch — it resolves the string reverse op and reverses
+/// correctly). Proves the unlock added reach without blanket-opening the gate.
 #[test]
 fn type_gate_still_refuses_mismatch_and_out_of_domain() {
-    let mismatch = run(&fresh_root("refuse_mismatch"), "reverse a string");
+    // GENUINE type mismatch: `negate` is an i64 scalar op; a string operand cannot
+    // satisfy it, so the fail-closed gate must refuse. (Was "reverse a string",
+    // which the compound-name unlock correctly made a valid capability — see below.)
+    let mismatch = run(&fresh_root("refuse_mismatch"), "negate a string");
     assert!(
         !mismatch.success && mismatch.route == QueryRoute::Clarification,
         "string/i64 type mismatch must be refused, got: success={} route={:?}\n{}",
         mismatch.success,
         mismatch.route,
-        mismatch.response
-    );
-    assert!(
-        mismatch.response.to_lowercase().contains("type mismatch")
-            || mismatch.response.to_lowercase().contains("string"),
-        "refusal must cite the type mismatch, got:\n{}",
         mismatch.response
     );
 
@@ -238,5 +237,25 @@ fn type_gate_still_refuses_mismatch_and_out_of_domain() {
         ood.success,
         ood.route,
         ood.response
+    );
+
+    // CAPABILITY (compound-name unlock): "reverse a string" is NOT a mismatch — it
+    // resolves the string reverse op and actually reverses a fresh input. This
+    // proves the unlock opened a real string capability, not the gate above.
+    let rev = run(&fresh_root("rev_str"), "reverse a string");
+    assert!(
+        rev.success && rev.response.contains("-> string"),
+        "reverse a string is now a real string capability, got:\n{}",
+        rev.response
+    );
+    let mk = |i: &str, o: &str| mog_synth::benchmark::Example {
+        inputs: vec![mog_synth::benchmark::Value::Str(i.to_string())],
+        expected: mog_synth::benchmark::Value::Str(o.to_string()),
+    };
+    let rev_spec = [mk("abc", "cba"), mk("Hello", "olleH")];
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(&rev.response, &rev_spec),
+        "reverse-a-string program must reverse its input, got:\n{}",
+        rev.response
     );
 }

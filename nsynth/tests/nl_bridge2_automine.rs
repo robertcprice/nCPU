@@ -220,11 +220,14 @@ fn regression_float_i64_and_refusal_intact() {
         a.response
     );
 
-    // Genuine type mismatch must still refuse (fail-closed gate intact).
-    let m = run(&fresh_root("mismatch"), "reverse a string");
+    // Genuine type mismatch must still refuse (fail-closed gate intact). `negate`
+    // is an i64 scalar op; a string operand cannot satisfy it. (Was "reverse a
+    // string", which the compound-name unlock correctly made a real string
+    // capability — covered as such in nl_bridge1_typelattice.)
+    let m = run(&fresh_root("mismatch"), "negate a string");
     assert!(
         !m.success,
-        "type-mismatch 'reverse a string' must still refuse; got:\n{}",
+        "type-mismatch 'negate a string' must still refuse; got:\n{}",
         m.response
     );
 }
