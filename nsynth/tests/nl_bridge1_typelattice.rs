@@ -83,13 +83,26 @@ fn float_average_request_synthesizes_real_f64_program() {
     let r = run(&root, "the average of two numbers");
     assert!(r.success, "average request must succeed; got: {}", r.response);
     let code = &r.response;
+    // TYPE: a real float program, not the i64 lane.
     assert!(code.contains("-> f64"), "must be -> f64, got:\n{code}");
     assert!(!code.contains("-> i64"), "must not be i64, got:\n{code}");
+    // BEHAVIOR over method-label + literal: the exact affine form ("0.5*a + 0.5*b"
+    // vs "(a + b) / 2") and the winning method ("search_float_affine" vs the
+    // arity-polymorphic "universal" search) drift as the float lane evolves; both
+    // are correct averages. Assert the program actually AVERAGES its two inputs.
+    // `Value::Float` stores the f64 bit-pattern (keeps `Value: Eq/Ord`).
+    let mkf = |a: f64, b: f64, o: f64| mog_synth::benchmark::Example {
+        inputs: vec![
+            mog_synth::benchmark::Value::Float(a.to_bits()),
+            mog_synth::benchmark::Value::Float(b.to_bits()),
+        ],
+        expected: mog_synth::benchmark::Value::Float(o.to_bits()),
+    };
+    let spec = [mkf(2.0, 4.0, 3.0), mkf(3.0, 5.0, 4.0), mkf(1.0, 9.0, 5.0)];
     assert!(
-        code.contains("0.5"),
-        "average is 0.5*a + 0.5*b, got:\n{code}"
+        mog_synth::runtime::code_reproduces_examples(code, &spec),
+        "synthesized program must average its two inputs, got:\n{code}"
     );
-    assert_eq!(r.synthesis_method.as_deref(), Some("search_float_affine"));
 }
 
 /// STRING accept (arity-1, string->string): "uppercase a string" → a real
@@ -115,22 +128,25 @@ fn string_request_synthesizes_real_string_program() {
         !code.contains("i64"),
         "must NOT be an i64 array op, got:\n{code}"
     );
-    // GENERALIZING `.upper()` rule from string_synth — NOT a memorized lookup table
-    // (the lexicon path emits `if s == \"...\" { return \"...\"; }` over training
-    // pairs, which would not generalize to an unseen string).
-    assert!(
-        code.contains(".upper()"),
-        "must emit the generalizing s.upper() rule, got:\n{code}"
-    );
+    // GENERALIZING rule — NOT a memorized lookup table (the lexicon path emits
+    // `if s == "..." { return "..."; }` over training pairs, which would not
+    // generalize to an unseen string).
     assert!(
         !code.contains("if s =="),
         "must NOT be the memorizing whole-word lexicon lookup table, got:\n{code}"
     );
-    assert_eq!(
-        r.synthesis_method.as_deref(),
-        Some("string_synth"),
-        "must route through the generalizing string synthesizer, got: {:?}",
-        r.synthesis_method
+    // BEHAVIOR over method-label: the winning tier drifts (string_synth ->
+    // typed-enum-str) while the emitted rule stays a real `.upper()`; assert the
+    // program actually UPPER-CASES a fresh input (generalizes), which a lookup
+    // table over an empty example set could not.
+    let mks = |i: &str, o: &str| mog_synth::benchmark::Example {
+        inputs: vec![mog_synth::benchmark::Value::Str(i.to_string())],
+        expected: mog_synth::benchmark::Value::Str(o.to_string()),
+    };
+    let spec = [mks("hello", "HELLO"), mks("MiXeD", "MIXED"), mks("abc", "ABC")];
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(code, &spec),
+        "synthesized program must upper-case its input, got:\n{code}"
     );
 }
 
@@ -142,9 +158,33 @@ fn i64_lane_unchanged_by_lattice() {
     // Scalar single-op.
     let add = run(&fresh_root("i64_add"), "add two numbers");
     assert!(add.success, "add must still succeed: {}", add.response);
+    // TYPE stays i64; BEHAVIOR over literal — the arity-polymorphic search names
+    // params a0/a1, so the exact "a + b" string drifted to "a0 + a1". Assert it
+    // still RETURNS i64 and actually adds its two arguments.
     assert!(
-        add.response.contains("-> i64") && add.response.contains("a + b"),
-        "add must still be the i64 program, got:\n{}",
+        add.response.contains("-> i64"),
+        "add must still be an i64 program, got:\n{}",
+        add.response
+    );
+    let add_spec = [
+        mog_synth::benchmark::Example {
+            inputs: vec![
+                mog_synth::benchmark::Value::Int(2),
+                mog_synth::benchmark::Value::Int(3),
+            ],
+            expected: mog_synth::benchmark::Value::Int(5),
+        },
+        mog_synth::benchmark::Example {
+            inputs: vec![
+                mog_synth::benchmark::Value::Int(5),
+                mog_synth::benchmark::Value::Int(7),
+            ],
+            expected: mog_synth::benchmark::Value::Int(12),
+        },
+    ];
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(&add.response, &add_spec),
+        "add program must add its two arguments, got:\n{}",
         add.response
     );
 

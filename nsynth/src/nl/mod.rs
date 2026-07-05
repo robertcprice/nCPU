@@ -473,6 +473,10 @@ impl NLPipeline {
             // A tensor renders as the engine `Tensor` type (the codegen path
             // emits `crate::tensor::ops::Tensor` calls, not a DSL literal).
             Value::Tensor { .. } => "Tensor".to_string(),
+            // A dict (Python-dict wire value) renders as the engine's `Map` type
+            // name — matching the naming used by the solver interface / refinement
+            // layers (`Type::Named("Map")`), not a DSL literal.
+            Value::Map(_) => "Map".to_string(),
         }
     }
 
