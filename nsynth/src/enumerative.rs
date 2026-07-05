@@ -224,11 +224,37 @@ fn cmp_expr(a: &Expr, b: &Expr) -> std::cmp::Ordering {
     }
 }
 
+/// The commutative ops here are ALSO associative, so this is the assoc-comm set
+/// eligible for flatten-and-sort normalization.
 fn is_commutative(op: BinOp) -> bool {
     matches!(
         op,
         BinOp::Add | BinOp::Mul | BinOp::Min | BinOp::Max | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
     )
+}
+
+/// The identity element that can be DROPPED from an assoc-comm operand list
+/// without changing eval (it is a literal const, never a sub-expr that errors).
+/// `None` for ops with no finite droppable identity here (Min/Max/BitAnd).
+fn identity_of(op: BinOp) -> Option<i64> {
+    match op {
+        BinOp::Add | BinOp::BitOr | BinOp::BitXor => Some(0),
+        BinOp::Mul => Some(1),
+        _ => None,
+    }
+}
+
+/// Collect every operand of an assoc-comm `op` into `out`, flattening nested
+/// applications of the SAME op (so `(a+b)+c` and `a+(b+c)` yield `[a,b,c]`).
+fn flatten_assoc(op: BinOp, e: &Expr, out: &mut Vec<Expr>) {
+    if let Expr::BinOp(o, l, r) = e {
+        if *o == op {
+            flatten_assoc(op, l, out);
+            flatten_assoc(op, r, out);
+            return;
+        }
+    }
+    out.push(e.clone());
 }
 
 /// Semantics-preserving canonicalization of a scalar Expr (see module note).
@@ -268,26 +294,42 @@ fn algebra_step(e: &Expr) -> Expr {
         Expr::BinOp(op, l, r) => {
             let l = algebra_step(l);
             let r = algebra_step(r);
-            // Identity removal — removes ONLY a literal 0/1, never a sub-expr.
-            match (op, &l, &r) {
-                (BinOp::Add, x, Expr::Const(0))
-                | (BinOp::Add, Expr::Const(0), x)
-                | (BinOp::Sub, x, Expr::Const(0))
-                | (BinOp::Mul, x, Expr::Const(1))
-                | (BinOp::Mul, Expr::Const(1), x)
-                | (BinOp::BitOr, x, Expr::Const(0))
-                | (BinOp::BitOr, Expr::Const(0), x)
-                | (BinOp::BitXor, x, Expr::Const(0))
-                | (BinOp::BitXor, Expr::Const(0), x) => return x.clone(),
-                _ => {}
+            if is_commutative(*op) {
+                // ASSOCIATIVE-COMMUTATIVE flattening: gather every operand of the
+                // same op into one list, drop identity elements, sort into
+                // canonical order, and (for idempotent ops) drop duplicates —
+                // then rebuild a left-leaning tree. This merges ALL groupings and
+                // orderings of `a+b+c` into ONE form. SOUND: every operand is
+                // still evaluated exactly as before (any erroring operand yields
+                // None regardless of tree shape), so eval is preserved.
+                let mut operands = Vec::new();
+                flatten_assoc(*op, &l, &mut operands);
+                flatten_assoc(*op, &r, &mut operands);
+                if let Some(id) = identity_of(*op) {
+                    operands.retain(|e| !matches!(e, Expr::Const(c) if *c == id));
+                }
+                operands.sort_by(cmp_expr);
+                if matches!(op, BinOp::Min | BinOp::Max | BinOp::BitAnd | BinOp::BitOr) {
+                    operands.dedup(); // idempotent: min(x,x)=x etc.
+                }
+                return match operands.len() {
+                    0 => Expr::Const(identity_of(*op).unwrap_or(0)),
+                    1 => operands.into_iter().next().unwrap(),
+                    _ => {
+                        let mut it = operands.into_iter();
+                        let mut acc = it.next().unwrap();
+                        for e in it {
+                            acc = Expr::BinOp(*op, Box::new(acc), Box::new(e));
+                        }
+                        acc
+                    }
+                };
             }
-            // Idempotence (both operands were evaluated — error-preserving).
-            if matches!(op, BinOp::Min | BinOp::Max | BinOp::BitAnd | BinOp::BitOr) && l == r {
-                return l;
-            }
-            // Commutative operand ordering.
-            if is_commutative(*op) && cmp_expr(&l, &r) == std::cmp::Ordering::Greater {
-                return Expr::BinOp(*op, Box::new(r), Box::new(l));
+            // Non-assoc ops: only the safe literal-0 identity (x - 0 -> x).
+            if matches!(op, BinOp::Sub) {
+                if let Expr::Const(0) = &r {
+                    return l;
+                }
             }
             Expr::BinOp(*op, Box::new(l), Box::new(r))
         }
@@ -4871,6 +4913,33 @@ mod tests {
         let sab = Expr::BinOp(BinOp::Sub, Box::new(a.clone()), Box::new(two.clone()));
         let sba = Expr::BinOp(BinOp::Sub, Box::new(two.clone()), Box::new(a.clone()));
         assert_ne!(canonicalize(&sab).0, canonicalize(&sba).0, "a-2 != 2-a (sub not commutative)");
+    }
+
+    /// ASSOCIATIVE-COMMUTATIVE flattening: every grouping AND ordering of a+b+c
+    /// collapses to ONE normal form — the big merge win over adjacent-swap only.
+    #[test]
+    fn algebraic_normalize_flattens_associative_chains() {
+        let (a, b, c) = (Expr::Var(0), Expr::Var(1), Expr::Var(2));
+        let add = |x: Expr, y: Expr| Expr::BinOp(BinOp::Add, Box::new(x), Box::new(y));
+        // (a+b)+c , a+(b+c) , c+(b+a) — all groupings/orders.
+        let f1 = add(add(a.clone(), b.clone()), c.clone());
+        let f2 = add(a.clone(), add(b.clone(), c.clone()));
+        let f3 = add(c.clone(), add(b.clone(), a.clone()));
+        let n1 = algebraic_normalize(&f1);
+        assert_eq!(n1, algebraic_normalize(&f2), "(a+b)+c == a+(b+c)");
+        assert_eq!(n1, algebraic_normalize(&f3), "(a+b)+c == c+(b+a)");
+        // Eval preserved across the whole equivalence class.
+        for inputs in [[1, 2, 3], [-4, 0, 9], [7, 7, -1]] {
+            assert_eq!(f1.eval(&inputs), n1.eval(&inputs), "eval preserved");
+        }
+        // min(a, min(b, a)) flattens + dedups to min(a, b).
+        let mn = Expr::BinOp(
+            BinOp::Min,
+            Box::new(a.clone()),
+            Box::new(Expr::BinOp(BinOp::Min, Box::new(b.clone()), Box::new(a.clone()))),
+        );
+        let expect = Expr::BinOp(BinOp::Min, Box::new(a.clone()), Box::new(b.clone()));
+        assert_eq!(algebraic_normalize(&mn), expect, "min(a,min(b,a)) -> min(a,b)");
     }
 
     /// COMPOSITE OUTPUT: a Pair-returning function `(a,b) -> (a+b, a-b)` is
