@@ -48,6 +48,13 @@ pub fn nl_synthesis_proposer(
     // the first .rs file, and write a brand-new `fn double` — wrong file, wrong
     // fn. When the description names no existing fn (feature work, inline-
     // example specs), this declines and the primary proceeds unchanged.
+    // RENAME refactor FIRST: "rename X to Y" is a structural refactor, never a
+    // body-swap — hoisted above the edit stage so it can't be hijacked (the
+    // edit stage previously declined it only by accident of reshape no-op).
+    if let Some(patch) = try_rename_patch(context, &description) {
+        return Ok(patch);
+    }
+
     if let Some(patch) = try_emergent_synthesis_patch(task, context, &description, analysis) {
         return Ok(patch);
     }
@@ -58,13 +65,6 @@ pub fn nl_synthesis_proposer(
     // missing fn compiles+passes after). Declines for non-additive prose or
     // when the fn already exists (that's the edit stage above).
     if let Some(patch) = try_emergent_addition_patch(task, context, &description, analysis) {
-        return Ok(patch);
-    }
-
-    // RENAME refactor: "rename X to Y" — a COORDINATED multi-file edit touching
-    // the definition and every call site (tests excluded: they are the oracle,
-    // and in the TDD shape they already reference the NEW name).
-    if let Some(patch) = try_rename_patch(context, &description) {
         return Ok(patch);
     }
 
