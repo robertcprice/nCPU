@@ -2900,7 +2900,7 @@ fn unsound_confident_solve_categorized(
     // in its own signature, so this never fires for them.)
     let req_sig_is_array = sig_lower.contains('[') || sig_lower.contains("vec<");
     if !req_sig_is_array {
-        if let Some(arr_word) = array_domain_word(input, registry, &req.function_name) {
+        if let Some(arr_word) = array_domain_word(input, registry, &req.function_name, &req.signature) {
             return Some(GateRefusal {
                 category: GateCategory::Hard,
                 reason: format!(
@@ -3267,12 +3267,28 @@ const ARRAY_DOMAIN_FLOOR: f32 = 0.50;
 /// whose declared `input_types` contains a vector type) other than `req_fn`.
 /// Returns the surface word so the gate can report the domain mismatch. Emergent:
 /// the operand domain is read from the resolved entity's signature, not a list.
-fn array_domain_word(input: &str, registry: &Registry, req_fn: &str) -> Option<String> {
+fn array_domain_word(
+    input: &str,
+    registry: &Registry,
+    req_fn: &str,
+    req_sig: &str,
+) -> Option<String> {
     use linguigenesis_core::entity::EntityType;
     use linguigenesis_core::nl_tokens::tokenize_lower;
 
     let resolver = EntityResolver::new(registry.clone());
+    // A token that merely names the resolved op's OWN type — "string" for a
+    // `string -> string` op, "array" for a genuine array op — is CONSISTENT with
+    // the op, not a foreign-domain operand, so it must not trip the array/scalar
+    // mismatch guard. The resolved op's signature carries its type words, so skip
+    // any operand token that appears in it (emergent, no hardcoded type list).
+    // This fixes the false positive where "trim a string" was rejected because
+    // "string" fuzzily op-links to a vec-input op.
+    let sig_l = req_sig.to_lowercase();
     for tok in tokenize_lower(input) {
+        if tok.len() >= 3 && sig_l.contains(tok.as_str()) {
+            continue; // token names a type in the op's own signature — not a mismatch
+        }
         // The token must be a genuine DOMAIN word, not a structural / stop word.
         // `resolve_operation_surface` fuzzily links almost ANY token to SOME op at
         // ~0.51 (e.g. "function"→map, "array"→array_max BOTH score 0.51), so the
