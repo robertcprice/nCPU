@@ -344,6 +344,65 @@ fn array_entity_with(lemma: &str, example_cases: String, provenance: &str) -> (S
 /// schema. PURE + DETERMINISTIC: same engine surface -> byte-identical output
 /// (entities emitted in a fixed, sorted order; `serde_json::Map` is a BTreeMap so
 /// keys are ordered).
+/// Split a Rust identifier into lowercase word tokens, handling snake_case,
+/// camelCase, and digit boundaries. `"sum_of_digits"` -> `[sum, of, digits]`,
+/// `"reverseNumber"` -> `[reverse, number]`, `"decimalToBinary"` ->
+/// `[decimal, to, binary]`. Pure identifier morphology — no hand table.
+pub(crate) fn tokenize_identifier(name: &str) -> Vec<String> {
+    let mut toks: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev: Option<char> = None;
+    for c in name.chars() {
+        let boundary = c == '_'
+            || (c.is_ascii_uppercase() && prev.map(|p| p.is_ascii_lowercase() || p.is_ascii_digit()).unwrap_or(false))
+            || (c.is_ascii_digit() && prev.map(|p| p.is_ascii_alphabetic()).unwrap_or(false))
+            || (c.is_ascii_alphabetic() && prev.map(|p| p.is_ascii_digit()).unwrap_or(false));
+        if c == '_' {
+            if !cur.is_empty() {
+                toks.push(std::mem::take(&mut cur));
+            }
+        } else {
+            if boundary && !cur.is_empty() {
+                toks.push(std::mem::take(&mut cur));
+            }
+            cur.push(c.to_ascii_lowercase());
+        }
+        prev = Some(c);
+    }
+    if !cur.is_empty() {
+        toks.push(cur);
+    }
+    toks
+}
+
+/// Derive an NL surface (synonyms, gloss) for an op EMERGENTLY from its name —
+/// the identifier's own morphology, no hand-authored phrase table. `sum_of_digits`
+/// -> synonyms `["sum of digits", "sum_of_digits"]`, gloss `"Sum of digits"`.
+/// Returns None for names too cryptic to ground safely (single-token < 3 chars,
+/// or all-tokens-are-noise) so the fail-closed NL gate is never handed a bogus
+/// surface that would false-trigger and drop precision.
+pub(crate) fn derive_nl_surface(name: &str) -> Option<(Vec<String>, String)> {
+    let toks = tokenize_identifier(name);
+    if toks.is_empty() {
+        return None;
+    }
+    // Reject un-groundable names: a lone token shorter than 3 chars (`f`, `gcd`
+    // is 3 so kept) carries no reliable English signal.
+    if toks.len() == 1 && toks[0].len() < 3 {
+        return None;
+    }
+    let phrase = toks.join(" ");
+    let mut gloss = phrase.clone();
+    if let Some(first) = gloss.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    let mut syns = vec![phrase];
+    if name.contains('_') && name != syns[0] {
+        syns.push(name.to_string()); // the raw snake_case identifier as an alias
+    }
+    Some((syns, gloss))
+}
+
 pub fn mine_capabilities() -> Value {
     let mut entities = serde_json::Map::new();
 
@@ -423,6 +482,27 @@ pub fn mined_lemmas() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tokenize_identifier_handles_snake_camel_digits() {
+        assert_eq!(tokenize_identifier("sum_of_digits"), ["sum", "of", "digits"]);
+        assert_eq!(tokenize_identifier("reverseNumber"), ["reverse", "number"]);
+        assert_eq!(tokenize_identifier("decimalToBinary"), ["decimal", "to", "binary"]);
+        assert_eq!(tokenize_identifier("is_prime"), ["is", "prime"]);
+        assert_eq!(tokenize_identifier("count_primes_below"), ["count", "primes", "below"]);
+    }
+
+    #[test]
+    fn derive_nl_surface_grounds_from_name() {
+        let (syns, gloss) = derive_nl_surface("sum_of_digits").unwrap();
+        assert_eq!(gloss, "Sum of digits");
+        assert!(syns.contains(&"sum of digits".to_string()));
+        // raw snake_case kept as an alias
+        assert!(syns.contains(&"sum_of_digits".to_string()));
+        // single short cryptic name is rejected (fail-closed for precision)
+        assert!(derive_nl_surface("f").is_none());
+        assert!(derive_nl_surface("gcd").is_some()); // 3 chars, kept
+    }
 
     /// EMERGENCE (a): the mined STRING op set is DERIVED FROM + EQUAL TO the
     /// engine's `SExpr` unary surface. We iterate the engine's reflected op list
