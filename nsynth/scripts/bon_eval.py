@@ -24,22 +24,44 @@ MOG_SYSTEM = (
     "Write a function in Mog for the description. Mog is a Rust subset the verifier "
     "runs, but NO `as` casts. NO `let` — declare `name: type = init;` (i64,f64,bool,"
     "string,[i64],[string]); mutate `x = expr;`; `for e in arr { }`; `while cond "
-    "{ }`; `if cond { } else { }`; index `arr[i]` (i is i64, NO `as usize`); "
-    "`arr.len()` returns i64 (NO cast); `arr.push(e)`; `+ - * / % == < > <= >= && "
-    "|| !`; `return expr;`. Output ONLY `fn f(...) -> ... { ... }` — no prose, no fence."
+    "{ }`; `if cond { } else { }`; early `return` in loops ok. ARRAYS: `a[i]` (i "
+    "i64, NO `as usize`), `a.len()` i64 (NO cast), `a.push(e)`, `for e in a`. "
+    "STRINGS: `s.upper()`, `s.lower()`, concat `a + b`, index `s[i]` (1-char), "
+    "`for ch in s`, `s == \"x\"`; strings have NO `.len()` — count by iterating. "
+    "`+ - * / % == < > <= >= && || !`; `return expr;`. Output ONLY "
+    "`fn f(...) -> ... { ... }` — no prose, no fence."
 )
 
 
-def chat(url, model, prompt, n, temp):
+# Default to the SPEC path: an UNTRAINED model can propose I/O examples from prose
+# (no Mog needed); the CODE path needs SFT to teach the Mog dialect (an untrained
+# general model writes Python). Override with MODE=code.
+MODE = os.environ.get("MODE", "spec")
+SYSTEM = MOG_SYSTEM if MODE == "code" else (
+    "For the described function output ONLY a JSON tool call "
+    "{\"kind\":\"examples\",\"examples\":[{\"in\":[...],\"out\":...}, ...]} whose I/O "
+    "pairs UNIQUELY determine the function. JSON only, no prose."
+)
+
+
+def chat_once(url, model, prompt, temp):
+    # n=1 per call (mlx_lm server best-of-N via repeated calls). Reasoning models
+    # (e.g. Gemma) put the answer in `reasoning`; combine both. Big max_tokens so
+    # the reasoning channel doesn't eat the answer.
     body = json.dumps({
         "model": model,
-        "messages": [{"role": "system", "content": MOG_SYSTEM}, {"role": "user", "content": prompt}],
-        "n": n, "temperature": temp, "max_tokens": 512,
+        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "temperature": temp, "max_tokens": 1400,
     }).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=180) as r:
         d = json.loads(r.read())
-    return [c["message"]["content"] for c in d.get("choices", [])]
+    m = d["choices"][0]["message"]
+    return (m.get("content") or "") + "\n" + (m.get("reasoning") or "")
+
+
+def chat(url, model, prompt, n, temp):
+    return [chat_once(url, model, prompt, temp if i else 0.2) for i in range(n)]
 
 
 def extract_json(s):

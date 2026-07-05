@@ -28,9 +28,12 @@ MOG_SYSTEM = (
     "verifier executes, but with NO `as` casts. Rules: NO `let` — declare "
     "`name: type = init;` (types i64, f64, bool, string, [i64], [string]); mutate "
     "`x = expr;`; `for e in arr { ... }`, `while cond { ... }`, `if cond { ... } "
-    "else { ... }`; index `arr[i]` (i is i64, NO `as usize`); `arr.len()` returns "
-    "i64 (NO cast); `arr.push(e)`; operators `+ - * / % == < > <= >= && || !`; "
-    "`return expr;`. Output ONLY `fn f(...) -> ... { ... }`, no prose, no fence."
+    "else { ... }`; early `return expr;` inside loops is fine. ARRAYS: index "
+    "`a[i]` (i is i64, NO `as usize`), `a.len()` returns i64 (NO cast), `a.push(e)`, "
+    "`for e in a`. STRINGS: `s.upper()`, `s.lower()`, concat `a + b`, index `s[i]` "
+    "(a 1-char string), iterate `for ch in s`, compare `s == \"x\"`; strings have NO "
+    "`.len()` — count by iterating. operators `+ - * / % == < > <= >= && || !`. "
+    "Output ONLY `fn f(...) -> ... { ... }`, no prose, no fence."
 )
 # The SECONDARY path: the model proposes I/O; nsynth SYNTHESIZES (verified) — only
 # for tasks in nsynth's synthesis domain.
