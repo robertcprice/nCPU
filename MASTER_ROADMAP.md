@@ -235,6 +235,16 @@ Goal: from the verified COMPONENT layer + RLVR proposer + crawler (see memory `c
 
 **Sequencing:** #1 (strings) → #2 (LLM edit driver on the gated repair loop) → #3 (ReAct tool loop) → #5 (flywheel across substrates) → #4 (struct synthesis). Every step commits verified; reuse the spine above.
 
+### 0.059 MERGE NOTE (2026-07-04, widen-nl-front-door <- universal-push @ 92c0bd9)
+
+Both work lines now live on ONE branch (widen-nl-front-door, merge 72dfc0b): the universal solver stack (op_library/op_pipeline/combinator/D&C/sketch, MBPP 61.9% ledger) + the agent/component line (component layer, emergent NL edit driver + feature-ADD + content-grep localization, struct in/out synthesis, crawler+promotion, fs-nav tools). Merged-tree verification: both sides' suites green. Merged MBPP (5s, snapshot-bin driver): **51.9% (471/907)**.
+
+FOR THE UNIVERSAL AGENT — two soundness gates were added where your tiers meet 2-example registry ops (please keep them when merging back):
+1. `op_pipeline::try_pipeline` requires >=3 DISTINCT examples (2-point specs were solved by nonsense chains, e.g. factorial->sum_of_digits->factorial for `increment`). Zero MBPP impact (prep filters >=3).
+2. `op_library::try_library` skips `category == "registry-op"` (coincidental aliases hijacked trusted leaves: length->count_positives, array_sum->max_subarray_sum).
+Also: `run_mbpp_bench.sh` now SNAPSHOTS the binary to mktemp before the loop — a concurrent `cargo clean` mid-run turned 764/940 tasks into bogus "killed" (please don't clean target dirs of trees you don't own mid-bench; the snapshot makes it moot).
+DELTA to your 61.9%: your Value::Map + newer prep/bin + search_combinator changes are still UNPUSHED in your working tree — push them and the merged bin's __map__ skip can be replaced with the real decode (+35 dict tasks).
+
 ## 0. Agent Start Protocol
 
 Follow these steps in order at the beginning of every coding-agent session:
