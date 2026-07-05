@@ -119,6 +119,23 @@ fn solve_string_lexicon(
 /// constructor; `output_matches` compares runtime Struct vs wire Struct) before
 /// being accepted — no fabrication on any failure. v1 scope: flat structs whose
 /// fields are Int/Bool/Str/Array (nested structs decline honestly).
+/// The Mog type name for a flat (non-nested) value — the field/param types the
+/// struct lanes can express. `None` for nested structs / maps / exotic carriers
+/// (the lane declines rather than mistyping).
+fn mog_flat_type(v: &Value) -> Option<&'static str> {
+    match v {
+        Value::Int(_) => Some("i64"),
+        Value::Bool(_) => Some("bool"),
+        Value::Str(_) => Some("string"),
+        Value::Array(elems) => match elems.first() {
+            Some(Value::Str(_)) => Some("[string]"),
+            // Empty or int-element arrays default to int arrays.
+            _ => Some("[i64]"),
+        },
+        _ => None,
+    }
+}
+
 fn solve_struct_output(problem: &Problem) -> Option<SolveResult> {
     use crate::benchmark::Example;
     // Gate: every example's expected is a Struct with identical field names.
@@ -144,15 +161,8 @@ fn solve_struct_output(problem: &Problem) -> Option<SolveResult> {
             }
         }
     }
-    let field_type = |v: &Value| -> Option<&'static str> {
-        match v {
-            Value::Int(_) => Some("i64"),
-            Value::Bool(_) => Some("bool"),
-            Value::Str(_) => Some("string"),
-            Value::Array(_) => Some("[i64]"),
-            _ => None, // nested structs / exotic carriers: decline in v1
-        }
-    };
+    // Field type from the value (nested struct / exotic carriers decline in v1).
+    let field_type = mog_flat_type;
 
     let fn_name = problem.function_name();
     // Struct name from the signature's return type; a lowercase/absent one gets
@@ -408,17 +418,32 @@ fn solve_map_output(problem: &Problem) -> Option<SolveResult> {
 /// honestly on any failure — never fabricates.
 fn solve_struct_input(problem: &Problem) -> Option<SolveResult> {
     use crate::benchmark::Example;
-    // Gate: one struct input with identical Int field names across examples.
-    let field_names: Vec<String> = match problem.examples.first()?.inputs.as_slice() {
-        [Value::Struct(fs)] if !fs.is_empty() => fs.iter().map(|(n, _)| n.clone()).collect(),
-        _ => return None,
-    };
+    // Gate: one struct input with identical field NAMES and consistent field
+    // TYPES across examples. Fields may be any flat Mog type (i64/bool/string/
+    // [i64]) — not just Int; the flattened core is handed to the full pipeline,
+    // which declines (whole strict-verify) if it cannot solve that shape.
+    let (field_names, field_types): (Vec<String>, Vec<&'static str>) =
+        match problem.examples.first()?.inputs.as_slice() {
+            [Value::Struct(fs)] if !fs.is_empty() => {
+                let mut names = Vec::with_capacity(fs.len());
+                let mut types = Vec::with_capacity(fs.len());
+                for (n, v) in fs {
+                    names.push(n.clone());
+                    types.push(mog_flat_type(v)?);
+                }
+                (names, types)
+            }
+            _ => return None,
+        };
     for e in &problem.examples {
         match e.inputs.as_slice() {
             [Value::Struct(fs)]
                 if fs.len() == field_names.len()
                     && fs.iter().zip(&field_names).all(|((n, _), f)| n == f)
-                    && fs.iter().all(|(_, v)| matches!(v, Value::Int(_))) => {}
+                    && fs
+                        .iter()
+                        .zip(&field_types)
+                        .all(|((_, v), ty)| mog_flat_type(v) == Some(*ty)) => {}
             _ => return None,
         }
         if matches!(e.expected, Value::Struct(_)) {
@@ -450,11 +475,12 @@ fn solve_struct_input(problem: &Problem) -> Option<SolveResult> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "i64".to_string());
 
-    // Flat sub-problem: the fields ARE the params.
+    // Flat sub-problem: the fields ARE the params (each keeps its own type).
     let core_name: &'static str = Box::leak(format!("{fn_name}_core").into_boxed_str());
     let params_src = field_names
         .iter()
-        .map(|f| format!("{f}: i64"))
+        .zip(&field_types)
+        .map(|(f, ty)| format!("{f}: {ty}"))
         .collect::<Vec<_>>()
         .join(", ");
     let core_sig: &'static str =
@@ -484,7 +510,8 @@ fn solve_struct_input(problem: &Problem) -> Option<SolveResult> {
 
     let decl_fields = field_names
         .iter()
-        .map(|f| format!("    {f}: i64,"))
+        .zip(&field_types)
+        .map(|(f, ty)| format!("    {f}: {ty},"))
         .collect::<Vec<_>>()
         .join("\n");
     let access = field_names
@@ -1152,8 +1179,38 @@ mod string_lexicon_tests {
 
 #[cfg(test)]
 mod struct_output_tests {
-    use super::{solve_map_output, solve_struct_output};
+    use super::{solve_map_output, solve_struct_input, solve_struct_output};
     use crate::benchmark::{Example, Problem, Value};
+
+    /// STRUCT INPUT with a NON-INT field: a `{greeting: string}` struct whose
+    /// function uppercases the field. Before, the lane required all-Int fields
+    /// and declined; now the flattened core `(greeting: string) -> string` is
+    /// solved by the string lane and the whole (decl + core + wrapper)
+    /// strict-verifies. Model-free coverage via gate-relaxation.
+    #[test]
+    fn struct_input_non_int_field_solves() {
+        let ex = |g: &str, out: &str| Example {
+            inputs: vec![Value::Struct(vec![("greeting".to_string(), Value::Str(g.to_string()))])],
+            expected: Value::Str(out.to_string()),
+        };
+        let problem = Problem {
+            name: "shout".into(),
+            category: "test",
+            description: "uppercase a struct's string field",
+            signature: "fn shout(g: Greeting) -> string",
+            examples: vec![
+                ex("hi", "HI"),
+                ex("yo", "YO"),
+                ex("hey", "HEY"),
+                ex("sup", "SUP"),
+            ],
+            ..Default::default()
+        };
+        let r = solve_struct_input(&problem).expect("non-int struct field now solves");
+        assert!(r.success);
+        assert!(r.code.contains("greeting: string"), "typed field kept: {}", r.code);
+        assert!(r.code.contains("struct Greeting"), "struct decl emitted: {}", r.code);
+    }
 
     /// MAP-OUTPUT, fixed keys: {0: n, 1: n+1} for input n. The lane solves a
     /// verified value-helper per key and emits an array-of-pairs the Map bridge
