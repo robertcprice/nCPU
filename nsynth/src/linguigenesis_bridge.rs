@@ -845,7 +845,7 @@ impl LinguigenesisBridge {
         let problem = self
             .problem_from_requirement(&req, fn_name)
             .map_err(|e| e.to_string())?;
-        Ok(crate::solver::solve_problem(&problem))
+        Ok(solve_verifying_holdouts(&problem))
     }
 
     /// The synthesizable op names (default_fn_name of every Function entity) —
@@ -1581,7 +1581,7 @@ impl LinguigenesisBridge {
         let problem = self
             .problem_from_requirement(req, fn_name)
             .map_err(|e| e.to_string())?;
-        Ok(crate::solver::solve_problem(&problem))
+        Ok(solve_verifying_holdouts(&problem))
     }
 
     /// Structural multi-component signal: does this request DESCRIBE >=2 component
@@ -3267,6 +3267,36 @@ const ARRAY_DOMAIN_FLOOR: f32 = 0.50;
 /// whose declared `input_types` contains a vector type) other than `req_fn`.
 /// Returns the surface word so the gate can report the domain mismatch. Emergent:
 /// the operand domain is read from the resolved entity's signature, not a list.
+/// Solve `problem`, then re-verify the emitted code against the FULL spec
+/// (examples + holdouts). `problem_from_requirement` reserves the last distinct
+/// row as a fresh holdout, and `solve_problem` solves a `synthesis_view()` that
+/// CLEARS holdouts — so the holdout never bites INSIDE the solver. Without this
+/// post-solve re-check an overfit that fits the seed but contradicts the holdout
+/// is wrongly accepted (e.g. "trim" synthesized as remove-ALL-spaces, which fits
+/// the leading/trailing-space seed rows but fails "a b c" -> "a b c"). This is the
+/// SOUNDNESS gate for the single-op NL door — mirrors the LLM-examples path.
+fn solve_verifying_holdouts(problem: &crate::benchmark::Problem) -> crate::solver::SolveResult {
+    let res = crate::solver::solve_problem(problem);
+    if res.success && !problem.holdouts.is_empty() {
+        let full: Vec<crate::benchmark::Example> = problem
+            .examples
+            .iter()
+            .chain(problem.holdouts.iter())
+            .cloned()
+            .collect();
+        if !crate::runtime::code_reproduces_examples(&res.code, &full) {
+            return crate::solver::SolveResult {
+                success: false,
+                code: res.code,
+                method: res.method,
+                error: Some("solved code fails the held-out probe (overfit)".to_string()),
+                metadata: Default::default(),
+            };
+        }
+    }
+    res
+}
+
 fn array_domain_word(
     input: &str,
     registry: &Registry,
