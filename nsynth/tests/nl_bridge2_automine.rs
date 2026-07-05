@@ -124,7 +124,24 @@ fn mined_sort_synthesizes_end_to_end() {
         "must emit the i64 array sort program, got:\n{}",
         r.response
     );
-    assert_eq!(r.synthesis_method.as_deref(), Some("array_transform_sort"));
+    // BEHAVIOR, not method label: the synthesized program must actually SORT. The
+    // exact internal method that wins ("array_transform_sort" vs a decompose tier)
+    // drifts as the solver evolves and is not a correctness property — assert the
+    // program reproduces the sort spec instead of hardcoding the label.
+    let mk = |xs: &[i64]| {
+        let mut v = xs.to_vec();
+        v.sort();
+        mog_synth::benchmark::Example {
+            inputs: vec![mog_synth::benchmark::Value::int_array(xs)],
+            expected: mog_synth::benchmark::Value::int_array(&v),
+        }
+    };
+    let spec = [mk(&[3, 1, 2]), mk(&[5, 4, 6, 4]), mk(&[9, -1, 0, 2])];
+    assert!(
+        mog_synth::runtime::code_reproduces_examples(&r.response, &spec),
+        "synthesized program must SORT its input, got:\n{}",
+        r.response
+    );
 }
 
 /// EMERGENCE: the COMMITTED mined JSON the bridge loads is byte-identical to a
