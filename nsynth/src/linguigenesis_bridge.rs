@@ -3453,19 +3453,40 @@ fn consensus_trust_gate(
     if !result.success || !is_examples_only(problem) {
         return result;
     }
-    if let ConsensusVerdict::Ambiguous { .. } =
-        differential_consensus(problem, &result.code)
-    {
-        result.success = false;
-        result.error = Some(
-            "candidate reproduces the given examples, but an independent solution \
-             that also fits them DISAGREES on another input — the examples do not \
-             determine the function; add an example or confirm the intended output"
-                .to_string(),
-        );
+    match differential_consensus(problem, &result.code) {
+        // A divergence witness PROVES the examples don't determine the function.
+        // Refuse — never a confident wrong.
+        ConsensusVerdict::Ambiguous { .. } => {
+            result.success = false;
+            result.error = Some(
+                "candidate reproduces the given examples, but an independent solution \
+                 that also fits them DISAGREES on another input — the examples do not \
+                 determine the function; add an example or confirm the intended output"
+                    .to_string(),
+            );
+        }
+        // An independent candidate AGREES — CONFIDENT. Leave as-is.
+        ConsensusVerdict::Verified { .. } => {}
+        // No independent candidate could be produced — we CANNOT corroborate this
+        // solve, so it must not be CLAIMED as confident. Keep the candidate (it
+        // reproduces the stated examples) but LABEL it tentative via the method tag
+        // so the product surfaces "matches your examples, not independently
+        // verified — confirm or add one" and the benchmark does not score it as a
+        // confident solve. This is what drives CONFIDENTLY-wrong to ~0 without a
+        // perfect corroborator: nothing uncorroborated is ever presented confident.
+        ConsensusVerdict::NoConsensus => {
+            if !result.method.ends_with(TENTATIVE_TAG) {
+                result.method = format!("{}{TENTATIVE_TAG}", result.method);
+            }
+        }
     }
     result
 }
+
+/// Method suffix marking a solve that reproduces the stated examples but could NOT
+/// be independently corroborated (examples-only spec, `NoConsensus`). Callers treat
+/// a tentative solve as "confirm-or-add-an-example", never a confident solve.
+pub const TENTATIVE_TAG: &str = ":tentative";
 
 fn solve_verifying_holdouts(problem: &crate::benchmark::Problem) -> crate::solver::SolveResult {
     let res = crate::solver::solve_problem(problem);

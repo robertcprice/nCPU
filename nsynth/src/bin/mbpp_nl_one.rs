@@ -102,10 +102,16 @@ fn main() {
         println!("UNSOLVED {id}");
         return;
     }
+    // A solve the engine could not independently corroborate is TENTATIVE, not a
+    // confident solve (see consensus_trust_gate) — do not score it as SOLVED.
+    let method = result.synthesis_method.as_deref().unwrap_or("nl");
+    if method.contains(":tentative") {
+        println!("TENTATIVE {id} {method}");
+        return;
+    }
     // VERIFY the synthesized program against the hidden asserts. A green result is
     // an HONEST agentic solve (NL understood + code passes the real tests).
     if mog_synth::runtime::code_reproduces_examples(&result.response, &exs) {
-        let method = result.synthesis_method.as_deref().unwrap_or("nl");
         println!("SOLVED {id} {method}");
     } else {
         println!("UNSOLVED {id}");

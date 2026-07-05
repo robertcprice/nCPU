@@ -88,9 +88,17 @@ fn main() {
     let _ = std::fs::remove_dir_all(&root);
 
     let method = r.synthesis_method.clone().unwrap_or_else(|| format!("{:?}", r.route));
+    let reproduces = mog_synth::runtime::code_reproduces_examples(&r.response, &exs);
+    // A solve the engine could NOT independently corroborate is labelled TENTATIVE
+    // (confirm-or-add-an-example), NOT a confident solve — so its correctness does
+    // not count as a confident SOLVED nor its wrongness as a confidently-WRONG.
+    let tentative = method.contains(":tentative");
     if !r.success {
         println!("CAT {id} REFUSED {:?}", r.route);
-    } else if mog_synth::runtime::code_reproduces_examples(&r.response, &exs) {
+    } else if tentative {
+        // Split tentative by whether it happens to be right, for measurement only.
+        println!("CAT {id} {} {method}", if reproduces { "TENTATIVE_OK" } else { "TENTATIVE_MISS" });
+    } else if reproduces {
         println!("CAT {id} SOLVED {method}");
     } else {
         println!("CAT {id} WRONG {method}");
