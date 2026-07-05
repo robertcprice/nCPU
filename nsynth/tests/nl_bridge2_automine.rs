@@ -200,10 +200,23 @@ fn regression_float_i64_and_refusal_intact() {
     let f = run(&fresh_root("fahr"), "convert celsius to fahrenheit");
     assert!(f.success && f.response.contains("-> f64"), "float intact: {}", f.response);
 
+    // i64 add intact — assert BEHAVIOR (adds two numbers), not "a + b" codegen: the
+    // arity-polymorphic search names params a0/a1, so the literal string drifts.
     let a = run(&fresh_root("add"), "add two numbers");
+    assert!(a.success && a.response.contains("-> i64"), "i64 add intact: {}", a.response);
+    let add_spec = [
+        mog_synth::benchmark::Example {
+            inputs: vec![mog_synth::benchmark::Value::Int(2), mog_synth::benchmark::Value::Int(3)],
+            expected: mog_synth::benchmark::Value::Int(5),
+        },
+        mog_synth::benchmark::Example {
+            inputs: vec![mog_synth::benchmark::Value::Int(5), mog_synth::benchmark::Value::Int(7)],
+            expected: mog_synth::benchmark::Value::Int(12),
+        },
+    ];
     assert!(
-        a.success && a.response.contains("-> i64") && a.response.contains("a + b"),
-        "i64 add intact: {}",
+        mog_synth::runtime::code_reproduces_examples(&a.response, &add_spec),
+        "synthesized program must add its two arguments, got:\n{}",
         a.response
     );
 
