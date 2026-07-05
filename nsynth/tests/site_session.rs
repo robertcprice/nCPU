@@ -135,6 +135,39 @@ fn teach_then_use_grows_the_web_vocabulary() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// SELF-LEARNING ARCHETYPE through the front door: teach a NEW page archetype
+/// by prose, then an ABSTRACT prompt that only names the purpose composes the
+/// taught structure — the full "understand better prompts, make complex programs
+/// from abstract asks" loop, reachable in conversation, no code change.
+#[test]
+fn teach_archetype_then_abstract_prompt_composes_it() {
+    let reg_file = std::env::temp_dir().join(format!("nsynth_archreg_{}.json", std::process::id()));
+    let _ = fs::remove_file(&reg_file);
+    std::env::set_var("NSYNTH_WEB_REGISTRY", &reg_file);
+    let root = fresh_root("archteach");
+    let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
+
+    // TEACH a new archetype by prose (its parts are named in the definition).
+    let rt = s.handle_query(
+        "teach web: a dashboard archetype means a page with a hero, features, and an about story",
+    );
+    assert!(rt.success, "{}", rt.response);
+    assert_eq!(rt.workflow, "registry.teach");
+
+    // ABSTRACT prompt — names the purpose (archetype) but NO section words. The
+    // taught archetype composes hero + features + about, emitted + fidelity-verified.
+    let r = s.handle_query("build a dashboard page called board for my team");
+    assert!(r.success, "{}", r.response);
+    let html = fs::read_to_string(root.join("site/board.html")).unwrap();
+    for marker in ["class=\"hero\"", "class=\"features\"", "class=\"about\""] {
+        assert!(html.contains(marker), "composed section {marker} present: {html}");
+    }
+
+    std::env::remove_var("NSYNTH_WEB_REGISTRY");
+    let _ = fs::remove_file(&reg_file);
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// BACKEND through the front door: "make me an api with a health check" builds
 /// a compile-gated server with the health route; component/op asks unaffected.
 #[test]
