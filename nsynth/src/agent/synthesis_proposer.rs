@@ -55,6 +55,14 @@ pub fn nl_synthesis_proposer(
         return Ok(patch);
     }
 
+    // SIGNATURE-CHANGE refactor: "add a parameter P to F defaulting to N" — a
+    // coordinated edit of F's signature AND every call site (each call gains the
+    // default as its new argument). Structural like rename; hoisted for the same
+    // reason.
+    if let Some(patch) = try_add_param_patch(context, &description) {
+        return Ok(patch);
+    }
+
     if let Some(patch) = try_emergent_synthesis_patch(task, context, &description, analysis) {
         return Ok(patch);
     }
@@ -395,6 +403,177 @@ pub fn try_emergent_addition_patch(
             .with_metadata("proposer", "nl_emergent_addition")
             .with_metadata("synthesis_method", result.method.clone()),
     )
+}
+
+/// SIGNATURE-CHANGE refactor: "add a parameter <p> to <fn> defaulting to <n>" —
+/// structural parse (no synthesis), then a coordinated patch:
+///   * the DEFINITION gains `, p: i64` in its signature;
+///   * EVERY non-test call site gains `, n` as the new trailing argument (the
+///     default), across all files — so existing behavior is preserved and the
+///     TDD oracle (tests already call the new arity with real values) proves
+///     the wiring.
+/// Gates: fn must be defined (non-test); param name must not already be in the
+/// signature; a default literal must be present in the prose (no fabrication).
+pub fn try_add_param_patch(context: &RepairContext, description: &str) -> Option<RepairPatch> {
+    let lower = description.to_lowercase();
+    if !lower.contains("add a parameter") && !lower.contains("add parameter") {
+        return None;
+    }
+    let toks: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .filter(|t| !t.is_empty())
+        .collect();
+    let ppos = toks.iter().position(|t| *t == "parameter")?;
+    let tpos = toks.iter().position(|t| *t == "to")?;
+    // Default literal: the token after "defaulting"/"default" (allow negatives).
+    let dpos = toks
+        .iter()
+        .position(|t| *t == "defaulting" || *t == "default" || *t == "defaults")?;
+    let default_lit: i64 = toks[dpos + 1..]
+        .iter()
+        .find_map(|t| t.parse::<i64>().ok())?;
+    let is_ident =
+        |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let param = toks[ppos + 1..tpos].iter().find(|t| is_ident(t))?.to_string();
+    let defined: Vec<String> = context
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with(".rs"))
+        .flat_map(|f| defined_fn_names(f.text.as_deref().unwrap_or("")))
+        .collect();
+    let fn_name = toks[tpos + 1..]
+        .iter()
+        .find(|t| defined.iter().any(|d| d == *t))?
+        .to_string();
+
+    let mut patch = patch_with_meta("nl_add_param_refactor");
+    let mut touched = 0usize;
+    for file in &context.files {
+        if !file.path.ends_with(".rs") {
+            continue;
+        }
+        let text = file.text.as_deref().unwrap_or("");
+        let rewritten = add_param_outside_tests(text, &fn_name, &param, default_lit)?;
+        if rewritten != text {
+            touched += 1;
+            patch = patch.with_edit(RepairEdit::new(
+                file.path.clone(),
+                text.to_string(),
+                rewritten,
+                "add-parameter refactor (signature + call sites; tests untouched)",
+            ));
+        }
+    }
+    (touched > 0).then_some(patch)
+}
+
+fn patch_with_meta(proposer: &str) -> RepairPatch {
+    RepairPatch::new().with_metadata("proposer", proposer)
+}
+
+/// Rewrite `fn_name`'s DEFINITION signature (append `, p: i64`) and every call
+/// site (append `, <default>`), skipping test blocks. Returns None (whole patch
+/// declines) if the param already exists in the signature.
+fn add_param_outside_tests(
+    text: &str,
+    fn_name: &str,
+    param: &str,
+    default_lit: i64,
+) -> Option<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut test_block_depth: Option<i32> = None;
+    let mut pending_test_block = false;
+    let def_pat = format!("fn {fn_name}(");
+    let call_pat = format!("{fn_name}(");
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("#[cfg(test)") {
+            pending_test_block = true;
+        }
+        let in_test = test_block_depth.is_some();
+        let rewritten = if in_test {
+            line.to_string()
+        } else if let Some(defpos) = line.find(&def_pat) {
+            // DEFINITION: append the param before the closing paren of the sig.
+            let close = line[defpos..].find(')')? + defpos;
+            if line[..close].contains(&format!("{param}:")) {
+                return None; // param already present — decline whole refactor
+            }
+            let sep = if line[defpos + def_pat.len()..close].trim().is_empty() { "" } else { ", " };
+            format!(
+                "{}{sep}{param}: i64{}",
+                &line[..close],
+                &line[close..]
+            )
+        } else if line.contains(&call_pat) && !line.contains(&def_pat) {
+            // CALL SITES: append the default before each call's closing paren.
+            rewrite_calls_append_arg(line, &call_pat, &default_lit.to_string())
+        } else {
+            line.to_string()
+        };
+        out.push(rewritten);
+        for c in line.chars() {
+            if c == '{' {
+                depth += 1;
+                if pending_test_block && test_block_depth.is_none() {
+                    test_block_depth = Some(depth);
+                    pending_test_block = false;
+                }
+            } else if c == '}' {
+                if test_block_depth == Some(depth) {
+                    test_block_depth = None;
+                }
+                depth -= 1;
+            }
+        }
+    }
+    let mut s = out.join("\n");
+    if text.ends_with('\n') {
+        s.push('\n');
+    }
+    Some(s)
+}
+
+/// Append `arg` to every `name(...)` call on the line (word-boundary; balanced
+/// paren scan finds each call's close).
+fn rewrite_calls_append_arg(line: &str, call_pat: &str, arg: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let boundary =
+            i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+        if boundary && line[i..].starts_with(call_pat) {
+            let open = i + call_pat.len() - 1;
+            // balanced scan for this call's closing paren
+            let mut d = 0i32;
+            let mut j = open;
+            while j < bytes.len() {
+                if bytes[j] == b'(' {
+                    d += 1;
+                } else if bytes[j] == b')' {
+                    d -= 1;
+                    if d == 0 {
+                        break;
+                    }
+                }
+                j += 1;
+            }
+            if j < bytes.len() {
+                let inner_empty = line[open + 1..j].trim().is_empty();
+                let sep = if inner_empty { "" } else { ", " };
+                out.push_str(&line[i..j]);
+                out.push_str(&format!("{sep}{arg}"));
+                out.push(')');
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// RENAME refactor (coordinated multi-file EDIT, no synthesis needed): parse
@@ -1859,6 +2038,96 @@ mod tests {
             .verify(&task.test_command)
             .expect("verify after");
         assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// SIGNATURE-CHANGE refactor, end to end: "add a parameter offset to scale
+    /// defaulting to 0" — the definition gains the param, the cross-file call
+    /// site gains the default argument, tests (already calling the new arity)
+    /// go green. Behavior preserved by construction; tests never edited.
+    #[test]
+    fn add_param_refactor_updates_signature_and_call_sites() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!("nsynth_addparam_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"addparam\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub mod maths;\npub mod report;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn new_arity() {\n        assert_eq!(crate::maths::scale(4, 0), 8);\n        assert_eq!(crate::report::doubled(3), 6);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        fs::write(root.join("src/maths.rs"), "pub fn scale(x: i64) -> i64 {\n    2 * x\n}\n")
+            .expect("maths");
+        fs::write(
+            root.join("src/report.rs"),
+            "use crate::maths::scale;\n\npub fn doubled(n: i64) -> i64 {\n    scale(n)\n}\n",
+        )
+        .expect("report");
+
+        let task = RepoTaskSpec {
+            id: "addparam-scale".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Refactor,
+            issue: "nl: add a parameter offset to scale defaulting to 0".into(),
+            test_command: "cargo test new_arity".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken (tests call new arity)");
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_add_param_refactor"),
+            "add-param stage should fire: {:?}",
+            patch.metadata
+        );
+        let paths: Vec<&str> = patch.edits.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"src/maths.rs"), "definition edited: {paths:?}");
+        assert!(paths.contains(&"src/report.rs"), "call site edited: {paths:?}");
+        let def = patch.edits.iter().find(|e| e.path == "src/maths.rs").unwrap();
+        assert!(def.new_text.contains("scale(x: i64, offset: i64)"), "{}", def.new_text);
+        let call = patch.edits.iter().find(|e| e.path == "src/report.rs").unwrap();
+        assert!(call.new_text.contains("scale(n, 0)"), "{}", call.new_text);
+
+        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
+        tx.apply_repair_patch(&patch).expect("apply");
+        tx.commit().expect("commit");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn add_param_declines_without_default_or_unknown_fn() {
+        let root = std::env::temp_dir().join(format!("nsynth_apneg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn scale(x: i64) -> i64 { 2 * x }\n").unwrap();
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        // No default literal -> decline (never fabricate).
+        assert!(try_add_param_patch(&context, "add a parameter offset to scale").is_none());
+        // Unknown fn -> decline.
+        assert!(
+            try_add_param_patch(&context, "add a parameter offset to shrink defaulting to 0")
+                .is_none()
+        );
         let _ = fs::remove_dir_all(root);
     }
 
