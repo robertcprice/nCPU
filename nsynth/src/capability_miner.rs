@@ -256,7 +256,7 @@ fn stateful_entity(
     op: &str,
     example_cases: String,
 ) -> (String, Value) {
-    let (syns, def, domain) = nl_surface(lemma);
+    let (syns, def, domain) = surface_forms(lemma, "stateful");
     let attrs = json!({
         "arity": "2",
         "input_types": "i64, Vec<i64>",
@@ -292,7 +292,7 @@ fn string_entity(
     code_body: &str,
     example_cases: String,
 ) -> (String, Value) {
-    let (syns, def, domain) = nl_surface(lemma);
+    let (syns, def, domain) = surface_forms(lemma, "string");
     // Derive the default fn-name/category from the engine signature, not by hand:
     // every string op here is arity-1 `string -> string`.
     let attrs = json!({
@@ -325,7 +325,7 @@ fn string_entity(
 }
 
 fn array_entity_with(lemma: &str, example_cases: String, provenance: &str) -> (String, Value) {
-    let (syns, def, domain) = nl_surface(lemma);
+    let (syns, def, domain) = surface_forms(lemma, "array");
     let attrs = json!({
         "arity": "1",
         "input_types": "Vec<i64>",
@@ -411,6 +411,31 @@ pub(crate) fn derive_nl_surface(name: &str) -> Option<(Vec<String>, String)> {
         syns.push(name.to_string()); // the raw snake_case identifier as an alias
     }
     Some((syns, gloss))
+}
+
+/// Surface forms for a mined op: the CURATED hand-authored entry when present,
+/// else EMERGENTLY derived from the op's own name (`derive_nl_surface`). This is
+/// the fix for the biggest agentic-NL failure bucket (~49% REFUSED): previously a
+/// reflected op with no hand-authored entry got EMPTY synonyms + empty
+/// definition, so the resolver could only reach it by exact lemma match — every
+/// newly-mined op was NL-unreachable until someone hand-typed a phrase. Now the
+/// op's own identifier morphology grounds it ("running_total" -> "running total")
+/// with no hand edit. Precision-safe: `derive_nl_surface` returns None for
+/// un-groundable cryptic names, so the fail-closed NL gate is never handed a
+/// bogus surface. `default_domain` is the emitter's known category.
+fn surface_forms(lemma: &str, default_domain: &'static str) -> (Vec<String>, String, String) {
+    let (syns, def, domain) = nl_surface(lemma);
+    if !syns.is_empty() || !def.is_empty() {
+        return (
+            syns.iter().map(|s| s.to_string()).collect(),
+            def.to_string(),
+            domain.to_string(),
+        );
+    }
+    match derive_nl_surface(lemma) {
+        Some((s, g)) => (s, g, default_domain.to_string()),
+        None => (vec![], String::new(), default_domain.to_string()),
+    }
 }
 
 pub fn mine_capabilities() -> Value {
@@ -512,6 +537,25 @@ mod tests {
         // single short cryptic name is rejected (fail-closed for precision)
         assert!(derive_nl_surface("f").is_none());
         assert!(derive_nl_surface("gcd").is_some()); // 3 chars, kept
+    }
+
+    /// surface_forms prefers the CURATED entry, else falls back to the EMERGENT
+    /// derivation — so a newly-mined op is NL-reachable from its own name with no
+    /// hand edit, while cryptic names stay empty (precision-safe).
+    #[test]
+    fn surface_forms_prefers_curated_else_derives() {
+        // Curated wins for a hand-authored op.
+        let (syns, def, _) = surface_forms("uppercase", "string");
+        assert!(syns.iter().any(|s| s == "upcase"), "curated synonym kept: {syns:?}");
+        assert!(def.starts_with("Convert"), "curated gloss kept");
+        // An op with NO curated entry gets an emergent surface from its identifier.
+        let (syns2, def2, dom2) = surface_forms("cumulative_gap", "array");
+        assert!(syns2.iter().any(|s| s == "cumulative gap"), "derived phrase: {syns2:?}");
+        assert_eq!(def2, "Cumulative gap");
+        assert_eq!(dom2, "array", "default domain used for a derived op");
+        // Cryptic name → no bogus surface (fail-closed).
+        let (syns3, def3, _) = surface_forms("zq", "array");
+        assert!(syns3.is_empty() && def3.is_empty(), "cryptic name stays unsurfaced");
     }
 
     /// EMERGENCE (a): the mined STRING op set is DERIVED FROM + EQUAL TO the
