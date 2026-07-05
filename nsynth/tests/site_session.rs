@@ -134,3 +134,20 @@ fn teach_then_use_grows_the_web_vocabulary() {
     let _ = fs::remove_file(&reg_file);
     let _ = fs::remove_dir_all(&root);
 }
+
+/// BACKEND through the front door: "make me an api with a health check" builds
+/// a compile-gated server with the health route; component/op asks unaffected.
+#[test]
+fn handle_query_builds_backend_from_prose() {
+    let root = fresh_root("backend");
+    let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
+    let r = s.handle_query("make me an api with a health check and a users database");
+    assert!(r.success, "response: {}", r.response);
+    assert_eq!(r.workflow, "backend.build");
+    let src = fs::read_to_string(root.join("backend/main.rs")).expect("server on disk");
+    assert!(src.contains("/health"), "health route present");
+    // Guard: a counter ask still routes to components, not backend.
+    let r2 = s.handle_query("build a counter");
+    assert_eq!(r2.workflow, "component.build", "{}", r2.response);
+    let _ = fs::remove_dir_all(&root);
+}

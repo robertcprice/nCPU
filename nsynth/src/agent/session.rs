@@ -436,6 +436,46 @@ impl CodingAgentSession {
             return result;
         }
 
+        // BACKEND INTAKE (hub backend domain): "make me an api with a health
+        // check and a users store" — routes through the registry hub's backend
+        // resolution (synonym edges: api->endpoint, service->server), builds via
+        // the unified door (rule clauses w/ examples) or the structural server
+        // (health + store), COMPILE-repair-gated. Site asks were consumed above.
+        if let Some(ask) = crate::backend_intake::comprehend_backend_prose(query) {
+            let result = match crate::backend_intake::build_backend_ask(&self.root, query, &ask) {
+                Ok(written) => AgentQueryResult {
+                    route: QueryRoute::GreenfieldProject,
+                    success: true,
+                    response: format!(
+                        "Built backend (store {:?}, rules [{}]) — compile-gated: {}",
+                        ask.store,
+                        ask.rule_names.join(", "),
+                        written.join(", "),
+                    ),
+                    workflow: "backend.build".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("backend-intake".to_string()),
+                    repo_result: None,
+                    tool_trace: written
+                        .iter()
+                        .map(|p| (format!("fs.write:{p}"), "ok".to_string()))
+                        .collect(),
+                },
+                Err(e) => AgentQueryResult {
+                    route: QueryRoute::GreenfieldProject,
+                    success: false,
+                    response: format!("backend build failed: {e}"),
+                    workflow: "backend.build".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("backend-intake".to_string()),
+                    repo_result: None,
+                    tool_trace: Vec::new(),
+                },
+            };
+            self.record_result(query, &result);
+            return result;
+        }
+
         // COMPONENT INTAKE (component layer front door): a CONSTRUCTION request
         // naming known component(s) — "build a counter", "an accumulator", "give me
         // array statistics" — builds a verified crate directly (resolve ->

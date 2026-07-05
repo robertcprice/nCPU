@@ -1090,3 +1090,136 @@ damage_penalty(0)=-3 and damage_penalty(1)=-1 and damage_penalty(2)=1.";
         assert!(pairs.contains(&(0, 1)));
     }
 }
+
+/// A comprehended BACKEND ask from free prose (the hub's backend domain).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackendAsk {
+    pub store: StoreKind,
+    /// Named rule clauses with inline examples (empty = structural-only server:
+    /// health route + store, no synthesized handlers).
+    pub rule_names: Vec<String>,
+}
+
+/// Emergent comprehension of a backend request: the routing gate is a
+/// construction cue plus a token resolving through the REGISTRY HUB's backend
+/// domain to a server/route concept ("api" -> endpoint, "service"/"backend" ->
+/// server — synonym edges + morphology, not keywords). Store kind from the
+/// resolved store concept's surface (sqlite/file words pick the engine's
+/// concrete stores; default memory). Rule names from "a function NAME ..."
+/// clauses that carry inline examples.
+pub fn comprehend_backend_prose(text: &str) -> Option<BackendAsk> {
+    use crate::registry_hub::{backend_seeds, domain_registry, resolve_domain, Domain};
+    use linguigenesis_core::entity_resolution::EntityResolver;
+    let lower = text.to_lowercase();
+    let tokens: Vec<String> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect();
+    const CUES: [&str; 7] = ["make", "build", "create", "add", "new", "generate", "want"];
+    if !tokens.iter().any(|t| CUES.contains(&t.as_str())) {
+        return None;
+    }
+    let registry = domain_registry(Domain::Backend, &backend_seeds());
+    let resolver = EntityResolver::new(registry.clone());
+    let mut is_backend = false;
+    let mut store_word: Option<String> = None;
+    for t in &tokens {
+        if let Some((kind, _lemma, _score)) = resolve_domain(&resolver, &registry, t, "backend_kind") {
+            match kind.as_str() {
+                "server" | "route" => is_backend = true,
+                "store" => store_word = Some(t.clone()),
+                _ => {}
+            }
+        }
+    }
+    if !is_backend {
+        return None;
+    }
+    // Concrete store selection: the ENGINE'S OWN store names first
+    // (StoreKind::parse — platform vocabulary), else memory default when any
+    // store concept was mentioned, else memory.
+    let store = tokens
+        .iter()
+        .find_map(|t| StoreKind::parse(t))
+        .unwrap_or(StoreKind::Memory);
+    let _ = store_word;
+    // Rule clauses: "a function NAME ..." with inline examples.
+    let mut rule_names = Vec::new();
+    for clause in split_function_clauses(text) {
+        let cl = clause.to_lowercase();
+        if let Some(rest) = cl.split("function ").nth(1) {
+            let name: String = rest
+                .split_whitespace()
+                .find(|w| w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or("")
+                .to_string();
+            if !name.is_empty() && !examples_for_rule_in_text(text, &name).is_empty() {
+                rule_names.push(name);
+            }
+        }
+    }
+    Some(BackendAsk { store, rule_names })
+}
+
+/// Build a comprehended backend ask into `root/backend/main.rs`:
+///   * rule asks route through the FULL unified door (synthesis + auto HTTP
+///     checks + compile/HTTP repair);
+///   * structural-only asks render the server (health route + store) and pass
+///     the COMPILE-REPAIR gate.
+/// Fail-closed either way. Returns the written relative paths.
+pub fn build_backend_ask(root: &std::path::Path, english: &str, ask: &BackendAsk) -> Result<Vec<String>, String> {
+    let out = root.join("backend/main.rs");
+    if ask.rule_names.is_empty() {
+        let app = BackendApp::from_rules(english, vec![], ask.store);
+        let source = crate::backend_repair::build_with_compile_and_http_repair(&app, &[], ask.store, 2)?;
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&out, source).map_err(|e| e.to_string())?;
+    } else {
+        let names: Vec<&str> = ask.rule_names.iter().map(String::as_str).collect();
+        write_backend_unified(&out, english, &names, None, ask.store)?;
+    }
+    Ok(vec!["backend/main.rs".to_string()])
+}
+
+#[cfg(test)]
+mod backend_ask_tests {
+    use super::*;
+
+    #[test]
+    fn comprehends_structural_and_rule_asks() {
+        // Structural: hub resolution ("api" -> endpoint via synonym edge).
+        let a = comprehend_backend_prose("make me an api with a health check and a users database")
+            .expect("backend ask");
+        assert!(a.rule_names.is_empty());
+        assert_eq!(a.store, StoreKind::Memory);
+        // Synonym + morphology: "service" -> server; sqlite store word.
+        let b = comprehend_backend_prose("build a new service storing events in sqlite")
+            .expect("service ask");
+        assert_eq!(b.store, StoreKind::Sqlite);
+        // Rule clause with inline examples joins the unified door.
+        let c = comprehend_backend_prose(
+            "create a backend with a function double where double(2)=4 and double(5)=10",
+        )
+        .expect("rule ask");
+        assert_eq!(c.rule_names, vec!["double".to_string()]);
+        // Negatives: no backend concept, or no cue.
+        assert!(comprehend_backend_prose("add a function that triples a number").is_none());
+        assert!(comprehend_backend_prose("the api is slow").is_none());
+    }
+
+    #[test]
+    fn structural_backend_builds_and_compiles() {
+        let root = std::env::temp_dir().join(format!("nsynth_bask_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let english = "make me an api with a health check";
+        let ask = comprehend_backend_prose(english).expect("ask");
+        let written = build_backend_ask(&root, english, &ask).expect("build (compile-gated)");
+        assert_eq!(written, vec!["backend/main.rs".to_string()]);
+        let src = std::fs::read_to_string(root.join("backend/main.rs")).unwrap();
+        assert!(src.contains("/health"), "health route present");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
