@@ -867,10 +867,27 @@ impl LinguigenesisBridge {
         }
         let req = match self.nl_to_requirement(description) {
             Ok(req) => req,
-            Err(BridgeError::ClarificationNeeded { questions, .. }) => {
-                return Err(format_clarification_prompt(&questions));
+            Err(refusal) => {
+                // PHRASE fallback: per-token comprehension refused, but the prose
+                // may name a MULTI-WORD op by its own lemma words ("reverse the
+                // string" → reverse_string) or a derived phrase surface. Resolve
+                // at phrase level and synthesize that REGISTRY op through the
+                // trusted example path — strict-verified, fail-closed preserved
+                // (a phrase miss falls through to the original refusal).
+                if let Some((op, _score)) = self.resolve_phrase_op(description) {
+                    if let Some(r) = self.synthesize_op_by_name(&op) {
+                        if r.success {
+                            return Ok(r);
+                        }
+                    }
+                }
+                match refusal {
+                    BridgeError::ClarificationNeeded { questions, .. } => {
+                        return Err(format_clarification_prompt(&questions));
+                    }
+                    e => return Err(e.to_string()),
+                }
             }
-            Err(e) => return Err(e.to_string()),
         };
         let problem = self
             .problem_from_requirement(&req, fn_name)

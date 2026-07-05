@@ -36,3 +36,28 @@ fn phrase_resolution_declines_out_of_order_and_unrelated() {
         "unrelated prose resolves no phrase op"
     );
 }
+
+/// FRONT DOOR: prose the per-token comprehension REFUSED now synthesizes
+/// end-to-end via the phrase fallback — verified code out, not a clarification.
+#[test]
+fn phrase_fallback_synthesizes_when_comprehension_refuses() {
+    let b = LinguigenesisBridge::new();
+    let r = b
+        .synthesize_from_description_symbolic("please reverse the string for me", None)
+        .expect("phrase fallback synthesizes");
+    assert!(r.success, "err: {:?}", r.error);
+    assert!(
+        r.code.contains("fn reverse_string"),
+        "the phrase-resolved op, verified: {}",
+        r.code
+    );
+}
+
+/// FAIL-CLOSED preserved: gibberish still refuses (no phrase hit, no fabrication).
+#[test]
+fn phrase_fallback_does_not_weaken_fail_closed() {
+    let b = LinguigenesisBridge::new();
+    assert!(b
+        .synthesize_from_description_symbolic("frobnicate the zorp quickly", None)
+        .is_err());
+}

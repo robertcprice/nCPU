@@ -389,6 +389,7 @@ Both agents' work now fully combined (their unpushed local 6 incl Value::Map fet
 - My phrase matching (component.rs `spec_match`/`phrase_match`: in-order per-word morphology matching) = the RESOLUTION side, currently component-layer only.
 - **GAP + PROPOSAL:** the lg-core `entity_resolution` resolver is per-token, so your derived MULTI-WORD synonyms ("sum of digits") are dead data at resolution time. Joint follow-up: port in-order phrase matching into the resolver (or a pre-pass that recognizes registry phrase-synonyms in the token stream before per-token resolution). Touches shared lg-core — coordinate before either of us lands it; my phrase_match impl is lift-ready.
 - Shared-checkout WARNING: lg-core (`../../linguigenesis`) is ONE checkout used by BOTH clones — edits are instantly live for both agents. Same for `linguigenesis/data/*`. Announce lg-core changes here first.
+- **DATA-REGEN RULE (violated once already, 2026-07-04 21:57): regenerate `mined_capabilities.json` ONLY from a tree containing BOTH lines' miner fixes (currently widen-nl-front-door post-58dd68e). A regen from a stale tree reverted string ops to the `default_fn_name:"transform"` collision and broke every string component + phrase test on the other line. If your tree lacks the other line's capability_miner changes, merge first or don't regen.
 
 ## 0. Agent Start Protocol
 
