@@ -162,6 +162,9 @@ fn main() {{
     let args: Vec<String> = std::env::args().collect();
     let port = arg_value(&args, "--port").unwrap_or_else(|| "7800".to_string());
     let host = arg_value(&args, "--host").unwrap_or_else(|| "127.0.0.1".to_string());
+    // Optional static site root: when set, GET requests not matching an API
+    // route are served as files from this directory (single-artifact stack).
+    let static_dir = arg_value(&args, "--static");
     let bind = format!("{{}}:{{}}", host, port);
     let listener = TcpListener::bind(&bind).unwrap_or_else(|e| {{
         eprintln!("cannot bind {{bind}}: {{e}}");
@@ -176,8 +179,9 @@ fn main() {{
         match stream {{
             Ok(stream) => {{
                 let store = Arc::clone(&store);
+                let static_dir = static_dir.clone();
                 thread::spawn(move || {{
-                    let _ = handle_connection(stream, store);
+                    let _ = handle_connection(stream, store, static_dir);
                 }});
             }}
             Err(e) => eprintln!("accept error: {{e}}"),
@@ -189,7 +193,11 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {{
     args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
 }}
 
-fn handle_connection(mut stream: TcpStream, store: Arc<dyn EventStore>) -> io::Result<()> {{
+fn handle_connection(
+    mut stream: TcpStream,
+    store: Arc<dyn EventStore>,
+    static_dir: Option<String>,
+) -> io::Result<()> {{
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     if reader.read_line(&mut request_line)? == 0 {{
@@ -249,8 +257,52 @@ fn handle_connection(mut stream: TcpStream, store: Arc<dyn EventStore>) -> io::R
             }}
         }}
 {evaluate_arms}
+        // STATIC FALLBACK: unmatched GETs are served from the site root when
+        // one was provided (`--static <dir>`). This is what lets one binary
+        // serve the generated site AND its api. Fail-closed to 404.
+        ("GET", _) => match static_dir.as_deref().and_then(|d| load_static(d, &path)) {{
+            Some((bytes, ctype)) => write_bytes(&mut stream, 200, ctype, &bytes),
+            None => write_response(&mut stream, 404, "{{\"error\":\"unknown route\"}}"),
+        }},
         _ => write_response(&mut stream, 404, "{{\"error\":\"unknown route\"}}"),
     }}
+}}
+
+fn load_static(dir: &str, path: &str) -> Option<(Vec<u8>, &'static str)> {{
+    let rel = path.split('?').next().unwrap_or("/");
+    let rel = if rel == "/" {{ "index.html" }} else {{ rel.trim_start_matches('/') }};
+    // Path-traversal guard: no parent refs, no absolute escape.
+    if rel.is_empty() || rel.contains("..") {{
+        return None;
+    }}
+    let full = std::path::Path::new(dir).join(rel);
+    let bytes = std::fs::read(&full).ok()?;
+    let ctype = match full.extension().and_then(|e| e.to_str()) {{
+        Some("html") | Some("htm") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        _ => "application/octet-stream",
+    }};
+    Some((bytes, ctype))
+}}
+
+fn write_bytes(stream: &mut TcpStream, status: u16, ctype: &str, body: &[u8]) -> io::Result<()> {{
+    let status_text = match status {{
+        200 => "OK",
+        404 => "Not Found",
+        _ => "Server Error",
+    }};
+    let header = format!(
+        "HTTP/1.1 {{}} {{}}\r\nContent-Type: {{}}\r\nContent-Length: {{}}\r\nConnection: close\r\n\r\n",
+        status, status_text, ctype, body.len()
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.write_all(body)?;
+    stream.flush()
 }}
 
 fn extract_i64_field(body: &str, field: &str) -> Option<i64> {{

@@ -161,6 +161,70 @@ fn probe_submission_once(bin: &Path) -> Result<(), String> {
     result
 }
 
+/// SINGLE-ARTIFACT STACK smoke: boot the generated backend with `--static
+/// <dir>`, GET `/` and require 200 text/html containing `expect` (a page
+/// marker, e.g. the site title). Proves one binary serves the generated site
+/// AND its api. Also confirms the api still answers (`/health` 200).
+pub fn verify_static_serving(
+    bin: &Path,
+    static_dir: &Path,
+    expect: &str,
+    max_attempts: usize,
+) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..max_attempts {
+        match probe_static_once(bin, static_dir, expect) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_err = err;
+                if attempt + 1 < max_attempts {
+                    thread::sleep(Duration::from_millis(50 * (attempt as u64 + 1)));
+                }
+            }
+        }
+    }
+    Err(format!(
+        "generated backend static serving failed after {max_attempts} attempts: {last_err}"
+    ))
+}
+
+fn probe_static_once(bin: &Path, static_dir: &Path, expect: &str) -> Result<(), String> {
+    let mut child = Command::new(bin)
+        .arg("--port")
+        .arg("0")
+        .arg("--static")
+        .arg(static_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn generated backend: {e}"))?;
+
+    let addr = read_ready_addr(&mut child)?;
+    thread::sleep(Duration::from_millis(25));
+
+    let result = (|| {
+        let page = http_get(&addr, "/")?;
+        if !page.contains("200 OK") {
+            return Err(format!("GET / not 200: {page}"));
+        }
+        if !page.contains("text/html") {
+            return Err(format!("GET / missing text/html content-type: {page}"));
+        }
+        if !page.contains(expect) {
+            return Err(format!("GET / missing expected marker {expect:?}: {page}"));
+        }
+        // The api must still answer alongside the served site.
+        let health = http_get(&addr, "/health")?;
+        if !health.contains("200 OK") || !health.contains("\"ok\":true") {
+            return Err(format!("GET /health unexpected while serving static: {health}"));
+        }
+        Ok(())
+    })();
+
+    stop_child(&mut child);
+    result
+}
+
 fn read_ready_addr(child: &mut Child) -> Result<String, String> {
     let stdout = child
         .stdout

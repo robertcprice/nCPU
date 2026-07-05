@@ -186,3 +186,28 @@ fn handle_query_wires_contact_form_to_the_api() {
     assert!(!html2.contains("action=\"/events\""), "unrequested wiring must not appear");
     let _ = fs::remove_dir_all(&root);
 }
+
+/// SINGLE ARTIFACT: the provisioned backend serves the generated SITE and its
+/// api from one binary. One prompt yields both; booting the backend with
+/// `--static <site>` serves the page over HTTP (text/html) while /health still
+/// answers. This is the full stack from one sentence, end-to-end proven.
+#[test]
+fn provisioned_backend_serves_the_generated_site() {
+    let root = fresh_root("serve");
+    let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
+    let r = s.handle_query(
+        "add a new page called index to my website with a hero and a contact form that posts to my api",
+    );
+    assert!(r.success, "response: {}", r.response);
+    // Both artifacts exist from the one ask.
+    assert!(root.join("site/index.html").exists(), "site page");
+    let backend = fs::read_to_string(root.join("backend/main.rs")).expect("provisioned backend");
+    // Compile the provisioned backend, boot it pointed at the generated site,
+    // and require it to serve the page over HTTP while the api stays live.
+    let (src, bin) =
+        mog_synth::backend_http::compile_to_temp_bin(&backend, false).expect("compile backend");
+    let served = mog_synth::backend_http::verify_static_serving(&bin, &root.join("site"), "<title", 2);
+    mog_synth::backend_http::cleanup_temp_artifacts(&src, &bin);
+    served.expect("backend serves the generated site over HTTP with the api still answering");
+    let _ = fs::remove_dir_all(&root);
+}
