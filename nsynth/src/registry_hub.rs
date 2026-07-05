@@ -32,6 +32,9 @@ impl Domain {
             Domain::Backend => "backend_kind",
         }
     }
+    pub fn env_var_name(&self) -> &'static str {
+        self.env_var()
+    }
     fn env_var(&self) -> &'static str {
         match self {
             Domain::Web => "NSYNTH_WEB_REGISTRY",

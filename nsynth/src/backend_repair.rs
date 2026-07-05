@@ -19,7 +19,12 @@ pub fn build_with_compile_and_http_repair(
     };
 
     if checks.is_empty() {
-        return compile_with_repair(&app.render_rust(), store, 3);
+        // Even a rule-less server must SERVE, not just compile: boot the binary
+        // and probe the built-in /health (verify_backend_http always checks it).
+        // Closes the gap where structural backends were compile-gated only.
+        let source = compile_with_repair(&app.render_rust(), store, 3)?;
+        try_http_verify_source(&source, &[], store)?;
+        return Ok(source);
     }
 
     let mut source = compile_with_repair(&app.render_rust(), store, 3)?;

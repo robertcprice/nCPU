@@ -151,3 +151,27 @@ fn handle_query_builds_backend_from_prose() {
     assert_eq!(r2.workflow, "component.build", "{}", r2.response);
     let _ = fs::remove_dir_all(&root);
 }
+
+/// SITE + BACKEND MEET: "a contact form that posts to my api" wires the form's
+/// action to the generated server's route — comprehended through the hub's
+/// backend domain, emitted, and fidelity-verified.
+#[test]
+fn handle_query_wires_contact_form_to_the_api() {
+    let root = fresh_root("meet");
+    let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
+    let r = s.handle_query(
+        "add a new page called reach to my website with a contact form that posts to my api",
+    );
+    assert!(r.success, "response: {}", r.response);
+    let html = fs::read_to_string(root.join("site/reach.html")).expect("page");
+    assert!(
+        html.contains("action=\"/rules/contact/evaluate\"") && html.contains("method=\"post\""),
+        "form wired to the api: {html}"
+    );
+    // Without the api phrase, the form stays unwired.
+    let r2 = s.handle_query("add a new page called plain to my website with a contact form");
+    assert!(r2.success, "{}", r2.response);
+    let html2 = fs::read_to_string(root.join("site/plain.html")).expect("page2");
+    assert!(!html2.contains("action=\"/rules/"), "unrequested wiring must not appear");
+    let _ = fs::remove_dir_all(&root);
+}

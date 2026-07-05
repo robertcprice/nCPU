@@ -140,6 +140,9 @@ pub struct SiteRequest {
     pub theme: String,            // theme registry name
     pub colors: Vec<String>,      // resolved CSS values, request order
     pub sections: Vec<String>,    // resolved section names, request order
+    /// The ask wires the contact form to the backend api ("posts to my api"):
+    /// detected through the HUB'S BACKEND DOMAIN, not keywords.
+    pub api_form: bool,
 }
 
 /// The WEB REGISTRY: sections and themes as ENTITIES with synonym edges and
@@ -270,6 +273,20 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
         }
     }
     let theme = theme.unwrap_or_else(|| "modern".to_string());
+    // SITE+BACKEND: any token resolving through the hub's BACKEND domain to a
+    // route/server concept ("posts to my api", "sends to the endpoint") wires
+    // the contact form to the api.
+    let api_form = {
+        use crate::registry_hub::{backend_seeds, domain_registry, resolve_domain, Domain};
+        let breg = domain_registry(Domain::Backend, &backend_seeds());
+        let bres = EntityResolver::new(breg.clone());
+        sections.contains(&"contact".to_string())
+            && tokens.iter().any(|t| {
+                resolve_domain(&bres, &breg, t, "backend_kind")
+                    .map(|(kind, _, _)| kind == "route" || kind == "server")
+                    .unwrap_or(false)
+            })
+    };
     // Colors: the platform's own vocabulary (CSS named colors + hex).
     let colors: Vec<String> = tokens.iter().filter_map(|t| css_color_value(t)).collect();
     if !sections.contains(&"nav".to_string()) {
@@ -278,7 +295,7 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
     if !sections.contains(&"footer".to_string()) {
         sections.push("footer".to_string());
     }
-    Some(SiteRequest { page, title, theme, colors, sections })
+    Some(SiteRequest { page, title, theme, colors, sections, api_form })
 }
 
 /// Emit the page HTML + the tokens->CSS stylesheet for a request.
@@ -319,15 +336,24 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let html = format!(
+    let mut html = format!(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<link rel=\"stylesheet\" href=\"styles.css\">\n</head>\n<body>\n{}\n</body>\n</html>\n",
         req.title, body
     );
+    if req.api_form {
+        html = wire_form_action(&html, "/rules/contact/evaluate");
+    }
     let css = format!(
         ":root {{\n  --primary: {primary};\n  --neutral: {neutral};\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n}}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: {}; color: var(--neutral); }}\nh1, h2, h3 {{ font-weight: {}; }}\n.site-nav {{ display: flex; justify-content: space-between; align-items: center; padding: var(--spacing); background: var(--primary); color: white; }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1rem; margin: 0; }}\n.site-nav a {{ color: white; text-decoration: none; }}\n.hero {{ padding: calc(var(--spacing) * 2) var(--spacing); text-align: center; }}\n.cta {{ display: inline-block; padding: 0.75rem 1.5rem; background: var(--primary); color: white; border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--spacing); padding: var(--spacing); }}\n.card {{ border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--spacing); }}\n.ph {{ height: 120px; background: var(--primary); opacity: 0.25; border-radius: var(--radius); }}\n.contact form {{ display: grid; gap: 1rem; padding: var(--spacing); max-width: 480px; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.5rem; border-radius: var(--radius); border: 1px solid var(--neutral); }}\nbutton {{ padding: 0.75rem 1.5rem; background: var(--primary); color: white; border: 0; border-radius: var(--radius); }}\n.site-footer {{ padding: var(--spacing); text-align: center; opacity: 0.8; }}\n",
         theme.radius, theme.shadow, theme.spacing, theme.font_stack, theme.heading_weight
     );
     (html, css)
+}
+
+/// Wire the contact form to the backend api route (site+backend integration):
+/// the form gains action + method so submissions POST to the generated server.
+pub fn wire_form_action(html: &str, path: &str) -> String {
+    html.replacen("<form>", &format!("<form action=\"{path}\" method=\"post\">"), 1)
 }
 
 /// REQUEST-DERIVED verification: well-formed HTML + every requested section's
@@ -358,6 +384,9 @@ pub fn verify_page(req: &SiteRequest, html: &str, css: &str) -> Vec<String> {
         if !css.contains(c.as_str()) {
             fails.push(format!("requested color '{c}' not applied in css"));
         }
+    }
+    if req.api_form && !html.contains("action=\"/rules/") {
+        fails.push("requested api-wired form has no action".into());
     }
     fails
 }
@@ -720,6 +749,7 @@ pub fn scaffold_from_structure(root: &Path, spec: &str) -> Result<Vec<String>, S
                     theme: "modern".into(),
                     colors: vec![],
                     sections: vec!["nav".into(), "hero".into(), "footer".into()],
+                    api_form: false,
                 };
                 let (html, css) = emit_page(&req);
                 let fails = verify_page(&req, &html, &css);
@@ -864,5 +894,80 @@ mod real_nl_tests {
         assert!(comprehend_site_request("paginate the results array").is_none());
         assert!(comprehend_site_request("add a function that triples a number").is_none());
         assert!(comprehend_site_request("frobnicate the zorp").is_none());
+    }
+}
+
+/// MINE the web vocabulary: reflect the engine's OWN section/theme surface into
+/// the hub's web data registry (the capability_miner discipline applied to the
+/// web domain). Built-ins become versioned data concepts; TAUGHT concepts are
+/// PRESERVED (merge-by-lemma, taught entries never dropped) — the two growth
+/// seams composing. Idempotent. Returns how many concepts the file now holds.
+pub fn mine_web_registry() -> Result<usize, String> {
+    use crate::registry_hub::{load_domain_concepts, teach_concept, Concept, Domain};
+    let mut mined: Vec<Concept> = Vec::new();
+    for s in section_registry() {
+        mined.push(Concept {
+            lemma: s.name.to_string(),
+            kind: "section".into(),
+            definition: format!("built-in section asserting '{}'", s.assert_marker),
+            synonyms: vec![],
+        });
+    }
+    for t in theme_registry() {
+        mined.push(Concept {
+            lemma: t.name.to_string(),
+            kind: "theme".into(),
+            definition: format!("built-in theme (font {}, radius {})", t.font_stack, t.radius),
+            synonyms: vec![],
+        });
+    }
+    // Taught concepts win over mined reflections on lemma collision (a taught
+    // definition/synonyms are richer than the reflected stub).
+    let taught = load_domain_concepts(Domain::Web);
+    for c in mined {
+        if taught.iter().any(|t| t.lemma == c.lemma) {
+            continue;
+        }
+        teach_concept(Domain::Web, c)?;
+    }
+    Ok(load_domain_concepts(Domain::Web).len())
+}
+
+#[cfg(test)]
+mod mine_tests {
+    use super::*;
+    use crate::registry_hub::{load_domain_concepts, teach_concept, Concept, Domain};
+
+    #[test]
+    fn mining_reflects_builtins_and_preserves_taught() {
+        let p = std::env::temp_dir().join(format!("nsynth_webmine_{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        std::env::set_var(Domain::Web.env_var_name(), &p);
+        // A taught concept exists first...
+        teach_concept(
+            Domain::Web,
+            Concept {
+                lemma: "testimonials".into(),
+                kind: "section".into(),
+                definition: "customer quotes in a row".into(),
+                synonyms: vec!["reviews".into()],
+            },
+        )
+        .unwrap();
+        let n = mine_web_registry().expect("mine");
+        assert!(n >= 10, "sections + themes + taught: {n}");
+        let all = load_domain_concepts(Domain::Web);
+        // Built-ins reflected...
+        assert!(all.iter().any(|c| c.lemma == "gallery" && c.kind == "section"));
+        assert!(all.iter().any(|c| c.lemma == "modern" && c.kind == "theme"));
+        // ...and the taught concept SURVIVES with its richer definition.
+        let t = all.iter().find(|c| c.lemma == "testimonials").unwrap();
+        assert_eq!(t.definition, "customer quotes in a row");
+        assert_eq!(t.synonyms, vec!["reviews".to_string()]);
+        // Idempotent.
+        let n2 = mine_web_registry().expect("re-mine");
+        assert_eq!(n, n2);
+        std::env::remove_var(Domain::Web.env_var_name());
+        let _ = std::fs::remove_file(&p);
     }
 }
