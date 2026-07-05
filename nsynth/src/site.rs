@@ -90,6 +90,128 @@ fn css_color_value(word: &str) -> Option<String> {
     }
 }
 
+/// RGB for the CSS named-color vocabulary (the spec's own defined values —
+/// reference data, exactly like CSS_COLORS is the spec's own names). Used only
+/// for contrast math; emission keeps the NAME so browsers resolve it natively.
+fn named_rgb(word: &str) -> Option<(u8, u8, u8)> {
+    let v = match word {
+        "black" => (0, 0, 0),
+        "silver" => (192, 192, 192),
+        "gray" | "grey" => (128, 128, 128),
+        "white" => (255, 255, 255),
+        "maroon" => (128, 0, 0),
+        "red" => (255, 0, 0),
+        "purple" => (128, 0, 128),
+        "fuchsia" | "magenta" => (255, 0, 255),
+        "green" => (0, 128, 0),
+        "lime" => (0, 255, 0),
+        "olive" => (128, 128, 0),
+        "yellow" => (255, 255, 0),
+        "navy" => (0, 0, 128),
+        "blue" => (0, 0, 255),
+        "teal" => (0, 128, 128),
+        "aqua" | "cyan" => (0, 255, 255),
+        "orange" => (255, 165, 0),
+        "gold" => (255, 215, 0),
+        "coral" => (255, 127, 80),
+        "salmon" => (250, 128, 114),
+        "crimson" => (220, 20, 60),
+        "indigo" => (75, 0, 130),
+        "violet" => (238, 130, 238),
+        "plum" => (221, 160, 221),
+        "orchid" => (218, 112, 214),
+        "khaki" => (240, 230, 140),
+        "ivory" => (255, 255, 240),
+        "beige" => (245, 245, 220),
+        "mint" => (152, 255, 152),
+        "azure" => (240, 255, 255),
+        "lavender" => (230, 230, 250),
+        "turquoise" => (64, 224, 208),
+        "skyblue" => (135, 206, 235),
+        "steelblue" => (70, 130, 180),
+        "slateblue" => (106, 90, 205),
+        "royalblue" => (65, 105, 225),
+        "midnightblue" => (25, 25, 112),
+        "seagreen" => (46, 139, 87),
+        "forestgreen" => (34, 139, 34),
+        "darkgreen" => (0, 100, 0),
+        "olivedrab" => (107, 142, 35),
+        "chocolate" => (210, 105, 30),
+        "sienna" => (160, 82, 45),
+        "brown" => (165, 42, 42),
+        "tan" => (210, 180, 140),
+        "charcoal" => (54, 69, 79),
+        "cream" => (255, 253, 208),
+        "tomato" => (255, 99, 71),
+        "firebrick" => (178, 34, 34),
+        "darkred" => (139, 0, 0),
+        "hotpink" => (255, 105, 180),
+        "deeppink" => (255, 20, 147),
+        "peachpuff" => (255, 218, 185),
+        "goldenrod" => (218, 165, 32),
+        "darkslategray" => (47, 79, 79),
+        "dimgray" => (105, 105, 105),
+        "lightgray" => (211, 211, 211),
+        "gainsboro" => (220, 220, 220),
+        "whitesmoke" => (245, 245, 245),
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// Resolve any accepted color token (hex literal or CSS/mapped name) to RGB.
+fn color_rgb(word: &str) -> Option<(u8, u8, u8)> {
+    if let Some(hex) = word.strip_prefix('#') {
+        let full = match hex.len() {
+            3 => hex.chars().flat_map(|c| [c, c]).collect::<String>(),
+            6 => hex.to_string(),
+            _ => return None,
+        };
+        let r = u8::from_str_radix(&full[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&full[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&full[4..6], 16).ok()?;
+        return Some((r, g, b));
+    }
+    named_rgb(word)
+}
+
+/// WCAG relative luminance of an sRGB color.
+fn relative_luminance((r, g, b): (u8, u8, u8)) -> f64 {
+    fn chan(c: u8) -> f64 {
+        let s = c as f64 / 255.0;
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b)
+}
+
+/// WCAG contrast ratio in [1.0, 21.0].
+pub fn contrast_ratio(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
+    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// The legible text color (near-black or white) for a given background — the
+/// one with the higher contrast ratio. Auto-chosen so surfaces are always
+/// readable regardless of the requested palette.
+fn on_color(bg: (u8, u8, u8)) -> (&'static str, (u8, u8, u8)) {
+    let white = (255, 255, 255);
+    let ink = (17, 17, 17);
+    if contrast_ratio(bg, ink) >= contrast_ratio(bg, white) {
+        ("#111111", ink)
+    } else {
+        ("#ffffff", white)
+    }
+}
+
+/// Minimum contrast for text on colored UI surfaces (WCAG AA for large/bold
+/// text and UI components is 3.0). Body text on white targets 4.5.
+pub const MIN_UI_CONTRAST: f64 = 3.0;
+
 /// A page section: registry unit with emission + its structural assertion.
 #[derive(Clone)]
 pub struct Section {
@@ -343,8 +465,16 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
     if req.api_form {
         html = wire_form_action(&html, "/events");
     }
+    // Auto-choose legible text for the primary-colored surfaces so they are
+    // readable for ANY requested palette (contrast-verified below).
+    let on_primary = req
+        .colors
+        .first()
+        .and_then(|c| color_rgb(c))
+        .map(|rgb| on_color(rgb).0)
+        .unwrap_or("#ffffff");
     let css = format!(
-        ":root {{\n  --primary: {primary};\n  --neutral: {neutral};\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n}}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: {}; color: var(--neutral); }}\nh1, h2, h3 {{ font-weight: {}; }}\n.site-nav {{ display: flex; justify-content: space-between; align-items: center; padding: var(--spacing); background: var(--primary); color: white; }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1rem; margin: 0; }}\n.site-nav a {{ color: white; text-decoration: none; }}\n.hero {{ padding: calc(var(--spacing) * 2) var(--spacing); text-align: center; }}\n.cta {{ display: inline-block; padding: 0.75rem 1.5rem; background: var(--primary); color: white; border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--spacing); padding: var(--spacing); }}\n.card {{ border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--spacing); }}\n.ph {{ height: 120px; background: var(--primary); opacity: 0.25; border-radius: var(--radius); }}\n.contact form {{ display: grid; gap: 1rem; padding: var(--spacing); max-width: 480px; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.5rem; border-radius: var(--radius); border: 1px solid var(--neutral); }}\nbutton {{ padding: 0.75rem 1.5rem; background: var(--primary); color: white; border: 0; border-radius: var(--radius); }}\n.site-footer {{ padding: var(--spacing); text-align: center; opacity: 0.8; }}\n",
+        ":root {{\n  --primary: {primary};\n  --neutral: {neutral};\n  --on-primary: {on_primary};\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n}}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: {}; color: var(--neutral); }}\nh1, h2, h3 {{ font-weight: {}; }}\n.site-nav {{ display: flex; justify-content: space-between; align-items: center; padding: var(--spacing); background: var(--primary); color: var(--on-primary); }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1rem; margin: 0; }}\n.site-nav a {{ color: var(--on-primary); text-decoration: none; }}\n.hero {{ padding: calc(var(--spacing) * 2) var(--spacing); text-align: center; }}\n.cta {{ display: inline-block; padding: 0.75rem 1.5rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--spacing); padding: var(--spacing); }}\n.card {{ border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--spacing); }}\n.ph {{ height: 120px; background: var(--primary); opacity: 0.25; border-radius: var(--radius); }}\n.contact form {{ display: grid; gap: 1rem; padding: var(--spacing); max-width: 480px; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.5rem; border-radius: var(--radius); border: 1px solid var(--neutral); }}\nbutton {{ padding: 0.75rem 1.5rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); }}\n.site-footer {{ padding: var(--spacing); text-align: center; opacity: 0.8; }}\n",
         theme.radius, theme.shadow, theme.spacing, theme.font_stack, theme.heading_weight
     );
     (html, css)
@@ -387,6 +517,19 @@ pub fn verify_page(req: &SiteRequest, html: &str, css: &str) -> Vec<String> {
     }
     if req.api_form && !html.contains("action=\"/events\"") {
         fails.push("requested api-wired form has no action".into());
+    }
+    // CONTRAST: the one honestly-verifiable aesthetic property. Text on the
+    // primary-colored surfaces (nav, buttons, CTA) must meet the WCAG UI floor.
+    // The emitter auto-picks the text color, so this holds for any palette; a
+    // failure here means the emitter chose wrong, not that the request is bad.
+    if let Some(primary) = req.colors.first().and_then(|c| color_rgb(c)) {
+        let (_, on) = on_color(primary);
+        let ratio = contrast_ratio(primary, on);
+        if ratio < MIN_UI_CONTRAST {
+            fails.push(format!(
+                "text on primary color has contrast {ratio:.2} < {MIN_UI_CONTRAST:.1} (illegible)"
+            ));
+        }
     }
     fails
 }
@@ -930,6 +1073,43 @@ mod real_nl_tests {
 
         std::env::remove_var(Domain::Backend.env_var_name());
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// CONTRAST is real and auto-corrected: the emitter picks legible text for
+    /// the primary surfaces so verify passes for ANY palette — including a
+    /// pathological light primary (yellow) where fixed white text would be
+    /// illegible. The one honestly-verifiable aesthetic property.
+    #[test]
+    fn primary_surface_text_is_always_legible() {
+        // WCAG anchors: black-on-white is the maximum 21:1.
+        assert!((contrast_ratio((0, 0, 0), (255, 255, 255)) - 21.0).abs() < 0.01);
+
+        // Dark primary -> white text; light primary -> near-black text.
+        assert_eq!(on_color((0, 0, 128)).0, "#ffffff", "navy takes white text");
+        assert_eq!(on_color((255, 255, 0)).0, "#111111", "yellow takes ink text");
+
+        // A pathological ask: yellow primary. Fixed white text would be ~1.07:1
+        // (illegible); the emitter must pick ink and pass the floor.
+        let req = SiteRequest {
+            page: "p".into(),
+            title: "P".into(),
+            theme: "modern".into(),
+            colors: vec!["yellow".into()],
+            sections: vec!["nav".into(), "hero".into(), "footer".into()],
+            api_form: false,
+        };
+        let (html, css) = emit_page(&req);
+        assert!(css.contains("--on-primary: #111111"), "yellow -> ink text chosen: {css}");
+        let fails = verify_page(&req, &html, &css);
+        assert!(
+            !fails.iter().any(|f| f.contains("contrast")),
+            "auto-chosen text must pass the contrast floor: {fails:?}"
+        );
+
+        // A normal dark palette keeps white text and also passes.
+        let req2 = SiteRequest { colors: vec!["navy".into()], ..req.clone() };
+        let (_h2, css2) = emit_page(&req2);
+        assert!(css2.contains("--on-primary: #ffffff"), "navy -> white text: {css2}");
     }
 
     /// Precision: web-ish words in OP requests still never comprehend as sites,
