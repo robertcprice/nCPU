@@ -433,6 +433,17 @@ Timeout lever SPENT: 5s→10s converted only 3 kills (582→585). The wall is re
 
 (Agent-lane side note: phrase resolution now wired into the synthesis front door — comprehension-refused prose falls back to phrase-level op resolution; and the repair agent does coordinated multi-file additions with real file creation in EditTransaction.)
 
+### 0.06A SITE/ARTIFACT DOMAIN PLAN (2026-07-05; agent lane) — "add a page to my website, modern theme, these sections, this palette"
+
+Target asks: (1) "add this new page to my website, modern theme with X and Y, this color scheme"; (2) "make a new project organized like this structure file, build a ...". Recon: http/ has 37k lines (serving, DOCTYPE pages, themes, tailwind, PWA), verify_backend_http smoke exists, build_backend_from_english exists. MISSING = the NL-addressable SITE domain. All symbolic; verification = REQUEST-DERIVED structural fidelity (aesthetics unverifiable; fidelity is): well-formed HTML, requested sections present (selector asserts), palette/theme tokens applied in CSS, link integrity, later HTTP-smoke.
+
+Phases (each committed + tested):
+A. `site.rs`: design-token THEMES as data (modern/minimal/classic seeds), PALETTES from the platform's own color vocabulary (CSS named colors + hex — a standard, not a hand list), SECTION registry (nav/hero/features/gallery/contact/footer/about — emission + per-section assertion), PageSpec -> semantic HTML + tokens->CSS. Ladder: tag-balance well-formedness + spec-derived asserts + link integrity.
+B. NL: prose -> SiteRequest via emergent resolution (section nouns by morphology, themes vs token registry, colors vs CSS vocabulary). handle_query intake: construction cue + web noun (page/site/website), negative-gated (paginate/count-style hijacks tested).
+C. ADD-TO-EXISTING: detect site conventions (pages + shared nav), new page + nav wiring in EVERY page as one atomic multi-file patch (EditTransaction), link-integrity verified.
+D. STRUCTURE-FILE scaffolding: indented/markdown tree spec -> dirs/pages/modules (component registry resolves node names); the SPEC IS THE ORACLE (walk-assert generated tree matches).
+E. Accept tests = the user's two literal asks.
+
 ## 0. Agent Start Protocol
 
 Follow these steps in order at the beginning of every coding-agent session:
