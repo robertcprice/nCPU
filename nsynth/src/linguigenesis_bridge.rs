@@ -1627,7 +1627,8 @@ impl LinguigenesisBridge {
         let problem = self
             .problem_from_requirement(req, fn_name)
             .map_err(|e| e.to_string())?;
-        Ok(solve_verifying_holdouts(&problem))
+        let result = solve_verifying_holdouts(&problem);
+        Ok(consensus_trust_gate(&problem, result))
     }
 
     /// Structural multi-component signal: does this request DESCRIBE >=2 component
@@ -3421,6 +3422,51 @@ const ARRAY_CONTENT_FLOOR: f32 = 0.9;
 /// is wrongly accepted (e.g. "trim" synthesized as remove-ALL-spaces, which fits
 /// the leading/trailing-space seed rows but fails "a b c" -> "a b c"). This is the
 /// SOUNDNESS gate for the single-op NL door — mirrors the LLM-examples path.
+/// TRUST GATE for examples-only NL synthesis: a verified solve over an
+/// examples-only spec (no reference / no holdouts — the pure agentic-NL regime) is
+/// only as correct as the examples DETERMINE the function. Two doctests do not pin
+/// a two-output function, so an overfit passes verification honestly and the agent
+/// would report a CONFIDENTLY-WRONG solve. Corroborate with an INDEPENDENT
+/// candidate (differential consensus) and downgrade the confident success to an
+/// honest refusal when the spec is PROVABLY underdetermined:
+///   * `Ambiguous {witness}` — an independent candidate passes the SAME examples
+///     yet DIFFERS on a probe. That witness PROVES the examples don't determine
+///     the function, so the "solve" cannot be claimed. DOWNGRADE.
+///   * `NoConsensus` — no independent candidate was produced (the corroborator
+///     could not reach it). This is NOT proof of underdetermination — refusing
+///     here would wrongly reject correct-but-hard solves (e.g. verified
+///     compositions the enumerative corroborator can't reproduce). KEEP.
+///   * `Verified` — an independent candidate AGREES. KEEP (confident).
+/// So the gate is SOUND: it only ever downgrades on a proof (a divergence
+/// witness), never a correct solve. The verifier's zero-false-positive guarantee
+/// is unchanged; this stops the agent CLAIMING a solve a witness shows the
+/// examples don't determine. Reference/holdout-backed specs skip the gate (their
+/// strict-verify holdouts already give a real differential correctness check).
+/// FOLLOW-UP: catching the `NoConsensus` tail (thin specs the corroborator can't
+/// solve, e.g. sum_product) needs a STRONGER independent corroborator so those
+/// become `Ambiguous` — see agentic-nl-diagnosis.
+fn consensus_trust_gate(
+    problem: &crate::benchmark::Problem,
+    mut result: crate::solver::SolveResult,
+) -> crate::solver::SolveResult {
+    use crate::agent::consensus::{differential_consensus, is_examples_only, ConsensusVerdict};
+    if !result.success || !is_examples_only(problem) {
+        return result;
+    }
+    if let ConsensusVerdict::Ambiguous { .. } =
+        differential_consensus(problem, &result.code)
+    {
+        result.success = false;
+        result.error = Some(
+            "candidate reproduces the given examples, but an independent solution \
+             that also fits them DISAGREES on another input — the examples do not \
+             determine the function; add an example or confirm the intended output"
+                .to_string(),
+        );
+    }
+    result
+}
+
 fn solve_verifying_holdouts(problem: &crate::benchmark::Problem) -> crate::solver::SolveResult {
     let res = crate::solver::solve_problem(problem);
     if res.success && !problem.holdouts.is_empty() {
