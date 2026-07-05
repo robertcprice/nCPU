@@ -296,7 +296,15 @@ impl EGraph {
                 let cid = self.find(id);
                 for n in self.class_nodes(cid) {
                     if let Some((cost, expr)) = self.node_cost(&n, &best) {
-                        let better = best.get(&cid).map(|(c, _)| cost < *c).unwrap_or(true);
+                        // Deterministic + stable: strictly lower cost, or equal
+                        // cost with a canonically-smaller form (Debug key), so the
+                        // SAME class always extracts the SAME Expr across builds.
+                        let better = match best.get(&cid) {
+                            None => true,
+                            Some((c, e)) => {
+                                cost < *c || (cost == *c && format!("{expr:?}") < format!("{e:?}"))
+                            }
+                        };
                         if better {
                             best.insert(cid, (cost, expr));
                             changed = true;

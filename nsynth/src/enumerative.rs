@@ -984,8 +984,11 @@ fn canonicalize(e: &Expr) -> (Expr, usize) {
     // THEN dense-var renaming. This merges a whole EQUIVALENCE CLASS — including
     // factored forms (`a*b+a*c` and `a*(b+c)`) the greedy normalizer misses —
     // into ONE library op, so the flywheel compresses look-alikes maximally.
-    // Sound (only true equalities) and node-capped for termination.
-    let e = &crate::egraph::simplify(e);
+    // Sound (only true equalities) and node-capped for termination. The greedy
+    // algebraic_normalize is applied AFTER to impose a stable canonical operand
+    // ORDER on the e-graph's minimal form (extraction ties are broken
+    // deterministically but the greedy sort is the canonical representative).
+    let e = &algebraic_normalize(&crate::egraph::simplify(e));
     let mut map: BTreeMap<usize, usize> = BTreeMap::new();
     // First pass: assign dense slots in first-encounter (left-to-right) order.
     fn assign(e: &Expr, map: &mut BTreeMap<usize, usize>, next: &mut usize) {
