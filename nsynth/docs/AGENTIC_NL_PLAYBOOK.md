@@ -24,10 +24,28 @@ RLVR reward** than raw unit tests, and the inference-time guarantee. A small mod
 - `nsynth_tool` bin = the RL ENVIRONMENT: stdin JSON proposal → stdout
   `{verdict, reward, code}` (clean JSON; solver logs on stderr). One process/rollout.
 
-**Training pipeline (offline, on the Mac):**
-1. SFT warm-start SmolLM3 on `NSYNTH_HARVEST` verified traces (mlx_lm.lora format).
-2. RLVR (GRPO/PPO), reward = `nsynth_tool` — multi-turn propose→verify→revise.
-3. Inference: best-of-N with `run_tool` verify-reject → verified, else tentative/refuse.
+**Scope + ceiling (honest).** The pipeline is a VERIFIED NL *function synthesizer*:
+the model comprehends prose → proposes a SPEC (language-agnostic I/O examples);
+nsynth SYNTHESIZES + verifies the program. So the model writes specs, not code
+(nsynth's verifier runs its own DSL, so handing it Python buys nothing). The
+verified-output ceiling is nsynth's **synthesis reach = the PBE rate (38% HumanEval
+/ 60% MBPP)** — the rate reachable with a *perfect* comprehender. Two ORTHOGONAL
+levers, and the second keeps the no-model thesis intact:
+  * **LLM comprehension** — closes the NL→PBE gap (16% → 38% HumanEval).
+  * **Engine synthesis** (no model) — raises the 38% ceiling.
+
+**Robust sequencing — gate each phase on measured gain; do NOT jump to RLVR:**
+0. **Infra (LANDED):** `src/rlvr.rs` (tool schema + reward) + `src/bin/nsynth_tool.rs`
+   (RL env) + `scripts/rlvr_data_gen.py` (RSFT traces, nsynth is the teacher) +
+   `scripts/bon_eval.py` (best-of-N harness).
+1. **Inference-only best-of-N** with an off-the-shelf model (works today, no
+   training) — `bon_eval.py` against `mlx_lm.server`. Measures how far the model
+   closes the gap. Decide from the number whether training is worth it.
+2. **SFT** on `rlvr_data_gen.py` traces (cheap) — only if Phase 1 leaves headroom.
+3. **RLVR** (GRPO/PPO, reward = `nsynth_tool`, multi-turn propose→verify→revise) —
+   only if SFT plateaus. Most powerful, most complex; last.
+Inference always: best-of-N with `run_tool` verify-reject → verified, else
+tentative/refuse (guarantee + trust preserved).
 
 The three layers below are the components this architecture composes.
 

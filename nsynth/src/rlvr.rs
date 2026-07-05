@@ -81,16 +81,13 @@ impl ToolResponse {
 /// Route a model proposal through nsynth's synthesis + verification + trust gate.
 pub fn run_tool(req: &ToolRequest) -> ToolResponse {
     match req {
-        ToolRequest::Examples {
-            signature,
-            examples,
-        } => {
+        ToolRequest::Examples { examples, .. } => {
             if examples.is_empty() {
                 return ToolResponse::Refused {
                     reason: "no examples proposed".into(),
                 };
             }
-            let problem = examples_problem(signature, examples.clone(), Vec::new());
+            let problem = examples_problem(examples.clone(), Vec::new());
             let solved = solve_problem(&problem);
             if !solved.success {
                 return ToolResponse::Refused {
@@ -125,11 +122,7 @@ pub fn run_tool(req: &ToolRequest) -> ToolResponse {
                 },
             }
         }
-        ToolRequest::VerifyProgram {
-            signature,
-            code,
-            examples,
-        } => {
+        ToolRequest::VerifyProgram { code, examples, .. } => {
             if examples.is_empty() {
                 return ToolResponse::Refused {
                     reason: "no examples to verify against".into(),
@@ -137,7 +130,7 @@ pub fn run_tool(req: &ToolRequest) -> ToolResponse {
             }
             // nsynth as pure verifier: the model wrote `code`; `gate` strict-verifies
             // it + corroborates.
-            let problem = examples_problem(signature, examples.clone(), Vec::new());
+            let problem = examples_problem(examples.clone(), Vec::new());
             gate(&problem, code.clone(), "model-program".to_string())
         }
     }
@@ -169,11 +162,15 @@ pub fn rlvr_reward(req: &ToolRequest, hidden: &[Example]) -> f32 {
     }
 }
 
-/// Build an examples-only Problem (no reference — the pure NL/tool regime).
-fn examples_problem(signature: &str, examples: Vec<Example>, holdouts: Vec<Example>) -> Problem {
+/// Build an examples-only Problem (no reference — the pure NL/tool regime). The
+/// signature is INFERRED from the example value types (the examples are ground
+/// truth for types); a model-proposed signature string is only advisory and often
+/// wrong, so we do not trust it.
+fn examples_problem(examples: Vec<Example>, holdouts: Vec<Example>) -> Problem {
+    let sig = crate::linguigenesis_bridge::infer_signature("f", &examples);
     Problem {
         name: "tool".to_string(),
-        signature: Box::leak(signature.to_string().into_boxed_str()),
+        signature: Box::leak(sig.into_boxed_str()),
         examples,
         holdouts,
         ..Default::default()
