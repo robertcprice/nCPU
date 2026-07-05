@@ -999,13 +999,19 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
-    // Stage 1.6: analogy-driven transfer (Phase 3.2), opt-in via NSYNTH_ANALOGY=1.
-    // Runs alongside CachedTeachers (does not replace it) so it can be A/B'd
-    // without regressing the proven path. Universal: transfers donors of ANY
-    // type (scalar/array/tree/string/…) via rename+verify, plus type-specific
-    // re-fit fallback. Not gated on scalar-only. Emits only verifier-accepted
-    // code.
-    if std::env::var("NSYNTH_ANALOGY").as_deref() == Ok("1")
+    // Stage 1.6: analogy-driven transfer (Phase 3.2). SELF-ACTIVATING once the
+    // solved-cache is warm enough to hold useful donors — cross-problem transfer
+    // is a compounding, self-dependent capability (learn from accumulated
+    // experience) and is SOUND BY CONSTRUCTION: it emits only verifier-accepted
+    // code, so a bad transfer just fails verify (the only cost is a little
+    // latency, bounded by rename+verify over a few donors). Was opt-in behind
+    // NSYNTH_ANALOGY=1 purely for A/B; now on by default above a donor threshold,
+    // with NSYNTH_ANALOGY=0 as an explicit kill switch. Runs alongside
+    // CachedTeachers, not instead of it.
+    let analogy_enabled = std::env::var("NSYNTH_ANALOGY").as_deref() != Ok("0")
+        && (std::env::var("NSYNTH_ANALOGY").as_deref() == Ok("1")
+            || crate::solved_cache::entry_count() >= 24);
+    if analogy_enabled
         && !super::analogy::in_refit()
         && preemptive_search_result.is_none()
         && crate::solved_cache::entry_count() > 0
