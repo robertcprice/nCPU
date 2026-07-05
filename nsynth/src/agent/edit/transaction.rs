@@ -10,6 +10,9 @@ pub struct EditTransaction {
     root: PathBuf,
     originals: HashMap<PathBuf, String>,
     working: HashMap<PathBuf, String>,
+    /// Files this transaction CREATES (absent before apply). Rollback deletes
+    /// them instead of restoring content.
+    created: std::collections::HashSet<PathBuf>,
     committed: bool,
 }
 
@@ -19,6 +22,7 @@ impl EditTransaction {
             root: root.into(),
             originals: HashMap::new(),
             working: HashMap::new(),
+            created: std::collections::HashSet::new(),
             committed: false,
         }
     }
@@ -40,8 +44,17 @@ impl EditTransaction {
 
     pub fn apply_repair_patch(&mut self, patch: &RepairPatch) -> Result<(), String> {
         for edit in &patch.edits {
-            self.snapshot_file(&edit.path)?;
             let path = self.resolve_relative(&edit.path)?;
+            // NEW-FILE edit: the path does not exist yet (a coordinated patch may
+            // create a module and wire it elsewhere). Track for delete-on-rollback
+            // and seed the working copy with old_text so the exactly-one-occurrence
+            // rule below degenerates to "write new_text".
+            if !path.exists() && !self.working.contains_key(&path) {
+                self.created.insert(path.clone());
+                self.working.insert(path.clone(), edit.old_text.clone());
+            } else {
+                self.snapshot_file(&edit.path)?;
+            }
             let original = self
                 .working
                 .get(&path)
@@ -64,6 +77,9 @@ impl EditTransaction {
 
     pub fn commit(mut self) -> Result<(), String> {
         for (path, content) in &self.working {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
             if let Err(error) = fs::write(path, content) {
                 let _ = self.rollback();
                 return Err(error.to_string());
@@ -79,6 +95,9 @@ impl EditTransaction {
         }
         for (path, content) in &self.originals {
             fs::write(path, content).map_err(|e| e.to_string())?;
+        }
+        for path in &self.created {
+            let _ = fs::remove_file(path);
         }
         Ok(())
     }

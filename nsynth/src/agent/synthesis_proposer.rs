@@ -327,11 +327,55 @@ pub fn try_emergent_addition_patch(
                 .map(|f| f.path.clone())
         })?;
     let old_text = read_relative_file(context, &target).ok()?;
-    // Append the new fn, pub'd so sibling modules/tests can call it.
+    // Pub the new fn so sibling modules/tests can call it.
     let mut appended = synthesized.trim().to_string();
     if !appended.starts_with("pub ") && appended.starts_with("fn ") {
         appended = format!("pub {appended}");
     }
+
+    // MULTI-FILE addition: when the target is a MODULE-MANIFEST lib.rs (it
+    // declares `mod` lines and defines no fns of its own outside tests), follow
+    // the repo's own convention — a COORDINATED two-file patch: a NEW module
+    // `src/<fn>.rs` holding the verified fn, plus the `mod`/`pub use` wiring in
+    // lib.rs. New-file edits carry old_text == new_text (the transaction's
+    // read-fallback makes that a create). Falls back to single-file append for
+    // flat repos.
+    // Manifest = `mod x;` DECLARATIONS (an inline `mod tests { ... }` block is
+    // not module structure), and lib.rs defines no fns of its own.
+    let manifest_style = target == "src/lib.rs"
+        && old_text
+            .lines()
+            .any(|l| l.trim_start().starts_with("mod ") && l.trim_end().ends_with(';'))
+        && defined_fn_names(&old_text).is_empty();
+    if manifest_style {
+        let module_file = format!("src/{fn_name}.rs");
+        let module_body = format!("{appended}\n");
+        // Wire before the first `mod` line, keeping the manifest shape.
+        let first_mod = old_text
+            .lines()
+            .find(|l| l.trim_start().starts_with("mod ") && l.trim_end().ends_with(';'))
+            .map(str::to_string)?;
+        let wired = format!("mod {fn_name};\npub use {fn_name}::*;\n{first_mod}");
+        let new_lib = old_text.replacen(&first_mod, &wired, 1);
+        return Some(
+            RepairPatch::new()
+                .with_edit(RepairEdit::new(
+                    module_file,
+                    module_body.clone(),
+                    module_body,
+                    "emergent NL addition (new module file; verified synthesis, no LLM)",
+                ))
+                .with_edit(RepairEdit::new(
+                    target,
+                    old_text,
+                    new_lib,
+                    "emergent NL addition (module wiring in lib.rs)",
+                ))
+                .with_metadata("proposer", "nl_emergent_addition_multifile")
+                .with_metadata("synthesis_method", result.method.clone()),
+        );
+    }
+
     let new_text = format!("{}\n\n{}\n", old_text.trim_end(), appended);
     Some(
         RepairPatch::new()
@@ -1672,6 +1716,75 @@ mod tests {
         assert_eq!(patch.edits[0].path, "src/maths.rs", "found via content, not name");
         assert!(patch.edits[0].new_text.contains("fn mul3"), "repo fn name kept: {}", patch.edits[0].new_text);
         fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
+        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify after");
+        assert!(after.success, "stderr: {}", after.stderr);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// MULTI-FILE COORDINATED ADDITION, end to end through the REAL transaction:
+    /// a module-manifest repo (lib.rs only declares mods) gets a NEW module file
+    /// src/triple.rs (file CREATION via EditTransaction) plus the lib.rs wiring
+    /// in ONE atomic patch — and the compile-failing crate goes green.
+    #[test]
+    fn emergent_addition_multifile_creates_module_and_wires_manifest() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_addmf_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"addmf\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // Module-manifest lib.rs: declares mods, defines no fns of its own.
+        fs::write(
+            root.join("src/lib.rs"),
+            "mod ops;\npub use ops::*;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn triples() {\n        assert_eq!(crate::triple(4), 12);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        fs::write(root.join("src/ops.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
+            .expect("ops.rs");
+
+        let task = RepoTaskSpec {
+            id: "add-mf-triple".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Feature,
+            issue: "nl: add a function that triples a number".into(),
+            test_command: "cargo test triples".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
+            .verify(&task.test_command)
+            .expect("verify before");
+        assert!(!before.success, "fixture must start broken (missing fn)");
+        let analysis = FailureParser::default().parse(&before.failure_output());
+
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("propose");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "proposer" && v == "nl_emergent_addition_multifile"),
+            "multi-file addition should fire: {:?}",
+            patch.metadata
+        );
+        assert_eq!(patch.edits.len(), 2, "coordinated two-file patch");
+        assert_eq!(patch.edits[0].path, "src/triple.rs", "new module file");
+        assert!(patch.edits[1].new_text.contains("mod triple;"), "manifest wired");
+
+        // Apply through the REAL transaction — proves atomic file CREATION.
+        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
+        tx.apply_repair_patch(&patch).expect("apply");
+        tx.commit().expect("commit");
+        assert!(root.join("src/triple.rs").is_file(), "module created on disk");
+
         let after = RepairVerifier::new(&root, GuardrailPolicy::default())
             .verify(&task.test_command)
             .expect("verify after");
