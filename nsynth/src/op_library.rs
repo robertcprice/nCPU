@@ -142,6 +142,19 @@ pub fn maybe_record_learned(problem: &Problem, result: &SolveResult) {
     ) {
         return;
     }
+    // SEMANTIC CONTRACT gate — a second, INDEPENDENT oracle. Consensus draws its
+    // corroborators from the same solver family, so a shared overfitting bias can
+    // pass a program that is not the operation it claims to be. If the task's op
+    // carries a decidable output contract (max/min/abs/sort), the candidate must
+    // honor it on FRESH inputs the seed never saw; a violation keeps the overfit
+    // out of the self-growing library (where a false accept would compound).
+    let fn_name = problem.function_name();
+    let sample_inputs = &first.inputs;
+    if crate::constraint_oracle::check_op_contract(&result.code, &fn_name, &fn_name, sample_inputs)
+        .is_err()
+    {
+        return;
+    }
     let name = format!("learned_{}", short_hash(&result.code));
     record_learned_op(name, arity, result.code.clone());
 }
