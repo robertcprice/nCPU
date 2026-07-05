@@ -11,8 +11,10 @@
 //!      broad Rust-subset (loops/conditionals/arrays/strings), so the model can
 //!      write ALGORITHMS nsynth could never synthesize, and nsynth still guarantees
 //!      correctness. Ceiling = the interpreter's execution breadth + the model's
-//!      coding — NOT nsynth's synthesis reach. (Mog dialect: no `let`; declare
-//!      `x: i64 = 0;`; `for e in arr {}`; `while c {}`; `return e;`.)
+//!      coding — NOT nsynth's synthesis reach. MOG DIALECT (a Rust subset, but NO
+//!      `as` casts): declare `x: i64 = 0;` (no `let`); `for e in arr {}`,
+//!      `while c {}`, `if c {} else {}`; index `a[i]` (i64 index, no `as usize`);
+//!      `a.len()` returns i64 (no cast); `a.push(e)`; `&&`/`||`/`%`; `return e;`.
 //!   2. [`ToolRequest::Examples`] / [`Reference`] — the model proposes a SPEC;
 //!      nsynth SYNTHESIZES the verified program. Narrower (bounded by nsynth's
 //!      synthesis = the PBE rate), but the model writes nothing.
@@ -134,10 +136,28 @@ pub fn run_tool(req: &ToolRequest) -> ToolResponse {
                     reason: "no examples to verify against".into(),
                 };
             }
-            // nsynth as pure verifier: the model wrote `code`; `gate` strict-verifies
-            // it + corroborates.
+            // nsynth as pure verifier: the model WROTE `code`. Strict-verify it
+            // against the examples. Unlike the synthesis paths, we do NOT refuse a
+            // PASSING program just because an independent candidate also fits the
+            // (possibly thin) examples — that is about the spec, not the model's
+            // code. So: fail strict-verify → Refused; else Verified iff corroborated,
+            // Tentative otherwise (never refuse a program that passes).
             let problem = examples_problem(examples.clone(), Vec::new());
-            gate(&problem, code.clone(), "model-program".to_string())
+            if verify_problem_code_strict(&problem, code).is_err() {
+                return ToolResponse::Refused {
+                    reason: "program failed strict verification against the examples".into(),
+                };
+            }
+            match differential_consensus(&problem, code) {
+                ConsensusVerdict::Verified { .. } => ToolResponse::Verified {
+                    code: code.clone(),
+                    method: "model-program".to_string(),
+                },
+                _ => ToolResponse::Tentative {
+                    code: code.clone(),
+                    method: "model-program".to_string(),
+                },
+            }
         }
     }
 }
@@ -239,6 +259,29 @@ mod tests {
         assert!(resp.code().is_some(), "reference intake should solve: {resp:?}");
         let hidden = [ex(&[5], 15), ex(&[-2], -6)];
         assert!(rlvr_reward(&req, &hidden) >= 0.5, "triple correct: {resp:?}");
+    }
+
+    #[test]
+    fn model_written_algorithm_beyond_synthesis_is_verified() {
+        // The POWERFUL path: the model writes a Mog ALGORITHM (a loop nsynth would
+        // not synthesize from these examples); nsynth EXECUTES + verifies it. Must
+        // NOT be refused for being one-of-many fits (that's the spec, not the code).
+        let arr = |xs: &[i64]| Example {
+            inputs: vec![Value::int_array(xs)],
+            expected: Value::Int(xs.iter().sum()),
+        };
+        let req = ToolRequest::VerifyProgram {
+            signature: "fn f(a: [i64]) -> i64".into(),
+            // Mog dialect: no `let`; `a.len()` is i64; `a[i]` i64 index; no `as`.
+            code: "fn f(a: [i64]) -> i64 { s: i64 = 0; i: i64 = 0; while i < a.len() { \
+                   s = s + a[i]; i = i + 1; } return s; }"
+                .into(),
+            examples: vec![arr(&[1, 2, 3]), arr(&[10, 20]), arr(&[5])],
+        };
+        let resp = run_tool(&req);
+        assert!(resp.code().is_some(), "model algorithm must be accepted, got {resp:?}");
+        // Held-out oracle: it actually sums.
+        assert!(rlvr_reward(&req, &[arr(&[7, 8, 9])]) >= 0.5, "sums correctly: {resp:?}");
     }
 
     #[test]

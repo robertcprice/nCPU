@@ -25,11 +25,12 @@ BIN = os.environ.get("NSYNTH_TOOL_BIN", "./target/release/nsynth_tool")
 # nsynth's synthesis reach). Mog is a small Rust-subset the verifier runs.
 MOG_SYSTEM = (
     "Write a function in Mog to satisfy the description. Mog is a Rust subset the "
-    "verifier executes. Rules: NO `let` — declare with `name: type = init;` (types "
-    "i64, f64, bool, string, [i64], [string]); mutate with `x = expr;`; loops "
-    "`for e in arr { ... }` and `while cond { ... }`; `if cond { ... } else { ... }`; "
-    "index `arr[i as usize]`, length `arr.len()`; `return expr;`. Output ONLY the "
-    "`fn f(...) -> ... { ... }` body, no prose, no markdown fence."
+    "verifier executes, but with NO `as` casts. Rules: NO `let` — declare "
+    "`name: type = init;` (types i64, f64, bool, string, [i64], [string]); mutate "
+    "`x = expr;`; `for e in arr { ... }`, `while cond { ... }`, `if cond { ... } "
+    "else { ... }`; index `arr[i]` (i is i64, NO `as usize`); `arr.len()` returns "
+    "i64 (NO cast); `arr.push(e)`; operators `+ - * / % == < > <= >= && || !`; "
+    "`return expr;`. Output ONLY `fn f(...) -> ... { ... }`, no prose, no fence."
 )
 # The SECONDARY path: the model proposes I/O; nsynth SYNTHESIZES (verified) — only
 # for tasks in nsynth's synthesis domain.

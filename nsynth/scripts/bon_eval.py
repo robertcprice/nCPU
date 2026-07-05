@@ -22,10 +22,11 @@ BIN = os.environ.get("NSYNTH_TOOL_BIN", "./target/release/nsynth_tool")
 # POWERFUL path: the model WRITES Mog code (a Rust subset nsynth executes+verifies).
 MOG_SYSTEM = (
     "Write a function in Mog for the description. Mog is a Rust subset the verifier "
-    "runs: NO `let` — declare `name: type = init;` (i64,f64,bool,string,[i64],"
-    "[string]); mutate `x = expr;`; `for e in arr { }`; `while cond { }`; `if cond "
-    "{ } else { }`; `arr[i as usize]`, `arr.len()`, `arr.push(e)`; `return expr;`. "
-    "Output ONLY `fn f(...) -> ... { ... }` — no prose, no markdown fence."
+    "runs, but NO `as` casts. NO `let` — declare `name: type = init;` (i64,f64,bool,"
+    "string,[i64],[string]); mutate `x = expr;`; `for e in arr { }`; `while cond "
+    "{ }`; `if cond { } else { }`; index `arr[i]` (i is i64, NO `as usize`); "
+    "`arr.len()` returns i64 (NO cast); `arr.push(e)`; `+ - * / % == < > <= >= && "
+    "|| !`; `return expr;`. Output ONLY `fn f(...) -> ... { ... }` — no prose, no fence."
 )
 
 
