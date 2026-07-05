@@ -488,6 +488,35 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // it is (under the real query's fingerprint, outside this guard).
     let recordable = !super::analogy::in_refit() && !crate::learning_freeze::is_frozen();
 
+    // REGISTRY PRIMITIVES prefer the domain-direct string emitter first:
+    // string_synth / morph emit `s.trim()`-style TRANSPILABLE bodies, while the
+    // decompose lane below can win the same spec with an interpreter-only char
+    // loop that breaks downstream Rust transpilation (observed post-merge:
+    // trim -> decompose-char-filter, `for ch in s` / `""` / char-vs-&str compile
+    // errors in every component build). The bench cascade for every other
+    // category is untouched.
+    if problem.category == "registry-op" {
+        if let Some(result) = solve_string_output(problem) {
+            if result.success && recordable {
+                crate::solved_cache::record(problem, &result.method, &result.code);
+            }
+            return result;
+        }
+    }
+
+    // Structural decomposition at the VERY TOP: ms-scale, self-gating, and both
+    // the string-output path (string_synth enumerative burn) and the int-array
+    // frontier below it consume the whole per-task budget before a cheap
+    // decompose shape (char-filter, derivative, rolling_max) is ever attempted —
+    // the same starvation disease as the library/float lanes, same cure.
+    if let Some(result) = super::search_decompose::try_decompose(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
+        }
+        return result;
+    }
+
     // String-output problems take the additive string-program path (the i64
     // gradient/search pipeline cannot express string outputs).
     if let Some(result) = solve_string_output(problem) {
@@ -627,6 +656,15 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
             return result;
         }
     }
+    // Polynomial float lane: affine refuses `πr²` / `(4/3)πr³` / `k·a·b` — the
+    // geometry formulas MBPP's float tasks are made of. Parsimony-laddered power
+    // products, over-determination-gated, same round-then-reverify contract.
+    if let Some(result) = super::search_float::search_float_poly(problem, &problem.function_name())
+    {
+        if result.success {
+            return result;
+        }
+    }
 
     let router_ctx = post_enumerative_context(problem);
 
@@ -684,6 +722,28 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
             t0.elapsed().as_secs_f32(),
             result.method
         );
+        return result;
+    }
+
+    // Fixed-K TUPLE output tier: `(min, max)`-style tasks whose every output is a
+    // constant-length scalar array. Solves each output column by reusing the
+    // library/pipeline tiers above, then assembles a verified multi-fn program.
+    // Self-gates (instant None) for any non-fixed-array output, so scalar/array
+    // problems are untouched. Runs here so a genuine tuple task is not first
+    // mangled by the variable-length array machinery below.
+    if let Some(result) = super::search_tuple::try_tuple(problem) {
+        eprintln!("[solve] tuple-columns OK in {:.3}s — {}", t0.elapsed().as_secs_f32(), result.method);
+        return result;
+    }
+
+    // Structural DECOMPOSITION tier (emergent-ops step 1): map/filter/select
+    // hypotheses over list I/O, element holes solved by reusing the verified op
+    // library as a COMPONENT basis + data-mined predicates. Self-gates to
+    // single-list-input problems; end-to-end re-verified inside. Runs early for
+    // the same reason as the tuple tier — its shapes must not be starved by the
+    // int-array machinery below (string-element lists especially).
+    if let Some(result) = super::search_decompose::try_decompose(problem) {
+        eprintln!("[solve] decompose OK in {:.3}s — {}", t0.elapsed().as_secs_f32(), result.method);
         return result;
     }
 

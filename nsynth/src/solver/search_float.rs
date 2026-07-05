@@ -101,12 +101,15 @@ fn least_squares_affine(rows: &[Vec<f64>], targets: &[f64], arity: usize) -> Opt
     solve_f64(ata, atb)
 }
 
-/// Format a float coefficient compactly: round to 6 decimals, trim trailing
+/// Format a float coefficient compactly: round to 12 decimals, trim trailing
 /// zeros, and keep at least one fractional digit so it lexes as a float literal
-/// (`2.0`, not `2`). Negative values are emitted bare; the renderer wraps terms.
+/// (`2.0`, not `2`). 12 decimals (not 6) because the OUTER verification gate
+/// (`output_matches`/`float_eq`) compares at 1e-9 relative — a 6-decimal π
+/// (3.141593) leaves ~1e-7 relative error: the lane accepted what the gate then
+/// rejected. Negative values are emitted bare; the renderer wraps terms.
 fn fmt_coeff(c: f64) -> String {
-    let r = (c * 1e6).round() / 1e6;
-    let mut s = format!("{r:.6}");
+    let r = (c * 1e12).round() / 1e12;
+    let mut s = format!("{r:.12}");
     while s.ends_with('0') {
         s.pop();
     }
@@ -129,8 +132,10 @@ fn predict(coeffs: &[f64], row: &[f64]) -> f64 {
 /// magnitude, with an absolute floor. Continuous fits are never bit-exact, so
 /// "correct" means within this band on every example.
 fn tolerance(targets: &[f64]) -> f64 {
+    // Aligned with the OUTER verification gate (`float_eq`: 1e-9 relative with a
+    // 1e-9 absolute floor) so a lane-accepted model is never gate-rejected.
     let max_abs = targets.iter().fold(0.0f64, |m, &y| m.max(y.abs()));
-    (max_abs * 1e-6).max(1e-6)
+    (max_abs * 1e-9).max(1e-9)
 }
 
 /// Recover `f(x) = c0 + Σ c_j·x_j` over f64 by least squares, verify to
@@ -144,7 +149,7 @@ pub(super) fn search_float_affine(problem: &Problem, fn_name: &str) -> Option<So
     let coeffs = least_squares_affine(&rows, &targets, arity)?;
     // Round the coefficients to the finite precision we will print, then verify
     // the ROUNDED model — so the formula we emit is exactly the one we checked.
-    let rounded: Vec<f64> = coeffs.iter().map(|&c| (c * 1e6).round() / 1e6).collect();
+    let rounded: Vec<f64> = coeffs.iter().map(|&c| (c * 1e12).round() / 1e12).collect();
     let eps = tolerance(&targets);
     for (row, &y) in rows.iter().zip(targets.iter()) {
         if (predict(&rounded, row) - y).abs() > eps {
@@ -196,6 +201,147 @@ pub(super) fn search_float_affine(problem: &Problem, fn_name: &str) -> Option<So
         error: None,
         metadata: Default::default(),
     })
+}
+
+/// POLYNOMIAL float lane: the affine solver refuses `πr²`, `(4/3)πr³`, `k·a·b` —
+/// the geometry/physics formulas MBPP's float tasks are made of. This recovers
+/// `f(x) = c0 + Σ c_i·φ_i(x)` where each φ is a POWER PRODUCT of the inputs
+/// (`x²`, `x³`, `a·b`, `a²`…), by the same least-squares + round + re-verify
+/// contract as the affine lane.
+///
+/// Parsimony ladder, not one big basis: candidate feature sets are tried
+/// SMALLEST FIRST, and each requires over-determination (`n ≥ unknowns + 1`)
+/// before it may fit. MBPP tasks carry ~3 examples, so a full quadratic basis
+/// (which INTERPOLATES any 3 points — meaningless) is unreachable there, while
+/// the honest 1-term models (`c·x²`: 2 unknowns) fit with a spare point. A set
+/// is accepted only if the ROUNDED model reproduces every example within
+/// tolerance — recover-or-refuse, same as everywhere else.
+pub(super) fn search_float_poly(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let (rows, targets, arity) = extract_float(problem)?;
+    let n = rows.len();
+
+    // Each feature is the per-argument power vector of a monomial. NEGATIVE
+    // powers are RATIOS (F5 in the wall analysis): [-1, 1] = b/a, so a single
+    // 2-unknown model like `c·b/a` (parabola vertex -b/2a) still fits a
+    // 3-example task under the over-determination gate. A zero denominator on
+    // any example makes the feature non-finite and the fit check refuses.
+    // arity 2, [1,1] = a·b; arity 1, [2] = x². The ladder is ordered by size.
+    let ladder: Vec<Vec<Vec<i32>>> = match arity {
+        1 => vec![
+            vec![vec![2]],                     // c·x²      (+c0)
+            vec![vec![3]],                     // c·x³
+            vec![vec![-1]],                    // c/x
+            vec![vec![1], vec![2]],            // c1·x + c2·x²
+            vec![vec![1], vec![2], vec![3]],   // full cubic
+        ],
+        2 => vec![
+            vec![vec![1, 1]],                              // c·a·b
+            vec![vec![2, 1]],                              // c·a²·b   (πr²h cylinder)
+            vec![vec![1, 2]],                              // c·a·b²
+            vec![vec![2, 0]],                              // c·a²
+            vec![vec![0, 2]],                              // c·b²
+            vec![vec![1, -1]],                             // c·a/b    (ratios)
+            vec![vec![-1, 1]],                             // c·b/a
+            vec![vec![2, 0], vec![0, 2]],                  // c1·a² + c2·b²
+            vec![vec![1, 0], vec![0, 1], vec![1, 1]],      // bilinear
+        ],
+        3 => vec![
+            vec![vec![1, 1, 1]],                                       // c·a·b·c
+            vec![vec![0, 1, -1]],                                      // c·b/c ratios
+            vec![vec![1, -1, 0]],
+            vec![vec![-1, 1, 0]],                                      // c·b/a (-b/2a vertex)
+            vec![vec![0, -1, 1]],
+            vec![vec![1, 1, 0], vec![1, 0, 1], vec![0, 1, 1]],         // pairwise products
+        ],
+        _ => return None,
+    };
+
+    let feat_val = |pows: &[i32], row: &[f64]| -> f64 {
+        pows.iter().zip(row).map(|(&p, &x)| x.powi(p)).product()
+    };
+    let param_names = scalar_param_names(arity);
+
+    for feats in &ladder {
+        let m = feats.len() + 1; // + intercept
+        if n < m + 1 {
+            continue; // over-determination: at least one spare example
+        }
+        // Least squares over the expanded feature rows (reuses the affine
+        // normal-equations solver: the expansion IS the affine problem in φ-space).
+        let frows: Vec<Vec<f64>> =
+            rows.iter().map(|r| feats.iter().map(|f| feat_val(f, r)).collect()).collect();
+        let Some(coeffs) = least_squares_affine(&frows, &targets, feats.len()) else { continue };
+        let rounded: Vec<f64> = coeffs.iter().map(|&c| (c * 1e12).round() / 1e12).collect();
+        let eps = tolerance(&targets);
+        let fits = rows.iter().zip(targets.iter()).all(|(row, &y)| {
+            let frow: Vec<f64> = feats.iter().map(|f| feat_val(f, row)).collect();
+            frow.iter().all(|v| v.is_finite()) && (predict(&rounded, &frow) - y).abs() <= eps
+        });
+        if !fits || rounded[1..].iter().all(|&c| c.abs() < 1e-9) {
+            continue;
+        }
+
+        // Emit `c0 + c1*a*a + c2*a/b …` — positive powers as repeated
+        // multiplication, negative powers as division (left-assoc precedence
+        // makes `c * b / a` evaluate ((c·b)/a), which is the fitted feature).
+        let mono = |pows: &[i32]| -> String {
+            let mut out = String::new();
+            for (j, &p) in pows.iter().enumerate() {
+                for _ in 0..p.max(0) {
+                    if !out.is_empty() {
+                        out.push_str(" * ");
+                    }
+                    out.push_str(&param_names[j]);
+                }
+            }
+            for (j, &p) in pows.iter().enumerate() {
+                for _ in 0..(-p).max(0) {
+                    out.push_str(" / ");
+                    out.push_str(&param_names[j]);
+                }
+            }
+            out
+        };
+        let mut terms: Vec<String> = Vec::new();
+        for (i, f) in feats.iter().enumerate() {
+            let c = rounded[i + 1];
+            if c.abs() < 1e-9 {
+                continue;
+            }
+            terms.push(format!("{} * {}", fmt_coeff(c), mono(f)));
+        }
+        if rounded[0].abs() >= 1e-9 || terms.is_empty() {
+            terms.push(fmt_coeff(rounded[0]));
+        }
+        let params = scalar_params_decl(&param_names).replace(": i64", ": f64");
+        let body = terms.join(" + ");
+        let code = format!("fn {fn_name}({params}) -> f64 {{\n    return {body};\n}}\n");
+
+        // Same final guard as the affine lane: the EMITTED program must
+        // reproduce every example through the runtime, within tolerance.
+        let verified = problem.examples.iter().all(|ex| {
+            match execute_function_for_problem(&code, fn_name, &ex.inputs, problem) {
+                Ok(crate::runtime::Value::Float(v)) => {
+                    ex.expected_f64().is_some_and(|want| (v - want).abs() <= eps)
+                }
+                Ok(crate::runtime::Value::Int(i)) => {
+                    ex.expected_f64().is_some_and(|want| (i as f64 - want).abs() <= eps)
+                }
+                _ => false,
+            }
+        });
+        if !verified {
+            continue;
+        }
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: "search_float_poly".to_string(),
+            error: None,
+            metadata: Default::default(),
+        });
+    }
+    None
 }
 
 #[cfg(test)]
@@ -280,5 +426,70 @@ mod tests {
             search_float_affine(&p, "f").is_none(),
             "must refuse a parabola"
         );
+    }
+
+    #[test]
+    fn float_poly_recovers_circle_area_from_three_examples() {
+        // πr² with the MBPP-typical THREE examples: the 1-term quadratic model
+        // (c·x², 2 unknowns) fits with a spare point; the affine lane refuses it.
+        let f = |r: f64| std::f64::consts::PI * r * r;
+        let rows: Vec<(Vec<f64>, f64)> =
+            [1.0, 2.0, 3.0].iter().map(|&r| (vec![r], f(r))).collect();
+        let p = pf("fn circle_area(r: f64) -> f64", &rows);
+        assert!(search_float_affine(&p, "circle_area").is_none());
+        let r = search_float_poly(&p, "circle_area").expect("must recover πr²");
+        assert_eq!(r.method, "search_float_poly");
+        assert!(r.code.contains("3.14159265"), "code: {}", r.code);
+    }
+
+    #[test]
+    fn float_poly_recovers_two_arg_product() {
+        // k·a·b (triangle area 0.5·b·h): single bilinear term, 2 unknowns.
+        let f = |b: f64, h: f64| 0.5 * b * h;
+        let raw = [(2.0, 3.0), (4.0, 5.0), (6.0, 1.0), (3.0, 3.0)];
+        let rows: Vec<(Vec<f64>, f64)> = raw.iter().map(|&(a, b)| (vec![a, b], f(a, b))).collect();
+        let p = pf("fn tri(b: f64, h: f64) -> f64", &rows);
+        let r = search_float_poly(&p, "tri").expect("must recover 0.5·b·h");
+        assert!(r.code.contains("0.5"), "code: {}", r.code);
+    }
+
+    #[test]
+    fn float_poly_circle_area_solves_through_the_full_pipeline() {
+        // Regression probe for the end-to-end path: the direct-call test above
+        // passes while the BINARY missed circle_area — this pins the pipeline
+        // route (solve_problem), not just the lane.
+        let f = |r: f64| std::f64::consts::PI * r * r;
+        let rows: Vec<(Vec<f64>, f64)> =
+            [1.0, 2.0, 3.0].iter().map(|&r| (vec![r], f(r))).collect();
+        let p = pf("fn circle_area(a: f64) -> f64", &rows);
+        let r = crate::solver::solve_problem(&p);
+        assert!(r.success, "pipeline must route circle_area to the poly lane: {:?}", r.error);
+        assert_eq!(r.method, "search_float_poly", "method: {}", r.method);
+    }
+
+    #[test]
+    fn float_poly_refuses_underdetermined_and_offmodel() {
+        // 3 examples cannot license a 3-unknown model (interpolation), and data
+        // off every ladder model must be refused, not force-fitted.
+        let rows: Vec<(Vec<f64>, f64)> =
+            vec![(vec![1.0], 2.7), (vec![2.0], -1.1), (vec![3.0], 9.9)]; // arbitrary
+        let p = pf("fn f(x: f64) -> f64", &rows);
+        assert!(
+            search_float_poly(&p, "f").is_none(),
+            "arbitrary 3 points must not be fitted"
+        );
+    }
+
+    #[test]
+    fn float_poly_recovers_ratio_of_arguments() {
+        // -0.5·b/a (the parabola-vertex x-coordinate shape): a RATIO feature
+        // ([-1, 1] negative power), 2 unknowns, fits 3 examples with a spare.
+        let f = |a: f64, b: f64| -0.5 * b / a;
+        let raw = [(5.0, 3.0), (2.0, 8.0), (4.0, 6.0)];
+        let rows: Vec<(Vec<f64>, f64)> = raw.iter().map(|&(a, b)| (vec![a, b], f(a, b))).collect();
+        let p = pf("fn vx(a: f64, b: f64) -> f64", &rows);
+        let r = search_float_poly(&p, "vx").expect("must recover -0.5*b/a");
+        assert!(r.code.contains("/ a"), "code must divide by a: {}", r.code);
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
     }
 }

@@ -155,9 +155,9 @@ fn literal_to_coding_value(lit: &LiteralValue) -> CodingValue {
         LiteralValue::Array(a) => CodingValue::Array(a.clone()),
         LiteralValue::Pair(a, b) => CodingValue::Pair(*a, *b),
         // CodingValue has no struct carrier (the intent path is scalar/array
-        // oriented); a struct literal degrades to Unit-ish Int(0) and the
-        // struct-typed spec routes through the bridge path instead. The
-        // struct-output SYNTHESIS itself lives in solver::pipeline.
+        // oriented); a struct literal degrades to Int(0) and the struct-typed
+        // spec routes through the bridge path instead. Struct-output SYNTHESIS
+        // lives in solver::pipeline.
         LiteralValue::Struct(_) => CodingValue::Int(0),
     }
 }

@@ -530,6 +530,9 @@ impl TaskDecomposer {
                     Value::Tensor { .. } => {
                         input_types.insert("tensor");
                     }
+                    Value::Map(_) => {
+                        input_types.insert("map");
+                    }
                 }
             }
             match &ex.expected {
@@ -565,6 +568,9 @@ impl TaskDecomposer {
                 }
                 Value::Tensor { .. } => {
                     output_types.insert("tensor");
+                }
+                Value::Map(_) => {
+                    output_types.insert("map");
                 }
             }
         }

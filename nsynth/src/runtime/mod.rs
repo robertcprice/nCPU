@@ -1094,6 +1094,34 @@ fn output_matches(actual: &Value, expected: &crate::benchmark::Value) -> bool {
                 && output_matches(&Value::Int(*d), &t[3])
         }
         (Value::Unit, BV::Tuple(t)) => t.is_empty(),
+        // Map bridge: the runtime has no map type — a Mog program carries a map
+        // as an array of [key, value] pairs (nested arrays are native). Compare
+        // ORDER-INDEPENDENTLY against the canonical wire Map: same entry count,
+        // every actual pair matches exactly one unused expected entry (key and
+        // value both recurse through output_matches, so an int key still bridges
+        // int<->float soundly). Duplicate actual keys cannot double-claim one
+        // expected entry, so a padded/repeated output is rejected.
+        (Value::Array(pairs), BV::Map(expected)) => {
+            if pairs.len() != expected.len() {
+                return false;
+            }
+            let mut used = vec![false; expected.len()];
+            pairs.iter().all(|p| {
+                let Value::Array(kv) = p else { return false };
+                if kv.len() != 2 {
+                    return false;
+                }
+                match expected.iter().enumerate().find(|(i, (ek, ev))| {
+                    !used[*i] && output_matches(&kv[0], ek) && output_matches(&kv[1], ev)
+                }) {
+                    Some((i, _)) => {
+                        used[i] = true;
+                        true
+                    }
+                    None => false,
+                }
+            })
+        }
         // Struct: a runtime struct verifies against a wire `Struct` by key,
         // recursing on each field value (HashMap order is not significant). The
         // runtime struct NAME is intentionally ignored here — the wire form has no
@@ -1375,6 +1403,7 @@ fn is_composite_expected(v: &BenchmarkValue) -> bool {
             | BenchmarkValue::Tuple(..)
             | BenchmarkValue::Struct(..)
             | BenchmarkValue::Bool(..)
+            | BenchmarkValue::Map(..)
     )
 }
 
@@ -1394,6 +1423,22 @@ fn runtime_value_from_problem(value: &BenchmarkValue, problem_name: &str) -> Res
                 .map(|v| runtime_value_from_problem(v, problem_name))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Value::Array(elems))
+        }
+        // Map INPUT: the runtime has no map type, so hand Mog code the canonical
+        // array-of-[key, value]-pairs shape (key-sorted — deterministic). The
+        // program iterates/indexes it like any nested array; a map OUTPUT takes
+        // the same shape back through the `output_matches` Map bridge.
+        BenchmarkValue::Map(entries) => {
+            let pairs = entries
+                .iter()
+                .map(|(k, v)| {
+                    Ok(Value::Array(vec![
+                        runtime_value_from_problem(k, problem_name)?,
+                        runtime_value_from_problem(v, problem_name)?,
+                    ]))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(Value::Array(pairs))
         }
         BenchmarkValue::Quad(a, b, c, d) => Ok(Value::Quad(*a, *b, *c, *d)),
         BenchmarkValue::Pair(a, b) => {
@@ -4527,6 +4572,11 @@ impl Runtime {
                 }
                 _ => Err(format!("unknown string method {method}")),
             },
+            // int/float -> string. A fundamental interpreter capability (like
+            // ord()), unblocking the whole int->string task class (number
+            // sequences, base conversion, decimal rendering). `to_str` on Int is
+            // exact; on Float it renders the shortest round-tripping form.
+            Value::Int(i) if method == "to_str" => Ok(Value::Str(i.to_string())),
             other => Err(format!("cannot call method {method} on {:?}", other)),
         }
     }

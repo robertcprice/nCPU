@@ -122,6 +122,7 @@ fn value_to_type(value: &crate::benchmark::Value) -> Type {
         }
         crate::benchmark::Value::Struct(_) => Type::Named("Struct".to_string()),
         crate::benchmark::Value::Tensor { .. } => Type::Named("Tensor".to_string()),
+        crate::benchmark::Value::Map(_) => Type::Named("Map".to_string()),
     }
 }
 

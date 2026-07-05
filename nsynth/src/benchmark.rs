@@ -49,6 +49,15 @@ pub enum Value {
     /// not example-search, so this variant exists mainly to make tensor I/O
     /// representable + type-distinguishable on the wire.
     Tensor { data: Vec<u64>, shape: Vec<usize> },
+    /// An unordered key→value mapping (Python dict on the MBPP wire), stored as
+    /// (key, value) pairs in CANONICAL (key-sorted) order — same determinism
+    /// trick as `Struct` — so derived `Eq`/`Ord`/`Serialize` treat two equal
+    /// maps identically regardless of insertion order. Keys are full `Value`s
+    /// (MBPP uses both int and string keys). Build via [`Value::map_from_pairs`]
+    /// so the canonical invariant holds. The runtime interpreter has NO map
+    /// type; a Mog program carries a map as an array of `[key, value]` pairs and
+    /// the verifier bridges that shape to this variant order-independently.
+    Map(Vec<(Value, Value)>),
 }
 
 impl Value {
@@ -71,6 +80,22 @@ impl Value {
             }
             _ => None,
         }
+    }
+
+    /// Build a `Value::Map` in canonical (key-sorted) order from arbitrary-order
+    /// pairs. Later duplicates of an equal key win (Python dict semantics), so a
+    /// wire dict round-trips exactly.
+    pub fn map_from_pairs(pairs: Vec<(Value, Value)>) -> Value {
+        let mut canonical: Vec<(Value, Value)> = Vec::with_capacity(pairs.len());
+        for (k, v) in pairs {
+            if let Some(slot) = canonical.iter_mut().find(|(ck, _)| *ck == k) {
+                slot.1 = v;
+            } else {
+                canonical.push((k, v));
+            }
+        }
+        canonical.sort_by(|a, b| a.0.cmp(&b.0));
+        Value::Map(canonical)
     }
 }
 
@@ -106,6 +131,15 @@ impl std::fmt::Display for Value {
                 "({})",
                 vs.iter()
                     .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Value::Map(entries) => write!(
+                f,
+                "{{{}}}",
+                entries
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {v}"))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -472,6 +506,9 @@ fn render_expected(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        // Maps render like their Display form (canonical key order), which is
+        // also what the array-of-pairs bridge compares against.
+        Value::Map(_) => value.to_string(),
         // Tensors are not example-rendered (they reach the engine via CODEGEN,
         // not literal-based synthesis); fall back to the Display form.
         Value::Tensor { .. } => value.to_string(),
@@ -633,6 +670,13 @@ fn render_value(problem: &Problem, value: &Value) -> Result<String, String> {
         // synthesis — the tensor reach is CODEGEN-only (a direct
         // `crate::tensor` call), so a tensor here is a hard error rather than
         // a fabricated literal.
+        // Maps have no Mog literal; a program carries a map as an array of
+        // [key, value] pairs and the verifier bridges the shapes, so a map is
+        // never rendered as a source literal.
+        Value::Map(_) => Err(format!(
+            "cannot render map literal for {} (maps verify via the array-of-pairs bridge)",
+            problem.name
+        )),
         Value::Tensor { .. } => Err(format!(
             "cannot render tensor literal for {} (tensors use the codegen path, not example literals)",
             problem.name

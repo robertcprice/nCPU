@@ -48,6 +48,13 @@ fn fingerprint_value(v: &Value) -> String {
             let joined: Vec<String> = xs.iter().map(|x| x.to_string()).collect();
             format!("a:[{}]", joined.join(","))
         }
+        Value::Map(entries) => {
+            let joined: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| format!("{}:{}", fingerprint_value(k), fingerprint_value(v)))
+                .collect();
+            format!("m:{{{}}}", joined.join(","))
+        }
         Value::Pair(a, b) => format!("p:({a},{b})"),
         Value::Quad(a, b, c, d) => format!("q:({a},{b},{c},{d})"),
         Value::Tree(nodes) => {

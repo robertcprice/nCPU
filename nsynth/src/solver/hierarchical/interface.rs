@@ -62,6 +62,7 @@ fn infer_signature_from_examples(examples: &[Example]) -> String {
             crate::benchmark::Value::Tuple(_) => "Tuple",
             crate::benchmark::Value::Struct(_) => "Struct",
             crate::benchmark::Value::Tensor { .. } => "Tensor",
+            crate::benchmark::Value::Map(_) => "Map",
         };
         param_idx += 1;
         param_types.push(format!("{}: {}", param_name(param_idx), type_str));
@@ -79,6 +80,7 @@ fn infer_signature_from_examples(examples: &[Example]) -> String {
         crate::benchmark::Value::Tuple(_) => "Tuple",
         crate::benchmark::Value::Struct(_) => "Struct",
         crate::benchmark::Value::Tensor { .. } => "Tensor",
+        crate::benchmark::Value::Map(_) => "Map",
     };
 
     format!(
@@ -148,6 +150,7 @@ fn value_to_type(value: &crate::benchmark::Value) -> Option<String> {
         crate::benchmark::Value::Tuple(_) => "Tuple".to_string(),
         crate::benchmark::Value::Struct(_) => "Struct".to_string(),
         crate::benchmark::Value::Tensor { .. } => "Tensor".to_string(),
+        crate::benchmark::Value::Map(_) => "Map".to_string(),
     })
 }
 

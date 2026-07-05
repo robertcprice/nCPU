@@ -125,6 +125,9 @@ impl TypeClass {
             // method-stats router never routes a tensor problem to a scalar/array
             // specialist (the tensor reach is codegen, handled before this point).
             Value::Tensor { .. } => TypeClass::Mixed,
+            // Maps reach Mog code as arrays of [key, value] pairs (the runtime
+            // has no map type), so route them with the array machinery.
+            Value::Map(_) => TypeClass::Array,
         }
     }
 }

@@ -10,10 +10,21 @@ fn json_to_value(v: &serde_json::Value) -> Option<Value> {
     if let Some(b) = v.as_bool() {
         return Some(Value::Bool(b));
     }
-    // {"__map__": ...} — dict tasks skip until Value::Map lands in this tree
-    // (the decode exists in the universal working tree; port with the Map type).
-    if v.get("__map__").is_some() {
-        return None;
+    // {"__map__": [[k, v], ...]} — the prep script's dict encoding (a plain JSON
+    // object would stringify int keys and lose the key type). Decodes to
+    // Value::Map in canonical order.
+    if let Some(entries) = v.get("__map__").and_then(|m| m.as_array()) {
+        let pairs: Option<Vec<(Value, Value)>> = entries
+            .iter()
+            .map(|e| {
+                let kv = e.as_array()?;
+                if kv.len() != 2 {
+                    return None;
+                }
+                Some((json_to_value(&kv[0])?, json_to_value(&kv[1])?))
+            })
+            .collect();
+        return Some(Value::map_from_pairs(pairs?));
     }
     if let Some(i) = v.as_i64() {
         return Some(Value::Int(i));

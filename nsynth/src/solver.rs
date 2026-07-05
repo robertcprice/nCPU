@@ -45,8 +45,13 @@ mod search_numeric_families;
 mod search_runtime;
 mod search_scalar_families;
 mod search_text_families;
+mod search_combinator;
+mod search_universal;
+mod search_decompose;
 mod search_time_families;
 mod search_tree_families;
+mod search_tuple;
+mod search_typed_enum;
 mod signature;
 
 use self::helpers::{
@@ -258,6 +263,7 @@ pub fn solve_problem_prefer_differentiable(problem: &Problem) -> SolveResult {
 pub fn solve_problem(problem: &Problem) -> SolveResult {
     pipeline::solve_problem(&problem.synthesis_view())
 }
+
 
 /// Build a whole-word string->string lookup-table program from single-arg
 /// examples (irregular inflection and similar arbitrary lexicons), or None if

@@ -19,6 +19,13 @@
 
 /// Apply the full normalization pass to one transpiled component's Rust source.
 pub fn normalize_component(rust: &str) -> String {
+    // Rule 7 FIRST: FLOAT fns — a Mog body may combine an f64 with a bare integer
+    // literal (`(a0 + a1) / 2`), fine in the interpreter but not in Rust
+    // (E0277 `no implementation for f64 / {integer}`; observed post-merge when the
+    // universal lane started winning `average`). Inside fns whose signature
+    // mentions f64, suffix `.0` to standalone integer literals (float scalar fns
+    // have no indices to corrupt).
+    let rust = &floatize_int_literals(rust);
     // Determine which top-level params are mutated and need `mut` (rule 4),
     // BEFORE rewriting `.len`/index (those don't affect param-mutation detection
     // but we want a stable scan of the original body for the param signature).
@@ -468,4 +475,65 @@ mod tests {
         assert_eq!(escape_module_name("loop"), "loop_m");
         assert_eq!(escape_module_name("negate"), "negate");
     }
+}
+
+/// Rule 7: inside fns whose SIGNATURE mentions `f64`, rewrite standalone integer
+/// literals to float literals (`2` -> `2.0`) so mixed f64/int arithmetic compiles.
+/// Brace-scoped to f64 fns only; literals already carrying a `.` are untouched.
+fn floatize_int_literals(rust: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_f64_fn = false;
+    let mut depth: i32 = 0;
+    for line in rust.lines() {
+        let t = line.trim_start();
+        if t.starts_with("fn ") || t.starts_with("pub fn ") {
+            in_f64_fn = line.contains("f64");
+        }
+        let rewritten = if in_f64_fn && !t.starts_with("fn ") && !t.starts_with("pub fn ") {
+            let chars: Vec<char> = line.chars().collect();
+            let mut s = String::with_capacity(line.len() + 4);
+            let mut i = 0;
+            while i < chars.len() {
+                let c = chars[i];
+                if c.is_ascii_digit()
+                    && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_' || chars[i - 1] == '.'))
+                {
+                    let start = i;
+                    while i < chars.len() && chars[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    let lit: String = chars[start..i].iter().collect();
+                    // Already a float, or part of an identifier? handled by guards.
+                    if i < chars.len() && (chars[i] == '.' || chars[i].is_alphanumeric() || chars[i] == '_') {
+                        s.push_str(&lit);
+                    } else {
+                        s.push_str(&lit);
+                        s.push_str(".0");
+                    }
+                    continue;
+                }
+                s.push(c);
+                i += 1;
+            }
+            s
+        } else {
+            line.to_string()
+        };
+        out.push(rewritten);
+        for c in line.chars() {
+            if c == '{' {
+                depth += 1;
+            } else if c == '}' {
+                depth -= 1;
+                if depth <= 0 {
+                    in_f64_fn = false;
+                }
+            }
+        }
+    }
+    let mut s = out.join("\n");
+    if rust.ends_with('\n') {
+        s.push('\n');
+    }
+    s
 }
