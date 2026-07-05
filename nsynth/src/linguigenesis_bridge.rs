@@ -3422,29 +3422,36 @@ const ARRAY_CONTENT_FLOOR: f32 = 0.9;
 /// is wrongly accepted (e.g. "trim" synthesized as remove-ALL-spaces, which fits
 /// the leading/trailing-space seed rows but fails "a b c" -> "a b c"). This is the
 /// SOUNDNESS gate for the single-op NL door — mirrors the LLM-examples path.
-/// TRUST GATE for examples-only NL synthesis: a verified solve over an
-/// examples-only spec (no reference / no holdouts — the pure agentic-NL regime) is
-/// only as correct as the examples DETERMINE the function. Two doctests do not pin
-/// a two-output function, so an overfit passes verification honestly and the agent
+/// TRUST GATE for examples-only NL synthesis. A verified solve over an
+/// examples-only spec (no reference/holdouts — the pure agentic-NL regime) is only
+/// as correct as the examples DETERMINE the function; two doctests don't pin a
+/// two-output function, so an overfit passes verification honestly and the agent
 /// would report a CONFIDENTLY-WRONG solve. Corroborate with an INDEPENDENT
-/// candidate (differential consensus) and downgrade the confident success to an
-/// honest refusal when the spec is PROVABLY underdetermined:
-///   * `Ambiguous {witness}` — an independent candidate passes the SAME examples
-///     yet DIFFERS on a probe. That witness PROVES the examples don't determine
-///     the function, so the "solve" cannot be claimed. DOWNGRADE.
-///   * `NoConsensus` — no independent candidate was produced (the corroborator
-///     could not reach it). This is NOT proof of underdetermination — refusing
-///     here would wrongly reject correct-but-hard solves (e.g. verified
-///     compositions the enumerative corroborator can't reproduce). KEEP.
-///   * `Verified` — an independent candidate AGREES. KEEP (confident).
-/// So the gate is SOUND: it only ever downgrades on a proof (a divergence
-/// witness), never a correct solve. The verifier's zero-false-positive guarantee
-/// is unchanged; this stops the agent CLAIMING a solve a witness shows the
-/// examples don't determine. Reference/holdout-backed specs skip the gate (their
-/// strict-verify holdouts already give a real differential correctness check).
-/// FOLLOW-UP: catching the `NoConsensus` tail (thin specs the corroborator can't
-/// solve, e.g. sum_product) needs a STRONGER independent corroborator so those
-/// become `Ambiguous` — see agentic-nl-diagnosis.
+/// candidate (differential consensus):
+///   * `Ambiguous {witness}` — an independent candidate fits the SAME examples yet
+///     DIFFERS on a probe: a PROOF the examples underdetermine the function.
+///     REFUSE (never a confident wrong).
+///   * `Verified` — an independent candidate AGREES. Confident; keep as-is.
+///   * `NoConsensus` — nothing could corroborate it. NOT a confident solve →
+///     LABEL tentative (`method:tentative`) so callers present "matches your
+///     examples, not independently verified — confirm/add one" and never score it
+///     confident.
+/// The verifier's zero-false-positive guarantee is untouched; this only stops the
+/// agent CLAIMING confidence it cannot justify.
+///
+/// SCOPE + KNOWN LIMIT (measured, HE-NL 33→21 confidently-wrong): the gate only
+/// runs for `is_examples_only` problems. Reference/holdout-backed NL problems SKIP
+/// it — but for NL the "reference" is COMPREHENSION-DERIVED, so a MIS-comprehension
+/// yields a self-consistently-wrong reference that verification cannot catch (the
+/// ~15 reference-backed residual + the compositional door, which also builds a
+/// composed reference). Running consensus on those cannot be done safely with the
+/// CURRENT corroborator: a CORRECT composition ("sum of negated values") already
+/// returns `NoConsensus` (proven), so broadening the gate would false-flag correct
+/// solves as tentative. The single lever that closes the residual is a STRONGER
+/// independent corroborator (correct→`Verified`, wrong→`Ambiguous`, `NoConsensus`
+/// rare) — then the gate can run on every NL door safely. Until then this is the
+/// sound extent; the rest is a comprehension problem (Prong 2). See
+/// agentic-nl-diagnosis / AGENTIC_NL_PLAYBOOK.
 fn consensus_trust_gate(
     problem: &crate::benchmark::Problem,
     mut result: crate::solver::SolveResult,
