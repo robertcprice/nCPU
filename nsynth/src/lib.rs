@@ -46,6 +46,7 @@ pub mod optimization;
 pub mod orchestrator;
 pub mod prob;
 pub mod program_trace;
+pub mod registry_hub;
 pub mod rejected_cache;
 pub mod runtime;
 pub mod search_family_router;

@@ -180,6 +180,13 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     canonical("modern", "theme", "a modern sleek contemporary fresh design style", &["sleek", "contemporary", "fresh"]);
     canonical("minimal", "theme", "a minimal simple plain clean design style", &["simple", "plain", "clean", "minimalist"]);
     canonical("classic", "theme", "a classic traditional elegant vintage serif design style", &["traditional", "elegant", "vintage"]);
+    // GROWTH: merge every TAUGHT concept from the hub's web data registry —
+    // runtime-taught vocabulary resolves exactly like the seeds (entities +
+    // synonym edges through the same resolver).
+    for c in crate::registry_hub::load_domain_concepts(crate::registry_hub::Domain::Web) {
+        let syns: Vec<&str> = c.synonyms.iter().map(String::as_str).collect();
+        canonical(&c.lemma, &c.kind, &c.definition, &syns);
+    }
     reg
 }
 
@@ -188,19 +195,13 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
 /// definition-overlap tier; the canonical entity carries `web_kind`.
 fn resolve_web_token(
     resolver: &linguigenesis_core::entity_resolution::EntityResolver,
+    registry: &linguigenesis_core::registry::Registry,
     token: &str,
 ) -> Option<(String, String, f32)> {
-    // Scan the RANKED candidates for the first that carries web_kind: a synonym
-    // surface ("banner") direct-matches its own entity first, but the canonical
-    // ("hero") arrives via the synonym-edge lens right behind it.
-    resolver
-        .rank_candidates(token)
-        .into_iter()
-        .filter(|r| r.evidence.score >= 0.5)
-        .find_map(|r| {
-            let kind = r.entity.get_property("web_kind")?.clone();
-            Some((kind, r.entity.lemma.clone(), r.evidence.score))
-        })
+    // Full emergent completion (shared hub helper): ranked candidates, and a
+    // kind-less hit (a synonym entity reached by morphology) follows its
+    // synonym EDGES to the canonical concept carrying web_kind.
+    crate::registry_hub::resolve_domain(resolver, registry, token, "web_kind")
 }
 
 /// Emergent comprehension of a page request: routing gate = a construction cue
@@ -247,11 +248,12 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
         c.make_ascii_uppercase();
     }
     // CONTENT resolution through the REAL resolver over the web registry.
-    let resolver = EntityResolver::new(web_registry());
+    let registry = web_registry();
+    let resolver = EntityResolver::new(registry.clone());
     let mut theme: Option<String> = None;
     let mut sections: Vec<String> = Vec::new();
     for t in &tokens {
-        if let Some((kind, lemma, _score)) = resolve_web_token(&resolver, t) {
+        if let Some((kind, lemma, _score)) = resolve_web_token(&resolver, &registry, t) {
             match kind.as_str() {
                 "theme" => {
                     if theme.is_none() {
@@ -292,11 +294,29 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
         .get(1)
         .cloned()
         .unwrap_or_else(|| "#36454f".into());
+    // Built-in sections use their curated emitters; TAUGHT sections (grown at
+    // runtime through the registry hub) get a generic emitter built from the
+    // concept's own definition — vocabulary growth without code changes.
+    let taught: Vec<crate::registry_hub::Concept> =
+        crate::registry_hub::load_domain_concepts(crate::registry_hub::Domain::Web);
     let body: String = req
         .sections
         .iter()
-        .filter_map(|name| registry.iter().find(|s| s.name == name))
-        .map(|s| (s.emit)(&req.title))
+        .filter_map(|name| {
+            if let Some(s) = registry.iter().find(|s| s.name == name) {
+                return Some((s.emit)(&req.title));
+            }
+            taught.iter().find(|c| &c.lemma == name).map(|c| {
+                let mut t = c.lemma.clone();
+                if let Some(ch) = t.get_mut(0..1) {
+                    ch.make_ascii_uppercase();
+                }
+                format!(
+                    "<section class=\"taught\" id=\"{}\"><h2>{}</h2><p>{}</p></section>",
+                    c.lemma, t, c.definition
+                )
+            })
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let html = format!(
@@ -325,6 +345,12 @@ pub fn verify_page(req: &SiteRequest, html: &str, css: &str) -> Vec<String> {
         if let Some(s) = section_registry().into_iter().find(|s| s.name == name) {
             if !html.contains(s.assert_marker) {
                 fails.push(format!("requested section '{name}' missing ({})", s.assert_marker));
+            }
+        } else {
+            // Taught section: its id IS the assert marker.
+            let marker = format!("id=\"{name}\"");
+            if !html.contains(&marker) {
+                fails.push(format!("requested taught section '{name}' missing ({marker})"));
             }
         }
     }

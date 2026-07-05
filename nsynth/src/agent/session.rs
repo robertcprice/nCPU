@@ -348,6 +348,41 @@ impl CodingAgentSession {
             }
         }
 
+        // TEACH INTAKE (registry growth): "teach web: a testimonials section
+        // means customer quotes in a row, also called reviews" — persists the
+        // concept into the domain's data registry so it resolves in every
+        // future request AND process. The universal-substrate growth seam.
+        if let Some((domain, concept)) = crate::registry_hub::parse_teach(query) {
+            let lemma = concept.lemma.clone();
+            let kind = concept.kind.clone();
+            let result = match crate::registry_hub::teach_concept(domain, concept) {
+                Ok(()) => AgentQueryResult {
+                    route: QueryRoute::SynthesizeFunction,
+                    success: true,
+                    response: format!(
+                        "Learned {domain:?} concept '{lemma}' ({kind}) — resolvable in all future requests, persisted."
+                    ),
+                    workflow: "registry.teach".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("registry-teach".to_string()),
+                    repo_result: None,
+                    tool_trace: Vec::new(),
+                },
+                Err(e) => AgentQueryResult {
+                    route: QueryRoute::SynthesizeFunction,
+                    success: false,
+                    response: format!("teach failed: {e}"),
+                    workflow: "registry.teach".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("registry-teach".to_string()),
+                    repo_result: None,
+                    tool_trace: Vec::new(),
+                },
+            };
+            self.record_result(query, &result);
+            return result;
+        }
+
         // STRUCTURE-SCAFFOLD INTAKE: "make a new project organized like
         // structure.md" — a construction request naming ORGANIZATION plus a spec
         // FILE that exists in the root. The spec is the oracle: the generated

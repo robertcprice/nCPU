@@ -97,3 +97,40 @@ fn structure_intake_declines_without_a_spec_file() {
     assert_ne!(r.workflow, "site.scaffold", "no spec file on disk: {}", r.response);
     let _ = fs::remove_dir_all(&root);
 }
+
+/// THE GROWTH LOOP, end to end: an unknown concept is TAUGHT at runtime and the
+/// very next ask uses it — resolved through the real resolver (synonym too),
+/// emitted, and request-fidelity verified. Vocabulary grows without code.
+#[test]
+fn teach_then_use_grows_the_web_vocabulary() {
+    let reg_file = std::env::temp_dir().join(format!("nsynth_teachreg_{}.json", std::process::id()));
+    let _ = fs::remove_file(&reg_file);
+    std::env::set_var("NSYNTH_WEB_REGISTRY", &reg_file);
+    let root = fresh_root("teach");
+    let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
+
+    // BEFORE: "testimonials" resolves to nothing — the page builds without it.
+    let r0 = s.handle_query("make a new page called home for my website with a hero and testimonials");
+    assert!(r0.success);
+    let html0 = fs::read_to_string(root.join("site/home.html")).unwrap();
+    assert!(!html0.contains("id=\"testimonials\""), "unknown concept must not fabricate");
+
+    // TEACH.
+    let rt = s.handle_query(
+        "teach web: a testimonials section means customer quotes displayed in a row, also called reviews",
+    );
+    assert!(rt.success, "{}", rt.response);
+    assert_eq!(rt.workflow, "registry.teach");
+
+    // AFTER: the SYNONYM ("reviews") reaches the taught concept; the section is
+    // emitted and fidelity-verified on the new page.
+    let r1 = s.handle_query("add a new page called landing to my website with a hero and reviews");
+    assert!(r1.success, "{}", r1.response);
+    let html1 = fs::read_to_string(root.join("site/landing.html")).unwrap();
+    assert!(html1.contains("id=\"testimonials\""), "taught section emitted via synonym: {html1}");
+    assert!(html1.contains("customer quotes"), "definition-derived content");
+
+    std::env::remove_var("NSYNTH_WEB_REGISTRY");
+    let _ = fs::remove_file(&reg_file);
+    let _ = fs::remove_dir_all(&root);
+}
