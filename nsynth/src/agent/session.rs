@@ -348,6 +348,18 @@ impl CodingAgentSession {
             }
         }
 
+        // SITE INTAKE (web-artifact front door): a construction request naming a
+        // page/site — "add a new page called portfolio, modern theme, hero and
+        // gallery, teal and charcoal" — builds the page with request-derived
+        // structural verification (every requested section/color proven present).
+        // comprehend_site_request self-gates on construction cue + web noun, so
+        // op requests ("paginate the array") fall through untouched.
+        if let Some(req) = crate::site::comprehend_site_request(query) {
+            let result = self.run_build_site(&req);
+            self.record_result(query, &result);
+            return result;
+        }
+
         // COMPONENT INTAKE (component layer front door): a CONSTRUCTION request
         // naming known component(s) — "build a counter", "an accumulator", "give me
         // array statistics" — builds a verified crate directly (resolve ->
@@ -415,6 +427,48 @@ impl CodingAgentSession {
         let result = self.run_build_components(&specs);
         self.record_result(query, &result);
         Some(result)
+    }
+
+    /// Build a comprehended site/page request into the session root, reporting
+    /// the request-fidelity verification in the tool trace. Fail-closed: an
+    /// emission that doesn't verify against the request is a failed result.
+    fn run_build_site(&mut self, req: &crate::site::SiteRequest) -> AgentQueryResult {
+        match crate::site::build_site_page(&self.root, req) {
+            Ok(written) => {
+                let mut tool_trace: Vec<(String, String)> = written
+                    .iter()
+                    .map(|p| (format!("fs.write:{p}"), "ok".to_string()))
+                    .collect();
+                tool_trace.push(("site.verify".to_string(), "ok".to_string()));
+                AgentQueryResult {
+                    route: QueryRoute::GreenfieldProject,
+                    success: true,
+                    response: format!(
+                        "Built page '{}' (theme {}, sections [{}], colors [{}]) — request-fidelity verified: {}",
+                        req.page,
+                        req.theme,
+                        req.sections.join(", "),
+                        req.colors.join(", "),
+                        written.join(", "),
+                    ),
+                    workflow: "site.build".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("site-domain".to_string()),
+                    repo_result: None,
+                    tool_trace,
+                }
+            }
+            Err(e) => AgentQueryResult {
+                route: QueryRoute::GreenfieldProject,
+                success: false,
+                response: format!("site build failed: {e}"),
+                workflow: "site.build".to_string(),
+                clarification_questions: Vec::new(),
+                synthesis_method: Some("site-domain".to_string()),
+                repo_result: None,
+                tool_trace: Vec::new(),
+            },
+        }
     }
 
     fn run_build_components(
