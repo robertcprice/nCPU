@@ -251,6 +251,150 @@ fn solve_struct_output(problem: &Problem) -> Option<SolveResult> {
     })
 }
 
+/// MAP-OUTPUT synthesis (fixed-key). v1 scope: every example's expected is a
+/// `Map` with the SAME set of integer keys and integer values. Each key becomes
+/// a sub-problem (params -> i64 for that key's value) solved by the FULL
+/// pipeline; the assembly
+///
+///   fn f_k1(args) -> i64 { <verified> }  fn f_k2(args) -> i64 { <verified> }
+///   fn f(args) -> [[i64]] { return [[k1, f_k1(args)], [k2, f_k2(args)]]; }
+///
+/// is strict-verified WHOLE — the emitted array-of-[key,value]-pairs is matched
+/// against the expected `Map` by the order-independent Map bridge in
+/// `output_matches` (duplicate/padded keys rejected). Declines honestly on any
+/// failure; never fabricates. All model-free (each helper is engine synthesis).
+fn solve_map_output(problem: &Problem) -> Option<SolveResult> {
+    use crate::benchmark::Example;
+    // Gate: first example's expected is a non-empty Map of int keys.
+    let keys: Vec<i64> = match &problem.examples.first()?.expected {
+        Value::Map(entries) if !entries.is_empty() => entries
+            .iter()
+            .map(|(k, _)| match k {
+                Value::Int(i) => Some(*i),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?,
+        _ => return None,
+    };
+    // Every example: a Map with the SAME key set and integer values.
+    let mut sorted_keys = keys.clone();
+    sorted_keys.sort_unstable();
+    for e in &problem.examples {
+        let Value::Map(entries) = &e.expected else {
+            return None;
+        };
+        if entries.len() != keys.len() {
+            return None;
+        }
+        let mut ekeys = Vec::with_capacity(entries.len());
+        for (k, v) in entries {
+            match k {
+                Value::Int(i) => ekeys.push(*i),
+                _ => return None,
+            }
+            if !matches!(v, Value::Int(_)) {
+                return None;
+            }
+        }
+        ekeys.sort_unstable();
+        if ekeys != sorted_keys {
+            return None;
+        }
+    }
+    // FUNCTIONAL-CONSISTENCY pre-gate: identical inputs -> identical output.
+    for (i, a) in problem.examples.iter().enumerate() {
+        for b in problem.examples.iter().skip(i + 1) {
+            if a.inputs == b.inputs && a.expected != b.expected {
+                return None;
+            }
+        }
+    }
+
+    let fn_name = problem.function_name();
+    let params_src = problem
+        .signature
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(')'))
+        .map(|(p, _)| p.trim().to_string())
+        .unwrap_or_default();
+    let param_names: Vec<String> = params_src
+        .split(',')
+        .filter_map(|p| p.split(':').next().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+        .collect();
+    if param_names.is_empty() {
+        return None;
+    }
+
+    // One verified value-helper per key (order fixed by `keys`).
+    let mut helpers = String::new();
+    let mut pair_exprs = Vec::new();
+    for &k in &keys {
+        let fvals: Vec<Value> = problem
+            .examples
+            .iter()
+            .map(|e| match &e.expected {
+                Value::Map(entries) => entries
+                    .iter()
+                    .find(|(ek, _)| matches!(ek, Value::Int(i) if *i == k))
+                    .map(|(_, v)| v.clone())
+                    .expect("gated: key present in every example"),
+                _ => unreachable!("gated above"),
+            })
+            .collect();
+        // A stable, valid identifier for the key (negatives -> `_n`).
+        let key_id = if k < 0 {
+            format!("n{}", -k)
+        } else {
+            k.to_string()
+        };
+        let helper_name: &'static str =
+            Box::leak(format!("{fn_name}_k{key_id}").into_boxed_str());
+        let helper_sig: &'static str =
+            Box::leak(format!("fn {helper_name}({params_src}) -> i64").into_boxed_str());
+        let sub = Problem {
+            name: helper_name.to_string(),
+            category: "map-value",
+            description: "map value-per-key decomposition",
+            signature: helper_sig,
+            examples: problem
+                .examples
+                .iter()
+                .zip(fvals.iter())
+                .map(|(e, fv)| Example {
+                    inputs: e.inputs.clone(),
+                    expected: fv.clone(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let r = solve_problem(&sub);
+        if !r.success {
+            return None; // a value the engine can't synthesize => decline whole
+        }
+        helpers.push_str(r.code.trim_end());
+        helpers.push_str("\n\n");
+        pair_exprs.push(format!("[{k}, {helper_name}({})]", param_names.join(", ")));
+    }
+
+    let code = format!(
+        "{helpers}fn {fn_name}({params_src}) -> [[i64]] {{\n    return [{}];\n}}\n",
+        pair_exprs.join(", "),
+    );
+    // The WHOLE assembly must strict-verify — the constructor wiring is proven
+    // here (against the Map bridge), not assumed.
+    if crate::runtime::verify_problem_code_strict(problem, &code).is_err() {
+        return None;
+    }
+    Some(SolveResult {
+        success: true,
+        code,
+        method: "map_fieldwise".to_string(),
+        error: None,
+        metadata: Default::default(),
+    })
+}
+
 /// STRUCT-INPUT synthesis: FLATTEN-AND-WRAP. v1 scope: exactly ONE input, a
 /// flat struct of Int fields, non-struct output. The fields become the params
 /// of a flat sub-problem handed to the FULL pipeline; the assembly
@@ -558,6 +702,17 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // program (struct decl + verified per-field helpers + a constructor fn) is
     // strict-verified as a whole before being accepted.
     if let Some(result) = solve_struct_output(problem) {
+        if result.success && recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+        }
+        return result;
+    }
+
+    // Map-OUTPUT problems (fixed-key): the expected is a Map with the same key
+    // set across examples. Solve one verified value-helper per key (full
+    // pipeline), emit an array-of-[key,value]-pairs constructor, strict-verify
+    // the whole (the Map bridge matches pairs order-independently). Model-free.
+    if let Some(result) = solve_map_output(problem) {
         if result.success && recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
         }
@@ -997,8 +1152,49 @@ mod string_lexicon_tests {
 
 #[cfg(test)]
 mod struct_output_tests {
-    use super::solve_struct_output;
+    use super::{solve_map_output, solve_struct_output};
     use crate::benchmark::{Example, Problem, Value};
+
+    /// MAP-OUTPUT, fixed keys: {0: n, 1: n+1} for input n. The lane solves a
+    /// verified value-helper per key and emits an array-of-pairs the Map bridge
+    /// verifies — a composite value type that was 100% unsolvable before, now
+    /// solved model-free and strict-verified.
+    #[test]
+    fn solve_map_output_fixed_keys() {
+        let ex = |n: i64| Example {
+            inputs: vec![Value::Int(n)],
+            expected: Value::Map(vec![
+                (Value::Int(0), Value::Int(n)),
+                (Value::Int(1), Value::Int(n + 1)),
+            ]),
+        };
+        let problem = Problem {
+            name: "pair_map".into(),
+            category: "test",
+            description: "fixed-key map output",
+            signature: "fn pair_map(n: i64) -> Map",
+            examples: vec![ex(5), ex(3), ex(8), ex(0), ex(-2), ex(11)],
+            ..Default::default()
+        };
+        let r = solve_map_output(&problem).expect("solves a fixed-key int map");
+        assert!(r.success, "map solve succeeds");
+        assert!(r.code.contains("-> [[i64]]"), "emits array-of-pairs: {}", r.code);
+        assert_eq!(r.method, "map_fieldwise");
+        // The whole assembly strict-verifies (checked inside solve_map_output); a
+        // non-functional map spec is declined.
+        let chaos = Problem {
+            name: "chaos_map".into(),
+            category: "test",
+            description: "non-functional",
+            signature: "fn chaos_map(n: i64) -> Map",
+            examples: vec![
+                Example { inputs: vec![Value::Int(1)], expected: Value::Map(vec![(Value::Int(0), Value::Int(1))]) },
+                Example { inputs: vec![Value::Int(1)], expected: Value::Map(vec![(Value::Int(0), Value::Int(2))]) },
+            ],
+            ..Default::default()
+        };
+        assert!(solve_map_output(&chaos).is_none(), "non-functional map declined");
+    }
 
     /// NO FABRICATION, instantly: a spec that is not a FUNCTION (identical
     /// input demanding different structs) is declined by the functional-
