@@ -2655,6 +2655,32 @@ impl LinguigenesisBridge {
         Some((fnn, r.evidence.score, r.evidence.method.to_string()))
     }
 
+    /// PHRASE-level op resolution over a whole request: matches a MULTI-WORD op
+    /// reference in the prose against each synthesizable op's own lemma tokens
+    /// ("reverse the string" → `reverse_string`) and any data `phrase_surfaces`,
+    /// in order, each word by the emergent morphology tiers. The resolution-side
+    /// half of the NL-vocabulary lane (the universal agent's surface-derivation
+    /// miner is the emission half — see MASTER_ROADMAP 0.0591). Returns
+    /// `(default_fn_name, score)`.
+    pub fn resolve_phrase_op(&self, text: &str) -> Option<(String, f32)> {
+        use linguigenesis_core::entity_resolution::resolve_phrase_operation;
+        let registry = self.registry_clone().ok()?;
+        let resolver = EntityResolver::new(registry);
+        let tokens: Vec<String> = text
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect();
+        let (r, _span) = resolve_phrase_operation(&resolver, &tokens)?;
+        let fnn = r
+            .entity
+            .get_property("default_fn_name")
+            .cloned()
+            .unwrap_or_else(|| r.entity.lemma.clone());
+        Some((fnn, r.evidence.score))
+    }
+
     /// TEST-SUPPORT: resolve a single surface word to its highest-confidence
     /// programming op via the SAME emergent resolver the gate uses
     /// ([`resolved_content_ops`]). Returns `(default_fn_name, score)` for the
