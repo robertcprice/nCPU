@@ -887,6 +887,51 @@ mod real_nl_tests {
         assert!(r3.sections.contains(&"gallery".to_string()), "pictures -> gallery");
     }
 
+    /// BACKEND TEACH LOOP drives real behavior (symmetric with the web teach
+    /// loop): a runtime-taught backend synonym flips api-form detection. Before
+    /// teaching, "sends to my webhook" carries no known api target; after
+    /// teaching "webhook" as a route (synonym "hook"), the same phrasing wires
+    /// the contact form to the api — through the REAL resolver, no keywords.
+    #[test]
+    fn taught_backend_concept_flips_api_form_detection() {
+        use crate::registry_hub::{teach_concept, Concept, Domain};
+        let p = std::env::temp_dir()
+            .join(format!("nsynth_site_teachback_{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        std::env::set_var(Domain::Backend.env_var_name(), &p);
+
+        // Unknown target: no api wiring yet.
+        let before = comprehend_site_request(
+            "add a page called reach for my site with a contact form that sends to my webhook",
+        )
+        .expect("comprehends");
+        assert!(!before.api_form, "webhook is unknown before teaching: {:?}", before.api_form);
+
+        // Teach the backend vocabulary at runtime.
+        teach_concept(
+            Domain::Backend,
+            Concept {
+                lemma: "webhook".to_string(),
+                kind: "route".to_string(),
+                definition: "an inbound callback endpoint the site posts to".to_string(),
+                synonyms: vec!["hook".to_string()],
+            },
+        )
+        .expect("teach persists");
+
+        // Same phrasing now wires the form, and so does the taught synonym.
+        for phrase in [
+            "add a page called reach for my site with a contact form that sends to my webhook",
+            "add a page called reach for my site with a contact form that posts to a hook",
+        ] {
+            let after = comprehend_site_request(phrase).expect("comprehends");
+            assert!(after.api_form, "taught backend concept must wire the form: {phrase}");
+        }
+
+        std::env::remove_var(Domain::Backend.env_var_name());
+        let _ = std::fs::remove_file(&p);
+    }
+
     /// Precision: web-ish words in OP requests still never comprehend as sites,
     /// and gibberish resolves nothing.
     #[test]
