@@ -49,6 +49,7 @@ pub mod prob;
 pub mod program_trace;
 pub mod registry_hub;
 pub mod rejected_cache;
+pub mod rlvr;
 pub mod runtime;
 pub mod search_family_router;
 pub mod site;
