@@ -182,6 +182,120 @@ const ALL_CMPS: [CmpOp; 6] = [
 ];
 const CONSTANTS: [i64; 12] = [0, 1, -1, 2, -2, 3, 5, 7, 10, 32, 100, 255];
 
+// ── ALGEBRAIC CANONICALIZATION (e-graph on-ramp) ────────────────────────────
+// Normalize a scalar Expr to a canonical form using ONLY semantics-preserving
+// rewrites that are SOUND under partial (Option) evaluation — the seed of an
+// e-graph rewrite ruleset (the metamorphic algebraic laws), used here to
+// (a) simplify emitted code and (b) merge algebraically-equal subtrees so the
+// library flywheel compresses `a+b` and `b+a` to ONE reusable op. Deliberately
+// omits constant-folding and annihilators (x*0, x-x): those change which
+// sub-expressions get evaluated, which is unsound when a discarded sub-expr can
+// error. Guarantee (property-tested): eval is preserved on every input.
+
+fn expr_rank(e: &Expr) -> u8 {
+    match e {
+        Expr::Const(_) => 0,
+        Expr::Var(_) => 1,
+        Expr::UnaryOp(..) => 2,
+        Expr::BinOp(..) => 3,
+        _ => 4, // if / loops / call: opaque leaves for ordering purposes
+    }
+}
+
+/// Deterministic total order on Expr for canonical commutative-operand ordering.
+/// Structural; used ONLY to pick a stable operand order (semantics-irrelevant).
+fn cmp_expr(a: &Expr, b: &Expr) -> std::cmp::Ordering {
+    use std::cmp::Ordering::Equal;
+    let (ra, rb) = (expr_rank(a), expr_rank(b));
+    if ra != rb {
+        return ra.cmp(&rb);
+    }
+    match (a, b) {
+        (Expr::Const(x), Expr::Const(y)) => x.cmp(y),
+        (Expr::Var(x), Expr::Var(y)) => x.cmp(y),
+        (Expr::UnaryOp(o1, e1), Expr::UnaryOp(o2, e2)) => {
+            (*o1 as u8).cmp(&(*o2 as u8)).then_with(|| cmp_expr(e1, e2))
+        }
+        (Expr::BinOp(o1, l1, r1), Expr::BinOp(o2, l2, r2)) => (*o1 as u8)
+            .cmp(&(*o2 as u8))
+            .then_with(|| cmp_expr(l1, l2))
+            .then_with(|| cmp_expr(r1, r2)),
+        _ => Equal,
+    }
+}
+
+fn is_commutative(op: BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Add | BinOp::Mul | BinOp::Min | BinOp::Max | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
+    )
+}
+
+/// Semantics-preserving canonicalization of a scalar Expr (see module note).
+/// Iterates the local rewriter to a bounded fixpoint. Non-scalar nodes
+/// (loops / Call) are returned structurally unchanged in v1.
+pub fn algebraic_normalize(e: &Expr) -> Expr {
+    let mut cur = algebra_step(e);
+    for _ in 0..8 {
+        let next = algebra_step(&cur);
+        if next == cur {
+            break;
+        }
+        cur = next;
+    }
+    cur
+}
+
+fn algebra_step(e: &Expr) -> Expr {
+    match e {
+        Expr::Var(_) | Expr::Const(_) => e.clone(),
+        Expr::UnaryOp(op, inner) => {
+            let inner = algebra_step(inner);
+            // Involutions: --x -> x, ~~x -> x (both keep x; sound).
+            match (op, &inner) {
+                (UnOp::Neg, Expr::UnaryOp(UnOp::Neg, x)) => (**x).clone(),
+                (UnOp::BitNot, Expr::UnaryOp(UnOp::BitNot, x)) => (**x).clone(),
+                _ => Expr::UnaryOp(*op, Box::new(inner)),
+            }
+        }
+        Expr::IfExpr(cmp, l, r, t, els) => Expr::IfExpr(
+            *cmp,
+            Box::new(algebra_step(l)),
+            Box::new(algebra_step(r)),
+            Box::new(algebra_step(t)),
+            Box::new(algebra_step(els)),
+        ),
+        Expr::BinOp(op, l, r) => {
+            let l = algebra_step(l);
+            let r = algebra_step(r);
+            // Identity removal — removes ONLY a literal 0/1, never a sub-expr.
+            match (op, &l, &r) {
+                (BinOp::Add, x, Expr::Const(0))
+                | (BinOp::Add, Expr::Const(0), x)
+                | (BinOp::Sub, x, Expr::Const(0))
+                | (BinOp::Mul, x, Expr::Const(1))
+                | (BinOp::Mul, Expr::Const(1), x)
+                | (BinOp::BitOr, x, Expr::Const(0))
+                | (BinOp::BitOr, Expr::Const(0), x)
+                | (BinOp::BitXor, x, Expr::Const(0))
+                | (BinOp::BitXor, Expr::Const(0), x) => return x.clone(),
+                _ => {}
+            }
+            // Idempotence (both operands were evaluated — error-preserving).
+            if matches!(op, BinOp::Min | BinOp::Max | BinOp::BitAnd | BinOp::BitOr) && l == r {
+                return l;
+            }
+            // Commutative operand ordering.
+            if is_commutative(*op) && cmp_expr(&l, &r) == std::cmp::Ordering::Greater {
+                return Expr::BinOp(*op, Box::new(r), Box::new(l));
+            }
+            Expr::BinOp(*op, Box::new(l), Box::new(r))
+        }
+        // Non-scalar (loops / Call): v1 leaves the structure unchanged.
+        other => other.clone(),
+    }
+}
+
 /// Max example-mined constants to add to the size-1 seed (bounds search blow-up).
 const MAX_MINED_CONSTANTS: usize = 8;
 /// Magnitude bound on a mined constant (skip absurd literals that explode the
@@ -815,6 +929,11 @@ fn collect_scalar_subtrees<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// [`collect_scalar_subtrees`], every Var seen here is a free parameter, so
 /// `x*x` -> (`Var0*Var0`, 1) and `a-b` -> (`Var0-Var1`, 2).
 fn canonicalize(e: &Expr) -> (Expr, usize) {
+    // ALGEBRAIC normal form FIRST (semantics-preserving), THEN dense-var renaming.
+    // Composing the two means algebraically-equal subtrees merge into one library
+    // op: `a+2` and `2+a` both normalize to `Const(2)+Var0`, so the flywheel
+    // compresses them together instead of mining two look-alike ops.
+    let e = &algebraic_normalize(e);
     let mut map: BTreeMap<usize, usize> = BTreeMap::new();
     // First pass: assign dense slots in first-encounter (left-to-right) order.
     fn assign(e: &Expr, map: &mut BTreeMap<usize, usize>, next: &mut usize) {
@@ -4665,6 +4784,94 @@ pub fn dream(time_budget_ms: u64) -> ComponentLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SOUNDNESS GUARD for algebraic canonicalization (the crown jewel): over
+    /// 2000 random scalar exprs (all 12 binops incl. div/mod, all unops, ifs) x 8
+    /// random input vectors = 16k checks, `algebraic_normalize` must PRESERVE eval
+    /// EXACTLY (including the None/domain-error cases). A single unsound rewrite —
+    /// e.g. discarding a sub-expr that can error — is caught here.
+    #[test]
+    fn algebraic_normalize_preserves_eval_on_random_exprs() {
+        fn lcg(s: &mut u64) -> u64 {
+            *s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *s >> 16
+        }
+        fn gen(s: &mut u64, depth: u32) -> Expr {
+            if depth == 0 || lcg(s) % 3 == 0 {
+                if lcg(s) % 2 == 0 {
+                    Expr::Var((lcg(s) % 3) as usize)
+                } else {
+                    Expr::Const((lcg(s) % 11) as i64 - 5)
+                }
+            } else {
+                match lcg(s) % 3 {
+                    0 => {
+                        let op = ALL_BINOPS[(lcg(s) as usize) % ALL_BINOPS.len()];
+                        Expr::BinOp(op, Box::new(gen(s, depth - 1)), Box::new(gen(s, depth - 1)))
+                    }
+                    1 => {
+                        let op = ALL_UNOPS[(lcg(s) as usize) % ALL_UNOPS.len()];
+                        Expr::UnaryOp(op, Box::new(gen(s, depth - 1)))
+                    }
+                    _ => {
+                        let c = ALL_CMPS[(lcg(s) as usize) % ALL_CMPS.len()];
+                        Expr::IfExpr(
+                            c,
+                            Box::new(gen(s, depth - 1)),
+                            Box::new(gen(s, depth - 1)),
+                            Box::new(gen(s, depth - 1)),
+                            Box::new(gen(s, depth - 1)),
+                        )
+                    }
+                }
+            }
+        }
+        let mut s = 0xC0FFEE_u64;
+        let mut checked = 0usize;
+        for _ in 0..2000 {
+            let e = gen(&mut s, 4);
+            let c = algebraic_normalize(&e);
+            for _ in 0..8 {
+                let inputs: Vec<i64> = (0..3).map(|_| (lcg(&mut s) % 21) as i64 - 10).collect();
+                assert_eq!(
+                    e.eval(&inputs),
+                    c.eval(&inputs),
+                    "canonicalization changed eval: {e:?} -> {c:?} on {inputs:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 16000, "ran {checked} checks");
+    }
+
+    /// The MERGE win: algebraically-equal forms normalize to ONE representative,
+    /// so the library-mining canonicalize (algebra ∘ var-rename) compresses them
+    /// together instead of mining look-alikes.
+    #[test]
+    fn algebraic_normalize_merges_equal_forms() {
+        let a = Expr::Var(0);
+        let two = Expr::Const(2);
+        let ab = Expr::BinOp(BinOp::Add, Box::new(a.clone()), Box::new(two.clone())); // a+2
+        let ba = Expr::BinOp(BinOp::Add, Box::new(two.clone()), Box::new(a.clone())); // 2+a
+        assert_eq!(algebraic_normalize(&ab), algebraic_normalize(&ba), "a+2 == 2+a");
+        // x+0 -> x
+        let x0 = Expr::BinOp(BinOp::Add, Box::new(a.clone()), Box::new(Expr::Const(0)));
+        assert_eq!(algebraic_normalize(&x0), a);
+        // --x -> x
+        let nn = Expr::UnaryOp(UnOp::Neg, Box::new(Expr::UnaryOp(UnOp::Neg, Box::new(a.clone()))));
+        assert_eq!(algebraic_normalize(&nn), a);
+        // min(x,x) -> x
+        let mm = Expr::BinOp(BinOp::Min, Box::new(a.clone()), Box::new(a.clone()));
+        assert_eq!(algebraic_normalize(&mm), a);
+        // The mining canonical form merges a+2 and 2+a (algebra then var-rename).
+        assert_eq!(canonicalize(&ab).0, canonicalize(&ba).0, "mining canon merges commutative");
+        // Sub is NOT commutative — a-2 and 2-a must stay distinct.
+        let sab = Expr::BinOp(BinOp::Sub, Box::new(a.clone()), Box::new(two.clone()));
+        let sba = Expr::BinOp(BinOp::Sub, Box::new(two.clone()), Box::new(a.clone()));
+        assert_ne!(canonicalize(&sab).0, canonicalize(&sba).0, "a-2 != 2-a (sub not commutative)");
+    }
 
     /// COMPOSITE OUTPUT: a Pair-returning function `(a,b) -> (a+b, a-b)` is
     /// synthesized componentwise (each component a scalar fit), emitted as a
