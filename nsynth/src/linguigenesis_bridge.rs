@@ -3403,6 +3403,11 @@ fn mentioned_value_type(input: &str, registry: &Registry) -> Option<(String, Vec
 /// its mere presence — against a SCALAR resolved op — is a real domain signal.
 /// Pure non-resolving noise (score 0 / no match) never reaches here.
 const ARRAY_DOMAIN_FLOOR: f32 = 0.50;
+/// Minimum CONTENT-resolution confidence for a token to count as a real array
+/// operand. A registered domain noun ("array") resolves at ~1.0; a meta word
+/// ("function") only fuzzy-links via WordNet below this, so it is not misread as
+/// an operand even when the grammar-marker classification misses it.
+const ARRAY_CONTENT_FLOOR: f32 = 0.9;
 
 /// Find the first request token that resolves to an ARRAY-domain operation (an op
 /// whose declared `input_types` contains a vector type) other than `req_fn`.
@@ -3500,6 +3505,16 @@ fn array_domain_word(
                     content.entity.entity_type,
                     EntityType::GrammarMarker | EntityType::ConstraintMarker
                 ) {
+                    continue;
+                }
+                // A genuine array OPERAND is a REGISTERED domain word ("array" ->
+                // noun, content score ~1.0). A META word ("function", "method")
+                // only fuzzy-links via WordNet at a low content score. Require a
+                // high-confidence CONTENT resolution so a meta word — which the
+                // grammar-marker classification no longer catches after registry
+                // churn — is not misread as an array operand. Emergent: reads the
+                // resolver's own confidence, no stop-word list.
+                if content.evidence.score < ARRAY_CONTENT_FLOOR {
                     continue;
                 }
             }
