@@ -123,7 +123,7 @@ fn with_callee_names<R>(names: &[String], f: impl FnOnce() -> R) -> R {
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BinOp {
     Add,
     Sub,
@@ -139,7 +139,7 @@ pub enum BinOp {
     Shr,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum UnOp {
     Neg,
     Abs,
@@ -147,7 +147,7 @@ pub enum UnOp {
     Popcount,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CmpOp {
     Lt,
     Le,

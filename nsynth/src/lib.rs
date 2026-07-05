@@ -15,6 +15,7 @@ pub mod component;
 pub mod component_crawler;
 pub mod comprehension;
 pub mod constraint_oracle;
+pub mod egraph;
 pub mod db;
 pub mod differentiable;
 pub mod enumerative;
