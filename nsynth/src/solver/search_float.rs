@@ -216,6 +216,69 @@ pub(super) fn search_float_affine(problem: &Problem, fn_name: &str) -> Option<So
 /// the honest 1-term models (`c·x²`: 2 unknowns) fit with a spare point. A set
 /// is accepted only if the ROUNDED model reproduces every example within
 /// tolerance — recover-or-refuse, same as everywhere else.
+/// FLOAT SIGN PREDICATE: a single float input mapped to a bool by its SIGN.
+/// Sound by construction — only the four c=0 comparisons (>, >=, <, <=) are
+/// tried, and one is accepted only if it reproduces EVERY example exactly. There
+/// is no FITTED threshold, so no arbitrary-constant overfit: it solves
+/// is_positive / is_negative / is_non_negative and declines everything else.
+/// Strict-verified before acceptance; the first path from a float input to a
+/// boolean output.
+pub(super) fn search_float_sign_predicate(
+    problem: &Problem,
+    fn_name: &str,
+) -> Option<SolveResult> {
+    let sig = problem.signature.replace(' ', "").to_ascii_lowercase();
+    if !sig.contains("->bool") || !sig.contains("f64") {
+        return None;
+    }
+    // Single float input, bool output.
+    let rows: Vec<(f64, bool)> = problem
+        .examples
+        .iter()
+        .map(|ex| {
+            if ex.inputs.len() != 1 {
+                return None;
+            }
+            Some((value_as_f64(&ex.inputs[0])?, ex.expected_bool()?))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if rows.is_empty() {
+        return None;
+    }
+    let param = problem
+        .signature
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(')'))
+        .and_then(|(p, _)| p.split(':').next().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())?;
+    for op in [">", ">=", "<", "<="] {
+        let all = rows.iter().all(|(x, y)| {
+            let pred = match op {
+                ">" => *x > 0.0,
+                ">=" => *x >= 0.0,
+                "<" => *x < 0.0,
+                _ => *x <= 0.0,
+            };
+            pred == *y
+        });
+        if !all {
+            continue;
+        }
+        let code =
+            format!("fn {fn_name}({param}: f64) -> bool {{\n    return {param} {op} 0.0;\n}}\n");
+        if crate::runtime::verify_problem_code_strict(problem, &code).is_ok() {
+            return Some(SolveResult {
+                success: true,
+                code,
+                method: format!("float_sign_predicate({op}0)"),
+                error: None,
+                metadata: Default::default(),
+            });
+        }
+    }
+    None
+}
+
 pub(super) fn search_float_poly(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let (rows, targets, arity) = extract_float(problem)?;
     let n = rows.len();
@@ -348,6 +411,54 @@ pub(super) fn search_float_poly(problem: &Problem, fn_name: &str) -> Option<Solv
 mod tests {
     use super::*;
     use crate::benchmark::{Example, Problem, Value};
+
+    /// FLOAT -> BOOL sign predicate: is_positive solves via the exact `x > 0`
+    /// comparison; a non-sign boolean (|x| > 1) is declined (no fitted constant).
+    #[test]
+    fn float_sign_predicate_solves_is_positive() {
+        let ex = |x: f64, y: bool| Example {
+            inputs: vec![Value::Float(x.to_bits())],
+            expected: Value::Bool(y),
+        };
+        let problem = Problem {
+            name: "is_positive".to_string(),
+            category: "test",
+            description: "sign predicate",
+            signature: "fn is_positive(x: f64) -> bool",
+            examples: vec![
+                ex(1.5, true),
+                ex(-2.0, false),
+                ex(3.0, true),
+                ex(-0.5, false),
+                ex(0.0, false),
+                ex(7.25, true),
+            ],
+            ..Default::default()
+        };
+        let r = search_float_sign_predicate(&problem, "is_positive").expect("solves is_positive");
+        assert!(r.success);
+        assert!(r.code.contains("x > 0.0"), "emits x > 0: {}", r.code);
+
+        // A boolean that is NOT a sign check (|x| > 1) has no c=0 comparison that
+        // fits — declined, never a fabricated/overfit constant.
+        let notsign = Problem {
+            name: "big".to_string(),
+            category: "test",
+            description: "not a sign predicate",
+            signature: "fn big(x: f64) -> bool",
+            examples: vec![
+                ex(2.0, true),
+                ex(0.5, false),
+                ex(-2.0, true),
+                ex(-0.5, false),
+            ],
+            ..Default::default()
+        };
+        assert!(
+            search_float_sign_predicate(&notsign, "big").is_none(),
+            "non-sign boolean declined (no fitted threshold)"
+        );
+    }
 
     fn pf(sig: &'static str, rows: &[(Vec<f64>, f64)]) -> Problem {
         Problem {
@@ -493,3 +604,4 @@ mod tests {
         assert!(crate::runtime::code_reproduces_examples(&r.code, &p.examples));
     }
 }
+

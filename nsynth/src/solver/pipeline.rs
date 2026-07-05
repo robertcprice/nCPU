@@ -827,6 +827,17 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
     let _train_deadline = solve_budget_ms()
         .map(|ms| crate::synthesis::common::TrainDeadline::set(std::time::Duration::from_millis(ms as u64)));
 
+    // Float SIGN PREDICATE first among the float lanes: a `f64 -> bool` sign
+    // check (is_positive / is_negative). Exact c=0 comparisons only, so it's
+    // sound (no fitted threshold); declines everything else. The first float ->
+    // bool path.
+    if let Some(result) =
+        super::search_float::search_float_sign_predicate(problem, &problem.function_name())
+    {
+        if result.success {
+            return result;
+        }
+    }
     // Float (continuous) lane first: a `-> f64` problem is least-squares affine
     // regression, a different regime from the exact-integer machinery below
     // (which would choke on f64 inputs). Self-gates to f64 signatures and returns
