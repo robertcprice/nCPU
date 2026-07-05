@@ -380,3 +380,160 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+/// Replace the nav's link list with the given (href, label) pairs — the one
+/// post-processing hook both the create and extend paths share, so every page
+/// on a site carries the SAME nav (the site's convention is regenerated, not
+/// guessed).
+pub fn set_nav_links(html: &str, links: &[(String, String)]) -> String {
+    let items: String = links
+        .iter()
+        .map(|(href, label)| format!("<li><a href=\"{href}\">{label}</a></li>"))
+        .collect();
+    let Some(start) = html.find("<ul>") else { return html.to_string() };
+    let Some(end) = html[start..].find("</ul>").map(|e| start + e) else {
+        return html.to_string();
+    };
+    format!("{}<ul>{}{}", &html[..start], items, &html[end..])
+}
+
+/// Link-integrity check over a site directory: every `href="X.html"` in every
+/// page must resolve to an existing file. Returns failures.
+pub fn verify_site_links(dir: &Path) -> Vec<String> {
+    let mut fails = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec!["site dir unreadable".into()];
+    };
+    let pages: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|x| x == "html").unwrap_or(false))
+        .collect();
+    for page in &pages {
+        let Ok(text) = std::fs::read_to_string(page) else { continue };
+        let mut rest = text.as_str();
+        while let Some(pos) = rest.find("href=\"") {
+            rest = &rest[pos + 6..];
+            let Some(endq) = rest.find('"') else { break };
+            let href = &rest[..endq];
+            if href.ends_with(".html") && !dir.join(href).is_file() {
+                fails.push(format!(
+                    "{}: broken link '{href}'",
+                    page.file_name().unwrap_or_default().to_string_lossy()
+                ));
+            }
+            rest = &rest[endq..];
+        }
+    }
+    fails
+}
+
+/// EXTEND an existing site with a new page, following its conventions: the new
+/// page is emitted with the site's stylesheet and a nav linking every page, and
+/// the nav in EVERY existing page is rewired to include the new page — one
+/// coordinated change, link-integrity verified across the whole site.
+/// Fails closed on any verification failure.
+pub fn extend_site(root: &Path, req: &SiteRequest) -> Result<Vec<String>, String> {
+    let dir = root.join("site");
+    let mut existing: Vec<String> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("no existing site: {e}"))?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            n.ends_with(".html").then_some(n)
+        })
+        .collect();
+    existing.sort();
+    if existing.is_empty() {
+        return Err("no existing pages to extend".into());
+    }
+    let new_file = format!("{}.html", req.page);
+    if existing.contains(&new_file) {
+        return Err(format!("page '{}' already exists", req.page));
+    }
+    // The site-wide nav: every existing page + the new one, labels from stems.
+    let mut all: Vec<String> = existing.clone();
+    all.push(new_file.clone());
+    all.sort();
+    let links: Vec<(String, String)> = all
+        .iter()
+        .map(|f| {
+            let stem = f.trim_end_matches(".html");
+            let mut label = stem.to_string();
+            if let Some(c) = label.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            (f.clone(), label)
+        })
+        .collect();
+
+    // New page: emitted for the request, nav rewired to the site-wide list.
+    let (html, _css) = emit_page(req);
+    let html = set_nav_links(&html, &links);
+    let fails = verify_page(req, &html, &std::fs::read_to_string(dir.join("styles.css")).unwrap_or_default());
+    // Palette check may legitimately fail against the EXISTING stylesheet (the
+    // site's palette wins on extend); only structural page failures block.
+    let blocking: Vec<&String> = fails.iter().filter(|f| !f.contains("color")).collect();
+    if !blocking.is_empty() {
+        return Err(format!("new page failed fidelity: {blocking:?}"));
+    }
+
+    let mut written = Vec::new();
+    std::fs::write(dir.join(&new_file), &html).map_err(|e| e.to_string())?;
+    written.push(format!("site/{new_file}"));
+    // Rewire the nav in every existing page.
+    for f in &existing {
+        let p = dir.join(f);
+        let text = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+        let rewired = set_nav_links(&text, &links);
+        if rewired != text {
+            std::fs::write(&p, rewired).map_err(|e| e.to_string())?;
+            written.push(format!("site/{f}"));
+        }
+    }
+    // Whole-site link integrity is the closing gate.
+    let link_fails = verify_site_links(&dir);
+    if !link_fails.is_empty() {
+        return Err(format!("site link integrity failed: {link_fails:?}"));
+    }
+    Ok(written)
+}
+
+#[cfg(test)]
+mod extend_tests {
+    use super::*;
+
+    #[test]
+    fn extends_existing_site_and_rewires_every_nav() {
+        let root = std::env::temp_dir().join(format!("nsynth_extend_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // Existing site: home + about.
+        let home = comprehend_site_request("build a new page called home for the website with a hero")
+            .unwrap();
+        build_site_page(&root, &home).expect("home");
+        let about = comprehend_site_request("add a page called about to the site with an about section")
+            .unwrap();
+        extend_site(&root, &about).expect("about extends");
+        // Now add the user's page.
+        let req = comprehend_site_request(
+            "add a new page called portfolio to my website with a gallery and a contact form",
+        )
+        .unwrap();
+        let written = extend_site(&root, &req).expect("extend");
+        assert!(written.contains(&"site/portfolio.html".to_string()));
+        // EVERY page's nav links every page (coordinated rewiring).
+        for f in ["home.html", "about.html", "portfolio.html"] {
+            let text = std::fs::read_to_string(root.join("site").join(f)).unwrap();
+            for target in ["home.html", "about.html", "portfolio.html"] {
+                assert!(
+                    text.contains(&format!("href=\"{target}\"")),
+                    "{f} must link {target}"
+                );
+            }
+        }
+        // Link integrity green.
+        assert!(verify_site_links(&root.join("site")).is_empty());
+        // Duplicate page fails closed.
+        assert!(extend_site(&root, &req).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

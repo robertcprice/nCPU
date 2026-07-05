@@ -433,7 +433,20 @@ impl CodingAgentSession {
     /// the request-fidelity verification in the tool trace. Fail-closed: an
     /// emission that doesn't verify against the request is a failed result.
     fn run_build_site(&mut self, req: &crate::site::SiteRequest) -> AgentQueryResult {
-        match crate::site::build_site_page(&self.root, req) {
+        // EXTEND when a site already exists (follow its conventions, rewire the
+        // nav in every page, whole-site link integrity); CREATE otherwise.
+        let site_exists = std::fs::read_dir(self.root.join("site"))
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .any(|e| e.file_name().to_string_lossy().ends_with(".html"))
+            })
+            .unwrap_or(false);
+        let build = if site_exists {
+            crate::site::extend_site(&self.root, req)
+        } else {
+            crate::site::build_site_page(&self.root, req)
+        };
+        match build {
             Ok(written) => {
                 let mut tool_trace: Vec<(String, String)> = written
                     .iter()
