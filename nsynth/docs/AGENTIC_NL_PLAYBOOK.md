@@ -16,24 +16,38 @@ in, verify against the task's own hidden tests (`src/bin/mbpp_nl_one.rs`,
   guarantee ("reproduces the examples it was checked against") holds; 2-3 stated
   examples just don't determine the function, so an overfit passes honestly.
 
-## Layer 1 — the consensus trust gate (LANDED, no model)
+## Layer 1 — the consensus trust gate + confidence labeling (LANDED, no model)
 
-`consensus_trust_gate` (`linguigenesis_bridge.rs`): after a verified solve over an
-examples-only spec, corroborate with an independent candidate. On a divergence
-witness (`ConsensusVerdict::Ambiguous`) → downgrade the confident success to an
-honest refusal. Sound (never refuses a correct solve). Suite 82/82.
+`consensus_trust_gate` (`linguigenesis_bridge.rs`), wired in
+`synthesize_from_requirement`: after a verified solve over an examples-only spec,
+corroborate with an independent candidate:
+- `Ambiguous` (divergence witness) → REFUSE (proven underdetermined).
+- `Verified` → confident.
+- `NoConsensus` (can't corroborate) → **TENTATIVE**: keep the candidate but tag
+  `method` `:tentative`; callers present "matches your examples, not independently
+  verified — confirm/add one" and never score it confident. Suite 82/82.
 
-**To fully close confidently-wrong**, pick one:
-- **(1a) Stronger corroborator** — `agent/consensus.rs::independent_candidates` is
-  enumerative + leave-one-out; too weak for thin/typed specs (e.g. tuple-output
-  `sum_product` → `NoConsensus`, not `Ambiguous`, so it slips). Add independent
-  synthesis methods / output-type coverage so an alternative candidate is found →
-  `Ambiguous` → caught.
-- **(1b) Confidence labeling** — mark examples-only + not-`Verified` solves
-  *tentative* (present the candidate + "confirm or add an example") instead of
-  confident `success`. Eliminates ALL confidently-wrong without a perfect
-  corroborator; cost is more "tentative" (honest — 2 examples genuinely can't be
-  confident).
+**MEASURED (HumanEval-NL, 154):** confidently-WRONG **33 → 21 (−36%)**;
+`sum_product` (the canonical overfit) is now correctly TENTATIVE. Cost: 14 solves
+labelled tentative (8 were actually right — the honesty tax; 6 were wrong = wrongs
+avoided). SOLVED-confident 25 → 14.
+
+**The remaining 21 confidently-wrong leak through UNGATED NL doors** (the gate is
+per-door; it only covers `synthesize_from_requirement`):
+- **5 — compositional door** (`try_compose_pipeline` → `into_solve_result` in
+  `run_synthesis`) is not gated. FIX: run the same gate on the pipeline outcome
+  (needs the composed Problem plumbed to the gate).
+- **~15 — reference-backed leaks**: `is_examples_only` is FALSE when comprehension
+  attaches the resolved op's reference, so the gate skips — but for NL that
+  reference is COMPREHENSION-DERIVED (untrusted: if the wrong op was picked, its
+  reference + holdouts are self-consistently wrong). FIX: in the NL path, treat a
+  comprehension-derived reference as untrusted and run consensus regardless of
+  `is_examples_only`.
+- **1 — `ExplainCode`**: routed to explanation, not synthesis (routing artifact).
+
+**To reach confidently-wrong ≈ 0:** (i) gate the compositional door; (ii) drop the
+reference-trust assumption for the NL path; (iii) still-stronger corroborator for
+the thin-spec `NoConsensus` tail. All three are scoped, suite-gated follow-ons.
 
 ## Layer 2 — a real planner in the gated LME lane (RUN THIS)
 
