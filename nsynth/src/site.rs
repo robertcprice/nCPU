@@ -308,6 +308,20 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     canonical("modern", "theme", "a modern sleek contemporary fresh design style", &["sleek", "contemporary", "fresh"]);
     canonical("minimal", "theme", "a minimal simple plain clean design style", &["simple", "plain", "clean", "minimalist"]);
     canonical("classic", "theme", "a classic traditional elegant vintage serif design style", &["traditional", "elegant", "vintage"]);
+    // PAGE ARCHETYPES — a PURPOSE (landing/storefront/blog/docs) carries an
+    // implied STRUCTURE. Resolving the purpose lets an ABSTRACT prompt ("a
+    // landing page for my bakery") get a sensible section composition it never
+    // spelled out. Resolved through the same real resolver; the default section
+    // list is data (see `archetype_sections`). Lemmas are chosen NOT to collide
+    // with section words (portfolio/showcase stay gallery synonyms).
+    // The DEFINITION names the archetype's parts; the composition is DERIVED by
+    // resolving those words against the section registry (see
+    // `composition_from_definition`) — emergent, not a hardcoded list, so a
+    // TAUGHT archetype composes for free from the definition it was taught with.
+    canonical("landing", "archetype", "a landing home page with a hero, features, and a contact form", &["splash", "startpage"]);
+    canonical("storefront", "archetype", "a shop store page with a hero, a gallery, and a contact form", &["shop", "store", "storefront", "ecommerce", "catalog"]);
+    canonical("blog", "archetype", "a blog journal page with a hero, features, and an about story", &["journal", "articles", "posts"]);
+    canonical("documentation", "archetype", "a documentation reference page with a hero and an about overview", &["docs", "manual", "guide"]);
     // GROWTH: merge every TAUGHT concept from the hub's web data registry —
     // runtime-taught vocabulary resolves exactly like the seeds (entities +
     // synonym edges through the same resolver).
@@ -316,6 +330,49 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
         canonical(&c.lemma, &c.kind, &c.definition, &syns);
     }
     reg
+}
+
+/// Derive an archetype's implied composition EMERGENTLY by comprehending its
+/// own DEFINITION: resolve each word of the definition against the section
+/// registry and collect the sections it names, in order. This is what lets the
+/// system LEARN new archetypes for free — a taught archetype ("teach web: a
+/// portfolio archetype means a page with a hero, a gallery, an about story and
+/// a contact form") composes from the definition it was taught with, no code
+/// change. Domain-agnostic: the same mechanism composes any domain's archetype
+/// from its definition against that domain's part vocabulary.
+fn composition_from_definition(
+    resolver: &linguigenesis_core::entity_resolution::EntityResolver,
+    registry: &linguigenesis_core::registry::Registry,
+    definition: &str,
+    part_kind: &str,
+) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for tok in definition
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+    {
+        if let Some((kind, lemma, _score)) = resolve_web_token(resolver, registry, tok) {
+            if kind == part_kind && !parts.contains(&lemma) {
+                parts.push(lemma);
+            }
+        }
+    }
+    parts
+}
+
+/// The composition an archetype implies for a page, derived from the archetype
+/// entity's own definition in the (taught-merged) web registry.
+fn archetype_sections(
+    resolver: &linguigenesis_core::entity_resolution::EntityResolver,
+    registry: &linguigenesis_core::registry::Registry,
+    archetype: &str,
+) -> Vec<String> {
+    let Some(entity) = registry.get_by_lemma(archetype) else {
+        return Vec::new();
+    };
+    let def = entity.definitions.first().cloned().unwrap_or_default();
+    composition_from_definition(resolver, registry, &def, "section")
 }
 
 /// Resolve one token to a web entity (section/theme) through the REAL resolver.
@@ -380,6 +437,7 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
     let resolver = EntityResolver::new(registry.clone());
     let mut theme: Option<String> = None;
     let mut sections: Vec<String> = Vec::new();
+    let mut archetype: Option<String> = None;
     for t in &tokens {
         if let Some((kind, lemma, _score)) = resolve_web_token(&resolver, &registry, t) {
             match kind.as_str() {
@@ -393,7 +451,28 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
                         sections.push(lemma);
                     }
                 }
+                "archetype" => {
+                    if archetype.is_none() {
+                        archetype = Some(lemma);
+                    }
+                }
                 _ => {}
+            }
+        }
+    }
+    // STRUCTURE FROM PURPOSE: an abstract prompt that named a purpose but no
+    // explicit sections gets the archetype's implied composition. Explicit
+    // sections always win — inference only fills a void, never overrides intent.
+    // STRUCTURE FROM PURPOSE: fill from the archetype when the prompt named no
+    // CONTENT section (nav/footer are structural and auto-added, so they don't
+    // count). Merge — archetype parts augment, explicit content always wins.
+    let has_content = sections.iter().any(|s| s != "nav" && s != "footer");
+    if !has_content {
+        if let Some(a) = &archetype {
+            for part in archetype_sections(&resolver, &registry, a) {
+                if !sections.contains(&part) {
+                    sections.push(part);
+                }
             }
         }
     }
@@ -1225,6 +1304,78 @@ mod real_nl_tests {
         assert!(css2.contains("--on-primary: #ffffff"), "navy -> white text: {css2}");
     }
 
+    /// STRUCTURE FROM PURPOSE: an ABSTRACT prompt that names a page purpose but
+    /// no explicit sections gets a sensible composition, inferred EMERGENTLY from
+    /// the archetype's own definition (not a hardcoded table). Explicit sections
+    /// always win over inference.
+    #[test]
+    fn abstract_prompt_infers_structure_from_archetype() {
+        // No section words at all — only the purpose "landing" + a domain noun.
+        let r = comprehend_site_request("build a landing page for my bakery")
+            .expect("comprehends an abstract landing prompt");
+        for s in ["hero", "features", "contact"] {
+            assert!(r.sections.contains(&s.to_string()), "landing implies {s}: {:?}", r.sections);
+        }
+        // A storefront purpose implies a gallery (catalog), not features.
+        let r2 = comprehend_site_request("make a storefront site for my shop")
+            .expect("comprehends storefront");
+        assert!(r2.sections.contains(&"gallery".to_string()), "storefront implies gallery: {:?}", r2.sections);
+
+        // Explicit sections WIN — inference only fills a void.
+        let r3 = comprehend_site_request("build a landing page with just an about section")
+            .expect("comprehends");
+        assert!(r3.sections.contains(&"about".to_string()), "explicit about honored");
+        assert!(!r3.sections.contains(&"features".to_string()), "archetype did NOT override explicit: {:?}", r3.sections);
+    }
+
+    /// LEARN A NEW ARCHETYPE: a runtime-taught archetype composes for free from
+    /// the definition it was taught with — no code change. This is the emergent
+    /// "make its own archetypes" path: the composition is COMPREHENDED, not coded.
+    #[test]
+    fn taught_archetype_composes_from_its_definition() {
+        use crate::registry_hub::{teach_concept, Concept, Domain};
+        let p = std::env::temp_dir().join(format!("nsynth_arch_{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        std::env::set_var(Domain::Web.env_var_name(), &p);
+
+        // Unknown purpose before teaching: falls back (no inferred composition).
+        let before = comprehend_site_request("build a dashboard page").expect("comprehends");
+        assert!(
+            !before.sections.contains(&"features".to_string()),
+            "dashboard is unknown before teaching: {:?}",
+            before.sections
+        );
+
+        // Teach the archetype by DEFINITION — its parts are named in prose.
+        teach_concept(
+            Domain::Web,
+            Concept {
+                lemma: "dashboard".to_string(),
+                kind: "archetype".to_string(),
+                definition: "a dashboard page with a hero, features, and an about overview"
+                    .to_string(),
+                synonyms: vec!["console".to_string()],
+            },
+        )
+        .expect("teach persists");
+
+        // Now the same abstract prompt composes from the TAUGHT definition, and
+        // so does its taught synonym.
+        for phrase in ["build a dashboard page", "build a console page"] {
+            let r = comprehend_site_request(phrase).expect("comprehends");
+            for s in ["hero", "features", "about"] {
+                assert!(
+                    r.sections.contains(&s.to_string()),
+                    "taught dashboard implies {s} from its definition ({phrase}): {:?}",
+                    r.sections
+                );
+            }
+        }
+
+        std::env::remove_var(Domain::Web.env_var_name());
+        let _ = std::fs::remove_file(&p);
+    }
+
     /// ACCESSIBILITY invariants are real and pass on emitted pages but CATCH
     /// synthetic violations — the natural generalization of the contrast check
     /// to objective a11y structure.
@@ -1364,3 +1515,4 @@ mod mine_tests {
         let _ = std::fs::remove_file(&p);
     }
 }
+
