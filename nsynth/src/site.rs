@@ -1215,6 +1215,43 @@ mod tests {
     }
 
     #[test]
+    fn real_engine_synthesis_becomes_a_verified_widget() {
+        // THE UNIFICATION PROOF: examples -> engine synthesis (verified) -> transpile
+        // -> interactive widget. No hand-written logic, no model. The whole examples-
+        // only synthesis stack reaching the app domain.
+        use crate::benchmark::{Example, Problem, Value};
+        let ex = |a: i64, b: i64, out: i64| Example {
+            inputs: vec![Value::Int(a), Value::Int(b)],
+            expected: Value::Int(out),
+        };
+        let problem = Problem {
+            name: "add".to_string(),
+            category: "arithmetic",
+            description: "add two numbers",
+            signature: "fn add(a: i64, b: i64) -> i64",
+            examples: vec![ex(2, 3, 5), ex(10, 4, 14), ex(0, 7, 7), ex(-1, 1, 0), ex(20, 22, 42)],
+            holdouts: vec![],
+            reference_code: "",
+            synthetic_args: Vec::new(),
+            synthetic_values: Vec::new(),
+            recursive_allowed: false,
+            tree_input: false,
+            explicit_stack: false,
+            functions: vec![],
+        };
+        let result = crate::solver::solve_problem(&problem);
+        assert!(result.success, "engine must synthesize add: {:?}", result.error);
+        let html = build_widget_from_mog("Adder", "add", &["a", "b"], &result.code)
+            .expect("verified logic must become a widget");
+        assert!(html.contains("function add"), "synthesized logic not embedded");
+        assert!(html.contains("add(Number"), "runner does not call the synthesized logic");
+        assert!(
+            !html.contains("i64") && !html.contains(": number"),
+            "Mog/TS annotations must be stripped for browser JS"
+        );
+    }
+
+    #[test]
     fn comprehends_the_full_ask() {
         let r = comprehend_site_request(
             "hey add a new page called portfolio to my website, make it a modern theme \
