@@ -1581,6 +1581,32 @@ impl CodingAgentSession {
             }
         }
 
+        // TERMINAL FALLTHROUGH: comprehension could not classify this as any
+        // buildable workflow and produced no clarifying questions. If the prompt
+        // READS as a construction request, refuse HONESTLY — never dress a repo
+        // file listing up as a successful build (the confident-wrong failure the
+        // audit flagged). Genuine informational/exploration prompts fall through
+        // to the repo listing below, which for them is a real answer.
+        if has_build_intent(query) {
+            return AgentQueryResult {
+                route: QueryRoute::Clarification,
+                success: false,
+                response: format!(
+                    "I couldn't confidently understand \"{}\" as something I can build \
+                     or compute — nothing resolved to a known operation, component, or \
+                     artifact. Try naming a concrete function with an example (e.g. \"a \
+                     function f where f(2)=4\"), or a known artifact: a website/page, an \
+                     api, or a component like a counter or a stack.",
+                    truncate(query, 100)
+                ),
+                workflow: "unknown".into(),
+                clarification_questions: Vec::new(),
+                synthesis_method: None,
+                repo_result: None,
+                tool_trace: Vec::new(),
+            };
+        }
+
         let mut tool_trace = Vec::new();
         if let Ok(out) = self.tools.invoke("git", &ToolCall::new("status")) {
             tool_trace.push(("git.status".into(), truncate(&out.content, 120)));
@@ -1631,6 +1657,22 @@ impl CodingAgentSession {
             tool_trace,
         }
     }
+}
+
+/// True if the prompt reads as a request to BUILD/PRODUCE something (an
+/// imperative construction verb), vs an informational/exploration question. Used
+/// only to decide, at the terminal explore fallthrough, whether an unclassified
+/// prompt should refuse honestly (a failed build) or get the repo listing (a
+/// genuine inspection). Discourse-type detection, not domain vocabulary.
+fn has_build_intent(query: &str) -> bool {
+    const BUILD_VERBS: [&str; 13] = [
+        "build", "make", "create", "implement", "write", "generate", "develop", "design", "add",
+        "code", "program", "produce", "scaffold",
+    ];
+    let lower = query.to_lowercase();
+    lower
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|tok| BUILD_VERBS.contains(&tok))
 }
 
 fn route_from_workflow(workflow: &CodingWorkflow) -> QueryRoute {
@@ -2050,6 +2092,27 @@ mod tests {
         if result.route == QueryRoute::Clarification {
             assert!(!result.clarification_questions.is_empty());
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unclassified_build_request_refuses_honestly() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("honest_refuse");
+        fs::create_dir_all(&root).unwrap();
+        let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+        // A construction request nothing can classify (no web archetype, backend
+        // concept, component, or resolvable op) must REFUSE honestly — never dress
+        // a repo file listing up as a successful build.
+        let r = session.handle_query("build a snake game with keyboard controls");
+        assert!(!r.success, "unclassified build must not report success: {}", r.response);
+        assert!(
+            !r.response.contains("explored repository"),
+            "must not present a file listing as a successful build: {}",
+            r.response
+        );
+        assert!(has_build_intent("build a snake game"), "sanity: build intent detected");
+        assert!(!has_build_intent("what does this project do"), "sanity: question is not build intent");
         let _ = fs::remove_dir_all(root);
     }
 
