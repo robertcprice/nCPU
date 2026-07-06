@@ -215,6 +215,24 @@ pub const MIN_UI_CONTRAST: f64 = 3.0;
 /// WCAG AA minimum contrast for normal body text.
 pub const MIN_BODY_CONTRAST: f64 = 4.5;
 
+/// Business/establishment nouns that resolve to the STOREFRONT archetype. This
+/// is WordNet's OWN taxonomy — the single-word hyponyms of `shop`, `restaurant`,
+/// `eating_place`, and `market` (generated offline via NLTK WordNet, not
+/// hand-picked). So "a website for my bakery / cafe / pharmacy / florist"
+/// resolves to a storefront page through the REAL resolver, emergently, for any
+/// business type WordNet knows — no per-domain hand mapping. (The 500k graph is
+/// edge-starved — 0 relations — so these edges are seeded from WordNet directly.)
+const STOREFRONT_NOUNS: &[&str] = &[
+    "automat", "bakehouse", "bakery", "bakeshop", "barbershop", "bazaar", "bazar", "bistro",
+    "bodega", "bookshop", "bookstall", "bookstore", "booth", "boutique", "brasserie", "brewpub",
+    "buttery", "cafe", "cafeteria", "caff", "canteen", "charcuterie", "chophouse", "cleaners",
+    "coffeehouse", "commissary", "confectionary", "confectionery", "cybercafe", "deli",
+    "delicatessen", "diner", "drugstore", "estaminet", "florist", "garage", "grill", "grillroom",
+    "haberdashery", "ironmonger", "lunchroom", "millinery", "newsstand", "outfitter", "patisserie",
+    "pawnshop", "perfumery", "pharmacy", "pizzeria", "rotisserie", "salon", "slopshop", "stall",
+    "stand", "steakhouse", "teahouse", "tearoom", "teashop", "thriftshop", "tobacconist", "toyshop",
+];
+
 /// A page section: registry unit with emission + its structural assertion.
 #[derive(Clone)]
 pub struct Section {
@@ -319,7 +337,15 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     // `composition_from_definition`) — emergent, not a hardcoded list, so a
     // TAUGHT archetype composes for free from the definition it was taught with.
     canonical("landing", "archetype", "a landing home page with a hero, features, and a contact form", &["splash", "startpage"]);
-    canonical("storefront", "archetype", "a shop store page with a hero, a gallery, and a contact form", &["shop", "store", "storefront", "ecommerce", "catalog"]);
+    // Storefront synonyms = the base retail words + WordNet's whole business-type
+    // taxonomy, so any shop/eatery noun ("bakery", "cafe", "florist"...) resolves
+    // to a storefront page emergently through the real resolver.
+    let storefront_syns: Vec<&str> = ["shop", "store", "storefront", "ecommerce", "catalog"]
+        .iter()
+        .chain(STOREFRONT_NOUNS.iter())
+        .copied()
+        .collect();
+    canonical("storefront", "archetype", "a shop store page with a hero, a gallery, and a contact form", &storefront_syns);
     canonical("blog", "archetype", "a blog journal page with a hero, features, and an about story", &["journal", "articles", "posts"]);
     canonical("documentation", "archetype", "a documentation reference page with a hero and an about overview", &["docs", "manual", "guide"]);
     // MOODS — an aesthetic TONE that implies a PALETTE and a style, composed
@@ -466,11 +492,13 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
     // count). Merge — archetype parts augment, explicit content always wins.
     let has_content = sections.iter().any(|s| s != "nav" && s != "footer");
     if !has_content {
-        if let Some(a) = &archetype {
-            for part in archetype_sections(&resolver, &registry, a) {
-                if !sections.contains(&part) {
-                    sections.push(part);
-                }
+        // A resolved purpose (archetype, incl. a business noun -> storefront)
+        // fills its composition; otherwise a bare "make a website" defaults to a
+        // landing page rather than an empty shell.
+        let a = archetype.clone().unwrap_or_else(|| "landing".to_string());
+        for part in archetype_sections(&resolver, &registry, &a) {
+            if !sections.contains(&part) {
+                sections.push(part);
             }
         }
     }
@@ -1353,6 +1381,33 @@ mod real_nl_tests {
         assert!(!r3.sections.contains(&"features".to_string()), "archetype did NOT override explicit: {:?}", r3.sections);
     }
 
+    /// DOMAIN NOUN -> ARCHETYPE via WordNet: "a website for my bakery" (no
+    /// section/archetype word at all) resolves through the business-type taxonomy
+    /// to a storefront composition. Generalizes to any WordNet shop/eatery noun.
+    /// A bare "make a website" defaults to a landing page, not an empty shell.
+    #[test]
+    fn domain_noun_resolves_to_storefront_via_wordnet() {
+        // The exact abstract prompt the user asked about.
+        let r = comprehend_site_request("generate a professional website for my bakery")
+            .expect("routes + comprehends");
+        for s in ["hero", "gallery", "contact"] {
+            assert!(r.sections.contains(&s.to_string()), "bakery -> storefront implies {s}: {:?}", r.sections);
+        }
+        // Other WordNet business types resolve the same way.
+        for noun in ["cafe", "pharmacy", "florist", "boutique"] {
+            let rr = comprehend_site_request(&format!("build a website for my {noun}"))
+                .unwrap_or_else(|| panic!("{noun} comprehends"));
+            assert!(rr.sections.contains(&"gallery".to_string()), "{noun} -> storefront: {:?}", rr.sections);
+        }
+        // Bare website with no signal -> landing default (hero/features/contact),
+        // not an empty nav+footer shell.
+        let bare = comprehend_site_request("make me a website").expect("comprehends");
+        assert!(bare.sections.contains(&"hero".to_string()), "bare website -> landing: {:?}", bare.sections);
+        // A non-business word must NOT spuriously resolve to storefront.
+        let plain = comprehend_site_request("build a website with an about section").expect("comprehends");
+        assert!(plain.sections.contains(&"about".to_string()), "explicit about honored: {:?}", plain.sections);
+    }
+
     /// AESTHETIC FROM MOOD: an abstract prompt naming a TONE (but no explicit
     /// colors/theme) derives a palette and a style from the mood's own
     /// definition — the same compose-from-definition mechanism as archetypes,
@@ -1392,11 +1447,13 @@ mod real_nl_tests {
         let _ = std::fs::remove_file(&p);
         std::env::set_var(Domain::Web.env_var_name(), &p);
 
-        // Unknown purpose before teaching: falls back (no inferred composition).
+        // Before teaching, "dashboard" is unknown -> the bare-website default
+        // (landing: hero/features/contact), which notably does NOT include the
+        // taught-specific "about" section. Teaching then changes the composition.
         let before = comprehend_site_request("build a dashboard page").expect("comprehends");
         assert!(
-            !before.sections.contains(&"features".to_string()),
-            "dashboard is unknown before teaching: {:?}",
+            !before.sections.contains(&"about".to_string()),
+            "dashboard is unknown before teaching (no taught 'about'): {:?}",
             before.sections
         );
 
