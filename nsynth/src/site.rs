@@ -261,6 +261,17 @@ pub fn section_registry() -> Vec<Section> {
     fn about(title: &str) -> String {
         format!("<section class=\"about\" id=\"about\"><h2>About</h2><p>{title} is built with verified components.</p></section>")
     }
+    // Business/storefront sections — real shops need these. Content is HONEST
+    // scaffold (labeled placeholders, never fabricated facts/hours/prices).
+    fn menu(_t: &str) -> String {
+        "<section class=\"menu\" id=\"menu\"><h2>Menu</h2><div class=\"grid\"><article class=\"card\"><h3>Item</h3><p>Description. <span class=\"price\">$0.00</span></p></article><article class=\"card\"><h3>Item</h3><p>Description. <span class=\"price\">$0.00</span></p></article><article class=\"card\"><h3>Item</h3><p>Description. <span class=\"price\">$0.00</span></p></article></div></section>".to_string()
+    }
+    fn hours(_t: &str) -> String {
+        "<section class=\"hours\" id=\"hours\"><h2>Hours</h2><ul class=\"hours-list\"><li>Mon–Fri <span>TODO</span></li><li>Sat <span>TODO</span></li><li>Sun <span>TODO</span></li></ul></section>".to_string()
+    }
+    fn location(_t: &str) -> String {
+        "<section class=\"location\" id=\"location\"><h2>Find Us</h2><address>Street address, City<br>Phone: TODO</address><div class=\"map-embed\" aria-label=\"map placeholder\"></div></section>".to_string()
+    }
     fn footer(title: &str) -> String {
         format!("<footer class=\"site-footer\"><p>&copy; {title}</p></footer>")
     }
@@ -269,6 +280,9 @@ pub fn section_registry() -> Vec<Section> {
         Section { name: "hero", assert_marker: "class=\"hero\"", emit: hero },
         Section { name: "features", assert_marker: "class=\"features\"", emit: features },
         Section { name: "gallery", assert_marker: "class=\"gallery\"", emit: gallery },
+        Section { name: "menu", assert_marker: "class=\"menu\"", emit: menu },
+        Section { name: "hours", assert_marker: "class=\"hours\"", emit: hours },
+        Section { name: "location", assert_marker: "class=\"location\"", emit: location },
         Section { name: "contact", assert_marker: "<form", emit: contact },
         Section { name: "about", assert_marker: "class=\"about\"", emit: about },
         Section { name: "footer", assert_marker: "<footer", emit: footer },
@@ -315,12 +329,15 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
         }
     };
     // Sections.
-    canonical("nav", "section", "a navigation menu bar with links at the top of the page", &["menu", "navigation", "navbar"]);
+    canonical("nav", "section", "a navigation bar with links at the top of the page", &["navigation", "navbar", "navmenu"]);
     canonical("hero", "section", "a large banner header splash welcoming visitors at the top", &["banner", "splash", "jumbotron", "header"]);
     canonical("features", "section", "a grid of feature cards highlighting benefits and services", &["benefits", "highlights", "services"]);
     canonical("gallery", "section", "a grid of photos images and pictures to showcase work", &["photos", "images", "pictures", "showcase", "portfolio"]);
     canonical("contact", "section", "a form where visitors reach out send a message or email to get in touch", &["form", "message", "email", "reach"]);
     canonical("about", "section", "an about section telling the story bio and background", &["bio", "story", "background"]);
+    canonical("menu", "section", "a menu of products items dishes or offerings with prices", &["products", "items", "offerings", "dishes", "pricing", "prices"]);
+    canonical("hours", "section", "opening hours times and schedule when open", &["schedule", "opening", "times"]);
+    canonical("location", "section", "a location address map and directions to find us", &["address", "map", "directions", "find"]);
     canonical("footer", "section", "a footer at the bottom with copyright", &["bottom", "copyright"]);
     // Themes.
     canonical("modern", "theme", "a modern sleek contemporary fresh design style", &["sleek", "contemporary", "fresh"]);
@@ -345,7 +362,7 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
         .chain(STOREFRONT_NOUNS.iter())
         .copied()
         .collect();
-    canonical("storefront", "archetype", "a shop store page with a hero, a gallery, and a contact form", &storefront_syns);
+    canonical("storefront", "archetype", "a shop store page with a hero, a menu, a gallery, hours, a location, and a contact form", &storefront_syns);
     canonical("blog", "archetype", "a blog journal page with a hero, features, and an about story", &["journal", "articles", "posts"]);
     canonical("documentation", "archetype", "a documentation reference page with a hero and an about overview", &["docs", "manual", "guide"]);
     // MOODS — an aesthetic TONE that implies a PALETTE and a style, composed
@@ -1390,7 +1407,8 @@ mod real_nl_tests {
         // The exact abstract prompt the user asked about.
         let r = comprehend_site_request("generate a professional website for my bakery")
             .expect("routes + comprehends");
-        for s in ["hero", "gallery", "contact"] {
+        // A storefront composes a COMPLETE business structure, not just 3 sections.
+        for s in ["hero", "menu", "gallery", "hours", "location", "contact"] {
             assert!(r.sections.contains(&s.to_string()), "bakery -> storefront implies {s}: {:?}", r.sections);
         }
         // Other WordNet business types resolve the same way.
