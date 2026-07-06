@@ -812,6 +812,45 @@ pub fn verify_widget(html: &str, fn_name: &str, n_params: usize) -> Vec<String> 
     issues
 }
 
+/// Strip TypeScript type annotations so the transpiled logic runs in a browser
+/// `<script>` (TS is not valid JS). Handles the shapes `mog_transpile::to_typescript`
+/// emits — param and return annotations over `number` / `number[]` / `string` /
+/// `boolean` / `bigint` / `any`. Longest types first so `number[]` isn't half-stripped.
+fn ts_to_js(ts: &str) -> String {
+    let mut s = ts.to_string();
+    for ty in [
+        ": number[]", ": string[]", ": bigint[]", ": number", ": string",
+        ": boolean", ": bigint", ": any",
+    ] {
+        s = s.replace(ty, "");
+    }
+    s
+}
+
+/// End-to-end seam: turn a STRICT-VERIFIED Mog program into a working interactive
+/// page. Transpile to TypeScript, strip to browser JS, emit the widget, and
+/// fail-closed VERIFY the wiring. `Ok(html)` is a self-contained page whose behavior
+/// is the proven function; `Err` means the wiring did not verify (never ship it).
+///
+/// This is how the whole examples-only synthesis stack reaches the app domain: the
+/// logic is synthesized + verified elsewhere; here it becomes a runnable widget.
+pub fn build_widget_from_mog(
+    title: &str,
+    fn_name: &str,
+    params: &[&str],
+    mog_code: &str,
+) -> Result<String, String> {
+    let ts = crate::mog_transpile::to_typescript(mog_code);
+    let js = ts_to_js(&ts);
+    let html = emit_interactive_widget(title, fn_name, params, &js);
+    let issues = verify_widget(&html, fn_name, params.len());
+    if issues.is_empty() {
+        Ok(html)
+    } else {
+        Err(format!("interactive widget failed verification: {}", issues.join("; ")))
+    }
+}
+
 /// The configured provider spec, or None when content generation is off.
 pub fn content_spec() -> Option<String> {
     std::env::var("NSYNTH_CONTENT_MODEL")
@@ -1159,6 +1198,20 @@ mod tests {
         // Fail-closed: a widget missing the logic fn must FAIL verification.
         let broken = html.replace("function tip", "function nope");
         assert!(!verify_widget(&broken, "tip", 2).is_empty(), "missing logic not caught");
+    }
+
+    #[test]
+    fn build_widget_from_mog_transpiles_strips_and_verifies() {
+        // A strict-verified Mog program becomes a browser-runnable widget end-to-end.
+        let mog = "fn tip(bill: i64, pct: i64) -> i64 {\n    return bill * pct / 100;\n}\n";
+        let html = build_widget_from_mog("Tip Calculator", "tip", &["bill", "pct"], mog)
+            .expect("widget should build + verify");
+        assert!(html.contains("function tip"), "logic not embedded");
+        assert!(
+            !html.contains(": number") && !html.contains("i64"),
+            "TS/Mog annotations must be stripped for browser JS: {html}"
+        );
+        assert!(html.contains("tip(Number"), "runner does not call the logic");
     }
 
     #[test]
