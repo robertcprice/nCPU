@@ -767,6 +767,22 @@ impl CodingAgentSession {
     /// has EXPLICITLY disambiguated the operation through dialogue — re-running
     /// the gate against the original (often gibberish) query would wrongly refuse
     /// the user-confirmed op.
+    /// True iff `lemma` is a KNOWN registry Function op carrying its own canonical
+    /// `example_cases` — the trust signal that a request genuinely resolved to a
+    /// real operation (whose examples are the op's ground truth), as opposed to a
+    /// prose-fabricated function name with self-derived (possibly mis-comprehended)
+    /// examples. Used to gate the Unknown-workflow synthesis promotion.
+    fn registry_op_has_examples(&self, lemma: &str) -> bool {
+        let bridge = LinguigenesisBridge::new();
+        match bridge.registry_clone() {
+            Ok(reg) => reg
+                .get_by_lemma(lemma)
+                .map(|e| e.get_property("example_cases").is_some())
+                .unwrap_or(false),
+            Err(_) => false,
+        }
+    }
+
     fn dispatch(&mut self, query: &str, req: &SynthesisRequirement, gate: bool) -> AgentQueryResult {
         // TENSOR REACH (NL-BRIDGE-3B-TENSOR-FORWARD): consult the tensor route
         // FIRST, before workflow routing, so a forward-inference request
@@ -785,7 +801,26 @@ impl CodingAgentSession {
             crate::tensor_nl::TensorRouteOutcome::NotTensor => {}
         }
 
-        let route = route_from_workflow(&req.workflow);
+        // A concretely-RESOLVED registry op that the intent classifier left as
+        // `Unknown` (so route_from_workflow sends it to ToolExplore/Clarification)
+        // is a synthesis request in all but the workflow label — e.g. a phrase-
+        // resolved op ("absolute value" -> abs) the workflow cue-scanner missed.
+        // Promote ONLY when the function_name is a KNOWN registry op carrying its
+        // own canonical example_cases (a genuinely-resolved op, NOT a prose-
+        // fabricated name whose self-derived examples mis-comprehend the task):
+        // that trust signal is what separates abs (resolves, solves) from a
+        // mis-comprehended complex task (which must stay REFUSED, not ship wrong).
+        // run_synthesis still STRICT-VERIFIES (gate=true).
+        let resolved_registry_op = !req.function_name.is_empty()
+            && !req.examples.is_empty()
+            && self
+                .registry_op_has_examples(&req.function_name);
+        let route = match route_from_workflow(&req.workflow) {
+            QueryRoute::ToolExplore | QueryRoute::Clarification if resolved_registry_op => {
+                QueryRoute::SynthesizeFunction
+            }
+            r => r,
+        };
         match route {
             QueryRoute::SynthesizeFunction => self.run_synthesis(query, req, gate),
             QueryRoute::RepoRepair => self.run_repo_repair(query, req),
