@@ -161,6 +161,53 @@ fn probe_submission_once(bin: &Path) -> Result<(), String> {
     result
 }
 
+/// RESOURCE CRUD smoke: boot the generated backend, POST a record to
+/// `/<resource>` (require 201), then GET `/<resource>` and require the posted
+/// record is listed. Proves the in-memory collection round-trips over HTTP.
+pub fn verify_resource_crud(bin: &Path, resource: &str, max_attempts: usize) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..max_attempts {
+        match probe_resource_once(bin, resource) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_err = err;
+                if attempt + 1 < max_attempts {
+                    thread::sleep(Duration::from_millis(50 * (attempt as u64 + 1)));
+                }
+            }
+        }
+    }
+    Err(format!(
+        "resource CRUD for /{resource} failed after {max_attempts} attempts: {last_err}"
+    ))
+}
+
+fn probe_resource_once(bin: &Path, resource: &str) -> Result<(), String> {
+    let mut child = Command::new(bin)
+        .arg("--port")
+        .arg("0")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn generated backend: {e}"))?;
+    let addr = read_ready_addr(&mut child)?;
+    thread::sleep(Duration::from_millis(25));
+    let result = (|| {
+        let record = "{\"name\":\"ada\"}";
+        let resp = http_post(&addr, &format!("/{resource}"), record)?;
+        if !resp.contains("201") {
+            return Err(format!("POST /{resource} not 201: {resp}"));
+        }
+        let listed = http_get(&addr, &format!("/{resource}"))?;
+        if !listed.contains("ada") {
+            return Err(format!("posted record not visible via GET /{resource}: {listed}"));
+        }
+        Ok(())
+    })();
+    stop_child(&mut child);
+    result
+}
+
 /// SINGLE-ARTIFACT STACK smoke: boot the generated backend with `--static
 /// <dir>`, GET `/` and require 200 text/html containing `expect` (a page
 /// marker, e.g. the site title). Proves one binary serves the generated site

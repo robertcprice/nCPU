@@ -72,6 +72,10 @@ pub struct BackendApp {
     pub description: String,
     pub rules: Vec<RuleModel>,
     pub store: StoreSpec,
+    /// REST collection resources ("users", "orders"): each gets an in-memory
+    /// list with GET /name (list) and POST /name (append). Empty by default, so
+    /// existing rule-only backends are byte-for-byte unchanged.
+    pub resources: Vec<String>,
 }
 
 impl BackendApp {
@@ -106,13 +110,61 @@ impl BackendApp {
             description: description.to_string(),
             rules,
             store,
+            resources: Vec::new(),
         }
+    }
+
+    /// Attach REST collection resources (names) to this backend.
+    pub fn with_resources(mut self, resources: Vec<String>) -> Self {
+        self.resources = resources;
+        self
     }
 
     pub fn render_rust(&self) -> String {
         render_backend_app(self)
     }
 }
+
+/// In-memory collection state for the resources (a name -> Vec<String> map).
+/// Empty resource list -> empty string (no state, existing backends unchanged).
+fn render_resource_state(resources: &[String]) -> String {
+    if resources.is_empty() {
+        return String::new();
+    }
+    let inserts: String = resources
+        .iter()
+        .map(|r| format!("        m.insert(\"{r}\".to_string(), Vec::new());\n"))
+        .collect();
+    RESOURCE_STATE_TEMPLATE.replace("INSERTS", &inserts)
+}
+
+/// GET (list) + POST (append) match arms for each REST collection resource.
+fn render_resource_arms(resources: &[String]) -> String {
+    resources
+        .iter()
+        .map(|r| RESOURCE_ARM_TEMPLATE.replace("RES", r))
+        .collect()
+}
+
+const RESOURCE_STATE_TEMPLATE: &str = r#"static COLLECTIONS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Vec<String>>>> = std::sync::OnceLock::new();
+fn collections() -> &'static Mutex<std::collections::HashMap<String, Vec<String>>> {
+    COLLECTIONS.get_or_init(|| Mutex::new({
+        let mut m = std::collections::HashMap::new();
+INSERTS        m
+    }))
+}
+"#;
+
+const RESOURCE_ARM_TEMPLATE: &str = r#"        ("GET", "/RES") => {
+            let g = collections().lock().unwrap();
+            let items = g.get("RES").cloned().unwrap_or_default();
+            write_response(&mut stream, 200, &format!("[{}]", items.join(",")))
+        }
+        ("POST", "/RES") => {
+            collections().lock().unwrap().entry("RES".to_string()).or_default().push(body.to_string());
+            write_response(&mut stream, 201, "{\"ok\":true,\"created\":1}")
+        }
+"#;
 
 fn render_backend_app(app: &BackendApp) -> String {
     let store_layer = render_store_layer(app.store.kind);
@@ -128,6 +180,8 @@ fn render_backend_app(app: &BackendApp) -> String {
         .collect::<Vec<_>>()
         .join("\n\n");
     let evaluate_arms = render_evaluate_match_arms(&app.rules);
+    let resource_state = render_resource_state(&app.resources);
+    let resource_arms = render_resource_arms(&app.resources);
     let rules_json = escape_for_rust_string(&render_rules_list_literal(&app.rules));
     let description = escape_for_rust_string(&app.description);
     let rule_count = app.rules.len();
@@ -156,6 +210,7 @@ struct Event {{
 
 {store_layer}
 
+{resource_state}
 {rule_code}
 
 fn main() {{
@@ -257,6 +312,7 @@ fn handle_connection(
             }}
         }}
 {evaluate_arms}
+{resource_arms}
         // STATIC FALLBACK: unmatched GETs are served from the site root when
         // one was provided (`--static <dir>`). This is what lets one binary
         // serve the generated site AND its api. Fail-closed to 404.
@@ -814,6 +870,40 @@ mod tests {
     }
 
     #[test]
+    fn backend_ir_renders_resource_routes() {
+        let app = BackendApp::from_rules("users api", vec![], StoreKind::Memory)
+            .with_resources(vec!["users".to_string()]);
+        let src = app.render_rust();
+        assert!(src.contains("(\"GET\", \"/users\")"), "GET /users arm present");
+        assert!(src.contains("(\"POST\", \"/users\")"), "POST /users arm present");
+        assert!(src.contains("fn collections()"), "collection state present");
+        assert!(!src.contains("INSERTS"), "state template fully substituted");
+        // No resources requested -> no state, existing backends unchanged.
+        let plain = BackendApp::from_rules("x", vec![], StoreKind::Memory).render_rust();
+        assert!(!plain.contains("fn collections()"), "no resource state when none asked");
+    }
+
+    #[test]
+    fn backend_ir_resource_crud_round_trips_over_http() {
+        let rustc_ok = std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !rustc_ok {
+            eprintln!("skipping resource CRUD HTTP test: rustc unavailable");
+            return;
+        }
+        let app = BackendApp::from_rules("users api", vec![], StoreKind::Memory)
+            .with_resources(vec!["users".to_string()]);
+        let (src_path, bin) =
+            crate::backend_http::compile_to_temp_bin(&app.render_rust(), false).expect("compile");
+        let res = crate::backend_http::verify_resource_crud(&bin, "users", 6);
+        crate::backend_http::cleanup_temp_artifacts(&src_path, &bin);
+        res.expect("POST then GET /users round-trips over HTTP");
+    }
+
+    #[test]
     fn store_kind_parse_accepts_aliases() {
         assert_eq!(StoreKind::parse("memory"), Some(StoreKind::Memory));
         assert_eq!(StoreKind::parse("jsonl"), Some(StoreKind::File));
@@ -821,3 +911,4 @@ mod tests {
         assert_eq!(StoreKind::parse("nosuch"), None);
     }
 }
+
