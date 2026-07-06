@@ -276,6 +276,23 @@ pub fn section_registry() -> Vec<Section> {
     fn location(_t: &str) -> String {
         "<section class=\"location\" id=\"location\"><h2>Find Us</h2><address>123 Main Street<br>Your City, ST 00000<br>hello@example.com</address><div class=\"map-embed\" aria-label=\"map placeholder\"></div></section>".to_string()
     }
+    // App / dashboard / SaaS sections — data-display and conversion blocks.
+    // Numbers/quotes are editable STARTER placeholders (never claimed as real).
+    fn stats(_t: &str) -> String {
+        "<section class=\"stats\" id=\"stats\"><h2>At a glance</h2><div class=\"grid stat-grid\"><div class=\"stat card\"><span class=\"stat-num\">1,240</span><span class=\"stat-label\">Users</span></div><div class=\"stat card\"><span class=\"stat-num\">98%</span><span class=\"stat-label\">Uptime</span></div><div class=\"stat card\"><span class=\"stat-num\">4.8</span><span class=\"stat-label\">Rating</span></div><div class=\"stat card\"><span class=\"stat-num\">312</span><span class=\"stat-label\">Active today</span></div></div></section>".to_string()
+    }
+    fn chart(_t: &str) -> String {
+        "<section class=\"chart\" id=\"chart\"><h2>Overview</h2><div class=\"card\"><div class=\"bars\"><div class=\"bar\" style=\"height:45%\"></div><div class=\"bar\" style=\"height:62%\"></div><div class=\"bar\" style=\"height:38%\"></div><div class=\"bar\" style=\"height:80%\"></div><div class=\"bar\" style=\"height:55%\"></div><div class=\"bar\" style=\"height:70%\"></div><div class=\"bar\" style=\"height:90%\"></div></div><p class=\"section-intro\">Sample data — connect your source.</p></div></section>".to_string()
+    }
+    fn table(_t: &str) -> String {
+        "<section class=\"table\" id=\"table\"><h2>Recent activity</h2><div class=\"card table-wrap\"><table><thead><tr><th>Item</th><th>Status</th><th>Date</th></tr></thead><tbody><tr><td>Example row</td><td><span class=\"pill\">Active</span></td><td>—</td></tr><tr><td>Example row</td><td><span class=\"pill\">Pending</span></td><td>—</td></tr><tr><td>Example row</td><td><span class=\"pill\">Active</span></td><td>—</td></tr></tbody></table></div></section>".to_string()
+    }
+    fn pricing(_t: &str) -> String {
+        "<section class=\"pricing\" id=\"pricing\"><h2>Pricing</h2><p class=\"section-intro\">Simple plans — set your own prices.</p><div class=\"grid\"><div class=\"tier card\"><h3>Starter</h3><p class=\"price\">Free</p><ul><li>Core features</li><li>Community support</li></ul><a class=\"cta\" href=\"#contact\">Choose</a></div><div class=\"tier card featured\"><h3>Pro</h3><p class=\"price\">$—/mo</p><ul><li>Everything in Starter</li><li>Priority support</li></ul><a class=\"cta\" href=\"#contact\">Choose</a></div><div class=\"tier card\"><h3>Team</h3><p class=\"price\">$—/mo</p><ul><li>Everything in Pro</li><li>Admin controls</li></ul><a class=\"cta\" href=\"#contact\">Choose</a></div></div></section>".to_string()
+    }
+    fn testimonials(_t: &str) -> String {
+        "<section class=\"testimonials\" id=\"testimonials\"><h2>What people say</h2><div class=\"grid\"><blockquote class=\"card\"><p>\"A real quote from a happy customer goes here.\"</p><cite>— Name, Role</cite></blockquote><blockquote class=\"card\"><p>\"Replace with genuine feedback you've received.\"</p><cite>— Name, Role</cite></blockquote><blockquote class=\"card\"><p>\"Social proof builds trust — add your own.\"</p><cite>— Name, Role</cite></blockquote></div></section>".to_string()
+    }
     fn footer(title: &str) -> String {
         format!("<footer class=\"site-footer\"><p>&copy; {title} · All rights reserved.</p></footer>")
     }
@@ -289,6 +306,11 @@ pub fn section_registry() -> Vec<Section> {
         Section { name: "location", assert_marker: "class=\"location\"", emit: location },
         Section { name: "contact", assert_marker: "<form", emit: contact },
         Section { name: "about", assert_marker: "class=\"about\"", emit: about },
+        Section { name: "stats", assert_marker: "class=\"stats\"", emit: stats },
+        Section { name: "chart", assert_marker: "class=\"chart\"", emit: chart },
+        Section { name: "table", assert_marker: "class=\"table\"", emit: table },
+        Section { name: "pricing", assert_marker: "class=\"pricing\"", emit: pricing },
+        Section { name: "testimonials", assert_marker: "class=\"testimonials\"", emit: testimonials },
         Section { name: "footer", assert_marker: "<footer", emit: footer },
     ]
 }
@@ -339,9 +361,14 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     canonical("gallery", "section", "a grid of photos images and pictures to showcase work", &["photos", "images", "pictures", "showcase", "portfolio"]);
     canonical("contact", "section", "a form where visitors reach out send a message or email to get in touch", &["form", "message", "email", "reach"]);
     canonical("about", "section", "an about section telling the story bio and background", &["bio", "story", "background"]);
-    canonical("menu", "section", "a menu of products items dishes or offerings with prices", &["products", "items", "offerings", "dishes", "pricing", "prices"]);
+    canonical("menu", "section", "a menu of products items dishes or offerings", &["products", "items", "offerings", "dishes"]);
     canonical("hours", "section", "opening hours times and schedule when open", &["schedule", "opening", "times"]);
     canonical("location", "section", "a location address map and directions to find us", &["address", "map", "directions", "find"]);
+    canonical("stats", "section", "key stats metrics and numbers at a glance", &["metrics", "kpis", "numbers", "counters"]);
+    canonical("chart", "section", "a chart graph plotting data trends over time", &["graph", "plot", "trend", "trends"]);
+    canonical("table", "section", "a table of rows and records of recent activity data", &["rows", "records", "grid"]);
+    canonical("pricing", "section", "pricing plans tiers and subscription options", &["plans", "tiers", "subscription"]);
+    canonical("testimonials", "section", "testimonials reviews and quotes from customers", &["reviews", "quotes", "praise"]);
     canonical("footer", "section", "a footer at the bottom with copyright", &["bottom", "copyright"]);
     // Themes.
     canonical("modern", "theme", "a modern sleek contemporary fresh design style", &["sleek", "contemporary", "fresh"]);
@@ -369,6 +396,9 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     canonical("storefront", "archetype", "a shop store page with a hero, a menu, a gallery, hours, a location, and a contact form", &storefront_syns);
     canonical("blog", "archetype", "a blog journal page with a hero, features, and an about story", &["journal", "articles", "posts"]);
     canonical("documentation", "archetype", "a documentation reference page with a hero and an about overview", &["docs", "manual", "guide"]);
+    // App / data artifact types — same design system + verification, new shapes.
+    canonical("dashboard", "archetype", "a dashboard admin panel with stats, a chart, and a table", &["admin", "analytics", "console", "panel"]);
+    canonical("saas", "archetype", "a saas app landing page with a hero, features, pricing, testimonials, and a contact form", &["app", "webapp", "software", "platform", "startup"]);
     // MOODS — an aesthetic TONE that implies a PALETTE and a style, composed
     // from the mood's definition exactly like an archetype composes structure
     // (colors via the CSS vocabulary, theme via the resolver). This is how an
@@ -486,6 +516,12 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
         // them so e.g. the cue "build" can never fuzzy-resolve to the mood
         // "bold". Routing vs resolution stays cleanly separated.
         if CUES.iter().any(|c| morph_eq(t, c)) || WEB.iter().any(|w| morph_eq(t, w)) {
+            continue;
+        }
+        // The explicit page NAME ("called pricing"/"called gallery") is a label,
+        // not content — naming a page after a section word must not inject that
+        // section.
+        if page != "page" && *t == page {
             continue;
         }
         if let Some((kind, lemma, _score)) = resolve_web_token(&resolver, &registry, t) {
@@ -661,7 +697,7 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
     // palette (contrast-verified below).
     let body_text = "#16181d".to_string();
     let css = format!(
-        ":root {{\n  --primary: {primary};\n  --accent: {neutral};\n  --on-primary: {on_primary};\n  --ink: {body_text};\n  --text: {body_text};\n  --muted: #5b616e;\n  --bg: #fbfbfd;\n  --surface: #ffffff;\n  --line: #e7e9ee;\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n  --maxw: 1120px;\n}}\n* {{ box-sizing: border-box; }}\nhtml {{ scroll-behavior: smooth; }}\nbody {{ margin: 0; font-family: {}; color: var(--text); background: var(--bg); line-height: 1.65; -webkit-font-smoothing: antialiased; }}\nimg {{ max-width: 100%; }}\nh1, h2, h3 {{ font-weight: {}; line-height: 1.15; letter-spacing: -0.02em; color: var(--ink); }}\nh1 {{ font-size: clamp(2.4rem, 6vw, 3.6rem); margin: 0 0 1rem; }}\nh2 {{ font-size: clamp(1.6rem, 3.5vw, 2.2rem); margin: 0 0 1.5rem; }}\nh3 {{ font-size: 1.15rem; margin: 0 0 0.5rem; }}\np {{ margin: 0 0 1rem; }}\na {{ color: var(--primary); }}\nsection, .hero {{ padding: clamp(3rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 3rem); }}\nsection {{ max-width: var(--maxw); margin: 0 auto; }}\nsection > h2 {{ text-align: center; }}\n.section-intro {{ text-align: center; color: var(--muted); max-width: 54ch; margin: -0.5rem auto 2rem; }}\n.site-nav {{ position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem clamp(1.25rem, 5vw, 3rem); background: rgba(255,255,255,0.82); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }}\n.site-nav .brand {{ font-weight: 800; font-size: 1.15rem; color: var(--primary); letter-spacing: -0.01em; }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1.5rem; margin: 0; padding: 0; }}\n.site-nav a {{ color: var(--ink); text-decoration: none; font-weight: 500; font-size: 0.95rem; }}\n.site-nav a:hover {{ color: var(--primary); }}\n.hero {{ text-align: center; background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 10%, var(--bg)), var(--bg) 70%); border-bottom: 1px solid var(--line); }}\n.hero h1 {{ max-width: 16ch; margin-inline: auto; }}\n.hero .tagline {{ max-width: 46ch; margin: 0 auto 2rem; font-size: clamp(1.05rem, 2vw, 1.3rem); color: var(--muted); }}\n.cta {{ display: inline-block; padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; font-weight: 600; transition: transform 0.15s ease; }}\n.cta:hover {{ transform: translateY(-2px); }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-top: 1rem; }}\n.card {{ background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.5rem; transition: transform 0.15s ease; }}\n.card:hover {{ transform: translateY(-3px); }}\nfigure.card {{ margin: 0; }}\nfigcaption {{ font-weight: 600; color: var(--muted); }}\n.ph {{ aspect-ratio: 4 / 3; border-radius: calc(var(--radius) - 2px); margin-bottom: 1rem; background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 30%, #fff), color-mix(in srgb, var(--accent) 30%, #fff)); }}\n.contact form {{ display: grid; gap: 1rem; max-width: 520px; margin: 0 auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 2rem; box-shadow: var(--shadow); }}\n.contact label {{ display: grid; gap: 0.35rem; font-weight: 600; font-size: 0.9rem; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.7rem; border-radius: var(--radius); border: 1px solid var(--line); font: inherit; }}\n.contact input:focus, .contact textarea:focus {{ outline: 2px solid var(--primary); border-color: var(--primary); }}\nbutton {{ padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); font: inherit; font-weight: 600; cursor: pointer; }}\nbutton:hover {{ filter: brightness(1.08); }}\n.menu .price {{ color: var(--primary); font-weight: 700; }}\n.hours-list {{ list-style: none; padding: 0; max-width: 420px; margin: 1rem auto 0; }}\n.hours-list li {{ display: flex; justify-content: space-between; padding: 0.7rem 0; border-bottom: 1px solid var(--line); }}\n.location address {{ font-style: normal; text-align: center; color: var(--muted); }}\n.map-embed {{ height: 260px; border-radius: var(--radius); margin-top: 1.5rem; border: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 14%, var(--surface)), color-mix(in srgb, var(--accent) 14%, var(--surface))); }}\n.site-footer {{ padding: 2.5rem 1.5rem; text-align: center; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); }}\n",
+        ":root {{\n  --primary: {primary};\n  --accent: {neutral};\n  --on-primary: {on_primary};\n  --ink: {body_text};\n  --text: {body_text};\n  --muted: #5b616e;\n  --bg: #fbfbfd;\n  --surface: #ffffff;\n  --line: #e7e9ee;\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n  --maxw: 1120px;\n}}\n* {{ box-sizing: border-box; }}\nhtml {{ scroll-behavior: smooth; }}\nbody {{ margin: 0; font-family: {}; color: var(--text); background: var(--bg); line-height: 1.65; -webkit-font-smoothing: antialiased; }}\nimg {{ max-width: 100%; }}\nh1, h2, h3 {{ font-weight: {}; line-height: 1.15; letter-spacing: -0.02em; color: var(--ink); }}\nh1 {{ font-size: clamp(2.4rem, 6vw, 3.6rem); margin: 0 0 1rem; }}\nh2 {{ font-size: clamp(1.6rem, 3.5vw, 2.2rem); margin: 0 0 1.5rem; }}\nh3 {{ font-size: 1.15rem; margin: 0 0 0.5rem; }}\np {{ margin: 0 0 1rem; }}\na {{ color: var(--primary); }}\nsection, .hero {{ padding: clamp(3rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 3rem); }}\nsection {{ max-width: var(--maxw); margin: 0 auto; }}\nsection > h2 {{ text-align: center; }}\n.section-intro {{ text-align: center; color: var(--muted); max-width: 54ch; margin: -0.5rem auto 2rem; }}\n.site-nav {{ position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem clamp(1.25rem, 5vw, 3rem); background: rgba(255,255,255,0.82); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }}\n.site-nav .brand {{ font-weight: 800; font-size: 1.15rem; color: var(--primary); letter-spacing: -0.01em; }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1.5rem; margin: 0; padding: 0; }}\n.site-nav a {{ color: var(--ink); text-decoration: none; font-weight: 500; font-size: 0.95rem; }}\n.site-nav a:hover {{ color: var(--primary); }}\n.hero {{ text-align: center; background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 10%, var(--bg)), var(--bg) 70%); border-bottom: 1px solid var(--line); }}\n.hero h1 {{ max-width: 16ch; margin-inline: auto; }}\n.hero .tagline {{ max-width: 46ch; margin: 0 auto 2rem; font-size: clamp(1.05rem, 2vw, 1.3rem); color: var(--muted); }}\n.cta {{ display: inline-block; padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; font-weight: 600; transition: transform 0.15s ease; }}\n.cta:hover {{ transform: translateY(-2px); }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-top: 1rem; }}\n.card {{ background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.5rem; transition: transform 0.15s ease; }}\n.card:hover {{ transform: translateY(-3px); }}\nfigure.card {{ margin: 0; }}\nfigcaption {{ font-weight: 600; color: var(--muted); }}\n.ph {{ aspect-ratio: 4 / 3; border-radius: calc(var(--radius) - 2px); margin-bottom: 1rem; background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 30%, #fff), color-mix(in srgb, var(--accent) 30%, #fff)); }}\n.contact form {{ display: grid; gap: 1rem; max-width: 520px; margin: 0 auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 2rem; box-shadow: var(--shadow); }}\n.contact label {{ display: grid; gap: 0.35rem; font-weight: 600; font-size: 0.9rem; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.7rem; border-radius: var(--radius); border: 1px solid var(--line); font: inherit; }}\n.contact input:focus, .contact textarea:focus {{ outline: 2px solid var(--primary); border-color: var(--primary); }}\nbutton {{ padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); font: inherit; font-weight: 600; cursor: pointer; }}\nbutton:hover {{ filter: brightness(1.08); }}\n.menu .price {{ color: var(--primary); font-weight: 700; }}\n.hours-list {{ list-style: none; padding: 0; max-width: 420px; margin: 1rem auto 0; }}\n.hours-list li {{ display: flex; justify-content: space-between; padding: 0.7rem 0; border-bottom: 1px solid var(--line); }}\n.location address {{ font-style: normal; text-align: center; color: var(--muted); }}\n.map-embed {{ height: 260px; border-radius: var(--radius); margin-top: 1.5rem; border: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 14%, var(--surface)), color-mix(in srgb, var(--accent) 14%, var(--surface))); }}\n.stat-grid {{ grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }}\n.stat {{ text-align: center; display: grid; gap: 0.25rem; }}\n.stat-num {{ font-size: clamp(1.8rem, 4vw, 2.6rem); font-weight: 800; color: var(--primary); line-height: 1; }}\n.stat-label {{ color: var(--muted); font-size: 0.9rem; }}\n.bars {{ display: flex; align-items: flex-end; gap: 0.6rem; height: 200px; padding: 0.5rem 0; }}\n.bar {{ flex: 1; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--primary), color-mix(in srgb, var(--primary) 55%, var(--accent))); }}\n.table-wrap {{ overflow-x: auto; padding: 0.5rem; }}\ntable {{ width: 100%; border-collapse: collapse; }}\nth, td {{ text-align: left; padding: 0.8rem 1rem; border-bottom: 1px solid var(--line); }}\nth {{ font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }}\n.pill {{ display: inline-block; padding: 0.2rem 0.7rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; background: color-mix(in srgb, var(--primary) 14%, #fff); color: var(--primary); }}\n.tier {{ display: grid; gap: 1rem; text-align: center; }}\n.tier ul {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; color: var(--muted); }}\n.tier .price {{ font-size: 2rem; font-weight: 800; color: var(--ink); }}\n.tier.featured {{ border-color: var(--primary); box-shadow: 0 12px 32px color-mix(in srgb, var(--primary) 22%, transparent); }}\n.testimonials blockquote {{ margin: 0; display: grid; gap: 1rem; }}\n.testimonials cite {{ color: var(--muted); font-style: normal; font-weight: 600; }}\n.site-footer {{ padding: 2.5rem 1.5rem; text-align: center; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); }}\n",
         theme.radius, theme.shadow, theme.spacing, theme.font_stack, theme.heading_weight
     );
     (html, css)
@@ -947,7 +983,12 @@ pub fn set_nav_links(html: &str, links: &[(String, String)]) -> String {
         .iter()
         .map(|(href, label)| format!("<li><a href=\"{href}\">{label}</a></li>"))
         .collect();
-    let Some(start) = html.find("<ul>") else { return html.to_string() };
+    // Scope to the NAV's own <ul> — other sections (pricing tiers, hours) now
+    // carry <ul> lists, so "first <ul> in the doc" is no longer safe.
+    let nav = html.find("<nav").unwrap_or(0);
+    let Some(start) = html[nav..].find("<ul>").map(|s| nav + s) else {
+        return html.to_string();
+    };
     let Some(end) = html[start..].find("</ul>").map(|e| start + e) else {
         return html.to_string();
     };
@@ -1457,6 +1498,23 @@ mod real_nl_tests {
         assert!(plain.sections.contains(&"about".to_string()), "explicit about honored: {:?}", plain.sections);
     }
 
+    /// BEYOND WEBSITES: new artifact types (dashboard, saas app) compose their
+    /// own shapes from the SAME resolver + design system + verification.
+    #[test]
+    fn new_artifact_types_compose() {
+        let dash = comprehend_site_request("build a dashboard page").expect("comprehends");
+        for s in ["stats", "chart", "table"] {
+            assert!(dash.sections.contains(&s.to_string()), "dashboard implies {s}: {:?}", dash.sections);
+        }
+        let saas = comprehend_site_request("make a saas landing page for my app").expect("comprehends");
+        for s in ["hero", "features", "pricing", "testimonials", "contact"] {
+            assert!(saas.sections.contains(&s.to_string()), "saas implies {s}: {:?}", saas.sections);
+        }
+        // Synonyms route too: "admin panel" -> dashboard, "platform" -> saas.
+        let admin = comprehend_site_request("build an admin panel website").expect("comprehends");
+        assert!(admin.sections.contains(&"stats".to_string()), "admin -> dashboard: {:?}", admin.sections);
+    }
+
     /// AESTHETIC FROM MOOD: an abstract prompt naming a TONE (but no explicit
     /// colors/theme) derives a palette and a style from the mood's own
     /// definition — the same compose-from-definition mechanism as archetypes,
@@ -1496,13 +1554,14 @@ mod real_nl_tests {
         let _ = std::fs::remove_file(&p);
         std::env::set_var(Domain::Web.env_var_name(), &p);
 
-        // Before teaching, "dashboard" is unknown -> the bare-website default
+        // Before teaching, "portal" is unknown -> the bare-website default
         // (landing: hero/features/contact), which notably does NOT include the
         // taught-specific "about" section. Teaching then changes the composition.
-        let before = comprehend_site_request("build a dashboard page").expect("comprehends");
+        // ("portal"/"gateway" are novel words, not built-in archetypes.)
+        let before = comprehend_site_request("build a portal page").expect("comprehends");
         assert!(
             !before.sections.contains(&"about".to_string()),
-            "dashboard is unknown before teaching (no taught 'about'): {:?}",
+            "portal is unknown before teaching (no taught 'about'): {:?}",
             before.sections
         );
 
@@ -1510,23 +1569,23 @@ mod real_nl_tests {
         teach_concept(
             Domain::Web,
             Concept {
-                lemma: "dashboard".to_string(),
+                lemma: "portal".to_string(),
                 kind: "archetype".to_string(),
-                definition: "a dashboard page with a hero, features, and an about overview"
+                definition: "a portal page with a hero, features, and an about overview"
                     .to_string(),
-                synonyms: vec!["console".to_string()],
+                synonyms: vec!["gateway".to_string()],
             },
         )
         .expect("teach persists");
 
         // Now the same abstract prompt composes from the TAUGHT definition, and
         // so does its taught synonym.
-        for phrase in ["build a dashboard page", "build a console page"] {
+        for phrase in ["build a portal page", "build a gateway page"] {
             let r = comprehend_site_request(phrase).expect("comprehends");
             for s in ["hero", "features", "about"] {
                 assert!(
                     r.sections.contains(&s.to_string()),
-                    "taught dashboard implies {s} from its definition ({phrase}): {:?}",
+                    "taught portal implies {s} from its definition ({phrase}): {:?}",
                     r.sections
                 );
             }
@@ -1675,5 +1734,6 @@ mod mine_tests {
         let _ = std::fs::remove_file(&p);
     }
 }
+
 
 

@@ -109,26 +109,26 @@ fn teach_then_use_grows_the_web_vocabulary() {
     let root = fresh_root("teach");
     let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
 
-    // BEFORE: "testimonials" resolves to nothing — the page builds without it.
-    let r0 = s.handle_query("make a new page called home for my website with a hero and testimonials");
+    // BEFORE: "newsletter" resolves to nothing — the page builds without it.
+    let r0 = s.handle_query("make a new page called home for my website with a hero and a newsletter");
     assert!(r0.success);
     let html0 = fs::read_to_string(root.join("site/home.html")).unwrap();
-    assert!(!html0.contains("id=\"testimonials\""), "unknown concept must not fabricate");
+    assert!(!html0.contains("id=\"newsletter\""), "unknown concept must not fabricate");
 
     // TEACH.
     let rt = s.handle_query(
-        "teach web: a testimonials section means customer quotes displayed in a row, also called reviews",
+        "teach web: a newsletter section means an email signup form in a strip, also called subscribe",
     );
     assert!(rt.success, "{}", rt.response);
     assert_eq!(rt.workflow, "registry.teach");
 
-    // AFTER: the SYNONYM ("reviews") reaches the taught concept; the section is
+    // AFTER: the SYNONYM ("subscribe") reaches the taught concept; the section is
     // emitted and fidelity-verified on the new page.
-    let r1 = s.handle_query("add a new page called landing to my website with a hero and reviews");
+    let r1 = s.handle_query("add a new page called promo to my website with a hero and subscribe");
     assert!(r1.success, "{}", r1.response);
-    let html1 = fs::read_to_string(root.join("site/landing.html")).unwrap();
-    assert!(html1.contains("id=\"testimonials\""), "taught section emitted via synonym: {html1}");
-    assert!(html1.contains("customer quotes"), "definition-derived content");
+    let html1 = fs::read_to_string(root.join("site/promo.html")).unwrap();
+    assert!(html1.contains("id=\"newsletter\""), "taught section emitted via synonym: {html1}");
+    assert!(html1.contains("email signup"), "definition-derived content");
 
     std::env::remove_var("NSYNTH_WEB_REGISTRY");
     let _ = fs::remove_file(&reg_file);
@@ -148,15 +148,16 @@ fn teach_archetype_then_abstract_prompt_composes_it() {
     let mut s = CodingAgentSession::new(&root, GuardrailPolicy::default());
 
     // TEACH a new archetype by prose (its parts are named in the definition).
+    // ("portal" is a novel word, not a built-in archetype like dashboard/saas.)
     let rt = s.handle_query(
-        "teach web: a dashboard archetype means a page with a hero, features, and an about story",
+        "teach web: a portal archetype means a page with a hero, features, and an about story",
     );
     assert!(rt.success, "{}", rt.response);
     assert_eq!(rt.workflow, "registry.teach");
 
     // ABSTRACT prompt — names the purpose (archetype) but NO section words. The
     // taught archetype composes hero + features + about, emitted + fidelity-verified.
-    let r = s.handle_query("build a dashboard page called board for my team");
+    let r = s.handle_query("build a portal page called board for my team");
     assert!(r.success, "{}", r.response);
     let html = fs::read_to_string(root.join("site/board.html")).unwrap();
     for marker in ["class=\"hero\"", "class=\"features\"", "class=\"about\""] {
