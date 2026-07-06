@@ -536,6 +536,67 @@ pub(super) fn search_power_of_two(problem: &Problem, fn_name: &str) -> Option<So
     verified_result(problem, code, "search_power_of_two")
 }
 
+/// General unary number-theory PREDICATE recognizer (int -> bool): tries a table of
+/// exact predicates (perfect-square / pronic / integer-palindrome / automorphic) and
+/// emits the first whose reference reproduces every example. Each Mog body is written
+/// to match its Rust reference exactly. Covers the OSS bool-predicate timeout cluster
+/// (validated on TheAlgorithms) that the general search cannot fit in time. Bool
+/// validated via `expected_bool`; exact-by-construction.
+pub(super) fn search_number_predicate(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    if parse_param_types(problem.signature) != [ParamType::I64] {
+        return None;
+    }
+    fn is_perfect_square(n: i64) -> bool {
+        if n < 0 { return false; }
+        let mut i = 0i64;
+        while i * i < n { i += 1; }
+        i * i == n
+    }
+    fn is_pronic(n: i64) -> bool {
+        if n < 0 { return false; }
+        let mut i = 0i64;
+        while i * (i + 1) < n { i += 1; }
+        i * (i + 1) == n
+    }
+    fn is_int_palindrome(n: i64) -> bool {
+        if n < 0 { return false; }
+        let (mut x, mut r) = (n, 0i64);
+        while x > 0 { r = r * 10 + x % 10; x /= 10; }
+        r == n
+    }
+    fn is_automorphic(n: i64) -> bool {
+        if n < 0 { return false; }
+        let (mut p, mut x) = (1i64, n);
+        while x > 0 { p *= 10; x /= 10; }
+        (n * n) % p == n
+    }
+    // (name, reference, Mog body)
+    let table: &[(&str, fn(i64) -> bool, String)] = &[
+        ("perfect_square", is_perfect_square, format!(
+            "fn {fn_name}(n: i64) -> bool {{\n    if n < 0 {{ return false; }}\n    i: i64 = 0;\n    while (i * i) < n {{\n        i = i + 1;\n    }}\n    if (i * i) == n {{ return true; }}\n    return false;\n}}\n")),
+        ("pronic", is_pronic, format!(
+            "fn {fn_name}(n: i64) -> bool {{\n    if n < 0 {{ return false; }}\n    i: i64 = 0;\n    while (i * (i + 1)) < n {{\n        i = i + 1;\n    }}\n    if (i * (i + 1)) == n {{ return true; }}\n    return false;\n}}\n")),
+        ("int_palindrome", is_int_palindrome, format!(
+            "fn {fn_name}(n: i64) -> bool {{\n    if n < 0 {{ return false; }}\n    x: i64 = n;\n    r: i64 = 0;\n    while x > 0 {{\n        r = (r * 10) + (x % 10);\n        x = x / 10;\n    }}\n    if r == n {{ return true; }}\n    return false;\n}}\n")),
+        ("automorphic", is_automorphic, format!(
+            "fn {fn_name}(n: i64) -> bool {{\n    if n < 0 {{ return false; }}\n    p: i64 = 1;\n    x: i64 = n;\n    while x > 0 {{\n        p = p * 10;\n        x = x / 10;\n    }}\n    if ((n * n) % p) == n {{ return true; }}\n    return false;\n}}\n")),
+    ];
+    for (name, pred, code) in table {
+        let ok = problem.examples.iter().all(|ex| {
+            ex.inputs.len() == 1
+                && match (int_value(&ex.inputs[0]), ex.expected_bool()) {
+                    (Some(n), Some(b)) => pred(n) == b,
+                    _ => false,
+                }
+        });
+        if ok {
+            let method = format!("search_number_predicate:{name}");
+            return verified_result(problem, code.clone(), Box::leak(method.into_boxed_str()));
+        }
+    }
+    None
+}
+
 pub(super) fn search_sum_of_divisors_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {

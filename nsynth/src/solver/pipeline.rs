@@ -1004,6 +1004,21 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact number-theory predicate table (perfect-square/pronic/palindrome/automorphic)
+    // — the OSS bool-predicate timeout cluster; fire early before the general search.
+    if let Some(result) =
+        super::search_numeric_families::search_number_predicate(problem, problem.function_name())
+    {
+        if result.success {
+            eprintln!(
+                "[solve] number-predicate OK in {:.3}s — {}",
+                t0.elapsed().as_secs_f32(),
+                result.method
+            );
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and
