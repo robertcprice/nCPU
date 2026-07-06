@@ -285,6 +285,52 @@ fn probe_resource_once(bin: &Path, resource: &str, workdir: &Path) -> Result<(),
     result
 }
 
+/// ADMIN UI smoke: the generated backend serves a working server-rendered CRUD
+/// app. Boot in a fresh workdir; GET / carries the resource's add-form; a browser
+/// FORM submit (urlencoded) 303-redirects; and the re-rendered page shows the new
+/// item. Proves "api -> app": a real web app, no client JS, from one prompt.
+pub fn verify_resource_ui(bin: &Path, resource: &str) -> Result<(), String> {
+    let workdir = unique_path("ncpu_resource_ui", "d");
+    std::fs::create_dir_all(&workdir).map_err(|e| format!("mkdir workdir: {e}"))?;
+    let result = (|| {
+        let mut child = Command::new(bin)
+            .arg("--port")
+            .arg("0")
+            .current_dir(&workdir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn: {e}"))?;
+        let addr = read_ready_addr(&mut child)?;
+        thread::sleep(Duration::from_millis(25));
+        let r = (|| {
+            let idx = http_get(&addr, "/")?;
+            if !idx.contains(&format!("action=\"/{resource}\"")) {
+                return Err(format!("admin page missing add-form for /{resource}"));
+            }
+            let post = request_ct(
+                &addr,
+                "POST",
+                &format!("/{resource}"),
+                "item=fresh+bread",
+                "application/x-www-form-urlencoded",
+            )?;
+            if !post.contains("303") {
+                return Err(format!("form submit did not redirect: {post}"));
+            }
+            let idx2 = http_get(&addr, "/")?;
+            if !idx2.contains("fresh bread") {
+                return Err(format!("submitted item not shown on admin page: {idx2}"));
+            }
+            Ok(())
+        })();
+        stop_child(&mut child);
+        r
+    })();
+    let _ = std::fs::remove_dir_all(&workdir);
+    result
+}
+
 /// SINGLE-ARTIFACT STACK smoke: boot the generated backend with `--static
 /// <dir>`, GET `/` and require 200 text/html containing `expect` (a page
 /// marker, e.g. the site title). Proves one binary serves the generated site
@@ -437,6 +483,23 @@ fn http_get(addr: &str, path: &str) -> Result<String, String> {
 
 fn http_post(addr: &str, path: &str, body: &str) -> Result<String, String> {
     request(addr, "POST", path, body)
+}
+
+fn request_ct(addr: &str, method: &str, path: &str, body: &str, ctype: &str) -> Result<String, String> {
+    let mut stream =
+        TcpStream::connect(addr).map_err(|e| format!("connect {addr}: {e}"))?;
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("write request: {e}"))?;
+    let mut resp = String::new();
+    stream
+        .read_to_string(&mut resp)
+        .map_err(|e| format!("read response: {e}"))?;
+    Ok(resp)
 }
 
 fn request(addr: &str, method: &str, path: &str, body: &str) -> Result<String, String> {

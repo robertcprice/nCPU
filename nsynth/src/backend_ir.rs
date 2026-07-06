@@ -137,18 +137,33 @@ fn render_resource_state(resources: &[String]) -> String {
         .iter()
         .map(|r| format!("        m.insert(\"{r}\".to_string(), load_collection(\"{r}\"));\n"))
         .collect();
-    RESOURCE_STATE_TEMPLATE.replace("NAMES_LOAD", &loads)
-}
-
-/// GET (list) + POST (append) match arms for each REST collection resource.
-fn render_resource_arms(resources: &[String]) -> String {
-    resources
+    let names_list: String = resources
         .iter()
-        .map(|r| RESOURCE_ARM_TEMPLATE.replace("RES", r))
-        .collect()
+        .map(|r| format!("\"{r}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    RESOURCE_STATE_TEMPLATE
+        .replace("NAMES_LOAD", &loads)
+        .replace("NAMES_LIST", &names_list)
 }
 
-const RESOURCE_STATE_TEMPLATE: &str = r#"static COLLECTIONS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Vec<String>>>> = std::sync::OnceLock::new();
+/// Match arms: a single server-rendered admin UI at GET "/" (list + add-form for
+/// every resource), then per-resource REST arms (list/create/read/update/delete).
+fn render_resource_arms(resources: &[String]) -> String {
+    if resources.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(RESOURCE_INDEX_ARM);
+    for r in resources {
+        out.push_str(&RESOURCE_ARM_TEMPLATE.replace("RES", r));
+    }
+    out
+}
+
+const RESOURCE_INDEX_ARM: &str = "        (\"GET\", \"/\") => write_bytes(&mut stream, 200, \"text/html; charset=utf-8\", render_index_page().as_bytes()),\n";
+
+const RESOURCE_STATE_TEMPLATE: &str = r#"const RESOURCE_NAMES: &[&str] = &[NAMES_LIST];
+static COLLECTIONS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Vec<String>>>> = std::sync::OnceLock::new();
 fn collection_path(name: &str) -> String { format!("{}.jsonl", name) }
 fn load_collection(name: &str) -> Vec<String> {
     std::fs::read_to_string(collection_path(name))
@@ -164,6 +179,34 @@ fn collections() -> &'static Mutex<std::collections::HashMap<String, Vec<String>
 NAMES_LOAD        m
     }))
 }
+fn form_value(body: &str) -> String {
+    body.splitn(2, '=').nth(1).unwrap_or(body).replace('+', " ")
+}
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+fn write_redirect(stream: &mut TcpStream, location: &str) -> io::Result<()> {
+    let resp = format!("HTTP/1.1 303 See Other\r\nLocation: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", location);
+    stream.write_all(resp.as_bytes())
+}
+fn render_index_page() -> String {
+    let g = collections().lock().unwrap();
+    let mut b = String::from("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Admin</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem;color:#16181d}h2{margin-top:1.5rem}ul{list-style:none;padding:0}li{padding:.45rem 0;border-bottom:1px solid #eee}form{display:flex;gap:.5rem;margin:.6rem 0}input{flex:1;padding:.45rem;border:1px solid #ccc;border-radius:6px}button{padding:.45rem 1rem;border:0;border-radius:6px;background:#2b57ff;color:#fff;cursor:pointer}.empty{color:#888}</style></head><body><h1>Admin</h1>");
+    for name in RESOURCE_NAMES {
+        b.push_str(&format!("<section><h2>{}</h2><ul>", name));
+        match g.get(*name) {
+            Some(items) if !items.is_empty() => {
+                for it in items {
+                    b.push_str(&format!("<li>{}</li>", escape_html(it)));
+                }
+            }
+            _ => b.push_str("<li class=\"empty\">No items yet.</li>"),
+        }
+        b.push_str(&format!("</ul><form method=\"post\" action=\"/{}\"><input name=\"item\" placeholder=\"new {}\" required><button>Add</button></form></section>", name, name));
+    }
+    b.push_str("</body></html>");
+    b
+}
 "#;
 
 const RESOURCE_ARM_TEMPLATE: &str = r#"        ("GET", "/RES") => {
@@ -172,11 +215,22 @@ const RESOURCE_ARM_TEMPLATE: &str = r#"        ("GET", "/RES") => {
             write_response(&mut stream, 200, &format!("[{}]", items.join(",")))
         }
         ("POST", "/RES") => {
-            let mut g = collections().lock().unwrap();
-            let v = g.entry("RES".to_string()).or_default();
-            v.push(body.replace('\n', " "));
-            save_collection("RES", v);
-            write_response(&mut stream, 201, "{\"ok\":true,\"created\":1}")
+            // A browser FORM submit (urlencoded) stores the field value and
+            // redirects back to the admin page; an API client (json/other) gets
+            // 201 and the record verbatim.
+            let is_form = content_type.starts_with("application/x-www-form-urlencoded");
+            let value = if is_form { form_value(&body) } else { body.replace('\n', " ") };
+            {
+                let mut g = collections().lock().unwrap();
+                let v = g.entry("RES".to_string()).or_default();
+                v.push(value);
+                save_collection("RES", v);
+            }
+            if is_form {
+                write_redirect(&mut stream, "/")
+            } else {
+                write_response(&mut stream, 201, "{\"ok\":true,\"created\":1}")
+            }
         }
         ("GET", p) if p.starts_with("/RES/") => {
             let id: usize = p["/RES/".len()..].parse().unwrap_or(usize::MAX);
@@ -308,6 +362,7 @@ fn handle_connection(
     let method = parts.next().unwrap_or("").to_string();
     let path = parts.next().unwrap_or("").to_string();
     let mut content_length = 0usize;
+    let mut content_type = String::new();
     loop {{
         let mut line = String::new();
         let n = reader.read_line(&mut line)?;
@@ -317,9 +372,12 @@ fn handle_connection(
         if let Some((k, v)) = line.split_once(':') {{
             if k.trim().eq_ignore_ascii_case("content-length") {{
                 content_length = v.trim().parse().unwrap_or(0);
+            }} else if k.trim().eq_ignore_ascii_case("content-type") {{
+                content_type = v.trim().to_string();
             }}
         }}
     }}
+    let _ = &content_type;
     let mut body = vec![0u8; content_length];
     if content_length > 0 {{
         reader.read_exact(&mut body)?;
@@ -953,6 +1011,26 @@ mod tests {
     }
 
     #[test]
+    fn backend_ir_resource_serves_admin_ui() {
+        let rustc_ok = std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !rustc_ok {
+            eprintln!("skipping admin UI test: rustc unavailable");
+            return;
+        }
+        let app = BackendApp::from_rules("users api", vec![], StoreKind::Memory)
+            .with_resources(vec!["users".to_string()]);
+        let (src_path, bin) =
+            crate::backend_http::compile_to_temp_bin(&app.render_rust(), false).expect("compile");
+        let res = crate::backend_http::verify_resource_ui(&bin, "users");
+        crate::backend_http::cleanup_temp_artifacts(&src_path, &bin);
+        res.expect("server-rendered admin UI: GET / -> form submit -> item shown");
+    }
+
+    #[test]
     fn backend_ir_resource_persists_across_restart() {
         let rustc_ok = std::process::Command::new("rustc")
             .arg("--version")
@@ -980,4 +1058,5 @@ mod tests {
         assert_eq!(StoreKind::parse("nosuch"), None);
     }
 }
+
 
