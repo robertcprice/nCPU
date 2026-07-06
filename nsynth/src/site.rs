@@ -973,6 +973,23 @@ pub fn wants_interactive_app(query: &str) -> bool {
     build && app
 }
 
+/// The actual function name from a Mog program `fn NAME(...) -> ... { ... }`. The
+/// solver may name the fn differently from the request (e.g. "double" resolves to
+/// the library op `times_two`); the widget must wire the name the CODE actually
+/// defines, or verify_widget fails. Falls back to `None` if no `fn` header parses.
+pub fn fn_name_from_mog(mog: &str) -> Option<String> {
+    let after = mog.trim_start().strip_prefix("fn ")?;
+    let name: String = after
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
 /// Parse parameter NAMES from a signature `fn f(a: i64, b: i64) -> i64`, in order.
 pub fn params_from_signature(sig: &str) -> Vec<String> {
     let inside = sig
@@ -1451,6 +1468,10 @@ mod tests {
             vec!["a".to_string(), "b".to_string()]
         );
         assert_eq!(params_from_signature("fn f(n: i64) -> i64"), vec!["n".to_string()]);
+        // fn name + params from the actual Mog (solver may rename: double -> times_two).
+        let mog = "fn times_two(n: i64) -> i64 {\n    return 2 * n;\n}\n";
+        assert_eq!(fn_name_from_mog(mog), Some("times_two".to_string()));
+        assert_eq!(params_from_signature(mog), vec!["n".to_string()]);
     }
 
     #[test]

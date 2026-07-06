@@ -975,11 +975,16 @@ impl CodingAgentSession {
         // A wrap failure never downgrades the solve — the function result still stands.
         let mut app_html: Option<String> = None;
         if synthesis.success && crate::site::wants_interactive_app(query) {
-            let params = crate::site::params_from_signature(&req.signature);
+            // Wire the name + params the SYNTHESIZED CODE actually defines — the solver
+            // may rename (e.g. "double" resolves to the library op `times_two`), and the
+            // widget's runner must call the real fn or verify_widget fails.
+            let code_fn = crate::site::fn_name_from_mog(&synthesis.code)
+                .unwrap_or_else(|| intent.function_name.clone());
+            let params = crate::site::params_from_signature(&synthesis.code);
             let param_refs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
             if let Ok(html) = crate::site::build_widget_from_mog(
                 &intent.function_name,
-                &intent.function_name,
+                &code_fn,
                 &param_refs,
                 &synthesis.code,
             ) {
