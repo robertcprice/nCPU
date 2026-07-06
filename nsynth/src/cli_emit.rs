@@ -58,6 +58,77 @@ pub fn verify_cli(source: &str, args: &[&str], expected: &str) -> Result<(), Str
     Ok(())
 }
 
+/// A comprehended request to build a command-line tool: the function to wrap.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CliAsk {
+    pub name: String,
+}
+
+/// Comprehend "build a CLI tool that ... where NAME(x)=y ..." — a construction
+/// cue + a CLI noun + a function name that carries inline examples. Returns None
+/// (falls through to the next intake) when it's not a CLI ask or has no examples.
+pub fn comprehend_cli_request(text: &str) -> Option<CliAsk> {
+    let lower = text.to_lowercase();
+    const CUES: [&str; 6] = ["build", "make", "create", "write", "generate", "want"];
+    const CLI_NOUNS: [&str; 6] = ["cli", "command-line", "command line", "tool", "utility", "program"];
+    let has_cue = CUES.iter().any(|c| lower.split(|ch: char| !ch.is_alphanumeric()).any(|t| t == *c));
+    let has_cli = CLI_NOUNS.iter().any(|n| lower.contains(n));
+    if !has_cue || !has_cli {
+        return None;
+    }
+    let name = extract_fn_name(&lower)?;
+    Some(CliAsk { name })
+}
+
+/// Find the function name that carries inline examples: an explicit "function
+/// NAME", else the identifier before a `NAME(` that is followed by an `=`.
+fn extract_fn_name(lower: &str) -> Option<String> {
+    if let Some(rest) = lower.split("function ").nth(1) {
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() && lower.contains(&format!("{name}(")) {
+            return Some(name);
+        }
+    }
+    let bytes = lower.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'(' {
+            let mut j = i;
+            while j > 0 && (bytes[j - 1].is_ascii_alphanumeric() || bytes[j - 1] == b'_') {
+                j -= 1;
+            }
+            if j < i && lower[i..].contains('=') {
+                return Some(lower[j..i].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Build a CLI ask: synthesize the verified function from the prose, wrap it in a
+/// CLI, VERIFY the CLI compiles + computes an example, and write `cli/main.rs`.
+/// Fail-closed — a wrong or unsynthesizable function fails the ask.
+pub fn build_cli_ask(
+    root: &std::path::Path,
+    english: &str,
+    ask: &CliAsk,
+) -> Result<Vec<String>, String> {
+    let (rust, fn_name, examples) =
+        crate::backend_intake::synthesize_rust_fn_from_prose(english, &ask.name)?;
+    let cli = emit_cli_rust(&fn_name, &rust, &[CliArg::Int]);
+    if let Some((inp, out)) = examples.first() {
+        verify_cli(&cli, &[&inp.to_string()], &out.to_string())?;
+    }
+    let out_path = root.join("cli/main.rs");
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&out_path, cli).map_err(|e| e.to_string())?;
+    Ok(vec!["cli/main.rs".to_string()])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +139,25 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn comprehends_cli_requests() {
+        assert_eq!(
+            comprehend_cli_request(
+                "build a CLI tool for a function double where double(2)=4 and double(5)=10"
+            ),
+            Some(CliAsk { name: "double".into() })
+        );
+        assert_eq!(
+            comprehend_cli_request("make a command-line tool for triple where triple(3)=9"),
+            Some(CliAsk { name: "triple".into() })
+        );
+        // No inline examples -> falls through (can't synthesize).
+        assert!(comprehend_cli_request("build a CLI tool that doubles a number").is_none());
+        // Not a CLI ask -> falls through.
+        assert!(comprehend_cli_request("build a website for my bakery").is_none());
+        assert!(comprehend_cli_request("a function double where double(2)=4").is_none());
     }
 
     #[test]

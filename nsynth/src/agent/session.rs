@@ -436,6 +436,39 @@ impl CodingAgentSession {
             return result;
         }
 
+        // CLI INTAKE: "build a CLI tool for a function double where double(2)=4"
+        // — a construction cue + a CLI noun + a function name carrying inline
+        // examples. Synthesizes the verified function, wraps it in a runnable
+        // command-line tool, and VERIFIES the CLI compiles + computes an example
+        // (fail-closed). Requires inline examples, so it never hijacks a plain
+        // "build a tool" or an api/site ask (those have no NAME(x)=y clause).
+        if let Some(ask) = crate::cli_emit::comprehend_cli_request(query) {
+            let result = match crate::cli_emit::build_cli_ask(&self.root, query, &ask) {
+                Ok(written) => AgentQueryResult {
+                    route: QueryRoute::GreenfieldProject,
+                    success: true,
+                    response: format!("Built CLI tool '{}' — compile+run verified: {}", ask.name, written.join(", ")),
+                    workflow: "cli.build".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("cli-intake".to_string()),
+                    repo_result: None,
+                    tool_trace: written.iter().map(|p| (format!("fs.write:{p}"), "ok".to_string())).collect(),
+                },
+                Err(e) => AgentQueryResult {
+                    route: QueryRoute::GreenfieldProject,
+                    success: false,
+                    response: format!("CLI build failed: {e}"),
+                    workflow: "cli.build".to_string(),
+                    clarification_questions: Vec::new(),
+                    synthesis_method: Some("cli-intake".to_string()),
+                    repo_result: None,
+                    tool_trace: Vec::new(),
+                },
+            };
+            self.record_result(query, &result);
+            return result;
+        }
+
         // BACKEND INTAKE (hub backend domain): "make me an api with a health
         // check and a users store" — routes through the registry hub's backend
         // resolution (synonym edges: api->endpoint, service->server), builds via
