@@ -1254,6 +1254,28 @@ mod backend_ask_tests {
     }
 
     #[test]
+    fn multiple_resources_in_one_ask() {
+        if !rustc_available() {
+            eprintln!("skipping multi-resource build test: rustc unavailable");
+            return;
+        }
+        let english = "make me an api with a users resource and an orders resource";
+        assert_eq!(
+            detect_resources(english),
+            vec!["orders".to_string(), "users".to_string()],
+            "both collections detected"
+        );
+        let ask = comprehend_backend_prose(english).expect("routes as a backend ask");
+        let root = std::env::temp_dir().join(format!("nsynth_multibe_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        build_backend_ask(&root, english, &ask).expect("builds + compiles both collections");
+        let src = std::fs::read_to_string(root.join("backend/main.rs")).unwrap();
+        assert!(src.contains("(\"GET\", \"/users\")"), "users route present");
+        assert!(src.contains("(\"GET\", \"/orders\")"), "orders route present");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn comprehends_structural_and_rule_asks() {
         // Structural: hub resolution ("api" -> endpoint via synonym edge).
         let a = comprehend_backend_prose("make me an api with a health check and a users database")
