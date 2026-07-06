@@ -473,6 +473,10 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
     let mut sections: Vec<String> = Vec::new();
     let mut archetype: Option<String> = None;
     let mut mood: Option<String> = None;
+    // The SUBJECT of the site — the domain noun that resolved to an archetype
+    // ("bakery" -> storefront). Becomes the brand/title when no explicit page
+    // name was given, so the site says "Bakery", not "Page".
+    let mut subject: Option<String> = None;
     for t in &tokens {
         // Routing tokens (construction cues, web nouns) are NOT content — skip
         // them so e.g. the cue "build" can never fuzzy-resolve to the mood
@@ -493,6 +497,11 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
                     }
                 }
                 "archetype" => {
+                    // A domain noun (token differs from the archetype lemma it
+                    // resolved to, e.g. bakery -> storefront) is the site subject.
+                    if subject.is_none() && *t != lemma {
+                        subject = Some(t.clone());
+                    }
                     if archetype.is_none() {
                         archetype = Some(lemma);
                     }
@@ -503,6 +512,17 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+    // SUBJECT AS BRAND: no explicit "called/named X" page name -> use the site
+    // subject noun (bakery) as the title, so brand/hero/title read the domain,
+    // not the generic "Page".
+    if title == "Page" {
+        if let Some(s) = &subject {
+            title = s.clone();
+            if let Some(c) = title.get_mut(0..1) {
+                c.make_ascii_uppercase();
             }
         }
     }
@@ -630,17 +650,14 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
         .and_then(|c| color_rgb(c))
         .map(|rgb| on_color(rgb).0)
         .unwrap_or("#ffffff");
-    // Body copy sits on the page's default white background. The requested
-    // neutral doubles as the body text color, but a light neutral would be
-    // illegible on white — so body text uses the neutral only when it clears
-    // the WCAG body floor, else falls back to ink. (--neutral stays as-is for
-    // borders/accents.) Contrast-verified below; holds for any palette.
-    let body_text = color_rgb(&neutral)
-        .filter(|&rgb| contrast_ratio(rgb, (255, 255, 255)) >= MIN_BODY_CONTRAST)
-        .map(|_| neutral.clone())
-        .unwrap_or_else(|| "#111111".to_string());
+    // Body text is INK — a near-black, always. The palette colors are for the
+    // brand (--primary) and accents/borders (--accent), NEVER the running text:
+    // reading paragraphs in the palette's 2nd color is the #1 "looks amateur"
+    // tell. Ink clears the WCAG body floor on the near-white page for any
+    // palette (contrast-verified below).
+    let body_text = "#16181d".to_string();
     let css = format!(
-        ":root {{\n  --primary: {primary};\n  --neutral: {neutral};\n  --on-primary: {on_primary};\n  --text: {body_text};\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n}}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: {}; color: var(--text); }}\nh1, h2, h3 {{ font-weight: {}; }}\n.site-nav {{ display: flex; justify-content: space-between; align-items: center; padding: var(--spacing); background: var(--primary); color: var(--on-primary); }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1rem; margin: 0; }}\n.site-nav a {{ color: var(--on-primary); text-decoration: none; }}\n.hero {{ padding: calc(var(--spacing) * 2) var(--spacing); text-align: center; }}\n.cta {{ display: inline-block; padding: 0.75rem 1.5rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--spacing); padding: var(--spacing); }}\n.card {{ border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--spacing); }}\n.ph {{ height: 120px; background: var(--primary); opacity: 0.25; border-radius: var(--radius); }}\n.contact form {{ display: grid; gap: 1rem; padding: var(--spacing); max-width: 480px; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.5rem; border-radius: var(--radius); border: 1px solid var(--neutral); }}\nbutton {{ padding: 0.75rem 1.5rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); }}\n.menu {{ padding: var(--spacing); }}\n.menu .price {{ color: var(--primary); font-weight: 700; }}\n.hours {{ padding: var(--spacing); }}\n.hours-list {{ list-style: none; padding: 0; max-width: 360px; }}\n.hours-list li {{ display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid var(--neutral); }}\n.location {{ padding: var(--spacing); }}\n.location address {{ font-style: normal; }}\n.map-embed {{ height: 240px; background: var(--neutral); opacity: 0.15; border-radius: var(--radius); margin-top: 1rem; }}\n.site-footer {{ padding: var(--spacing); text-align: center; opacity: 0.8; }}\n",
+        ":root {{\n  --primary: {primary};\n  --accent: {neutral};\n  --on-primary: {on_primary};\n  --ink: {body_text};\n  --text: {body_text};\n  --muted: #5b616e;\n  --bg: #fbfbfd;\n  --surface: #ffffff;\n  --line: #e7e9ee;\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n  --maxw: 1120px;\n}}\n* {{ box-sizing: border-box; }}\nhtml {{ scroll-behavior: smooth; }}\nbody {{ margin: 0; font-family: {}; color: var(--text); background: var(--bg); line-height: 1.65; -webkit-font-smoothing: antialiased; }}\nimg {{ max-width: 100%; }}\nh1, h2, h3 {{ font-weight: {}; line-height: 1.15; letter-spacing: -0.02em; color: var(--ink); }}\nh1 {{ font-size: clamp(2.4rem, 6vw, 3.6rem); margin: 0 0 1rem; }}\nh2 {{ font-size: clamp(1.6rem, 3.5vw, 2.2rem); margin: 0 0 1.5rem; }}\nh3 {{ font-size: 1.15rem; margin: 0 0 0.5rem; }}\np {{ margin: 0 0 1rem; }}\na {{ color: var(--primary); }}\nsection, .hero {{ padding: clamp(3rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 3rem); }}\nsection {{ max-width: var(--maxw); margin: 0 auto; }}\nsection > h2 {{ text-align: center; }}\n.site-nav {{ position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem clamp(1.25rem, 5vw, 3rem); background: rgba(255,255,255,0.82); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }}\n.site-nav .brand {{ font-weight: 800; font-size: 1.15rem; color: var(--primary); letter-spacing: -0.01em; }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1.5rem; margin: 0; padding: 0; }}\n.site-nav a {{ color: var(--ink); text-decoration: none; font-weight: 500; font-size: 0.95rem; }}\n.site-nav a:hover {{ color: var(--primary); }}\n.hero {{ text-align: center; background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 10%, var(--bg)), var(--bg) 70%); border-bottom: 1px solid var(--line); }}\n.hero h1 {{ max-width: 16ch; margin-inline: auto; }}\n.hero .tagline {{ max-width: 46ch; margin: 0 auto 2rem; font-size: clamp(1.05rem, 2vw, 1.3rem); color: var(--muted); }}\n.cta {{ display: inline-block; padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; font-weight: 600; transition: transform 0.15s ease; }}\n.cta:hover {{ transform: translateY(-2px); }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-top: 1rem; }}\n.card {{ background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.5rem; transition: transform 0.15s ease; }}\n.card:hover {{ transform: translateY(-3px); }}\nfigure.card {{ margin: 0; }}\nfigcaption {{ font-weight: 600; color: var(--muted); }}\n.ph {{ aspect-ratio: 4 / 3; border-radius: calc(var(--radius) - 2px); margin-bottom: 1rem; background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 30%, #fff), color-mix(in srgb, var(--accent) 30%, #fff)); }}\n.contact form {{ display: grid; gap: 1rem; max-width: 520px; margin: 0 auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 2rem; box-shadow: var(--shadow); }}\n.contact label {{ display: grid; gap: 0.35rem; font-weight: 600; font-size: 0.9rem; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.7rem; border-radius: var(--radius); border: 1px solid var(--line); font: inherit; }}\n.contact input:focus, .contact textarea:focus {{ outline: 2px solid var(--primary); border-color: var(--primary); }}\nbutton {{ padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); font: inherit; font-weight: 600; cursor: pointer; }}\nbutton:hover {{ filter: brightness(1.08); }}\n.menu .price {{ color: var(--primary); font-weight: 700; }}\n.hours-list {{ list-style: none; padding: 0; max-width: 420px; margin: 1rem auto 0; }}\n.hours-list li {{ display: flex; justify-content: space-between; padding: 0.7rem 0; border-bottom: 1px solid var(--line); }}\n.location address {{ font-style: normal; text-align: center; color: var(--muted); }}\n.map-embed {{ height: 260px; border-radius: var(--radius); margin-top: 1.5rem; border: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 14%, var(--surface)), color-mix(in srgb, var(--accent) 14%, var(--surface))); }}\n.site-footer {{ padding: 2.5rem 1.5rem; text-align: center; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); }}\n",
         theme.radius, theme.shadow, theme.spacing, theme.font_stack, theme.heading_weight
     );
     (html, css)
@@ -1419,6 +1436,8 @@ mod real_nl_tests {
         // "professional" now shifts the aesthetic (mood -> modern theme + navy).
         assert_eq!(r.theme, "modern", "professional -> modern theme: {}", r.theme);
         assert!(r.colors.contains(&"navy".to_string()), "professional -> navy palette: {:?}", r.colors);
+        // SUBJECT AS BRAND: the site knows it's a bakery, not "Page".
+        assert_eq!(r.title, "Bakery", "subject noun becomes the brand: {}", r.title);
         // Other WordNet business types resolve the same way.
         for noun in ["cafe", "pharmacy", "florist", "boutique"] {
             let rr = comprehend_site_request(&format!("build a website for my {noun}"))
