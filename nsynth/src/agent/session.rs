@@ -968,11 +968,38 @@ impl CodingAgentSession {
                 tool_trace.push((format!("fs.write:{filename}"), out.content));
             }
         }
+        // INTERACTIVE-APP front door: when the request wants a RUNNABLE page and the
+        // logic synthesized+verified, wrap the PROVEN function in an interactive widget
+        // (transpile → strip → emit → re-verify wiring) and write it as an .html file.
+        // The response becomes the working app; its behavior IS the verified function.
+        // A wrap failure never downgrades the solve — the function result still stands.
+        let mut app_html: Option<String> = None;
+        if synthesis.success && crate::site::wants_interactive_app(query) {
+            let params = crate::site::params_from_signature(&req.signature);
+            let param_refs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
+            if let Ok(html) = crate::site::build_widget_from_mog(
+                &intent.function_name,
+                &intent.function_name,
+                &param_refs,
+                &synthesis.code,
+            ) {
+                let fname = format!("app_{}.html", intent.function_name);
+                if let Ok(out) = self.tools.invoke(
+                    "fs",
+                    &ToolCall::new("write")
+                        .arg("path", fname.clone())
+                        .arg("content", html.clone()),
+                ) {
+                    tool_trace.push((format!("fs.write:{fname}"), out.content));
+                }
+                app_html = Some(html);
+            }
+        }
         AgentQueryResult {
             route: QueryRoute::SynthesizeFunction,
             success: synthesis.success,
             response: if synthesis.success {
-                synthesis.code.clone()
+                app_html.clone().unwrap_or_else(|| synthesis.code.clone())
             } else {
                 synthesis
                     .error
