@@ -1035,6 +1035,23 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact int->base-N-string recognizer (binary-0b / arbitrary-base uppercase) —
+    // the OSS base-conversion timeout cluster. Builds the string via the Mog
+    // string-index primitive; strict-re-verified. Fire early before the generic
+    // string-program search (which memorizes rather than generalizes here).
+    if let Some(result) =
+        super::search_numeric_families::search_base_string(problem, problem.function_name())
+    {
+        if result.success {
+            eprintln!(
+                "[solve] base-string OK in {:.3}s — {}",
+                t0.elapsed().as_secs_f32(),
+                result.method
+            );
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and

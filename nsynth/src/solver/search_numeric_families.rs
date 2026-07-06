@@ -698,6 +698,92 @@ pub(super) fn search_factor_list(problem: &Problem, fn_name: &str) -> Option<Sol
     None
 }
 
+/// INT -> base-N STRING recognizer. Two exact references keyed on arity:
+///   * 1-arg, signed: binary with a `0b` prefix (decimal_to_binary_iterative /
+///     _recursive — the recursive one carries a `-0b…` sign).
+///   * 2-arg (n, base): arbitrary-base uppercase digit string, no prefix, 0 -> "0"
+///     (int_to_base / decimal_to_any).
+/// The emitted Mog builds the string with the string-INDEX primitive
+/// (`"0123…Z"[m % base]` returns a 1-char string) prepended in a loop — there is
+/// no int->char builtin, so indexing a digit lexicon is the mechanism. Covers the
+/// OSS base-conversion timeout cluster (TheAlgorithms). String validated via
+/// `str_value`; exact-by-construction; strict re-verify in `verified_result`.
+pub(super) fn search_base_string(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let pts = parse_param_types(problem.signature);
+    // ---- 1-arg: binary with a 0b prefix (signed) ----
+    if pts == [ParamType::I64] {
+        fn ref_bin(n: i64) -> String {
+            if n == 0 {
+                return "0b0".to_string();
+            }
+            let neg = n < 0;
+            let mut m = (n as i128).unsigned_abs();
+            let mut s = String::new();
+            while m > 0 {
+                s.insert(0, char::from(b'0' + (m % 2) as u8));
+                m /= 2;
+            }
+            format!("{}0b{}", if neg { "-" } else { "" }, s)
+        }
+        let ok = problem.examples.iter().all(|ex| {
+            ex.inputs.len() == 1
+                && match (int_value(&ex.inputs[0]), str_value(&ex.expected)) {
+                    (Some(n), Some(s)) => ref_bin(n) == s,
+                    _ => false,
+                }
+        });
+        if ok {
+            let code = format!(
+                "fn {fn_name}(n: i64) -> string {{\n    if n == 0 {{\n        return \"0b0\";\n    }}\n    digits: string = \"0123456789ABCDEF\";\n    m: i64 = n;\n    sign: string = \"\";\n    if n < 0 {{\n        sign = \"-\";\n        m = 0 - n;\n    }}\n    result: string = \"\";\n    while m > 0 {{\n        result = digits[m % 2] + result;\n        m = m / 2;\n    }}\n    return (sign + \"0b\") + result;\n}}\n"
+            );
+            return verified_result(problem, code, "search_base_string:binary_0b");
+        }
+        return None;
+    }
+    // ---- 2-arg (n, base): uppercase digit string, no prefix, 0 -> "0" ----
+    if pts == [ParamType::I64, ParamType::I64] {
+        fn ref_base(n: i64, b: i64) -> Option<String> {
+            if !(2..=36).contains(&b) || n < 0 {
+                return None;
+            }
+            if n == 0 {
+                return Some("0".to_string());
+            }
+            let digits = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            let (mut m, mut s) = (n, String::new());
+            while m > 0 {
+                s.insert(0, digits[(m % b) as usize] as char);
+                m /= b;
+            }
+            Some(s)
+        }
+        let ok = problem.examples.iter().all(|ex| {
+            ex.inputs.len() == 2
+                && match (
+                    int_value(&ex.inputs[0]),
+                    int_value(&ex.inputs[1]),
+                    str_value(&ex.expected),
+                ) {
+                    (Some(n), Some(b), Some(s)) => ref_base(n, b).as_deref() == Some(s),
+                    _ => false,
+                }
+        });
+        if ok {
+            // The `if b < 2` guard keeps the emitted program TOTAL: a base <= 1 would
+            // divide-by-zero (b==0) or loop forever (b==1, `m / 1` never shrinks), which
+            // the strict-verify robustness probe (perturbed inputs) would trip. Real
+            // examples always carry b >= 2, so this guard never changes a real output —
+            // it only makes the program execute cleanly on out-of-distribution probes.
+            let code = format!(
+                "fn {fn_name}(n: i64, b: i64) -> string {{\n    if b < 2 {{\n        return \"0\";\n    }}\n    if n == 0 {{\n        return \"0\";\n    }}\n    digits: string = \"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\";\n    m: i64 = n;\n    result: string = \"\";\n    while m > 0 {{\n        result = digits[m % b] + result;\n        m = m / b;\n    }}\n    return result;\n}}\n"
+            );
+            return verified_result(problem, code, "search_base_string:to_base");
+        }
+        return None;
+    }
+    None
+}
+
 pub(super) fn search_sum_of_divisors_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
