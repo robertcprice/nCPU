@@ -11,6 +11,7 @@ pub mod backend_p2c;
 pub mod backend_repair;
 pub mod capability_miner;
 pub mod bidirectional;
+pub mod cli_emit;
 pub mod component;
 pub mod component_crawler;
 pub mod comprehension;
