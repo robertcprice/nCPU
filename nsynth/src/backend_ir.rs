@@ -183,7 +183,7 @@ fn form_value(body: &str) -> String {
     body.splitn(2, '=').nth(1).unwrap_or(body).replace('+', " ")
 }
 fn escape_html(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 fn write_redirect(stream: &mut TcpStream, location: &str) -> io::Result<()> {
     let resp = format!("HTTP/1.1 303 See Other\r\nLocation: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", location);
@@ -191,13 +191,13 @@ fn write_redirect(stream: &mut TcpStream, location: &str) -> io::Result<()> {
 }
 fn render_index_page() -> String {
     let g = collections().lock().unwrap();
-    let mut b = String::from("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Admin</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem;color:#16181d}h2{margin-top:1.5rem}ul{list-style:none;padding:0}li{padding:.45rem 0;border-bottom:1px solid #eee}form{display:flex;gap:.5rem;margin:.6rem 0}input{flex:1;padding:.45rem;border:1px solid #ccc;border-radius:6px}button{padding:.45rem 1rem;border:0;border-radius:6px;background:#2b57ff;color:#fff;cursor:pointer}.empty{color:#888}</style></head><body><h1>Admin</h1>");
+    let mut b = String::from("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Admin</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem;color:#16181d}h2{margin-top:1.5rem}ul{list-style:none;padding:0}li{padding:.45rem 0;border-bottom:1px solid #eee;display:flex;gap:.4rem;align-items:center}.row{flex:1;display:flex;gap:.4rem;margin:0}.del{background:#e5484d}form{display:flex;gap:.5rem;margin:.6rem 0}input{flex:1;padding:.45rem;border:1px solid #ccc;border-radius:6px}button{padding:.45rem 1rem;border:0;border-radius:6px;background:#2b57ff;color:#fff;cursor:pointer}.empty{color:#888}</style></head><body><h1>Admin</h1>");
     for name in RESOURCE_NAMES {
         b.push_str(&format!("<section><h2>{}</h2><ul>", name));
         match g.get(*name) {
             Some(items) if !items.is_empty() => {
-                for it in items {
-                    b.push_str(&format!("<li>{}</li>", escape_html(it)));
+                for (i, it) in items.iter().enumerate() {
+                    b.push_str(&format!("<li><form method=\"post\" action=\"/{}/{}/edit\" class=\"row\"><input name=\"item\" value=\"{}\"><button>Save</button></form><form method=\"post\" action=\"/{}/{}/delete\"><button class=\"del\">Delete</button></form></li>", name, i, escape_html(it), name, i));
                 }
             }
             _ => b.push_str("<li class=\"empty\">No items yet.</li>"),
@@ -263,6 +263,35 @@ const RESOURCE_ARM_TEMPLATE: &str = r#"        ("GET", "/RES") => {
                 }
                 _ => write_response(&mut stream, 404, "{\"error\":\"not found\"}"),
             }
+        }
+        ("POST", p) if p.starts_with("/RES/") && p.ends_with("/delete") => {
+            let mid = &p["/RES/".len()..p.len() - "/delete".len()];
+            let id: usize = mid.parse().unwrap_or(usize::MAX);
+            {
+                let mut g = collections().lock().unwrap();
+                if let Some(v) = g.get_mut("RES") {
+                    if id < v.len() {
+                        v.remove(id);
+                        save_collection("RES", v);
+                    }
+                }
+            }
+            write_redirect(&mut stream, "/")
+        }
+        ("POST", p) if p.starts_with("/RES/") && p.ends_with("/edit") => {
+            let mid = &p["/RES/".len()..p.len() - "/edit".len()];
+            let id: usize = mid.parse().unwrap_or(usize::MAX);
+            let value = form_value(&body);
+            {
+                let mut g = collections().lock().unwrap();
+                if let Some(v) = g.get_mut("RES") {
+                    if id < v.len() {
+                        v[id] = value;
+                        save_collection("RES", v);
+                    }
+                }
+            }
+            write_redirect(&mut stream, "/")
         }
 "#;
 
@@ -1058,5 +1087,6 @@ mod tests {
         assert_eq!(StoreKind::parse("nosuch"), None);
     }
 }
+
 
 

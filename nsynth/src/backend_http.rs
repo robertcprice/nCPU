@@ -322,6 +322,36 @@ pub fn verify_resource_ui(bin: &Path, resource: &str) -> Result<(), String> {
             if !idx2.contains("fresh bread") {
                 return Err(format!("submitted item not shown on admin page: {idx2}"));
             }
+            // EDIT via the per-item form -> 303, re-render shows the new value.
+            let edit = request_ct(
+                &addr,
+                "POST",
+                &format!("/{resource}/0/edit"),
+                "item=sourdough",
+                "application/x-www-form-urlencoded",
+            )?;
+            if !edit.contains("303") {
+                return Err(format!("edit form did not redirect: {edit}"));
+            }
+            let idx3 = http_get(&addr, "/")?;
+            if !idx3.contains("sourdough") || idx3.contains("fresh bread") {
+                return Err(format!("edit not reflected on admin page: {idx3}"));
+            }
+            // DELETE via the per-item form -> 303, item gone.
+            let del = request_ct(
+                &addr,
+                "POST",
+                &format!("/{resource}/0/delete"),
+                "",
+                "application/x-www-form-urlencoded",
+            )?;
+            if !del.contains("303") {
+                return Err(format!("delete form did not redirect: {del}"));
+            }
+            let idx4 = http_get(&addr, "/")?;
+            if idx4.contains("sourdough") {
+                return Err(format!("deleted item still shown: {idx4}"));
+            }
             Ok(())
         })();
         stop_child(&mut child);
