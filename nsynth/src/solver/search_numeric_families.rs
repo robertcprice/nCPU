@@ -710,33 +710,42 @@ pub(super) fn search_factor_list(problem: &Problem, fn_name: &str) -> Option<Sol
 /// `str_value`; exact-by-construction; strict re-verify in `verified_result`.
 pub(super) fn search_base_string(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let pts = parse_param_types(problem.signature);
-    // ---- 1-arg: binary with a 0b prefix (signed) ----
+    // ---- 1-arg, signed: a radix-prefixed digit string (0b binary / 0o octal /
+    //      0x hex, lowercase). Digits 0-1 (binary) index the same in either case,
+    //      so a single lowercase lexicon serves binary AND hex.
     if pts == [ParamType::I64] {
-        fn ref_bin(n: i64) -> String {
+        // (prefix, base) — the emitted Mog lexicon is always the lowercase set.
+        const FORMATS: &[(&str, i64)] = &[("0b", 2), ("0o", 8), ("0x", 16)];
+        fn ref_prefixed(n: i64, prefix: &str, base: i64) -> String {
             if n == 0 {
-                return "0b0".to_string();
+                return format!("{prefix}0");
             }
             let neg = n < 0;
             let mut m = (n as i128).unsigned_abs();
+            let b = base as u128;
+            let lex = b"0123456789abcdef";
             let mut s = String::new();
             while m > 0 {
-                s.insert(0, char::from(b'0' + (m % 2) as u8));
-                m /= 2;
+                s.insert(0, lex[(m % b) as usize] as char);
+                m /= b;
             }
-            format!("{}0b{}", if neg { "-" } else { "" }, s)
+            format!("{}{}{}", if neg { "-" } else { "" }, prefix, s)
         }
-        let ok = problem.examples.iter().all(|ex| {
-            ex.inputs.len() == 1
-                && match (int_value(&ex.inputs[0]), str_value(&ex.expected)) {
-                    (Some(n), Some(s)) => ref_bin(n) == s,
-                    _ => false,
-                }
-        });
-        if ok {
-            let code = format!(
-                "fn {fn_name}(n: i64) -> string {{\n    if n == 0 {{\n        return \"0b0\";\n    }}\n    digits: string = \"0123456789ABCDEF\";\n    m: i64 = n;\n    sign: string = \"\";\n    if n < 0 {{\n        sign = \"-\";\n        m = 0 - n;\n    }}\n    result: string = \"\";\n    while m > 0 {{\n        result = digits[m % 2] + result;\n        m = m / 2;\n    }}\n    return (sign + \"0b\") + result;\n}}\n"
-            );
-            return verified_result(problem, code, "search_base_string:binary_0b");
+        for (prefix, base) in FORMATS {
+            let ok = problem.examples.iter().all(|ex| {
+                ex.inputs.len() == 1
+                    && match (int_value(&ex.inputs[0]), str_value(&ex.expected)) {
+                        (Some(n), Some(s)) => ref_prefixed(n, prefix, *base) == s,
+                        _ => false,
+                    }
+            });
+            if ok {
+                let code = format!(
+                    "fn {fn_name}(n: i64) -> string {{\n    if n == 0 {{\n        return \"{prefix}0\";\n    }}\n    digits: string = \"0123456789abcdef\";\n    m: i64 = n;\n    sign: string = \"\";\n    if n < 0 {{\n        sign = \"-\";\n        m = 0 - n;\n    }}\n    result: string = \"\";\n    while m > 0 {{\n        result = digits[m % {base}] + result;\n        m = m / {base};\n    }}\n    return (sign + \"{prefix}\") + result;\n}}\n"
+                );
+                let method = format!("search_base_string:prefixed_{prefix}");
+                return verified_result(problem, code, Box::leak(method.into_boxed_str()));
+            }
         }
         return None;
     }
