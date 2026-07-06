@@ -194,13 +194,30 @@ fn probe_resource_once(bin: &Path, resource: &str) -> Result<(), String> {
     thread::sleep(Duration::from_millis(25));
     let result = (|| {
         let record = "{\"name\":\"ada\"}";
+        // CREATE
         let resp = http_post(&addr, &format!("/{resource}"), record)?;
         if !resp.contains("201") {
             return Err(format!("POST /{resource} not 201: {resp}"));
         }
+        // READ-ALL
         let listed = http_get(&addr, &format!("/{resource}"))?;
         if !listed.contains("ada") {
             return Err(format!("posted record not visible via GET /{resource}: {listed}"));
+        }
+        // READ-ONE
+        let one = request(&addr, "GET", &format!("/{resource}/0"), "")?;
+        if !one.contains("ada") {
+            return Err(format!("GET /{resource}/0 missing record: {one}"));
+        }
+        // DELETE
+        let del = request(&addr, "DELETE", &format!("/{resource}/0"), "")?;
+        if !del.contains("deleted") {
+            return Err(format!("DELETE /{resource}/0 not confirmed: {del}"));
+        }
+        // GONE
+        let after = http_get(&addr, &format!("/{resource}"))?;
+        if after.contains("ada") {
+            return Err(format!("record still present after delete: {after}"));
         }
         Ok(())
     })();
