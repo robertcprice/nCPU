@@ -877,7 +877,28 @@ impl CodingAgentSession {
         // synthesize_from_description's pipeline-first precedence
         // (linguigenesis_bridge.rs:511). Returns None for single-op requests, so
         // single-op behaviour is unchanged.
-        let synthesis = match bridge.try_compose_pipeline(query) {
+        // A compose-pipeline forces an ARRAY-input signature (`fn f(a: [i64])`).
+        // Take it ONLY when the task's own examples are not DEFINITIVELY scalar: a
+        // scalar-input task ("product of the odd DIGITS of n" — every doctest input
+        // `in:[5]` is an Int) must NOT be re-typed as an array reduce, which
+        // mis-models the input and ships a phantom array pipeline, starving the
+        // scalar digit-decompose search. Empty/array/mixed examples preserve prior
+        // behavior, so genuine array pipelines are untouched.
+        let scalar_typed_task = !req.examples.is_empty()
+            && req.examples.iter().all(|ex| {
+                ex.inputs.iter().all(|v| {
+                    matches!(
+                        v,
+                        linguigenesis_core::coding_requirements::LiteralValue::Int(_)
+                    )
+                })
+            });
+        let composed = if scalar_typed_task {
+            None
+        } else {
+            bridge.try_compose_pipeline(query)
+        };
+        let synthesis = match composed {
             Some(Ok(outcome)) => outcome.into_solve_result(),
             Some(Err(error)) => {
                 return AgentQueryResult {
