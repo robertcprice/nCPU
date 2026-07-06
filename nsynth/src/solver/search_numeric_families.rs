@@ -597,6 +597,107 @@ pub(super) fn search_number_predicate(problem: &Problem, fn_name: &str) -> Optio
     None
 }
 
+/// Unary INT -> LIST recognizer: divisor lists and prime factorizations. Tries a
+/// battery of exact list-generating references (all-divisors, prime factors with
+/// multiplicity, distinct prime factors) and emits the first whose reference
+/// reproduces EVERY example's list output. Covers the OSS factor-list timeout
+/// cluster (factors_of_a_number / prime_factors / unique_prime_factors on
+/// TheAlgorithms) that the generic list search cannot fit in time. Edge-case
+/// variants that special-case n=0/1 (keon `factors` 1->[1], `prime_factorization`
+/// 0->[0]) simply won't validate against the clean references -> None -> no false
+/// solve. List validated via `array_value`; exact-by-construction; strict
+/// re-verify in `verified_result` (so a Mog body that can't reproduce the examples
+/// is rejected, never accepted).
+pub(super) fn search_factor_list(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    if parse_param_types(problem.signature) != [ParamType::I64] {
+        return None;
+    }
+    const BOUND: i64 = 2_000_000;
+    // All positive divisors of n, ascending (incl. 1 and n).
+    fn ref_all_divisors(n: i64) -> Option<Vec<i64>> {
+        if !(1..=BOUND).contains(&n) {
+            return None;
+        }
+        let mut v = Vec::new();
+        let mut i = 1i64;
+        while i <= n {
+            if n % i == 0 {
+                v.push(i);
+            }
+            i += 1;
+        }
+        Some(v)
+    }
+    // Prime factors WITH multiplicity, ascending (2560 -> [2;9, 5]).
+    fn ref_prime_factors(n: i64) -> Option<Vec<i64>> {
+        if !(0..=BOUND).contains(&n) {
+            return None;
+        }
+        let mut v = Vec::new();
+        let (mut m, mut d) = (n, 2i64);
+        while d * d <= m {
+            while m % d == 0 {
+                v.push(d);
+                m /= d;
+            }
+            d += 1;
+        }
+        if m > 1 {
+            v.push(m);
+        }
+        Some(v)
+    }
+    // DISTINCT prime factors, ascending (2560 -> [2, 5]).
+    fn ref_unique_prime_factors(n: i64) -> Option<Vec<i64>> {
+        if !(0..=BOUND).contains(&n) {
+            return None;
+        }
+        let mut v = Vec::new();
+        let (mut m, mut d) = (n, 2i64);
+        while d * d <= m {
+            if m % d == 0 {
+                v.push(d);
+                while m % d == 0 {
+                    m /= d;
+                }
+            }
+            d += 1;
+        }
+        if m > 1 {
+            v.push(m);
+        }
+        Some(v)
+    }
+    let all_div = format!(
+        "fn {fn_name}(n: i64) -> [i64] {{\n    result: [i64] = [];\n    i: i64 = 1;\n    while i <= n {{\n        if (n % i) == 0 {{\n            result.push(i);\n        }}\n        i = i + 1;\n    }}\n    return result;\n}}\n"
+    );
+    let prime_mult = format!(
+        "fn {fn_name}(n: i64) -> [i64] {{\n    result: [i64] = [];\n    m: i64 = n;\n    d: i64 = 2;\n    while (d * d) <= m {{\n        while (m % d) == 0 {{\n            result.push(d);\n            m = m / d;\n        }}\n        d = d + 1;\n    }}\n    if m > 1 {{\n        result.push(m);\n    }}\n    return result;\n}}\n"
+    );
+    let prime_uniq = format!(
+        "fn {fn_name}(n: i64) -> [i64] {{\n    result: [i64] = [];\n    m: i64 = n;\n    d: i64 = 2;\n    while (d * d) <= m {{\n        if (m % d) == 0 {{\n            result.push(d);\n            while (m % d) == 0 {{\n                m = m / d;\n            }}\n        }}\n        d = d + 1;\n    }}\n    if m > 1 {{\n        result.push(m);\n    }}\n    return result;\n}}\n"
+    );
+    let table: [(&str, fn(i64) -> Option<Vec<i64>>, String); 3] = [
+        ("all_divisors", ref_all_divisors, all_div),
+        ("prime_factors", ref_prime_factors, prime_mult),
+        ("unique_prime_factors", ref_unique_prime_factors, prime_uniq),
+    ];
+    for (name, reference, code) in &table {
+        let ok = problem.examples.iter().all(|ex| {
+            ex.inputs.len() == 1
+                && match (int_value(&ex.inputs[0]), array_value(&ex.expected)) {
+                    (Some(n), Some(exp)) => reference(n) == Some(exp),
+                    _ => false,
+                }
+        });
+        if ok {
+            let method = format!("search_factor_list:{name}");
+            return verified_result(problem, code.clone(), Box::leak(method.into_boxed_str()));
+        }
+    }
+    None
+}
+
 pub(super) fn search_sum_of_divisors_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {

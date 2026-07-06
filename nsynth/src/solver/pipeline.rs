@@ -1019,6 +1019,22 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact int->list factor recognizer (all-divisors / prime-factors[-mult] /
+    // distinct-prime-factors) — the OSS factor-list timeout cluster; fire early,
+    // strict-re-verified so a spurious fit cannot pass.
+    if let Some(result) =
+        super::search_numeric_families::search_factor_list(problem, problem.function_name())
+    {
+        if result.success {
+            eprintln!(
+                "[solve] factor-list OK in {:.3}s — {}",
+                t0.elapsed().as_secs_f32(),
+                result.method
+            );
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and

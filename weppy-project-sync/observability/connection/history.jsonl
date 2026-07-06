@@ -1,0 +1,12 @@
+{"timestamp":"2026-07-01T15:31:45.244Z","type":"mcp","status":"registered","instanceId":"74401f29-c205-4369-94fa-6d374fec557e","message":"MCP registered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T15:31:46.046Z","type":"mcp","status":"registered","instanceId":"4a2ad322-6f53-4035-9480-3dc598886f48","message":"MCP registered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T15:32:01.647Z","type":"mcp","status":"registered","instanceId":"8ade01b6-77bb-4f98-be2c-b1d2f9d785ad","message":"MCP registered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T15:32:21.139Z","type":"mcp","status":"registered","instanceId":"54d6e6e0-ebda-47a7-b1dc-3a6d5b8069a7","message":"MCP registered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T15:32:31.505Z","type":"mcp","status":"registered","instanceId":"a4b96d4c-a5a4-4af8-b249-7ee2f81609f1","message":"MCP registered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T16:35:10.980Z","type":"mcp","status":"registered","instanceId":"b9a11ad7-7792-43b0-a925-74b1aa0e53c3","message":"MCP registered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T16:37:02.051Z","type":"mcp","status":"unregistered","instanceId":"8ade01b6-77bb-4f98-be2c-b1d2f9d785ad","message":"MCP unregistered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T16:37:31.906Z","type":"mcp","status":"unregistered","instanceId":"a4b96d4c-a5a4-4af8-b249-7ee2f81609f1","message":"MCP unregistered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T17:08:58.845Z","type":"mcp","status":"registered","instanceId":"ae284780-6615-496b-bd27-3d51fae80e29","message":"MCP registered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T17:09:20.444Z","type":"mcp","status":"registered","instanceId":"169a2c21-2420-4018-bbbd-3b4755c608c1","message":"MCP registered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T17:35:11.933Z","type":"mcp","status":"unregistered","instanceId":"b9a11ad7-7792-43b0-a925-74b1aa0e53c3","message":"MCP unregistered — Claude Code","aiClientName":"Claude Code"}
+{"timestamp":"2026-07-01T18:09:21.032Z","type":"mcp","status":"unregistered","instanceId":"169a2c21-2420-4018-bbbd-3b4755c608c1","message":"MCP unregistered — Claude Code","aiClientName":"Claude Code"}

@@ -56,7 +56,7 @@ mod search_typed_enum;
 mod signature;
 
 use self::helpers::{
-    family_name, int_value, templ, validate_array_and_int, validate_binary_int,
+    array_value, family_name, int_value, templ, validate_array_and_int, validate_binary_int,
     validate_quaternary_int, validate_ternary_int, validate_two_arrays, validate_unary_array,
     validate_unary_int, validate_unary_pair, validate_unary_str,
 };
