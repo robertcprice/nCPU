@@ -131,11 +131,13 @@ fn render_resource_state(resources: &[String]) -> String {
     if resources.is_empty() {
         return String::new();
     }
-    let inserts: String = resources
+    // Each resource is loaded from its <name>.jsonl file at startup (durable
+    // across restarts).
+    let loads: String = resources
         .iter()
-        .map(|r| format!("        m.insert(\"{r}\".to_string(), Vec::new());\n"))
+        .map(|r| format!("        m.insert(\"{r}\".to_string(), load_collection(\"{r}\"));\n"))
         .collect();
-    RESOURCE_STATE_TEMPLATE.replace("INSERTS", &inserts)
+    RESOURCE_STATE_TEMPLATE.replace("NAMES_LOAD", &loads)
 }
 
 /// GET (list) + POST (append) match arms for each REST collection resource.
@@ -147,10 +149,19 @@ fn render_resource_arms(resources: &[String]) -> String {
 }
 
 const RESOURCE_STATE_TEMPLATE: &str = r#"static COLLECTIONS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Vec<String>>>> = std::sync::OnceLock::new();
+fn collection_path(name: &str) -> String { format!("{}.jsonl", name) }
+fn load_collection(name: &str) -> Vec<String> {
+    std::fs::read_to_string(collection_path(name))
+        .map(|s| s.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect())
+        .unwrap_or_default()
+}
+fn save_collection(name: &str, items: &[String]) {
+    let _ = std::fs::write(collection_path(name), items.join("\n"));
+}
 fn collections() -> &'static Mutex<std::collections::HashMap<String, Vec<String>>> {
     COLLECTIONS.get_or_init(|| Mutex::new({
         let mut m = std::collections::HashMap::new();
-INSERTS        m
+NAMES_LOAD        m
     }))
 }
 "#;
@@ -161,7 +172,10 @@ const RESOURCE_ARM_TEMPLATE: &str = r#"        ("GET", "/RES") => {
             write_response(&mut stream, 200, &format!("[{}]", items.join(",")))
         }
         ("POST", "/RES") => {
-            collections().lock().unwrap().entry("RES".to_string()).or_default().push(body.to_string());
+            let mut g = collections().lock().unwrap();
+            let v = g.entry("RES".to_string()).or_default();
+            v.push(body.replace('\n', " "));
+            save_collection("RES", v);
             write_response(&mut stream, 201, "{\"ok\":true,\"created\":1}")
         }
         ("GET", p) if p.starts_with("/RES/") => {
@@ -177,7 +191,8 @@ const RESOURCE_ARM_TEMPLATE: &str = r#"        ("GET", "/RES") => {
             let mut g = collections().lock().unwrap();
             match g.get_mut("RES") {
                 Some(v) if id < v.len() => {
-                    v[id] = body.to_string();
+                    v[id] = body.replace('\n', " ");
+                    save_collection("RES", v);
                     write_response(&mut stream, 200, "{\"ok\":true,\"updated\":1}")
                 }
                 _ => write_response(&mut stream, 404, "{\"error\":\"not found\"}"),
@@ -189,6 +204,7 @@ const RESOURCE_ARM_TEMPLATE: &str = r#"        ("GET", "/RES") => {
             match g.get_mut("RES") {
                 Some(v) if id < v.len() => {
                     v.remove(id);
+                    save_collection("RES", v);
                     write_response(&mut stream, 200, "{\"ok\":true,\"deleted\":1}")
                 }
                 _ => write_response(&mut stream, 404, "{\"error\":\"not found\"}"),
@@ -934,6 +950,26 @@ mod tests {
         let res = crate::backend_http::verify_resource_crud(&bin, "users", 6);
         crate::backend_http::cleanup_temp_artifacts(&src_path, &bin);
         res.expect("POST then GET /users round-trips over HTTP");
+    }
+
+    #[test]
+    fn backend_ir_resource_persists_across_restart() {
+        let rustc_ok = std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !rustc_ok {
+            eprintln!("skipping resource persistence test: rustc unavailable");
+            return;
+        }
+        let app = BackendApp::from_rules("users api", vec![], StoreKind::Memory)
+            .with_resources(vec!["users".to_string()]);
+        let (src_path, bin) =
+            crate::backend_http::compile_to_temp_bin(&app.render_rust(), false).expect("compile");
+        let res = crate::backend_http::verify_resource_persists(&bin, "users");
+        crate::backend_http::cleanup_temp_artifacts(&src_path, &bin);
+        res.expect("resource survives a process restart (file-backed)");
     }
 
     #[test]

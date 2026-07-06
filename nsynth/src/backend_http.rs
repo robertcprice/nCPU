@@ -165,10 +165,16 @@ fn probe_submission_once(bin: &Path) -> Result<(), String> {
 /// `/<resource>` (require 201), then GET `/<resource>` and require the posted
 /// record is listed. Proves the in-memory collection round-trips over HTTP.
 pub fn verify_resource_crud(bin: &Path, resource: &str, max_attempts: usize) -> Result<(), String> {
+    let workdir = unique_path("ncpu_resource_wd", "d");
+    let _ = std::fs::create_dir_all(&workdir);
     let mut last_err = String::new();
+    let mut out = Err(String::new());
     for attempt in 0..max_attempts {
-        match probe_resource_once(bin, resource) {
-            Ok(()) => return Ok(()),
+        match probe_resource_once(bin, resource, &workdir) {
+            Ok(()) => {
+                out = Ok(());
+                break;
+            }
             Err(err) => {
                 last_err = err;
                 if attempt + 1 < max_attempts {
@@ -177,15 +183,60 @@ pub fn verify_resource_crud(bin: &Path, resource: &str, max_attempts: usize) -> 
             }
         }
     }
-    Err(format!(
-        "resource CRUD for /{resource} failed after {max_attempts} attempts: {last_err}"
-    ))
+    let _ = std::fs::remove_dir_all(&workdir);
+    out.map_err(|_| {
+        format!("resource CRUD for /{resource} failed after {max_attempts} attempts: {last_err}")
+    })
 }
 
-fn probe_resource_once(bin: &Path, resource: &str) -> Result<(), String> {
+/// PERSISTENCE smoke: boot the backend in a fresh workdir, POST a record, kill
+/// it; boot a SECOND process in the SAME workdir and require the record is still
+/// there via GET — proving resources survive a restart (file-backed).
+pub fn verify_resource_persists(bin: &Path, resource: &str) -> Result<(), String> {
+    let workdir = unique_path("ncpu_resource_persist", "d");
+    std::fs::create_dir_all(&workdir).map_err(|e| format!("mkdir workdir: {e}"))?;
+    let run = |post: bool| -> Result<String, String> {
+        let mut child = Command::new(bin)
+            .arg("--port")
+            .arg("0")
+            .current_dir(&workdir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn: {e}"))?;
+        let addr = read_ready_addr(&mut child)?;
+        thread::sleep(Duration::from_millis(25));
+        let r = (|| {
+            if post {
+                let resp = http_post(&addr, &format!("/{resource}"), "{\"name\":\"ada\"}")?;
+                if !resp.contains("201") {
+                    return Err(format!("POST not 201: {resp}"));
+                }
+            }
+            http_get(&addr, &format!("/{resource}"))
+        })();
+        stop_child(&mut child);
+        r
+    };
+    let result = (|| {
+        run(true)?; // process 1: create a record, then dies
+        let after = run(false)?; // process 2 (restart): read the collection
+        if !after.contains("ada") {
+            return Err(format!("record did NOT survive restart: {after}"));
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&workdir);
+    result
+}
+
+fn probe_resource_once(bin: &Path, resource: &str, workdir: &Path) -> Result<(), String> {
+    // Run in an isolated workdir: resources persist to <name>.jsonl in CWD, so
+    // each probe gets a clean directory (no repo pollution, no parallel clash).
     let mut child = Command::new(bin)
         .arg("--port")
         .arg("0")
+        .current_dir(workdir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
