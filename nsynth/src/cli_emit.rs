@@ -6,14 +6,30 @@
 //! This is the smallest "app" wrapper around the engine's strongest capability
 //! (function synthesis) — a new artifact type distinct from sites and backends.
 
-/// Emit a self-contained Rust CLI wrapping `fn_source` (a `fn NAME(...) -> i64`).
-/// `arity` integer arguments are read from argv and passed to `fn_name`.
-pub fn emit_cli_rust(fn_name: &str, fn_source: &str, arity: usize) -> String {
+/// The type of a CLI argument, so the wrapper parses argv correctly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliArg {
+    /// Parsed as an i64.
+    Int,
+    /// Used as a String verbatim.
+    Str,
+}
+
+/// Emit a self-contained Rust CLI wrapping `fn_source` (a `fn NAME(...) -> ...`).
+/// One argv value is read per entry in `args`, parsed to its type, and passed to
+/// `fn_name`; the result is printed. Supports integer and string tools.
+pub fn emit_cli_rust(fn_name: &str, fn_source: &str, args: &[CliArg]) -> String {
+    let arity = args.len();
     let mut parse = String::new();
-    for i in 0..arity {
-        parse.push_str(&format!(
-            "    let a{i}: i64 = args.get({i}).and_then(|s| s.parse().ok()).unwrap_or_else(|| {{ eprintln!(\"usage: {fn_name} expects {arity} integer argument(s)\"); std::process::exit(2); }});\n"
-        ));
+    for (i, ty) in args.iter().enumerate() {
+        match ty {
+            CliArg::Int => parse.push_str(&format!(
+                "    let a{i}: i64 = args.get({i}).and_then(|s| s.parse().ok()).unwrap_or_else(|| {{ eprintln!(\"usage: {fn_name} expects {arity} argument(s)\"); std::process::exit(2); }});\n"
+            )),
+            CliArg::Str => parse.push_str(&format!(
+                "    let a{i}: String = args.get({i}).cloned().unwrap_or_else(|| {{ eprintln!(\"usage: {fn_name} expects {arity} argument(s)\"); std::process::exit(2); }});\n"
+            )),
+        }
     }
     let call_args: Vec<String> = (0..arity).map(|i| format!("a{i}")).collect();
     format!(
@@ -56,7 +72,7 @@ mod tests {
 
     #[test]
     fn emits_wrapper_shape() {
-        let cli = emit_cli_rust("dbl", "fn dbl(x: i64) -> i64 { x * 2 }", 1);
+        let cli = emit_cli_rust("dbl", "fn dbl(x: i64) -> i64 { x * 2 }", &[CliArg::Int]);
         assert!(cli.contains("fn dbl(x: i64) -> i64"), "includes the function");
         assert!(cli.contains("fn main()"), "has a main");
         assert!(cli.contains("dbl(a0)"), "calls the function with parsed arg");
@@ -69,7 +85,7 @@ mod tests {
             eprintln!("skipping CLI run test: rustc unavailable");
             return;
         }
-        let cli = emit_cli_rust("dbl", "fn dbl(x: i64) -> i64 { x * 2 }", 1);
+        let cli = emit_cli_rust("dbl", "fn dbl(x: i64) -> i64 { x * 2 }", &[CliArg::Int]);
         verify_cli(&cli, &["5"], "10").expect("dbl 5 -> 10");
         verify_cli(&cli, &["-3"], "-6").expect("dbl -3 -> -6");
     }
@@ -80,7 +96,26 @@ mod tests {
             eprintln!("skipping CLI run test: rustc unavailable");
             return;
         }
-        let cli = emit_cli_rust("add", "fn add(a: i64, b: i64) -> i64 { a + b }", 2);
+        let cli = emit_cli_rust(
+            "add",
+            "fn add(a: i64, b: i64) -> i64 { a + b }",
+            &[CliArg::Int, CliArg::Int],
+        );
         verify_cli(&cli, &["3", "4"], "7").expect("add 3 4 -> 7");
+    }
+
+    #[test]
+    fn string_cli_computes() {
+        if !rustc_available() {
+            eprintln!("skipping CLI run test: rustc unavailable");
+            return;
+        }
+        // A string tool: reverse a string. Proves CLIs wrap string functions too.
+        let cli = emit_cli_rust(
+            "rev",
+            "fn rev(s: String) -> String { s.chars().rev().collect() }",
+            &[CliArg::Str],
+        );
+        verify_cli(&cli, &["hello"], "olleh").expect("rev hello -> olleh");
     }
 }
