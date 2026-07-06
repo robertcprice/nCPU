@@ -851,6 +851,66 @@ pub fn build_widget_from_mog(
     }
 }
 
+/// Full app-gen path: given a named function, its parameter names, and I/O
+/// examples, SYNTHESIZE the logic through the real solver (strict-verified against
+/// the examples), then emit + verify an interactive widget. `Ok(html)` is a working
+/// app whose behavior is the proven function; `Err` means the logic could not be
+/// synthesized or the widget did not verify. This is the reusable core the product
+/// front door ("build a calculator that …") calls once it has parsed the ask.
+pub fn synthesize_interactive_app(
+    title: &str,
+    fn_name: &str,
+    params: &[&str],
+    examples: &[(Vec<i64>, i64)],
+) -> Result<String, String> {
+    use crate::benchmark::{Example, Problem, Value};
+    if examples.len() < 2 {
+        return Err("need >= 2 examples to synthesize verified logic".to_string());
+    }
+    let exs: Vec<Example> = examples
+        .iter()
+        .map(|(ins, out)| Example {
+            inputs: ins.iter().map(|&v| Value::Int(v)).collect(),
+            expected: Value::Int(*out),
+        })
+        .collect();
+    let sig = format!(
+        "fn {}({}) -> i64",
+        fn_name,
+        params
+            .iter()
+            .map(|p| format!("{p}: i64"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    // Problem.signature is &'static; this path is user-request frequency, so the
+    // small per-call leak (as the bridge already does for NL problems) is fine.
+    let sig_static: &'static str = Box::leak(sig.into_boxed_str());
+    let problem = Problem {
+        name: fn_name.to_string(),
+        category: "interactive",
+        description: "interactive app logic",
+        signature: sig_static,
+        examples: exs,
+        holdouts: vec![],
+        reference_code: "",
+        synthetic_args: Vec::new(),
+        synthetic_values: Vec::new(),
+        recursive_allowed: false,
+        tree_input: false,
+        explicit_stack: false,
+        functions: vec![],
+    };
+    let result = crate::solver::solve_problem(&problem);
+    if !result.success {
+        return Err(format!(
+            "could not synthesize verified logic from the examples: {:?}",
+            result.error
+        ));
+    }
+    build_widget_from_mog(title, fn_name, params, &result.code)
+}
+
 /// The configured provider spec, or None when content generation is off.
 pub fn content_spec() -> Option<String> {
     std::env::var("NSYNTH_CONTENT_MODEL")
@@ -1249,6 +1309,32 @@ mod tests {
             !html.contains("i64") && !html.contains(": number"),
             "Mog/TS annotations must be stripped for browser JS"
         );
+    }
+
+    #[test]
+    fn synthesize_interactive_app_reusable_core() {
+        // Adder.
+        let adder = synthesize_interactive_app(
+            "Adder",
+            "add",
+            &["a", "b"],
+            &[(vec![2, 3], 5), (vec![10, 4], 14), (vec![0, 7], 7), (vec![-1, 1], 0), (vec![20, 22], 42)],
+        )
+        .expect("add should synthesize");
+        assert!(adder.contains("function add") && adder.contains("add(Number"));
+
+        // A DIFFERENT logic (larger-of-two) — proves the path is not hardcoded to add.
+        let maxer = synthesize_interactive_app(
+            "Bigger",
+            "biggest",
+            &["a", "b"],
+            &[(vec![3, 7], 7), (vec![9, 2], 9), (vec![-5, -1], -1), (vec![4, 4], 4), (vec![100, 50], 100)],
+        )
+        .expect("max should synthesize");
+        assert!(maxer.contains("function biggest") && maxer.contains("biggest(Number"));
+
+        // Fail-closed: too few examples => honest error, never a fabricated app.
+        assert!(synthesize_interactive_app("X", "f", &["a"], &[(vec![1], 1)]).is_err());
     }
 
     #[test]
