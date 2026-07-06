@@ -358,7 +358,7 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     canonical("nav", "section", "a navigation bar with links at the top of the page", &["navigation", "navbar", "navmenu"]);
     canonical("hero", "section", "a large banner header splash welcoming visitors at the top", &["banner", "splash", "jumbotron", "header"]);
     canonical("features", "section", "a grid of feature cards highlighting benefits and services", &["benefits", "highlights", "services"]);
-    canonical("gallery", "section", "a grid of photos images and pictures to showcase work", &["photos", "images", "pictures", "showcase", "portfolio"]);
+    canonical("gallery", "section", "a grid of photos images and pictures to showcase work", &["photos", "images", "pictures", "showcase"]);
     canonical("contact", "section", "a form where visitors reach out send a message or email to get in touch", &["form", "message", "email", "reach"]);
     canonical("about", "section", "an about section telling the story bio and background", &["bio", "story", "background"]);
     canonical("menu", "section", "a menu of products items dishes or offerings", &["products", "items", "offerings", "dishes"]);
@@ -399,6 +399,7 @@ fn web_registry() -> linguigenesis_core::registry::Registry {
     // App / data artifact types — same design system + verification, new shapes.
     canonical("dashboard", "archetype", "a dashboard admin panel with stats, a chart, and a table", &["admin", "analytics", "console", "panel"]);
     canonical("saas", "archetype", "a saas app landing page with a hero, features, pricing, testimonials, and a contact form", &["app", "webapp", "software", "platform", "startup"]);
+    canonical("portfolio", "archetype", "a portfolio page with a hero, a gallery, an about story, and a contact form", &["folio"]);
     // MOODS — an aesthetic TONE that implies a PALETTE and a style, composed
     // from the mood's definition exactly like an archetype composes structure
     // (colors via the CSS vocabulary, theme via the resolver). This is how an
@@ -454,8 +455,16 @@ fn resolve_web_token(
     // Full emergent completion (shared hub helper): ranked candidates, and a
     // kind-less hit (a synonym entity reached by morphology) follows its
     // synonym EDGES to the canonical concept carrying web_kind.
+    // FLOOR: reject weak fuzzy hits (e.g. "show"->storefront 0.64, "work"->
+    // contact 0.56) so prose tails ("...to show my work") don't inject spurious
+    // sections/archetypes. Real matches (exact 1.0, synonyms/morphology ~0.8+)
+    // clear it; noise doesn't. This is what keeps wider routing precise.
     crate::registry_hub::resolve_domain(resolver, registry, token, "web_kind")
+        .filter(|(_, _, score)| *score >= WEB_RESOLVE_FLOOR)
 }
+
+/// Minimum resolver confidence for a token to count as a web concept.
+const WEB_RESOLVE_FLOOR: f32 = 0.72;
 
 /// Emergent comprehension of a page request: routing gate = a construction cue
 /// plus a web noun (token-level, morphology-aware); CONTENT resolution rides
@@ -481,12 +490,21 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
         nv.push(name.to_string());
         tv.iter().any(|v| nv.contains(v))
     };
-    // Routing gate (token-level + morphology; routing, not resolution).
-    const CUES: [&str; 8] = ["add", "create", "make", "build", "new", "generate", "want", "put"];
+    // ROUTING GATE, two signals. (1) a CONSTRUCTION cue (broadened to the common
+    // build verbs) — cheap, rejects non-imperative prompts up front. (2) a WEB
+    // signal — EITHER a literal web noun OR a token that emergently RESOLVES to a
+    // web archetype (blog/dashboard/storefront/... incl. business nouns). The
+    // second half is checked AFTER resolution below, so "build a dashboard" /
+    // "an online store" route via the resolver, not a keyword list — while ops,
+    // components, and math prompts (no web archetype) never claim the site door.
+    const CUES: [&str; 14] = [
+        "add", "create", "make", "build", "new", "generate", "want", "put", "design", "need",
+        "develop", "launch", "start", "setup",
+    ];
     const WEB: [&str; 6] = ["page", "website", "site", "webpage", "homepage", "web"];
     let has_cue = tokens.iter().any(|t| CUES.iter().any(|c| morph_eq(t, c)));
-    let has_web = tokens.iter().any(|t| WEB.iter().any(|w| morph_eq(t, w)));
-    if !has_cue || !has_web {
+    let has_web_noun = tokens.iter().any(|t| WEB.iter().any(|w| morph_eq(t, w)));
+    if !has_cue {
         return None;
     }
     // Page name: the token after "called"/"named" (structural cue).
@@ -554,6 +572,14 @@ pub fn comprehend_site_request(text: &str) -> Option<SiteRequest> {
                 _ => {}
             }
         }
+    }
+    // WEB SIGNAL (the emergent half of the gate): route only if a literal web
+    // noun was present OR the prompt RESOLVED to a web archetype (blog/dashboard/
+    // storefront/saas/... or a business noun -> storefront). A construction cue
+    // with no web archetype and no web noun ("build a counter", "reverse a
+    // string") is NOT a site request — let it fall through to the next intake.
+    if !has_web_noun && archetype.is_none() {
+        return None;
     }
     // SUBJECT AS BRAND: no explicit "called/named X" page name -> use the site
     // subject noun (bakery) as the title, so brand/hero/title read the domain,
@@ -716,6 +742,75 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
 // receives the prompt on stdin, prints copy on stdout). A helper that drives the
 // local model lives at scripts/site_content.py, so a real config is e.g.
 // NSYNTH_CONTENT_MODEL="cmd:python3 scripts/site_content.py". Unset => scaffold.
+
+/// Emit a self-contained INTERACTIVE page: one labeled numeric input per param, a
+/// compute button, an ARIA-live output area, and a `<script>` embedding `logic_js`
+/// — the synthesized+transpiled JS `function <fn_name>(...)`. The button reads the
+/// inputs, calls the VERIFIED logic, and renders the result.
+///
+/// This is the seam that UNIFIES the two engines: UI + accessibility from this
+/// module, BEHAVIOR from verified synthesis (`mog_transpile::to_typescript` of a
+/// strict-verified program) — never hand-written JS. It is how a proven function
+/// (the whole examples-only synthesis stack) becomes a working web app / game
+/// widget, the north-star capability beyond static marketing sites.
+pub fn emit_interactive_widget(
+    title: &str,
+    fn_name: &str,
+    params: &[&str],
+    logic_js: &str,
+) -> String {
+    let inputs: String = params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            format!(
+                "<label for=\"arg{i}\">{p}</label>\n\
+                 <input type=\"number\" id=\"arg{i}\" name=\"{p}\" value=\"0\">\n"
+            )
+        })
+        .collect();
+    let read_args: String = (0..params.len())
+        .map(|i| format!("Number(document.getElementById('arg{i}').value)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>{title}</title>\n<link rel=\"stylesheet\" href=\"styles.css\">\n</head>\n\
+         <body>\n<main>\n<h1>{title}</h1>\n<form id=\"widget\" onsubmit=\"return false\">\n\
+         {inputs}<button type=\"button\" id=\"run\" onclick=\"__run()\">Compute</button>\n\
+         </form>\n<output id=\"result\" aria-live=\"polite\"></output>\n</main>\n\
+         <script>\n{logic_js}\nfunction __run() {{\n  \
+         const out = {fn_name}({read_args});\n  \
+         document.getElementById('result').textContent = String(out);\n}}\n</script>\n\
+         </body>\n</html>\n"
+    )
+}
+
+/// Structure verifier for an interactive widget — fail-closed like `verify_page`.
+/// The BEHAVIOR is the already-strict-verified synthesized function; this checks
+/// the wiring that exposes it: the logic fn is embedded, the runner calls it,
+/// there is an input per parameter, and an output area exists.
+pub fn verify_widget(html: &str, fn_name: &str, n_params: usize) -> Vec<String> {
+    let mut issues = Vec::new();
+    if !html.contains(&format!("function {fn_name}"))
+        && !html.contains(&format!("{fn_name} ="))
+        && !html.contains(&format!("const {fn_name}"))
+    {
+        issues.push(format!("logic function '{fn_name}' not embedded"));
+    }
+    if !html.contains(&format!("{fn_name}(")) {
+        issues.push("runner does not call the logic function".to_string());
+    }
+    if !html.contains("id=\"result\"") {
+        issues.push("no output area".to_string());
+    }
+    let n_inputs = html.matches("type=\"number\"").count();
+    if n_inputs < n_params {
+        issues.push(format!("expected {n_params} input(s), found {n_inputs}"));
+    }
+    issues
+}
 
 /// The configured provider spec, or None when content generation is off.
 pub fn content_spec() -> Option<String> {
@@ -1049,6 +1144,22 @@ pub fn build_site_page(root: &Path, req: &SiteRequest) -> Result<Vec<String>, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interactive_widget_embeds_verified_logic_and_wires_it() {
+        // A verified function (here a stand-in for the transpiler output) becomes a
+        // working widget: embedded, called by the runner, one input per param.
+        let logic_js = "function tip(bill, pct) { return bill * pct / 100; }";
+        let html = emit_interactive_widget("Tip Calculator", "tip", &["bill", "pct"], logic_js);
+        let issues = verify_widget(&html, "tip", 2);
+        assert!(issues.is_empty(), "widget did not verify: {issues:?}");
+        assert!(html.contains("function tip"), "logic not embedded");
+        assert!(html.contains("tip(Number"), "runner does not call the logic");
+        assert!(html.contains("aria-live"), "output not announced to AT");
+        // Fail-closed: a widget missing the logic fn must FAIL verification.
+        let broken = html.replace("function tip", "function nope");
+        assert!(!verify_widget(&broken, "tip", 2).is_empty(), "missing logic not caught");
+    }
 
     #[test]
     fn comprehends_the_full_ask() {
@@ -1818,6 +1929,45 @@ mod real_nl_tests {
         );
     }
 
+    /// EMERGENT ROUTING: a prompt routes to the site door when it RESOLVES to a
+    /// web archetype (blog/dashboard/storefront/portfolio/business noun), even
+    /// with no literal "page/website" noun — via the resolver, not a keyword
+    /// list. Precision holds: construction cues over non-web nouns don't claim it.
+    #[test]
+    fn widened_routing_resolves_web_intent() {
+        // NEW positives — previously rejected for lacking a web noun.
+        for p in [
+            "build me an online store for my coffee shop", // store -> storefront
+            "build a dashboard for my sales team",         // dashboard archetype
+            "create a blog about my travels",              // blog archetype
+            "make a portfolio to show my work",            // portfolio archetype
+            "design a homepage for my startup",            // broadened cue "design"
+            "i need a website for my gym",                 // broadened cue "need"
+        ] {
+            assert!(comprehend_site_request(p).is_some(), "should route to site: {p}");
+        }
+        // PRECISION — a construction cue with NO web archetype/noun must NOT be
+        // hijacked by the site door (these belong to component/op synthesis).
+        for p in [
+            "build a counter",
+            "build a stack",
+            "make an accumulator",
+            "create a function that doubles a number",
+            "reverse a string then sort it",
+            // backend/api prompts belong to the backend door (which runs AFTER
+            // site) — the wider site gate must not hijack them.
+            "make me an api with a health check",
+            "create a backend with a users database",
+        ] {
+            assert!(comprehend_site_request(p).is_none(), "must NOT route to site: {p}");
+        }
+        // The dashboard/blog/portfolio archetypes actually compose.
+        let d = comprehend_site_request("build a dashboard for my team").unwrap();
+        assert!(d.sections.contains(&"stats".to_string()), "dashboard composes: {:?}", d.sections);
+        let pf = comprehend_site_request("make a portfolio to show my work").unwrap();
+        assert!(pf.sections.contains(&"gallery".to_string()), "portfolio composes: {:?}", pf.sections);
+    }
+
     /// Precision: web-ish words in OP requests still never comprehend as sites,
     /// and gibberish resolves nothing.
     #[test]
@@ -1902,6 +2052,7 @@ mod mine_tests {
         let _ = std::fs::remove_file(&p);
     }
 }
+
 
 
 
