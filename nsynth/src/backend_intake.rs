@@ -1162,6 +1162,35 @@ pub fn comprehend_backend_prose(text: &str) -> Option<BackendAsk> {
     Some(BackendAsk { store, rule_names })
 }
 
+/// REST collection resources named in prose: a noun immediately before a
+/// resource marker ("users resource", "orders collection", "products table")
+/// names a REST collection with GET/POST /<noun>. Detected at build time from
+/// the ask's english (keeps BackendAsk unchanged).
+pub(crate) fn detect_resources(text: &str) -> Vec<String> {
+    const RES_MARKERS: [&str; 5] = ["resource", "resources", "collection", "collections", "table"];
+    let tokens: Vec<String> = text
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect();
+    let mut resources: Vec<String> = Vec::new();
+    for i in 1..tokens.len() {
+        if RES_MARKERS.contains(&tokens[i].as_str()) {
+            let noun = &tokens[i - 1];
+            if !matches!(noun.as_str(), "a" | "an" | "the")
+                && noun.chars().all(|c| c.is_ascii_alphanumeric())
+                && StoreKind::parse(noun).is_none()
+            {
+                resources.push(noun.clone());
+            }
+        }
+    }
+    resources.sort();
+    resources.dedup();
+    resources
+}
+
 /// Build a comprehended backend ask into `root/backend/main.rs`:
 ///   * rule asks route through the FULL unified door (synthesis + auto HTTP
 ///     checks + compile/HTTP repair);
@@ -1171,7 +1200,8 @@ pub fn comprehend_backend_prose(text: &str) -> Option<BackendAsk> {
 pub fn build_backend_ask(root: &std::path::Path, english: &str, ask: &BackendAsk) -> Result<Vec<String>, String> {
     let out = root.join("backend/main.rs");
     if ask.rule_names.is_empty() {
-        let app = BackendApp::from_rules(english, vec![], ask.store);
+        let app = BackendApp::from_rules(english, vec![], ask.store)
+            .with_resources(detect_resources(english));
         let source = crate::backend_repair::build_with_compile_and_http_repair(&app, &[], ask.store, 2)?;
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -1187,6 +1217,41 @@ pub fn build_backend_ask(root: &std::path::Path, english: &str, ask: &BackendAsk
 #[cfg(test)]
 mod backend_ask_tests {
     use super::*;
+
+    #[test]
+    fn detect_resources_finds_named_collections() {
+        assert_eq!(
+            detect_resources("make me an api with a users resource"),
+            vec!["users".to_string()]
+        );
+        let both = detect_resources("an api with a users table and an orders collection");
+        assert_eq!(both, vec!["orders".to_string(), "users".to_string()]);
+        assert!(detect_resources("make me an api with a health check").is_empty());
+        // "users database" is a STORE concept, not a REST collection.
+        assert!(detect_resources("an api with a users database").is_empty());
+    }
+
+    #[test]
+    fn builds_backend_with_a_resource_route() {
+        if !rustc_available() {
+            eprintln!("skipping resource-backend build test: rustc unavailable");
+            return;
+        }
+        let english = "make me an api with a users resource";
+        let ask = comprehend_backend_prose(english).expect("routes as a backend ask");
+        let root = std::env::temp_dir().join(format!("nsynth_resbe_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // build_backend_ask compiles the generated server (fail-closed) — success
+        // means the resource routes are real, compiled code.
+        let written = build_backend_ask(&root, english, &ask).expect("builds + compiles");
+        assert!(written.contains(&"backend/main.rs".to_string()));
+        let src = std::fs::read_to_string(root.join("backend/main.rs")).unwrap();
+        assert!(
+            src.contains("(\"GET\", \"/users\")") && src.contains("(\"POST\", \"/users\")"),
+            "generated backend carries the /users resource routes"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn comprehends_structural_and_rule_asks() {
