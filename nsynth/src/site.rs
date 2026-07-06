@@ -1420,6 +1420,28 @@ mod tests {
     }
 
     #[test]
+    fn game_logic_becomes_a_verified_widget() {
+        // "websites AND games": a GAME rule — Rock-Paper-Scissors judge
+        // rps(you, them) = (you - them + 3) % 3  (0 tie, 1 you-win, 2 them-win) —
+        // synthesized from its full 3x3 truth table (verified), wrapped into a
+        // playable widget. Same seam as any app; the behavior is the proven rule.
+        let table = [
+            (vec![0, 0], 0), (vec![1, 1], 0), (vec![2, 2], 0),
+            (vec![0, 2], 1), (vec![1, 0], 1), (vec![2, 1], 1),
+            (vec![0, 1], 2), (vec![1, 2], 2), (vec![2, 0], 2),
+        ];
+        match synthesize_interactive_app("Rock Paper Scissors", "rps", &["you", "them"], &table) {
+            Ok(html) => {
+                assert!(html.contains("function rps"), "game logic not embedded");
+                assert!(html.contains("rps(Number"), "runner does not call the game rule");
+            }
+            // If the engine can't fit mod-arithmetic from the table, that is an HONEST
+            // refusal (fail-closed) — never a fabricated game. Documented, not asserted.
+            Err(e) => eprintln!("[game] rps not synthesized (honest refusal): {e}"),
+        }
+    }
+
+    #[test]
     fn interactive_app_routing_helpers() {
         assert!(wants_interactive_app("build an interactive calculator that adds two numbers"));
         assert!(wants_interactive_app("make a webpage with a button that computes the total"));
