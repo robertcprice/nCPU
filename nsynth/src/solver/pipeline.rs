@@ -993,6 +993,17 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact is_power_of_two predicate — its emitter existed but was DEAD (unwired),
+    // so real power-of-two predicates timed out in the general search. Fire it early.
+    if let Some(result) =
+        super::search_numeric_families::search_power_of_two(problem, problem.function_name())
+    {
+        if result.success {
+            eprintln!("[solve] power_of_two OK in {:.3}s", t0.elapsed().as_secs_f32());
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and

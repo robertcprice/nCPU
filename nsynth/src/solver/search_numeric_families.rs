@@ -509,6 +509,33 @@ pub(super) fn search_is_even_formula(problem: &Problem, fn_name: &str) -> Option
     verified_result(problem, code_is_even(fn_name), "search_is_even_formula")
 }
 
+/// `is_power_of_two(n)` predicate (n>0 && n&(n-1)==0). The emitter
+/// `code_bit_power_of_two_check` existed but was DEAD — no search wired it, so real
+/// power-of-two predicates from OSS timed out in the general search. Mirrors
+/// `search_is_even_formula` (bool validates as int 0/1). Exact, verified.
+pub(super) fn search_power_of_two(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64] {
+        return None;
+    }
+    // Bool predicate: validate against expected_bool (expected_int returns 0 for
+    // ALL bools, so the int path can't check it) and emit a `-> bool` program.
+    let ok = problem.examples.iter().all(|ex| {
+        ex.inputs.len() == 1
+            && match (int_value(&ex.inputs[0]), ex.expected_bool()) {
+                (Some(n), Some(b)) => (n > 0 && (n & (n - 1)) == 0) == b,
+                _ => false,
+            }
+    });
+    if !ok {
+        return None;
+    }
+    let code = format!(
+        "fn {fn_name}(n: i64) -> bool {{\n    if n <= 0 {{\n        return false;\n    }}\n    if (n & (n - 1)) == 0 {{\n        return true;\n    }}\n    return false;\n}}\n"
+    );
+    verified_result(problem, code, "search_power_of_two")
+}
+
 pub(super) fn search_sum_of_divisors_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
