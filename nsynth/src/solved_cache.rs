@@ -96,6 +96,27 @@ pub fn examples_fingerprint(examples: &[Example]) -> String {
     parts.join(";;")
 }
 
+/// Solver-logic version stamped into every cache key. BUMP THIS whenever solver
+/// behavior changes (a new search family, comprehension re-typing, distinguishing
+/// examples, a soundness gate) so previously-cached — possibly OVERFIT — solutions
+/// are INVALIDATED and the problem is re-solved with current logic instead of
+/// served stale. A cached result only re-verifies against the SAME (possibly weak)
+/// examples the overfit already passed, so `lookup`'s strict re-verify cannot catch
+/// a stale overfit on its own — the version key is what forces the re-solve. Old
+/// entries carry an unversioned key and never match a versioned one, so a bump is a
+/// clean, self-pruning reset.
+const SOLVER_CACHE_VERSION: u32 = 1;
+
+/// Version-salted cache key: the raw example fingerprint prefixed with the solver
+/// version, so a `SOLVER_CACHE_VERSION` bump invalidates every prior entry.
+fn cache_key(problem: &Problem) -> String {
+    format!(
+        "v{}\u{1f}{}",
+        SOLVER_CACHE_VERSION,
+        examples_fingerprint(&problem.examples)
+    )
+}
+
 #[derive(Clone)]
 pub struct CachedSolution {
     pub code: String,
@@ -452,7 +473,7 @@ pub fn lookup(problem: &Problem) -> Option<CachedSolution> {
     if cache_path().is_none() {
         return None;
     }
-    let fp = examples_fingerprint(&problem.examples);
+    let fp = cache_key(problem);
     let candidate = with_cache(|c| c.get(&fp).cloned())?;
     if verify_problem_code_strict(problem, &candidate.code).is_ok() {
         Some(candidate)
@@ -471,7 +492,7 @@ pub fn record(problem: &Problem, method: &str, code: &str) {
     if cache_path().is_none() {
         return;
     }
-    let fp = examples_fingerprint(&problem.examples);
+    let fp = cache_key(problem);
     with_cache(|c| {
         c.insert(
             fp,
@@ -1295,8 +1316,9 @@ mod tests {
                     expected: Value::Int(10),
                 },
             ]);
-            // Insert deliberately wrong cached code.
-            let fp = examples_fingerprint(&problem.examples);
+            // Insert deliberately wrong cached code (versioned key, so lookup finds
+            // it and the STRICT verifier — not a key miss — is what rejects it).
+            let fp = cache_key(&problem);
             with_cache(|c| {
                 c.insert(
                     fp,
