@@ -956,6 +956,26 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact digit-family recognizer (digits → filter → map → reduce over a scalar
+    // int): a bounded combinatorial-but-EXACT solve, validated against every
+    // example + strict-re-verified, so it must short-circuit AHEAD of the overfit-
+    // prone generic branch/scalar search (search_single_branch / search_scalar_expr)
+    // which would otherwise fit the doctests spuriously and ship a confidently-wrong
+    // program. Instant None for non-unary-int / single-digit data.
+    if let Some(result) = super::search_digit_reduce::search_digits_filter_map_reduce(
+        problem,
+        problem.function_name(),
+    ) {
+        if result.success {
+            eprintln!(
+                "[solve] digit-reduce OK in {:.3}s — {}",
+                t0.elapsed().as_secs_f32(),
+                result.method
+            );
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and

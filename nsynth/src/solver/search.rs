@@ -503,6 +503,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_sum_odd_digits_loop,
     },
     SearchCandidate {
+        key: "search_digits_filter_map_reduce",
+        func: crate::solver::search_digit_reduce::search_digits_filter_map_reduce,
+    },
+    SearchCandidate {
         key: "search_harmonic_sum_loop",
         func: search_harmonic_sum_loop,
     },

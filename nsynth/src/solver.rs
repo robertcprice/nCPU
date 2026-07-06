@@ -42,6 +42,7 @@ mod search_codegen;
 mod search_families;
 mod search_float;
 mod search_numeric_families;
+mod search_digit_reduce;
 mod search_runtime;
 mod search_scalar_families;
 mod search_text_families;

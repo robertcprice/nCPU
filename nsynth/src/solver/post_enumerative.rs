@@ -116,6 +116,7 @@ pub(super) fn search_result_preempts_native_gradient(result: &SolveResult) -> bo
         | "search_count_divisors_loop"
         | "search_sum_of_divisors_loop"
         | "search_sum_odd_digits_loop"
+        | "search_digits_filter_map_reduce"
         | "search_power_loop"
         | "search_is_prime_loop"
         | "search_harmonic_sum_loop"
