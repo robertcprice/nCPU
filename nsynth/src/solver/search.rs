@@ -475,6 +475,10 @@ const SEARCH_CANDIDATES: &[SearchCandidate] = &[
         func: search_power_loop,
     },
     SearchCandidate {
+        key: "search_modpow_loop",
+        func: search_modpow_loop,
+    },
+    SearchCandidate {
         key: "search_collatz_loop",
         func: search_collatz_loop,
     },

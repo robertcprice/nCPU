@@ -976,6 +976,23 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact modular-exponentiation recognizer (a^b mod m): a specialized verified
+    // solve that must short-circuit AHEAD of the generic branch search, which
+    // otherwise fits real modpow spuriously (search_two_branch) and preempts it.
+    // Instant None for non-ternary-int data.
+    if let Some(result) =
+        super::search_numeric_families::search_modpow_loop(problem, problem.function_name())
+    {
+        if result.success {
+            eprintln!(
+                "[solve] modpow OK in {:.3}s — {}",
+                t0.elapsed().as_secs_f32(),
+                result.method
+            );
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and

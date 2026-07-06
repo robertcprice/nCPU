@@ -8,6 +8,12 @@ pub(super) fn code_power_loop_search(fn_name: &str) -> String {
     )
 }
 
+pub(super) fn code_modpow_loop_search(fn_name: &str) -> String {
+    format!(
+        "fn {fn_name}(a: i64, b: i64, m: i64) -> i64 {{\n    acc: i64 = 1;\n    i: i64 = 0;\n    while i < b {{\n        acc = (acc * a) % m;\n        i = i + 1;\n    }}\n    return acc;\n}}\n"
+    )
+}
+
 pub(super) fn code_digit_sum_loop_search(fn_name: &str) -> String {
     format!(
         "fn {fn_name}(n: i64) -> i64 {{\n    x: i64 = n;\n    if x < 0 {{\n        x = 0 - x;\n    }}\n    acc: i64 = 0;\n    while x > 0 {{\n        acc = acc + (x % 10);\n        x = x / 10;\n    }}\n    return acc;\n}}\n"

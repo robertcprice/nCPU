@@ -32,6 +32,40 @@ pub(super) fn search_power_loop(problem: &Problem, fn_name: &str) -> Option<Solv
     )
 }
 
+/// Iterative modular exponentiation `a^b mod m` (`modpow(a,b,m)`): the 3-arg gap
+/// found validating against keon/algorithms `power(a,b,mod)`. The engine had
+/// `search_power_loop` (a^b) but no MODULAR power, so real modpow only "solved" as
+/// an overfit 2-branch. This is the dedicated verified recognizer (b multiplications,
+/// mod each step — matches the emitted Mog exactly). i128 intermediate in the
+/// reference avoids a validation-time overflow panic; out-of-domain (b<0 or m<=0)
+/// maps to a sentinel that simply fails the match. Exact-by-construction: emitted
+/// only when it reproduces every example, then `verified_result` re-verifies.
+pub(super) fn search_modpow_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    let param_types = parse_param_types(problem.signature);
+    if param_types != [ParamType::I64, ParamType::I64, ParamType::I64] {
+        return None;
+    }
+    if !validate_ternary_int(problem, |a, b, m| {
+        if b < 0 || m <= 0 {
+            return i64::MIN;
+        }
+        let mut acc: i64 = 1;
+        let mut i: i64 = 0;
+        while i < b {
+            acc = ((acc as i128 * a as i128) % m as i128) as i64;
+            i += 1;
+        }
+        acc
+    }) {
+        return None;
+    }
+    verified_result(
+        problem,
+        code_modpow_loop_search(fn_name),
+        "search_modpow_loop",
+    )
+}
+
 pub(super) fn search_collatz_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {

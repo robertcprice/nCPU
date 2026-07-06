@@ -105,7 +105,7 @@ pub fn examples_fingerprint(examples: &[Example]) -> String {
 /// a stale overfit on its own — the version key is what forces the re-solve. Old
 /// entries carry an unversioned key and never match a versioned one, so a bump is a
 /// clean, self-pruning reset.
-const SOLVER_CACHE_VERSION: u32 = 2;
+const SOLVER_CACHE_VERSION: u32 = 3;
 
 /// Version-salted cache key: the raw example fingerprint prefixed with the solver
 /// version, so a `SOLVER_CACHE_VERSION` bump invalidates every prior entry.
