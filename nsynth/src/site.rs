@@ -682,6 +682,12 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
     if req.api_form {
         html = wire_form_action(&html, "/events");
     }
+    // OPTIONAL content model: when NSYNTH_CONTENT_MODEL is configured, fill the
+    // hero/about TEXT with model-authored copy — INSIDE the already-built
+    // structure, so sections, markers, contrast, and links (all verified below)
+    // are untouched. Off by default => honest starter scaffold. Enabling it can
+    // never lower the page's guarantees; it only rewrites unverifiable prose.
+    html = apply_generated_content(html, &req.title, content_spec().as_deref());
     // Auto-choose legible text for the primary-colored surfaces so they are
     // readable for ANY requested palette (contrast-verified below).
     let on_primary = req
@@ -701,6 +707,130 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
         theme.radius, theme.shadow, theme.spacing, theme.font_stack, theme.heading_weight
     );
     (html, css)
+}
+
+// ── OPTIONAL CONTENT MODEL ──────────────────────────────────────────────────
+// A gated, NON-REQUIRED layer. Structure + aesthetics stay 100% model-free and
+// verified; the model only rewrites the one inherently-unverifiable thing —
+// prose. Configured via NSYNTH_CONTENT_MODEL="cmd:<shell command>" (the command
+// receives the prompt on stdin, prints copy on stdout). A helper that drives the
+// local model lives at scripts/site_content.py, so a real config is e.g.
+// NSYNTH_CONTENT_MODEL="cmd:python3 scripts/site_content.py". Unset => scaffold.
+
+/// The configured provider spec, or None when content generation is off.
+pub fn content_spec() -> Option<String> {
+    std::env::var("NSYNTH_CONTENT_MODEL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Model-authored copy for one text slot, or None (caller keeps the scaffold).
+fn generated_copy(spec: &str, slot: &str, brand: &str, subject: &str) -> Option<String> {
+    let prompt = match slot {
+        "tagline" => format!(
+            "Write one short website hero tagline, at most 12 words, for \"{brand}\", a {subject}. Output only the tagline text, no quotes, no preamble."
+        ),
+        "about" => format!(
+            "Write one or two warm sentences of website About copy for \"{brand}\", a {subject}. Output only the copy, no preamble."
+        ),
+        _ => return None,
+    };
+    let raw = run_content_command(spec, &prompt)?;
+    let clean = sanitize_copy(&raw);
+    if clean.is_empty() {
+        None
+    } else {
+        Some(clean)
+    }
+}
+
+/// Run a `cmd:<shell>` provider: prompt on stdin, copy on stdout. Any failure
+/// (no provider, spawn error, non-zero exit) yields None => scaffold survives.
+fn run_content_command(spec: &str, prompt: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let cmd = spec.strip_prefix("cmd:")?;
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(prompt.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Reduce raw model output to a safe single-line snippet: strip any tags (no
+/// injection into the verified page), take the first non-empty line, cap length,
+/// and HTML-escape. The model can put text on the page but never markup.
+fn sanitize_copy(raw: &str) -> String {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in raw.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    line.chars()
+        .take(240)
+        .collect::<String>()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Swap the inner text of the hero tagline and the about paragraph with
+/// model-authored copy, in place, leaving every tag/class/id (the verified
+/// structure) exactly as emitted. No-op when `spec` is None.
+fn apply_generated_content(html: String, brand: &str, spec: Option<&str>) -> String {
+    let Some(spec) = spec else { return html };
+    let subject = brand.to_lowercase();
+    let mut html = html;
+    // Hero tagline: <p class="tagline">TEXT</p>
+    if let Some(copy) = generated_copy(spec, "tagline", brand, &subject) {
+        html = replace_inner(&html, "<p class=\"tagline\">", "</p>", &copy);
+    }
+    // About paragraph: first <p ...> inside <section class="about" ...>
+    if let Some(copy) = generated_copy(spec, "about", brand, &subject) {
+        if let Some(sec) = html.find("<section class=\"about\"") {
+            if let Some(prel) = html[sec..].find("<p") {
+                let popen = sec + prel;
+                if let Some(gt) = html[popen..].find('>') {
+                    let start = popen + gt + 1;
+                    if let Some(erel) = html[start..].find("</p>") {
+                        let end = start + erel;
+                        html = format!("{}{}{}", &html[..start], copy, &html[end..]);
+                    }
+                }
+            }
+        }
+    }
+    html
+}
+
+/// Replace the text between the first `open` marker and the next `close`.
+fn replace_inner(html: &str, open: &str, close: &str, new: &str) -> String {
+    let Some(i) = html.find(open).map(|s| s + open.len()) else {
+        return html.to_string();
+    };
+    let Some(j) = html[i..].find(close).map(|e| i + e) else {
+        return html.to_string();
+    };
+    format!("{}{}{}", &html[..i], new, &html[j..])
 }
 
 /// Wire the contact form to the backend api route (site+backend integration):
@@ -1496,6 +1626,44 @@ mod real_nl_tests {
         // A non-business word must NOT spuriously resolve to storefront.
         let plain = comprehend_site_request("build a website with an about section").expect("comprehends");
         assert!(plain.sections.contains(&"about".to_string()), "explicit about honored: {:?}", plain.sections);
+    }
+
+    /// OPTIONAL CONTENT MODEL: gated, non-required. When configured it rewrites
+    /// only the PROSE (hero tagline, about copy) inside the already-built,
+    /// already-verified structure — sections/markers/contrast untouched — and
+    /// sanitizes output so the model can add text but never markup. Off => the
+    /// honest starter scaffold. (Uses a deterministic `cmd:` provider in the test
+    /// so no real model is needed to prove the wiring + the safety net.)
+    #[test]
+    fn optional_content_model_swaps_prose_and_stays_gated() {
+        let (html, _) = emit_page(&SiteRequest {
+            page: "bakery".into(),
+            title: "Bakery".into(),
+            theme: "modern".into(),
+            colors: vec!["navy".into()],
+            sections: vec!["nav".into(), "hero".into(), "about".into(), "footer".into()],
+            api_form: false,
+        });
+        // OFF (spec None): the scaffold prose is intact.
+        let off = apply_generated_content(html.clone(), "Bakery", None);
+        assert!(off.contains("take a look around"), "scaffold tagline when off");
+        // ON (deterministic provider): hero tagline replaced, structure intact.
+        let on = apply_generated_content(
+            html.clone(),
+            "Bakery",
+            Some("cmd:printf 'Freshly baked every morning'"),
+        );
+        assert!(on.contains("Freshly baked every morning"), "generated tagline swapped in: {on}");
+        assert!(!on.contains("take a look around"), "scaffold tagline replaced");
+        assert!(on.contains("class=\"hero\"") && on.contains("class=\"about\""), "structure intact");
+        // SAFETY: markup in model output is stripped — text only, never tags.
+        let safe = apply_generated_content(
+            html,
+            "Bakery",
+            Some("cmd:printf '<script>bad()</script>Fresh bread'"),
+        );
+        assert!(safe.contains("Fresh bread"), "text kept: {safe}");
+        assert!(!safe.contains("<script>"), "markup stripped: {safe}");
     }
 
     /// BEYOND WEBSITES: new artifact types (dashboard, saas app) compose their
