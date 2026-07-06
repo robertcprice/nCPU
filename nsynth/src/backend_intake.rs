@@ -212,6 +212,32 @@ fn build_rule_for_prose(
     finalize_built_rule(name, res, door)
 }
 
+/// Synthesize a single i64-scalar function from prose and return its verified
+/// Rust source, the ACTUAL function name (the resolver may name it after the
+/// canonical op, e.g. "double" -> `times_two`), and the (input, output) examples.
+/// Reuses the backend's rule synthesis — the CLI generator wraps this into a
+/// tool. Bypasses build_rule_for_prose's requested-name check on purpose, since
+/// the CLI just needs to CALL whatever name the synthesis produced.
+pub fn synthesize_rust_fn_from_prose(
+    english: &str,
+    name: &str,
+) -> Result<(String, String, Vec<(i64, i64)>), String> {
+    let bridge = LinguigenesisBridge::new();
+    let (res, _door) = synthesize_rule_for_prose(&bridge, english, name, english)?;
+    if !is_i64_scalar_rule(&res.code) {
+        return Err(format!("'{name}' did not synthesize as an i64-scalar function"));
+    }
+    let rust = to_rust(&res.code);
+    let fn_name = rust
+        .split("fn ")
+        .nth(1)
+        .and_then(|s| s.split('(').next())
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| format!("no fn in transpiled Rust: {rust}"))?;
+    let verify_io = sample_mog_io_pairs(&res.code, &fn_name);
+    Ok((rust, fn_name, verify_io))
+}
+
 use std::time::Instant;
 
 fn build_steered_rule(
