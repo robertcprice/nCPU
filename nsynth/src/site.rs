@@ -676,6 +676,19 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
         .get(1)
         .cloned()
         .unwrap_or_else(|| "#36454f".into());
+    // A THIRD role so a 3-color palette lands somewhere real (the bar gradient);
+    // falls back to the accent when only two colors were requested.
+    let accent2 = req.colors.get(2).cloned().unwrap_or_else(|| neutral.clone());
+    // EVERY requested color becomes a palette token, so "red, white and blue"
+    // (3+ colors) no longer fails fidelity: the old emitter consumed only
+    // colors[0..1], so a 3rd color never reached the CSS and build_site_page
+    // errored out. Each requested color is now a real custom property in :root.
+    let palette_tokens: String = req
+        .colors
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("  --c{}: {};\n", i + 1, c))
+        .collect();
     // Built-in sections use their curated emitters; TAUGHT sections (grown at
     // runtime through the registry hub) get a generic emitter built from the
     // concept's own definition — vocabulary growth without code changes.
@@ -729,7 +742,7 @@ pub fn emit_page(req: &SiteRequest) -> (String, String) {
     // palette (contrast-verified below).
     let body_text = "#16181d".to_string();
     let css = format!(
-        ":root {{\n  --primary: {primary};\n  --accent: {neutral};\n  --on-primary: {on_primary};\n  --ink: {body_text};\n  --text: {body_text};\n  --muted: #5b616e;\n  --bg: #fbfbfd;\n  --surface: #ffffff;\n  --line: #e7e9ee;\n  --radius: {};\n  --shadow: {};\n  --spacing: {};\n  --maxw: 1120px;\n}}\n* {{ box-sizing: border-box; }}\nhtml {{ scroll-behavior: smooth; }}\nbody {{ margin: 0; font-family: {}; color: var(--text); background: var(--bg); line-height: 1.65; -webkit-font-smoothing: antialiased; }}\nimg {{ max-width: 100%; }}\nh1, h2, h3 {{ font-weight: {}; line-height: 1.15; letter-spacing: -0.02em; color: var(--ink); }}\nh1 {{ font-size: clamp(2.4rem, 6vw, 3.6rem); margin: 0 0 1rem; }}\nh2 {{ font-size: clamp(1.6rem, 3.5vw, 2.2rem); margin: 0 0 1.5rem; }}\nh3 {{ font-size: 1.15rem; margin: 0 0 0.5rem; }}\np {{ margin: 0 0 1rem; }}\na {{ color: var(--primary); }}\nsection, .hero {{ padding: clamp(3rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 3rem); }}\nsection {{ max-width: var(--maxw); margin: 0 auto; }}\nsection > h2 {{ text-align: center; }}\n.section-intro {{ text-align: center; color: var(--muted); max-width: 54ch; margin: -0.5rem auto 2rem; }}\n.site-nav {{ position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem clamp(1.25rem, 5vw, 3rem); background: rgba(255,255,255,0.82); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }}\n.site-nav .brand {{ font-weight: 800; font-size: 1.15rem; color: var(--primary); letter-spacing: -0.01em; }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1.5rem; margin: 0; padding: 0; }}\n.site-nav a {{ color: var(--ink); text-decoration: none; font-weight: 500; font-size: 0.95rem; }}\n.site-nav a:hover {{ color: var(--primary); }}\n.hero {{ text-align: center; background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 10%, var(--bg)), var(--bg) 70%); border-bottom: 1px solid var(--line); }}\n.hero h1 {{ max-width: 16ch; margin-inline: auto; }}\n.hero .tagline {{ max-width: 46ch; margin: 0 auto 2rem; font-size: clamp(1.05rem, 2vw, 1.3rem); color: var(--muted); }}\n.cta {{ display: inline-block; padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; font-weight: 600; transition: transform 0.15s ease; }}\n.cta:hover {{ transform: translateY(-2px); }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-top: 1rem; }}\n.card {{ background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.5rem; transition: transform 0.15s ease; }}\n.card:hover {{ transform: translateY(-3px); }}\nfigure.card {{ margin: 0; }}\nfigcaption {{ font-weight: 600; color: var(--muted); }}\n.ph {{ aspect-ratio: 4 / 3; border-radius: calc(var(--radius) - 2px); margin-bottom: 1rem; background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 30%, #fff), color-mix(in srgb, var(--accent) 30%, #fff)); }}\n.contact form {{ display: grid; gap: 1rem; max-width: 520px; margin: 0 auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 2rem; box-shadow: var(--shadow); }}\n.contact label {{ display: grid; gap: 0.35rem; font-weight: 600; font-size: 0.9rem; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.7rem; border-radius: var(--radius); border: 1px solid var(--line); font: inherit; }}\n.contact input:focus, .contact textarea:focus {{ outline: 2px solid var(--primary); border-color: var(--primary); }}\nbutton {{ padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); font: inherit; font-weight: 600; cursor: pointer; }}\nbutton:hover {{ filter: brightness(1.08); }}\n.menu .price {{ color: var(--primary); font-weight: 700; }}\n.hours-list {{ list-style: none; padding: 0; max-width: 420px; margin: 1rem auto 0; }}\n.hours-list li {{ display: flex; justify-content: space-between; padding: 0.7rem 0; border-bottom: 1px solid var(--line); }}\n.location address {{ font-style: normal; text-align: center; color: var(--muted); }}\n.map-embed {{ height: 260px; border-radius: var(--radius); margin-top: 1.5rem; border: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 14%, var(--surface)), color-mix(in srgb, var(--accent) 14%, var(--surface))); }}\n.stat-grid {{ grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }}\n.stat {{ text-align: center; display: grid; gap: 0.25rem; }}\n.stat-num {{ font-size: clamp(1.8rem, 4vw, 2.6rem); font-weight: 800; color: var(--primary); line-height: 1; }}\n.stat-label {{ color: var(--muted); font-size: 0.9rem; }}\n.bars {{ display: flex; align-items: flex-end; gap: 0.6rem; height: 200px; padding: 0.5rem 0; }}\n.bar {{ flex: 1; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--primary), color-mix(in srgb, var(--primary) 55%, var(--accent))); }}\n.table-wrap {{ overflow-x: auto; padding: 0.5rem; }}\ntable {{ width: 100%; border-collapse: collapse; }}\nth, td {{ text-align: left; padding: 0.8rem 1rem; border-bottom: 1px solid var(--line); }}\nth {{ font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }}\n.pill {{ display: inline-block; padding: 0.2rem 0.7rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; background: color-mix(in srgb, var(--primary) 14%, #fff); color: var(--primary); }}\n.tier {{ display: grid; gap: 1rem; text-align: center; }}\n.tier ul {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; color: var(--muted); }}\n.tier .price {{ font-size: 2rem; font-weight: 800; color: var(--ink); }}\n.tier.featured {{ border-color: var(--primary); box-shadow: 0 12px 32px color-mix(in srgb, var(--primary) 22%, transparent); }}\n.testimonials blockquote {{ margin: 0; display: grid; gap: 1rem; }}\n.testimonials cite {{ color: var(--muted); font-style: normal; font-weight: 600; }}\n.site-footer {{ padding: 2.5rem 1.5rem; text-align: center; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); }}\n",
+        ":root {{\n  --primary: {primary};\n  --accent: {neutral};\n  --on-primary: {on_primary};\n  --ink: {body_text};\n  --text: {body_text};\n  --muted: #5b616e;\n  --bg: #fbfbfd;\n  --surface: #ffffff;\n  --line: #e7e9ee;\n  --accent2: {accent2};\n{palette_tokens}  --radius: {};\n  --shadow: {};\n  --spacing: {};\n  --maxw: 1120px;\n}}\n* {{ box-sizing: border-box; }}\nhtml {{ scroll-behavior: smooth; }}\nbody {{ margin: 0; font-family: {}; color: var(--text); background: var(--bg); line-height: 1.65; -webkit-font-smoothing: antialiased; }}\nimg {{ max-width: 100%; }}\nh1, h2, h3 {{ font-weight: {}; line-height: 1.15; letter-spacing: -0.02em; color: var(--ink); }}\nh1 {{ font-size: clamp(2.4rem, 6vw, 3.6rem); margin: 0 0 1rem; }}\nh2 {{ font-size: clamp(1.6rem, 3.5vw, 2.2rem); margin: 0 0 1.5rem; }}\nh3 {{ font-size: 1.15rem; margin: 0 0 0.5rem; }}\np {{ margin: 0 0 1rem; }}\na {{ color: var(--primary); }}\nsection, .hero {{ padding: clamp(3rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 3rem); }}\nsection {{ max-width: var(--maxw); margin: 0 auto; }}\nsection > h2 {{ text-align: center; }}\n.section-intro {{ text-align: center; color: var(--muted); max-width: 54ch; margin: -0.5rem auto 2rem; }}\n.site-nav {{ position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem clamp(1.25rem, 5vw, 3rem); background: rgba(255,255,255,0.82); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }}\n.site-nav .brand {{ font-weight: 800; font-size: 1.15rem; color: var(--primary); letter-spacing: -0.01em; }}\n.site-nav ul {{ list-style: none; display: flex; gap: 1.5rem; margin: 0; padding: 0; }}\n.site-nav a {{ color: var(--ink); text-decoration: none; font-weight: 500; font-size: 0.95rem; }}\n.site-nav a:hover {{ color: var(--primary); }}\n.hero {{ text-align: center; background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 10%, var(--bg)), var(--bg) 70%); border-bottom: 1px solid var(--line); }}\n.hero h1 {{ max-width: 16ch; margin-inline: auto; }}\n.hero .tagline {{ max-width: 46ch; margin: 0 auto 2rem; font-size: clamp(1.05rem, 2vw, 1.3rem); color: var(--muted); }}\n.cta {{ display: inline-block; padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border-radius: var(--radius); box-shadow: var(--shadow); text-decoration: none; font-weight: 600; transition: transform 0.15s ease; }}\n.cta:hover {{ transform: translateY(-2px); }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-top: 1rem; }}\n.card {{ background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.5rem; transition: transform 0.15s ease; }}\n.card:hover {{ transform: translateY(-3px); }}\nfigure.card {{ margin: 0; }}\nfigcaption {{ font-weight: 600; color: var(--muted); }}\n.ph {{ aspect-ratio: 4 / 3; border-radius: calc(var(--radius) - 2px); margin-bottom: 1rem; background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 30%, #fff), color-mix(in srgb, var(--accent) 30%, #fff)); }}\n.contact form {{ display: grid; gap: 1rem; max-width: 520px; margin: 0 auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 2rem; box-shadow: var(--shadow); }}\n.contact label {{ display: grid; gap: 0.35rem; font-weight: 600; font-size: 0.9rem; }}\n.contact input, .contact textarea {{ width: 100%; padding: 0.7rem; border-radius: var(--radius); border: 1px solid var(--line); font: inherit; }}\n.contact input:focus, .contact textarea:focus {{ outline: 2px solid var(--primary); border-color: var(--primary); }}\nbutton {{ padding: 0.85rem 1.8rem; background: var(--primary); color: var(--on-primary); border: 0; border-radius: var(--radius); font: inherit; font-weight: 600; cursor: pointer; }}\nbutton:hover {{ filter: brightness(1.08); }}\n.menu .price {{ color: var(--primary); font-weight: 700; }}\n.hours-list {{ list-style: none; padding: 0; max-width: 420px; margin: 1rem auto 0; }}\n.hours-list li {{ display: flex; justify-content: space-between; padding: 0.7rem 0; border-bottom: 1px solid var(--line); }}\n.location address {{ font-style: normal; text-align: center; color: var(--muted); }}\n.map-embed {{ height: 260px; border-radius: var(--radius); margin-top: 1.5rem; border: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 14%, var(--surface)), color-mix(in srgb, var(--accent) 14%, var(--surface))); }}\n.stat-grid {{ grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }}\n.stat {{ text-align: center; display: grid; gap: 0.25rem; }}\n.stat-num {{ font-size: clamp(1.8rem, 4vw, 2.6rem); font-weight: 800; color: var(--primary); line-height: 1; }}\n.stat-label {{ color: var(--muted); font-size: 0.9rem; }}\n.bars {{ display: flex; align-items: flex-end; gap: 0.6rem; height: 200px; padding: 0.5rem 0; }}\n.bar {{ flex: 1; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--primary), color-mix(in srgb, var(--primary) 55%, var(--accent2))); }}\n.table-wrap {{ overflow-x: auto; padding: 0.5rem; }}\ntable {{ width: 100%; border-collapse: collapse; }}\nth, td {{ text-align: left; padding: 0.8rem 1rem; border-bottom: 1px solid var(--line); }}\nth {{ font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }}\n.pill {{ display: inline-block; padding: 0.2rem 0.7rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; background: color-mix(in srgb, var(--primary) 14%, #fff); color: var(--primary); }}\n.tier {{ display: grid; gap: 1rem; text-align: center; }}\n.tier ul {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; color: var(--muted); }}\n.tier .price {{ font-size: 2rem; font-weight: 800; color: var(--ink); }}\n.tier.featured {{ border-color: var(--primary); box-shadow: 0 12px 32px color-mix(in srgb, var(--primary) 22%, transparent); }}\n.testimonials blockquote {{ margin: 0; display: grid; gap: 1rem; }}\n.testimonials cite {{ color: var(--muted); font-style: normal; font-weight: 600; }}\n.site-footer {{ padding: 2.5rem 1.5rem; text-align: center; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); }}\n",
         theme.radius, theme.shadow, theme.spacing, theme.font_stack, theme.heading_weight
     );
     (html, css)
@@ -909,6 +922,43 @@ pub fn synthesize_interactive_app(
         ));
     }
     build_widget_from_mog(title, fn_name, params, &result.code)
+}
+
+/// Structural cue that a request wants a RUNNABLE interactive page, not just a
+/// bare function: a build verb + an app/widget noun. Not a phrase→plan table — a
+/// coarse routing signal; the actual logic is still synthesized + verified.
+pub fn wants_interactive_app(query: &str) -> bool {
+    let q = query.to_lowercase();
+    let build = ["build", "make", "create", "generate"]
+        .iter()
+        .any(|w| q.contains(w));
+    let app = [
+        "interactive", "calculator", "widget", "web app", "webapp", "webpage",
+        "web page", "html page", "a page", "button",
+    ]
+    .iter()
+    .any(|w| q.contains(w));
+    build && app
+}
+
+/// Parse parameter NAMES from a signature `fn f(a: i64, b: i64) -> i64`, in order.
+pub fn params_from_signature(sig: &str) -> Vec<String> {
+    let inside = sig
+        .split('(')
+        .nth(1)
+        .and_then(|s| s.split(')').next())
+        .unwrap_or("");
+    inside
+        .split(',')
+        .filter_map(|p| {
+            let name = p.trim().split(':').next().unwrap_or("").trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .collect()
 }
 
 /// The configured provider spec, or None when content generation is off.
@@ -1335,6 +1385,18 @@ mod tests {
 
         // Fail-closed: too few examples => honest error, never a fabricated app.
         assert!(synthesize_interactive_app("X", "f", &["a"], &[(vec![1], 1)]).is_err());
+    }
+
+    #[test]
+    fn interactive_app_routing_helpers() {
+        assert!(wants_interactive_app("build an interactive calculator that adds two numbers"));
+        assert!(wants_interactive_app("make a webpage with a button that computes the total"));
+        assert!(!wants_interactive_app("return the sum of the even numbers")); // bare function
+        assert_eq!(
+            params_from_signature("fn add(a: i64, b: i64) -> i64"),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(params_from_signature("fn f(n: i64) -> i64"), vec!["n".to_string()]);
     }
 
     #[test]
