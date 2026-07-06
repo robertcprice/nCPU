@@ -209,6 +209,15 @@ fn probe_resource_once(bin: &Path, resource: &str) -> Result<(), String> {
         if !one.contains("ada") {
             return Err(format!("GET /{resource}/0 missing record: {one}"));
         }
+        // UPDATE
+        let upd = request(&addr, "PUT", &format!("/{resource}/0"), "{\"name\":\"bob\"}")?;
+        if !upd.contains("updated") {
+            return Err(format!("PUT /{resource}/0 not confirmed: {upd}"));
+        }
+        let one2 = request(&addr, "GET", &format!("/{resource}/0"), "")?;
+        if !one2.contains("bob") || one2.contains("ada") {
+            return Err(format!("record not updated: {one2}"));
+        }
         // DELETE
         let del = request(&addr, "DELETE", &format!("/{resource}/0"), "")?;
         if !del.contains("deleted") {

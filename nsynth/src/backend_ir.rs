@@ -172,6 +172,17 @@ const RESOURCE_ARM_TEMPLATE: &str = r#"        ("GET", "/RES") => {
                 None => write_response(&mut stream, 404, "{\"error\":\"not found\"}"),
             }
         }
+        ("PUT", p) if p.starts_with("/RES/") => {
+            let id: usize = p["/RES/".len()..].parse().unwrap_or(usize::MAX);
+            let mut g = collections().lock().unwrap();
+            match g.get_mut("RES") {
+                Some(v) if id < v.len() => {
+                    v[id] = body.to_string();
+                    write_response(&mut stream, 200, "{\"ok\":true,\"updated\":1}")
+                }
+                _ => write_response(&mut stream, 404, "{\"error\":\"not found\"}"),
+            }
+        }
         ("DELETE", p) if p.starts_with("/RES/") => {
             let id: usize = p["/RES/".len()..].parse().unwrap_or(usize::MAX);
             let mut g = collections().lock().unwrap();
@@ -896,6 +907,7 @@ mod tests {
         assert!(src.contains("(\"GET\", \"/users\")"), "GET /users (list) arm present");
         assert!(src.contains("(\"POST\", \"/users\")"), "POST /users (create) arm present");
         assert!(src.contains("p.starts_with(\"/users/\")"), "item-level /users/ id arms present");
+        assert!(src.contains("(\"PUT\", p)"), "PUT (update) arm present");
         assert!(src.contains("(\"DELETE\", p)"), "DELETE arm present");
         assert!(src.contains("fn collections()"), "collection state present");
         assert!(!src.contains("INSERTS"), "state template fully substituted");
