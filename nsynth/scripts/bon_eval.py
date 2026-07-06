@@ -16,7 +16,7 @@ Usage:
 The model is UNTRUSTED: every proposal is verified by nsynth; a wrong proposal
 scores 0. A SOLVED requires nsynth `verified` AND passing the hidden tests.
 """
-import json, subprocess, sys, os, urllib.request
+import json, subprocess, sys, os, time, urllib.request, urllib.error
 
 BIN = os.environ.get("NSYNTH_TOOL_BIN", "./target/release/nsynth_tool")
 # POWERFUL path: the model WRITES Mog code (a Rust subset nsynth executes+verifies).
@@ -53,11 +53,20 @@ def chat_once(url, model, prompt, temp):
         "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
         "temperature": temp, "max_tokens": 1400,
     }).encode()
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=180) as r:
-        d = json.loads(r.read())
-    m = d["choices"][0]["message"]
-    return (m.get("content") or "") + "\n" + (m.get("reasoning") or "")
+    # mlx_lm server is single-threaded and REFUSES connects while mid-generation;
+    # retry with backoff so a transient refusal doesn't zero the whole run.
+    last = None
+    for attempt in range(6):
+        try:
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                d = json.loads(r.read())
+            m = d["choices"][0]["message"]
+            return (m.get("content") or "") + "\n" + (m.get("reasoning") or "")
+        except (urllib.error.URLError, ConnectionError) as e:
+            last = e
+            time.sleep(1.5 * (attempt + 1))
+    raise last
 
 
 def chat(url, model, prompt, n, temp):

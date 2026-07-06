@@ -346,6 +346,13 @@ impl LinguigenesisBridge {
         for src in edges.all_entities() {
             // Skip anything already present (seed stubs, hand-table words): additive.
             if registry.get_by_lemma(&src.lemma).is_some() {
+                // EXCEPTION: a seed stub carrying `phrase_surfaces` (multi-word
+                // WordNet recall lemmas) must not be silently dropped — union its
+                // phrases onto the real, example-bearing op so the phrase resolver
+                // ("absolute value" -> abs) can reach it. Additive, dedup.
+                if let Some(ps) = src.get_property("phrase_surfaces") {
+                    let _ = registry.append_phrase_surfaces(&src.lemma, ps);
+                }
                 continue;
             }
             // Re-create the entity with a fresh, non-colliding id. Carry over the
