@@ -153,6 +153,30 @@ pub fn ingest_dir(dir: &std::path::Path) -> Vec<SurfaceForm> {
     out
 }
 
+/// Ingest a README (markdown) into a project-level SurfaceForm: a summary (the
+/// "what / when to use it") + recall terms. Distinct from symbol docs — this is
+/// the project-level key for "build me a thing that does <Y>".
+pub fn ingest_readme(md: &str) -> SurfaceForm {
+    let mut summary = String::new();
+    for para in md.split("\n\n") {
+        let p = para.trim();
+        if p.is_empty() || p.starts_with('#') || p.starts_with("```") || p.starts_with('!') {
+            continue;
+        }
+        summary = p.lines().next().unwrap_or("").trim().to_string();
+        break;
+    }
+    let mut terms: Vec<String> = Vec::new();
+    for w in md.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()) {
+        if w.len() >= 3 && !STOPWORDS.contains(&w) && w.chars().any(|c| c.is_ascii_alphabetic()) {
+            terms.push(w.to_string());
+        }
+    }
+    terms.sort();
+    terms.dedup();
+    SurfaceForm { lemma: "<project>".to_string(), terms, gloss: summary }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +223,16 @@ pub struct RingBuffer { cap: usize }
         let gcd = forms.iter().find(|f| f.lemma == "gcd").unwrap();
         for t in ["greatest", "common", "divisor", "integers"] {
             assert!(gcd.terms.contains(&t.to_string()), "term '{t}' in {:?}", gcd.terms);
+        }
+    }
+
+    #[test]
+    fn ingests_readme_summary_and_terms() {
+        let md = "# ripgrep\n\nripgrep recursively searches directories for a regex pattern.\n\n## Install\n\n```\ncargo install ripgrep\n```\n";
+        let pd = ingest_readme(md);
+        assert_eq!(pd.gloss, "ripgrep recursively searches directories for a regex pattern.");
+        for t in ["ripgrep", "recursively", "searches", "directories", "regex", "pattern"] {
+            assert!(pd.terms.contains(&t.to_string()), "project term '{t}' in {:?}", pd.terms);
         }
     }
 }
