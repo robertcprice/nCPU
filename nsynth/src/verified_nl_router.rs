@@ -489,20 +489,53 @@ pub fn answer_with_proposer(
     // reserving 2-of-4 left seed=2, too thin for the search to determine even simple
     // functions (abs, x*1.5), which then refused. seed>=3 keeps synthesis reachable
     // while the >=1 held-out example still catches a seed-overfit (fuzz-verified).
-    if examples.len() >= 4 {
+    // DISTINCT-example floor: five copies of {0->0, 1->1} are 5 examples but only
+    // TWO points — too few to determine a function, so synthesis returns a
+    // coincidental fit (a recurrence through 2 points) CONFIDENTLY wrong. Count
+    // distinct consistent examples, not raw rows.
+    let distinct = crate::benchmark::dedup_consistent_examples(examples)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    if distinct >= 4 {
         let holdout = (examples.len() - 3).clamp(1, 2);
-        let seed = &examples[..examples.len() - holdout];
-        let sig: &'static str =
-            Box::leak(crate::linguigenesis_bridge::infer_signature("f", seed).into_boxed_str());
-        let problem = crate::benchmark::Problem {
-            name: "f".to_string(),
-            signature: sig,
-            examples: seed.to_vec(),
-            ..Default::default()
+        // Solve on a seed and require the result to reproduce EVERY example. Returns
+        // (method, code, entry) or None.
+        let solve_on = |seed: &[crate::benchmark::Example]| -> Option<(String, String, String)> {
+            let sig: &'static str =
+                Box::leak(crate::linguigenesis_bridge::infer_signature("f", seed).into_boxed_str());
+            let problem = crate::benchmark::Problem {
+                name: "f".to_string(),
+                signature: sig,
+                examples: seed.to_vec(),
+                ..Default::default()
+            };
+            let res = crate::solver::solve_problem(&problem);
+            if res.success && crate::runtime::code_reproduces_examples(&res.code, examples) {
+                let entry =
+                    crate::site::fn_name_from_mog(&res.code).unwrap_or_else(|| "f".to_string());
+                Some((res.method, res.code, entry))
+            } else {
+                None
+            }
         };
-        let res = crate::solver::solve_problem(&problem);
-        if res.success && crate::runtime::code_reproduces_examples(&res.code, examples) {
-            return Answer::Synthesized { method: res.method, code: res.code };
+        let seed1 = &examples[..examples.len() - holdout];
+        if let Some((method, code, entry)) = solve_on(seed1) {
+            // TIER-3 DISTINGUISHING GATE. Tier 1/2 refuse when two candidate ops
+            // reproduce the examples but DIVERGE on fresh inputs; tier 3 had no such
+            // check — a lone synthesized program that fits under-determined examples
+            // was returned CONFIDENT. Fix: independently synthesize on a DIFFERENT
+            // seed subset; if the two programs disagree on fresh probes, the examples
+            // don't pin the function down -> refuse rather than guess. A determined
+            // task yields the same behaviour from both seeds and passes.
+            let seed2 = &examples[holdout..];
+            let disagree = solve_on(seed2)
+                .map(|(_, code2, entry2)| {
+                    programs_disagree(&[(code.clone(), entry.clone()), (code2, entry2)], examples)
+                })
+                .unwrap_or(false);
+            if !disagree {
+                return Answer::Synthesized { method, code };
+            }
         }
     }
     // Tier 4 — GATED MODEL PROPOSER. The model writes a candidate program (an
@@ -993,6 +1026,20 @@ mod tests {
         // examples -> the holdout discipline refuses (never a confident overfit).
         let noise = vec![ex(100, 105), ex(50, 52), ex(73, 30), ex(12, 99), ex(8, 3), ex(64, 77)];
         assert!(matches!(answer("predict", &noise), Answer::Refused));
+    }
+
+    #[test]
+    fn tier3_refuses_under_determined_synthesis() {
+        use crate::benchmark::{Example, Value};
+        let ex = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+        // Five rows but only TWO distinct points {0->0, 1->1}. Synthesis can fit a
+        // recurrence through them and would return it CONFIDENTLY (f(2)=1, not 4),
+        // but the distinct-example floor refuses: too few points to determine a fn.
+        let degenerate = vec![ex(0, 0), ex(1, 1), ex(0, 0), ex(1, 1), ex(0, 0)];
+        assert!(
+            matches!(answer("the square of a number", &degenerate), Answer::Refused),
+            "under-determined synthesis (2 distinct points) must refuse, not guess"
+        );
     }
 
     #[test]
