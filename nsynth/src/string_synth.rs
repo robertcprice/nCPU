@@ -864,6 +864,72 @@ pub fn synthesize_word_program(
     None
 }
 
+// ── string -> int aggregations ───────────────────────────────────────────────
+//
+// A novel `string -> int` task (e.g. "count the words") has no synthesizer today:
+// the expression/word grammars produce string outputs, the combinator takes
+// int-list input, and only a matching LIBRARY op can catch it. This closes the two
+// most common, TRANSPILABLE shapes: char count (`s.len`) and word count
+// (`s.split(sep).len`). count-a-specific-char is deliberately NOT included — it
+// needs a `for ch in s.chars()` loop that breaks downstream Rust transpilation.
+
+fn verify_str_int(code: &str, examples: &[(String, i64)]) -> bool {
+    let bench: Vec<crate::benchmark::Example> = examples
+        .iter()
+        .map(|(s, o)| crate::benchmark::Example {
+            inputs: vec![crate::benchmark::Value::Str(s.clone())],
+            expected: crate::benchmark::Value::Int(*o),
+        })
+        .collect();
+    crate::runtime::code_reproduces_examples(code, &bench)
+}
+
+/// Synthesize a `string -> int` aggregation (char count / word count) from single
+/// string-arg examples. Returns a SELF-VERIFIED Mog program or None. Never-wrong: a
+/// candidate is only returned if it reproduces every example via the interpreter.
+pub fn synthesize_string_int_program(
+    params: &[String],
+    examples: &[(String, i64)],
+) -> Option<StrSynthResult> {
+    if params.len() != 1 || examples.len() < 2 {
+        return None;
+    }
+    let p = &params[0];
+    // Char count: s.len (Mog `.len` is char count).
+    if examples.iter().all(|(s, o)| s.chars().count() as i64 == *o) {
+        let code = format!("fn transform({p}: string) -> i64 {{\n    return {p}.len;\n}}\n");
+        if verify_str_int(&code, examples) {
+            return Some(StrSynthResult {
+                success: true,
+                code,
+                method: "str-char_count".to_string(),
+                error: None,
+            });
+        }
+    }
+    // Word count: s.split(sep).len. Require some example to actually split into >1
+    // segment (else it's the constant 1 or coincides with something trivial).
+    for sep in [" ", "-", "_", ",", "/"] {
+        let matches = examples.iter().all(|(s, o)| s.split(sep).count() as i64 == *o);
+        let nontrivial = examples.iter().any(|(s, _)| s.split(sep).count() >= 2);
+        if matches && nontrivial {
+            let code = format!(
+                "fn transform({p}: string) -> i64 {{\n    return {p}.split(\"{}\").len;\n}}\n",
+                esc(sep)
+            );
+            if verify_str_int(&code, examples) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: "str-word_count".to_string(),
+                    error: None,
+                });
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -985,6 +1051,60 @@ mod tests {
         let p = vec!["s".to_string()];
         let r = synthesize_word_program(&p, &[wex("hello", "olleh"), wex("world", "xyz")]);
         assert!(r.is_none());
+    }
+
+    #[test]
+    fn string_int_synthesizes_word_count() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_string_int_program(
+            &p,
+            &[("hello world".into(), 2), ("one two three".into(), 3), ("a".into(), 1)],
+        );
+        assert_eq!(r.map(|r| r.method), Some("str-word_count".to_string()));
+    }
+
+    #[test]
+    fn string_int_synthesizes_char_count() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_string_int_program(
+            &p,
+            &[("hello".into(), 5), ("hi".into(), 2), ("abcd".into(), 4)],
+        );
+        assert_eq!(r.map(|r| r.method), Some("str-char_count".to_string()));
+    }
+
+    #[test]
+    fn string_int_refuses_unmatched() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_string_int_program(&p, &[("hello".into(), 99), ("hi".into(), 1)]);
+        assert!(r.is_none());
+    }
+
+    /// END-TO-END: word-count solves through the real `solve_problem` pipeline via
+    /// the new string->int tier (no other tier synthesizes novel string->int).
+    #[test]
+    fn solve_problem_word_count_end_to_end() {
+        use crate::benchmark::{Example, Problem, Value};
+        let ex = |i: &str, o: i64| Example {
+            inputs: vec![Value::Str(i.to_string())],
+            expected: Value::Int(o),
+        };
+        let problem = Problem {
+            name: "wc".to_string(),
+            signature: "fn wc(s: string) -> i64",
+            examples: vec![
+                ex("hello world", 2),
+                ex("one two three", 3),
+                ex("a b c d", 4),
+                ex("single", 1),
+                ex("two words", 2),
+            ],
+            ..Default::default()
+        };
+        let r = crate::solver::solve_problem(&problem);
+        assert!(r.success, "word count should solve: {:?}", r.error);
+        assert!(r.method.starts_with("str-"), "via string->int tier, got {}", r.method);
+        assert!(crate::runtime::code_reproduces_examples(&r.code, &[ex("a b c d e f", 6)]));
     }
 
     /// C1 END-TO-END: a title-case task solves through the real `solve_problem`

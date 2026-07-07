@@ -727,6 +727,34 @@ fn try_word_program(problem: &Problem) -> Option<SolveResult> {
     Some(SolveResult { success: true, code, method: wr.method, error: None, metadata: Default::default() })
 }
 
+/// `string -> int` aggregations (char count / word count) — a genuine gap: no tier
+/// synthesizes a novel string-input int-output program (only a matching library op
+/// could). Self-verified + declines for anything that isn't one of its shapes.
+fn try_string_int_program(problem: &Problem) -> Option<SolveResult> {
+    let examples: Vec<(String, i64)> = problem
+        .examples
+        .iter()
+        .filter_map(|e| match (e.inputs.as_slice(), &e.expected) {
+            ([Value::Str(s)], Value::Int(o)) => Some((s.clone(), *o)),
+            _ => None,
+        })
+        .collect();
+    if examples.is_empty() || examples.len() != problem.examples.len() {
+        return None;
+    }
+    let pname = problem
+        .signature
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(':'))
+        .map(|(n, _)| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "s".to_string());
+    let wr = crate::string_synth::synthesize_string_int_program(&[pname], &examples)?;
+    let fn_name = problem.function_name();
+    let code = wr.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+    Some(SolveResult { success: true, code, method: wr.method, error: None, metadata: Default::default() })
+}
+
 pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // Suppress cache recording while the analogy universal re-fitter is
     // re-solving a TEACHER-AUGMENTED problem: that problem's examples are
@@ -756,6 +784,15 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // (longest/shortest-word etc.). Self-verified + correct-by-construction, so this
     // only ever returns a program that reproduces every example; declines otherwise.
     if let Some(result) = try_word_program(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
+        }
+        return result;
+    }
+
+    // string -> int aggregations (char/word count). Self-verified; declines otherwise.
+    if let Some(result) = try_string_int_program(problem) {
         if recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
             crate::op_library::maybe_record_learned(problem, &result);
