@@ -86,6 +86,7 @@ fn main() {
         Answer::Library { name, .. } => println!("SOLVED {id} {name}"),
         Answer::Composition { .. } => println!("COMPOSED {id}"),
         Answer::Synthesized { method, .. } => println!("SYNTHESIZED {id} {method}"),
+        Answer::Proposed { method, .. } => println!("PROPOSED {id} {method}"),
         Answer::Refused => match verified_nl_router::route(text) {
             Some(r) => println!("GATED {id} {}", r.op.name),
             None => println!("REFUSED {id}"),

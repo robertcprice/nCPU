@@ -201,7 +201,8 @@ fn main() {
                     Answer::Refused => refused += 1,
                     Answer::Library { code, .. }
                     | Answer::Composition { code }
-                    | Answer::Synthesized { code, .. } => {
+                    | Answer::Synthesized { code, .. }
+                    | Answer::Proposed { code, .. } => {
                         if code_reproduces_examples(&code, &ex) {
                             solved += 1;
                         } else {

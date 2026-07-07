@@ -300,8 +300,35 @@ pub enum Answer {
     Composition { code: String },
     /// A function synthesized by the FULL engine and verified against the examples.
     Synthesized { method: String, code: String },
+    /// A program a MODEL proposed, that nsynth verified (reproduces held-out +
+    /// strict-verify + consensus). The model is the proposer; nsynth is the oracle.
+    Proposed { method: String, code: String },
     /// No verified answer.
     Refused,
+}
+
+/// A model proposer: given a request (NL prompt + seed examples) it returns
+/// candidate Mog programs. Empty when no model is available — the tier is inert.
+pub type Proposer<'a> = dyn Fn(&str, &[crate::benchmark::Example]) -> Vec<String> + 'a;
+
+/// The live proposer: the served local model (inert without `NSYNTH_LOCAL_LLM_URL`,
+/// where `propose_program` returns `None`). One candidate; the repair loop lives in
+/// `propose_program` itself.
+fn live_proposer(request: &str, _seed: &[crate::benchmark::Example]) -> Vec<String> {
+    crate::local_llm::propose_program(request, None, 0.2)
+        .into_iter()
+        .collect()
+}
+
+/// Format the model request from the NL prompt + the SEED examples (the model never
+/// sees the held-out examples, so they can catch a fit-to-seed hallucination).
+fn proposer_request(prompt: &str, seed: &[crate::benchmark::Example]) -> String {
+    let mut s = format!("{prompt}\n\nExamples:\n");
+    for ex in seed {
+        s.push_str(&format!("  {:?} -> {:?}\n", ex.inputs, ex.expected));
+    }
+    s.push_str("\nWrite the Mog function `f`.");
+    s
 }
 
 /// THE never-wrong front door. Tries, in order of specificity/cost:
@@ -315,44 +342,83 @@ pub enum Answer {
 /// vocabulary tiers (declare / declare_composed) apply — synthesis needs an oracle,
 /// so it is not attempted there. Always verified-or-refused: never confidently wrong.
 pub fn answer(prompt: &str, examples: &[crate::benchmark::Example]) -> Answer {
-    if !examples.is_empty() {
-        if let Some(r) = route_verified(prompt, examples) {
-            return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
-        }
-        if let Some(code) = route_composed(prompt, examples) {
-            return Answer::Composition { code };
-        }
-        // Synthesis tier — the full engine, with HOLDOUT discipline so a weak-example
-        // overfit is refused, not returned. Solve on a SEED (all but the last two
-        // examples) and require the result to reproduce EVERY example including the
-        // held-out ones. A function fit only to the seed (e.g. an affine through two
-        // stock-price points) fails the held-out check and is discarded. Needs >= 4
-        // examples to hold out TWO (two independent held-out points are hard for an
-        // overfit to satisfy by chance) while leaving a seed for the solver. Needs
-        // >= 4 (seed >= 2 + holdout 2); fewer -> refuse rather than risk an overfit
-        // through the "solve on all, verify on all" door.
-        if examples.len() >= 4 {
-            let seed = &examples[..examples.len() - 2];
-            let sig: &'static str = Box::leak(
-                crate::linguigenesis_bridge::infer_signature("f", seed).into_boxed_str(),
-            );
-            let problem = crate::benchmark::Problem {
-                name: "f".to_string(),
-                signature: sig,
-                examples: seed.to_vec(),
-                ..Default::default()
-            };
-            let res = crate::solver::solve_problem(&problem);
-            if res.success && crate::runtime::code_reproduces_examples(&res.code, examples) {
-                return Answer::Synthesized { method: res.method, code: res.code };
-            }
-        }
-    } else {
+    answer_with_proposer(prompt, examples, Some(&live_proposer))
+}
+
+/// [`answer`] with an explicit model proposer (tier 4). Tiers 1-3 (library op,
+/// composition, full synthesis) are the model-free never-wrong core; tier 4 lets a
+/// MODEL propose a program for the hard tail the engine can't synthesize — gated the
+/// same way, so the model can NEVER produce a wrong answer. `proposer = None` (or an
+/// unavailable model) reduces exactly to the model-free door.
+pub fn answer_with_proposer(
+    prompt: &str,
+    examples: &[crate::benchmark::Example],
+    proposer: Option<&Proposer>,
+) -> Answer {
+    if examples.is_empty() {
         if let Some(code) = declare_composed(prompt) {
             return Answer::Composition { code };
         }
         if let Some(op) = declare(prompt) {
             return Answer::Library { name: op.name, code: op.mog.to_string() };
+        }
+        return Answer::Refused;
+    }
+    if let Some(r) = route_verified(prompt, examples) {
+        return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+    }
+    if let Some(code) = route_composed(prompt, examples) {
+        return Answer::Composition { code };
+    }
+    // Tier 3 — full synthesis with HOLDOUT discipline. Solve on a SEED (all but the
+    // last two) and require the result to reproduce EVERY example including the two
+    // held-out; a fit-only-to-seed overfit fails and is discarded. Needs >= 4.
+    if examples.len() >= 4 {
+        let seed = &examples[..examples.len() - 2];
+        let sig: &'static str =
+            Box::leak(crate::linguigenesis_bridge::infer_signature("f", seed).into_boxed_str());
+        let problem = crate::benchmark::Problem {
+            name: "f".to_string(),
+            signature: sig,
+            examples: seed.to_vec(),
+            ..Default::default()
+        };
+        let res = crate::solver::solve_problem(&problem);
+        if res.success && crate::runtime::code_reproduces_examples(&res.code, examples) {
+            return Answer::Synthesized { method: res.method, code: res.code };
+        }
+    }
+    // Tier 4 — GATED MODEL PROPOSER. The model writes a candidate program (an
+    // algorithm the engine cannot synthesize); nsynth is the oracle. Same never-wrong
+    // gate: the model sees only the SEED, and a candidate is accepted only if it
+    // reproduces EVERY example (incl. the two held-out the model never saw) AND
+    // passes run_tool's strict-verify + differential-consensus. A hallucinated or
+    // fit-to-seed proposal fails and is discarded. Model quality bounds REACH, never
+    // correctness.
+    if examples.len() >= 4 {
+        if let Some(propose) = proposer {
+            let seed = &examples[..examples.len() - 2];
+            let sig = crate::linguigenesis_bridge::infer_signature("f", seed);
+            let request = proposer_request(prompt, seed);
+            for code in propose(&request, seed).into_iter().take(5) {
+                if !crate::runtime::code_reproduces_examples(&code, examples) {
+                    continue; // fails the held-out -> discard
+                }
+                // The candidate reproduced every example incl. the two held-out (above)
+                // — the primary never-wrong evidence. run_tool adds the strict-verify
+                // robustness probe + consensus: accept unless it is REFUSED (brittle /
+                // overfit-caught). Tentative (reproduces + robust, no independent
+                // reference to corroborate) is fine — the held-out examples are the
+                // corroboration a model proposal has.
+                let req = crate::rlvr::ToolRequest::VerifyProgram {
+                    signature: sig.clone(),
+                    code: code.clone(),
+                    examples: examples.to_vec(),
+                };
+                if crate::rlvr::run_tool(&req).code().is_some() {
+                    return Answer::Proposed { method: "model-proposed".to_string(), code };
+                }
+            }
         }
     }
     Answer::Refused
@@ -687,6 +753,50 @@ mod tests {
         assert!(cands.iter().any(|op| op.name == "gcd"), "gcd should be proposed");
         let lcm = ranked_candidates("least common multiple of two numbers");
         assert!(lcm.iter().any(|op| op.name == "lcm"), "lcm should be proposed");
+    }
+
+    // A correct nth-prime program (an algorithm the engine cannot synthesize) — used
+    // as a mock model proposal to exercise tier 4.
+    const PRIME_MOG: &str = "fn f(n: i64) -> i64 {\n    count: i64 = 0;\n    cand: i64 = 1;\n    while count < n {\n        cand = cand + 1;\n        is_p: i64 = 1;\n        d: i64 = 2;\n        while (d * d) <= cand {\n            if (cand % d) == 0 {\n                is_p = 0;\n            }\n            d = d + 1;\n        }\n        if is_p == 1 {\n            count = count + 1;\n        }\n    }\n    return cand;\n}\n";
+
+    fn answer_code(a: &Answer) -> &str {
+        match a {
+            Answer::Library { code, .. }
+            | Answer::Composition { code }
+            | Answer::Synthesized { code, .. }
+            | Answer::Proposed { code, .. } => code,
+            Answer::Refused => "",
+        }
+    }
+
+    #[test]
+    fn proposer_tier_is_gated_never_returns_a_bad_proposal() {
+        use crate::benchmark::{Example, Value};
+        let ex = |a: i64, b: i64| Example { inputs: vec![Value::Int(a)], expected: Value::Int(b) };
+        // nth prime: no library op, beyond engine synthesis -> forces tier 4.
+        let primes = vec![ex(1, 2), ex(2, 3), ex(3, 5), ex(4, 7), ex(5, 11), ex(6, 13)];
+
+        // A model that ONLY hands back WRONG programs must never cause a wrong answer:
+        // either an earlier tier answers correctly, or it refuses — never the garbage.
+        let wrong = |_r: &str, _s: &[Example]| {
+            vec![
+                "fn f(n: i64) -> i64 { return n; }".to_string(),
+                "fn f(n: i64) -> i64 { return 0; }".to_string(),
+            ]
+        };
+        let a = answer_with_proposer("nth prime number", &primes, Some(&wrong));
+        assert!(
+            matches!(a, Answer::Refused)
+                || crate::runtime::code_reproduces_examples(answer_code(&a), &primes),
+            "a wrong proposal must never be returned"
+        );
+
+        // A model that hands back the CORRECT program is accepted (Proposed, unless an
+        // earlier tier already solved it) and reproduces the examples.
+        let right = |_r: &str, _s: &[Example]| vec![PRIME_MOG.to_string()];
+        let b = answer_with_proposer("nth prime number", &primes, Some(&right));
+        assert!(!matches!(b, Answer::Refused), "correct proposal should be accepted");
+        assert!(crate::runtime::code_reproduces_examples(answer_code(&b), &primes));
     }
 
     #[test]
