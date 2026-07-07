@@ -276,6 +276,15 @@ pub const OPS: &[LibOp] = &[
 "fn count_positives(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "sum_of_squares", arity: 1, mog:
 "fn sum_of_squares(arr: [i64]) -> i64 {\n    acc: i64 = 0;\n    for e in arr {\n        acc = acc + e * e;\n    }\n    return acc;\n}\n" },
+    // Fundamental reduces. Their ABSENCE was a real never-wrong hole: "sum of a
+    // list" had no correct op, so the router grabbed the nearest reproducer
+    // (`max_subarray_sum`) which coincides with sum only on all-positive inputs and
+    // is confidently WRONG on negatives. With the true op present it competes, and
+    // the distinguishing gate refuses when the examples can't tell them apart.
+    LibOp { name: "array_sum", arity: 1, mog:
+"fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n" },
+    LibOp { name: "array_product", arity: 1, mog:
+"fn array_product(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    for item in arr {\n        p = p * item;\n    }\n    return p;\n}\n" },
     // ── array + scalar (2-arg) ─────────────────────────────────────────────
     LibOp { name: "count_value", arity: 2, mog:
 "fn count_value(arr: [i64], x: i64) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e == x {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
@@ -489,6 +498,13 @@ pub const OPS: &[LibOp] = &[
     // bubble sort — array element assignment writes back to the identifier binding.
     LibOp { name: "sort", arity: 1, mog:
 "fn sort(a: [i64]) -> [i64] {\n    n: i64 = a.len;\n    i: i64 = 0;\n    while i < n {\n        j: i64 = 0;\n        while j < n - i - 1 {\n            if a[j] > a[j + 1] {\n                tmp: i64 = a[j];\n                a[j] = a[j + 1];\n                a[j + 1] = tmp;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return a;\n}\n" },
+    // Reverse a list. Was MISSING, so "reverse a list" fell to tier-3 synthesis,
+    // which produced a SORT-DESCENDING program that reproduces ascending-input
+    // examples (reverse == sort-desc there) but is confidently WRONG on unsorted
+    // input. With the true op present, tier-1 returns it and the array probes
+    // (which reverse/shuffle the example arrays) distinguish it from sort-desc.
+    LibOp { name: "reverse_list", arity: 1, mog:
+"fn reverse_list(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = arr.len - 1;\n    while i >= 0 {\n        out.push(arr[i]);\n        i = i - 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "list_min", arity: 1, mog:
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:

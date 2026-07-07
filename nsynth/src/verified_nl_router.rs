@@ -814,10 +814,13 @@ fn passers_disagree(passing: &[&'static LibOp], examples: &[crate::benchmark::Ex
     programs_disagree(&progs, examples)
 }
 
-/// Fresh probe inputs: each example's input tuple with one scalar-int position
-/// nudged (+1, +2, *2, and a few small constants), so we exercise inputs the
-/// examples did not cover. Non-int arguments are left as-is (limited but the
-/// non-distinguishing hole is overwhelmingly a scalar-predicate problem).
+/// Fresh probe inputs: each example's input tuple with one position perturbed into
+/// inputs the examples did not cover, so the distinguishing gate can observe two
+/// coincidental ops diverge. Scalar-int positions are nudged (+deltas, small
+/// constants); ARRAY positions are perturbed to break regime coincidences (inject a
+/// negative / a zero, negate, reverse, resize) — without which sum/max-subarray and
+/// product/max-product-subarray look identical on all-positive examples and a wrong
+/// op ships confident.
 fn fresh_probe_inputs(examples: &[crate::benchmark::Example]) -> Vec<Vec<crate::benchmark::Value>> {
     use crate::benchmark::Value;
     let seen: std::collections::HashSet<String> =
@@ -828,13 +831,49 @@ fn fresh_probe_inputs(examples: &[crate::benchmark::Example]) -> Vec<Vec<crate::
             out.push(tup);
         }
     };
-    for ex in examples.iter().take(4) {
+    for (ex_idx, ex) in examples.iter().take(4).enumerate() {
         for pos in 0..ex.inputs.len() {
             if let Value::Int(v) = ex.inputs[pos] {
                 for delta in [1i64, 2, 3, 5, -1] {
                     let mut tup = ex.inputs.clone();
                     tup[pos] = Value::Int(v.wrapping_add(delta));
                     push_if_new(tup);
+                }
+            }
+            // ARRAY probes. An all-positive example array cannot distinguish `sum`
+            // from `max_subarray_sum`, `product` from `max_product_subarray`, or an
+            // order-sensitive op from an order-insensitive one. Generate a few fresh
+            // arrays that break those regimes so the distinguishing gate can observe
+            // coincidental ops diverge. Only from the FIRST example (these run against
+            // every candidate program, so keep the count small) with regime-breakers
+            // chosen to cover sign, zero, and order at once.
+            if ex_idx == 0 {
+                if let Value::Array(elems) = &ex.inputs[pos] {
+                    let ints: Option<Vec<i64>> = elems
+                        .iter()
+                        .map(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+                        .collect();
+                    if let Some(base) = ints {
+                        if !base.is_empty() {
+                            let mut variants: Vec<Vec<i64>> = Vec::new();
+                            // negative in front + a zero: breaks sum/max-subarray,
+                            // product/max-product, and covers 0 all at once.
+                            let mut mixed = vec![-3, 0];
+                            mixed.extend_from_slice(&base);
+                            variants.push(mixed);
+                            // reverse: order-sensitive ops (reverse vs sort-desc) diverge
+                            let mut rev = base.clone();
+                            rev.reverse();
+                            variants.push(rev);
+                            // a fixed small mixed array, regime-independent catch-all
+                            variants.push(vec![-2, 5, -1, 3]);
+                            for arr in variants {
+                                let mut tup = ex.inputs.clone();
+                                tup[pos] = Value::int_array(&arr);
+                                push_if_new(tup);
+                            }
+                        }
+                    }
                 }
             }
         }
