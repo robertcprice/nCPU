@@ -123,7 +123,16 @@ pub fn ranked_candidates(prompt: &str) -> Vec<&'static LibOp> {
     if ptoks.is_empty() {
         return Vec::new();
     }
-    let has = |t: &str| ptoks.iter().any(|p| p == t);
+    // Match an op-name token against the prompt: exact, OR a prompt token that
+    // STARTS WITH the op token (>=4 chars) so compounds resolve — "uppercase"
+    // matches `to_upper`'s "upper", "lowercase" matches "lower". Prefix matching is
+    // liberal, but the verify gate backstops it, so a spurious prefix hit that
+    // doesn't reproduce the examples is discarded, never returned.
+    let has = |t: &str| {
+        ptoks
+            .iter()
+            .any(|p| p == t || (t.len() >= 4 && p.starts_with(t)))
+    };
     // Raw lowercase words in order (for acronym initial-matching, which needs the
     // ORIGINAL sequence, not the stopword-filtered/stemmed token set).
     let words: Vec<String> = prompt
