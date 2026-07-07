@@ -442,6 +442,17 @@ pub const OPS: &[LibOp] = &[
 "fn reverse_upto_k(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    i: i64 = k - 1;\n    while i >= 0 {\n        out.push(arr[i]);\n        i = i - 1;\n    }\n    i = k;\n    while i < arr.len {\n        out.push(arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "every_nth", arity: 2, mog:
 "fn every_nth(arr: [i64], k: i64) -> [i64] {\n    out: [i64] = [];\n    i: i64 = k - 1;\n    while i < arr.len {\n        out.push(arr[i]);\n        i = i + k;\n    }\n    return out;\n}\n" },
+    // Canonical list PRIMITIVES. sort is a genuine primitive (like reverse), not a
+    // per-algorithm recognizer: any sorting task (bubble/bucket/cocktail/merge/...)
+    // produces the SAME output, so try_library matches them all via `library:sort`,
+    // and the composition search can reuse it (sort-then-take-k, etc.). In-place
+    // bubble sort — array element assignment writes back to the identifier binding.
+    LibOp { name: "sort", arity: 1, mog:
+"fn sort(a: [i64]) -> [i64] {\n    n: i64 = a.len;\n    i: i64 = 0;\n    while i < n {\n        j: i64 = 0;\n        while j < n - i - 1 {\n            if a[j] > a[j + 1] {\n                tmp: i64 = a[j];\n                a[j] = a[j + 1];\n                a[j + 1] = tmp;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return a;\n}\n" },
+    LibOp { name: "list_min", arity: 1, mog:
+"fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
+    LibOp { name: "list_max", arity: 1, mog:
+"fn list_max(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] > m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "sum_last_k", arity: 2, mog:
 "fn sum_last_k(arr: [i64], k: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = arr.len - k;\n    if i < 0 {\n        i = 0;\n    }\n    while i < arr.len {\n        s = s + arr[i];\n        i = i + 1;\n    }\n    return s;\n}\n" },
     LibOp { name: "count_greater_than", arity: 2, mog:
