@@ -394,10 +394,42 @@ fn finish_self_extend(
     gate: GateReport,
     passed_gate: bool,
 ) -> (Option<Engine>, LearnReport) {
-    let message = if passed_gate {
+    // Extract the emitted op code (present only on a green gate) up front — it is
+    // needed both to persist and to SCREEN for memorization.
+    let base_len = engine.program().len();
+    let code = candidate
+        .program()
+        .get(base_len..)
+        .map(|s| s.trim_start_matches('\n').to_string())
+        .unwrap_or_default();
+
+    // MEMORIZATION-OVERFIT GUARD. A green regression gate proves the program
+    // reproduces its examples and breaks no existing behavior — it does NOT prove
+    // the program GENERALIZES. When the examples underdetermine the op, the solver
+    // can return a memorized fit: a curve threaded through the points with magic
+    // constants that carry as much information as the outputs they reproduce (the
+    // specification wall — no holdout split can catch it because the fit is
+    // consistent with every given example, and here there is no source to
+    // corroborate). Reject the persist so an uncorroborated memorization never
+    // enters the library as a verified op. Conservative (see `synth_confidence`):
+    // fires only on two-or-more large magic constants rivaling the data.
+    let memorized =
+        passed_gate && !code.is_empty() && crate::synth_confidence::is_memorization_overfit(&code, &req.examples);
+    let accepted = passed_gate && !memorized;
+
+    let message = if accepted {
         format!(
             "accepted `{}` via {} (gate green: {}/{} golden cases passed, sound)",
             req.name, method, gate.passed, gate.total
+        )
+    } else if memorized {
+        format!(
+            "rejected `{}` via {}: gate green but the synthesized program is a MEMORIZATION overfit \
+             — its magic constants carry as much information as the {} examples explain, so the \
+             examples underdetermine the op (specification wall; supply more examples or the source)",
+            req.name,
+            method,
+            req.examples.len()
         )
     } else {
         let failures = if gate.failures.is_empty() {
@@ -417,7 +449,7 @@ fn finish_self_extend(
         synthesized: true,
         method: method.clone(),
         regression_passed: passed_gate,
-        accepted: passed_gate,
+        accepted,
         message: message.clone(),
     };
 
@@ -428,17 +460,11 @@ fn finish_self_extend(
         method,
         verified: true,
         regression_passed: passed_gate,
-        accepted: passed_gate,
+        accepted,
         note: message,
     });
 
-    if passed_gate {
-        let base_len = engine.program().len();
-        let code = candidate
-            .program()
-            .get(base_len..)
-            .map(|s| s.trim_start_matches('\n').to_string())
-            .unwrap_or_default();
+    if accepted {
         if !code.is_empty() {
             let members: Vec<(String, bool)> = if req.name.ends_with("_class") {
                 req.examples
