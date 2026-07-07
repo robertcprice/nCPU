@@ -10,10 +10,35 @@
 
 use mog_synth::comprehension::Engine;
 use mog_synth::doc_ingest::{ingest_dir, ingest_fn_sources_dir, ingest_multiarg_examples_dir};
-use mog_synth::foreign_op::{verify_foreign_rust, ForeignVerdict};
+use mog_synth::foreign_op::{eval_foreign_rust, verify_foreign_rust, ForeignVerdict};
 use mog_synth::learn_nl::teach_by_examples_n;
 use std::path::PathBuf;
 use std::process::Command;
+
+/// Deterministic held-out inputs for the oracle probe: a spread matched to
+/// `arity`, excluding anything already among the `mined` example inputs (so the
+/// oracle genuinely tests fresh points). Empty for arities we don't spread.
+fn fresh_inputs(arity: usize, mined: &[(Vec<i64>, i64)]) -> Vec<Vec<i64>> {
+    let seen: std::collections::HashSet<&Vec<i64>> = mined.iter().map(|(i, _)| i).collect();
+    let cands: Vec<Vec<i64>> = match arity {
+        1 => [4, 5, 8, 11, 13, 17, 23, 50, 64, 77, 101, 128, 255, 500, 999]
+            .iter()
+            .map(|&n| vec![n])
+            .collect(),
+        2 => [
+            (3, 5), (7, 4), (12, 8), (9, 9), (20, 15), (100, 7), (48, 36), (17, 5), (64, 24), (13, 29),
+        ]
+        .iter()
+        .map(|&(a, b)| vec![a, b])
+        .collect(),
+        3 => [(2, 3, 4), (7, 1, 5), (10, 10, 10), (9, 4, 6), (15, 20, 25)]
+            .iter()
+            .map(|&(a, b, c)| vec![a, b, c])
+            .collect(),
+        _ => Vec::new(),
+    };
+    cands.into_iter().filter(|c| !seen.contains(c)).collect()
+}
 
 fn main() {
     let arg = match std::env::args().nth(1) {
@@ -67,23 +92,47 @@ fn main() {
             .find(|f| &f.lemma == name)
             .map(|f| f.terms.iter().take(6).cloned().collect())
             .unwrap_or_default();
-        let outcome = teach_by_examples_n(&engine, name, rows);
+
+        // ORACLE-AMPLIFY: when the repo's real source is available, probe it on
+        // fresh held-out inputs the mined examples never covered and add those as
+        // extra teaching examples. A synthesized closed form that merely overfits
+        // the handful of mined points (the specification wall — e.g. an LCG's
+        // affine form missing its final mod) disagrees with the real source on a
+        // fresh input, so it fails the amplified regression gate and never
+        // persists. The real source is a differential oracle, for free.
+        let src = sources.get(name);
+        let mut teach_rows = rows.clone();
+        let mut amp = 0usize;
+        if let Some(src) = src {
+            let fresh = fresh_inputs(arity, rows);
+            if !fresh.is_empty() {
+                if let Ok(outs) = eval_foreign_rust(name, src, &fresh) {
+                    for (ins, out) in fresh.into_iter().zip(outs) {
+                        teach_rows.push((ins, out));
+                    }
+                    amp = teach_rows.len() - rows.len();
+                }
+            }
+        }
+
+        let outcome = teach_by_examples_n(&engine, name, &teach_rows);
         if outcome.success {
             learned += 1;
             println!(
-                "LEARNED   {name:<16} arity={arity} ex={:<2} method={:<24} vocab={:?}",
+                "LEARNED   {name:<16} arity={arity} ex={:<2} (+{amp} oracle) method={:<24} vocab={:?}",
                 rows.len(),
                 outcome.method.clone().unwrap_or_default(),
                 vocab
             );
-        } else if let Some(src) = sources.get(name) {
-            // Engine can't SYNTHESIZE it — import the repo's ACTUAL code, vetted
-            // (compile+run against the examples). Lands TENTATIVE: the frontier crosser.
+        } else if let Some(src) = src {
+            // Engine can't SYNTHESIZE it (or its best fit failed the oracle-amplified
+            // gate) — import the repo's ACTUAL code, vetted (compile+run against the
+            // mined examples). Lands TENTATIVE: the frontier crosser.
             match verify_foreign_rust(name, src, rows).verdict {
                 ForeignVerdict::Tentative => {
                     foreign += 1;
                     println!(
-                        "FOREIGN   {name:<16} arity={arity} ex={:<2} TENTATIVE (verified foreign source, beyond synthesis) vocab={:?}",
+                        "FOREIGN   {name:<16} arity={arity} ex={:<2} TENTATIVE (verified foreign source, beyond/over synthesis) vocab={:?}",
                         rows.len(),
                         vocab
                     );

@@ -107,6 +107,80 @@ fn run_with_timeout(bin: &Path, timeout: Duration) -> Result<bool, String> {
     }
 }
 
+/// Evaluate a foreign `fn name(a: i64, ..) -> i64` on a batch of `inputs` and
+/// return one output per input. This turns the repo's ACTUAL source into a
+/// differential ORACLE: the flywheel can probe it on fresh, held-out inputs the
+/// mined examples never covered, then require any SYNTHESIZED op to agree there —
+/// killing example-overfit closed forms (the specification wall) before they
+/// persist. Returns `Err` if the source won't compile / run / prints garbage.
+///
+/// SECURITY: same arbitrary-code-execution caveat as [`verify_foreign_rust`].
+pub fn eval_foreign_rust(name: &str, source: &str, inputs: &[Vec<i64>]) -> Result<Vec<i64>, String> {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let arity = inputs[0].len();
+    if arity == 0 || inputs.iter().any(|i| i.len() != arity) {
+        return Err("inconsistent input arity".into());
+    }
+    let mut calls = String::new();
+    for ins in inputs {
+        let args = ins.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        calls.push_str(&format!("    println!(\"{{}}\", {name}({args}));\n"));
+    }
+    let harness = format!(
+        "#![allow(warnings)]\n{}\n\nfn main() {{\n{calls}}}\n",
+        source.trim()
+    );
+    let (src, bin) = crate::backend_http::compile_to_temp_bin(&harness, false)?;
+    let out = run_capture_with_timeout(&bin, Duration::from_secs(5));
+    crate::backend_http::cleanup_temp_artifacts(&src, &bin);
+    let text = out?;
+    let vals: Vec<i64> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().parse::<i64>().map_err(|_| format!("non-integer foreign output: {l:?}")))
+        .collect::<Result<_, _>>()?;
+    if vals.len() != inputs.len() {
+        return Err(format!("foreign produced {} outputs for {} inputs", vals.len(), inputs.len()));
+    }
+    Ok(vals)
+}
+
+/// Spawn `bin`, enforce a wall-clock `timeout`, and return its captured stdout on
+/// a clean exit. Output is tiny (one int per line) so the pipe never blocks.
+fn run_capture_with_timeout(bin: &Path, timeout: Duration) -> Result<String, String> {
+    use std::io::Read;
+    let mut child = Command::new(bin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn foreign harness: {e}"))?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => {
+                if !status.success() {
+                    return Err("foreign harness exited non-zero".into());
+                }
+                let mut buf = String::new();
+                if let Some(mut so) = child.stdout.take() {
+                    so.read_to_string(&mut buf).map_err(|e| e.to_string())?;
+                }
+                return Ok(buf);
+            }
+            None => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("foreign harness exceeded time budget".into());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +207,19 @@ mod tests {
         let bad = "fn collatz_steps(n: i64) -> i64 { n }";
         let vb = verify_foreign_rust("collatz_steps", bad, &ex);
         assert!(matches!(vb.verdict, ForeignVerdict::Refused(_)), "wrong foreign op refused");
+    }
+
+    #[test]
+    fn foreign_source_is_a_differential_oracle_on_fresh_inputs() {
+        if !rustc_available() {
+            eprintln!("skipping foreign-eval test: rustc unavailable");
+            return;
+        }
+        // The repo's real source, evaluated on inputs the mined examples never
+        // covered, is the held-out oracle that kills example-overfit synths.
+        let src = "fn collatz_steps(mut n: i64) -> i64 {\n    let mut c = 0;\n    while n != 1 { n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 }; c += 1; }\n    c\n}";
+        let fresh = vec![vec![2i64], vec![3], vec![11], vec![97]];
+        let got = eval_foreign_rust("collatz_steps", src, &fresh).expect("foreign eval");
+        assert_eq!(got, vec![1, 7, 14, 118], "foreign oracle reproduces true collatz on fresh inputs");
     }
 }
