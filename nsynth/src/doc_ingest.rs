@@ -841,6 +841,29 @@ assert_eq!(add(1, 2), 3);     // two-arg -> not a unary example
         assert!(sq.contains(&(2, 4)) && sq.contains(&(3, 9)), "{sq:?}");
     }
 
+    /// W2 producer round-trip: a documented op -> noise-gated surface form ->
+    /// JSONL overlay -> read back, with the op's discriminating terms preserved.
+    /// This is exactly the overlay `ingest_docs` writes and the resolver merges
+    /// (`merge_doc_surface_forms`) to enrich op recall — closing the "built but
+    /// never invoked" gap.
+    #[test]
+    fn producer_round_trips_a_documented_op_overlay() {
+        let src = "/// Compute the greatest common divisor of two integers.\npub fn gcd(a: i64, b: i64) -> i64 { if b == 0 { a } else { gcd(b, a % b) } }\n";
+        let forms = filter_surface_forms(&ingest_source(src), 8);
+        let gcd = forms.iter().find(|f| f.lemma == "gcd").expect("gcd form derived");
+        assert!(
+            gcd.terms.iter().any(|t| t == "greatest" || t == "divisor"),
+            "discriminating terms preserved: {:?}",
+            gcd.terms
+        );
+        // JSONL round-trip is lossless (the overlay the resolver reads).
+        let path = std::env::temp_dir().join(format!("nsynth_overlay_{}.jsonl", std::process::id()));
+        write_surface_forms_jsonl(&path, &forms).unwrap();
+        let back = read_surface_forms_jsonl(&path);
+        assert!(back.iter().any(|f| f.lemma == "gcd" && f.terms == gcd.terms));
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn gates_noise_into_discriminating_overlay() {
         // Code inside a docstring does not leak into recall terms.
