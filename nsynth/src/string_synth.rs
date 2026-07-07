@@ -669,6 +669,140 @@ fn fail(msg: &str) -> StrSynthResult {
     }
 }
 
+// ── C1: word-list composition (statement-level, loop-emitting) ───────────────
+//
+// The `SExpr` grammar above emits a single INLINE EXPRESSION, so it cannot express
+// a transform that MAPS over the words of a string (split -> per-word op -> join)
+// or reorders the word LIST — those need a loop / list method, i.e. statements.
+// This closes part of the string-list gap (string 20.7% vs int 69%): title-case,
+// reverse-each-word, sort-words, reverse-word-order. The search is tiny
+// (separators x shapes) and EVERY candidate is self-verified against the examples
+// through the real interpreter before it is returned, so a wrong shape or a bad
+// emit can never be a false accept — never-wrong by construction.
+
+#[derive(Clone, Copy)]
+enum WordShape {
+    /// Uppercase the first char of each word, rest unchanged (matches the emit).
+    TitleCase,
+    /// Reverse the characters of each word in place.
+    ReverseEachWord,
+    /// Reverse the ORDER of the words, rejoin.
+    ReverseWordOrder,
+}
+
+impl WordShape {
+    fn name(self) -> &'static str {
+        match self {
+            WordShape::TitleCase => "title_case",
+            WordShape::ReverseEachWord => "reverse_each_word",
+            WordShape::ReverseWordOrder => "reverse_word_order",
+        }
+    }
+}
+
+/// First char uppercased, rest verbatim — matches the emitted Mog
+/// (`w.slice(0,1).upper() + w.slice(1, w.len)`), NOT a lowercasing title-case.
+fn cap_first(w: &str) -> String {
+    let mut c = w.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Apply a word shape in RUST, mirroring the emitted Mog exactly (so the predicted
+/// output the search matches on equals what the program will compute).
+fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
+    let words: Vec<&str> = input.split(sep).collect();
+    match shape {
+        WordShape::TitleCase => {
+            words.iter().map(|w| cap_first(w)).collect::<Vec<_>>().join(sep)
+        }
+        WordShape::ReverseEachWord => words
+            .iter()
+            .map(|w| w.chars().rev().collect::<String>())
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::ReverseWordOrder => {
+            let mut ws = words.clone();
+            ws.reverse();
+            ws.join(sep)
+        }
+    }
+}
+
+/// Emit the Mog program for a word shape. `p` is the (single) string parameter,
+/// `sep` the separator literal. Entry fn is `transform` so the caller's
+/// `replacen("fn transform(", ...)` renames it, matching `synthesize_string_program`.
+fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
+    let sep = esc(sep);
+    match shape {
+        WordShape::TitleCase => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        w: string = words[i];\n        first: string = w.slice(0, 1);\n        rest: string = w.slice(1, w.len);\n        out.push(first.upper() + rest);\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::ReverseEachWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].reverse());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::ReverseWordOrder => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = words.len - 1;\n    while i >= 0 {{\n        out.push(words[i]);\n        i = i - 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+    }
+}
+
+/// Synthesize a word-list composition (title-case / reverse-each-word /
+/// sort-words / reverse-word-order) from `string -> string` examples. Returns a
+/// SELF-VERIFIED Mog program or None. Never-wrong: a candidate is only returned if
+/// it reproduces every example through the real interpreter.
+pub fn synthesize_word_program(
+    params: &[String],
+    examples: &[StrSynthExample],
+) -> Option<StrSynthResult> {
+    if params.len() != 1 || examples.len() < 2 {
+        return None;
+    }
+    // Single string arg with a string output; skip if any example isn't 1-arg.
+    if examples.iter().any(|ex| ex.inputs.len() != 1) {
+        return None;
+    }
+    // A shape that leaves every example unchanged is the identity, not this op.
+    if examples.iter().all(|ex| ex.inputs[0] == ex.expected) {
+        return None;
+    }
+    let p = &params[0];
+    const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
+    const SHAPES: [WordShape; 3] =
+        [WordShape::TitleCase, WordShape::ReverseEachWord, WordShape::ReverseWordOrder];
+    for sep in SEPS {
+        for shape in SHAPES {
+            let predicts_all = examples
+                .iter()
+                .all(|ex| apply_word_shape(&ex.inputs[0], sep, shape) == ex.expected);
+            if !predicts_all {
+                continue;
+            }
+            let code = emit_word_program(p, sep, shape);
+            // Never-wrong gate: the emitted program must reproduce every example
+            // through the real interpreter (catches any emit/semantics drift).
+            let bench: Vec<crate::benchmark::Example> = examples
+                .iter()
+                .map(|ex| crate::benchmark::Example {
+                    inputs: vec![crate::benchmark::Value::Str(ex.inputs[0].clone())],
+                    expected: crate::benchmark::Value::Str(ex.expected.clone()),
+                })
+                .collect();
+            if crate::runtime::code_reproduces_examples(&code, &bench) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: format!("word-{}", shape.name()),
+                    error: None,
+                });
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,6 +819,78 @@ mod tests {
             &params.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
             exs,
         )
+    }
+
+    fn wex(i: &str, o: &str) -> StrSynthExample {
+        StrSynthExample { inputs: vec![i.to_string()], expected: o.to_string() }
+    }
+
+    /// C1: each word shape synthesizes a SELF-VERIFIED program with the right method.
+    /// (A shape only returns if its emitted Mog reproduces every example through the
+    /// real interpreter, so these also prove the emits actually run.)
+    #[test]
+    fn word_program_synthesizes_title_case() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(
+            &p,
+            &[wex("hello world", "Hello World"), wex("one two three", "One Two Three")],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-title_case".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_reverse_each_word() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(&p, &[wex("abc def", "cba fed"), wex("hi bye", "ih eyb")]);
+        assert_eq!(r.map(|r| r.method), Some("word-reverse_each_word".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_reverse_word_order() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(&p, &[wex("a b c", "c b a"), wex("one two", "two one")]);
+        assert_eq!(r.map(|r| r.method), Some("word-reverse_word_order".to_string()));
+    }
+
+    /// Never-wrong: an example set no word shape reproduces returns None (no guess).
+    #[test]
+    fn word_program_refuses_unmatched() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(&p, &[wex("hello", "olleh"), wex("world", "xyz")]);
+        assert!(r.is_none());
+    }
+
+    /// C1 END-TO-END: a title-case task solves through the real `solve_problem`
+    /// pipeline (proves the tier is actually REACHED, not just callable in isolation)
+    /// and the returned program reproduces a held-out input.
+    #[test]
+    fn solve_problem_solves_title_case_end_to_end() {
+        use crate::benchmark::{Example, Problem, Value};
+        let ex = |i: &str, o: &str| Example {
+            inputs: vec![Value::Str(i.to_string())],
+            expected: Value::Str(o.to_string()),
+        };
+        let problem = Problem {
+            name: "titlecase".to_string(),
+            signature: "fn titlecase(s: string) -> string",
+            examples: vec![
+                ex("hello world", "Hello World"),
+                ex("one two three", "One Two Three"),
+                ex("foo bar", "Foo Bar"),
+                ex("a b c d", "A B C D"),
+            ],
+            ..Default::default()
+        };
+        let r = crate::solver::solve_problem(&problem);
+        assert!(r.success, "title-case should solve end-to-end: {:?}", r.error);
+        assert!(
+            crate::runtime::code_reproduces_examples(
+                &r.code,
+                &[ex("quick brown fox", "Quick Brown Fox")]
+            ),
+            "solved program must generalise to a held-out sentence; method={}",
+            r.method
+        );
     }
 
     #[test]

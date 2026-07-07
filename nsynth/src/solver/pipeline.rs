@@ -638,6 +638,22 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
         });
     }
 
+    // C1: word-list composition (title-case / reverse-each-word / reverse-word-order)
+    // — statement-level shapes the expression synthesizer (`SExpr`) cannot express
+    // (they need a split->loop->join). Self-verified against every example through the
+    // real interpreter, so never a false accept; tried after the expression
+    // generalizer declines but BEFORE the memorizing lexicon fallback.
+    if let Some(wr) = crate::string_synth::synthesize_word_program(&params, &all) {
+        let code = wr.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: wr.method,
+            error: None,
+            metadata: Default::default(),
+        });
+    }
+
     // Whole-word lexicon lookup (LAST resort): for arbitrary string->string maps no
     // suffix transduction OR generalizing string program explains (e.g. irregular
     // inflection: have->has, be->is). This memorizes the training pairs, so it is
