@@ -1104,7 +1104,22 @@ impl CodingAgentSession {
                 // reloaded (gated) and visible — and so the gate runs against the
                 // current durable state.
                 let engine = crate::comprehension::Engine::new();
-                crate::learn_nl::teach_by_examples(&engine, &name, &examples)
+                let outcome = crate::learn_nl::teach_by_examples(&engine, &name, &examples);
+                if outcome.success {
+                    outcome
+                } else {
+                    // NEVER-WRONG FRONT-DOOR FALLBACK (W1). `self_extend` could not
+                    // synthesize a generalizing op from these examples. Hand the same
+                    // examples to `verified_nl_router::answer` — the 4-tier never-wrong
+                    // door (library op → 2-op composition → holdout synthesis → GATED
+                    // MODEL PROPOSER with distillation into the learned store). Every
+                    // tier is verified-or-refused, so this can only ever ADD a proven
+                    // solve or leave the honest failure untouched — never a confident
+                    // wrong answer. This is what makes the model tier + distillation
+                    // (built + measured, previously benchmark-bin-only) reachable from
+                    // the product path. Inert without a served model → tiers 1–3 only.
+                    self.teach_via_verified_front_door(&name, &examples, outcome)
+                }
             }
             LearnIntake::TeachByComposition { name, steps } => {
                 let engine = crate::comprehension::Engine::new();
@@ -1139,6 +1154,37 @@ impl CodingAgentSession {
             repo_result: None,
             tool_trace: Vec::new(),
         }
+    }
+
+    /// W1 — route a FAILED teach-by-examples through the never-wrong front door
+    /// [`crate::verified_nl_router::answer`], which adds two tiers `self_extend`
+    /// does not: full HOLDOUT synthesis and the GATED MODEL PROPOSER (whose verified
+    /// proposals distill into the learned store via `record_proposed_op`). Every
+    /// tier is verified-or-refused, so this only ever ADDS a proven solve or returns
+    /// the original honest `fallback` failure unchanged — it can never manufacture a
+    /// confident wrong answer. Inert without a served model (`NSYNTH_LOCAL_LLM_URL`)
+    /// → the model tier is skipped and only the symbolic tiers run.
+    fn teach_via_verified_front_door(
+        &self,
+        name: &str,
+        examples: &[(i64, i64)],
+        fallback: crate::learn_nl::LearnOutcome,
+    ) -> crate::learn_nl::LearnOutcome {
+        use crate::benchmark::{Example, Value};
+        use crate::learn_nl::LearnOutcome;
+        use crate::verified_nl_router::Answer;
+        let bench: Vec<Example> = examples
+            .iter()
+            .map(|(i, o)| Example { inputs: vec![Value::Int(*i)], expected: Value::Int(*o) })
+            .collect();
+        let (code, method) = match crate::verified_nl_router::answer(name, &bench) {
+            Answer::Refused => return fallback,
+            Answer::Library { name: n, code } => (code, format!("verified-nl-router:library:{n}")),
+            Answer::Composition { code } => (code, "verified-nl-router:composition".to_string()),
+            Answer::Synthesized { method, code } => (code, format!("verified-nl-router:{method}")),
+            Answer::Proposed { method, code } => (code, format!("verified-nl-router:{method}")),
+        };
+        LearnOutcome { success: true, message: code, method: Some(method) }
     }
 
     /// REFERENCE SYNTHESIS (UNWALL-3): synthesize a program equivalent to the
@@ -2083,6 +2129,64 @@ mod tests {
         let result = session.handle_query("build wibble(1)=3, wibble(2)=6, wibble(4)=12");
         assert_eq!(result.route, QueryRoute::SynthesizeFunction);
         assert!(result.success, "response={}", result.response);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// W1: a failed teach-by-examples falls through to the never-wrong front door,
+    /// which SYNTHESIZES a generalizing program (2n+1 via the holdout tier — no
+    /// model server needed) and returns it VERIFIED, not the honest failure. This
+    /// is the wire that makes the model tier + distillation reachable from the
+    /// product (they live inside the same `answer()` this reaches).
+    #[test]
+    fn w1_teach_fallback_reaches_verified_front_door() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("w1_fallback");
+        fs::create_dir_all(&root).unwrap();
+        let session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+        // 2n+1, six examples so the holdout tier (needs >=4, holds out 2) fires.
+        let ex = [(0i64, 1i64), (1, 3), (2, 5), (3, 7), (4, 9), (5, 11)];
+        let fail = crate::learn_nl::LearnOutcome {
+            success: false,
+            message: "engine could not synthesize".into(),
+            method: None,
+        };
+        let out = session.teach_via_verified_front_door("f", &ex, fail);
+        assert!(out.success, "front door should synthesize 2n+1: {}", out.message);
+        assert!(
+            out.method.as_deref().unwrap_or("").starts_with("verified-nl-router:"),
+            "method={:?}",
+            out.method
+        );
+        // The returned program actually reproduces the taught examples (never-wrong).
+        let bench: Vec<_> = ex
+            .iter()
+            .map(|(i, o)| crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Int(*i)],
+                expected: crate::benchmark::Value::Int(*o),
+            })
+            .collect();
+        assert!(crate::runtime::code_reproduces_examples(&out.message, &bench));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// W1 never-wrong: when neither the engine NOR the front door can verify a
+    /// program, the honest failure is returned UNCHANGED — the fallback never
+    /// fabricates a confident wrong answer from under-determined examples.
+    #[test]
+    fn w1_teach_fallback_preserves_never_wrong() {
+        let _guard = SESSION_TEST_LOCK.lock().unwrap();
+        let root = temp_root("w1_neverwrong");
+        fs::create_dir_all(&root).unwrap();
+        let session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+        // Non-generalizing noise: any fit to a seed fails the held-out points.
+        let noise = [(100i64, 105i64), (50, 52), (73, 30), (12, 99), (8, 3), (64, 77)];
+        let fail = crate::learn_nl::LearnOutcome {
+            success: false,
+            message: "no generalizing op".into(),
+            method: Some("engine".into()),
+        };
+        let out = session.teach_via_verified_front_door("predict", &noise, fail.clone());
+        assert_eq!(out, fail, "noise must return the honest failure unchanged");
         let _ = fs::remove_dir_all(root);
     }
 
