@@ -694,6 +694,8 @@ enum WordShape {
     LongestWord,
     /// The single shortest word (first on a length tie).
     ShortestWord,
+    /// First character of each word, concatenated (initials): "hi there" -> "ht".
+    Initials,
 }
 
 impl WordShape {
@@ -705,6 +707,7 @@ impl WordShape {
             WordShape::ReverseWordOrder => "reverse_word_order",
             WordShape::LongestWord => "longest_word",
             WordShape::ShortestWord => "shortest_word",
+            WordShape::Initials => "initials",
         }
     }
 }
@@ -762,6 +765,11 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             }
             best.to_string()
         }
+        // First char of each word, joined with "" (empty word contributes "").
+        WordShape::Initials => words
+            .iter()
+            .map(|w| w.chars().next().map(String::from).unwrap_or_default())
+            .collect::<String>(),
     }
 }
 
@@ -789,6 +797,9 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::ShortestWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    best: string = words[0];\n    i: i64 = 1;\n    while i < words.len {{\n        if words[i].len < best.len {{\n            best = words[i];\n        }}\n        i = i + 1;\n    }}\n    return best;\n}}\n"
         ),
+        WordShape::Initials => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].slice(0, 1));\n        i = i + 1;\n    }}\n    return out.join(\"\");\n}}\n"
+        ),
     }
 }
 
@@ -813,13 +824,14 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 6] = [
+    const SHAPES: [WordShape; 7] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
         WordShape::ReverseWordOrder,
         WordShape::LongestWord,
         WordShape::ShortestWord,
+        WordShape::Initials,
     ];
     for sep in SEPS {
         // A word shape only applies to GENUINE multi-word input: at least one
@@ -1005,6 +1017,16 @@ mod tests {
         let p = vec!["s".to_string()];
         let r = synthesize_word_program(&p, &[wex("aaa bb c", "c"), wex("hello hi", "hi")]);
         assert_eq!(r.map(|r| r.method), Some("word-shortest_word".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_initials() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(
+            &p,
+            &[wex("hello world", "hw"), wex("the quick brown", "tqb"), wex("a b c", "abc")],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-initials".to_string()));
     }
 
     /// Reachability probe: is longest-word solved by THIS synthesizer, or shadowed
