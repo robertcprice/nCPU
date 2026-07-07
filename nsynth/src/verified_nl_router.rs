@@ -1060,6 +1060,65 @@ mod tests {
     }
 
     #[test]
+    fn adversarial_intent_sweep_is_never_confidently_wrong() {
+        use crate::benchmark::{Example, Value};
+        let iv = |x: i64| Value::Int(x);
+        let av = |a: &[i64]| Value::int_array(a);
+        let ex = |i: Vec<Value>, o: Value| Example { inputs: i, expected: o };
+        // (prompt, NON-distinguishing examples, fresh DISTINGUISHING input, intended out).
+        // Each may SOLVE-correct or REFUSE, but must NEVER return a program that
+        // disagrees with the intended output on the fresh input (confident-wrong).
+        // These are the coincidental-op traps found by the adversarial sweep.
+        let cases: Vec<(&str, Vec<Example>, Vec<Value>, Value)> = vec![
+            // sum coincides with max_subarray_sum on all-positive input
+            (
+                "the sum of a list of numbers",
+                vec![ex(vec![av(&[1, 2, 3])], iv(6)), ex(vec![av(&[10, 20])], iv(30)), ex(vec![av(&[4, 4, 4])], iv(12)), ex(vec![av(&[5])], iv(5))],
+                vec![av(&[-1, 5])],
+                iv(4),
+            ),
+            // reverse coincides with sort-descending on ascending input
+            (
+                "reverse a list of numbers",
+                vec![ex(vec![av(&[1, 2, 3])], av(&[3, 2, 1])), ex(vec![av(&[1, 2])], av(&[2, 1])), ex(vec![av(&[4, 5, 6, 7])], av(&[7, 6, 5, 4])), ex(vec![av(&[9])], av(&[9]))],
+                vec![av(&[3, 1, 2])],
+                av(&[2, 1, 3]),
+            ),
+            // double coincides with tetrahedral_number at {0,2}
+            (
+                "double a number",
+                vec![ex(vec![iv(0)], iv(0)), ex(vec![iv(2)], iv(4)), ex(vec![iv(1)], iv(2)), ex(vec![iv(3)], iv(6))],
+                vec![iv(5)],
+                iv(10),
+            ),
+            // minimum coincides with `first` on ascending input
+            (
+                "the minimum value in a list",
+                vec![ex(vec![av(&[1, 2, 3])], iv(1)), ex(vec![av(&[5, 9])], iv(5)), ex(vec![av(&[2, 4, 8])], iv(2)), ex(vec![av(&[0, 7])], iv(0))],
+                vec![av(&[9, 1, 5])],
+                iv(1),
+            ),
+        ];
+        for (prompt, exs, fresh, intended) in cases {
+            let code = match answer(prompt, &exs) {
+                Answer::Library { code, .. }
+                | Answer::Composition { code }
+                | Answer::Synthesized { code, .. }
+                | Answer::Proposed { code, .. } => code,
+                Answer::Refused => continue, // honest refusal is allowed
+            };
+            let entry = crate::site::fn_name_from_mog(&code).unwrap_or_else(|| "f".to_string());
+            if let Ok(got) = crate::runtime::execute_function(&code, &entry, &fresh, "probe") {
+                assert_eq!(
+                    format!("{got:?}"),
+                    format!("{intended:?}"),
+                    "CONFIDENT-WRONG on '{prompt}': fresh {fresh:?} -> {got:?}, intended {intended:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn candidacy_requires_an_operation_token_not_a_generic_type_noun() {
         // "double a number": the only op-name token shared with tetrahedral_NUMBER is
         // the generic type noun "number" -> it must NOT be proposed (it coincides with
