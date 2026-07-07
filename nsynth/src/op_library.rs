@@ -453,6 +453,18 @@ pub const OPS: &[LibOp] = &[
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:
 "fn list_max(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] > m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
+    // fib_list(n) -> [fib_0 .. fib_n]. Every fibonacci-SEQUENCE task (iterative /
+    // memoized / recursive / binet / cached) emits the SAME list, so try_library
+    // matches them all via one `library:fib_list` — the sort pattern again.
+    LibOp { name: "fib_list", arity: 1, mog:
+"fn fib_list(n: i64) -> [i64] {\n    out: [i64] = [];\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 0;\n    while i <= n {\n        out.push(a);\n        next: i64 = a + b;\n        a = b;\n        b = next;\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    // Base PARSE primitives (string digits -> int) — the inverse of the base-string
+    // build lane. parse_hex is case-insensitive. Any binary/hex-string-to-int task
+    // matches by execution regardless of its function name.
+    LibOp { name: "parse_binary", arity: 1, mog:
+"fn parse_binary(s: string) -> i64 {\n    total: i64 = 0;\n    i: i64 = 0;\n    n: i64 = s.len;\n    while i < n {\n        c: string = s[i];\n        d: i64 = 0;\n        if c == \"1\" { d = 1; }\n        total = total * 2 + d;\n        i = i + 1;\n    }\n    return total;\n}\n" },
+    LibOp { name: "parse_hex", arity: 1, mog:
+"fn parse_hex(s: string) -> i64 {\n    total: i64 = 0;\n    i: i64 = 0;\n    n: i64 = s.len;\n    while i < n {\n        c: string = s[i];\n        d: i64 = 0;\n        if c == \"1\" { d = 1; } if c == \"2\" { d = 2; } if c == \"3\" { d = 3; } if c == \"4\" { d = 4; } if c == \"5\" { d = 5; } if c == \"6\" { d = 6; } if c == \"7\" { d = 7; } if c == \"8\" { d = 8; } if c == \"9\" { d = 9; }\n        if c == \"a\" { d = 10; } if c == \"A\" { d = 10; } if c == \"b\" { d = 11; } if c == \"B\" { d = 11; } if c == \"c\" { d = 12; } if c == \"C\" { d = 12; } if c == \"d\" { d = 13; } if c == \"D\" { d = 13; } if c == \"e\" { d = 14; } if c == \"E\" { d = 14; } if c == \"f\" { d = 15; } if c == \"F\" { d = 15; }\n        total = total * 16 + d;\n        i = i + 1;\n    }\n    return total;\n}\n" },
     LibOp { name: "sum_last_k", arity: 2, mog:
 "fn sum_last_k(arr: [i64], k: i64) -> i64 {\n    s: i64 = 0;\n    i: i64 = arr.len - k;\n    if i < 0 {\n        i = 0;\n    }\n    while i < arr.len {\n        s = s + arr[i];\n        i = i + 1;\n    }\n    return s;\n}\n" },
     LibOp { name: "count_greater_than", arity: 2, mog:
