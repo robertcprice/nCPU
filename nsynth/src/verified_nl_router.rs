@@ -913,6 +913,14 @@ fn fresh_probe_inputs(examples: &[crate::benchmark::Example]) -> Vec<Vec<crate::
                         }
                     }
                 }
+                // NOTE: string probes were tried here but REVERTED. They correctly made
+                // the tier-1 gate refuse under-determined string tasks (already-upper
+                // examples don't distinguish to_upper from identity), but that exposed a
+                // SEPARATE tier-3 hole — `typed-enum-str` returns a lookup table that
+                // memorizes the examples and falls back to identity for unseen input,
+                // shipping a confident-wrong (abc->abc for "uppercase"). Adding string
+                // probes without fixing that memorization regresses correct cases, so
+                // strings stay unprobed until the tier-3 lookup-table overfit is gated.
             }
         }
     }
