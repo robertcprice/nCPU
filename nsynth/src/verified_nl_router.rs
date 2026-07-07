@@ -550,13 +550,36 @@ pub fn answer_with_proposer(
             // seed subset; if the two programs disagree on fresh probes, the examples
             // don't pin the function down -> refuse rather than guess. A determined
             // task yields the same behaviour from both seeds and passes.
-            let seed2 = &examples[holdout..];
-            let disagree = solve_on(seed2)
-                .map(|(_, code2, entry2)| {
-                    programs_disagree(&[(code.clone(), entry.clone()), (code2, entry2)], examples)
-                })
-                .unwrap_or(false);
-            if !disagree {
+            // Hypotheses to corroborate the synthesis against on fresh probes:
+            //  (1) an independent synthesis on a DIFFERENT seed subset (catches a lone
+            //      overfit that fits under-determined examples), and
+            //  (2) the NL-TOP library op that also reproduces the examples — the
+            //      interpretation the prompt most names. If the synthesis disagrees
+            //      with (2), the prompt points at a different function than the one
+            //      synthesized ("sum of the SQUARES" whose 0/1 examples let a plain
+            //      sum coincide) -> refuse. Only the SINGLE top passer is used, not
+            //      every passer: a lower-ranked coincidental op (max_subarray_sum for
+            //      "sum of a list") must NOT veto a correct synthesis the NL-top agrees
+            //      with, else legit all-positive sum would over-refuse.
+            let mut progs: Vec<(String, String)> = vec![(code.clone(), entry.clone())];
+            if let Some((_, code2, entry2)) = solve_on(&examples[holdout..]) {
+                progs.push((code2, entry2));
+            }
+            let input_types: Vec<&'static str> = examples
+                .first()
+                .map(|e| e.inputs.iter().map(value_type_str).collect())
+                .unwrap_or_default();
+            if let Some(op) = ranked_candidates(prompt)
+                .into_iter()
+                .filter(|op| op_accepts_types(op.mog, &input_types))
+                .take(12)
+                .find(|op| crate::runtime::code_reproduces_examples(op.mog, examples))
+            {
+                if let Some(en) = op_entry_name(op.mog) {
+                    progs.push((op.mog.to_string(), en.to_string()));
+                }
+            }
+            if !programs_disagree(&progs, examples) {
                 return Answer::Synthesized { method, code };
             }
         }
@@ -1097,6 +1120,14 @@ mod tests {
                 vec![ex(vec![av(&[1, 2, 3])], iv(1)), ex(vec![av(&[5, 9])], iv(5)), ex(vec![av(&[2, 4, 8])], iv(2)), ex(vec![av(&[0, 7])], iv(0))],
                 vec![av(&[9, 1, 5])],
                 iv(1),
+            ),
+            // sum-of-squares coincides with a plain sum when every element is 0/1
+            // (x*x == x) — tier-3 must not ship the coincidence over the NL-top op.
+            (
+                "the sum of the squares of a list of numbers",
+                vec![ex(vec![av(&[0, 1, 1])], iv(2)), ex(vec![av(&[1, 0])], iv(1)), ex(vec![av(&[1, 1, 1])], iv(3)), ex(vec![av(&[0, 0, 1])], iv(1))],
+                vec![av(&[2, 3])],
+                iv(13),
             ),
         ];
         for (prompt, exs, fresh, intended) in cases {
