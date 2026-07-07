@@ -1237,7 +1237,28 @@ pub fn build_backend_ask(root: &std::path::Path, english: &str, ask: &BackendAsk
         let names: Vec<&str> = ask.rule_names.iter().map(String::as_str).collect();
         write_backend_unified(&out, english, &names, None, ask.store)?;
     }
-    Ok(vec!["backend/main.rs".to_string()])
+    // Make it a runnable project: Cargo.toml + README so `cargo run` serves it.
+    let dir = root.join("backend");
+    let cargo = "[package]\nname = \"backend\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"server\"\npath = \"main.rs\"\n";
+    std::fs::write(dir.join("Cargo.toml"), cargo).map_err(|e| e.to_string())?;
+    let resources = detect_resources(english);
+    let ui = if resources.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n## Admin UI + resources\n\nOpen <http://127.0.0.1:7800/> for a web app over: {}.\nEach also has a REST API: `GET/POST /<name>`, `GET/PUT/DELETE /<name>/<id>`.\n",
+            resources.join(", ")
+        )
+    };
+    let readme = format!(
+        "# Generated backend\n\nA dependency-free HTTP server (Rust stdlib).\n\n## Run\n\n```\ncargo run --release -- --port 7800\n```\n\n`GET /health` returns status.{ui}"
+    );
+    std::fs::write(dir.join("README.md"), readme).map_err(|e| e.to_string())?;
+    Ok(vec![
+        "backend/main.rs".to_string(),
+        "backend/Cargo.toml".to_string(),
+        "backend/README.md".to_string(),
+    ])
 }
 
 #[cfg(test)]
@@ -1330,7 +1351,10 @@ mod backend_ask_tests {
         let english = "make me an api with a health check";
         let ask = comprehend_backend_prose(english).expect("ask");
         let written = build_backend_ask(&root, english, &ask).expect("build (compile-gated)");
-        assert_eq!(written, vec!["backend/main.rs".to_string()]);
+        assert!(written.contains(&"backend/main.rs".to_string()));
+        // A runnable project: Cargo.toml + README written alongside.
+        assert!(written.contains(&"backend/Cargo.toml".to_string()));
+        assert!(root.join("backend/Cargo.toml").is_file() && root.join("backend/README.md").is_file());
         let src = std::fs::read_to_string(root.join("backend/main.rs")).unwrap();
         assert!(src.contains("/health"), "health route present");
         let _ = std::fs::remove_dir_all(&root);

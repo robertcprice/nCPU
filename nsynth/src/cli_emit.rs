@@ -118,16 +118,29 @@ pub fn build_cli_ask(
     let (rust, fn_name, examples) =
         crate::backend_intake::synthesize_rust_fn_from_prose(english, &ask.name)?;
     let cli = emit_cli_rust(&fn_name, &rust, &[CliArg::Int]);
-    if let Some((inp, out)) = examples.first() {
+    let example = examples.first().copied();
+    if let Some((inp, out)) = example {
         verify_cli(&cli, &[&inp.to_string()], &out.to_string())?;
     }
-    let out_path = root.join("cli/main.rs");
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&out_path, cli).map_err(|e| e.to_string())?;
-    Ok(vec!["cli/main.rs".to_string()])
+    // Write a runnable project, not a bare file: main.rs + Cargo.toml + README, so
+    // the user can `cargo run -- <n>` (or `rustc main.rs`) immediately.
+    let dir = root.join("cli");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("main.rs"), &cli).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("Cargo.toml"), CLI_CARGO_TOML).map_err(|e| e.to_string())?;
+    let sample = example.map(|(i, _)| i).unwrap_or(5);
+    let readme = format!(
+        "# {fn_name} — generated CLI\n\nA verified command-line tool wrapping `{fn_name}`.\n\n## Run\n\n```\ncargo run --release -- {sample}\n```\n\nor without cargo:\n\n```\nrustc -O main.rs -o tool && ./tool {sample}\n```\n"
+    );
+    std::fs::write(dir.join("README.md"), readme).map_err(|e| e.to_string())?;
+    Ok(vec![
+        "cli/main.rs".to_string(),
+        "cli/Cargo.toml".to_string(),
+        "cli/README.md".to_string(),
+    ])
 }
+
+const CLI_CARGO_TOML: &str = "[package]\nname = \"cli-tool\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"tool\"\npath = \"main.rs\"\n";
 
 #[cfg(test)]
 mod tests {
