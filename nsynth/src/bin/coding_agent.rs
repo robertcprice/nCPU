@@ -204,6 +204,35 @@ fn main() {
         process::exit(2);
     }
 
+    // PURE-EXAMPLE FAST PATH: a spec that is just `name: a->b, c->d` (no natural
+    // language) is the natural on-device input — solve it directly through the
+    // verified synthesizer instead of dead-ending at the NL classifier's
+    // "what kind of task is this?" clarification. Falls through to the NL front
+    // door on a refusal.
+    if let Some((name, examples)) = parse_example_spec(query.trim()) {
+        if let Some(code) = solve_example_spec(&name, &examples) {
+            if json_out {
+                let value = serde_json::json!({
+                    "route": "SynthesizeFunction",
+                    "success": true,
+                    "workflow": "pure_example_pbe",
+                    "response": code,
+                });
+                println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
+            } else {
+                println!("route: SynthesizeFunction");
+                println!("workflow: pure_example_pbe");
+                println!("success: true");
+                println!("---");
+                println!("{code}");
+            }
+            if let Some(lang) = &emit_lang {
+                emit_source_from_code(&code, lang);
+            }
+            return;
+        }
+    }
+
     let result = session.handle_query(query.trim());
     emit_result(&result, json_out);
     if let Some(lang) = &emit_lang {
@@ -220,29 +249,31 @@ fn main() {
 /// language the Pi/phone already has (Python/JS/Go/Java), so the verified logic can
 /// drop straight into the device's own stack without shipping a Rust toolchain.
 fn emit_target_source(result: &AgentQueryResult, lang: &str) {
-    use mog_synth::mog_transpile as tp;
     if !result.success {
         eprintln!("--emit: nothing to emit (query did not solve)");
         return;
     }
     // The verified Mog function is embedded in the response; pull it out with the
     // brace-matched extractor (handles the `fn NAME(..) -> RET { .. }` block).
-    let src = match mog_synth::doc_ingest::extract_rust_fn_sources(&result.response)
+    match mog_synth::doc_ingest::extract_rust_fn_sources(&result.response)
         .into_iter()
         .next()
     {
-        Some((_name, src)) => src,
-        None => {
-            eprintln!("--emit: no function found in the result to transpile");
-            return;
-        }
-    };
+        Some((_name, src)) => emit_source_from_code(&src, lang),
+        None => eprintln!("--emit: no function found in the result to transpile"),
+    }
+}
+
+/// Transpile a verified Mog function to a device-native language and print it.
+/// Shared by `--emit` (from an NL result) and the pure-example fast path.
+fn emit_source_from_code(code: &str, lang: &str) {
+    use mog_synth::mog_transpile as tp;
     let out = match lang.to_ascii_lowercase().as_str() {
-        "python" | "py" => tp::to_python(&src),
-        "rust" | "rs" => tp::to_rust(&src),
-        "typescript" | "ts" => tp::to_typescript(&src),
-        "go" => tp::to_go(&src),
-        "java" => tp::to_java(&src),
+        "python" | "py" => tp::to_python(code),
+        "rust" | "rs" => tp::to_rust(code),
+        "typescript" | "ts" => tp::to_typescript(code),
+        "go" => tp::to_go(code),
+        "java" => tp::to_java(code),
         other => {
             eprintln!("--emit: unknown language '{other}' (python|rust|typescript|go|java)");
             return;
@@ -250,6 +281,100 @@ fn emit_target_source(result: &AgentQueryResult, lang: &str) {
     };
     println!("--- emit:{} ---", lang.to_ascii_lowercase());
     println!("{out}");
+}
+
+/// Parse a PURE example-list spec — `f: 0->7, 1->10, 2->17`, `add: 2,3->5, 10,4->14`,
+/// or bare `2->4, 3->6, 5->10` — into (name, examples). Returns None the moment the
+/// query carries natural language (anything beyond an optional leading `name:` and
+/// numeric pairs), so real NL still goes to the front door. Integers before an arrow
+/// are that pair's inputs; the first integer after it is the output; any remaining
+/// integers belong to the next pair.
+fn parse_example_spec(query: &str) -> Option<(String, Vec<mog_synth::benchmark::Example>)> {
+    use mog_synth::benchmark::{Example, Value};
+    let q = query.trim();
+    if !q.contains("->") {
+        return None;
+    }
+    let is_ident = |s: &str| -> bool {
+        let mut chars = s.chars();
+        matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let (name, body) = match q.split_once(':') {
+        Some((head, rest)) if is_ident(head.trim()) => (head.trim().to_string(), rest.trim()),
+        _ => ("f".to_string(), q),
+    };
+    // A pure spec contains only digits, separators, and the arrow — no NL.
+    if !body
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '-' | '>' | ',' | ' ' | '\t'))
+    {
+        return None;
+    }
+    let parse_ints = |s: &str| -> Vec<i64> {
+        s.split(',').filter_map(|t| t.trim().parse::<i64>().ok()).collect()
+    };
+    let parts: Vec<&str> = body.split("->").collect();
+    if parts.len() < 3 {
+        return None; // need >= 2 pairs (arrows), not a single point
+    }
+    let mut examples = Vec::new();
+    let mut pending = parse_ints(parts[0]);
+    for mid in &parts[1..parts.len() - 1] {
+        let ints = parse_ints(mid);
+        if ints.is_empty() || pending.is_empty() {
+            return None;
+        }
+        examples.push(Example {
+            inputs: pending.iter().map(|&v| Value::Int(v)).collect(),
+            expected: Value::Int(ints[0]),
+        });
+        pending = ints[1..].to_vec();
+    }
+    let last = parse_ints(parts[parts.len() - 1]);
+    if last.len() != 1 || pending.is_empty() {
+        return None;
+    }
+    examples.push(Example {
+        inputs: pending.iter().map(|&v| Value::Int(v)).collect(),
+        expected: Value::Int(last[0]),
+    });
+    let arity = examples[0].inputs.len();
+    if examples.iter().any(|e| e.inputs.len() != arity) {
+        return None;
+    }
+    Some((name, examples))
+}
+
+/// Solve a pure-example spec directly through the verified synthesizer, bypassing
+/// the NL classifier. Strict-verifies before returning — never emits an unproven
+/// program. Returns the verified Mog code, or None on refusal.
+fn solve_example_spec(name: &str, examples: &[mog_synth::benchmark::Example]) -> Option<String> {
+    let sig: &'static str = Box::leak(
+        mog_synth::linguigenesis_bridge::infer_signature(name, examples).into_boxed_str(),
+    );
+    let problem = mog_synth::benchmark::Problem {
+        name: name.to_string(),
+        category: "cli-pbe",
+        description: "",
+        signature: sig,
+        examples: examples.to_vec(),
+        ..Default::default()
+    };
+    let res = mog_synth::solver::solve_problem(&problem);
+    if !res.success {
+        return None;
+    }
+    if mog_synth::runtime::verify_problem_code_strict(&problem, &res.code).is_err() {
+        return None;
+    }
+    // Same memorization guard as the teach path: refuse a fit whose magic constants
+    // rival the data they explain (the examples underdetermine the op). Keeps the
+    // CLI fast path from emitting an uncorroborated memorized closed form.
+    if mog_synth::synth_confidence::is_memorization_overfit(&res.code, examples) {
+        return None;
+    }
+    Some(res.code)
 }
 
 fn emit_result(result: &AgentQueryResult, json_out: bool) {
