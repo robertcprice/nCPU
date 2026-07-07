@@ -1,0 +1,25 @@
+{"id":1,"text":"greatest common divisor of two numbers","examples":[{"in":[12,18],"out":6},{"in":[24,36],"out":12},{"in":[7,13],"out":1}]}
+{"id":2,"text":"least common multiple of two numbers","examples":[{"in":[4,6],"out":12},{"in":[3,5],"out":15}]}
+{"id":3,"text":"factorial of a number","examples":[{"in":[5],"out":120},{"in":[0],"out":1},{"in":[4],"out":24}]}
+{"id":4,"text":"check whether a number is prime","examples":[{"in":[7],"out":true},{"in":[8],"out":false},{"in":[2],"out":true}]}
+{"id":5,"text":"sum of the digits of a number","examples":[{"in":[123],"out":6},{"in":[40],"out":4}]}
+{"id":6,"text":"count the vowels in a string","examples":[{"in":["hello"],"out":2},{"in":["sky"],"out":0}]}
+{"id":7,"text":"reverse a string","examples":[{"in":["abc"],"out":"cba"},{"in":["hi"],"out":"ih"}]}
+{"id":8,"text":"convert a string to uppercase","examples":[{"in":["abc"],"out":"ABC"},{"in":["Hi"],"out":"HI"}]}
+{"id":9,"text":"sort a list of numbers","examples":[{"in":[[3,1,2]],"out":[1,2,3]},{"in":[[9,0,5]],"out":[0,5,9]}]}
+{"id":10,"text":"convert a number to roman numerals","examples":[{"in":[4],"out":"IV"},{"in":[49],"out":"XLIX"}]}
+{"id":11,"text":"convert a number to binary","examples":[{"in":[5],"out":"0b101"},{"in":[8],"out":"0b1000"}]}
+{"id":12,"text":"the prime factors of a number","examples":[{"in":[60],"out":[2,2,3,5]},{"in":[17],"out":[17]}]}
+{"id":13,"text":"all divisors of a number","examples":[{"in":[6],"out":[1,2,3,6]},{"in":[12],"out":[1,2,3,4,6,12]}]}
+{"id":14,"text":"the nth fibonacci number","examples":[{"in":[10],"out":55},{"in":[7],"out":13}]}
+{"id":15,"text":"raise a number to a power","examples":[{"in":[2,3],"out":8},{"in":[5,2],"out":25}]}
+{"id":16,"text":"count how many divisors a number has","examples":[{"in":[6],"out":4},{"in":[12],"out":6}]}
+{"id":17,"text":"length of a string","examples":[{"in":["hello"],"out":5},{"in":[""],"out":0}]}
+{"id":18,"text":"is the number even","examples":[{"in":[4],"out":true},{"in":[7],"out":false}]}
+{"id":19,"text":"largest digit in a number","examples":[{"in":[273],"out":7},{"in":[19],"out":9}]}
+{"id":20,"text":"convert a string to lowercase","examples":[{"in":["ABC"],"out":"abc"},{"in":["Hi"],"out":"hi"}]}
+{"id":21,"text":"solve the traveling salesman problem","examples":[{"in":[[0,1,2]],"out":3}]}
+{"id":22,"text":"the edit distance between two strings","examples":[{"in":["cat","cut"],"out":1}]}
+{"id":23,"text":"check if parentheses are balanced","examples":[{"in":["(())"],"out":true},{"in":["(()"],"out":false}]}
+{"id":24,"text":"encrypt this with a secret cipher","examples":[{"in":["abc"],"out":"xyz"}]}
+{"id":25,"text":"predict tomorrow's stock price","examples":[{"in":[100],"out":105}]}

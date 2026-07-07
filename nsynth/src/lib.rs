@@ -25,6 +25,7 @@ pub mod emergent_rule_learning;
 pub mod eval;
 pub mod execution;
 pub mod foreign_op;
+pub mod synth_confidence;
 pub mod ffi;
 pub mod http;
 pub mod hybrid;
