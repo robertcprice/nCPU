@@ -970,7 +970,7 @@ pub fn try_library(problem: &Problem) -> Option<SolveResult> {
         if code_reproduces_examples(op.mog, &problem.examples) {
             return Some(SolveResult {
                 success: true,
-                code: op.mog.to_string(),
+                code: rename_entry_fn(op.mog, &problem.function_name()),
                 method: format!("library:{}", op.name),
                 error: None,
                 metadata: Default::default(),
@@ -978,6 +978,27 @@ pub fn try_library(problem: &Problem) -> Option<SolveResult> {
         }
     }
     try_learned(problem, arity)
+}
+
+/// The entry (first-declared) function name of a Mog program, or "" if none.
+fn entry_fn_name(mog: &str) -> &str {
+    mog.split("fn ").nth(1).and_then(|s| s.split('(').next()).map(str::trim).unwrap_or("")
+}
+
+/// Rename a matched op's ENTRY fn (and any recursive self-calls) to the problem's
+/// expected function name. A library/learned op's own name often differs from the
+/// task it solves (e.g. `is_palindrome` solving `palindrome_check`); the verifier
+/// invokes the task's entry name, so returning the op verbatim yields an
+/// `undefined variable '<task>'` failure even though the LOGIC is correct. We
+/// replace `srcname(` -> `target(` everywhere: this renames the `fn srcname(`
+/// declaration AND any recursive `srcname(...)` calls, while the trailing `(`
+/// boundary prevents hitting a longer helper that merely shares the prefix.
+fn rename_entry_fn(mog: &str, target: &str) -> String {
+    let src = entry_fn_name(mog);
+    if src.is_empty() || src == target || target.is_empty() {
+        return mog.to_string();
+    }
+    mog.replace(&format!("{src}("), &format!("{target}("))
 }
 
 /// Does the entry fn's parameter list type-match the given input values? Parses
@@ -1026,7 +1047,7 @@ fn try_learned(problem: &Problem, arity: usize) -> Option<SolveResult> {
         if code_reproduces_examples(&op.mog, &problem.examples) {
             return Some(SolveResult {
                 success: true,
-                code: op.mog.clone(),
+                code: rename_entry_fn(&op.mog, &problem.function_name()),
                 method: format!("library-learned:{}", op.name),
                 error: None,
                 metadata: Default::default(),
