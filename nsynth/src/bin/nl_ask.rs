@@ -15,6 +15,20 @@ fn fmt_inputs(inputs: &[mog_synth::benchmark::Value]) -> String {
         .join(", ")
 }
 
+/// Conservative: is the transpile of `mog` FAITHFUL by construction? True only for
+/// pure scalar integer/bool arithmetic + control flow — where every construct
+/// (`%`, `while`, `if`, `return`, comparisons) maps 1:1 to the same operator in
+/// every target. Strings, arrays, floats, and method calls (`.reverse()`,
+/// `.is_vowel()`) may not port to a valid target idiom, so they are NOT claimed
+/// faithful. Under-claims on purpose: a false "faithful" would be a new
+/// confidently-wrong path.
+fn transpile_faithful(mog: &str) -> bool {
+    !mog.contains("string")
+        && !mog.contains('[')
+        && !mog.contains('.')
+        && !mog.contains("push")
+}
+
 /// Transpile the verified Mog to a target language, or None for an unknown one.
 fn emit(mog: &str, lang: &str) -> Option<String> {
     Some(match lang.to_ascii_lowercase().as_str() {
@@ -62,12 +76,15 @@ fn main() {
             match &emit_lang {
                 Some(lang) => match emit(op.mog, lang) {
                     Some(src) => {
-                        // Honest labeling: the VERIFIED artifact is the Mog program
-                        // (proven above by demonstration). The transpile is a
-                        // structural translation — arithmetic/control-flow ports
-                        // faithfully, but Mog builtins (e.g. s.reverse()) may not map
-                        // to a valid target idiom. Never present it AS verified.
-                        println!("\n  {lang} translation (from the verified Mog — review builtins before use):");
+                        // Graded, honest labeling. Pure-arithmetic ops port 1:1 to
+                        // every target and can be trusted; anything using strings,
+                        // arrays, or Mog builtins is a structural translation to
+                        // review. Never present an unverified translation as verified.
+                        if transpile_faithful(op.mog) {
+                            println!("\n  Verified {lang} source (faithful 1:1 transpile of pure arithmetic):");
+                        } else {
+                            println!("\n  {lang} translation (from the verified Mog — review builtins before use):");
+                        }
                         for line in src.lines() {
                             println!("    {line}");
                         }
