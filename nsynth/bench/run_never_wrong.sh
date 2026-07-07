@@ -12,3 +12,9 @@ while read -r row; do printf '%s' "$row" | timeout 6 "$BIN" 2>/dev/null >> /tmp/
 echo "=== never-wrong eval ==="
 awk '{print $1}' /tmp/nw_results.txt | sort | uniq -c
 echo "WRONG (must be 0): $(grep -c '^WRONG' /tmp/nw_results.txt)"
+
+# Stress-prove the invariant: thousands of generated tasks (valid/corrupted/weak/thin),
+# assert a returned op always reproduces its examples. Violations must be 0.
+echo "=== invariant fuzz ==="
+cargo build --release --bin nl_fuzz 2>&1 | grep -E '^error' && exit 1 || true
+./target/release/nl_fuzz "${1:-3000}"

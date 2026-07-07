@@ -1608,7 +1608,7 @@ fn tree_to_runtime_value(nodes: &[crate::benchmark::TreeNode]) -> Value {
 /// on iteration order — it sorts the int payloads before packing a `Pair`/`Quad`
 /// (the oracle compares pairs/quads as a multiset, so a fixed canonical order is
 /// both deterministic and equivalent).
-pub(crate) fn benchmark_value_from_runtime(value: &Value) -> Result<BenchmarkValue, String> {
+pub fn benchmark_value_from_runtime(value: &Value) -> Result<BenchmarkValue, String> {
     match value {
         Value::Int(v) => Ok(BenchmarkValue::Int(*v)),
         Value::Float(v) => Ok(BenchmarkValue::Float(v.to_bits())),

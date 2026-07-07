@@ -199,9 +199,18 @@ pub fn route_verified(prompt: &str, examples: &[crate::benchmark::Example]) -> O
         return None; // no oracle -> cannot confirm -> refuse rather than guess
     }
     const MAX_TRIED: usize = 12;
-    // Collect EVERY candidate that reproduces the examples (not just the first).
+    // Type-aware pre-filter: drop candidates whose parameter types can't accept the
+    // example inputs BEFORE spending the top-MAX_TRIED budget on them. A string op
+    // can never solve an int task, so proposing it only wastes a gate execution and
+    // risks crowding the right op out of the budget. Correctness is unaffected (the
+    // gate already rejects mismatches) — this improves recall and speed.
+    let input_types: Vec<&'static str> = examples
+        .first()
+        .map(|e| e.inputs.iter().map(value_type_str).collect())
+        .unwrap_or_default();
     let passing: Vec<&'static LibOp> = ranked_candidates(prompt)
         .into_iter()
+        .filter(|op| op_accepts_types(op.mog, &input_types))
         .take(MAX_TRIED)
         .filter(|op| crate::runtime::code_reproduces_examples(op.mog, examples))
         .collect();
@@ -227,6 +236,47 @@ pub fn route_verified(prompt: &str, examples: &[crate::benchmark::Example]) -> O
 /// The entry function name of an op program (first `fn <name>(`).
 fn op_entry_name(mog: &str) -> Option<&str> {
     mog.split("fn ").nth(1)?.split('(').next().map(str::trim)
+}
+
+/// The Mog parameter type an example input value would be declared as.
+fn value_type_str(v: &crate::benchmark::Value) -> &'static str {
+    use crate::benchmark::Value;
+    match v {
+        Value::Int(_) => "i64",
+        Value::Bool(_) => "bool",
+        Value::Str(_) => "string",
+        Value::Float(_) => "f64",
+        Value::Array(_) => "[i64]",
+        _ => "?",
+    }
+}
+
+/// True if the op's entry signature can accept inputs of `input_types` — same arity
+/// and each declared param type matches (an unknown `?` input type is permissive so
+/// we never wrongly EXCLUDE a candidate the gate could still verify). Empty input
+/// types (no examples) -> permissive.
+fn op_accepts_types(mog: &str, input_types: &[&str]) -> bool {
+    if input_types.is_empty() {
+        return true;
+    }
+    let Some(open) = mog.find('(') else { return true };
+    let Some(rel_close) = mog[open..].find(')') else { return true };
+    let inner = mog[open + 1..open + rel_close].trim();
+    let params: Vec<&str> = if inner.is_empty() {
+        vec![]
+    } else {
+        inner
+            .split(',')
+            .filter_map(|p| p.split(':').nth(1).map(str::trim))
+            .collect()
+    };
+    if params.len() != input_types.len() {
+        return false;
+    }
+    params
+        .iter()
+        .zip(input_types)
+        .all(|(declared, got)| *got == "?" || declared == got)
 }
 
 /// True if any two passing ops produce DIFFERENT outputs on some fresh probe input
