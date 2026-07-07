@@ -213,32 +213,74 @@ impl CodingAgentSession {
             }
         }
 
-        // NEVER-WRONG ROUTING (no examples). If the prose CONFIDENTLY names a single
-        // verified library op — a unique strict name match or acronym, gated by a
-        // type cue so a scalar op can't answer a list request — synthesize THAT op
-        // directly. This is correct-or-refuse by construction: `declare` returns None
-        // on anything ambiguous or type-mismatched, so it never converts a good route
-        // into a confident wrong one; those fall through to the normal comprehension
-        // path below (which may still refuse or, with examples, verify). It fixes the
-        // bare-NL front door where the guessing path mis-resolved (e.g. "count the
-        // even numbers" -> is_even, "the digits of a number" -> a wrong universal fit).
-        if let Some(op) = crate::verified_nl_router::declare(query) {
-            // Return the op's OWN verified reference implementation (`op.mog`) — correct
-            // by construction. (Do NOT re-synthesize via the solver: from an op's few
-            // example_cases it can overfit to a wrong closed form, e.g. gcd ->
-            // `(a-6)%(b-6)`, or fail outright.)
-            let result = AgentQueryResult {
-                route: QueryRoute::SynthesizeFunction,
-                success: true,
-                response: op.mog.to_string(),
-                workflow: "synthesize_function".to_string(),
-                clarification_questions: Vec::new(),
-                synthesis_method: Some(format!("verified-nl-router:declare:{}", op.name)),
-                repo_result: None,
-                tool_trace: Vec::new(),
-            };
-            self.record_result(query, &result);
-            return result;
+        // NEVER-WRONG FRONT DOOR. Split the query into its NL prompt and any inline
+        // I/O examples, then route through the verified `answer()` stack: a library op,
+        // a 2-op composition, full engine synthesis, or a gated model proposal — each
+        // VERIFIED against the examples (or, with no examples, an unambiguous name /
+        // acronym match). Correctness is by VERIFICATION, never a phrase-matched guess:
+        // a type-wrong candidate (reverse_number on a list, all_divisors for a count)
+        // is EXECUTED against the examples, fails, and is refused — generally, no
+        // per-case rules. Falls through to the legacy comprehension path only on Refuse.
+        {
+            let (nl, examples) = crate::verified_nl_router::split_prompt_examples(query);
+            let prompt = if nl.is_empty() { query.to_string() } else { nl };
+            match crate::verified_nl_router::answer(&prompt, &examples) {
+                crate::verified_nl_router::Answer::Refused => {
+                    // If the query CARRIED examples, it is a function-synthesis request
+                    // and answer() already tried the whole verified stack (library /
+                    // composition / synthesis / gated model). Its refusal is FINAL:
+                    // refuse honestly rather than fall through to the legacy guessing
+                    // path, which would ship a confident-wrong answer with no oracle.
+                    // With NO examples the query may be a site/project/teach request the
+                    // op-router can't recognize, so those still fall through below.
+                    if !examples.is_empty() {
+                        let result = AgentQueryResult {
+                            route: QueryRoute::SynthesizeFunction,
+                            success: false,
+                            response: format!(
+                                "no verified program for `{prompt}` — the examples underdetermine it or the engine can't synthesize it (would not guess)"
+                            ),
+                            workflow: "synthesize_function".to_string(),
+                            clarification_questions: Vec::new(),
+                            synthesis_method: Some("verified-nl-router:refused".to_string()),
+                            repo_result: None,
+                            tool_trace: Vec::new(),
+                        };
+                        self.record_result(query, &result);
+                        return result;
+                    }
+                }
+                ans => {
+                    use crate::verified_nl_router::Answer;
+                    let (method, code) = match ans {
+                        Answer::Library { name, code } => {
+                            (format!("verified-nl-router:library:{name}"), code)
+                        }
+                        Answer::Composition { code } => {
+                            ("verified-nl-router:composition".to_string(), code)
+                        }
+                        Answer::Synthesized { method, code } => {
+                            (format!("verified-nl-router:synth:{method}"), code)
+                        }
+                        Answer::Proposed { method, code } => {
+                            (format!("verified-nl-router:proposed:{method}"), code)
+                        }
+                        Answer::Refused => unreachable!(),
+                    };
+                    let result = AgentQueryResult {
+                        route: QueryRoute::SynthesizeFunction,
+                        success: true,
+                        response: code,
+                        workflow: "synthesize_function".to_string(),
+                        clarification_questions: Vec::new(),
+                        synthesis_method: Some(method),
+                        repo_result: None,
+                        tool_trace: Vec::new(),
+                    };
+                    self.record_result(query, &result);
+                    return result;
+                }
+            }
         }
 
         // REFERENCE INTAKE (UNWALL-3-REFERENCE-INTAKE-NL): if the request CARRIES

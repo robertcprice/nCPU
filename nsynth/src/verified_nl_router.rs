@@ -348,6 +348,115 @@ pub fn answer(prompt: &str, examples: &[crate::benchmark::Example]) -> Answer {
     answer_with_proposer(prompt, examples, Some(&live_proposer))
 }
 
+/// Split a raw query into its NL PROMPT and any inline I/O EXAMPLES it carries.
+/// Examples are signalled by `->`. Forms handled generally (no per-case matching):
+///   "multiply two numbers: 2,3->6, 4,5->20"  -> ("multiply two numbers", [..])
+///   "reverse a list: [1,2,3]->[3,2,1]"        -> ("reverse a list", [..])
+///   "0->7, 1->10, 2->17"                       -> ("", [..])
+///   "multiply two numbers"                     -> ("multiply two numbers", [])
+/// Values parse as int / float / bool / "string" / [int,..]; a top-level comma
+/// separates operands and pairs, commas inside `[..]`/`"..."` do not.
+pub fn split_prompt_examples(query: &str) -> (String, Vec<crate::benchmark::Example>) {
+    let q = query.trim();
+    if !q.contains("->") {
+        return (q.to_string(), Vec::new());
+    }
+    // "<NL>: <examples>" when the tail after the first colon carries the arrows;
+    // otherwise the whole string is the example region (no NL prefix).
+    let (nl, body) = match q.split_once(':') {
+        Some((head, tail)) if tail.contains("->") => (head.trim().to_string(), tail.trim()),
+        _ => (String::new(), q),
+    };
+    (nl, parse_arrow_examples(body))
+}
+
+/// Parse `"INPUTS -> OUT, INPUTS -> OUT, ..."`. Integers before an arrow are that
+/// pair's inputs; the first value after it is the output; remaining values belong to
+/// the next pair — so multi-arg examples (`2,3->5, 4,5->9`) split correctly.
+fn parse_arrow_examples(body: &str) -> Vec<crate::benchmark::Example> {
+    use crate::benchmark::Example;
+    let parts: Vec<&str> = body.split("->").collect();
+    if parts.len() < 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut pending = parse_values(parts[0]);
+    for mid in &parts[1..parts.len() - 1] {
+        let vals = parse_values(mid);
+        if vals.is_empty() || pending.is_empty() {
+            return out;
+        }
+        out.push(Example { inputs: pending.clone(), expected: vals[0].clone() });
+        pending = vals[1..].to_vec();
+    }
+    let last = parse_values(parts[parts.len() - 1]);
+    if last.len() == 1 && !pending.is_empty() {
+        out.push(Example { inputs: pending, expected: last[0].clone() });
+    }
+    out
+}
+
+/// Split at top-level commas (not inside `[..]` or `"..."`), parsing each token.
+fn parse_values(s: &str) -> Vec<crate::benchmark::Value> {
+    let mut vals = Vec::new();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut last = 0usize;
+    let bytes = s.as_bytes();
+    for (i, &c) in bytes.iter().enumerate() {
+        match c {
+            b'"' => in_str = !in_str,
+            b'[' if !in_str => depth += 1,
+            b']' if !in_str => depth -= 1,
+            b',' if !in_str && depth == 0 => {
+                if let Some(v) = parse_value(&s[last..i]) {
+                    vals.push(v);
+                }
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if let Some(v) = parse_value(&s[last..]) {
+        vals.push(v);
+    }
+    vals
+}
+
+/// One literal token -> Value: int, float, bool, `"string"`, or `[int,..]`.
+fn parse_value(tok: &str) -> Option<crate::benchmark::Value> {
+    use crate::benchmark::Value;
+    let t = tok.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Ok(i) = t.parse::<i64>() {
+        return Some(Value::Int(i));
+    }
+    match t {
+        "true" => return Some(Value::Bool(true)),
+        "false" => return Some(Value::Bool(false)),
+        _ => {}
+    }
+    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+        return Some(Value::Str(t[1..t.len() - 1].to_string()));
+    }
+    if t.starts_with('[') && t.ends_with(']') {
+        let inner = &t[1..t.len() - 1];
+        if inner.trim().is_empty() {
+            return Some(Value::int_array(&[]));
+        }
+        let ints: Option<Vec<i64>> = inner.split(',').map(|x| x.trim().parse::<i64>().ok()).collect();
+        if let Some(ints) = ints {
+            return Some(Value::int_array(&ints));
+        }
+    }
+    if let Ok(f) = t.parse::<f64>() {
+        return Some(Value::Float(f.to_bits()));
+    }
+    None
+}
+
 /// [`answer`] with an explicit model proposer (tier 4). Tiers 1-3 (library op,
 /// composition, full synthesis) are the model-free never-wrong core; tier 4 lets a
 /// MODEL propose a program for the hard tail the engine can't synthesize — gated the
@@ -479,64 +588,12 @@ pub fn declare(prompt: &str) -> Option<&'static LibOp> {
         return Some(acro[0]);
     }
     // Otherwise a unique strict name match (every op-name token present, one winner).
-    let r = route(prompt)?;
-    // TYPE-CUE mismatch. The prompt names a CONTAINER (list/array/string)
-    // but the matched op takes a SCALAR (e.g. `reverse_number` for "reverse a list of
-    // numbers", or `is_even` for "the even numbers"). A wrong-typed op can't be the
-    // confident single answer — refuse.
-    if prompt_names_container(prompt) && op_takes_scalar(r.op) {
-        return None;
-    }
-    // OUTPUT-CUE mismatch. The prompt asks for a COUNT ("number of" / "how many") but
-    // the matched op returns a CONTAINER (e.g. `all_divisors` returns the divisor LIST,
-    // not the count). Wrong-shaped answer — refuse.
-    if prompt_asks_count(prompt) && op_returns_container(r.op) {
-        return None;
-    }
-    Some(r.op)
-}
-
-/// The prompt asks for a scalar COUNT of something.
-fn prompt_asks_count(prompt: &str) -> bool {
-    let p = prompt.to_ascii_lowercase();
-    p.contains("number of") || p.contains("how many") || p.contains("count of")
-}
-
-/// The op's RETURN type is a container (`[..]`/`string`) rather than a scalar.
-fn op_returns_container(op: &LibOp) -> bool {
-    let ret = op
-        .mog
-        .split_once("->")
-        .and_then(|(_, r)| r.split_once('{'))
-        .map(|(t, _)| t.trim())
-        .unwrap_or("");
-    ret.contains('[') || ret.contains("string")
-}
-
-/// The prompt explicitly names a container/aggregate input.
-fn prompt_names_container(prompt: &str) -> bool {
-    let p = prompt.to_ascii_lowercase();
-    ["list", "array", "vec", "sequence", "elements", "string", "text", "characters"]
-        .iter()
-        .any(|c| p.contains(c))
-}
-
-/// The op's FIRST parameter is a scalar (`i64`/`bool`) rather than a container
-/// (`[..]`/`string`). Read from `op.mog`'s signature: `fn NAME(p: TYPE, ..) -> RET`.
-fn op_takes_scalar(op: &LibOp) -> bool {
-    let params = op
-        .mog
-        .split_once('(')
-        .and_then(|(_, r)| r.split_once(')'))
-        .map(|(a, _)| a)
-        .unwrap_or("");
-    let first_ty = params
-        .split(',')
-        .next()
-        .and_then(|p| p.split_once(':'))
-        .map(|(_, t)| t.trim())
-        .unwrap_or("");
-    !(first_ty.contains('[') || first_ty.contains("string") || first_ty.contains("str"))
+    // No hardcoded type/phrase guards here: a no-example declare is a token-grounded
+    // GUESS by nature, and the honest never-wrong correctness gate is VERIFICATION —
+    // `answer()` executes each candidate against the caller's examples, which rejects a
+    // type-wrong op (reverse_number on a list, all_divisors for a count) FOR ANY case,
+    // no phrase list required. Route callers that have examples through `answer()`.
+    route(prompt).map(|r| r.op)
 }
 
 /// NO-EXAMPLES composition. A prompt like "reverse then uppercase a string" names

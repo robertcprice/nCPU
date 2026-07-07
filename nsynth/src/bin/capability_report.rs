@@ -51,11 +51,41 @@ fn json_to_value(v: &serde_json::Value) -> Option<Value> {
 
 /// One of SOLVED / WRONG / REFUSED / TENTATIVE_OK / TENTATIVE_MISS / SKIP —
 /// identical taxonomy to `nl_diag`, computed in-process for the whole battery.
+fn fmt_val(v: &Value) -> String {
+    match v {
+        Value::Int(i) => i.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Str(s) => format!("\"{s}\""),
+        Value::Float(bits) => {
+            let f = f64::from_bits(*bits);
+            let s = f.to_string();
+            if s.contains('.') || s.contains('e') { s } else { format!("{s}.0") }
+        }
+        Value::Array(a) => format!("[{}]", a.iter().map(fmt_val).collect::<Vec<_>>().join(",")),
+        other => format!("{other:?}"),
+    }
+}
+
 fn classify(id: i64, text: &str, exs: &[Example]) -> (&'static str, String) {
     let root = std::env::temp_dir().join(format!("caprep_{id}_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&root);
     let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
-    let r = session.handle_query(text);
+    // Realistic query: the NL description PLUS the inline examples the user would give
+    // (`text: in->out, ...`). handle_query splits them and routes through the verified
+    // answer() stack. Set NSYNTH_CAP_BARE=1 to measure the no-examples front door.
+    let query = if std::env::var("NSYNTH_CAP_BARE").is_ok() || exs.is_empty() {
+        text.to_string()
+    } else {
+        let pairs: Vec<String> = exs
+            .iter()
+            .map(|e| {
+                let ins = e.inputs.iter().map(fmt_val).collect::<Vec<_>>().join(",");
+                format!("{ins}->{}", fmt_val(&e.expected))
+            })
+            .collect();
+        format!("{text}: {}", pairs.join(", "))
+    };
+    let r = session.handle_query(&query);
     let _ = std::fs::remove_dir_all(&root);
 
     let method = r.synthesis_method.clone().unwrap_or_else(|| format!("{:?}", r.route));
