@@ -91,6 +91,20 @@ fn main() {
         println!("{}", json_line(f));
     }
 
+    // Close the resolver-merge loop: if NSYNTH_DOC_SURFACE_FORMS points somewhere,
+    // append the gated overlay there so the bridge enriches matching ops on its
+    // next load (decorate-existing-only; unknown lemmas are dropped at merge time).
+    if let Ok(overlay) = std::env::var("NSYNTH_DOC_SURFACE_FORMS") {
+        let path = std::path::Path::new(&overlay);
+        let mut all = mog_synth::doc_ingest::read_surface_forms_jsonl(path);
+        all.extend(gated);
+        if let Err(e) = mog_synth::doc_ingest::write_surface_forms_jsonl(path, &all) {
+            eprintln!("warning: could not write overlay {overlay}: {e}");
+        } else {
+            eprintln!("appended overlay -> {overlay} ({} total forms)", all.len());
+        }
+    }
+
     if cloned {
         let _ = std::fs::remove_dir_all(&dir);
     }

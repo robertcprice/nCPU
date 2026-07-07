@@ -330,6 +330,37 @@ impl LinguigenesisBridge {
         }
     }
 
+    /// RESOLVER-MERGE of doc_ingest surface forms (opt-in via the
+    /// `NSYNTH_DOC_SURFACE_FORMS` JSONL path). DECORATE-EXISTING-ONLY: for each
+    /// mined form whose lemma matches an EXISTING op entity, append its terms as
+    /// `phrase_surfaces` — enriching that op's resolution recall with real
+    /// doc-derived vocabulary (e.g. gcd gains "greatest, common, divisor"). Unknown
+    /// lemmas are DROPPED, so a noisy corpus can only enrich real ops, never inject
+    /// spurious entities. Unset env => zero change (no regression).
+    fn merge_doc_surface_forms(registry: &mut Registry) {
+        let Ok(path) = std::env::var("NSYNTH_DOC_SURFACE_FORMS") else {
+            return;
+        };
+        let forms = crate::doc_ingest::read_surface_forms_jsonl(std::path::Path::new(&path));
+        let mut enriched = 0usize;
+        for sf in &forms {
+            if sf.lemma == "<project>" || sf.terms.is_empty() {
+                continue;
+            }
+            if registry.get_by_lemma(&sf.lemma).is_some() {
+                let donor = sf.terms.join(", ");
+                if registry.append_phrase_surfaces(&sf.lemma, &donor).is_ok() {
+                    enriched += 1;
+                }
+            }
+        }
+        if enriched > 0 {
+            eprintln!(
+                "[Linguigenesis] doc-ingest: enriched {enriched} existing ops with mined surface forms"
+            );
+        }
+    }
+
     /// Collision-safe merge of the WordNet edge file into an ALREADY-populated
     /// registry. Each NEW closure word is re-added with a FRESH high id (base +
     /// 1000+, mirroring `merge_computing_knowledge`) so it never overwrites a
@@ -511,6 +542,9 @@ impl LinguigenesisBridge {
         // Activate the dormant emergent type-mismatch gate by declaring the value-
         // type vocabulary it compares against (additive, idempotent).
         Self::ensure_value_type_vocabulary(registry);
+        // RESOLVER-MERGE: enrich existing ops with doc-ingest-mined surface forms
+        // (opt-in, decorate-existing-only). Off by default => zero change.
+        Self::merge_doc_surface_forms(registry);
         // Repair cross-file synonym danglers: edges DECLARED in coding_registry.json
         // that point to ops living in mined_capabilities.json (e.g. flip/invert ->
         // reverse) are dropped at coding load (target absent then). Now that mined is

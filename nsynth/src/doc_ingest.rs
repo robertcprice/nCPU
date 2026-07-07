@@ -21,11 +21,35 @@ pub struct DocSymbol {
 /// Auto-derived NL surface form for a symbol: candidate terms a prompt might use
 /// to mean this symbol, plus a one-line gloss. Merges into the resolver as recall
 /// vocabulary (same role as capability_miner's hand-authored nl_surface).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SurfaceForm {
     pub lemma: String,
     pub terms: Vec<String>,
     pub gloss: String,
+}
+
+/// Write surface forms as line-delimited JSON (the resolver-merge overlay file).
+pub fn write_surface_forms_jsonl(path: &std::path::Path, forms: &[SurfaceForm]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut f = std::fs::File::create(path)?;
+    for sf in forms {
+        writeln!(f, "{}", serde_json::to_string(sf).unwrap_or_default())?;
+    }
+    Ok(())
+}
+
+/// Read surface forms from a JSONL overlay file (skips malformed lines).
+pub fn read_surface_forms_jsonl(path: &std::path::Path) -> Vec<SurfaceForm> {
+    std::fs::read_to_string(path)
+        .map(|s| {
+            s.lines()
+                .filter_map(|l| serde_json::from_str::<SurfaceForm>(l.trim()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 const STOPWORDS: &[&str] = &[
