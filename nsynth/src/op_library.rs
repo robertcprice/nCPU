@@ -159,6 +159,46 @@ pub fn maybe_record_learned(problem: &Problem, result: &SolveResult) {
     record_learned_op(name, arity, result.code.clone());
 }
 
+/// Distill a VERIFIED MODEL-PROPOSED program into the learned store, so a FUTURE
+/// run solves the same task MODEL-FREE at the synthesis tier (`try_library` →
+/// `try_learned`) before the model is ever consulted — the engine permanently
+/// ABSORBS the model's capability. The model teaches once.
+///
+/// Unlike [`maybe_record_learned`] this SKIPS the differential-consensus gate. That
+/// gate requires an INDEPENDENT re-synthesis to agree — but the whole point of the
+/// model tier is tasks the engine CANNOT synthesize, so consensus would reject
+/// exactly the novel capability we want to keep. Soundness is preserved without it:
+///   (a) the caller records only AFTER the program reproduced every example incl. the
+///       held-out ones + passed strict-verify (never-wrong evidence), and
+///   (b) every FUTURE use re-verifies the learned op against that future task's own
+///       examples (incl. held-out) before it can fire — the store is never trusted
+///       blindly. A bad persisted op is at worst dead weight (capped, deduped).
+/// The cheap param-use + semantic-contract guards keep degenerate constants out.
+pub fn record_proposed_op(problem: &Problem, code: &str) -> bool {
+    if learned_ops_path().is_none() {
+        return false;
+    }
+    let Some(first) = problem.examples.first() else { return false };
+    let arity = first.inputs.len();
+    // Reject input-ignoring constants (see maybe_record_learned).
+    if !body_uses_a_parameter(code) {
+        return false;
+    }
+    // Already covered by a hand-written or previously-learned op — nothing to absorb.
+    if try_library(problem).is_some() {
+        return false;
+    }
+    // Semantic-contract oracle: if the task name implies a decidable contract, the
+    // program must honor it on the sample inputs (a cheap independent check).
+    let fn_name = problem.function_name();
+    if crate::constraint_oracle::check_op_semantics(code, &fn_name, &fn_name, &first.inputs).is_err()
+    {
+        return false;
+    }
+    let name = format!("proposed_{}", short_hash(code));
+    record_learned_op(name, arity, code.to_string())
+}
+
 fn short_hash(s: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -1308,6 +1348,60 @@ mod tests {
 
         // Clean up so other tests see an empty store.
         learned_store().lock().unwrap().clear();
+    }
+
+    /// DISTILLATION (model -> engine): a verified MODEL-PROPOSED program — an
+    /// algorithm the engine cannot synthesize on its own — is absorbed into the
+    /// learned store by `record_proposed_op`, so the SAME task is thereafter solved
+    /// MODEL-FREE via the synthesis library tier. The model teaches the engine once.
+    #[test]
+    fn proposed_op_is_distilled_and_reused_model_free() {
+        let path = std::env::temp_dir()
+            .join(format!("nsynth_distill_{}_{}.jsonl", std::process::id(), line!()));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("NSYNTH_LEARNED_OPS_PATH", &path);
+        learned_store().lock().unwrap().clear();
+
+        // nth prime: no hand-written op, beyond the engine's own synthesis.
+        let prime = "fn f(n: i64) -> i64 {\n    count: i64 = 0;\n    cand: i64 = 1;\n    while count < n {\n        cand = cand + 1;\n        is_p: i64 = 1;\n        d: i64 = 2;\n        while (d * d) <= cand {\n            if (cand % d) == 0 {\n                is_p = 0;\n            }\n            d = d + 1;\n        }\n        if is_p == 1 {\n            count = count + 1;\n        }\n    }\n    return cand;\n}\n";
+        let task = problem_with(
+            "f",
+            "fn f(n: i64) -> i64",
+            vec![
+                (vec![Value::Int(1)], Value::Int(2)),
+                (vec![Value::Int(2)], Value::Int(3)),
+                (vec![Value::Int(5)], Value::Int(11)),
+            ],
+        );
+        // Precondition: neither hand ops nor the (cleared) store solve it.
+        assert!(try_library(&task).is_none(), "nth-prime must not be pre-covered");
+
+        // Distill the verified proposal into the learned store.
+        assert!(record_proposed_op(&task, prime), "should record the proposed op");
+
+        // Now the SAME task is solved model-free by the distilled op.
+        let r = try_library(&task).expect("distilled op should solve nth-prime model-free");
+        assert!(r.method.starts_with("library-learned:"), "got {}", r.method);
+        // ...and it genuinely generalises to a held-out input (8th prime = 19).
+        assert!(code_reproduces_examples(
+            &r.code,
+            &[Example { inputs: vec![Value::Int(8)], expected: Value::Int(19) }]
+        ));
+
+        // A degenerate constant proposal is never distilled (would pollute the store).
+        let constant_task = problem_with(
+            "f",
+            "fn f(n: i64) -> i64",
+            vec![(vec![Value::Int(3)], Value::Int(7)), (vec![Value::Int(9)], Value::Int(7))],
+        );
+        assert!(
+            !record_proposed_op(&constant_task, "fn f(n: i64) -> i64 {\n    return 7;\n}\n"),
+            "input-ignoring constant must not be distilled"
+        );
+
+        learned_store().lock().unwrap().clear();
+        std::env::remove_var("NSYNTH_LEARNED_OPS_PATH");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
