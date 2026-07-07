@@ -132,3 +132,57 @@ fn synthesize_from_description_auto_falls_back_to_llm() {
     assert!(r.success, "auto-fallback must yield a verified program");
     assert!(r.code.contains("for ") && r.code.contains("arr"), "expected array fold: {}", r.code);
 }
+
+/// Gated e2e for the REPO-REPAIR model tier (A1): a repo fn beyond deterministic
+/// synthesis (`has_dup` over a Vec — no registry match, and the scalar test-miner
+/// can't reach it) is repaired by the gated local model through the FULL RepoAgent
+/// loop, with `cargo test` as the acceptance oracle. Skips unless a local model is
+/// serving at NSYNTH_LOCAL_LLM_URL.
+#[test]
+fn gated_model_repairs_repo_beyond_deterministic_synthesis() {
+    if mog_synth::local_llm::propose_rust_fn("a function returning its i64 argument unchanged", None, 0.0)
+        .is_none()
+    {
+        eprintln!("skip: no local model at NSYNTH_LOCAL_LLM_URL");
+        return;
+    }
+    use mog_synth::agent::repo::RepoAgent;
+    use mog_synth::agent::runtime::CodeTaskSpec;
+    use mog_synth::agent::CodingIntent;
+    use mog_synth::agent::GuardrailPolicy;
+    use std::fs;
+
+    let root = std::env::temp_dir().join(format!("nsynth_gated_repair_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"gr\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn has_dup(v: Vec<i64>) -> bool {\n    false\n}\n\n#[cfg(test)]\nmod tests {\n    use super::has_dup;\n    #[test]\n    fn t() {\n        assert_eq!(has_dup(vec![1, 2, 3]), false);\n        assert_eq!(has_dup(vec![1, 2, 2]), true);\n        assert_eq!(has_dup(vec![5, 5]), true);\n    }\n}\n",
+    )
+    .unwrap();
+
+    let issue = "the has_dup function should return whether the list contains any duplicate value";
+    let intent = CodingIntent::from_nl_lenient(issue).expect("intent");
+    let spec = CodeTaskSpec::from_nl(
+        root.to_string_lossy(),
+        issue,
+        intent,
+        "cargo test".to_string(),
+        vec!["src/**".into()],
+        3,
+    );
+    let mut agent = RepoAgent::new(&root, GuardrailPolicy::default());
+    let result = agent.run(&spec);
+    assert!(!result.baseline_passed, "fixture must start broken");
+    assert!(
+        result.final_passed && result.success,
+        "gated model must repair has_dup (cargo-test gated); phases={:?}",
+        result.phases_completed
+    );
+    let _ = fs::remove_dir_all(root);
+}

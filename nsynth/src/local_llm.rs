@@ -380,7 +380,12 @@ pub fn propose_program(
             {"role": "user", "content": user}
         ],
         "temperature": temperature,
-        "max_tokens": 1200
+        "max_tokens": 2500,
+        // Reasoning models (Qwen3.x) otherwise spend 2000+ tokens "thinking" — slow
+        // (>2min, curl times out) and the code lands after a wall of prose. Disable
+        // it: with thinking off + the in-prompt Mog example, Qwen writes correct Mog
+        // in ~8s. Ignored by templates without this flag (e.g. Gemma).
+        "chat_template_kwargs": {"enable_thinking": false}
     });
     let out = Command::new("curl")
         .args([
@@ -456,25 +461,30 @@ pub fn propose_rust_fn(request: &str, prior: Option<(&str, &str)>, temperature: 
 /// Extract a Mog function from the model output: prefer a fenced ``` block; else
 /// take from the first `fn ` through its balanced closing brace.
 fn extract_code(content: &str) -> Option<String> {
-    // Fenced block: between the first ``` and the next ```. Strip an optional
-    // language tag on the fence line (```mog / ```rust / ```python) — a bare word
-    // up to the newline — so the tag never leaks into the extracted code.
-    if let Some(start) = content.find("```") {
-        let after = &content[start + 3..];
-        let after = match after.find('\n') {
-            Some(nl) if !after[..nl].trim().is_empty()
-                && after[..nl].trim().chars().all(|c| c.is_ascii_alphanumeric()) =>
+    // Fenced blocks. A REASONING model (Qwen3.5, etc.) emits DRAFT code blocks in its
+    // thinking before the final answer, so scan ALL ``` fences and keep the LAST block
+    // that defines a function — that is the finished program, not a scratch draft.
+    // Strip an optional language tag on the fence line so it never leaks into the code.
+    let parts: Vec<&str> = content.split("```").collect();
+    // Blocks are the odd-indexed segments between fences.
+    let mut best: Option<String> = None;
+    for block in parts.iter().skip(1).step_by(2) {
+        let body = match block.find('\n') {
+            Some(nl)
+                if !block[..nl].trim().is_empty()
+                    && block[..nl].trim().chars().all(|c| c.is_ascii_alphanumeric()) =>
             {
-                &after[nl + 1..]
+                &block[nl + 1..]
             }
-            _ => after.strip_prefix('\n').unwrap_or(after),
+            _ => block.strip_prefix('\n').unwrap_or(block),
         };
-        if let Some(end) = after.find("```") {
-            let code = after[..end].trim();
-            if code.contains("fn ") {
-                return Some(code.to_string());
-            }
+        let code = body.trim();
+        if code.contains("fn ") {
+            best = Some(code.to_string());
         }
+    }
+    if best.is_some() {
+        return best;
     }
     // Fallback: from `fn ` to the matching closing brace.
     let fn_pos = content.find("fn ")?;
