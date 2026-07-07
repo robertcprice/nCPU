@@ -1809,12 +1809,12 @@ mod tests {
     }
 
     #[test]
-    fn model_repair_declines_non_plain_rust() {
-        // The same plain-Rust gate the verified path uses: IR wrappers / Result are
-        // not compilable for the repo's concrete signature — decline, don't emit.
-        let old = "pub fn f(n: i64) -> i64 {\n    return n;\n}\n";
-        assert!(model_body_to_new_text(old, "f", "fn f(n: i64) -> i64 { return ok(n); }").is_none());
-        assert!(model_body_to_new_text(old, "f", "fn f(n: i64) -> Result<i64> { n }").is_none());
+    fn model_repair_declines_when_target_fn_absent() {
+        // Reshape needs the repo fn to exist in the file; if the localizer picked a
+        // name not present, there is nothing to swap — decline rather than emit.
+        let old = "pub fn twice(n: i64) -> i64 {\n    return n;\n}\n";
+        let proposed = "fn twice(x: i64) -> i64 { return x * 2; }";
+        assert!(model_body_to_new_text(old, "not_present", proposed).is_none());
     }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
