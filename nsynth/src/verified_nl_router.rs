@@ -249,6 +249,9 @@ pub fn route_composed(prompt: &str, examples: &[crate::benchmark::Example]) -> O
     let out_ty = value_type_str(&first.expected);
     let cands: Vec<&'static LibOp> = ranked_candidates(prompt).into_iter().take(8).collect();
     let fname = "composed";
+    // Collect EVERY chain that reproduces the examples (not just the first), so the
+    // distinguishing gate can catch a spec that two different chains both satisfy.
+    let mut chains: Vec<String> = Vec::new();
     for a in &cands {
         let (a_params, a_ret) = op_sig_types(a.mog);
         if a_params.len() != 1 || a_params[0] != in_ty {
@@ -271,11 +274,22 @@ pub fn route_composed(prompt: &str, examples: &[crate::benchmark::Example]) -> O
                 b.mog.trim_end()
             );
             if crate::runtime::code_reproduces_examples(&code, examples) {
-                return Some(code);
+                chains.push(code);
             }
         }
     }
-    None
+    let first = chains.first()?.clone();
+    // Distinguishing-power gate (same as single ops): if two distinct chains both
+    // satisfy the examples but DIVERGE on fresh inputs, the spec is under-determined
+    // -> refuse rather than return a possibly-wrong chain.
+    if chains.len() > 1 {
+        let progs: Vec<(String, String)> =
+            chains.iter().map(|c| (c.clone(), fname.to_string())).collect();
+        if programs_disagree(&progs, examples) {
+            return None;
+        }
+    }
+    Some(first)
 }
 
 /// The entry function name of an op program (first `fn <name>(`).
@@ -433,17 +447,19 @@ fn op_accepts_types(mog: &str, input_types: &[&str]) -> bool {
 /// (an input NOT in the examples). Fresh inputs are small perturbations of the
 /// example inputs (scalar ints nudged); an input on which the ops diverge proves the
 /// examples failed to distinguish them.
-fn passers_disagree(passing: &[&'static LibOp], examples: &[crate::benchmark::Example]) -> bool {
+/// True if any two candidate PROGRAMS produce a different output on some fresh probe
+/// input. Each program is (source, entry-fn-name). This is the distinguishing gate,
+/// generalized to program level so a SINGLE op and a COMPOSITION are gated the same
+/// way — the never-wrong guarantee stays uniform across both answer paths.
+fn programs_disagree(programs: &[(String, String)], examples: &[crate::benchmark::Example]) -> bool {
     let probes = fresh_probe_inputs(examples);
-    let names: Vec<Option<&str>> = passing.iter().map(|op| op_entry_name(op.mog)).collect();
     for inputs in &probes {
         // runtime::Value has no PartialEq, so compare its deterministic Debug form.
         let mut seen: Option<String> = None;
-        for (op, name) in passing.iter().zip(&names) {
-            let Some(name) = name else { continue };
+        for (code, name) in programs {
             // Only successful evaluations count; an error is not a disagreement
-            // signal (an op simply undefined on a probe input tells us nothing).
-            if let Ok(out) = crate::runtime::execute_function(op.mog, name, inputs, "nl_probe") {
+            // signal (a program simply undefined on a probe input tells us nothing).
+            if let Ok(out) = crate::runtime::execute_function(code, name, inputs, "nl_probe") {
                 let key = format!("{out:?}");
                 match &seen {
                     Some(prev) if *prev != key => return true, // divergence found
@@ -454,6 +470,15 @@ fn passers_disagree(passing: &[&'static LibOp], examples: &[crate::benchmark::Ex
         }
     }
     false
+}
+
+/// Convenience: run [`programs_disagree`] over a set of single library ops.
+fn passers_disagree(passing: &[&'static LibOp], examples: &[crate::benchmark::Example]) -> bool {
+    let progs: Vec<(String, String)> = passing
+        .iter()
+        .filter_map(|op| op_entry_name(op.mog).map(|n| (op.mog.to_string(), n.to_string())))
+        .collect();
+    programs_disagree(&progs, examples)
 }
 
 /// Fresh probe inputs: each example's input tuple with one scalar-int position

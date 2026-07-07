@@ -15,18 +15,20 @@ fn fmt_inputs(inputs: &[mog_synth::benchmark::Value]) -> String {
         .join(", ")
 }
 
-/// Conservative: is the transpile of `mog` FAITHFUL by construction? True only for
-/// pure scalar integer/bool arithmetic + control flow — where every construct
-/// (`%`, `while`, `if`, `return`, comparisons) maps 1:1 to the same operator in
-/// every target. Strings, arrays, floats, and method calls (`.reverse()`,
-/// `.is_vowel()`) may not port to a valid target idiom, so they are NOT claimed
-/// faithful. Under-claims on purpose: a false "faithful" would be a new
-/// confidently-wrong path.
-fn transpile_faithful(mog: &str) -> bool {
-    !mog.contains("string")
-        && !mog.contains('[')
-        && !mog.contains('.')
-        && !mog.contains("push")
+/// Conservative + TARGET-AWARE: is the transpile of `mog` to `lang` faithful by
+/// construction? Two conditions must both hold:
+///   1. Pure scalar int/bool arithmetic + control flow (no strings, arrays, floats,
+///      or Mog builtins like `.reverse()` — those may not port to a valid idiom).
+///   2. The target has Mog's i64 integer semantics. rust/go/java use fixed 64-bit
+///      ints; python uses arbitrary-precision (bigint) and typescript/js use float64
+///      `number` — so an arithmetic result that overflows i64 (e.g. factorial(25))
+///      DIVERGES from Mog on those targets. Claiming "faithful" there would be a new
+///      confidently-wrong path, so it isn't claimed.
+fn transpile_faithful(mog: &str, lang: &str) -> bool {
+    let pure_arith =
+        !mog.contains("string") && !mog.contains('[') && !mog.contains('.') && !mog.contains("push");
+    let i64_target = matches!(lang.to_ascii_lowercase().as_str(), "rust" | "rs" | "go" | "java");
+    pure_arith && i64_target
 }
 
 /// Transpile the verified Mog to a target language, or None for an unknown one.
@@ -80,10 +82,10 @@ fn main() {
                         // every target and can be trusted; anything using strings,
                         // arrays, or Mog builtins is a structural translation to
                         // review. Never present an unverified translation as verified.
-                        if transpile_faithful(op.mog) {
-                            println!("\n  Verified {lang} source (faithful 1:1 transpile of pure arithmetic):");
+                        if transpile_faithful(op.mog, lang) {
+                            println!("\n  Verified {lang} source (faithful 1:1 transpile — i64 arithmetic):");
                         } else {
-                            println!("\n  {lang} translation (from the verified Mog — review builtins before use):");
+                            println!("\n  {lang} translation (from the verified Mog — review builtins / integer width before use):");
                         }
                         for line in src.lines() {
                             println!("    {line}");

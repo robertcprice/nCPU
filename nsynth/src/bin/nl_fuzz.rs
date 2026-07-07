@@ -14,7 +14,7 @@
 use mog_synth::benchmark::{Example, Value};
 use mog_synth::op_library::OPS;
 use mog_synth::runtime::{benchmark_value_from_runtime, code_reproduces_examples, execute_function};
-use mog_synth::verified_nl_router::route_verified;
+use mog_synth::verified_nl_router::{route_composed, route_verified};
 
 /// Deterministic linear-congruential RNG (no external crate, reproducible).
 struct Lcg(u64);
@@ -135,6 +135,47 @@ fn main() {
                     }
                 }
                 None => refused += 1,
+            }
+        }
+
+        // COMPOSITION task: build examples for a real chain b(a(x)) and assert
+        // route_composed only ever returns a chain that reproduces them. Only a
+        // unary source op chains simply here.
+        if tys.len() == 1 {
+            let b = rng.pick(OPS);
+            if b.name != op.name {
+                let bname = entry_name(b.mog);
+                let mut cex: Vec<Example> = Vec::new();
+                let mut att = 0;
+                while cex.len() < 4 && att < 30 {
+                    att += 1;
+                    let Some(input) = gen_value(&tys[0], &mut rng) else { break };
+                    let Ok(y) = execute_function(op.mog, name, &[input.clone()], "fuzz") else { continue };
+                    let Ok(yb) = benchmark_value_from_runtime(&y) else { continue };
+                    if let Ok(z) = execute_function(b.mog, bname, &[yb], "fuzz") {
+                        if let Ok(zb) = benchmark_value_from_runtime(&z) {
+                            cex.push(Example { inputs: vec![input], expected: zb });
+                        }
+                    }
+                }
+                if cex.len() >= 3 {
+                    let cprompt =
+                        format!("{} then {}", op.name.replace('_', " "), b.name.replace('_', " "));
+                    for cv in [cex.clone(), corrupt_one_output(&cex, &mut rng)] {
+                        tasks += 1;
+                        match route_composed(&cprompt, &cv) {
+                            Some(code) => {
+                                if code_reproduces_examples(&code, &cv) {
+                                    solved += 1;
+                                } else {
+                                    violations += 1;
+                                    eprintln!("VIOLATION(compose): prompt={cprompt:?} chain fails {cv:?}");
+                                }
+                            }
+                            None => refused += 1,
+                        }
+                    }
+                }
             }
         }
     }
