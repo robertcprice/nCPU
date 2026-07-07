@@ -822,6 +822,18 @@ pub fn synthesize_word_program(
         WordShape::ShortestWord,
     ];
     for sep in SEPS {
+        // A word shape only applies to GENUINE multi-word input: at least one
+        // example must split into >=2 non-empty words on this separator. Without
+        // this, a shape coincidentally matches a single-word transform — e.g.
+        // `longest_word` reproduces `trim` ("  hi  " -> "hi", the lone non-empty
+        // segment) and would hijack it when this synthesizer runs before the real
+        // trim tier.
+        let multiword = examples
+            .iter()
+            .any(|ex| ex.inputs[0].split(sep).filter(|w| !w.is_empty()).count() >= 2);
+        if !multiword {
+            continue;
+        }
         for shape in SHAPES {
             let predicts_all = examples
                 .iter()

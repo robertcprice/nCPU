@@ -666,6 +666,67 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
     None
 }
 
+/// C1 word-list composition as a TOP-priority tier. `search_decompose`'s
+/// typed-enum lane can SEED-OVERFIT a word task (fit the visible examples with a
+/// flexible enum program that fails held-out inputs), and it runs before
+/// `solve_string_output` where the word synthesizer otherwise lives — so
+/// longest-word / shortest-word read UNSOLVED under holdout discipline even though
+/// a correct program exists. Running the word synthesizer FIRST fixes that: it is
+/// correct-by-construction + self-verifies every example through the interpreter,
+/// so it cannot return a wrong program, and it declines (None) for any spec that
+/// is not one of its shapes, leaving all other specs on their normal path. Its Mog
+/// (split/loop/join) is transpilable, consistent with the "prefer the domain-direct
+/// emitter" rule below.
+fn try_word_program(problem: &Problem) -> Option<SolveResult> {
+    if !problem
+        .signature
+        .replace(' ', "")
+        .to_ascii_lowercase()
+        .contains("->string")
+    {
+        return None;
+    }
+    let params: Vec<String> = problem
+        .signature
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(')'))
+        .map(|(p, _)| p)
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|p| p.split(':').next().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+        .collect();
+    let params = if params.is_empty() { vec!["s".to_string()] } else { params };
+    // All examples must be string-input, string-output.
+    let all: Vec<crate::string_synth::StrSynthExample> = problem
+        .examples
+        .iter()
+        .filter_map(|e| {
+            let ins: Option<Vec<String>> = e
+                .inputs
+                .iter()
+                .map(|v| match v {
+                    Value::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect();
+            match (ins, &e.expected) {
+                (Some(i), Value::Str(o)) => {
+                    Some(crate::string_synth::StrSynthExample { inputs: i, expected: o.clone() })
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if all.len() != problem.examples.len() {
+        return None;
+    }
+    let wr = crate::string_synth::synthesize_word_program(&params, &all)?;
+    let fn_name = problem.function_name();
+    let code = wr.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+    Some(SolveResult { success: true, code, method: wr.method, error: None, metadata: Default::default() })
+}
+
 pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // Suppress cache recording while the analogy universal re-fitter is
     // re-solving a TEACHER-AUGMENTED problem: that problem's examples are
@@ -689,6 +750,17 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
             }
             return result;
         }
+    }
+
+    // C1 word shapes run BEFORE decompose, which would otherwise seed-overfit them
+    // (longest/shortest-word etc.). Self-verified + correct-by-construction, so this
+    // only ever returns a program that reproduces every example; declines otherwise.
+    if let Some(result) = try_word_program(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
+        }
+        return result;
     }
 
     // Structural decomposition at the VERY TOP: ms-scale, self-gating, and both
