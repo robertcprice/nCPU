@@ -46,6 +46,21 @@ fn stem(w: &str) -> String {
     w
 }
 
+/// Generic TYPE / domain nouns that name the KIND of data, not the OPERATION. An op
+/// that shares ONLY these with a prompt is not a real match — `tetrahedral_number`
+/// for "double a NUMBER", `reverse_number` for "the absolute value of a NUMBER" —
+/// so `ranked_candidates` requires at least one NON-generic (operation-bearing)
+/// token before proposing an op. Tokens are already stemmed (plurals collapsed).
+fn is_generic_type_token(t: &str) -> bool {
+    // ONLY pure type-abstraction nouns that ops carry coincidentally as a suffix
+    // (tetrahedral_NUMBER, reverse_NUMBER). Deliberately EXCLUDES list / array /
+    // string: those are the sole matchable token for legitimate ops whose operation
+    // word is an abbreviation the prompt spells out (list_MIN vs "minimum ... list";
+    // "min" is 3 chars so it never prefix-matches "minimum"), so treating them as
+    // generic would wrongly drop the correct op.
+    matches!(t, "number" | "integer" | "value" | "element" | "item")
+}
+
 /// Split on any non-alphanumeric, drop stopwords, stem the rest.
 fn content_tokens(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
@@ -147,12 +162,20 @@ pub fn ranked_candidates(prompt: &str) -> Vec<&'static LibOp> {
             continue;
         }
         let matched = name_toks.iter().filter(|t| has(t)).count();
+        // Candidacy needs at least one OPERATION-bearing token match — sharing only a
+        // generic type noun ("number", "list") is not a real match and lets a
+        // coincidental op (tetrahedral_number for "double a number") reproduce
+        // degenerate examples and ship confident-wrong.
+        let matched_specific = name_toks
+            .iter()
+            .filter(|t| has(t) && !is_generic_type_token(t))
+            .count();
         // ACRONYM match: a single-token op name (gcd, lcm) whose letters are the
         // initials of a run of consecutive prompt words ("greatest common divisor"
         // -> "gcd"). Emergent — derived from the name's own letters, not a synonym
         // list. Scored as a full-coverage hit so it's tried early.
         let acronym = name_toks.len() == 1 && is_acronym_of(&name_toks[0], &words);
-        if matched == 0 && !acronym {
+        if matched_specific == 0 && !acronym {
             continue;
         }
         let coverage = if acronym {
@@ -1034,6 +1057,26 @@ mod tests {
         // examples -> the holdout discipline refuses (never a confident overfit).
         let noise = vec![ex(100, 105), ex(50, 52), ex(73, 30), ex(12, 99), ex(8, 3), ex(64, 77)];
         assert!(matches!(answer("predict", &noise), Answer::Refused));
+    }
+
+    #[test]
+    fn candidacy_requires_an_operation_token_not_a_generic_type_noun() {
+        // "double a number": the only op-name token shared with tetrahedral_NUMBER is
+        // the generic type noun "number" -> it must NOT be proposed (it coincides with
+        // double at {0,2} and would ship confident-wrong on degenerate examples).
+        let cands = ranked_candidates("double a number");
+        assert!(
+            !cands.iter().any(|op| op.name == "tetrahedral_number"),
+            "generic 'number'-only match must not qualify tetrahedral_number"
+        );
+        // But list / array / string are NOT generic — list_min's operation word "min"
+        // is a 3-char abbreviation that never prefix-matches "minimum", so "list" is
+        // its only matchable token and it MUST still be proposed.
+        let cands = ranked_candidates("the minimum value in a list");
+        assert!(
+            cands.iter().any(|op| op.name == "list_min"),
+            "list_min must still be proposed via its 'list' token"
+        );
     }
 
     #[test]
