@@ -690,6 +690,10 @@ enum WordShape {
     SortWords,
     /// Reverse the ORDER of the words, rejoin.
     ReverseWordOrder,
+    /// The single longest word (first on a length tie).
+    LongestWord,
+    /// The single shortest word (first on a length tie).
+    ShortestWord,
 }
 
 impl WordShape {
@@ -699,6 +703,8 @@ impl WordShape {
             WordShape::ReverseEachWord => "reverse_each_word",
             WordShape::SortWords => "sort_words",
             WordShape::ReverseWordOrder => "reverse_word_order",
+            WordShape::LongestWord => "longest_word",
+            WordShape::ShortestWord => "shortest_word",
         }
     }
 }
@@ -736,6 +742,26 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             ws.reverse();
             ws.join(sep)
         }
+        // First on a length tie, char-counted (matches Mog `.len` = char count and
+        // the strict `>`/`<` emit that only replaces on a STRICT win).
+        WordShape::LongestWord => {
+            let mut best = *words.first().unwrap_or(&"");
+            for w in words.iter().skip(1) {
+                if w.chars().count() > best.chars().count() {
+                    best = w;
+                }
+            }
+            best.to_string()
+        }
+        WordShape::ShortestWord => {
+            let mut best = *words.first().unwrap_or(&"");
+            for w in words.iter().skip(1) {
+                if w.chars().count() < best.chars().count() {
+                    best = w;
+                }
+            }
+            best.to_string()
+        }
     }
 }
 
@@ -756,6 +782,12 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         ),
         WordShape::ReverseWordOrder => format!(
             "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").reverse().join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::LongestWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    best: string = words[0];\n    i: i64 = 1;\n    while i < words.len {{\n        if words[i].len > best.len {{\n            best = words[i];\n        }}\n        i = i + 1;\n    }}\n    return best;\n}}\n"
+        ),
+        WordShape::ShortestWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    best: string = words[0];\n    i: i64 = 1;\n    while i < words.len {{\n        if words[i].len < best.len {{\n            best = words[i];\n        }}\n        i = i + 1;\n    }}\n    return best;\n}}\n"
         ),
     }
 }
@@ -781,11 +813,13 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 4] = [
+    const SHAPES: [WordShape; 6] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
         WordShape::ReverseWordOrder,
+        WordShape::LongestWord,
+        WordShape::ShortestWord,
     ];
     for sep in SEPS {
         for shape in SHAPES {
@@ -875,6 +909,24 @@ mod tests {
         let p = vec!["s".to_string()];
         let r = synthesize_word_program(&p, &[wex("a b c", "c b a"), wex("one two", "two one")]);
         assert_eq!(r.map(|r| r.method), Some("word-reverse_word_order".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_longest_word() {
+        let p = vec!["s".to_string()];
+        // "quick"/"brown" tie at 5 -> first ("quick"), disambiguating longest from last.
+        let r = synthesize_word_program(
+            &p,
+            &[wex("the quick brown fox", "quick"), wex("a bb ccc", "ccc")],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-longest_word".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_shortest_word() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(&p, &[wex("aaa bb c", "c"), wex("hello hi", "hi")]);
+        assert_eq!(r.map(|r| r.method), Some("word-shortest_word".to_string()));
     }
 
     /// Never-wrong: an example set no word shape reproduces returns None (no guess).
