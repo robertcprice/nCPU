@@ -444,30 +444,33 @@ pub fn try_emergent_addition_patch(
         appended = format!("pub {appended}");
     }
 
-    // MULTI-FILE addition: when the target is a MODULE-MANIFEST lib.rs (it
-    // declares `mod` lines and defines no fns of its own outside tests), follow
-    // the repo's own convention — a COORDINATED two-file patch: a NEW module
-    // `src/<fn>.rs` holding the verified fn, plus the `mod`/`pub use` wiring in
-    // lib.rs. New-file edits carry old_text == new_text (the transaction's
-    // read-fallback makes that a create). Falls back to single-file append for
-    // flat repos.
-    // Manifest = `mod x;` DECLARATIONS (an inline `mod tests { ... }` block is
-    // not module structure), and lib.rs defines no fns of its own.
-    let manifest_style = target == "src/lib.rs"
-        && old_text
-            .lines()
-            .any(|l| l.trim_start().starts_with("mod ") && l.trim_end().ends_with(';'))
-        && defined_fn_names(&old_text).is_empty();
-    if manifest_style {
+    // COORDINATED MULTI-FILE addition. When the crate has a MODULE-MANIFEST ROOT —
+    // `src/lib.rs` (library) OR `src/main.rs` (binary) that carries `mod x;`
+    // structure and no logic fns of its own — follow the repo's own convention: a
+    // NEW module `src/<fn>.rs` holding the verified fn, plus the `mod`/`pub use`
+    // wiring in that root. This is keyed on the manifest ROOT found in the repo, NOT
+    // on which file the append `target` resolved to — so it fires for binary crates
+    // too, where the target lands on a logic module, not the root. A binary root may
+    // define `fn main` (its entry point); that is not a logic fn and does not
+    // disqualify the manifest shape. New-file edits carry old_text == new_text (the
+    // transaction's read-fallback makes that a create). Falls back to single-file
+    // append for flat repos with no manifest root.
+    let is_mod_decl = |l: &str| l.trim_start().starts_with("mod ") && l.trim_end().ends_with(';');
+    let manifest_root = context.files.iter().find(|f| {
+        (f.path == "src/lib.rs" || f.path == "src/main.rs")
+            && f.text.as_deref().is_some_and(|t| {
+                t.lines().any(is_mod_decl) && defined_fn_names(t).into_iter().all(|n| n == "main")
+            })
+    });
+    if let Some(root_file) = manifest_root {
+        let root_path = root_file.path.clone();
+        let root_text = root_file.text.clone().unwrap_or_default();
         let module_file = format!("src/{fn_name}.rs");
         let module_body = format!("{appended}\n");
         // Wire before the first `mod` line, keeping the manifest shape.
-        let first_mod = old_text
-            .lines()
-            .find(|l| l.trim_start().starts_with("mod ") && l.trim_end().ends_with(';'))
-            .map(str::to_string)?;
+        let first_mod = root_text.lines().find(|l| is_mod_decl(l)).map(str::to_string)?;
         let wired = format!("mod {fn_name};\npub use {fn_name}::*;\n{first_mod}");
-        let new_lib = old_text.replacen(&first_mod, &wired, 1);
+        let new_root = root_text.replacen(&first_mod, &wired, 1);
         return Some(
             RepairPatch::new()
                 .with_edit(RepairEdit::new(
@@ -477,10 +480,10 @@ pub fn try_emergent_addition_patch(
                     "emergent NL addition (new module file; verified synthesis, no LLM)",
                 ))
                 .with_edit(RepairEdit::new(
-                    target,
-                    old_text,
-                    new_lib,
-                    "emergent NL addition (module wiring in lib.rs)",
+                    root_path,
+                    root_text,
+                    new_root,
+                    "emergent NL addition (module wiring in crate root)",
                 ))
                 .with_metadata("proposer", "nl_emergent_addition_multifile")
                 .with_metadata("synthesis_method", result.method.clone()),
@@ -1815,6 +1818,68 @@ mod tests {
         let old = "pub fn twice(n: i64) -> i64 {\n    return n;\n}\n";
         let proposed = "fn twice(x: i64) -> i64 { return x * 2; }";
         assert!(model_body_to_new_text(old, "not_present", proposed).is_none());
+    }
+
+    /// Multi-file NEW-feature coordination on a BINARY crate: an additive request
+    /// on a manifest-style `src/main.rs` (module decls + `fn main` only) must
+    /// produce the same COORDINATED two-file patch as a library — a new module file
+    /// plus the `mod`/`use` wiring in main.rs — not a blind append. No model in the
+    /// loop (purely emergent synthesis).
+    #[test]
+    fn emergent_addition_wires_a_new_module_into_a_binary_main() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_binmod_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"binmod\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("cargo.toml");
+        // Manifest-style BINARY root: module decls + `fn main` only (no logic fns).
+        fs::write(
+            root.join("src/main.rs"),
+            "mod util;\n\nfn main() {\n    println!(\"{}\", util::seed());\n}\n",
+        )
+        .expect("main.rs");
+        fs::write(root.join("src/util.rs"), "pub fn seed() -> i64 {\n    1\n}\n").expect("util.rs");
+
+        let task = RepoTaskSpec {
+            id: "add-triple-bin".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: add a function that triples a number".into(),
+            test_command: "cargo build".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+
+        assert!(
+            patch.edits.len() >= 2,
+            "coordinated multi-file patch expected on a binary root: {:?}",
+            patch.metadata
+        );
+        assert!(
+            patch
+                .edits
+                .iter()
+                .any(|e| e.path == "src/main.rs" && e.new_text.contains("mod ")),
+            "binary main.rs wired with a new module decl: {:?}",
+            patch.edits.iter().map(|e| e.path.clone()).collect::<Vec<_>>()
+        );
+        assert!(
+            patch
+                .edits
+                .iter()
+                .any(|e| e.path != "src/main.rs" && e.path.starts_with("src/") && e.path.ends_with(".rs")),
+            "a new module file was created alongside the wiring"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
