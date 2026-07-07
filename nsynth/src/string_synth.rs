@@ -686,6 +686,8 @@ enum WordShape {
     TitleCase,
     /// Reverse the characters of each word in place.
     ReverseEachWord,
+    /// Sort the words ascending (lexicographic), rejoin.
+    SortWords,
     /// Reverse the ORDER of the words, rejoin.
     ReverseWordOrder,
 }
@@ -695,6 +697,7 @@ impl WordShape {
         match self {
             WordShape::TitleCase => "title_case",
             WordShape::ReverseEachWord => "reverse_each_word",
+            WordShape::SortWords => "sort_words",
             WordShape::ReverseWordOrder => "reverse_word_order",
         }
     }
@@ -723,6 +726,11 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             .map(|w| w.chars().rev().collect::<String>())
             .collect::<Vec<_>>()
             .join(sep),
+        WordShape::SortWords => {
+            let mut ws = words.clone();
+            ws.sort_unstable();
+            ws.join(sep)
+        }
         WordShape::ReverseWordOrder => {
             let mut ws = words.clone();
             ws.reverse();
@@ -743,8 +751,11 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::ReverseEachWord => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].reverse());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::SortWords => format!(
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").sort().join(\"{sep}\");\n}}\n"
+        ),
         WordShape::ReverseWordOrder => format!(
-            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = words.len - 1;\n    while i >= 0 {{\n        out.push(words[i]);\n        i = i - 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+            "fn transform({p}: string) -> string {{\n    return {p}.split(\"{sep}\").reverse().join(\"{sep}\");\n}}\n"
         ),
     }
 }
@@ -770,8 +781,12 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 3] =
-        [WordShape::TitleCase, WordShape::ReverseEachWord, WordShape::ReverseWordOrder];
+    const SHAPES: [WordShape; 4] = [
+        WordShape::TitleCase,
+        WordShape::ReverseEachWord,
+        WordShape::SortWords,
+        WordShape::ReverseWordOrder,
+    ];
     for sep in SEPS {
         for shape in SHAPES {
             let predicts_all = examples
@@ -843,6 +858,16 @@ mod tests {
         let p = vec!["s".to_string()];
         let r = synthesize_word_program(&p, &[wex("abc def", "cba fed"), wex("hi bye", "ih eyb")]);
         assert_eq!(r.map(|r| r.method), Some("word-reverse_each_word".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_sort_words() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(
+            &p,
+            &[wex("banana apple cherry", "apple banana cherry"), wex("dog cat", "cat dog")],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-sort_words".to_string()));
     }
 
     #[test]

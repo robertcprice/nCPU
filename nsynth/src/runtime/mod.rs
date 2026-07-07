@@ -4381,11 +4381,23 @@ impl Runtime {
                     Ok(Value::Array(out))
                 }
                 "sort" => {
-                    items.sort_by(|lhs, rhs| {
-                        let lhs = expect_int(lhs).unwrap_or_default();
-                        let rhs = expect_int(rhs).unwrap_or_default();
-                        lhs.cmp(&rhs)
+                    // Polymorphic total order: ints numerically, strings
+                    // lexicographically (was int-only via `expect_int().unwrap_or_default()`,
+                    // which mapped every string to 0 -> a no-op sort on `[string]`).
+                    items.sort_by(|lhs, rhs| match (lhs, rhs) {
+                        (Value::Int(a), Value::Int(b)) => a.cmp(b),
+                        (Value::Str(a), Value::Str(b)) => a.cmp(b),
+                        (Value::Int(_), _) => std::cmp::Ordering::Less,
+                        (_, Value::Int(_)) => std::cmp::Ordering::Greater,
+                        _ => std::cmp::Ordering::Equal,
                     });
+                    Ok(Value::Array(items.clone()))
+                }
+                "reverse" => {
+                    // Array reverse had NO arm (only `Value::Str` reverse existed), so
+                    // `xs.reverse()` on an array errored. Reverse in place, return the
+                    // array (mirrors `sort`'s mutate-and-return).
+                    items.reverse();
                     Ok(Value::Array(items.clone()))
                 }
                 "join" => {
@@ -7220,6 +7232,36 @@ fn main() -> i64 {
         let na = Value::Array(vec![a.clone(), d.clone()]);
         let nb = Value::Array(vec![b.clone(), d.clone()]);
         assert!(value_eq(&na, &nb));
+    }
+
+    /// Array `.sort()` is polymorphic (strings lexicographic, ints numeric) and
+    /// `.reverse()` exists for arrays — both were broken for `[string]`: `sort`
+    /// mapped every string to 0 (no-op) and `reverse` had no array arm at all.
+    #[test]
+    fn array_sort_and_reverse_are_polymorphic() {
+        use crate::benchmark::{Example, Value as BV};
+        let sv = |s: &str| BV::Str(s.to_string());
+        // String sort: lexicographic (previously a no-op).
+        assert!(code_reproduces_examples(
+            "fn f(s: string) -> string {\n    return s.split(\" \").sort().join(\" \");\n}\n",
+            &[Example {
+                inputs: vec![sv("banana apple cherry")],
+                expected: sv("apple banana cherry"),
+            }],
+        ));
+        // Int sort stays NUMERIC, not lexical ([1,9,10], not [1,10,9]).
+        assert!(code_reproduces_examples(
+            "fn f(xs: [i64]) -> [i64] {\n    return xs.sort();\n}\n",
+            &[Example {
+                inputs: vec![BV::int_array(&[9, 10, 1])],
+                expected: BV::int_array(&[1, 9, 10]),
+            }],
+        ));
+        // Array reverse now has an arm (was an unknown-method error).
+        assert!(code_reproduces_examples(
+            "fn f(s: string) -> string {\n    return s.split(\" \").reverse().join(\" \");\n}\n",
+            &[Example { inputs: vec![sv("a b c")], expected: sv("c b a") }],
+        ));
     }
 
     #[test]
