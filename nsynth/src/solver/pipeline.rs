@@ -1052,6 +1052,22 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact list->f64 statistical-mean recognizer (arithmetic / harmonic / avg
+    // absolute deviation) — the constant-free slice of the float timeout tail.
+    // Fire before the generic float lanes (which fit polynomials, not reductions).
+    if let Some(result) =
+        super::search_numeric_families::search_float_stat(problem, problem.function_name())
+    {
+        if result.success {
+            eprintln!(
+                "[solve] float-stat OK in {:.3}s — {}",
+                t0.elapsed().as_secs_f32(),
+                result.method
+            );
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and

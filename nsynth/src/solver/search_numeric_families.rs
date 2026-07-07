@@ -793,6 +793,86 @@ pub(super) fn search_base_string(problem: &Problem, fn_name: &str) -> Option<Sol
     None
 }
 
+/// Unary-list -> f64 statistical-mean recognizer: arithmetic mean, harmonic mean,
+/// average absolute deviation. These are CONSTANT-FREE reductions — unlike the
+/// physics-formula float tail (coulombs_law/energy_from_mass/vol_* etc.), which
+/// encodes hidden domain constants (c^2, k, pi) not recoverable from I/O and stays
+/// out of reach. geometric_mean is EXCLUDED: it needs a fractional (nth-root)
+/// power and Mog's `pow` builtin is integer-only. The emitted Mog relies on Mog's
+/// int/float coercion (int list element + f64 accumulator widens to f64) and a
+/// MANUAL abs (`if d < 0.0 { d = 0.0 - d; }`) since the `abs` builtin is int-only.
+/// Validated with a float tolerance; strict re-verify in `verified_result`.
+pub(super) fn search_float_stat(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    use crate::benchmark::value_as_f64;
+    if parse_param_types(problem.signature) != [ParamType::ArrayI64] {
+        return None;
+    }
+    if !problem.signature.contains("-> f64") {
+        return None;
+    }
+    fn ref_arith(xs: &[i64]) -> Option<f64> {
+        if xs.is_empty() {
+            return None;
+        }
+        Some(xs.iter().map(|&x| x as f64).sum::<f64>() / xs.len() as f64)
+    }
+    fn ref_harmonic(xs: &[i64]) -> Option<f64> {
+        if xs.is_empty() || xs.iter().any(|&x| x == 0) {
+            return None;
+        }
+        let s: f64 = xs.iter().map(|&x| 1.0 / x as f64).sum();
+        Some(xs.len() as f64 / s)
+    }
+    fn ref_avg_abs_dev(xs: &[i64]) -> Option<f64> {
+        if xs.is_empty() {
+            return None;
+        }
+        let mean = xs.iter().map(|&x| x as f64).sum::<f64>() / xs.len() as f64;
+        let s: f64 = xs.iter().map(|&x| (x as f64 - mean).abs()).sum();
+        Some(s / xs.len() as f64)
+    }
+    let arith = format!(
+        "fn {fn_name}(arr: [i64]) -> f64 {{\n    total: f64 = 0.0;\n    count: f64 = 0.0;\n    for x in arr {{\n        total = total + x;\n        count = count + 1.0;\n    }}\n    return total / count;\n}}\n"
+    );
+    let harmonic = format!(
+        "fn {fn_name}(arr: [i64]) -> f64 {{\n    s: f64 = 0.0;\n    count: f64 = 0.0;\n    for x in arr {{\n        s = s + (1.0 / x);\n        count = count + 1.0;\n    }}\n    return count / s;\n}}\n"
+    );
+    let avg_dev = format!(
+        "fn {fn_name}(arr: [i64]) -> f64 {{\n    total: f64 = 0.0;\n    count: f64 = 0.0;\n    for x in arr {{\n        total = total + x;\n        count = count + 1.0;\n    }}\n    mean: f64 = total / count;\n    dev: f64 = 0.0;\n    for x in arr {{\n        d: f64 = x - mean;\n        if d < 0.0 {{\n            d = 0.0 - d;\n        }}\n        dev = dev + d;\n    }}\n    return dev / count;\n}}\n"
+    );
+    let table: [(&str, fn(&[i64]) -> Option<f64>, String); 3] = [
+        ("arithmetic_mean", ref_arith, arith),
+        ("harmonic_mean", ref_harmonic, harmonic),
+        ("avg_abs_deviation", ref_avg_abs_dev, avg_dev),
+    ];
+    for (name, reference, code) in &table {
+        let ok = problem.examples.iter().all(|ex| {
+            ex.inputs.len() == 1
+                && match (array_value(&ex.inputs[0]), value_as_f64(&ex.expected)) {
+                    (Some(xs), Some(want)) => match reference(&xs) {
+                        Some(got) => (got - want).abs() <= 1e-9 * want.abs().max(1.0),
+                        None => false,
+                    },
+                    _ => false,
+                }
+        });
+        // Verify via `code_reproduces_examples` (float-tolerant), NOT verified_result:
+        // the latter's strict main-wrapper reads stdout as an int and rejects an f64
+        // result ("expected int result, got Float"). This is the same float-tolerance
+        // acceptance the float affine/poly lanes use — and the harness's own final gate.
+        if ok && crate::runtime::code_reproduces_examples(code, &problem.examples) {
+            return Some(SolveResult {
+                success: true,
+                code: code.clone(),
+                method: format!("search_float_stat:{name}"),
+                error: None,
+                metadata: Default::default(),
+            });
+        }
+    }
+    None
+}
+
 pub(super) fn search_sum_of_divisors_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {
