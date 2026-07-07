@@ -14,7 +14,7 @@
 use mog_synth::benchmark::{Example, Value};
 use mog_synth::op_library::OPS;
 use mog_synth::runtime::{benchmark_value_from_runtime, code_reproduces_examples, execute_function};
-use mog_synth::verified_nl_router::{route_composed, route_verified};
+use mog_synth::verified_nl_router::{answer, route_composed, route_verified, Answer};
 
 /// Deterministic linear-congruential RNG (no external crate, reproducible).
 struct Lcg(u64);
@@ -79,7 +79,7 @@ fn main() {
     let mut refused = 0usize;
     let mut tasks = 0usize;
 
-    for _ in 0..iters {
+    for iter_n in 0..iters {
         // Pick a source op and build CONSISTENT examples by running it.
         let op = rng.pick(OPS);
         let tys = param_types(op.mog);
@@ -178,6 +178,40 @@ fn main() {
                 }
             }
         }
+
+        // FULL answer() invariant — covers the SYNTHESIS tier + its holdout. Sparse
+        // (solve_problem is slow). Two probes: (1) the consistent task — any non-Refused
+        // answer must reproduce every example; (2) an OVERFIT task with RANDOM outputs
+        // — no real function fits, so the holdout must refuse it, and if it somehow
+        // returns, it must still reproduce all. Both assert the one invariant.
+        if iter_n % 6 == 0 && examples.len() >= 5 {
+            let checks: Vec<(&str, Vec<Example>)> = vec![
+                (prompt.as_str(), examples.clone()),
+                ("do the thing", {
+                    let mut r = examples.clone();
+                    for e in &mut r {
+                        e.expected = corrupt_scalar(&e.expected, &mut rng);
+                    }
+                    r
+                }),
+            ];
+            for (p, ex) in checks {
+                tasks += 1;
+                match answer(p, &ex) {
+                    Answer::Refused => refused += 1,
+                    Answer::Library { code, .. }
+                    | Answer::Composition { code }
+                    | Answer::Synthesized { code, .. } => {
+                        if code_reproduces_examples(&code, &ex) {
+                            solved += 1;
+                        } else {
+                            violations += 1;
+                            eprintln!("VIOLATION(answer): prompt={p:?} returned code fails examples");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     println!("nl_fuzz: {tasks} tasks generated ({iters} iterations)");
@@ -188,6 +222,16 @@ fn main() {
         println!("OK — never-wrong invariant held across all {tasks} fuzzed tasks");
     } else {
         std::process::exit(1);
+    }
+}
+
+/// Randomize a scalar output so a whole example set describes NO consistent
+/// function — an overfit trap the synthesis holdout must refuse.
+fn corrupt_scalar(v: &Value, rng: &mut Lcg) -> Value {
+    match v {
+        Value::Int(_) => Value::Int(rng.range(-50, 200)),
+        Value::Bool(_) => Value::Bool(rng.next() % 2 == 0),
+        other => other.clone(),
     }
 }
 

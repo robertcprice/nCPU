@@ -299,10 +299,10 @@ pub fn try_test_mined_synthesis_patch(
 
     // Mine integer asserts for `repo_fn` across every context file (tests may live in
     // a sibling module), dedup, and require enough points to PIN the function.
-    let mut rows: Vec<(Vec<i64>, i64)> = Vec::new();
+    let mut rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
     for f in &context.files {
         if let Some(t) = f.text.as_deref() {
-            rows.extend(mine_int_asserts(t, &repo_fn));
+            rows.extend(mine_asserts(t, &repo_fn));
         }
     }
     rows.sort();
@@ -314,8 +314,8 @@ pub fn try_test_mined_synthesis_patch(
     let exs: Vec<crate::benchmark::Example> = rows
         .iter()
         .map(|(ins, out)| crate::benchmark::Example {
-            inputs: ins.iter().map(|&v| crate::benchmark::Value::Int(v)).collect(),
-            expected: crate::benchmark::Value::Int(*out),
+            inputs: ins.clone(),
+            expected: out.clone(),
         })
         .collect();
     let sig: &'static str =
@@ -360,12 +360,12 @@ pub fn try_test_mined_synthesis_patch(
     )
 }
 
-/// Mine integer I/O examples for `fn_name` from `assert_eq!(..)` calls in `text`.
-/// Both `assert_eq!(f(4), 8)` and `assert_eq!(8, f(4))` yield `([4], 8)`. Only calls
-/// whose args AND expected are integer literals are captured (the solver's strong
-/// domain); everything else is skipped. Name matching is word-boundary safe, so
-/// `add` never matches `add_two`.
-fn mine_int_asserts(text: &str, fn_name: &str) -> Vec<(Vec<i64>, i64)> {
+/// Mine I/O examples for `fn_name` from `assert_eq!(..)` calls in `text`. Both
+/// `assert_eq!(f(4), 8)` and `assert_eq!(8, f(4))` yield `([4], 8)`. Integer, string
+/// (`"abc"`), and boolean (`true`/`false`) literals are captured — the solver's
+/// verified domains; anything else (floats, expressions, method chains) is skipped.
+/// Name matching is word-boundary safe, so `add` never matches `add_two`.
+fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> {
     let mut out = Vec::new();
     let mut cur = text;
     while let Some(rel) = cur.find("assert_eq!") {
@@ -384,6 +384,29 @@ fn mine_int_asserts(text: &str, fn_name: &str) -> Vec<(Vec<i64>, i64)> {
         }
     }
     out
+}
+
+/// Parse a Rust literal token into a `Value`: integer, `true`/`false`, or a simple
+/// double-quoted string (no escapes). Returns `None` for anything else so the miner
+/// only captures cleanly-verifiable examples.
+fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
+    use crate::benchmark::Value;
+    let t = tok.trim();
+    if let Ok(i) = t.parse::<i64>() {
+        return Some(Value::Int(i));
+    }
+    match t {
+        "true" => return Some(Value::Bool(true)),
+        "false" => return Some(Value::Bool(false)),
+        _ => {}
+    }
+    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+        let body = &t[1..t.len() - 1];
+        if !body.contains('\\') {
+            return Some(Value::Str(body.to_string()));
+        }
+    }
+    None
 }
 
 /// Content strictly inside the first balanced `(..)` of `s` (which must start with
@@ -429,10 +452,14 @@ fn split_top_level_comma(s: &str) -> Vec<&str> {
     parts
 }
 
-/// `(call_side, int_side)` → `(args, expected)` when `call_side` is `fn_name(ints..)`
-/// (word-boundary) and `int_side` is an integer literal.
-fn assert_pair_to_example(fn_name: &str, call_side: &str, int_side: &str) -> Option<(Vec<i64>, i64)> {
-    let expected: i64 = int_side.trim().parse().ok()?;
+/// `(call_side, val_side)` → `(args, expected)` when `call_side` is `fn_name(lits..)`
+/// (word-boundary) and `val_side` is a literal, both parsed by [`parse_literal`].
+fn assert_pair_to_example(
+    fn_name: &str,
+    call_side: &str,
+    val_side: &str,
+) -> Option<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> {
+    let expected = parse_literal(val_side)?;
     let pat = format!("{fn_name}(");
     let pos = call_side.find(&pat)?;
     if pos > 0 {
@@ -443,8 +470,8 @@ fn assert_pair_to_example(fn_name: &str, call_side: &str, int_side: &str) -> Opt
     }
     let rest = &call_side[pos + fn_name.len()..]; // starts at the '('
     let inner = balanced_parens(rest)?;
-    let args: Option<Vec<i64>> =
-        split_top_level_comma(inner).iter().map(|a| a.trim().parse::<i64>().ok()).collect();
+    let args: Option<Vec<crate::benchmark::Value>> =
+        split_top_level_comma(inner).iter().map(|a| parse_literal(a)).collect();
     let args = args?;
     if args.is_empty() {
         return None;
@@ -2068,13 +2095,32 @@ mod tests {
 
     #[test]
     fn mines_int_examples_from_assert_eq_both_orders_word_boundary() {
+        use crate::benchmark::Value;
         let src = "assert_eq!(mystery(2), 5);\n assert_eq!(7, mystery(3));\n \
                    assert_eq!(mystery(4), 9);\n assert_eq!(mystery_helper(1), 99);";
-        let ex = mine_int_asserts(src, "mystery");
-        assert!(ex.contains(&(vec![2], 5)), "call-first order: {ex:?}");
-        assert!(ex.contains(&(vec![3], 7)), "int-first order: {ex:?}");
-        assert!(ex.contains(&(vec![4], 9)));
-        assert!(!ex.iter().any(|(_, o)| *o == 99), "mystery_helper must not match mystery");
+        let ex = mine_asserts(src, "mystery");
+        assert!(ex.contains(&(vec![Value::Int(2)], Value::Int(5))), "call-first order: {ex:?}");
+        assert!(ex.contains(&(vec![Value::Int(3)], Value::Int(7))), "int-first order: {ex:?}");
+        assert!(ex.contains(&(vec![Value::Int(4)], Value::Int(9))));
+        assert!(
+            !ex.iter().any(|(_, o)| *o == Value::Int(99)),
+            "mystery_helper must not match mystery"
+        );
+    }
+
+    #[test]
+    fn mines_string_and_bool_asserts() {
+        use crate::benchmark::Value;
+        let src = "assert_eq!(rev(\"ab\"), \"ba\");\n assert_eq!(is_pal(\"aa\"), true);\n \
+                   assert_eq!(is_pal(\"ab\"), false);";
+        let r = mine_asserts(src, "rev");
+        assert!(
+            r.contains(&(vec![Value::Str("ab".into())], Value::Str("ba".into()))),
+            "string example: {r:?}"
+        );
+        let b = mine_asserts(src, "is_pal");
+        assert!(b.contains(&(vec![Value::Str("aa".into())], Value::Bool(true))), "bool true: {b:?}");
+        assert!(b.contains(&(vec![Value::Str("ab".into())], Value::Bool(false))), "bool false: {b:?}");
     }
 
     /// The deterministic test-oracle lever: a repo fn with NO registry name match and
