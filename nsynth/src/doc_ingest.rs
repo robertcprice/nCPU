@@ -301,12 +301,129 @@ pub fn filter_surface_forms(forms: &[SurfaceForm], max_df: usize) -> Vec<Surface
     out
 }
 
+/// Mine `(function, [(input, output)])` integer examples from a source/test file:
+/// `NAME(IN)` immediately followed by a comparator/comma and an integer `OUT`
+/// (covers `assert_eq!(f(2), 4)`, `assert f(2) == 4`, `f(2) => 4`, `f(2) -> 4`).
+/// Only names with >= 2 examples are returned. This feeds the verify+register
+/// path (`learn_nl::teach_by_examples`) — the flywheel that turns a real repo's
+/// tests into named, verified library ops.
+pub fn mine_int_examples(source: &str) -> Vec<(String, Vec<(i64, i64)>)> {
+    let mut map: std::collections::BTreeMap<String, Vec<(i64, i64)>> = std::collections::BTreeMap::new();
+    for line in source.lines() {
+        for (name, inp, out) in scan_int_examples(line) {
+            let v = map.entry(name).or_default();
+            if !v.contains(&(inp, out)) {
+                v.push((inp, out));
+            }
+        }
+    }
+    map.into_iter().filter(|(_, v)| v.len() >= 2).collect()
+}
+
+fn scan_int_examples(line: &str) -> Vec<(String, i64, i64)> {
+    let b = line.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if !(b[i].is_ascii_alphabetic() || b[i] == b'_') {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            i += 1;
+        }
+        if i >= b.len() || b[i] != b'(' {
+            continue;
+        }
+        let name = line[start..i].to_string();
+        // Parse a single signed-integer argument: (IN)
+        let arg_start = i + 1;
+        let mut j = arg_start;
+        if j < b.len() && (b[j] == b'-' || b[j] == b'+') {
+            j += 1;
+        }
+        let ns = j;
+        while j < b.len() && b[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == ns || j >= b.len() || b[j] != b')' {
+            continue;
+        }
+        let Ok(inp) = line[arg_start..j].parse::<i64>() else { continue };
+        // After ')', require a comparator/comma, then a signed integer OUT.
+        let mut k = j + 1;
+        while k < b.len() && b[k] == b' ' {
+            k += 1;
+        }
+        let mut matched = false;
+        for op in ["==", "=>", "->", ",", "="] {
+            if line[k..].starts_with(op) {
+                k += op.len();
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            continue;
+        }
+        while k < b.len() && b[k] == b' ' {
+            k += 1;
+        }
+        let mut m = k;
+        if m < b.len() && (b[m] == b'-' || b[m] == b'+') {
+            m += 1;
+        }
+        let os = m;
+        while m < b.len() && b[m].is_ascii_digit() {
+            m += 1;
+        }
+        if m > os {
+            if let Ok(outp) = line[k..m].parse::<i64>() {
+                out.push((name, inp, outp));
+            }
+        }
+    }
+    out
+}
+
 /// Ingest one Rust source string into surface-form candidates.
 pub fn ingest_source(source: &str) -> Vec<SurfaceForm> {
     extract_doc_symbols(source)
         .iter()
         .map(derive_surface_form)
         .collect()
+}
+
+/// Mine integer `(function, examples)` from every `.rs`/`.py` file under `dir` —
+/// the flywheel's example source (feed each to learn_nl::teach_by_examples).
+pub fn ingest_examples_dir(dir: &std::path::Path) -> Vec<(String, Vec<(i64, i64)>)> {
+    let mut map: std::collections::BTreeMap<String, Vec<(i64, i64)>> = std::collections::BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&p) else { continue };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                if path.file_name().map(|n| n == "target").unwrap_or(false) {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.extension().and_then(|x| x.to_str()).map(|x| x == "rs" || x == "py").unwrap_or(false) {
+                if let Ok(src) = std::fs::read_to_string(&path) {
+                    for (name, pairs) in mine_int_examples(&src) {
+                        let v = map.entry(name).or_default();
+                        for pr in pairs {
+                            if !v.contains(&pr) {
+                                v.push(pr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    map.into_iter().filter(|(_, v)| v.len() >= 2).collect()
 }
 
 /// Ingest every `.rs` file under `dir` (recursively) — "point it at a repo".
@@ -405,6 +522,22 @@ pub struct RingBuffer { cap: usize }
         for t in ["greatest", "common", "divisor", "integers"] {
             assert!(gcd.terms.contains(&t.to_string()), "term '{t}' in {:?}", gcd.terms);
         }
+    }
+
+    #[test]
+    fn mines_int_examples_from_tests() {
+        let src = "\
+// double(5) => 10
+assert_eq!(double(2), 4);
+assert double(3) == 6
+let _ = triple(4);            // no expected value -> ignored
+assert_eq!(add(1, 2), 3);     // two-arg -> not a unary example
+";
+        let mined: std::collections::BTreeMap<_, _> = mine_int_examples(src).into_iter().collect();
+        let dbl = mined.get("double").expect("double mined");
+        assert!(dbl.contains(&(2, 4)) && dbl.contains(&(3, 6)) && dbl.contains(&(5, 10)), "{dbl:?}");
+        assert!(!mined.contains_key("triple"), "call with no expected value ignored");
+        assert!(!mined.contains_key("add"), "two-arg call is not a unary (in,out)");
     }
 
     #[test]
