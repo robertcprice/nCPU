@@ -96,6 +96,132 @@ fn item_kind_name(line: &str) -> Option<(String, String)> {
     None
 }
 
+/// Extract documented symbols from Python: a `def`/`class` followed by a
+/// `"""..."""` (or `'''`) docstring.
+pub fn extract_python_symbols(source: &str) -> Vec<DocSymbol> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim_start();
+        let item = t
+            .strip_prefix("async def ")
+            .map(|r| ("fn", r))
+            .or_else(|| t.strip_prefix("def ").map(|r| ("fn", r)))
+            .or_else(|| t.strip_prefix("class ").map(|r| ("struct", r)));
+        if let Some((kind, rest)) = item {
+            let name = leading_ident(rest);
+            if !name.is_empty() {
+                // Walk to the end of the (possibly multi-line) signature, then the
+                // next non-blank line is where a docstring would start.
+                let mut j = i;
+                while j < lines.len() && !lines[j].trim_end().ends_with(':') {
+                    j += 1;
+                }
+                if let Some((doc, next)) = py_docstring(&lines, j + 1) {
+                    out.push(DocSymbol { name, kind: kind.to_string(), doc });
+                    i = next;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// If a `"""`/`'''` docstring begins at/after `start` (skipping blanks), return
+/// its text + the line index after it.
+fn py_docstring(lines: &[&str], start: usize) -> Option<(String, usize)> {
+    let mut k = start;
+    while k < lines.len() && lines[k].trim().is_empty() {
+        k += 1;
+    }
+    let first = lines.get(k)?.trim();
+    let quote = if first.starts_with("\"\"\"") {
+        "\"\"\""
+    } else if first.starts_with("'''") {
+        "'''"
+    } else {
+        return None;
+    };
+    let after_open = &first[quote.len()..];
+    if let Some(end) = after_open.find(quote) {
+        return Some((after_open[..end].trim().to_string(), k + 1));
+    }
+    let mut doc = String::from(after_open.trim());
+    let mut m = k + 1;
+    while m < lines.len() {
+        let line = lines[m];
+        if let Some(end) = line.find(quote) {
+            if !line[..end].trim().is_empty() {
+                doc.push(' ');
+                doc.push_str(line[..end].trim());
+            }
+            return Some((doc.trim().to_string(), m + 1));
+        }
+        if !line.trim().is_empty() {
+            doc.push(' ');
+            doc.push_str(line.trim());
+        }
+        m += 1;
+    }
+    Some((doc.trim().to_string(), m))
+}
+
+/// Extract documented symbols from Go: contiguous `//` comment lines directly
+/// above a `func`/`type` declaration.
+pub fn extract_go_symbols(source: &str) -> Vec<DocSymbol> {
+    let mut out = Vec::new();
+    let mut doc = String::new();
+    for raw in source.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("//") {
+            if !doc.is_empty() {
+                doc.push(' ');
+            }
+            doc.push_str(rest.trim());
+            continue;
+        }
+        if doc.is_empty() {
+            continue;
+        }
+        let item = line
+            .strip_prefix("func ")
+            .map(|r| ("fn", r))
+            .or_else(|| line.strip_prefix("type ").map(|r| ("struct", r)));
+        if let Some((kind, rest)) = item {
+            // "func (r *Recv) Name(" — skip a receiver group.
+            let rest = rest.trim_start().strip_prefix('(').map_or(rest, |after| {
+                after.split_once(')').map(|(_, r)| r.trim_start()).unwrap_or(rest)
+            });
+            let name = leading_ident(rest.trim_start());
+            if !name.is_empty() {
+                out.push(DocSymbol { name, kind: kind.to_string(), doc: doc.clone() });
+            }
+        }
+        doc.clear();
+    }
+    out
+}
+
+/// The leading identifier of `s` (letters/digits/underscore).
+fn leading_ident(s: &str) -> String {
+    s.trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect()
+}
+
+/// Extract documented symbols by file extension (rs/py/go supported).
+pub fn extract_by_ext(source: &str, ext: &str) -> Vec<DocSymbol> {
+    match ext {
+        "py" => extract_python_symbols(source),
+        "go" => extract_go_symbols(source),
+        _ => extract_doc_symbols(source),
+    }
+}
+
 /// Turn a documented symbol into a SurfaceForm: the snake_case name words + the
 /// doc's content words become candidate NL terms; the first sentence is the gloss.
 pub fn derive_surface_form(sym: &DocSymbol) -> SurfaceForm {
@@ -143,9 +269,11 @@ pub fn ingest_dir(dir: &std::path::Path) -> Vec<SurfaceForm> {
                     continue;
                 }
                 stack.push(path);
-            } else if path.extension().map(|x| x == "rs").unwrap_or(false) {
-                if let Ok(src) = std::fs::read_to_string(&path) {
-                    out.extend(ingest_source(&src));
+            } else if let Some(ext) = path.extension().and_then(|x| x.to_str()) {
+                if matches!(ext, "rs" | "py" | "go") {
+                    if let Ok(src) = std::fs::read_to_string(&path) {
+                        out.extend(extract_by_ext(&src, ext).iter().map(derive_surface_form));
+                    }
                 }
             }
         }
@@ -224,6 +352,45 @@ pub struct RingBuffer { cap: usize }
         for t in ["greatest", "common", "divisor", "integers"] {
             assert!(gcd.terms.contains(&t.to_string()), "term '{t}' in {:?}", gcd.terms);
         }
+    }
+
+    #[test]
+    fn extracts_python_docstrings() {
+        let src = "\
+def reverse_string(s):
+    \"\"\"Reverse the given string and return it.\"\"\"
+    return s[::-1]
+
+class Cache:
+    '''An LRU cache with time-based eviction.'''
+    pass
+
+def no_doc(x):
+    return x
+";
+        let syms = extract_python_symbols(src);
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"reverse_string") && names.contains(&"Cache"), "{names:?}");
+        assert!(!names.contains(&"no_doc"), "undocumented python def skipped");
+        let rev = syms.iter().find(|s| s.name == "reverse_string").unwrap();
+        assert!(rev.doc.contains("Reverse the given string"));
+        assert!(syms.iter().find(|s| s.name == "Cache").unwrap().doc.contains("LRU cache"));
+    }
+
+    #[test]
+    fn extracts_go_doc_comments() {
+        let src = "\
+// GreatestCommonDivisor returns the gcd of a and b.
+func GreatestCommonDivisor(a, b int) int { return a }
+
+// RingBuffer is a fixed-capacity circular buffer.
+type RingBuffer struct { cap int }
+";
+        let syms = extract_go_symbols(src);
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"GreatestCommonDivisor") && names.contains(&"RingBuffer"), "{names:?}");
+        let g = syms.iter().find(|s| s.name == "GreatestCommonDivisor").unwrap();
+        assert!(g.doc.contains("gcd of a and b"));
     }
 
     #[test]
