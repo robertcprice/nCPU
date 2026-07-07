@@ -12,8 +12,21 @@
 //!
 //! Usage: nl_harvest [selfplay_iters] > mog_sft.jsonl
 use mog_synth::benchmark::{Example, Problem, Value};
-use mog_synth::local_llm::training_record;
+use mog_synth::local_llm::{mog_user_message, MOG_SYSTEM_PROMPT};
 use mog_synth::op_library::OPS;
+
+/// A single SFT chat record in GEMMA-COMPATIBLE form: the system prompt is FOLDED
+/// into the user turn (no `system` role — Gemma's chat template rejects it with
+/// "System role not supported", which crashes mlx_lm.lora training). Same reason
+/// inference folds it. Assistant content is the verified Mog program.
+fn folded_record(request: &str, code: &str) -> serde_json::Value {
+    serde_json::json!({
+        "messages": [
+            {"role": "user", "content": format!("{MOG_SYSTEM_PROMPT}\n\n{}", mog_user_message(request))},
+            {"role": "assistant", "content": format!("```mog\n{}\n```", code.trim())}
+        ]
+    })
+}
 use mog_synth::runtime::{benchmark_value_from_runtime, code_reproduces_examples, execute_function};
 use mog_synth::solver::solve_problem;
 
@@ -63,7 +76,7 @@ fn main() {
     let mut emit = |request: &str, code: &str| {
         // Dedup by the exact program so the corpus isn't dominated by one op.
         if seen.insert(format!("{request}\u{1f}{code}")) {
-            println!("{}", training_record(request, code));
+            println!("{}", folded_record(request, code));
             true
         } else {
             false
