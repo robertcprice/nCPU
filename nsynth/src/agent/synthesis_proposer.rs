@@ -248,7 +248,9 @@ pub fn try_model_repair_patch(
          Return only the function definition."
     );
 
-    let program = crate::local_llm::propose_program(&request, prior, 0.2)?;
+    // Ask for RUST, not Mog: the repo-repair oracle is cargo test over real Rust, and
+    // small local models write Rust well but not the Mog DSL.
+    let program = crate::local_llm::propose_rust_fn(&request, prior, 0.2)?;
     // MULTI-FILE: if the model returned several functions that map onto EXISTING repo
     // files (e.g. a fix touching a handler and its helper), coordinate them into one
     // atomic patch. The cargo-test oracle still gates the whole thing all-or-nothing.

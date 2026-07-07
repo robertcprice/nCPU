@@ -390,14 +390,67 @@ pub fn propose_program(
     extract_code(content)
 }
 
+/// Propose a plain-**Rust** function (not Mog). Small local models write ordinary
+/// Rust well but do not know the Mog DSL, so the repo-repair tier — whose oracle is
+/// `cargo test` over real Rust — asks for Rust directly. Same gated, curl-only,
+/// inert-without-`NSYNTH_LOCAL_LLM_URL` shape as [`propose_program`]; the caller
+/// still reshapes the result to the repo signature and the cargo-test oracle still
+/// decides, so a wrong or non-compiling proposal is discarded.
+pub fn propose_rust_fn(request: &str, prior: Option<(&str, &str)>, temperature: f64) -> Option<String> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "You write ONE Rust function. Output ONLY the function definition in a \
+               ```rust code block — no explanation, no tests, no main. Use plain Rust \
+               (i64 for integers).";
+    let task = match prior {
+        None => format!("Task:\n{request}\n\nWrite the Rust function."),
+        Some((code, err)) => format!(
+            "Task:\n{request}\n\nYour previous attempt:\n{code}\n\nIt FAILED: {err}\n\n\
+             Fix the bug and output ONLY the corrected Rust function."
+        ),
+    };
+    // Fold the system instructions into a SINGLE user turn: some local models
+    // (Gemma) reject a `system` role outright ("System role not supported").
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": format!("{sys}\n\n{task}")}],
+        "temperature": temperature,
+        "max_tokens": 1200
+    });
+    let out = Command::new("curl")
+        .args([
+            "-s", "-m", "120", &url, "-H", "Content-Type: application/json", "-d", &body.to_string(),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| msg["reasoning"].as_str())?;
+    extract_code(content)
+}
+
 /// Extract a Mog function from the model output: prefer a fenced ``` block; else
 /// take from the first `fn ` through its balanced closing brace.
 fn extract_code(content: &str) -> Option<String> {
-    // Fenced block: between the first ``` (optionally ```mog) and the next ```.
+    // Fenced block: between the first ``` and the next ```. Strip an optional
+    // language tag on the fence line (```mog / ```rust / ```python) — a bare word
+    // up to the newline — so the tag never leaks into the extracted code.
     if let Some(start) = content.find("```") {
         let after = &content[start + 3..];
-        let after = after.strip_prefix("mog").unwrap_or(after);
-        let after = after.strip_prefix('\n').unwrap_or(after);
+        let after = match after.find('\n') {
+            Some(nl) if !after[..nl].trim().is_empty()
+                && after[..nl].trim().chars().all(|c| c.is_ascii_alphanumeric()) =>
+            {
+                &after[nl + 1..]
+            }
+            _ => after.strip_prefix('\n').unwrap_or(after),
+        };
         if let Some(end) = after.find("```") {
             let code = after[..end].trim();
             if code.contains("fn ") {
