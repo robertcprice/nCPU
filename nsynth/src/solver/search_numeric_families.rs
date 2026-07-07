@@ -932,6 +932,124 @@ pub(super) fn search_bitwise_binary(problem: &Problem, fn_name: &str) -> Option<
     None
 }
 
+/// Roman-numeral recognizer — the DIGIT-LEXICON lane (a multi-char symbol table,
+/// the natural generalization of the base-N single-char lexicon). Two directions:
+///   * int -> roman (1..3999): greedy subtractive table (M/CM/D/.../I), emitted as
+///     a chain of `while m >= v { result = result + sym; m = m - v; }`.
+///   * roman -> int: scan chars, add each symbol value but SUBTRACT when a smaller
+///     precedes a larger (IV=4). Emitted as a 2-fn program (entry + a char-value
+///     helper), entry FIRST so the verifier calls it.
+/// int_to_roman guards n<1 / n>3999 so the emitted program stays total+bounded
+/// under the strict-verify robustness probe (an unbounded n would append billions
+/// of "I" and trip the value-size cap). Exact-by-construction; strict re-verify.
+pub(super) fn search_roman(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    const TABLE: &[(i64, &str)] = &[
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    fn roman_val(c: char) -> i64 {
+        match c.to_ascii_uppercase() {
+            'I' => 1,
+            'V' => 5,
+            'X' => 10,
+            'L' => 50,
+            'C' => 100,
+            'D' => 500,
+            'M' => 1000,
+            _ => 0,
+        }
+    }
+    let pts = parse_param_types(problem.signature);
+    // ---- int -> roman string ----
+    if pts == [ParamType::I64] && problem.examples.iter().all(|e| str_value(&e.expected).is_some())
+    {
+        fn ref_int_to_roman(n: i64) -> Option<String> {
+            if !(1..=3999).contains(&n) {
+                return None;
+            }
+            let (mut m, mut s) = (n, String::new());
+            for &(v, sym) in TABLE {
+                while m >= v {
+                    s.push_str(sym);
+                    m -= v;
+                }
+            }
+            Some(s)
+        }
+        let ok = problem.examples.iter().all(|ex| {
+            ex.inputs.len() == 1
+                && match (int_value(&ex.inputs[0]), str_value(&ex.expected)) {
+                    (Some(n), Some(s)) => ref_int_to_roman(n).as_deref() == Some(s),
+                    _ => false,
+                }
+        });
+        if ok {
+            let mut loops = String::new();
+            for &(v, sym) in TABLE {
+                loops.push_str(&format!(
+                    "    while m >= {v} {{\n        result = result + \"{sym}\";\n        m = m - {v};\n    }}\n"
+                ));
+            }
+            let code = format!(
+                "fn {fn_name}(n: i64) -> string {{\n    if n < 1 {{\n        return \"\";\n    }}\n    if n > 3999 {{\n        return \"\";\n    }}\n    result: string = \"\";\n    m: i64 = n;\n{loops}    return result;\n}}\n"
+            );
+            return verified_result(problem, code, "search_roman:int_to_roman");
+        }
+        return None;
+    }
+    // ---- roman string -> int ----
+    // Gate on the actual example types, NOT ParamType: infer_signature emits
+    // "String" (capital) for a str param but parse_param_types matches lowercase
+    // "string", so ParamType::String would never fire here.
+    if problem.examples.iter().all(|e| {
+        e.inputs.len() == 1 && str_value(&e.inputs[0]).is_some() && int_value(&e.expected).is_some()
+    }) {
+        fn ref_roman_to_int(s: &str) -> Option<i64> {
+            let cs: Vec<char> = s.chars().collect();
+            if cs.is_empty() || cs.iter().any(|&c| roman_val(c) == 0) {
+                return None;
+            }
+            let mut total = 0i64;
+            for i in 0..cs.len() {
+                let v = roman_val(cs[i]);
+                if i + 1 < cs.len() && v < roman_val(cs[i + 1]) {
+                    total -= v;
+                } else {
+                    total += v;
+                }
+            }
+            Some(total)
+        }
+        let ok = problem.examples.iter().all(|ex| {
+            ex.inputs.len() == 1
+                && match (str_value(&ex.inputs[0]), int_value(&ex.expected)) {
+                    (Some(s), Some(want)) => ref_roman_to_int(s) == Some(want),
+                    _ => false,
+                }
+        });
+        if ok {
+            let helper = format!("{fn_name}_roman_val");
+            let code = format!(
+                "fn {fn_name}(s: string) -> i64 {{\n    total: i64 = 0;\n    i: i64 = 0;\n    n: i64 = len(s);\n    while i < n {{\n        v: i64 = {helper}(s[i]);\n        nextv: i64 = 0;\n        if (i + 1) < n {{\n            nextv = {helper}(s[i + 1]);\n        }}\n        if v < nextv {{\n            total = total - v;\n        }} else {{\n            total = total + v;\n        }}\n        i = i + 1;\n    }}\n    return total;\n}}\n\nfn {helper}(c: string) -> i64 {{\n    if c == \"I\" {{ return 1; }}\n    if c == \"i\" {{ return 1; }}\n    if c == \"V\" {{ return 5; }}\n    if c == \"v\" {{ return 5; }}\n    if c == \"X\" {{ return 10; }}\n    if c == \"x\" {{ return 10; }}\n    if c == \"L\" {{ return 50; }}\n    if c == \"l\" {{ return 50; }}\n    if c == \"C\" {{ return 100; }}\n    if c == \"c\" {{ return 100; }}\n    if c == \"D\" {{ return 500; }}\n    if c == \"d\" {{ return 500; }}\n    if c == \"M\" {{ return 1000; }}\n    if c == \"m\" {{ return 1000; }}\n    return 0;\n}}\n"
+            );
+            return verified_result(problem, code, "search_roman:roman_to_int");
+        }
+        return None;
+    }
+    None
+}
+
 pub(super) fn search_sum_of_divisors_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {

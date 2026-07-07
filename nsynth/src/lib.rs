@@ -18,6 +18,7 @@ pub mod comprehension;
 pub mod constraint_oracle;
 pub mod egraph;
 pub mod db;
+pub mod doc_ingest;
 pub mod differentiable;
 pub mod enumerative;
 pub mod emergent_rule_learning;
