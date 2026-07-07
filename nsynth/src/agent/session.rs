@@ -252,12 +252,21 @@ impl CodingAgentSession {
                 }
                 ans => {
                     use crate::verified_nl_router::Answer;
+                    // With NO examples there is no oracle: a library / composition match
+                    // is a name-grounded GUESS at intent. The op itself is sound (its
+                    // .mog is the verified reference impl) but "is this what you asked
+                    // for?" is unconfirmed → label it TENTATIVE, never a confident solve.
+                    // Synthesis / model tiers only fire WITH examples, so they are always
+                    // verified. This is general epistemics (no examples ⇒ tentative), not
+                    // a per-case rule.
+                    let unverified = examples.is_empty();
+                    let tent = |m: String| if unverified { format!("{m}:tentative") } else { m };
                     let (method, code) = match ans {
                         Answer::Library { name, code } => {
-                            (format!("verified-nl-router:library:{name}"), code)
+                            (tent(format!("verified-nl-router:library:{name}")), code)
                         }
                         Answer::Composition { code } => {
-                            ("verified-nl-router:composition".to_string(), code)
+                            (tent("verified-nl-router:composition".to_string()), code)
                         }
                         Answer::Synthesized { method, code } => {
                             (format!("verified-nl-router:synth:{method}"), code)
@@ -1103,6 +1112,29 @@ impl CodingAgentSession {
                 app_html = Some(html);
             }
         }
+        // NEVER-WRONG DOWNGRADE. Reaching run_synthesis means the front-door
+        // (`answer()`) found NO user-authored oracle (inline `in->out` examples) —
+        // every with-examples query is intercepted and returned up there. So
+        // `req.examples` here are always COMPREHENSION-DERIVED: the engine strict-
+        // verifies the program against a spec it INFERRED from prose, not one the
+        // user gave. That makes the program correct-by-construction w.r.t. a GUESS at
+        // intent. Even a clean registry resolution is only a guess at WHICH op was
+        // meant ("average" mis-resolving to the verified-but-wrong `sum`): the op is
+        // sound, the CHOICE is unconfirmed. With no oracle to confirm intent, the
+        // honest label is TENTATIVE, never a confident solve — so the agent is never
+        // confidently wrong on a bare description. General epistemic rule (no user
+        // oracle ⇒ tentative), not a per-phrase patch. `user_oracle` is defensive:
+        // it is always false on this path today, but keeps the rule correct if a
+        // future caller reaches run_synthesis with real examples.
+        let user_oracle = !crate::verified_nl_router::split_prompt_examples(query).1.is_empty();
+        let method = if synthesis.success
+            && !user_oracle
+            && !synthesis.method.contains(":tentative")
+        {
+            format!("{}:tentative", synthesis.method)
+        } else {
+            synthesis.method.clone()
+        };
         AgentQueryResult {
             route: QueryRoute::SynthesizeFunction,
             success: synthesis.success,
@@ -1116,7 +1148,7 @@ impl CodingAgentSession {
             },
             workflow: workflow_label(&req.workflow),
             clarification_questions: Vec::new(),
-            synthesis_method: Some(synthesis.method.clone()),
+            synthesis_method: Some(method),
             repo_result: None,
             tool_trace,
         }
