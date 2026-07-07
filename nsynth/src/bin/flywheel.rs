@@ -40,10 +40,17 @@ fn main() {
         (PathBuf::from(&arg), false)
     };
 
-    let examples = ingest_examples_dir(&dir);
+    // MIN examples per function (arg 2, default 3). >=3 cuts the 2-point overfit
+    // (e.g. 7->8, 0->1 matching both increment and next_power_of_2): more examples
+    // pin the intended op.
+    let min_ex: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(3);
+    let examples: Vec<_> = ingest_examples_dir(&dir)
+        .into_iter()
+        .filter(|(_, v)| v.len() >= min_ex)
+        .collect();
     let forms = ingest_dir(&dir);
     eprintln!(
-        "mined {} functions with >= 2 integer examples from {}",
+        "mined {} functions with >= {min_ex} integer examples from {}",
         examples.len(),
         dir.display()
     );

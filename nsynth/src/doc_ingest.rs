@@ -308,16 +308,44 @@ pub fn filter_surface_forms(forms: &[SurfaceForm], max_df: usize) -> Vec<Surface
 /// path (`learn_nl::teach_by_examples`) — the flywheel that turns a real repo's
 /// tests into named, verified library ops.
 pub fn mine_int_examples(source: &str) -> Vec<(String, Vec<(i64, i64)>)> {
+    let lines: Vec<&str> = source.lines().collect();
     let mut map: std::collections::BTreeMap<String, Vec<(i64, i64)>> = std::collections::BTreeMap::new();
-    for line in source.lines() {
+    let mut push = |map: &mut std::collections::BTreeMap<String, Vec<(i64, i64)>>, name: String, io: (i64, i64)| {
+        let v = map.entry(name).or_default();
+        if !v.contains(&io) {
+            v.push(io);
+        }
+    };
+    for (idx, line) in lines.iter().enumerate() {
         for (name, inp, out) in scan_int_examples(line) {
-            let v = map.entry(name).or_default();
-            if !v.contains(&(inp, out)) {
-                v.push((inp, out));
+            push(&mut map, name, (inp, out));
+        }
+        // Python-style doctest: `>>> f(2)` on one line, the expected int on the next.
+        if let Some(rest) = line.trim_start().strip_prefix(">>>") {
+            if let Some((name, inp)) = single_int_call(rest.trim()) {
+                let mut k = idx + 1;
+                while k < lines.len() && lines[k].trim().is_empty() {
+                    k += 1;
+                }
+                if let Some(out) = lines.get(k).and_then(|l| l.trim().parse::<i64>().ok()) {
+                    push(&mut map, name, (inp, out));
+                }
             }
         }
     }
     map.into_iter().filter(|(_, v)| v.len() >= 2).collect()
+}
+
+/// Parse a bare `NAME(INT)` call (the whole string), returning (name, arg).
+fn single_int_call(s: &str) -> Option<(String, i64)> {
+    let open = s.find('(')?;
+    let name = &s[..open];
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let inner = s[open + 1..].strip_suffix(')')?;
+    let arg = inner.trim().parse::<i64>().ok()?;
+    Some((name.to_string(), arg))
 }
 
 fn scan_int_examples(line: &str) -> Vec<(String, i64, i64)> {
@@ -538,6 +566,14 @@ assert_eq!(add(1, 2), 3);     // two-arg -> not a unary example
         assert!(dbl.contains(&(2, 4)) && dbl.contains(&(3, 6)) && dbl.contains(&(5, 10)), "{dbl:?}");
         assert!(!mined.contains_key("triple"), "call with no expected value ignored");
         assert!(!mined.contains_key("add"), "two-arg call is not a unary (in,out)");
+    }
+
+    #[test]
+    fn mines_python_doctests() {
+        let src = "def square(n):\n    \"\"\"\n    >>> square(2)\n    4\n    >>> square(3)\n    9\n    \"\"\"\n    return n * n\n";
+        let mined: std::collections::BTreeMap<_, _> = mine_int_examples(src).into_iter().collect();
+        let sq = mined.get("square").expect("square doctest mined");
+        assert!(sq.contains(&(2, 4)) && sq.contains(&(3, 9)), "{sq:?}");
     }
 
     #[test]
