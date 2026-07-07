@@ -327,15 +327,79 @@ pub fn declare(prompt: &str) -> Option<&'static LibOp> {
     route(prompt).map(|r| r.op)
 }
 
+/// NO-EXAMPLES composition. A prompt like "reverse then uppercase a string" names
+/// two ops in sequence; with no example oracle, use the PROMPT ORDER to decide the
+/// chain (first-named applied first) and the TYPES to validate it (a: X->Y, b: Y->Z).
+/// Returns the composed program, or None if fewer than two ops are confidently named
+/// or their types don't chain in prompt order. Like [`declare`], the honest
+/// completion is [`demonstrate`] — show the chain's behavior for the user to confirm.
+pub fn declare_composed(prompt: &str) -> Option<String> {
+    // Ordered prompt words (lowercase); a prefix (>=4 chars) counts, so "uppercase"
+    // matches the op token "upper".
+    let words: Vec<String> = prompt
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    // Op-name tokens are STEMMED (content_tokens), so match against the stemmed word
+    // too (else "string" -> op token "str" never lines up with the raw word "string").
+    let pos_of = |tok: &str| -> Option<usize> {
+        words.iter().position(|w| {
+            let sw = stem(w);
+            sw == tok
+                || w == tok
+                || (tok.len() >= 4 && (sw.starts_with(tok) || w.starts_with(tok)))
+        })
+    };
+    // Ops whose FULL name is present, tagged with their earliest position in prompt.
+    let mut named: Vec<(&'static LibOp, usize)> = Vec::new();
+    for op in OPS {
+        let toks = content_tokens(op.name);
+        if toks.is_empty() {
+            continue;
+        }
+        let positions: Option<Vec<usize>> = toks.iter().map(|t| pos_of(t)).collect();
+        let Some(ps) = positions else { continue };
+        let earliest = *ps.iter().min().unwrap();
+        named.push((op, earliest));
+    }
+    named.sort_by_key(|(_, p)| *p);
+    named.dedup_by_key(|(op, _)| op.name);
+    if named.len() < 2 {
+        return None;
+    }
+    // First two ops in prompt order form the chain a -> b.
+    let (a, _) = named[0];
+    let (b, _) = named[1];
+    let (a_params, a_ret) = op_sig_types(a.mog);
+    let (b_params, b_ret) = op_sig_types(b.mog);
+    if a_params.len() != 1 || b_params.len() != 1 || b_params[0] != a_ret {
+        return None; // types don't chain in prompt order
+    }
+    let (a_entry, b_entry) = (op_entry_name(a.mog)?, op_entry_name(b.mog)?);
+    Some(format!(
+        "fn composed(x0: {}) -> {b_ret} {{\n    return {b_entry}({a_entry}(x0));\n}}\n\n{}\n{}",
+        a_params[0],
+        a.mog.trim_end(),
+        b.mog.trim_end()
+    ))
+}
+
 /// Run an op on a few illustrative inputs so a user can confirm the behavior by
 /// recognition (the no-example safety mechanism). Returns (input, output) pairs the
 /// op actually produced; skips inputs it can't run on.
 pub fn demonstrate(op: &LibOp) -> Vec<(Vec<crate::benchmark::Value>, String)> {
+    demonstrate_program(op.mog)
+}
+
+/// [`demonstrate`] for any program source (e.g. a composed chain), not just a
+/// library op. Runs the entry fn on illustrative inputs and returns real I/O pairs.
+pub fn demonstrate_program(mog: &str) -> Vec<(Vec<crate::benchmark::Value>, String)> {
     use crate::benchmark::Value;
-    let Some(name) = op_entry_name(op.mog) else { return vec![] };
+    let Some(name) = op_entry_name(mog) else { return vec![] };
     let tys: Vec<&str> = {
-        let (Some(o), Some(c)) = (op.mog.find('('), op.mog.find(')')) else { return vec![] };
-        let inner = op.mog[o + 1..c].trim();
+        let (Some(o), Some(c)) = (mog.find('('), mog.find(')')) else { return vec![] };
+        let inner = mog[o + 1..c].trim();
         if inner.is_empty() {
             vec![]
         } else {
@@ -355,7 +419,7 @@ pub fn demonstrate(op: &LibOp) -> Vec<(Vec<crate::benchmark::Value>, String)> {
         if inputs.len() != tys.len() {
             continue;
         }
-        if let Ok(v) = crate::runtime::execute_function(op.mog, name, &inputs, "demo") {
+        if let Ok(v) = crate::runtime::execute_function(mog, name, &inputs, "demo") {
             out.push((inputs, format!("{v:?}")));
         }
     }
@@ -586,6 +650,17 @@ mod tests {
         // Acronym wins over a coincidental single-token match (all_divisors on "divisor").
         assert_eq!(declare("greatest common divisor of two numbers").map(|o| o.name), Some("gcd"));
         assert_eq!(declare("all divisors of a number").map(|o| o.name), Some("all_divisors"));
+    }
+
+    #[test]
+    fn declare_composed_reads_a_chain_from_prompt_order() {
+        // "reverse then uppercase" -> the composed program, ordered by the prompt.
+        let code = declare_composed("reverse then uppercase a string");
+        assert!(code.is_some(), "should read a 2-op chain");
+        let code = code.unwrap();
+        assert!(code.contains("to_upper(reverse_string"), "chain must be reverse THEN upper");
+        // Single-op prompt names only one op -> no chain.
+        assert!(declare_composed("reverse a string").is_none());
     }
 
     #[test]

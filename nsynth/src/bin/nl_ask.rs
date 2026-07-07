@@ -57,49 +57,60 @@ fn main() {
         std::process::exit(2);
     }
 
-    match declare(&prompt) {
-        None => {
-            println!("REFUSED");
-            println!("  No verified operation confidently matches that request.");
-            println!("  Rephrase, or give an example (input -> output) so it can be verified.");
+    // Priority: a named 2-op CHAIN (more specific — two ops in sequence) beats a
+    // single op; a single op beats a refusal. Both no-example paths confirm by
+    // demonstration.
+    if let Some(code) = mog_synth::verified_nl_router::declare_composed(&prompt) {
+        println!("UNDERSTOOD AS  a 2-step chain");
+        print_demo(&mog_synth::verified_nl_router::demonstrate_program(&code));
+        println!("  Confirm the behavior above is what you meant.");
+        println!("\n  Verified program:");
+        for line in code.lines() {
+            println!("    {line}");
         }
-        Some(op) => {
-            println!("UNDERSTOOD AS  {}", op.name);
-            let demo = demonstrate(op);
-            if demo.is_empty() {
-                println!("  (could not produce an illustrative run)");
-            } else {
-                println!("  It does this:");
-                for (inputs, out) in &demo {
-                    println!("    {}  ->  {}", fmt_inputs(inputs), out);
-                }
-            }
-            println!("  Confirm the behavior above is what you meant.");
-            match &emit_lang {
-                Some(lang) => match emit(op.mog, lang) {
-                    Some(src) => {
-                        // Graded, honest labeling. Pure-arithmetic ops port 1:1 to
-                        // every target and can be trusted; anything using strings,
-                        // arrays, or Mog builtins is a structural translation to
-                        // review. Never present an unverified translation as verified.
-                        if transpile_faithful(op.mog, lang) {
-                            println!("\n  Verified {lang} source (faithful 1:1 transpile — i64 arithmetic):");
-                        } else {
-                            println!("\n  {lang} translation (from the verified Mog — review builtins / integer width before use):");
-                        }
-                        for line in src.lines() {
-                            println!("    {line}");
-                        }
+    } else if let Some(op) = declare(&prompt) {
+        println!("UNDERSTOOD AS  {}", op.name);
+        print_demo(&demonstrate(op));
+        println!("  Confirm the behavior above is what you meant.");
+        match &emit_lang {
+            Some(lang) => match emit(op.mog, lang) {
+                Some(src) => {
+                    // Graded, honest labeling: pure i64 arithmetic ports 1:1 to
+                    // rust/go/java and is trusted; anything else is a translation to
+                    // review. Never present an unverified translation as verified.
+                    if transpile_faithful(op.mog, lang) {
+                        println!("\n  Verified {lang} source (faithful 1:1 transpile — i64 arithmetic):");
+                    } else {
+                        println!("\n  {lang} translation (from the verified Mog — review builtins / integer width before use):");
                     }
-                    None => println!("\n  (unknown --emit target '{lang}')"),
-                },
-                None => {
-                    println!("\n  Verified program:");
-                    for line in op.mog.lines() {
+                    for line in src.lines() {
                         println!("    {line}");
                     }
                 }
+                None => println!("\n  (unknown --emit target '{lang}')"),
+            },
+            None => {
+                println!("\n  Verified program:");
+                for line in op.mog.lines() {
+                    println!("    {line}");
+                }
             }
         }
+    } else {
+        println!("REFUSED");
+        println!("  No verified operation confidently matches that request.");
+        println!("  Rephrase, or give an example (input -> output) so it can be verified.");
+    }
+}
+
+/// Print the illustrative input->output rows of a demonstration.
+fn print_demo(demo: &[(Vec<mog_synth::benchmark::Value>, String)]) {
+    if demo.is_empty() {
+        println!("  (could not produce an illustrative run)");
+        return;
+    }
+    println!("  It does this:");
+    for (inputs, out) in demo {
+        println!("    {}  ->  {}", fmt_inputs(inputs), out);
     }
 }

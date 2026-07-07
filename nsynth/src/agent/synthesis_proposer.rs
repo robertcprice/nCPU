@@ -83,6 +83,13 @@ pub fn nl_synthesis_proposer(
         return Ok(patch);
     }
 
+    // TEST-MINED synthesis: the prose carried no examples, but the failing test's
+    // `assert_eq!` calls do. Mine them and solve the real problem — deterministic,
+    // verified, no model. Strictly stronger than the keyword fast-patch below.
+    if let Some(patch) = try_test_mined_synthesis_patch(task, context, &description) {
+        return Ok(patch);
+    }
+
     if let Some(patch) = try_nl_repo_fast_patch(task, context, &description, analysis) {
         return Ok(patch);
     }
@@ -266,6 +273,183 @@ fn model_body_to_new_text(old_text: &str, repo_fn: &str, program: &str) -> Optio
     }
     let new_text = reshape_to_repo_signature(old_text, repo_fn, &body)?;
     (new_text != *old_text).then_some(new_text)
+}
+
+/// TEST-MINED SYNTHESIS — the deterministic lever that turns the repair loop's own
+/// TEST ORACLE into a searchable spec. Most real repairs have a failing test full of
+/// `assert_eq!(f(x), y)` calls; those ARE I/O examples, but nothing fed them to the
+/// solver — `try_real_synthesis_patch` only reads examples out of the PROSE and
+/// declines bare NL. So a bare-NL-but-tested repair used to fall through every
+/// deterministic stage to the (gated) model. This stage mines the asserts, solves
+/// the real problem, strict-verifies + screens for memorization, and reshapes to the
+/// repo signature — fully verified, no examples in the prose, NO model.
+pub fn try_test_mined_synthesis_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+) -> Option<RepairPatch> {
+    let intent = CodingIntent::from_nl_lenient(description).ok();
+    let target = pick_target_path(task, context, intent.as_ref()).ok()?;
+    let old_text = read_relative_file(context, &target).ok()?;
+    let default_fn = intent
+        .as_ref()
+        .map(|i| i.function_name.strip_prefix("nl_").unwrap_or(&i.function_name).to_string())
+        .unwrap_or_default();
+    let repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
+
+    // Mine integer asserts for `repo_fn` across every context file (tests may live in
+    // a sibling module), dedup, and require enough points to PIN the function.
+    let mut rows: Vec<(Vec<i64>, i64)> = Vec::new();
+    for f in &context.files {
+        if let Some(t) = f.text.as_deref() {
+            rows.extend(mine_int_asserts(t, &repo_fn));
+        }
+    }
+    rows.sort();
+    rows.dedup();
+    if rows.len() < 2 {
+        return None;
+    }
+
+    let exs: Vec<crate::benchmark::Example> = rows
+        .iter()
+        .map(|(ins, out)| crate::benchmark::Example {
+            inputs: ins.iter().map(|&v| crate::benchmark::Value::Int(v)).collect(),
+            expected: crate::benchmark::Value::Int(*out),
+        })
+        .collect();
+    let sig: &'static str =
+        Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str());
+    let problem = crate::benchmark::Problem {
+        name: repo_fn.clone(),
+        category: "repo-test-mined",
+        description: "",
+        signature: sig,
+        examples: exs.clone(),
+        ..Default::default()
+    };
+    let res = crate::solver::solve_problem(&problem);
+    if !res.success {
+        return None;
+    }
+    if crate::runtime::verify_problem_code_strict(&problem, &res.code).is_err() {
+        return None;
+    }
+    // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
+    if crate::synth_confidence::is_memorization_overfit(&res.code, &exs) {
+        return None;
+    }
+    let synthesized = rust_code_for_repo_synthesis(&res.code);
+    if !is_plain_rust_body(&synthesized) {
+        return None;
+    }
+    let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+    if new_text == old_text {
+        return None;
+    }
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                old_text,
+                new_text,
+                "test-mined synthesis proposer (examples from failing asserts; verified, no LLM)",
+            ))
+            .with_metadata("proposer", "nl_test_mined_synthesis")
+            .with_metadata("synthesis_method", res.method.clone()),
+    )
+}
+
+/// Mine integer I/O examples for `fn_name` from `assert_eq!(..)` calls in `text`.
+/// Both `assert_eq!(f(4), 8)` and `assert_eq!(8, f(4))` yield `([4], 8)`. Only calls
+/// whose args AND expected are integer literals are captured (the solver's strong
+/// domain); everything else is skipped. Name matching is word-boundary safe, so
+/// `add` never matches `add_two`.
+fn mine_int_asserts(text: &str, fn_name: &str) -> Vec<(Vec<i64>, i64)> {
+    let mut out = Vec::new();
+    let mut cur = text;
+    while let Some(rel) = cur.find("assert_eq!") {
+        let after = &cur[rel + "assert_eq!".len()..];
+        cur = after; // advance regardless of parse success
+        let Some(open) = after.find('(') else { continue };
+        let Some(inner) = balanced_parens(&after[open..]) else { continue };
+        let args = split_top_level_comma(inner);
+        if args.len() < 2 {
+            continue;
+        }
+        if let Some(ex) = assert_pair_to_example(fn_name, args[0].trim(), args[1].trim())
+            .or_else(|| assert_pair_to_example(fn_name, args[1].trim(), args[0].trim()))
+        {
+            out.push(ex);
+        }
+    }
+    out
+}
+
+/// Content strictly inside the first balanced `(..)` of `s` (which must start with
+/// `(`). `None` if unbalanced.
+fn balanced_parens(s: &str) -> Option<&str> {
+    let b = s.as_bytes();
+    if b.first() != Some(&b'(') {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (i, &c) in b.iter().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[1..i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Split `s` at commas that are NOT nested inside `()` or `[]`.
+fn split_top_level_comma(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut last = 0usize;
+    for (i, &c) in s.as_bytes().iter().enumerate() {
+        match c {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b',' if depth == 0 => {
+                parts.push(&s[last..i]);
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[last..]);
+    parts
+}
+
+/// `(call_side, int_side)` → `(args, expected)` when `call_side` is `fn_name(ints..)`
+/// (word-boundary) and `int_side` is an integer literal.
+fn assert_pair_to_example(fn_name: &str, call_side: &str, int_side: &str) -> Option<(Vec<i64>, i64)> {
+    let expected: i64 = int_side.trim().parse().ok()?;
+    let pat = format!("{fn_name}(");
+    let pos = call_side.find(&pat)?;
+    if pos > 0 {
+        let prev = call_side.as_bytes()[pos - 1];
+        if prev.is_ascii_alphanumeric() || prev == b'_' {
+            return None; // fn_name is a suffix of a longer identifier
+        }
+    }
+    let rest = &call_side[pos + fn_name.len()..]; // starts at the '('
+    let inner = balanced_parens(rest)?;
+    let args: Option<Vec<i64>> =
+        split_top_level_comma(inner).iter().map(|a| a.trim().parse::<i64>().ok()).collect();
+    let args = args?;
+    if args.is_empty() {
+        return None;
+    }
+    Some((args, expected))
 }
 
 /// EMERGENT NL edit driver (no examples, no LLM): "the double function should
@@ -1878,6 +2062,63 @@ mod tests {
                 .iter()
                 .any(|e| e.path != "src/main.rs" && e.path.starts_with("src/") && e.path.ends_with(".rs")),
             "a new module file was created alongside the wiring"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mines_int_examples_from_assert_eq_both_orders_word_boundary() {
+        let src = "assert_eq!(mystery(2), 5);\n assert_eq!(7, mystery(3));\n \
+                   assert_eq!(mystery(4), 9);\n assert_eq!(mystery_helper(1), 99);";
+        let ex = mine_int_asserts(src, "mystery");
+        assert!(ex.contains(&(vec![2], 5)), "call-first order: {ex:?}");
+        assert!(ex.contains(&(vec![3], 7)), "int-first order: {ex:?}");
+        assert!(ex.contains(&(vec![4], 9)));
+        assert!(!ex.iter().any(|(_, o)| *o == 99), "mystery_helper must not match mystery");
+    }
+
+    /// The deterministic test-oracle lever: a repo fn with NO registry name match and
+    /// NO examples in the prose is repaired purely from its failing `assert_eq!` calls
+    /// (mystery(x) = 2x+1) — verified by the solver, no model in the loop.
+    #[test]
+    fn test_mined_synthesis_repairs_from_asserts_no_prose_no_llm() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_testmine_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"tm\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn mystery(n: i64) -> i64 {\n    n\n}\n\n#[cfg(test)]\nmod tests {\n    use super::mystery;\n    #[test]\n    fn t() {\n        assert_eq!(mystery(2), 5);\n        assert_eq!(mystery(3), 7);\n        assert_eq!(mystery(4), 9);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+
+        let task = RepoTaskSpec {
+            id: "test-mined".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: fix the mystery function".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(
+            patch.metadata.iter().any(|(k, v)| k == "proposer" && v == "nl_test_mined_synthesis"),
+            "test-mined stage should win (no registry match, no prose examples): {:?}",
+            patch.metadata
+        );
+        assert!(
+            patch.edits.iter().any(|e| e.path == "src/lib.rs" && e.new_text.contains('2')),
+            "mystery body replaced with the solver's 2x+1"
         );
         let _ = fs::remove_dir_all(&root);
     }
