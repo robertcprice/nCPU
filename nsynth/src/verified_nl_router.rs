@@ -422,6 +422,21 @@ pub fn answer_with_proposer(
                         examples: examples.to_vec(),
                     };
                     if crate::rlvr::run_tool(&req).code().is_some() {
+                        // DISTILL model -> engine: persist this verified program as a
+                        // learned op so a FUTURE run solves the same task MODEL-FREE at
+                        // tier 3 (`try_library` reads the learned store), never reaching
+                        // the model again. The model teaches the engine once; the
+                        // capability becomes permanent + emergent. Sound because every
+                        // future use re-verifies against that task's own held-out
+                        // examples (see `record_proposed_op`).
+                        let full: &'static str = Box::leak(sig.clone().into_boxed_str());
+                        let problem = crate::benchmark::Problem {
+                            name: "f".to_string(),
+                            signature: full,
+                            examples: examples.to_vec(),
+                            ..Default::default()
+                        };
+                        crate::op_library::record_proposed_op(&problem, &code);
                         return Answer::Proposed { method: "model-proposed".to_string(), code };
                     }
                 }
@@ -464,7 +479,64 @@ pub fn declare(prompt: &str) -> Option<&'static LibOp> {
         return Some(acro[0]);
     }
     // Otherwise a unique strict name match (every op-name token present, one winner).
-    route(prompt).map(|r| r.op)
+    let r = route(prompt)?;
+    // TYPE-CUE mismatch. The prompt names a CONTAINER (list/array/string)
+    // but the matched op takes a SCALAR (e.g. `reverse_number` for "reverse a list of
+    // numbers", or `is_even` for "the even numbers"). A wrong-typed op can't be the
+    // confident single answer — refuse.
+    if prompt_names_container(prompt) && op_takes_scalar(r.op) {
+        return None;
+    }
+    // OUTPUT-CUE mismatch. The prompt asks for a COUNT ("number of" / "how many") but
+    // the matched op returns a CONTAINER (e.g. `all_divisors` returns the divisor LIST,
+    // not the count). Wrong-shaped answer — refuse.
+    if prompt_asks_count(prompt) && op_returns_container(r.op) {
+        return None;
+    }
+    Some(r.op)
+}
+
+/// The prompt asks for a scalar COUNT of something.
+fn prompt_asks_count(prompt: &str) -> bool {
+    let p = prompt.to_ascii_lowercase();
+    p.contains("number of") || p.contains("how many") || p.contains("count of")
+}
+
+/// The op's RETURN type is a container (`[..]`/`string`) rather than a scalar.
+fn op_returns_container(op: &LibOp) -> bool {
+    let ret = op
+        .mog
+        .split_once("->")
+        .and_then(|(_, r)| r.split_once('{'))
+        .map(|(t, _)| t.trim())
+        .unwrap_or("");
+    ret.contains('[') || ret.contains("string")
+}
+
+/// The prompt explicitly names a container/aggregate input.
+fn prompt_names_container(prompt: &str) -> bool {
+    let p = prompt.to_ascii_lowercase();
+    ["list", "array", "vec", "sequence", "elements", "string", "text", "characters"]
+        .iter()
+        .any(|c| p.contains(c))
+}
+
+/// The op's FIRST parameter is a scalar (`i64`/`bool`) rather than a container
+/// (`[..]`/`string`). Read from `op.mog`'s signature: `fn NAME(p: TYPE, ..) -> RET`.
+fn op_takes_scalar(op: &LibOp) -> bool {
+    let params = op
+        .mog
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(')'))
+        .map(|(a, _)| a)
+        .unwrap_or("");
+    let first_ty = params
+        .split(',')
+        .next()
+        .and_then(|p| p.split_once(':'))
+        .map(|(_, t)| t.trim())
+        .unwrap_or("");
+    !(first_ty.contains('[') || first_ty.contains("string") || first_ty.contains("str"))
 }
 
 /// NO-EXAMPLES composition. A prompt like "reverse then uppercase a string" names

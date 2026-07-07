@@ -213,6 +213,34 @@ impl CodingAgentSession {
             }
         }
 
+        // NEVER-WRONG ROUTING (no examples). If the prose CONFIDENTLY names a single
+        // verified library op — a unique strict name match or acronym, gated by a
+        // type cue so a scalar op can't answer a list request — synthesize THAT op
+        // directly. This is correct-or-refuse by construction: `declare` returns None
+        // on anything ambiguous or type-mismatched, so it never converts a good route
+        // into a confident wrong one; those fall through to the normal comprehension
+        // path below (which may still refuse or, with examples, verify). It fixes the
+        // bare-NL front door where the guessing path mis-resolved (e.g. "count the
+        // even numbers" -> is_even, "the digits of a number" -> a wrong universal fit).
+        if let Some(op) = crate::verified_nl_router::declare(query) {
+            // Return the op's OWN verified reference implementation (`op.mog`) — correct
+            // by construction. (Do NOT re-synthesize via the solver: from an op's few
+            // example_cases it can overfit to a wrong closed form, e.g. gcd ->
+            // `(a-6)%(b-6)`, or fail outright.)
+            let result = AgentQueryResult {
+                route: QueryRoute::SynthesizeFunction,
+                success: true,
+                response: op.mog.to_string(),
+                workflow: "synthesize_function".to_string(),
+                clarification_questions: Vec::new(),
+                synthesis_method: Some(format!("verified-nl-router:declare:{}", op.name)),
+                repo_result: None,
+                tool_trace: Vec::new(),
+            };
+            self.record_result(query, &result);
+            return result;
+        }
+
         // REFERENCE INTAKE (UNWALL-3-REFERENCE-INTAKE-NL): if the request CARRIES
         // a runnable reference implementation ("behaves like THIS: <fn>"), the
         // reference's behavior IS the spec. Intercept BEFORE comprehension (which
