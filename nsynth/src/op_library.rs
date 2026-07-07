@@ -505,6 +505,14 @@ pub const OPS: &[LibOp] = &[
     // (which reverse/shuffle the example arrays) distinguish it from sort-desc.
     LibOp { name: "reverse_list", arity: 1, mog:
 "fn reverse_list(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = arr.len - 1;\n    while i >= 0 {\n        out.push(arr[i]);\n        i = i - 1;\n    }\n    return out;\n}\n" },
+    // Element accessors. `first`/`last` were missing, so "the first element after
+    // reversing a list" (= last element) had no op and no chainable head to compose
+    // with reverse_list. With `first` present, route_composed builds the verified
+    // chain first(reverse_list(x)); `last` also answers "the last element" directly.
+    LibOp { name: "first", arity: 1, mog:
+"fn first(arr: [i64]) -> i64 {\n    return arr[0];\n}\n" },
+    LibOp { name: "last", arity: 1, mog:
+"fn last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[n - 1];\n}\n" },
     LibOp { name: "list_min", arity: 1, mog:
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:

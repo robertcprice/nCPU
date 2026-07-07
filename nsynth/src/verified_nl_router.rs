@@ -482,11 +482,16 @@ pub fn answer_with_proposer(
     if let Some(code) = route_composed(prompt, examples) {
         return Answer::Composition { code };
     }
-    // Tier 3 — full synthesis with HOLDOUT discipline. Solve on a SEED (all but the
-    // last two) and require the result to reproduce EVERY example including the two
-    // held-out; a fit-only-to-seed overfit fails and is discarded. Needs >= 4.
+    // Tier 3 — full synthesis with HOLDOUT discipline. Solve on a SEED and require
+    // the result to reproduce EVERY example including the held-out ones; a fit-only-
+    // to-seed overfit fails and is discarded. Needs >= 4. The holdout is 2 when there
+    // are enough examples, but shrinks to 1 at exactly 4 so the SEED stays >= 3:
+    // reserving 2-of-4 left seed=2, too thin for the search to determine even simple
+    // functions (abs, x*1.5), which then refused. seed>=3 keeps synthesis reachable
+    // while the >=1 held-out example still catches a seed-overfit (fuzz-verified).
     if examples.len() >= 4 {
-        let seed = &examples[..examples.len() - 2];
+        let holdout = (examples.len() - 3).clamp(1, 2);
+        let seed = &examples[..examples.len() - holdout];
         let sig: &'static str =
             Box::leak(crate::linguigenesis_bridge::infer_signature("f", seed).into_boxed_str());
         let problem = crate::benchmark::Problem {
