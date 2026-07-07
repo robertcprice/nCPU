@@ -258,6 +258,11 @@ pub const OPS: &[LibOp] = &[
 "fn reverse_number(n: i64) -> i64 {\n    x: i64 = n;\n    r: i64 = 0;\n    while x > 0 {\n        r = r * 10 + x % 10;\n        x = x / 10;\n    }\n    return r;\n}\n" },
     LibOp { name: "fibonacci", arity: 1, mog:
 "fn fibonacci(n: i64) -> i64 {\n    a: i64 = 0;\n    b: i64 = 1;\n    i: i64 = 0;\n    while i < n {\n        t: i64 = a + b;\n        a = b;\n        b = t;\n        i = i + 1;\n    }\n    return a;\n}\n" },
+    // A collatz trajectory length is a WHILE loop that no example set can induce
+    // (like is_prime / gcd); carry it as a known algorithm so a prompt naming
+    // "collatz" / "steps" resolves and is example-verified.
+    LibOp { name: "collatz_steps", arity: 1, mog:
+"fn collatz_steps(n: i64) -> i64 {\n    x: i64 = n;\n    steps: i64 = 0;\n    while x > 1 {\n        if x % 2 == 0 {\n            x = x / 2;\n        } else {\n            x = 3 * x + 1;\n        }\n        steps = steps + 1;\n    }\n    return steps;\n}\n" },
     LibOp { name: "is_even", arity: 1, mog:
 "fn is_even(n: i64) -> i64 {\n    if n % 2 == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     // ── number theory (2-arg i64) ──────────────────────────────────────────
