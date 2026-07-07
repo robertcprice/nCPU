@@ -929,6 +929,44 @@ mod tests {
         assert_eq!(r.map(|r| r.method), Some("word-shortest_word".to_string()));
     }
 
+    /// Reachability probe: is longest-word solved by THIS synthesizer, or shadowed
+    /// by an earlier tier? Asserts the method so we know whether C1 is load-bearing.
+    #[test]
+    fn solve_problem_longest_word_method() {
+        use crate::benchmark::{Example, Problem, Value};
+        let ex = |i: &str, o: &str| Example {
+            inputs: vec![Value::Str(i.to_string())],
+            expected: Value::Str(o.to_string()),
+        };
+        let problem = Problem {
+            name: "longest".to_string(),
+            signature: "fn longest(s: string) -> string",
+            examples: vec![
+                ex("hello world", "hello"),
+                ex("the quick brown fox", "quick"),
+                ex("one two three", "three"),
+                ex("a bb ccc", "ccc"),
+                ex("alpha beta", "alpha"),
+                ex("x yy zzz", "zzz"),
+            ],
+            ..Default::default()
+        };
+        let r = crate::solver::solve_problem(&problem);
+        assert!(r.success, "longest word should solve");
+        // C1 is LOAD-BEARING here: no other tier computes max-length-word, so this
+        // must be the word-list synthesizer (guards against silent shadowing).
+        assert!(
+            r.method.starts_with("word-"),
+            "longest word must solve via the word-list synthesizer, got {}",
+            r.method
+        );
+        assert!(
+            crate::runtime::code_reproduces_examples(&r.code, &[ex("i am here now", "here")]),
+            "must generalise; method={}",
+            r.method
+        );
+    }
+
     /// Never-wrong: an example set no word shape reproduces returns None (no guess).
     #[test]
     fn word_program_refuses_unmatched() {
