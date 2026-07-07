@@ -356,17 +356,20 @@ pub fn propose_program(
         .filter(|s| !s.is_empty())?;
     let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
     let sys = MOG_SYSTEM_PROMPT;
-    let user = match prior {
+    let task = match prior {
         None => format!("Task:\n{request}\n\nWrite the Mog function."),
         Some((code, err)) => format!(
             "Task:\n{request}\n\nYour previous attempt:\n{code}\n\nIt FAILED: {err}\n\n\
              Fix the bug and output ONLY the corrected Mog function."
         ),
     };
+    // Fold the system prompt into the USER turn: Gemma (and some other local models
+    // via mlx_lm) reject a `system` role with "System role not supported" (HTTP 404).
+    // A single user message works everywhere.
+    let user = format!("{sys}\n\n{task}");
     let body = serde_json::json!({
         "model": model,
         "messages": [
-            {"role": "system", "content": sys},
             {"role": "user", "content": user}
         ],
         "temperature": temperature,
