@@ -589,6 +589,86 @@ pub fn ingest_source(source: &str) -> Vec<SurfaceForm> {
         .collect()
 }
 
+/// Extract full Rust function sources `(name, "fn name(..) {..}")` from a source
+/// string (brace-matched). Feeds the foreign-op verifier when the engine can't
+/// synthesize a mined function — we import the repo's ACTUAL code.
+pub fn extract_rust_fn_sources(source: &str) -> Vec<(String, String)> {
+    let b = source.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 3 <= b.len() {
+        let at_fn = source[i..].starts_with("fn ")
+            && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'));
+        if !at_fn {
+            i += 1;
+            continue;
+        }
+        let name: String = source[i + 3..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            i += 3;
+            continue;
+        }
+        // Advance to the opening brace of the body (stop at ';' = a bodyless decl).
+        let mut k = i + 3 + name.len();
+        while k < b.len() && b[k] != b'{' && b[k] != b';' {
+            k += 1;
+        }
+        if k >= b.len() || b[k] == b';' {
+            i = k.max(i + 1);
+            continue;
+        }
+        // Brace-match the body.
+        let mut depth = 0i32;
+        let mut m = k;
+        while m < b.len() {
+            match b[m] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        m += 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            m += 1;
+        }
+        out.push((name, source[i..m].to_string()));
+        i = m;
+    }
+    out
+}
+
+/// Extract all Rust function sources under `dir` (name -> source), for foreign
+/// import. A later definition wins (repo lib files over generated stubs).
+pub fn ingest_fn_sources_dir(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    let mut map = std::collections::BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&p) else { continue };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                if path.file_name().map(|n| n == "target").unwrap_or(false) {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.extension().map(|x| x == "rs").unwrap_or(false) {
+                if let Ok(src) = std::fs::read_to_string(&path) {
+                    for (name, source) in extract_rust_fn_sources(&src) {
+                        map.insert(name, source);
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
 /// Mine integer `(function, examples)` from every `.rs`/`.py` file under `dir` —
 /// the flywheel's example source (feed each to learn_nl::teach_by_examples).
 pub fn ingest_examples_dir(dir: &std::path::Path) -> Vec<(String, Vec<(i64, i64)>)> {
@@ -732,6 +812,15 @@ assert_eq!(add(1, 2), 3);     // two-arg -> not a unary example
         assert!(dbl.contains(&(2, 4)) && dbl.contains(&(3, 6)) && dbl.contains(&(5, 10)), "{dbl:?}");
         assert!(!mined.contains_key("triple"), "call with no expected value ignored");
         assert!(!mined.contains_key("add"), "two-arg call is not a unary (in,out)");
+    }
+
+    #[test]
+    fn extracts_rust_fn_sources() {
+        let src = "pub fn double(x: i64) -> i64 { x * 2 }\nfn collatz(mut n: i64) -> i64 { let mut c=0; while n!=1 { n = if n%2==0 {n/2} else {3*n+1}; c+=1; } c }";
+        let m: std::collections::BTreeMap<_, _> = extract_rust_fn_sources(src).into_iter().collect();
+        assert!(m.get("double").unwrap().contains("x * 2"));
+        let col = m.get("collatz").unwrap();
+        assert!(col.starts_with("fn collatz") && col.contains("while n") && col.trim_end().ends_with('}'));
     }
 
     #[test]

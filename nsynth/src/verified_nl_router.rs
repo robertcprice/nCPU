@@ -68,11 +68,12 @@ pub struct Route {
 
 /// Route a natural-language prompt to a verified library op, or `None` to REFUSE.
 ///
-/// Rule: an op qualifies only if EVERY content token of its name appears (stemmed)
-/// in the prompt — a partial name match is not enough (that is how you get
-/// `count_divisors` firing on "divisor" when the user meant `sum_divisors`). Among
-/// qualifiers the MOST SPECIFIC (most name tokens) wins; a tie at the top
-/// specificity is genuine ambiguity, so we REFUSE rather than pick arbitrarily.
+/// STRICT single-op identification (for the no-example / pure-proposer path where
+/// there is no gate to backstop a guess): an op qualifies only if EVERY content
+/// token of its name appears in the prompt; the MOST SPECIFIC qualifier wins; a tie
+/// at the top specificity is genuine ambiguity -> REFUSE. Use [`route_verified`] when
+/// examples exist — it proposes LIBERALLY and lets the verify gate decide, which
+/// lifts recall (partial-name and near-miss prompts) without risking a wrong answer.
 pub fn route(prompt: &str) -> Option<Route> {
     let ptoks = content_tokens(prompt);
     if ptoks.is_empty() {
@@ -87,7 +88,6 @@ pub fn route(prompt: &str) -> Option<Route> {
         if name_toks.is_empty() {
             continue;
         }
-        // EVERY content token of the op name must be present in the prompt.
         if !name_toks.iter().all(|t| has(t)) {
             continue;
         }
@@ -98,7 +98,7 @@ pub fn route(prompt: &str) -> Option<Route> {
                 tie_at_best = false;
             }
             Some(b) if spec == b.specificity => {
-                tie_at_best = true; // two equally specific ops -> ambiguous
+                tie_at_best = true;
             }
             None => {
                 best = Some(Route { op, matched_tokens: name_toks, specificity: spec });
@@ -106,11 +106,74 @@ pub fn route(prompt: &str) -> Option<Route> {
             _ => {}
         }
     }
-    // Ambiguity at the top specificity -> refuse (never guess between two proven ops).
     if tie_at_best {
         return None;
     }
     best
+}
+
+/// Emergent PROPOSAL: every op sharing >=1 content token with the prompt, ranked by
+/// how much of the OP NAME the prompt covers (fraction of name tokens matched, then
+/// absolute count). This is deliberately LIBERAL — it proposes `count_divisors` for
+/// "number of divisors" (partial) and several plausible ops for one prompt. Liberal
+/// proposal is only safe because [`route_verified`] gates every candidate on the
+/// examples: a wrong proposal is executed, fails, and is discarded — never returned.
+pub fn ranked_candidates(prompt: &str) -> Vec<&'static LibOp> {
+    let ptoks = content_tokens(prompt);
+    if ptoks.is_empty() {
+        return Vec::new();
+    }
+    let has = |t: &str| ptoks.iter().any(|p| p == t);
+    // Raw lowercase words in order (for acronym initial-matching, which needs the
+    // ORIGINAL sequence, not the stopword-filtered/stemmed token set).
+    let words: Vec<String> = prompt
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    let mut scored: Vec<(&'static LibOp, f64, usize)> = Vec::new();
+    for op in OPS {
+        let name_toks = content_tokens(op.name);
+        if name_toks.is_empty() {
+            continue;
+        }
+        let matched = name_toks.iter().filter(|t| has(t)).count();
+        // ACRONYM match: a single-token op name (gcd, lcm) whose letters are the
+        // initials of a run of consecutive prompt words ("greatest common divisor"
+        // -> "gcd"). Emergent — derived from the name's own letters, not a synonym
+        // list. Scored as a full-coverage hit so it's tried early.
+        let acronym = name_toks.len() == 1 && is_acronym_of(&name_toks[0], &words);
+        if matched == 0 && !acronym {
+            continue;
+        }
+        let coverage = if acronym {
+            1.0
+        } else {
+            matched as f64 / name_toks.len() as f64
+        };
+        scored.push((op, coverage, matched.max(acronym as usize)));
+    }
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.2.cmp(&a.2))
+    });
+    scored.into_iter().map(|(op, _, _)| op).collect()
+}
+
+/// True if `name` (>=2 letters) is spelled by the first letters of some run of
+/// consecutive `words`, e.g. "gcd" from ["greatest","common","divisor"]. A pure
+/// structural rule over the op name's own characters — no hand-authored expansion.
+fn is_acronym_of(name: &str, words: &[String]) -> bool {
+    let letters: Vec<char> = name.chars().collect();
+    if letters.len() < 2 || words.len() < letters.len() {
+        return false;
+    }
+    words.windows(letters.len()).any(|w| {
+        w.iter()
+            .zip(&letters)
+            .all(|(word, &c)| word.starts_with(c))
+    })
 }
 
 /// Never-confidently-wrong routing: PROPOSE an op from the prompt, then let
@@ -122,19 +185,25 @@ pub fn route(prompt: &str) -> Option<Route> {
 /// "no true oracle" ceiling applies to NL too), so the example gate is mandatory.
 /// With zero examples the gate is vacuous — callers should treat that as TENTATIVE,
 /// not confirmed.
-pub fn route_verified<'a>(
-    prompt: &str,
-    examples: &'a [crate::benchmark::Example],
-) -> Option<Route> {
-    let r = route(prompt)?;
+pub fn route_verified(prompt: &str, examples: &[crate::benchmark::Example]) -> Option<Route> {
     if examples.is_empty() {
         return None; // no oracle -> cannot confirm -> refuse rather than guess
     }
-    if crate::runtime::code_reproduces_examples(r.op.mog, examples) {
-        Some(r)
-    } else {
-        None
+    // Try each NL-proposed candidate (best name-coverage first) through the gate;
+    // return the FIRST whose proven program reproduces every example. The NL rank
+    // is what makes this an oracle beyond the examples: on non-distinguishing
+    // examples (e.g. all-True `perfect_square`) the semantically-closest op is tried
+    // first, so we prefer the right op over a coincidental match. Bounded to the top
+    // candidates so a vague prompt can't scan the whole library.
+    const MAX_TRIED: usize = 12;
+    for op in ranked_candidates(prompt).into_iter().take(MAX_TRIED) {
+        if crate::runtime::code_reproduces_examples(op.mog, examples) {
+            let name_toks = content_tokens(op.name);
+            let spec = name_toks.len();
+            return Some(Route { op, matched_tokens: name_toks, specificity: spec });
+        }
     }
+    None
 }
 
 #[cfg(test)]
@@ -165,5 +234,32 @@ mod tests {
     fn prefers_the_more_specific_op() {
         // "sum of divisors" names sum_divisors fully; count_divisors needs "count".
         assert_eq!(routed_name("sum of the divisors"), Some("sum_divisors"));
+    }
+
+    #[test]
+    fn acronym_op_is_proposed_from_spelled_out_words() {
+        // gcd is spelled by the initials of "greatest common divisor" — an emergent
+        // structural match, so it appears among the ranked candidates for the gate.
+        let cands = ranked_candidates("greatest common divisor of two numbers");
+        assert!(cands.iter().any(|op| op.name == "gcd"), "gcd should be proposed");
+        let lcm = ranked_candidates("least common multiple of two numbers");
+        assert!(lcm.iter().any(|op| op.name == "lcm"), "lcm should be proposed");
+    }
+
+    #[test]
+    fn liberal_proposal_still_never_returns_unverified() {
+        // A near-miss prompt proposes count_divisors, but with examples that DON'T
+        // match it the gate must refuse (None), never return a wrong op.
+        let bad = vec![
+            crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Int(6)],
+                expected: crate::benchmark::Value::Int(999),
+            },
+            crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Int(12)],
+                expected: crate::benchmark::Value::Int(999),
+            },
+        ];
+        assert!(route_verified("number of divisors of a number", &bad).is_none());
     }
 }

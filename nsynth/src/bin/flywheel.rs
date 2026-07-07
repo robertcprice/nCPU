@@ -9,7 +9,8 @@
 //!     cargo run --release --bin flywheel -- ./some/repo
 
 use mog_synth::comprehension::Engine;
-use mog_synth::doc_ingest::{ingest_dir, ingest_multiarg_examples_dir};
+use mog_synth::doc_ingest::{ingest_dir, ingest_fn_sources_dir, ingest_multiarg_examples_dir};
+use mog_synth::foreign_op::{verify_foreign_rust, ForeignVerdict};
 use mog_synth::learn_nl::teach_by_examples_n;
 use std::path::PathBuf;
 use std::process::Command;
@@ -49,6 +50,7 @@ fn main() {
         .filter(|(_, v)| v.len() >= min_ex)
         .collect();
     let forms = ingest_dir(&dir);
+    let sources = ingest_fn_sources_dir(&dir);
     eprintln!(
         "mined {} functions (any arity) with >= {min_ex} integer examples from {}",
         examples.len(),
@@ -57,29 +59,45 @@ fn main() {
 
     let engine = Engine::new();
     let mut learned = 0usize;
+    let mut foreign = 0usize;
     for (name, rows) in &examples {
         let arity = rows.first().map(|(i, _)| i.len()).unwrap_or(1);
-        let outcome = teach_by_examples_n(&engine, name, rows);
         let vocab: Vec<String> = forms
             .iter()
             .find(|f| &f.lemma == name)
             .map(|f| f.terms.iter().take(6).cloned().collect())
             .unwrap_or_default();
+        let outcome = teach_by_examples_n(&engine, name, rows);
         if outcome.success {
             learned += 1;
             println!(
-                "LEARNED  {name:<16} arity={arity} ex={:<2} method={:<26} vocab={:?}",
+                "LEARNED   {name:<16} arity={arity} ex={:<2} method={:<24} vocab={:?}",
                 rows.len(),
                 outcome.method.clone().unwrap_or_default(),
                 vocab
             );
+        } else if let Some(src) = sources.get(name) {
+            // Engine can't SYNTHESIZE it — import the repo's ACTUAL code, vetted
+            // (compile+run against the examples). Lands TENTATIVE: the frontier crosser.
+            match verify_foreign_rust(name, src, rows).verdict {
+                ForeignVerdict::Tentative => {
+                    foreign += 1;
+                    println!(
+                        "FOREIGN   {name:<16} arity={arity} ex={:<2} TENTATIVE (verified foreign source, beyond synthesis) vocab={:?}",
+                        rows.len(),
+                        vocab
+                    );
+                }
+                ForeignVerdict::Refused(why) => {
+                    println!("refused   {name:<16} arity={arity} (synth + foreign both failed: {why})")
+                }
+            }
         } else {
-            println!("refused  {name:<16} arity={arity} ex={} (engine could not verify)", rows.len());
+            println!("refused   {name:<16} arity={arity} ex={} (engine could not verify, no source)", rows.len());
         }
     }
     eprintln!(
-        "flywheel: {} LEARNED (verified + registered) of {} mined",
-        learned,
+        "flywheel: {learned} SYNTHESIZED + {foreign} FOREIGN-TENTATIVE of {} mined",
         examples.len()
     );
 
