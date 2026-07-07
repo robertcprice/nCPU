@@ -873,6 +873,65 @@ pub(super) fn search_float_stat(problem: &Problem, fn_name: &str) -> Option<Solv
     None
 }
 
+/// (a, b) -> zero-padded binary string of a bitwise op. `binary_and/or/xor` on
+/// TheAlgorithms return `"0b" + bin(a OP b)` zero-padded to the bit-length of
+/// max(a, b) (e.g. binary_and(58, 73) -> "0b0001000"). Emits Mog with the native
+/// bit operators (&/|/^) plus a fixed-WIDTH binary build (loop exactly `width`
+/// times, LSB-first prepend, so the leading zeros are preserved rather than
+/// stripped). Non-negative guard keeps the program total under the strict-verify
+/// robustness probe (a negative m would make `m % 2` negative and index the digit
+/// lexicon out of bounds); real examples are always non-negative.
+pub(super) fn search_bitwise_binary(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
+    if parse_param_types(problem.signature) != [ParamType::I64, ParamType::I64] {
+        return None;
+    }
+    fn ref_bitwise(a: i64, b: i64, op: char) -> Option<String> {
+        if a < 0 || b < 0 {
+            return None;
+        }
+        let v = match op {
+            '&' => a & b,
+            '|' => a | b,
+            '^' => a ^ b,
+            _ => return None,
+        };
+        let hi = a.max(b);
+        let width = if hi == 0 {
+            1
+        } else {
+            64 - (hi as u64).leading_zeros() as i64
+        };
+        let mut s = String::new();
+        let mut m = v;
+        for _ in 0..width {
+            s.insert(0, if m & 1 == 1 { '1' } else { '0' });
+            m >>= 1;
+        }
+        Some(format!("0b{s}"))
+    }
+    for (name, op) in [("and", '&'), ("or", '|'), ("xor", '^')] {
+        let ok = problem.examples.iter().all(|ex| {
+            ex.inputs.len() == 2
+                && match (
+                    int_value(&ex.inputs[0]),
+                    int_value(&ex.inputs[1]),
+                    str_value(&ex.expected),
+                ) {
+                    (Some(a), Some(b), Some(s)) => ref_bitwise(a, b, op).as_deref() == Some(s),
+                    _ => false,
+                }
+        });
+        if ok {
+            let code = format!(
+                "fn {fn_name}(a: i64, b: i64) -> string {{\n    if a < 0 {{\n        return \"0b0\";\n    }}\n    if b < 0 {{\n        return \"0b0\";\n    }}\n    v: i64 = a {op} b;\n    hi: i64 = a;\n    if b > a {{\n        hi = b;\n    }}\n    width: i64 = 0;\n    t: i64 = hi;\n    while t > 0 {{\n        width = width + 1;\n        t = t / 2;\n    }}\n    if width == 0 {{\n        width = 1;\n    }}\n    digits: string = \"01\";\n    result: string = \"\";\n    m: i64 = v;\n    i: i64 = 0;\n    while i < width {{\n        result = digits[m % 2] + result;\n        m = m / 2;\n        i = i + 1;\n    }}\n    return \"0b\" + result;\n}}\n"
+            );
+            let method = format!("search_bitwise_binary:{name}");
+            return verified_result(problem, code, Box::leak(method.into_boxed_str()));
+        }
+    }
+    None
+}
+
 pub(super) fn search_sum_of_divisors_loop(problem: &Problem, fn_name: &str) -> Option<SolveResult> {
     let param_types = parse_param_types(problem.signature);
     if param_types != [ParamType::I64] {

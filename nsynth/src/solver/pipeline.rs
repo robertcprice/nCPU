@@ -1068,6 +1068,21 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
         }
     }
 
+    // Exact bitwise-op -> zero-padded binary string recognizer (binary_and/or/xor):
+    // the OSS bitwise-format timeout cluster. Fire early; strict-re-verified.
+    if let Some(result) =
+        super::search_numeric_families::search_bitwise_binary(problem, problem.function_name())
+    {
+        if result.success {
+            eprintln!(
+                "[solve] bitwise-binary OK in {:.3}s — {}",
+                t0.elapsed().as_secs_f32(),
+                result.method
+            );
+            return result;
+        }
+    }
+
     let non_scalar = has_non_scalar_input(problem);
 
     // Run the cheap preemptive search teacher first — it's ms-scale and
