@@ -249,6 +249,13 @@ pub fn try_model_repair_patch(
     );
 
     let program = crate::local_llm::propose_program(&request, prior, 0.2)?;
+    // MULTI-FILE: if the model returned several functions that map onto EXISTING repo
+    // files (e.g. a fix touching a handler and its helper), coordinate them into one
+    // atomic patch. The cargo-test oracle still gates the whole thing all-or-nothing.
+    // Falls back to the single-file body swap below.
+    if let Some(patch) = model_response_to_multifile_patch(context, &program) {
+        return Some(patch);
+    }
     let new_text = model_body_to_new_text(&old_text, &repo_fn, &program)?;
     Some(
         RepairPatch::new()
@@ -260,6 +267,56 @@ pub fn try_model_repair_patch(
             ))
             .with_metadata("proposer", "model_repair"),
     )
+}
+
+/// Coordinate a MULTI-FILE model patch: extract every `fn` from `response` and, for
+/// each one a repo file already defines, swap that fn's body into its file
+/// (accumulating multiple swaps per file). Returns a patch only when it touches TWO
+/// OR MORE files — a single-file response goes back to the caller's body-swap path.
+/// Pure over `context` + `response`, so it is testable with no model present; every
+/// edit still passes the plain-Rust gate and, downstream, the cargo-test oracle.
+fn model_response_to_multifile_patch(context: &RepairContext, response: &str) -> Option<RepairPatch> {
+    let fns = crate::doc_ingest::extract_rust_fn_sources(response);
+    if fns.len() < 2 {
+        return None;
+    }
+    // Accumulate per file: (original_text, current_text with swaps applied).
+    let mut per_file: std::collections::BTreeMap<String, (String, String)> =
+        std::collections::BTreeMap::new();
+    for (name, src) in &fns {
+        let Some(file) = context.files.iter().find(|f| {
+            f.path.ends_with(".rs") && file_defines_function(f.text.as_deref().unwrap_or(""), name)
+        }) else {
+            continue; // a proposed fn with no existing definition — not a coordinated edit
+        };
+        let orig = file.text.clone().unwrap_or_default();
+        let entry = per_file.entry(file.path.clone()).or_insert_with(|| (orig.clone(), orig));
+        let body = rust_code_for_repo_synthesis(src);
+        if !is_plain_rust_body(&body) {
+            continue;
+        }
+        if let Some(next) = reshape_to_repo_signature(&entry.1, name, &body) {
+            entry.1 = next;
+        }
+    }
+    let mut patch = RepairPatch::new();
+    let mut files_changed = 0usize;
+    for (path, (orig, current)) in per_file {
+        if current != orig {
+            patch = patch.with_edit(RepairEdit::new(
+                path,
+                orig,
+                current,
+                "gated model multi-file repair (untrusted; cargo-test gated)",
+            ));
+            files_changed += 1;
+        }
+    }
+    if files_changed >= 2 {
+        Some(patch.with_metadata("proposer", "model_repair_multifile"))
+    } else {
+        None
+    }
 }
 
 /// Pure string core of the model-repair stage (TESTABLE without a model or repo):
@@ -2121,6 +2178,42 @@ mod tests {
         let b = mine_asserts(src, "is_pal");
         assert!(b.contains(&(vec![Value::Str("aa".into())], Value::Bool(true))), "bool true: {b:?}");
         assert!(b.contains(&(vec![Value::Str("ab".into())], Value::Bool(false))), "bool false: {b:?}");
+    }
+
+    /// The gated model's multi-file coordination (pure — no model present): a response
+    /// with two functions, each defined in a different repo file, becomes one atomic
+    /// two-file patch. Downstream the cargo-test oracle still gates it.
+    #[test]
+    fn model_multifile_patch_coordinates_two_files() {
+        let root = std::env::temp_dir().join(format!("nsynth_mf_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"mf\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("src/lib.rs"), "mod a;\nmod b;\n").unwrap();
+        fs::write(root.join("src/a.rs"), "pub fn alpha(n: i64) -> i64 {\n    n\n}\n").unwrap();
+        fs::write(root.join("src/b.rs"), "pub fn beta(n: i64) -> i64 {\n    n\n}\n").unwrap();
+        let ctx = RepairContext::build(&root, &GuardrailPolicy::default()).unwrap();
+
+        // A "model response" that corrects BOTH functions (multi-line, as a model emits).
+        let response = "fn alpha(n: i64) -> i64 {\n    return n + 1;\n}\nfn beta(n: i64) -> i64 {\n    return n * 2;\n}\n";
+        let patch = model_response_to_multifile_patch(&ctx, response).expect("multi-file patch");
+        assert!(
+            patch.metadata.iter().any(|(k, v)| k == "proposer" && v == "model_repair_multifile"),
+            "metadata: {:?}",
+            patch.metadata
+        );
+        let paths: Vec<_> = patch.edits.iter().map(|e| e.path.clone()).collect();
+        assert!(
+            paths.contains(&"src/a.rs".to_string()) && paths.contains(&"src/b.rs".to_string()),
+            "both files edited: {paths:?}"
+        );
+        assert!(patch.edits.iter().any(|e| e.path == "src/a.rs" && e.new_text.contains("+ 1")));
+        assert!(patch.edits.iter().any(|e| e.path == "src/b.rs" && e.new_text.contains("* 2")));
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// The deterministic test-oracle lever: a repo fn with NO registry name match and

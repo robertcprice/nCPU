@@ -327,10 +327,11 @@ pub fn answer(prompt: &str, examples: &[crate::benchmark::Example]) -> Answer {
         // examples) and require the result to reproduce EVERY example including the
         // held-out ones. A function fit only to the seed (e.g. an affine through two
         // stock-price points) fails the held-out check and is discarded. Needs >= 4
-        // examples to hold out two AND leave >= 3 for the solver to determine the
-        // function (2 points underdetermine an affine); fewer -> refuse rather than
-        // risk an overfit through the "solve on all, verify on all" door.
-        if examples.len() >= 5 {
+        // examples to hold out TWO (two independent held-out points are hard for an
+        // overfit to satisfy by chance) while leaving a seed for the solver. Needs
+        // >= 4 (seed >= 2 + holdout 2); fewer -> refuse rather than risk an overfit
+        // through the "solve on all, verify on all" door.
+        if examples.len() >= 4 {
             let seed = &examples[..examples.len() - 2];
             let sig: &'static str = Box::leak(
                 crate::linguigenesis_bridge::infer_signature("f", seed).into_boxed_str(),
