@@ -231,7 +231,8 @@ pub fn derive_surface_form(sym: &DocSymbol) -> SurfaceForm {
             terms.push(w.to_ascii_lowercase());
         }
     }
-    for w in sym.doc.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()) {
+    let prose = strip_code(&sym.doc);
+    for w in prose.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()) {
         if w.len() >= 3 && !STOPWORDS.contains(&w) && w.chars().any(|c| c.is_ascii_alphabetic()) {
             terms.push(w.to_string());
         }
@@ -246,6 +247,58 @@ pub fn derive_surface_form(sym: &DocSymbol) -> SurfaceForm {
         .trim()
         .to_string();
     SurfaceForm { lemma: sym.name.clone(), terms, gloss }
+}
+
+/// Drop embedded code from a doc so its tokens don't leak into recall terms:
+/// fenced ```code``` blocks, inline `code`, and doctest lines (>>> / assert...).
+fn strip_code(doc: &str) -> String {
+    // Fenced blocks: keep only segments OUTSIDE ``` pairs.
+    let outside: String = doc.split("```").step_by(2).collect::<Vec<_>>().join(" ");
+    // Inline `code` spans.
+    let no_inline: String = outside.split('`').step_by(2).collect::<Vec<_>>().join(" ");
+    // Doctest / assertion lines.
+    no_inline
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.starts_with(">>>") && !t.starts_with("assert") && !t.starts_with("let ")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// GATE the raw surface forms into a resolver-ready overlay: keep only
+/// DISCRIMINATING doc terms (those appearing in at most `max_df` symbols — a
+/// term in many symbols, like "value" or "returns", can't disambiguate). The
+/// symbol's own name words are always kept. Forms left with no terms are dropped.
+/// This is what makes a noisy corpus safe to merge as recall vocabulary.
+pub fn filter_surface_forms(forms: &[SurfaceForm], max_df: usize) -> Vec<SurfaceForm> {
+    let mut df: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for f in forms {
+        for t in &f.terms {
+            *df.entry(t.as_str()).or_default() += 1;
+        }
+    }
+    let mut out = Vec::new();
+    for f in forms {
+        let name_words: std::collections::HashSet<String> =
+            f.lemma.split(|c: char| !c.is_ascii_alphanumeric()).flat_map(|p| {
+                let mut v = vec![p.to_ascii_lowercase()];
+                // split camelCase / snake handled by the non-alnum split already
+                v.retain(|s| s.len() >= 2);
+                v
+            }).collect();
+        let terms: Vec<String> = f
+            .terms
+            .iter()
+            .filter(|t| name_words.contains(t.as_str()) || df.get(t.as_str()).copied().unwrap_or(0) <= max_df)
+            .cloned()
+            .collect();
+        if !terms.is_empty() {
+            out.push(SurfaceForm { lemma: f.lemma.clone(), terms, gloss: f.gloss.clone() });
+        }
+    }
+    out
 }
 
 /// Ingest one Rust source string into surface-form candidates.
@@ -352,6 +405,37 @@ pub struct RingBuffer { cap: usize }
         for t in ["greatest", "common", "divisor", "integers"] {
             assert!(gcd.terms.contains(&t.to_string()), "term '{t}' in {:?}", gcd.terms);
         }
+    }
+
+    #[test]
+    fn gates_noise_into_discriminating_overlay() {
+        // Code inside a docstring does not leak into recall terms.
+        let sym = DocSymbol {
+            name: "read_u8".into(),
+            kind: "fn".into(),
+            doc: "Reads an unsigned 8 bit integer.\n```\nlet x = assert_eq!(rdr.read_u8(), 5);\n```".into(),
+        };
+        let f = derive_surface_form(&sym);
+        assert!(f.terms.contains(&"reads".to_string()) && f.terms.contains(&"integer".to_string()));
+        assert!(
+            !f.terms.iter().any(|t| t == "assert_eq" || t == "rdr"),
+            "fenced code tokens stripped: {:?}",
+            f.terms
+        );
+
+        // A generic term (high document-frequency) is dropped, discriminating
+        // terms + the symbol's own name words are kept.
+        let forms = vec![
+            SurfaceForm { lemma: "reverse_string".into(), terms: vec!["reverse".into(), "string".into(), "value".into()], gloss: String::new() },
+            SurfaceForm { lemma: "sort_list".into(), terms: vec!["sort".into(), "list".into(), "value".into()], gloss: String::new() },
+            SurfaceForm { lemma: "min_value".into(), terms: vec!["min".into(), "value".into()], gloss: String::new() },
+        ];
+        let gated = filter_surface_forms(&forms, 2); // "value" DF=3 > 2 -> dropped
+        let rev = gated.iter().find(|f| f.lemma == "reverse_string").unwrap();
+        assert!(rev.terms.contains(&"reverse".to_string()), "discriminating kept");
+        assert!(!rev.terms.contains(&"value".to_string()), "generic high-DF term dropped: {:?}", rev.terms);
+        let mv = gated.iter().find(|f| f.lemma == "min_value").unwrap();
+        assert!(mv.terms.contains(&"value".to_string()), "name word kept even when generic");
     }
 
     #[test]

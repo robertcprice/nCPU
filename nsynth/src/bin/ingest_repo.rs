@@ -7,7 +7,7 @@
 //!     cargo run --release --bin ingest_repo -- https://github.com/user/repo.git
 //!     cargo run --release --bin ingest_repo -- ./some/local/checkout
 
-use mog_synth::doc_ingest::{ingest_dir, ingest_readme, SurfaceForm};
+use mog_synth::doc_ingest::{filter_surface_forms, ingest_dir, ingest_readme, SurfaceForm};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -66,12 +66,28 @@ fn main() {
     }
 
     let symbols = forms.iter().filter(|f| f.lemma != "<project>").count();
+    let raw_vocab: std::collections::HashSet<&str> =
+        forms.iter().flat_map(|f| f.terms.iter().map(String::as_str)).collect();
+
+    // GATE: keep only discriminating terms (document-frequency <= ~2% of symbols,
+    // min 3), so a noisy corpus is safe to merge as recall vocabulary.
+    let max_df = (symbols / 50).max(3);
+    let gated = filter_surface_forms(&forms, max_df);
+    let gated_vocab: std::collections::HashSet<&str> =
+        gated.iter().flat_map(|f| f.terms.iter().map(String::as_str)).collect();
+
     eprintln!(
         "ingested {symbols} documented symbols (+{} README) from {}",
         forms.len() - symbols,
         dir.display()
     );
-    for f in &forms {
+    eprintln!(
+        "vocab: {} raw terms -> {} discriminating (max_df={max_df}); {} forms after gating",
+        raw_vocab.len(),
+        gated_vocab.len(),
+        gated.len()
+    );
+    for f in &gated {
         println!("{}", json_line(f));
     }
 
