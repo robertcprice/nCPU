@@ -156,6 +156,22 @@ def typ(v):
     if isinstance(v, list): return "list"
     return "?"
 
+def type_consistent(rows, arity):
+    """Drop examples whose type at ANY input position — or whose output type —
+    differs from the dominant (majority) type for that slot. A single stray
+    float/str example (e.g. decimal_to_hexadecimal's [17.0], or is_palindrome's
+    ['10101'] among int inputs) otherwise makes an i64 program fail the
+    reproduce-every-example gate, blocking a function the engine CAN solve on its
+    consistent examples. int and float are kept DISTINCT (an engine i64 program
+    can't run on a float arg), as are bool and int."""
+    from collections import Counter
+    pos_types = [Counter(typ(a[p]) for a, _ in rows).most_common(1)[0][0]
+                 for p in range(arity)]
+    out_type = Counter(typ(e) for _, e in rows).most_common(1)[0][0]
+    return [(a, e) for a, e in rows
+            if typ(e) == out_type
+            and all(typ(a[p]) == pos_types[p] for p in range(arity))]
+
 i = 0
 bytype = defaultdict(int)
 for fname, ios in sorted(funcs.items()):
@@ -168,6 +184,9 @@ for fname, ios in sorted(funcs.items()):
         continue
     arity = len(rows[0][0])
     rows = [(a, e) for a, e in rows if len(a) == arity]  # consistent arity
+    if len(rows) < MINEX:
+        continue
+    rows = type_consistent(rows, arity)  # drop stray-type (contaminant) examples
     if len(rows) < MINEX:
         continue
     i += 1
