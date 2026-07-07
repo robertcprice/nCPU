@@ -292,6 +292,71 @@ pub fn route_composed(prompt: &str, examples: &[crate::benchmark::Example]) -> O
     Some(first)
 }
 
+/// The unified never-wrong answer: one verified tier, or a refusal.
+pub enum Answer {
+    /// A single verified library op.
+    Library { name: &'static str, code: String },
+    /// A verified 2-op composition.
+    Composition { code: String },
+    /// A function synthesized by the FULL engine and verified against the examples.
+    Synthesized { method: String, code: String },
+    /// No verified answer.
+    Refused,
+}
+
+/// THE never-wrong front door. Tries, in order of specificity/cost:
+///   1. a single verified library op (fast, NL-guided),
+///   2. a verified 2-op composition,
+///   3. FULL SYNTHESIS from the examples — the whole engine (recognizers, PBE,
+///      affine/poly, op-pipeline), so the door reaches ANY function the engine can
+///      synthesize, not just the ~300-op vocabulary (e.g. `2n+1`, which no library
+///      op matches but the polynomial lane synthesizes).
+/// Every tier is verified against the examples. With NO examples, only the
+/// vocabulary tiers (declare / declare_composed) apply — synthesis needs an oracle,
+/// so it is not attempted there. Always verified-or-refused: never confidently wrong.
+pub fn answer(prompt: &str, examples: &[crate::benchmark::Example]) -> Answer {
+    if !examples.is_empty() {
+        if let Some(r) = route_verified(prompt, examples) {
+            return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+        }
+        if let Some(code) = route_composed(prompt, examples) {
+            return Answer::Composition { code };
+        }
+        // Synthesis tier — the full engine, with HOLDOUT discipline so a weak-example
+        // overfit is refused, not returned. Solve on a SEED (all but the last two
+        // examples) and require the result to reproduce EVERY example including the
+        // held-out ones. A function fit only to the seed (e.g. an affine through two
+        // stock-price points) fails the held-out check and is discarded. Needs >= 4
+        // examples to hold out two AND leave >= 3 for the solver to determine the
+        // function (2 points underdetermine an affine); fewer -> refuse rather than
+        // risk an overfit through the "solve on all, verify on all" door.
+        if examples.len() >= 5 {
+            let seed = &examples[..examples.len() - 2];
+            let sig: &'static str = Box::leak(
+                crate::linguigenesis_bridge::infer_signature("f", seed).into_boxed_str(),
+            );
+            let problem = crate::benchmark::Problem {
+                name: "f".to_string(),
+                signature: sig,
+                examples: seed.to_vec(),
+                ..Default::default()
+            };
+            let res = crate::solver::solve_problem(&problem);
+            if res.success && crate::runtime::code_reproduces_examples(&res.code, examples) {
+                return Answer::Synthesized { method: res.method, code: res.code };
+            }
+        }
+    } else {
+        if let Some(code) = declare_composed(prompt) {
+            return Answer::Composition { code };
+        }
+        if let Some(op) = declare(prompt) {
+            return Answer::Library { name: op.name, code: op.mog.to_string() };
+        }
+    }
+    Answer::Refused
+}
+
 /// The entry function name of an op program (first `fn <name>(`).
 pub fn op_entry_name(mog: &str) -> Option<&str> {
     mog.split("fn ").nth(1)?.split('(').next().map(str::trim)
@@ -621,6 +686,23 @@ mod tests {
         assert!(cands.iter().any(|op| op.name == "gcd"), "gcd should be proposed");
         let lcm = ranked_candidates("least common multiple of two numbers");
         assert!(lcm.iter().any(|op| op.name == "lcm"), "lcm should be proposed");
+    }
+
+    #[test]
+    fn answer_synthesizes_beyond_the_vocabulary_but_refuses_overfits() {
+        use crate::benchmark::{Example, Value};
+        let ex = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+        // 2n+1: no library op, but the engine synthesizes it. Six examples so a seed
+        // of four determines the affine and two hold out.
+        let affine = vec![ex(3, 7), ex(5, 11), ex(10, 21), ex(2, 5), ex(7, 15), ex(0, 1)];
+        assert!(
+            matches!(answer("two times n plus one", &affine), Answer::Synthesized { .. }),
+            "should synthesize 2n+1 beyond the library vocabulary"
+        );
+        // Random non-generalizing points: any fit to the seed fails the held-out
+        // examples -> the holdout discipline refuses (never a confident overfit).
+        let noise = vec![ex(100, 105), ex(50, 52), ex(73, 30), ex(12, 99), ex(8, 3), ex(64, 77)];
+        assert!(matches!(answer("predict", &noise), Answer::Refused));
     }
 
     #[test]

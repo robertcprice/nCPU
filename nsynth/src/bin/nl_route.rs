@@ -81,18 +81,14 @@ fn main() {
     //   GATED   — NL proposed an op but the gate REJECTED it (a mis-route the system
     //             refuses instead of returning — the never-wrong property working)
     //   REFUSED — NL proposed nothing (no confident op name in the prompt)
-    match verified_nl_router::route_verified(text, &examples) {
-        Some(r) => println!("SOLVED {id} {}", r.op.name),
-        None => {
-            // Single op failed — try a verified 2-op composition ("A then B").
-            if verified_nl_router::route_composed(text, &examples).is_some() {
-                println!("COMPOSED {id}");
-            } else {
-                match verified_nl_router::route(text) {
-                    Some(r) => println!("GATED {id} {}", r.op.name),
-                    None => println!("REFUSED {id}"),
-                }
-            }
-        }
+    use verified_nl_router::Answer;
+    match verified_nl_router::answer(text, &examples) {
+        Answer::Library { name, .. } => println!("SOLVED {id} {name}"),
+        Answer::Composition { .. } => println!("COMPOSED {id}"),
+        Answer::Synthesized { method, .. } => println!("SYNTHESIZED {id} {method}"),
+        Answer::Refused => match verified_nl_router::route(text) {
+            Some(r) => println!("GATED {id} {}", r.op.name),
+            None => println!("REFUSED {id}"),
+        },
     }
 }
