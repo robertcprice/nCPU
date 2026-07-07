@@ -320,9 +320,16 @@ pub const MOG_SYSTEM_PROMPT: &str =
         ch.is_alpha(), ch.ord(); a char is a 1-char string — compare with `ch == 'a'`.\n\
         - NO imports, NO `let`, NO helper functions — ONE self-contained function.\n\
         Output ONLY the function in a ```mog code block, no prose.\n\n\
+        CRITICAL: ONE self-contained function. You may NOT call any other function \
+        (no is_prime(), no helpers) — INLINE everything with nested loops.\n\n\
         EXAMPLE (count elements greater than ten):\n\
         ```mog\n\
         fn solve(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > 10 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n\
+        ```\n\n\
+        EXAMPLE with an INLINED nested loop (count primes below n — the prime test is \
+        inlined, NOT a helper call):\n\
+        ```mog\n\
+        fn solve(n: i64) -> i64 {\n    total: i64 = 0;\n    k: i64 = 2;\n    while k < n {\n        is_p: i64 = 1;\n        d: i64 = 2;\n        while (d * d) <= k {\n            if (k % d) == 0 {\n                is_p = 0;\n            }\n            d = d + 1;\n        }\n        if is_p == 1 {\n            total = total + 1;\n        }\n        k = k + 1;\n    }\n    return total;\n}\n\
         ```";
 
 /// Build the user message for a Mog task (task text + optional signature + examples),

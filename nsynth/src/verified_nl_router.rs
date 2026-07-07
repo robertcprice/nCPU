@@ -307,17 +307,20 @@ pub enum Answer {
     Refused,
 }
 
-/// A model proposer: given a request (NL prompt + seed examples) it returns
-/// candidate Mog programs. Empty when no model is available — the tier is inert.
-pub type Proposer<'a> = dyn Fn(&str, &[crate::benchmark::Example]) -> Vec<String> + 'a;
+/// A model proposer: given a request, the seed examples, and an optional PRIOR
+/// (failed code + error) for repair, it returns one candidate Mog program (or None
+/// when no model is available — the tier is then inert).
+pub type Proposer<'a> =
+    dyn Fn(&str, &[crate::benchmark::Example], Option<(&str, &str)>) -> Option<String> + 'a;
 
 /// The live proposer: the served local model (inert without `NSYNTH_LOCAL_LLM_URL`,
-/// where `propose_program` returns `None`). One candidate; the repair loop lives in
-/// `propose_program` itself.
-fn live_proposer(request: &str, _seed: &[crate::benchmark::Example]) -> Vec<String> {
-    crate::local_llm::propose_program(request, None, 0.2)
-        .into_iter()
-        .collect()
+/// where `propose_program` returns `None`).
+fn live_proposer(
+    request: &str,
+    _seed: &[crate::benchmark::Example],
+    prior: Option<(&str, &str)>,
+) -> Option<String> {
+    crate::local_llm::propose_program(request, prior, 0.2)
 }
 
 /// Format the model request from the NL prompt + the SEED examples (the model never
@@ -400,24 +403,29 @@ pub fn answer_with_proposer(
             let seed = &examples[..examples.len() - 2];
             let sig = crate::linguigenesis_bridge::infer_signature("f", seed);
             let request = proposer_request(prompt, seed);
-            for code in propose(&request, seed).into_iter().take(5) {
-                if !crate::runtime::code_reproduces_examples(&code, examples) {
-                    continue; // fails the held-out -> discard
+            // Best-of-N WITH REPAIR: propose -> verify -> on failure feed the code +
+            // error back so the model fixes its bug (an off-by-one, a bad return),
+            // up to N attempts. The gate is unchanged, so no repair can ever yield a
+            // wrong answer.
+            const MAX_ATTEMPTS: usize = 4;
+            let mut prior: Option<(String, String)> = None;
+            for _ in 0..MAX_ATTEMPTS {
+                let p = prior.as_ref().map(|(c, e)| (c.as_str(), e.as_str()));
+                let Some(code) = propose(&request, seed, p) else { break };
+                if crate::runtime::code_reproduces_examples(&code, examples) {
+                    // Reproduces every example incl. the two held-out (never-wrong
+                    // evidence). run_tool adds strict-verify + consensus; accept unless
+                    // REFUSED (Tentative is fine — the held-out is the corroboration).
+                    let req = crate::rlvr::ToolRequest::VerifyProgram {
+                        signature: sig.clone(),
+                        code: code.clone(),
+                        examples: examples.to_vec(),
+                    };
+                    if crate::rlvr::run_tool(&req).code().is_some() {
+                        return Answer::Proposed { method: "model-proposed".to_string(), code };
+                    }
                 }
-                // The candidate reproduced every example incl. the two held-out (above)
-                // — the primary never-wrong evidence. run_tool adds the strict-verify
-                // robustness probe + consensus: accept unless it is REFUSED (brittle /
-                // overfit-caught). Tentative (reproduces + robust, no independent
-                // reference to corroborate) is fine — the held-out examples are the
-                // corroboration a model proposal has.
-                let req = crate::rlvr::ToolRequest::VerifyProgram {
-                    signature: sig.clone(),
-                    code: code.clone(),
-                    examples: examples.to_vec(),
-                };
-                if crate::rlvr::run_tool(&req).code().is_some() {
-                    return Answer::Proposed { method: "model-proposed".to_string(), code };
-                }
+                prior = Some((code, "it did not reproduce all the examples".to_string()));
             }
         }
     }
@@ -776,13 +784,11 @@ mod tests {
         // nth prime: no library op, beyond engine synthesis -> forces tier 4.
         let primes = vec![ex(1, 2), ex(2, 3), ex(3, 5), ex(4, 7), ex(5, 11), ex(6, 13)];
 
-        // A model that ONLY hands back WRONG programs must never cause a wrong answer:
-        // either an earlier tier answers correctly, or it refuses — never the garbage.
-        let wrong = |_r: &str, _s: &[Example]| {
-            vec![
-                "fn f(n: i64) -> i64 { return n; }".to_string(),
-                "fn f(n: i64) -> i64 { return 0; }".to_string(),
-            ]
+        // A model that ONLY hands back WRONG programs (every attempt, repair included)
+        // must never cause a wrong answer: either an earlier tier answers correctly,
+        // or it refuses — never the garbage.
+        let wrong = |_r: &str, _s: &[Example], _p: Option<(&str, &str)>| {
+            Some("fn f(n: i64) -> i64 { return n; }".to_string())
         };
         let a = answer_with_proposer("nth prime number", &primes, Some(&wrong));
         assert!(
@@ -793,7 +799,7 @@ mod tests {
 
         // A model that hands back the CORRECT program is accepted (Proposed, unless an
         // earlier tier already solved it) and reproduces the examples.
-        let right = |_r: &str, _s: &[Example]| vec![PRIME_MOG.to_string()];
+        let right = |_r: &str, _s: &[Example], _p: Option<(&str, &str)>| Some(PRIME_MOG.to_string());
         let b = answer_with_proposer("nth prime number", &primes, Some(&right));
         assert!(!matches!(b, Answer::Refused), "correct proposal should be accepted");
         assert!(crate::runtime::code_reproduces_examples(answer_code(&b), &primes));
