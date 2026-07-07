@@ -420,12 +420,20 @@ pub fn propose_rust_fn(request: &str, prior: Option<(&str, &str)>, temperature: 
         ),
     };
     // Fold the system instructions into a SINGLE user turn: some local models
-    // (Gemma) reject a `system` role outright ("System role not supported").
+    // (Gemma) reject a `system` role outright ("System role not supported"). Append
+    // `/no_think` — Qwen3.x reasoning models skip their chain-of-thought and emit the
+    // function directly (faster, and the answer lands in `content` instead of being
+    // truncated mid-reasoning); harmless text to non-Qwen models.
     let body = serde_json::json!({
         "model": model,
-        "messages": [{"role": "user", "content": format!("{sys}\n\n{task}")}],
+        "messages": [{"role": "user", "content": format!("{sys}\n\n{task}\n\n/no_think")}],
+        // Disable reasoning at the template level too (llama.cpp honors this for
+        // Qwen); ignored by templates that don't support it.
+        "chat_template_kwargs": {"enable_thinking": false},
         "temperature": temperature,
-        "max_tokens": 1200
+        // Generous cap: a reasoning model that still thinks needs room to finish the
+        // function in `content` rather than truncating mid-thought.
+        "max_tokens": 4096
     });
     let out = Command::new("curl")
         .args([
