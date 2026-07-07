@@ -234,8 +234,87 @@ pub fn route_verified(prompt: &str, examples: &[crate::benchmark::Example]) -> O
 }
 
 /// The entry function name of an op program (first `fn <name>(`).
-fn op_entry_name(mog: &str) -> Option<&str> {
+pub fn op_entry_name(mog: &str) -> Option<&str> {
     mog.split("fn ").nth(1)?.split('(').next().map(str::trim)
+}
+
+/// NO-EXAMPLES path. Confidently identify a single verified op from the prompt
+/// alone — for the common case where a person types a request with no test cases.
+/// "Confident" means UNAMBIGUOUS: either a unique strict name match (every op-name
+/// token present, one clear winner) or a unique acronym match. Anything ambiguous
+/// or unmatched returns None -> the caller must refuse or ask, never guess. Because
+/// there is no example oracle here, the honest completion is [`demonstrate`]: show
+/// the op's ACTUAL behavior so the user confirms by recognition, not by trust.
+pub fn declare(prompt: &str) -> Option<&'static LibOp> {
+    // Acronym FIRST: a prompt that spells out an op ("greatest common divisor") is a
+    // stronger, more specific signal than a coincidental single shared token (that
+    // same prompt also token-matches `all_divisors` on "divisor"). Unique or skip.
+    let words: Vec<String> = prompt
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    let acro: Vec<&'static LibOp> = OPS
+        .iter()
+        .filter(|op| {
+            let toks = content_tokens(op.name);
+            toks.len() == 1 && is_acronym_of(&toks[0], &words)
+        })
+        .collect();
+    if acro.len() == 1 {
+        return Some(acro[0]);
+    }
+    // Otherwise a unique strict name match (every op-name token present, one winner).
+    route(prompt).map(|r| r.op)
+}
+
+/// Run an op on a few illustrative inputs so a user can confirm the behavior by
+/// recognition (the no-example safety mechanism). Returns (input, output) pairs the
+/// op actually produced; skips inputs it can't run on.
+pub fn demonstrate(op: &LibOp) -> Vec<(Vec<crate::benchmark::Value>, String)> {
+    use crate::benchmark::Value;
+    let Some(name) = op_entry_name(op.mog) else { return vec![] };
+    let tys: Vec<&str> = {
+        let (Some(o), Some(c)) = (op.mog.find('('), op.mog.find(')')) else { return vec![] };
+        let inner = op.mog[o + 1..c].trim();
+        if inner.is_empty() {
+            vec![]
+        } else {
+            inner
+                .split(',')
+                .filter_map(|p| p.split(':').nth(1).map(str::trim))
+                .collect()
+        }
+    };
+    // Two illustrative input tuples, by declared type.
+    let samples: [Vec<Value>; 2] = [
+        tys.iter().enumerate().map(|(i, t)| demo_value(t, i, 0)).collect(),
+        tys.iter().enumerate().map(|(i, t)| demo_value(t, i, 1)).collect(),
+    ];
+    let mut out = Vec::new();
+    for inputs in samples {
+        if inputs.len() != tys.len() {
+            continue;
+        }
+        if let Ok(v) = crate::runtime::execute_function(op.mog, name, &inputs, "demo") {
+            out.push((inputs, format!("{v:?}")));
+        }
+    }
+    out
+}
+
+/// A canonical illustrative value for a type, varied by argument position and which
+/// of the two demo rows it is, so a 2-arg op shows two genuinely different rows.
+fn demo_value(ty: &str, pos: usize, row: usize) -> crate::benchmark::Value {
+    use crate::benchmark::Value;
+    match ty {
+        "i64" => Value::Int([[12, 8], [30, 45]][row][pos.min(1)]),
+        "bool" => Value::Bool(row == 0),
+        "string" => Value::Str([["hello"], ["Cat"]][row][0].to_string()),
+        "[i64]" => Value::int_array(&[[3, 1, 2, 1], [9, 4, 6, 4]][row]),
+        "f64" => Value::Float((if row == 0 { 2.5f64 } else { 4.0 }).to_bits()),
+        _ => Value::Int(0),
+    }
 }
 
 /// The Mog parameter type an example input value would be declared as.
@@ -382,6 +461,29 @@ mod tests {
         assert!(cands.iter().any(|op| op.name == "gcd"), "gcd should be proposed");
         let lcm = ranked_candidates("least common multiple of two numbers");
         assert!(lcm.iter().any(|op| op.name == "lcm"), "lcm should be proposed");
+    }
+
+    #[test]
+    fn declare_resolves_confident_prompts_without_examples() {
+        assert_eq!(declare("reverse a string").map(|o| o.name), Some("reverse_string"));
+        assert_eq!(declare("sort a list of numbers").map(|o| o.name), Some("sort"));
+        // Acronym wins over a coincidental single-token match (all_divisors on "divisor").
+        assert_eq!(declare("greatest common divisor of two numbers").map(|o| o.name), Some("gcd"));
+        assert_eq!(declare("all divisors of a number").map(|o| o.name), Some("all_divisors"));
+    }
+
+    #[test]
+    fn declare_refuses_unmatched_prompt() {
+        assert!(declare("do something clever with my data").is_none());
+    }
+
+    #[test]
+    fn demonstrate_shows_real_behavior() {
+        let op = declare("reverse a string").unwrap();
+        let demo = demonstrate(op);
+        assert!(!demo.is_empty(), "should produce illustrative runs");
+        // reverse_string("hello") -> "olleh" must appear in the demonstration.
+        assert!(demo.iter().any(|(_, out)| out.contains("olleh")));
     }
 
     #[test]
