@@ -9,8 +9,8 @@
 //!     cargo run --release --bin flywheel -- ./some/repo
 
 use mog_synth::comprehension::Engine;
-use mog_synth::doc_ingest::{ingest_dir, ingest_examples_dir};
-use mog_synth::learn_nl::teach_by_examples;
+use mog_synth::doc_ingest::{ingest_dir, ingest_multiarg_examples_dir};
+use mog_synth::learn_nl::teach_by_examples_n;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -44,21 +44,22 @@ fn main() {
     // (e.g. 7->8, 0->1 matching both increment and next_power_of_2): more examples
     // pin the intended op.
     let min_ex: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(3);
-    let examples: Vec<_> = ingest_examples_dir(&dir)
+    let examples: Vec<_> = ingest_multiarg_examples_dir(&dir)
         .into_iter()
         .filter(|(_, v)| v.len() >= min_ex)
         .collect();
     let forms = ingest_dir(&dir);
     eprintln!(
-        "mined {} functions with >= {min_ex} integer examples from {}",
+        "mined {} functions (any arity) with >= {min_ex} integer examples from {}",
         examples.len(),
         dir.display()
     );
 
     let engine = Engine::new();
     let mut learned = 0usize;
-    for (name, pairs) in &examples {
-        let outcome = teach_by_examples(&engine, name, pairs);
+    for (name, rows) in &examples {
+        let arity = rows.first().map(|(i, _)| i.len()).unwrap_or(1);
+        let outcome = teach_by_examples_n(&engine, name, rows);
         let vocab: Vec<String> = forms
             .iter()
             .find(|f| &f.lemma == name)
@@ -67,13 +68,13 @@ fn main() {
         if outcome.success {
             learned += 1;
             println!(
-                "LEARNED  {name:<16} ex={:<2} method={:<28} vocab={:?}",
-                pairs.len(),
+                "LEARNED  {name:<16} arity={arity} ex={:<2} method={:<26} vocab={:?}",
+                rows.len(),
                 outcome.method.clone().unwrap_or_default(),
                 vocab
             );
         } else {
-            println!("refused  {name:<16} ex={} (engine could not verify)", pairs.len());
+            println!("refused  {name:<16} arity={arity} ex={} (engine could not verify)", rows.len());
         }
     }
     eprintln!(

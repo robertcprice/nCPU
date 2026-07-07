@@ -336,6 +336,148 @@ pub fn mine_int_examples(source: &str) -> Vec<(String, Vec<(i64, i64)>)> {
     map.into_iter().filter(|(_, v)| v.len() >= 2).collect()
 }
 
+/// Mine `(function, [(inputs, output)])` for functions of ANY integer arity from
+/// a source/test file: `NAME(a, b, ...)` followed by a comparator/comma and an
+/// integer `OUT` (covers `assert_eq!(add(1,2), 3)`, `gcd(12,8) == 4`). Subsumes
+/// the unary case (arity 1). Feeds learn_nl::teach_by_examples_n.
+pub fn mine_multiarg_examples(source: &str) -> Vec<(String, Vec<(Vec<i64>, i64)>)> {
+    let mut map: std::collections::BTreeMap<String, Vec<(Vec<i64>, i64)>> = std::collections::BTreeMap::new();
+    for line in source.lines() {
+        for (name, args, out) in scan_multiarg_examples(line) {
+            let v = map.entry(name).or_default();
+            let row = (args, out);
+            if !v.contains(&row) {
+                v.push(row);
+            }
+        }
+    }
+    map.into_iter().filter(|(_, v)| v.len() >= 2).collect()
+}
+
+fn scan_multiarg_examples(line: &str) -> Vec<(String, Vec<i64>, i64)> {
+    let b = line.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if !(b[i].is_ascii_alphabetic() || b[i] == b'_') {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            i += 1;
+        }
+        if i >= b.len() || b[i] != b'(' {
+            continue;
+        }
+        let name = line[start..i].to_string();
+        // Parse comma-separated signed integer args until ')'.
+        let mut j = i + 1;
+        let mut args: Vec<i64> = Vec::new();
+        let mut ok = true;
+        loop {
+            while j < b.len() && b[j] == b' ' {
+                j += 1;
+            }
+            let mut k = j;
+            if k < b.len() && (b[k] == b'-' || b[k] == b'+') {
+                k += 1;
+            }
+            let ns = k;
+            while k < b.len() && b[k].is_ascii_digit() {
+                k += 1;
+            }
+            if k == ns {
+                ok = false;
+                break;
+            }
+            let Ok(v) = line[j..k].parse::<i64>() else {
+                ok = false;
+                break;
+            };
+            args.push(v);
+            while k < b.len() && b[k] == b' ' {
+                k += 1;
+            }
+            if k < b.len() && b[k] == b',' {
+                j = k + 1;
+                continue;
+            }
+            if k < b.len() && b[k] == b')' {
+                j = k + 1;
+                break;
+            }
+            ok = false;
+            break;
+        }
+        if !ok || args.is_empty() {
+            continue;
+        }
+        let mut k = j;
+        while k < b.len() && b[k] == b' ' {
+            k += 1;
+        }
+        let mut matched = false;
+        for op in ["==", "=>", "->", ",", "="] {
+            if line[k..].starts_with(op) {
+                k += op.len();
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            continue;
+        }
+        while k < b.len() && b[k] == b' ' {
+            k += 1;
+        }
+        let mut m = k;
+        if m < b.len() && (b[m] == b'-' || b[m] == b'+') {
+            m += 1;
+        }
+        let os = m;
+        while m < b.len() && b[m].is_ascii_digit() {
+            m += 1;
+        }
+        if m > os {
+            if let Ok(outp) = line[k..m].parse::<i64>() {
+                out.push((name, args, outp));
+            }
+        }
+    }
+    out
+}
+
+/// Mine multi-arg `(function, examples)` from every `.rs`/`.py` file under `dir`.
+pub fn ingest_multiarg_examples_dir(dir: &std::path::Path) -> Vec<(String, Vec<(Vec<i64>, i64)>)> {
+    let mut map: std::collections::BTreeMap<String, Vec<(Vec<i64>, i64)>> = std::collections::BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&p) else { continue };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                if path.file_name().map(|n| n == "target").unwrap_or(false) {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.extension().and_then(|x| x.to_str()).map(|x| x == "rs" || x == "py").unwrap_or(false) {
+                if let Ok(src) = std::fs::read_to_string(&path) {
+                    for (name, rows) in mine_multiarg_examples(&src) {
+                        let v = map.entry(name).or_default();
+                        for row in rows {
+                            if !v.contains(&row) {
+                                v.push(row);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    map.into_iter().filter(|(_, v)| v.len() >= 2).collect()
+}
+
 /// Parse a bare `NAME(INT)` call (the whole string), returning (name, arg).
 fn single_int_call(s: &str) -> Option<(String, i64)> {
     let open = s.find('(')?;
@@ -566,6 +708,16 @@ assert_eq!(add(1, 2), 3);     // two-arg -> not a unary example
         assert!(dbl.contains(&(2, 4)) && dbl.contains(&(3, 6)) && dbl.contains(&(5, 10)), "{dbl:?}");
         assert!(!mined.contains_key("triple"), "call with no expected value ignored");
         assert!(!mined.contains_key("add"), "two-arg call is not a unary (in,out)");
+    }
+
+    #[test]
+    fn mines_multiarg_examples() {
+        let src = "assert_eq!(add(1, 2), 3);\nassert_eq!(add(10, 5), 15);\ngcd(12, 8) == 4\ngcd(9, 6) == 3\nassert_eq!(double(2), 4); assert_eq!(double(5), 10);\n";
+        let m: std::collections::BTreeMap<_, _> = mine_multiarg_examples(src).into_iter().collect();
+        assert_eq!(m.get("add").unwrap(), &vec![(vec![1, 2], 3), (vec![10, 5], 15)]);
+        assert_eq!(m.get("gcd").unwrap(), &vec![(vec![12, 8], 4), (vec![9, 6], 3)]);
+        // Unary is subsumed (arity 1).
+        assert_eq!(m.get("double").unwrap(), &vec![(vec![2], 4), (vec![5], 10)]);
     }
 
     #[test]

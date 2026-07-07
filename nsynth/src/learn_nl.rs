@@ -359,6 +359,63 @@ fn examples_from_pairs(pairs: &[(i64, i64)]) -> Vec<Example> {
         .collect()
 }
 
+/// The `&'static str` Mog signature for an `arity`-input `i64 -> i64` op.
+fn leak_signature_n(name: &str, arity: usize) -> &'static str {
+    let args: Vec<String> = (0..arity).map(|i| format!("a{i}: i64")).collect();
+    Box::leak(format!("fn {name}({}) -> i64", args.join(", ")).into_boxed_str())
+}
+
+/// Build multi-input [`Example`]s from `(inputs, out)` tuples.
+fn examples_from_tuples(rows: &[(Vec<i64>, i64)]) -> Vec<Example> {
+    rows.iter()
+        .map(|(ins, o)| Example {
+            inputs: ins.iter().map(|v| Value::Int(*v)).collect(),
+            expected: Value::Int(*o),
+        })
+        .collect()
+}
+
+/// TEACH a MULTI-ARG op from examples — the same regression-gated self-extension
+/// + persist path as [`teach_by_examples`], generalized to `arity` integer
+/// inputs (the solver already synthesizes 2-3 arg scalar functions, e.g. gcd/add;
+/// this just exposes it). Arity is inferred from the example width; all rows must
+/// share it. Only accepted-by-the-gate ops are kept (soundness unchanged).
+pub fn teach_by_examples_n(engine: &Engine, name: &str, rows: &[(Vec<i64>, i64)]) -> LearnOutcome {
+    let arity = match rows.first() {
+        Some((ins, _)) => ins.len(),
+        None => {
+            return LearnOutcome {
+                success: false,
+                message: "[user-taught] no examples".into(),
+                method: None,
+            }
+        }
+    };
+    if arity == 0 || rows.iter().any(|(ins, _)| ins.len() != arity) {
+        return LearnOutcome {
+            success: false,
+            message: format!("[user-taught] inconsistent arity for `{name}`"),
+            method: None,
+        };
+    }
+    let req = LearnRequest {
+        gap: format!("user-taught {arity}-arg op `{name}` from {} examples", rows.len()),
+        name: name.to_string(),
+        signature: leak_signature_n(name, arity),
+        examples: examples_from_tuples(rows),
+    };
+    let (_candidate, report) = self_extend(engine, &req);
+    LearnOutcome {
+        success: report.accepted,
+        message: format!("[user-taught] {}", report.message),
+        method: if report.accepted {
+            Some(report.method)
+        } else {
+            None
+        },
+    }
+}
+
 /// TEACH a new op from examples: route the examples through the EXISTING
 /// regression-gated self-extension path and persist on a green gate.
 ///
