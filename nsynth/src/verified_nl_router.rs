@@ -233,6 +233,51 @@ pub fn route_verified(prompt: &str, examples: &[crate::benchmark::Example]) -> O
     Some(Route { op: winner, matched_tokens: name_toks, specificity: spec })
 }
 
+/// Never-wrong 2-op COMPOSITION. When no single op reproduces the examples, a
+/// prompt like "reverse then uppercase a string" may still be a CHAIN of two proven
+/// ops. Propose ordered pairs from the NL candidates whose types chain (a: X->Y,
+/// b: Y->Z) and emit `f(x) = b(a(x))`; return the first composition that reproduces
+/// every example. Same never-wrong contract — the composed program is example-gated,
+/// and it is built only from already-verified ops, so a wrong chain is executed,
+/// fails, and is discarded. Unary chains only (the common "do A then B" shape).
+pub fn route_composed(prompt: &str, examples: &[crate::benchmark::Example]) -> Option<String> {
+    let first = examples.first()?;
+    if first.inputs.len() != 1 {
+        return None; // unary chains only
+    }
+    let in_ty = value_type_str(&first.inputs[0]);
+    let out_ty = value_type_str(&first.expected);
+    let cands: Vec<&'static LibOp> = ranked_candidates(prompt).into_iter().take(8).collect();
+    let fname = "composed";
+    for a in &cands {
+        let (a_params, a_ret) = op_sig_types(a.mog);
+        if a_params.len() != 1 || a_params[0] != in_ty {
+            continue; // a: in_ty -> a_ret
+        }
+        let (a_name, Some(a_entry)) = (a.name, op_entry_name(a.mog)) else { continue };
+        for b in &cands {
+            if b.name == a_name {
+                continue;
+            }
+            let (b_params, b_ret) = op_sig_types(b.mog);
+            if b_params.len() != 1 || b_params[0] != a_ret || b_ret != out_ty {
+                continue; // b: a_ret -> out_ty
+            }
+            let Some(b_entry) = op_entry_name(b.mog) else { continue };
+            // Entry FIRST (the verifier calls the first fn), then the two op defs.
+            let code = format!(
+                "fn {fname}(x0: {in_ty}) -> {out_ty} {{\n    return {b_entry}({a_entry}(x0));\n}}\n\n{}\n{}",
+                a.mog.trim_end(),
+                b.mog.trim_end()
+            );
+            if crate::runtime::code_reproduces_examples(&code, examples) {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
+
 /// The entry function name of an op program (first `fn <name>(`).
 pub fn op_entry_name(mog: &str) -> Option<&str> {
     mog.split("fn ").nth(1)?.split('(').next().map(str::trim)
@@ -315,6 +360,32 @@ fn demo_value(ty: &str, pos: usize, row: usize) -> crate::benchmark::Value {
         "f64" => Value::Float((if row == 0 { 2.5f64 } else { 4.0 }).to_bits()),
         _ => Value::Int(0),
     }
+}
+
+/// Parse an op's signature into (parameter types, return type). Return type is read
+/// from `-> T` (defaults to "i64" if absent).
+fn op_sig_types(mog: &str) -> (Vec<String>, String) {
+    let params: Vec<String> = match (mog.find('('), mog.find(')')) {
+        (Some(o), Some(c)) if c > o => {
+            let inner = mog[o + 1..c].trim();
+            if inner.is_empty() {
+                vec![]
+            } else {
+                inner
+                    .split(',')
+                    .filter_map(|p| p.split(':').nth(1).map(|t| t.trim().to_string()))
+                    .collect()
+            }
+        }
+        _ => vec![],
+    };
+    let ret = mog
+        .split("->")
+        .nth(1)
+        .and_then(|s| s.split('{').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "i64".to_string());
+    (params, ret)
 }
 
 /// The Mog parameter type an example input value would be declared as.
@@ -461,6 +532,26 @@ mod tests {
         assert!(cands.iter().any(|op| op.name == "gcd"), "gcd should be proposed");
         let lcm = ranked_candidates("least common multiple of two numbers");
         assert!(lcm.iter().any(|op| op.name == "lcm"), "lcm should be proposed");
+    }
+
+    #[test]
+    fn composes_two_verified_ops_when_no_single_op_fits() {
+        use crate::benchmark::{Example, Value};
+        // "reverse then uppercase": reverse_string then to_upper. No single op does
+        // this, but the composition must verify and be returned.
+        let ex = vec![
+            Example { inputs: vec![Value::Str("hello".into())], expected: Value::Str("OLLEH".into()) },
+            Example { inputs: vec![Value::Str("abc".into())], expected: Value::Str("CBA".into()) },
+        ];
+        let code = route_composed("reverse then uppercase a string", &ex);
+        assert!(code.is_some(), "should find a verified 2-op composition");
+        assert!(crate::runtime::code_reproduces_examples(&code.unwrap(), &ex));
+        // Wrong examples -> the composition must NOT be returned (never wrong).
+        let bad = vec![Example {
+            inputs: vec![Value::Str("hello".into())],
+            expected: Value::Str("ZZZ".into()),
+        }];
+        assert!(route_composed("reverse then uppercase a string", &bad).is_none());
     }
 
     #[test]

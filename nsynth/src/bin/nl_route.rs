@@ -83,9 +83,16 @@ fn main() {
     //   REFUSED — NL proposed nothing (no confident op name in the prompt)
     match verified_nl_router::route_verified(text, &examples) {
         Some(r) => println!("SOLVED {id} {}", r.op.name),
-        None => match verified_nl_router::route(text) {
-            Some(r) => println!("GATED {id} {}", r.op.name),
-            None => println!("REFUSED {id}"),
-        },
+        None => {
+            // Single op failed — try a verified 2-op composition ("A then B").
+            if verified_nl_router::route_composed(text, &examples).is_some() {
+                println!("COMPOSED {id}");
+            } else {
+                match verified_nl_router::route(text) {
+                    Some(r) => println!("GATED {id} {}", r.op.name),
+                    None => println!("REFUSED {id}"),
+                }
+            }
+        }
     }
 }

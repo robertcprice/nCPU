@@ -87,6 +87,14 @@ pub fn nl_synthesis_proposer(
         return Ok(patch);
     }
 
+    // GATED MODEL fallback: every deterministic path declined. An optional,
+    // untrusted local LLM proposes a fix from the failure — inert without
+    // NSYNTH_LOCAL_LLM_URL, and the cargo-test oracle still gates whatever it
+    // returns. Deterministic-first, model-last.
+    if let Some(patch) = try_model_repair_patch(task, context, &description, analysis) {
+        return Ok(patch);
+    }
+
     let mut run = AgentRun::start(description);
     run.comprehend().map_err(|e| e.to_string())?;
     if run.needs_clarification() {
@@ -170,6 +178,94 @@ pub fn try_real_synthesis_patch(
             .with_metadata("proposer", "nl_real_synthesis")
             .with_metadata("synthesis_method", result.method.clone()),
     )
+}
+
+/// GATED MODEL-REPAIR stage — the untrusted proposer of last resort.
+///
+/// When every deterministic path (rename / add-param / emergent / real-synthesis /
+/// fast-patch) has declined, an OPTIONAL local LLM proposes a function body from
+/// the concrete failure. It is a PROPOSER ONLY: the body is reshaped to the repo
+/// fn's exact signature and handed back as an ordinary patch, so the caller's
+/// cargo-test acceptance oracle still decides — a wrong proposal fails the test and
+/// is rolled back like any other. The model NEVER bypasses a gate and the guarantee
+/// never depends on it.
+///
+/// Inert by default: with `NSYNTH_LOCAL_LLM_URL` unset the lane returns `None`
+/// immediately, so there is zero behaviour change on any machine without a model.
+pub fn try_model_repair_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+    analysis: Option<&FailureAnalysis>,
+) -> Option<RepairPatch> {
+    // Off unless an endpoint is configured — the guarantee is the cargo-test oracle,
+    // not the model.
+    if std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .is_none()
+    {
+        return None;
+    }
+
+    // Localize the repo fn to repair, exactly as the verified path does.
+    let intent = CodingIntent::from_nl_lenient(description).ok();
+    let target = pick_target_path(task, context, intent.as_ref()).ok()?;
+    let old_text = read_relative_file(context, &target).ok()?;
+    let default_fn = intent
+        .as_ref()
+        .map(|i| {
+            i.function_name
+                .strip_prefix("nl_")
+                .unwrap_or(&i.function_name)
+                .to_string()
+        })
+        .unwrap_or_default();
+    let repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
+
+    // Feed the model the CURRENT body + the concrete failure so it repairs THIS
+    // error rather than guessing blind. Both are optional (best-effort feedback).
+    let prior_code = crate::doc_ingest::extract_rust_fn_sources(&old_text)
+        .into_iter()
+        .find(|(n, _)| n == &repo_fn)
+        .map(|(_, s)| s);
+    let failure = analysis
+        .map(|a| format!("{} (suggested: {})", a.message, a.suggested_action))
+        .unwrap_or_default();
+    let prior: Option<(&str, &str)> = match (&prior_code, failure.is_empty()) {
+        (Some(code), false) => Some((code.as_str(), failure.as_str())),
+        _ => None,
+    };
+    let request = format!(
+        "{description}\n\nWrite the Rust function `{repo_fn}` so the failing test passes. \
+         Return only the function definition."
+    );
+
+    let program = crate::local_llm::propose_program(&request, prior, 0.2)?;
+    let new_text = model_body_to_new_text(&old_text, &repo_fn, &program)?;
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                old_text,
+                new_text,
+                "gated model-repair proposer (untrusted; cargo-test gated)",
+            ))
+            .with_metadata("proposer", "model_repair"),
+    )
+}
+
+/// Pure string core of the model-repair stage (TESTABLE without a model or repo):
+/// reshape a proposed program to `repo_fn`'s signature in `old_text`. Declines when
+/// the proposal is not plain compilable Rust (IR wrappers / unlowered `:=`) or is a
+/// no-op — the same gate the verified synthesis path applies.
+fn model_body_to_new_text(old_text: &str, repo_fn: &str, program: &str) -> Option<String> {
+    let body = rust_code_for_repo_synthesis(program);
+    if !is_plain_rust_body(&body) {
+        return None;
+    }
+    let new_text = reshape_to_repo_signature(old_text, repo_fn, &body)?;
+    (new_text != *old_text).then_some(new_text)
 }
 
 /// EMERGENT NL edit driver (no examples, no LLM): "the double function should
@@ -1697,6 +1793,29 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Mutex;
+
+    // --- gated model-repair stage: the pure, model-free core (deterministic) ---
+
+    #[test]
+    fn model_repair_reshapes_a_proposed_body_to_the_repo_signature() {
+        // A "model-proposed" correct function, reshaped onto the repo fn's exact
+        // signature. This is the deterministic half of the gated model lane — the
+        // half that runs with no model present.
+        let old = "pub fn twice(n: i64) -> i64 {\n    return n;\n}\n";
+        let proposed = "fn twice(x: i64) -> i64 {\n    return x * 2;\n}";
+        let new = model_body_to_new_text(old, "twice", proposed).expect("reshaped patch");
+        assert!(new.contains("* 2"), "proposed body adopted: {new}");
+        assert!(new.contains("fn twice(n: i64) -> i64"), "repo signature preserved: {new}");
+    }
+
+    #[test]
+    fn model_repair_declines_non_plain_rust() {
+        // The same plain-Rust gate the verified path uses: IR wrappers / Result are
+        // not compilable for the repo's concrete signature — decline, don't emit.
+        let old = "pub fn f(n: i64) -> i64 {\n    return n;\n}\n";
+        assert!(model_body_to_new_text(old, "f", "fn f(n: i64) -> i64 { return ok(n); }").is_none());
+        assert!(model_body_to_new_text(old, "f", "fn f(n: i64) -> Result<i64> { n }").is_none());
+    }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
