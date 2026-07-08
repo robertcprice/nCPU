@@ -818,6 +818,11 @@ pub const OPS: &[LibOp] = &[
 "fn first(arr: [i64]) -> i64 {\n    return arr[0];\n}\n" },
     LibOp { name: "last", arity: 1, mog:
 "fn last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[n - 1];\n}\n" },
+    // Second-to-last element (arr[len-2]). On 3-element lists this equals the second
+    // element (index 1), so second_element/last coincide on such examples; 'second' +
+    // 'last' out-cover them and resolve it on 4+ elements ([7,1,5,3] -> 5).
+    LibOp { name: "second_to_last", arity: 1, mog:
+"fn second_to_last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[n - 2];\n}\n" },
     // Positional selectors. list_max coincides with these on examples where a[1]/a[2]
     // happens to be the max ([1,9,2] -> second 9 = max); wrong once it isn't ([5,3,9] ->
     // second 3). The named ops resolve the position directly; and when the examples are
