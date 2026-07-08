@@ -1760,6 +1760,14 @@ mod tests {
                 vec![av(&[2, 3, 4])],
                 iv(5),
             ),
+            // list_max coincides with max-except-first when the max is not the first
+            // element; wrong once it is ([9,1,2] -> 2 vs 9). max_except_first resolves it.
+            (
+                "the largest element except the first in a list",
+                vec![ex(vec![av(&[1, 9, 2])], iv(9)), ex(vec![av(&[3, 1, 5])], iv(5)), ex(vec![av(&[2, 8, 4])], iv(8))],
+                vec![av(&[9, 1, 2])],
+                iv(2),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

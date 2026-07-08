@@ -413,6 +413,14 @@ pub const OPS: &[LibOp] = &[
     // max-except-last 2, list_max 9). 'except' + 'last' outrank list_max.
     LibOp { name: "max_except_last", arity: 1, mog:
 "fn max_except_last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    m: i64 = arr[0];\n    i: i64 = 1;\n    while i < n - 1 {\n        if arr[i] > m {\n            m = arr[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
+    // Largest element among all but the FIRST. list_max coincides when the max is not the
+    // first element; wrong once it is ([9,1,2] -> max-except-first 2, list_max 9).
+    // 'except' + 'first' outrank list_max's container-noun match.
+    LibOp { name: "max_except_first", arity: 1, mog:
+"fn max_except_first(arr: [i64]) -> i64 {\n    m: i64 = arr[1];\n    i: i64 = 2;\n    while i < arr.len {\n        if arr[i] > m {\n            m = arr[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
+    // Smallest element among all but the FIRST (companion).
+    LibOp { name: "min_except_first", arity: 1, mog:
+"fn min_except_first(arr: [i64]) -> i64 {\n    m: i64 = arr[1];\n    i: i64 = 2;\n    while i < arr.len {\n        if arr[i] < m {\n            m = arr[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     // Smallest element among all but the last. list_min (container noun 'list' only)
     // coincides when the min is not the last element; wrong once it is ([5,3,1] ->
     // min-except-last 3, list_min 1). 'except' + 'last' outrank list_min.
