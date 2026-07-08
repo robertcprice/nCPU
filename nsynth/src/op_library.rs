@@ -578,6 +578,10 @@ pub const OPS: &[LibOp] = &[
     // guard refuses instead.
     LibOp { name: "all_same", arity: 1, mog:
 "fn all_same(arr: [i64]) -> i64 {\n    for e in arr {\n        if e != arr[0] {\n            return 0;\n        }\n    }\n    return 1;\n}\n" },
+    // Whether every element is > 0. Closes the 'all numbers positive' refusal; the name
+    // token "positive" resolves it and it is distinct from all-nonzero (differs on 0/neg).
+    LibOp { name: "all_positive", arity: 1, mog:
+"fn all_positive(arr: [i64]) -> i64 {\n    for e in arr {\n        if e <= 0 {\n            return 0;\n        }\n    }\n    return 1;\n}\n" },
     LibOp { name: "first_duplicate", arity: 1, mog:
 "fn first_duplicate(arr: [i64]) -> i64 {\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                return arr[i];\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return 0 - 1;\n}\n" },
     LibOp { name: "most_frequent", arity: 1, mog:
