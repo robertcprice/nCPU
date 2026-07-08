@@ -608,6 +608,12 @@ pub const OPS: &[LibOp] = &[
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:
 "fn list_max(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] > m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
+    // Second-largest value = the second element in descending order (equal values kept,
+    // so [8,8,3] -> 8). One pass tracking the top two. Closes the common 'second largest
+    // value in a list' refusal (list_max never reproduces it: max != second on any
+    // 2+-distinct example).
+    LibOp { name: "second_largest", arity: 1, mog:
+"fn second_largest(arr: [i64]) -> i64 {\n    first: i64 = arr[0];\n    second: i64 = arr[0];\n    i: i64 = 0;\n    for e in arr {\n        if i == 0 {\n            first = e;\n        } else {\n            if e > first {\n                second = first;\n                first = e;\n            } else {\n                if i == 1 {\n                    second = e;\n                } else {\n                    if e > second {\n                        second = e;\n                    }\n                }\n            }\n        }\n        i = i + 1;\n    }\n    return second;\n}\n" },
     // Largest NEGATIVE number. Coincides with list_max on all-negative inputs; list_max
     // was shipped and is wrong when a positive is present ([-4,3,-1] -> largest negative
     // -1, list_max 3). Returns 0 when there is no negative (under-determined all-positive
