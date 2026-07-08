@@ -673,6 +673,11 @@ pub const OPS: &[LibOp] = &[
 "fn running_sum(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    s: i64 = 0;\n    for e in arr {\n        s = s + e;\n        out.push(s);\n    }\n    return out;\n}\n" },
     LibOp { name: "consecutive_diffs", arity: 1, mog:
 "fn consecutive_diffs(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        j: i64 = i + 1;\n        out.push(arr[j] - arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    // Number of ADJACENT EQUAL pairs (a[i] == a[i+1]). Closes the 'adjacent equal pairs'
+    // refusal; name tokens 'adjacent' + 'equal' resolve it. Unique reproducer (no other
+    // op produces this run-boundary count).
+    LibOp { name: "count_adjacent_equal", arity: 1, mog:
+"fn count_adjacent_equal(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        if arr[i] == arr[i + 1] {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
     LibOp { name: "move_zeros_end", arity: 1, mog:
 "fn move_zeros_end(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        if e != 0 {\n            out.push(e);\n        }\n    }\n    for e in arr {\n        if e == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "move_first_to_last", arity: 1, mog:
