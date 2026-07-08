@@ -348,6 +348,12 @@ pub const OPS: &[LibOp] = &[
 "fn is_multiple(a: i64, b: i64) -> i64 {\n    if a % b == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "lcm", arity: 2, mog:
 "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        t: i64 = y;\n        y = x % y;\n        x = t;\n    }\n    return a / x * b;\n}\n" },
+    // Whether two numbers are COPRIME (gcd == 1). With no coprime op the router fell through to
+    // tier-3 synthesis, which overfit a degenerate example set (coprime happened to coincide with
+    // 'at least one operand is odd') and shipped a confident-wrong on (3,9) -- both odd but gcd 3,
+    // so not coprime. The named op resolves before synthesis and computes the real predicate.
+    LibOp { name: "is_coprime", arity: 2, mog:
+"fn is_coprime(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        t: i64 = y;\n        y = x % y;\n        x = t;\n    }\n    if x == 1 {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "power", arity: 2, mog:
 "fn power(a: i64, b: i64) -> i64 {\n    acc: i64 = 1;\n    i: i64 = 0;\n    while i < b {\n        acc = acc * a;\n        i = i + 1;\n    }\n    return acc;\n}\n" },
     // ── array reductions the base engine misses (1-arg [i64]) ──────────────

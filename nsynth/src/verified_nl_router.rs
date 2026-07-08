@@ -1885,6 +1885,15 @@ mod tests {
                 vec![iv(6)],
                 iv(0),
             ),
+            // Coprime with a degenerate example set (coprime coincided with 'at least one operand
+            // odd') let tier-3 synthesis ship a confident-wrong on two odds with a common factor
+            // ((3,9) -> 1 vs gcd 3 => 0). is_coprime resolves before synthesis.
+            (
+                "whether two numbers are coprime",
+                vec![ex(vec![iv(2), iv(3)], iv(1)), ex(vec![iv(4), iv(9)], iv(1)), ex(vec![iv(6), iv(8)], iv(0)), ex(vec![iv(2), iv(4)], iv(0))],
+                vec![iv(3), iv(9)],
+                iv(0),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
