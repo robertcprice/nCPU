@@ -517,6 +517,18 @@ pub const OPS: &[LibOp] = &[
 "fn digit_product(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    p: i64 = 1;\n    while x > 0 {\n        p = p * (x % 10);\n        x = x / 10;\n    }\n    return p;\n}\n" },
     LibOp { name: "largest_digit", arity: 1, mog:
 "fn largest_digit(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    m: i64 = 0;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d > m {\n            m = d;\n        }\n        x = x / 10;\n    }\n    return m;\n}\n" },
+    // The SMALLEST digit of a number. Without this op the prompt fell to the composition tier,
+    // whose lone-chain path (route_composed returns a single reproducing chain UNGATED) shipped a
+    // coincidental positional chain wrong on a fresh input (638 -> 2 vs 3). The named op resolves
+    // at the library tier before composition.
+    LibOp { name: "smallest_digit", arity: 1, mog:
+"fn smallest_digit(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    if x == 0 {\n        return 0;\n    }\n    m: i64 = 9;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d < m {\n            m = d;\n        }\n        x = x / 10;\n    }\n    return m;\n}\n" },
+    // The MEDIAN of a list (the middle value in sorted order; for even length returns the upper
+    // middle). Computed as the (n/2)-th order statistic by counting, so no in-place sort is needed.
+    // Closes a composition-tier lone-chain overfit ('median of an odd-length list' -> a chain wrong
+    // on [8,2,6] giving 5 vs 6); the named op resolves before composition.
+    LibOp { name: "median", arity: 1, mog:
+"fn median(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    k: i64 = n / 2;\n    for v in arr {\n        less: i64 = 0;\n        equal: i64 = 0;\n        for w in arr {\n            if w < v {\n                less = less + 1;\n            }\n            if w == v {\n                equal = equal + 1;\n            }\n        }\n        if less <= k {\n            if k < less + equal {\n                return v;\n            }\n        }\n    }\n    return arr[0];\n}\n" },
     LibOp { name: "count_primes_below", arity: 1, mog:
 "fn count_primes_below(n: i64) -> i64 {\n    c: i64 = 0;\n    k: i64 = 2;\n    while k < n {\n        d: i64 = 2;\n        prime: i64 = 1;\n        while d * d <= k {\n            if k % d == 0 {\n                prime = 0;\n            }\n            d = d + 1;\n        }\n        if prime == 1 {\n            c = c + 1;\n        }\n        k = k + 1;\n    }\n    return c;\n}\n" },
     // ── batch 2: array aggregation (1-arg [i64]) ───────────────────────────

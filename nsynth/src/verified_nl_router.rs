@@ -2020,6 +2020,22 @@ mod tests {
                 vec![iv(78)],
                 iv(8),
             ),
+            // Composition-tier lone-chain overfits (route_composed returns a single reproducing
+            // chain UNGATED): 'smallest digit' shipped a positional chain wrong on 638 (2 vs 3),
+            // and 'median of an odd-length list' shipped a chain wrong on [8,2,6] (5 vs 6). The
+            // named smallest_digit / median ops resolve at the library tier before composition.
+            (
+                "the smallest digit of a number",
+                vec![ex(vec![iv(123)], iv(1)), ex(vec![iv(907)], iv(0)), ex(vec![iv(52)], iv(2)), ex(vec![iv(441)], iv(1))],
+                vec![iv(638)],
+                iv(3),
+            ),
+            (
+                "the median of a list with an odd number of elements",
+                vec![ex(vec![av(&[1, 2, 3])], iv(2)), ex(vec![av(&[10, 20, 30])], iv(20)), ex(vec![av(&[5, 1, 3])], iv(3)), ex(vec![av(&[9, 2, 7, 1, 5])], iv(5))],
+                vec![av(&[8, 2, 6])],
+                iv(6),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
