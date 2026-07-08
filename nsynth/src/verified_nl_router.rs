@@ -1313,6 +1313,16 @@ mod tests {
                 vec![iv(-99)],
                 iv(99),
             ),
+            // trailing-zeros coincides with unset_bits (total 0-bits) on examples where
+            // the low bits are the only zeros — the behaviour-match tier returned the
+            // coincidental unset_bits (wrong on 10 = 1010: trailing=1, unset=2) until a
+            // real trailing_zeros op made the name tier resolve it directly.
+            (
+                "the number of trailing zeros in binary",
+                vec![ex(vec![iv(8)], iv(3)), ex(vec![iv(12)], iv(2)), ex(vec![iv(1)], iv(0)), ex(vec![iv(16)], iv(4)), ex(vec![iv(6)], iv(1))],
+                vec![iv(10)],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
