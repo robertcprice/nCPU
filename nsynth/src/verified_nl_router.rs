@@ -256,6 +256,56 @@ pub fn route_verified(prompt: &str, examples: &[crate::benchmark::Example]) -> O
     Some(Route { op: winner, matched_tokens: name_toks, specificity: spec })
 }
 
+/// BEHAVIOUR-match fallback. `route_verified` only tries ops whose NAME the prompt
+/// shares a token with, so an op the prompt DESCRIBES but never names is missed
+/// ("a map from each value to how many times it appears" never says "frequency", yet
+/// `element_frequency` computes exactly that). This tries EVERY type-compatible
+/// library op by behaviour and keeps one only if the same distinguishing gate holds:
+/// a known op that reproduces the examples is correct-by-construction (it cannot
+/// overfit like a search), and if two ops reproduce but DIVERGE on fresh probes the
+/// spec is under-determined -> refuse. A NL-matched passer is preferred as the winner
+/// (better provenance) but any agreeing passer is behaviourally identical. Requires
+/// >= 3 distinct examples so a lone coincidental passer has real points to clear.
+pub fn route_by_behavior(prompt: &str, examples: &[crate::benchmark::Example]) -> Option<Route> {
+    if examples.is_empty() {
+        return None;
+    }
+    let distinct = crate::benchmark::dedup_consistent_examples(examples)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    if distinct < 3 {
+        return None;
+    }
+    let input_types: Vec<&'static str> = examples
+        .first()
+        .map(|e| e.inputs.iter().map(value_type_str).collect())
+        .unwrap_or_default();
+    let passing: Vec<&'static LibOp> = OPS
+        .iter()
+        .filter(|op| op_accepts_types(op.mog, &input_types))
+        .filter(|op| crate::runtime::code_reproduces_examples(op.mog, examples))
+        .collect();
+    if passing.is_empty() {
+        return None;
+    }
+    // Distinguishing gate over ALL behaviour passers — the crucial soundness step:
+    // e.g. abs given single-digit examples is reproduced by BOTH reverse_number and
+    // sum_of_digits, which disagree on -99 -> refuse, never a confident coincidence.
+    if passing.len() > 1 && passers_disagree(&passing, examples) {
+        return None;
+    }
+    // Winner: prefer a passer the prompt actually names (provenance); else the first.
+    let named: std::collections::HashSet<&str> =
+        ranked_candidates(prompt).iter().map(|op| op.name).collect();
+    let winner = *passing
+        .iter()
+        .find(|op| named.contains(op.name))
+        .unwrap_or(&passing[0]);
+    let name_toks = content_tokens(winner.name);
+    let spec = name_toks.len();
+    Some(Route { op: winner, matched_tokens: name_toks, specificity: spec })
+}
+
 /// Never-wrong 2-op COMPOSITION. When no single op reproduces the examples, a
 /// prompt like "reverse then uppercase a string" may still be a CHAIN of two proven
 /// ops. Propose ordered pairs from the NL candidates whose types chain (a: X->Y,
@@ -521,6 +571,12 @@ pub fn answer_with_proposer(
     if let Some(code) = route_composed(prompt, examples) {
         return Answer::Composition { code };
     }
+    // Tier 2.5 — BEHAVIOUR-match any library op the prompt describes but does not
+    // name (element_frequency for "how many times each value appears"). Distinguishing
+    // -gated, so a coincidental match refuses instead of shipping wrong.
+    if let Some(r) = route_by_behavior(prompt, examples) {
+        return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+    }
     // Tier 3 — full synthesis with HOLDOUT discipline. Solve on a SEED and require
     // the result to reproduce EVERY example including the held-out ones; a fit-only-
     // to-seed overfit fails and is discarded. Needs >= 4. The holdout is 2 when there
@@ -595,7 +651,13 @@ pub fn answer_with_proposer(
                     progs.push((op.mog.to_string(), en.to_string()));
                 }
             }
-            if !programs_disagree(&progs, examples) {
+            // A bare library-op match belongs to the gated behaviour tier
+            // (route_by_behavior ran first with the distinguishing gate). If a library
+            // op still reaches tier 3, it is one that tier REJECTED as coincidental
+            // (sum_of_digits reproducing abs's single-digit examples, disagreeing with
+            // reverse_number on -99) — solve_problem's internal try_library has no such
+            // gate. Don't resurrect it: only a genuine SYNTHESIS result returns here.
+            if !method.contains("library:") && !programs_disagree(&progs, examples) {
                 return Answer::Synthesized { method, code };
             }
         }
@@ -1144,6 +1206,15 @@ mod tests {
                 vec![ex(vec![av(&[0, 1, 1])], iv(2)), ex(vec![av(&[1, 0])], iv(1)), ex(vec![av(&[1, 1, 1])], iv(3)), ex(vec![av(&[0, 0, 1])], iv(1))],
                 vec![av(&[2, 3])],
                 iv(13),
+            ),
+            // abs with single-digit examples: sum_of_digits AND reverse_number both
+            // reproduce (they equal |x| for one digit) — solve_problem's ungated
+            // try_library must not resurrect one after route_by_behavior refuses.
+            (
+                "the absolute value of a number",
+                vec![ex(vec![iv(-3)], iv(3)), ex(vec![iv(5)], iv(5)), ex(vec![iv(-1)], iv(1)), ex(vec![iv(0)], iv(0))],
+                vec![iv(-99)],
+                iv(99),
             ),
         ];
         for (prompt, exs, fresh, intended) in cases {
