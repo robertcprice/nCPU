@@ -389,7 +389,7 @@ pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Opt
     let in_ty = value_type_str(&first.inputs[0]);
     let out_ty = value_type_str(&first.expected);
     let fname = "composed";
-    let seed1 = &examples[..1];
+    let first_expected = &first.expected;
     // Cap the collected chains: past this many reproducers the spec is almost surely
     // under-determined, and we still gate whatever we gathered.
     const MAX_CHAINS: usize = 16;
@@ -400,6 +400,13 @@ pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Opt
             continue; // a: in_ty -> a_ret
         }
         let Some(a_entry) = op_entry_name(a.mog) else { continue };
+        // Evaluate `a` ONCE on the first input; every candidate `b` is then rejected
+        // with a single op-eval on this value before any chain string is built/parsed.
+        let Ok(mid_rt) = crate::runtime::execute_function(a.mog, a_entry, &first.inputs, "c")
+        else {
+            continue;
+        };
+        let Ok(mid1) = crate::runtime::benchmark_value_from_runtime(&mid_rt) else { continue };
         for b in OPS {
             if b.name == a.name {
                 continue;
@@ -409,15 +416,22 @@ pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Opt
                 continue; // b: a_ret -> out_ty
             }
             let Some(b_entry) = op_entry_name(b.mog) else { continue };
+            // Early reject: b(a(first_input)) must equal the first expected output.
+            let Ok(out_rt) = crate::runtime::execute_function(b.mog, b_entry, &[mid1.clone()], "c")
+            else {
+                continue;
+            };
+            match crate::runtime::benchmark_value_from_runtime(&out_rt) {
+                Ok(out1) if &out1 == first_expected => {}
+                _ => continue,
+            }
+            // Passed the first example — build the chain and verify EVERY example.
             let code = format!(
                 "fn {fname}(x0: {in_ty}) -> {out_ty} {{\n    return {b_entry}({a_entry}(x0));\n}}\n\n{}\n{}",
                 a.mog.trim_end(),
                 b.mog.trim_end()
             );
-            // Early reject on the FIRST example (one run) before verifying all.
-            if crate::runtime::code_reproduces_examples(&code, seed1)
-                && crate::runtime::code_reproduces_examples(&code, examples)
-            {
+            if crate::runtime::code_reproduces_examples(&code, examples) {
                 chains.push(code);
                 if chains.len() >= MAX_CHAINS {
                     break 'outer;
