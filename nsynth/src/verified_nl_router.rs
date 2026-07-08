@@ -1972,6 +1972,24 @@ mod tests {
                 vec![iv(2)],
                 iv(0),
             ),
+            // middle_char coincides with the MOST-FREQUENT char on short strings where the middle
+            // position holds it, wrong in general ('bbca' -> middle 'c' vs most-frequent 'b').
+            // most_frequent_char resolves it (frontier-measurement find).
+            (
+                "the most frequent character in a string",
+                vec![ex(vec![Value::Str("aab".into())], Value::Str("a".into())), ex(vec![Value::Str("xyy".into())], Value::Str("y".into())), ex(vec![Value::Str("ccca".into())], Value::Str("c".into()))],
+                vec![Value::Str("bbca".into())],
+                Value::Str("b".into()),
+            ),
+            // With no longest_run op the prompt fell to tier-3 synthesis, which overfit a NON-boolean
+            // unrelated pipeline (sum_values->octal_to_decimal->unset_bits) wrong on a fresh input
+            // ([7,7,1,1,1] -> 0 vs 3). The named longest_run op resolves before synthesis.
+            (
+                "the length of the longest run of equal adjacent elements",
+                vec![ex(vec![av(&[1, 1, 2])], iv(2)), ex(vec![av(&[3, 3, 3, 1])], iv(3)), ex(vec![av(&[1, 2, 3])], iv(1)), ex(vec![av(&[5, 5, 5, 5])], iv(4))],
+                vec![av(&[7, 7, 1, 1, 1])],
+                iv(3),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

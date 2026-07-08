@@ -567,6 +567,12 @@ pub const OPS: &[LibOp] = &[
     // Middle character (index len/2). Under-determined odd-length examples let the
     // composition tier ship a wrong chain ("hello" -> \"le\", a 2-char slice); the named
     // op resolves first.
+    // The MOST FREQUENT character in a string. middle_char coincides on short strings where the
+    // middle position happens to hold the most-frequent char, but is wrong in general ('bbca' ->
+    // middle 'c' vs most-frequent 'b'). Name tokens 'most'+'frequent'+'character' out-cover
+    // middle_char (matches only 'char'). O(n^2): for each char count its occurrences, keep the max.
+    LibOp { name: "most_frequent_char", arity: 1, mog:
+"fn most_frequent_char(s: string) -> string {\n    best_ch: string = \"\";\n    best_count: i64 = 0;\n    for ch in s {\n        c: i64 = 0;\n        for other in s {\n            if other == ch {\n                c = c + 1;\n            }\n        }\n        if c > best_count {\n            best_count = c;\n            best_ch = \"\";\n            best_ch = best_ch + ch;\n        }\n    }\n    return best_ch;\n}\n" },
     LibOp { name: "middle_char", arity: 1, mog:
 "fn middle_char(s: string) -> string {\n    mid: i64 = s.len / 2;\n    i: i64 = 0;\n    for ch in s {\n        if i == mid {\n            return ch;\n        }\n        i = i + 1;\n    }\n    return \"\";\n}\n" },
     LibOp { name: "count_vowels", arity: 1, mog:
@@ -850,6 +856,12 @@ pub const OPS: &[LibOp] = &[
     // op produces this run-boundary count).
     LibOp { name: "count_adjacent_equal", arity: 1, mog:
 "fn count_adjacent_equal(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        if arr[i] == arr[i + 1] {\n            c = c + 1;\n        }\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    // Length of the longest run of equal ADJACENT elements. Without this op the prompt fell to
+    // tier-3 synthesis, which overfit an unrelated pipeline (sum_values->octal_to_decimal->
+    // unset_bits) that reproduced a small example set but is confidently wrong on a fresh input
+    // ([7,7,1,1,1] -> 0 vs 3). The named op resolves before synthesis.
+    LibOp { name: "longest_run", arity: 1, mog:
+"fn longest_run(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    if n == 0 {\n        return 0;\n    }\n    best: i64 = 1;\n    cur: i64 = 1;\n    i: i64 = 1;\n    while i < n {\n        if arr[i] == arr[i - 1] {\n            cur = cur + 1;\n        } else {\n            cur = 1;\n        }\n        if cur > best {\n            best = cur;\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
     LibOp { name: "move_zeros_end", arity: 1, mog:
 "fn move_zeros_end(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        if e != 0 {\n            out.push(e);\n        }\n    }\n    for e in arr {\n        if e == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "move_first_to_last", arity: 1, mog:
