@@ -628,6 +628,11 @@ pub const OPS: &[LibOp] = &[
 "fn count_alphanumeric(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alnum() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "is_palindrome", arity: 1, mog:
 "fn is_palindrome(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // Whether two strings are ANAGRAMS (same length and same multiset of characters). Closes a
+    // frontier gap (no lib op). 'anagrams' names it; arity 2, so it never competes with 1-arg
+    // string prompts.
+    LibOp { name: "are_anagrams", arity: 2, mog:
+"fn are_anagrams(a: string, b: string) -> i64 {\n    if a.len != b.len {\n        return 0;\n    }\n    for ch in a {\n        ca: i64 = 0;\n        for x in a {\n            if x == ch {\n                ca = ca + 1;\n            }\n        }\n        cb: i64 = 0;\n        for y in b {\n            if y == ch {\n                cb = cb + 1;\n            }\n        }\n        if ca != cb {\n            return 0;\n        }\n    }\n    return 1;\n}\n" },
     // Whether two strings are equal (boolean). Closes the 'two strings are equal'
     // refusal; name token 'equal' resolves it (unique 2-string->bool reproducer).
     LibOp { name: "strings_equal", arity: 2, mog:
