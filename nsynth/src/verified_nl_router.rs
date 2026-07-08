@@ -1538,6 +1538,14 @@ mod tests {
                 vec![iv(8), iv(4)],
                 iv(1),
             ),
+            // Same predicate phrased with "multiple" (which is_divisible does not name-
+            // match) — tier-3 shipped a wrong program on (8,2); is_multiple resolves it.
+            (
+                "whether a is a multiple of b",
+                vec![ex(vec![iv(6), iv(2)], iv(1)), ex(vec![iv(7), iv(3)], iv(0)), ex(vec![iv(9), iv(3)], iv(1)), ex(vec![iv(10), iv(4)], iv(0))],
+                vec![iv(8), iv(2)],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
