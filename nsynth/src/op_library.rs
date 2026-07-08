@@ -734,6 +734,14 @@ pub const OPS: &[LibOp] = &[
 "fn max_two(a: i64, b: i64) -> i64 {\n    if a > b {\n        return a;\n    }\n    return b;\n}\n" },
     LibOp { name: "min_two", arity: 2, mog:
 "fn min_two(a: i64, b: i64) -> i64 {\n    if a < b {\n        return a;\n    }\n    return b;\n}\n" },
+    // Absolute difference. tier-3 synth answered "the absolute difference" with the
+    // signed a-b (coincides when a>=b, wrong on a<b: |2-10|=8 not -2). Named op fixes.
+    LibOp { name: "abs_difference", arity: 2, mog:
+"fn abs_difference(a: i64, b: i64) -> i64 {\n    d: i64 = a - b;\n    if d < 0 {\n        d = 0 - d;\n    }\n    return d;\n}\n" },
+    // Average of two. tier-3 synth overfit degenerate examples (all averaging the same
+    // constant) to that constant; the named op resolves it before synthesis.
+    LibOp { name: "average_two", arity: 2, mog:
+"fn average_two(a: i64, b: i64) -> i64 {\n    return (a + b) / 2;\n}\n" },
     LibOp { name: "multiply_two", arity: 2, mog:
 "fn multiply_two(a: i64, b: i64) -> i64 {\n    return a * b;\n}\n" },
     LibOp { name: "rect_perimeter", arity: 2, mog:
