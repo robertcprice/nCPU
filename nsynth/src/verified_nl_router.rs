@@ -1651,6 +1651,20 @@ mod tests {
                 vec![av(&[-1, -2])],
                 iv(1),
             ),
+            // contains_even coincides with count_evens when examples have <=1 even.
+            (
+                "whether a list contains an even number",
+                vec![ex(vec![av(&[1, 2, 3])], iv(1)), ex(vec![av(&[3, 5])], iv(0)), ex(vec![av(&[7, 4])], iv(1)), ex(vec![av(&[1, 9])], iv(0))],
+                vec![av(&[2, 4])],
+                iv(1),
+            ),
+            // contains_digit coincides with count_string_digits when examples have <=1 digit.
+            (
+                "whether a string contains a digit",
+                vec![ex(vec![Value::Str("a1b".into())], iv(1)), ex(vec![Value::Str("abc".into())], iv(0)), ex(vec![Value::Str("x9".into())], iv(1)), ex(vec![Value::Str("yz".into())], iv(0))],
+                vec![Value::Str("a12".into())],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

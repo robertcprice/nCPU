@@ -326,6 +326,11 @@ pub const OPS: &[LibOp] = &[
     // ── array reductions the base engine misses (1-arg [i64]) ──────────────
     LibOp { name: "count_evens", arity: 1, mog:
 "fn count_evens(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether the list contains ANY even (boolean). Coincides with count_evens when the
+    // examples have <=1 even; count_evens is wrong once there are 2+ ([2,4] -> contains 1,
+    // count 2). Name token \"contain\" resolves the boolean.
+    LibOp { name: "contains_even", arity: 1, mog:
+"fn contains_even(arr: [i64]) -> i64 {\n    for e in arr {\n        if e % 2 == 0 {\n            return 1;\n        }\n    }\n    return 0;\n}\n" },
     // Sum of the even NUMBERS in a list. Was missing (only sum_evens_upto /
     // sum_even_digits existed), so the combinator built a wrong program for "the sum
     // of the even numbers" and it refused. Name tier resolves it directly now.
@@ -480,6 +485,11 @@ pub const OPS: &[LibOp] = &[
 "fn count_lowercase(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_lower() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_string_digits", arity: 1, mog:
 "fn count_string_digits(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_digit() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether the string contains ANY digit (boolean). Coincides with count_string_digits
+    // when the examples have <=1 digit; the count is wrong once there are 2+ (\"a12\" ->
+    // contains 1, count 2). Name token \"contain\" resolves the boolean.
+    LibOp { name: "contains_digit", arity: 1, mog:
+"fn contains_digit(s: string) -> i64 {\n    for ch in s {\n        if ch.is_digit() {\n            return 1;\n        }\n    }\n    return 0;\n}\n" },
     LibOp { name: "count_spaces", arity: 1, mog:
 "fn count_spaces(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch == ' ' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     // ── batch 18: STRING DOMAIN (Loop 1). char-level build via `out = out + ch`,
