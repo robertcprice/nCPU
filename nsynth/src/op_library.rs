@@ -254,6 +254,11 @@ pub const OPS: &[LibOp] = &[
 "fn sum_of_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    acc: i64 = 0;\n    while x > 0 {\n        acc = acc + x % 10;\n        x = x / 10;\n    }\n    return acc;\n}\n" },
     LibOp { name: "count_digits", arity: 1, mog:
 "fn count_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    c: i64 = 0;\n    while x > 0 {\n        c = c + 1;\n        x = x / 10;\n    }\n    if c == 0 {\n        c = 1;\n    }\n    return c;\n}\n" },
+    // Number of DISTINCT digits. Coincides with count_digits on all-distinct-digit numbers;
+    // count_digits is wrong once a digit repeats (122 -> 2 distinct, count_digits 3). Checks
+    // each digit 0-9 for presence. 'distinct' + 'digit' outrank count_digits ('digit' only).
+    LibOp { name: "count_distinct_digits", arity: 1, mog:
+"fn count_distinct_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    c: i64 = 0;\n    d: i64 = 0;\n    while d <= 9 {\n        found: i64 = 0;\n        if x == 0 {\n            if d == 0 {\n                found = 1;\n            }\n        }\n        y: i64 = x;\n        while y > 0 {\n            if y % 10 == d {\n                found = 1;\n            }\n            y = y / 10;\n        }\n        if found == 1 {\n            c = c + 1;\n        }\n        d = d + 1;\n    }\n    return c;\n}\n" },
     // Even-digit variants. "count/sum the EVEN digits" coincides with count_digits /
     // sum_of_digits when every digit is even; the general op is name-matched and was
     // shipped confident-wrong (count even digits of 13 -> 2, not 0). With the specific

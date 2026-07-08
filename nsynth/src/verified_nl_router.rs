@@ -1718,6 +1718,14 @@ mod tests {
                 vec![iv(13)],
                 iv(1),
             ),
+            // count_distinct_digits coincides with count_digits on all-distinct-digit
+            // numbers; wrong once a digit repeats (122 -> 2 distinct, count_digits 3).
+            (
+                "the number of distinct digits in a number",
+                vec![ex(vec![iv(123)], iv(3)), ex(vec![iv(45)], iv(2)), ex(vec![iv(7)], iv(1))],
+                vec![iv(122)],
+                iv(2),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
