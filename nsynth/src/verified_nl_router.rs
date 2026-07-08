@@ -1612,6 +1612,14 @@ mod tests {
                 vec![av(&[7, 7, 8])],
                 iv(0),
             ),
+            // The composition tier shipped a wrong chain for first-minus-last; the named
+            // first_last_diff op resolves it ([3,1,8] -> 3-8 = -5).
+            (
+                "the difference between the first and last element",
+                vec![ex(vec![av(&[5, 1, 2])], iv(3)), ex(vec![av(&[10, 4])], iv(6)), ex(vec![av(&[7, 2, 9])], iv(-2))],
+                vec![av(&[3, 1, 8])],
+                iv(-5),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

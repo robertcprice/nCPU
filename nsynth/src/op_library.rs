@@ -689,6 +689,11 @@ pub const OPS: &[LibOp] = &[
 "fn second_element(arr: [i64]) -> i64 {\n    return arr[1];\n}\n" },
     LibOp { name: "third_element", arity: 1, mog:
 "fn third_element(arr: [i64]) -> i64 {\n    return arr[2];\n}\n" },
+    // Signed first-minus-last. The composition tier shipped a wrong chain for 'the
+    // difference between the first and last element' ([3,1,8] -> -2, want -5); this named
+    // op (first/last/diff all match) resolves it directly.
+    LibOp { name: "first_last_diff", arity: 1, mog:
+"fn first_last_diff(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[0] - arr[n - 1];\n}\n" },
     LibOp { name: "list_min", arity: 1, mog:
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:
