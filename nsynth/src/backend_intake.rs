@@ -1150,10 +1150,19 @@ pub fn comprehend_backend_prose(text: &str) -> Option<BackendAsk> {
     let resolver = EntityResolver::new(registry.clone());
     let mut is_backend = false;
     let mut store_word: Option<String> = None;
+    // A backend request must name a GENUINE backend noun (server/api/route/service/
+    // endpoint/health…), not merely a generic English verb the fuzzy resolver maps
+    // to a route by weak coincidence. Measured: real backend nouns resolve at score
+    // >= 0.88 (endpoints=0.88, server/api/service/route/health=1.00) while a generic
+    // verb like "find" maps to route at only 0.56. Without this floor a math prompt
+    // ("...to FIND k operations to MAKE all elements equal") was mis-classified as
+    // backend and shipped an EMPTY server artifact CONFIDENTLY — the one never-wrong
+    // leak found across a 200-task MBPP sweep (id158 min_Ops). 0.75 cleanly separates.
+    const MIN_BACKEND_KIND_SCORE: f32 = 0.75;
     for t in &tokens {
-        if let Some((kind, _lemma, _score)) = resolve_domain(&resolver, &registry, t, "backend_kind") {
+        if let Some((kind, _lemma, score)) = resolve_domain(&resolver, &registry, t, "backend_kind") {
             match kind.as_str() {
-                "server" | "route" => is_backend = true,
+                "server" | "route" if score >= MIN_BACKEND_KIND_SCORE => is_backend = true,
                 "store" => store_word = Some(t.clone()),
                 _ => {}
             }
@@ -1358,5 +1367,36 @@ mod backend_ask_tests {
         let src = std::fs::read_to_string(root.join("backend/main.rs")).unwrap();
         assert!(src.contains("/health"), "health route present");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// NEVER-WRONG REGRESSION: a math/algorithm prompt whose only "backend" signal is
+    /// a generic verb the fuzzy resolver weakly maps to a route (`find`->route@0.56)
+    /// must NOT be classified as a backend request. Before the score floor this
+    /// shipped an EMPTY server artifact CONFIDENTLY — the one confident-wrong leak in
+    /// a 200-task MBPP sweep (id158 min_Ops). Genuine backend nouns (score >= 0.88)
+    /// must still fire.
+    #[test]
+    fn math_prompt_is_not_mis_classified_as_backend() {
+        for prompt in [
+            "Write a python function to find k number of operations required to make all elements equal.",
+            "find the largest element in a list",
+            "generate the first n prime numbers",
+            "count the number of vowels in a string",
+        ] {
+            assert!(
+                comprehend_backend_prose(prompt).is_none(),
+                "must decline (not backend): {prompt:?}"
+            );
+        }
+        for prompt in [
+            "build a server",
+            "create a REST api with a users resource",
+            "make an http server with a health route",
+        ] {
+            assert!(
+                comprehend_backend_prose(prompt).is_some(),
+                "must still be recognised as backend: {prompt:?}"
+            );
+        }
     }
 }
