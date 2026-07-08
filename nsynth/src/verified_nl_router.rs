@@ -1239,6 +1239,17 @@ fn fresh_probe_inputs(examples: &[crate::benchmark::Example]) -> Vec<Vec<crate::
                             variants.push(rev);
                             // a fixed small mixed array, regime-independent catch-all
                             variants.push(vec![-2, 5, -1, 3]);
+                            // an ALL-NEGATIVE array (negative maximum). Every other variant
+                            // above leaves the maximum positive, so `|max|` (abs after max)
+                            // and `max_of_abs_values` coincide and the gate cannot see them
+                            // diverge -- a confident-wrong shipped for "absolute value of the
+                            // maximum" (max_absolute_value returned max-of-abs). Negating each
+                            // element gives a negative max where |max| != max-of-abs
+                            // ([-5,-2,-8] -> |max|=2 vs max-of-abs 8), so the two passing ops
+                            // diverge and the ambiguous prompt refuses instead of guessing.
+                            let neg: Vec<i64> =
+                                base.iter().map(|&x| if x > 0 { -x } else { x - 1 }).collect();
+                            variants.push(neg);
                             // a DUPLICATE-containing array: dedup / identity /
                             // elements_once all coincide on distinct-valued inputs, so
                             // without repeats the gate can't tell them apart (a plain
@@ -1826,6 +1837,18 @@ mod tests {
                 vec![ex(vec![av(&[2, 3])], iv(6)), ex(vec![av(&[1, 5])], iv(5)), ex(vec![av(&[2, 2])], iv(4))],
                 vec![av(&[-2, 3])],
                 iv(6),
+            ),
+            // |max(arr)| (abs AFTER max) shares every token with max_absolute_value (max of the
+            // abs values). On all-nonnegative examples both list_max and max_absolute_value pass
+            // and the old probe set left the maximum positive, so they never diverged and a
+            // confident-wrong shipped ([-3,-8] -> max_absolute_value returned 8, intended 3).
+            // The all-negative probe now makes them diverge -> the gate refuses this token-order
+            // ambiguity instead of guessing.
+            (
+                "the absolute value of the maximum value in a list",
+                vec![ex(vec![av(&[3, 5, 2])], iv(5)), ex(vec![av(&[1, 9])], iv(9)), ex(vec![av(&[4, 7, 6])], iv(7))],
+                vec![av(&[-3, -8])],
+                iv(3),
             ),
         ];
         for (prompt, exs, fresh, intended) in cases {
