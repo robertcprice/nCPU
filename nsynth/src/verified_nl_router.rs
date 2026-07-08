@@ -1463,6 +1463,14 @@ mod tests {
                 vec![av(&[2, 7, 8])],
                 iv(7),
             ),
+            // min_odd coincides with list_min on all-odd input — wrong once a smaller
+            // even is present ([2,7,3] -> smallest odd 3, list_min 2).
+            (
+                "the smallest odd number in a list",
+                vec![ex(vec![av(&[3, 5, 7])], iv(3)), ex(vec![av(&[9, 1])], iv(1)), ex(vec![av(&[5, 3, 9])], iv(3))],
+                vec![av(&[2, 7, 3])],
+                iv(3),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

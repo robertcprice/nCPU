@@ -317,6 +317,11 @@ pub const OPS: &[LibOp] = &[
     // positive 1, list_min -4).
     LibOp { name: "min_positive", arity: 1, mog:
 "fn min_positive(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e > 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e < m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
+    // Smallest ODD number. Coincides with list_min on all-odd inputs; list_min was
+    // shipped and is wrong when a smaller even is present ([2,7,3] -> smallest odd 3,
+    // list_min 2). Completes the min/max x even/odd grid (max_odd/min_even/max_even).
+    LibOp { name: "min_odd", arity: 1, mog:
+"fn min_odd(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e < m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
     LibOp { name: "count_odds", arity: 1, mog:
 "fn count_odds(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_positives", arity: 1, mog:
