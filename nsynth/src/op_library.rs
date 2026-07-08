@@ -470,6 +470,10 @@ pub const OPS: &[LibOp] = &[
 "fn count_letters(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "is_palindrome", arity: 1, mog:
 "fn is_palindrome(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // Whether two strings are equal (boolean). Closes the 'two strings are equal'
+    // refusal; name token 'equal' resolves it (unique 2-string->bool reproducer).
+    LibOp { name: "strings_equal", arity: 2, mog:
+"fn strings_equal(a: string, b: string) -> i64 {\n    if a == b {\n        return 1;\n    }\n    return 0;\n}\n" },
     // Balanced-parentheses is a stack/counter algorithm (a known algorithm, like
     // is_prime) — carry it so "check if parentheses are balanced" resolves + verifies.
     LibOp { name: "balanced_parentheses", arity: 1, mog:
