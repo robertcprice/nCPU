@@ -625,6 +625,12 @@ pub const OPS: &[LibOp] = &[
 "fn count_lowercase(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_lower() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_string_digits", arity: 1, mog:
 "fn count_string_digits(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_digit() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether the string ENDS WITH a digit. count_string_digits coincides whenever the digit
+    // count already decides it (examples with a single trailing digit or none), but is wrong once
+    // a digit sits mid-string ('a1b' -> count 1 but ends-with-digit 0). 'ends'+'digit' out-cover
+    // count_string_digits; the loop leaves r holding whether the LAST character is a digit.
+    LibOp { name: "ends_with_digit", arity: 1, mog:
+"fn ends_with_digit(s: string) -> i64 {\n    r: i64 = 0;\n    for ch in s {\n        if ch.is_digit() {\n            r = 1;\n        } else {\n            r = 0;\n        }\n    }\n    return r;\n}\n" },
     // Whether the string contains ANY digit (boolean). Coincides with count_string_digits
     // when the examples have <=1 digit; the count is wrong once there are 2+ (\"a12\" ->
     // contains 1, count 2). Name token \"contain\" resolves the boolean.

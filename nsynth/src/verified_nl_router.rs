@@ -827,6 +827,7 @@ pub fn answer_with_proposer(
                 .first()
                 .map(|e| e.inputs.iter().map(value_type_str).collect())
                 .unwrap_or_default();
+            let mut library_corroborates = false;
             if let Some(op) = ranked_candidates(prompt)
                 .into_iter()
                 .filter(|op| op_accepts_types(op.mog, &input_types))
@@ -835,8 +836,26 @@ pub fn answer_with_proposer(
             {
                 if let Some(en) = op_entry_name(op.mog) {
                     progs.push((op.mog.to_string(), en.to_string()));
+                    library_corroborates = true;
                 }
             }
+            // STRUCTURAL BOOLEAN-PREDICATE OVERFIT GATE. A synthesized program whose outputs are
+            // all boolean (0/1) over a small example set is the highest overfit-risk class: 2^k
+            // functions fit k boolean points, and two INDEPENDENT seed-syntheses routinely
+            // CONVERGE on the same coincidental pipeline (e.g. is_prime->is_even for "perfect
+            // square", lowest_set_bit_pos->is_prime for "divisible by 6"), so programs_disagree
+            // cannot see them diverge. The only independent semantic anchor is a LIBRARY op that
+            // also reproduces the examples — the interpretation the prompt actually names. Without
+            // one, a boolean synthesis is under-determined; refuse rather than ship a confident
+            // guess. (Empirically the risk set is empty: no battery case resolves via an
+            // uncorroborated boolean tier-3 synthesis, so this never regresses a solve.)
+            let boolean_output = examples.iter().all(|e| {
+                matches!(
+                    e.expected,
+                    crate::benchmark::Value::Int(0) | crate::benchmark::Value::Int(1)
+                )
+            });
+            let boolean_overfit = boolean_output && !library_corroborates;
             // CONSTANT-OVERFIT GUARD. When the examples share an output-derived
             // constant (pairs all averaging 5 -> "return 5"; abs single-positive
             // "return 5"), synthesis can return a CONSTANT function the holdout cannot
@@ -867,7 +886,11 @@ pub fn answer_with_proposer(
             // (sum_of_digits reproducing abs's single-digit examples, disagreeing with
             // reverse_number on -99) — solve_problem's internal try_library has no such
             // gate. Don't resurrect it: only a genuine SYNTHESIS result returns here.
-            if !constant_overfit && !method.contains("library:") && !programs_disagree(&progs, examples) {
+            if !boolean_overfit
+                && !constant_overfit
+                && !method.contains("library:")
+                && !programs_disagree(&progs, examples)
+            {
                 return Answer::Synthesized { method, code };
             }
         }
@@ -1921,6 +1944,24 @@ mod tests {
                 vec![ex(vec![av(&[1, 2])], iv(1)), ex(vec![av(&[3, 4])], iv(1)), ex(vec![av(&[-5, -6])], iv(0)), ex(vec![av(&[-1, -2])], iv(0))],
                 vec![av(&[-5, 10])],
                 iv(1),
+            ),
+            // count_string_digits coincides with ENDS-WITH-a-digit when the digit count already
+            // decides it, wrong on a mid-string digit ('a1b' -> count 1 vs ends-with-digit 0).
+            // ends_with_digit resolves it.
+            (
+                "whether a string ends with a digit",
+                vec![ex(vec![Value::Str("ab1".into())], iv(1)), ex(vec![Value::Str("xy9".into())], iv(1)), ex(vec![Value::Str("abc".into())], iv(0)), ex(vec![Value::Str("xyz".into())], iv(0))],
+                vec![Value::Str("a1b".into())],
+                iv(0),
+            ),
+            // STRUCTURAL: a boolean predicate with no library op (divisible by 6) fell to tier-3
+            // synthesis, which overfit lowest_set_bit_pos->is_prime, wrong on 4. The boolean-
+            // predicate overfit gate now refuses an uncorroborated boolean synthesis.
+            (
+                "whether a number is divisible by both two and three",
+                vec![ex(vec![iv(6)], iv(1)), ex(vec![iv(12)], iv(1)), ex(vec![iv(8)], iv(0)), ex(vec![iv(9)], iv(0))],
+                vec![iv(4)],
+                iv(0),
             ),
         ];
         for (prompt, exs, fresh, intended) in cases {
