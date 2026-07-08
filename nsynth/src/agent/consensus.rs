@@ -49,10 +49,30 @@ pub fn is_examples_only(problem: &Problem) -> bool {
     problem.reference_code.is_empty() && problem.holdouts.is_empty()
 }
 
+/// Wall-clock budget (ms) for gathering independent candidates. The leave-one-out
+/// pass re-runs the full solver once PER example, and a single solve on a hard task
+/// can burn ~30s (a search STAGE runs to completion internally, past the between-
+/// stages `NSYNTH_SOLVE_BUDGET_MS` check) — so N examples = N×30s, e.g. a measured
+/// 250s stall on nth_composite that froze the model-tier front door
+/// (`verified_nl_router`→rlvr verify→consensus) for minutes. Bounding gathering by
+/// wall clock is SOUND: fewer corroborators can only reduce a would-be `Verified`
+/// to `NoConsensus` (→ Tentative) or miss an `Ambiguous`, never MANUFACTURE a false
+/// `Verified` — the gate can only get MORE conservative, never confidently wrong.
+/// Default 20s (override `NSYNTH_CONSENSUS_BUDGET_MS`); the cheap enumerative
+/// candidate (a) always runs first since it is the usual fast corroborator.
+fn consensus_budget_ms() -> u128 {
+    std::env::var("NSYNTH_CONSENSUS_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000)
+}
+
 /// Gather INDEPENDENT candidates that also satisfy every visible example and
 /// differ textually from the accepted candidate.
 fn independent_candidates(problem: &Problem, accepted_code: &str) -> Vec<String> {
     let mut raw: Vec<String> = Vec::new();
+    let start = std::time::Instant::now();
+    let budget = consensus_budget_ms();
 
     // (a) bottom-up enumerative engine.
     if let Some(r) = crate::enumerative::synthesize_enumerative(problem) {
@@ -61,9 +81,16 @@ fn independent_candidates(problem: &Problem, accepted_code: &str) -> Vec<String>
         }
     }
 
-    // (b) leave-one-out re-synthesis (only meaningful with >= 2 examples).
+    // (b) leave-one-out re-synthesis (only meaningful with >= 2 examples), bounded
+    // by the wall-clock budget so one pathological subset-solve cannot stall the
+    // whole gate. Checked BEFORE each solve; the in-flight solve is not interrupted
+    // (no cooperative deadline inside the search stages yet), so the true bound is
+    // budget + one-solve overshoot — still bounded, unlike the unbounded N×solve.
     if problem.examples.len() >= 2 {
         for omit in 0..problem.examples.len() {
+            if start.elapsed().as_millis() > budget {
+                break;
+            }
             let mut sub = problem.clone();
             sub.examples = problem
                 .examples
