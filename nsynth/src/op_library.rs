@@ -254,6 +254,15 @@ pub const OPS: &[LibOp] = &[
 "fn sum_of_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    acc: i64 = 0;\n    while x > 0 {\n        acc = acc + x % 10;\n        x = x / 10;\n    }\n    return acc;\n}\n" },
     LibOp { name: "count_digits", arity: 1, mog:
 "fn count_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    c: i64 = 0;\n    while x > 0 {\n        c = c + 1;\n        x = x / 10;\n    }\n    if c == 0 {\n        c = 1;\n    }\n    return c;\n}\n" },
+    // Even-digit variants. "count/sum the EVEN digits" coincides with count_digits /
+    // sum_of_digits when every digit is even; the general op is name-matched and was
+    // shipped confident-wrong (count even digits of 13 -> 2, not 0). With the specific
+    // ops present, the name tier prefers them (coverage 1.0 incl "even") and the
+    // distinguishing gate refuses when the examples are all-even (under-determined).
+    LibOp { name: "count_even_digits", arity: 1, mog:
+"fn count_even_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    if x == 0 {\n        return 1;\n    }\n    c: i64 = 0;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d % 2 == 0 {\n            c = c + 1;\n        }\n        x = x / 10;\n    }\n    return c;\n}\n" },
+    LibOp { name: "sum_even_digits", arity: 1, mog:
+"fn sum_even_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    s: i64 = 0;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d % 2 == 0 {\n            s = s + d;\n        }\n        x = x / 10;\n    }\n    return s;\n}\n" },
     LibOp { name: "reverse_number", arity: 1, mog:
 "fn reverse_number(n: i64) -> i64 {\n    x: i64 = n;\n    r: i64 = 0;\n    while x > 0 {\n        r = r * 10 + x % 10;\n        x = x / 10;\n    }\n    return r;\n}\n" },
     LibOp { name: "fibonacci", arity: 1, mog:
