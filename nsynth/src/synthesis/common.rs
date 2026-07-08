@@ -39,7 +39,7 @@ impl Drop for TrainDeadline {
 
 /// True once an installed [`TrainDeadline`] has elapsed. Always false when no
 /// deadline is set, so non-opted-in callers see no behavior change.
-fn train_deadline_exceeded() -> bool {
+pub(crate) fn train_deadline_exceeded() -> bool {
     TRAIN_DEADLINE
         .with(|c| c.get())
         .is_some_and(|d| Instant::now() >= d)

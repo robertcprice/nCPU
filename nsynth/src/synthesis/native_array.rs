@@ -1544,6 +1544,21 @@ fn try_exact_array_warm_starts(
 pub(super) fn synthesize_array_gradient_core(problem: &Problem) -> Option<SolveResult> {
     let fn_name = problem.function_name();
     let (examples, n_scalar) = extract_arr_examples(problem)?;
+
+    // Wall-clock bound for the whole array-gradient sweep (9 restarts x ~13 archs x
+    // 600 steps). Like synthesize_scalar_inner, install a generous default deadline
+    // capped by the caller's NSYNTH_SOLVE_BUDGET_MS — so the tighter of the two wins
+    // and this can never run unbounded. Without it a hard array task hung the
+    // interactive path for minutes. train_program_arr honors it (checked every 16
+    // steps). Opt-in on the env for the tight case; the 60s default just trims the
+    // pathological tail and is far above any run that actually converges.
+    let sweep_secs: f32 = std::env::var("NSYNTH_SOLVE_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map_or(60.0, |ms| 60.0_f32.min(ms as f32 / 1000.0));
+    let _arr_deadline = crate::synthesis::common::TrainDeadline::set(
+        std::time::Duration::from_secs_f32(sweep_secs),
+    );
     let scalar_names: Vec<&str> = if n_scalar == 0 {
         vec![]
     } else if n_scalar == 1 {
@@ -2039,6 +2054,14 @@ where
     let mut loss_at_chk2 = f32::MAX;
 
     for step in 0..n_steps {
+        // Cooperative wall-clock bound: honor an installed TrainDeadline (checked every
+        // 16 steps, like train_program) so a doomed array-gradient sweep cannot run
+        // unbounded. Without this the array core spun ~minutes on a hard array task
+        // ("move all zeroes to the end") and hung the interactive handle_query path —
+        // no deadline was ever consulted here. No-op when no deadline is set.
+        if step % 16 == 0 && crate::synthesis::common::train_deadline_exceeded() {
+            break;
+        }
         if step == chk1 {
             loss_at_chk1 = best_loss;
         }

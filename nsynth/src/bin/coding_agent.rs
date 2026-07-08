@@ -51,6 +51,18 @@ fn main() {
         process::exit(2);
     }
 
+    // Interactive/product default: bound every solve attempt so a hard array task
+    // (e.g. "move all zeroes to the end") degrades to a refusal instead of spinning
+    // for minutes in the unbounded universal-array gradient. The synthesis routes
+    // and TrainDeadline all key off NSYNTH_SOLVE_BUDGET_MS; set a sane default here
+    // (the product entry, still single-threaded) only when the caller hasn't chosen
+    // one. Solvable problems converge in a few seconds, well inside this — it only
+    // trims the doomed tail. Callers who want a different bound still override it.
+    // SAFETY: single-threaded at process start; no other thread reads the env yet.
+    if env::var_os("NSYNTH_SOLVE_BUDGET_MS").is_none() {
+        unsafe { env::set_var("NSYNTH_SOLVE_BUDGET_MS", "20000") };
+    }
+
     let root = arg_value(&args, "--root").map(PathBuf::from);
     let session_id = arg_value(&args, "--session").unwrap_or_else(|| "main".to_string());
     let json_out = args.iter().any(|a| a == "--json");

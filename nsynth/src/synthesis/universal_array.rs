@@ -1503,6 +1503,22 @@ pub(super) fn synthesize_universal_array_fallback(
     const N_UNIV_ARR_STEPS: usize = 1000;
     const N_UNIV_ARR_RESTARTS: usize = 26;
 
+    // Wall-clock bound for the whole cascade (up to ~26+ restarts x 1000 steps,
+    // each a full exec_slot_backward over every example). This is the path that
+    // hung the interactive handle_query on hard array tasks like "move all zeroes
+    // to the end" — nothing here consulted a deadline. Install a generous default
+    // capped by the caller's NSYNTH_SOLVE_BUDGET_MS (tighter wins), and honor it in
+    // both the restart loop (between restarts) and the step loop (every 16 steps).
+    // No-op semantics when no budget is set relative to the 90s default, which is
+    // far above any run that actually converges — it only trims the doomed tail.
+    let univ_deadline_secs: f32 = std::env::var("NSYNTH_SOLVE_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map_or(90.0, |ms| 90.0_f32.min(ms as f32 / 1000.0));
+    let _univ_deadline = crate::synthesis::common::TrainDeadline::set(
+        std::time::Duration::from_secs_f32(univ_deadline_secs),
+    );
+
     // Emergent constant vocabulary: mine the problem's own examples for the
     // six most-useful integer constants instead of hand-picking a global
     // pool. Gradient descent starts with problem-appropriate values in
@@ -1602,6 +1618,11 @@ pub(super) fn synthesize_universal_array_fallback(
     let n_random_restarts = random_restart_count();
     let total_restarts = N_UNIV_ARR_RESTARTS + n_random_restarts;
     for restart in 0..total_restarts {
+        // Bail between restarts once the wall-clock budget is spent — no solution
+        // found in time means fall through to refuse/tentative (never-wrong safe).
+        if crate::synthesis::common::train_deadline_exceeded() {
+            break;
+        }
         let mut prog;
 
         if restart >= N_UNIV_ARR_RESTARTS {
@@ -1688,6 +1709,11 @@ pub(super) fn synthesize_universal_array_fallback(
         };
 
         for step in 0..N_UNIV_ARR_STEPS {
+            // Honor the wall-clock budget mid-restart (checked every 16 steps, like
+            // train_program) so a single 1000-step restart can't overrun it.
+            if step % 16 == 0 && crate::synthesis::common::train_deadline_exceeded() {
+                break;
+            }
             if step == chk1 {
                 loss_at_chk1 = best_loss;
             }
