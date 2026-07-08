@@ -546,6 +546,17 @@ pub const OPS: &[LibOp] = &[
     // length 3). The name token \"letter\" resolves it over the container noun \"string\".
     LibOp { name: "count_letters", arity: 1, mog:
 "fn count_letters(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Count of NON-letter characters. Coincides with string_length on strings with no
+    // letters; wrong once a letter is present (\"a1\" -> 1 non-letter, length 2). 'non' +
+    // 'letter' out-cover string_length's container-noun match.
+    LibOp { name: "count_non_letters", arity: 1, mog:
+"fn count_non_letters(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n        } else {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Count of CAPITAL (uppercase) letters. 'capital letters' does not name 'uppercase',
+    // so count_letters (matching 'letter') coincided on all-capital strings and shipped
+    // wrong on mixed case (\"aBc\" -> 1 capital, count_letters 3). count_capitals matches
+    // 'capital' (7 chars) and wins the char-length tiebreak over count_letters ('letter').
+    LibOp { name: "count_capitals", arity: 1, mog:
+"fn count_capitals(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_upper() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     // Count of alphanumeric characters. Coincides with string_length on all-alnum strings;
     // string_length is wrong once a non-alnum (space/punct) is present (\"a b\" -> 2 alnum,
     // length 3). Name tokens 'alphanumeric' + 'character' resolve it.

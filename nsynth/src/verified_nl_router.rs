@@ -1768,6 +1768,22 @@ mod tests {
                 vec![av(&[9, 1, 2])],
                 iv(2),
             ),
+            // string_length coincides with the non-letter count on strings with no letters.
+            (
+                "the number of non-letter characters in a string",
+                vec![ex(vec![Value::Str("12".into())], iv(2)), ex(vec![Value::Str("!!".into())], iv(2)), ex(vec![Value::Str("3".into())], iv(1))],
+                vec![Value::Str("a1".into())],
+                iv(1),
+            ),
+            // 'capital letters' does not name 'uppercase', so count_letters coincided on
+            // all-capital strings; count_capitals wins the char-length tiebreak ('capital'
+            // > 'letter') and is wrong on mixed case only for count_letters ("aBc" -> 1).
+            (
+                "the number of capital letters in a string",
+                vec![ex(vec![Value::Str("AB".into())], iv(2)), ex(vec![Value::Str("X".into())], iv(1)), ex(vec![Value::Str("QRS".into())], iv(3))],
+                vec![Value::Str("aBc".into())],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
