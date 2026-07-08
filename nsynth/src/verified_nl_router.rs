@@ -757,13 +757,37 @@ pub fn answer_with_proposer(
                     progs.push((op.mog.to_string(), en.to_string()));
                 }
             }
+            // CONSTANT-OVERFIT GUARD. When the examples share an output-derived
+            // constant (pairs all averaging 5 -> "return 5"; abs single-positive
+            // "return 5"), synthesis can return a CONSTANT function the holdout cannot
+            // catch (every held-out example shares the constant). A constant fn over
+            // VARIED inputs is almost always an overfit: if the program returns the SAME
+            // output on >= 3 fresh probes it succeeds on AND the examples have >= 2
+            // distinct inputs, refuse. Require >= 3 SUCCESSFUL evals so a program that
+            // errors on most probes and coincides on a couple is not mistaken for one.
+            let constant_overfit = {
+                let distinct_inputs: std::collections::HashSet<String> =
+                    examples.iter().map(|e| format!("{:?}", e.inputs)).collect();
+                if distinct_inputs.len() < 2 {
+                    false
+                } else {
+                    let outs: Vec<String> = fresh_probe_inputs(examples)
+                        .iter()
+                        .filter_map(|inp| {
+                            crate::runtime::execute_function(&code, &entry, inp, "cg").ok()
+                        })
+                        .map(|o| format!("{o:?}"))
+                        .collect();
+                    outs.len() >= 3 && outs.iter().all(|v| v == &outs[0])
+                }
+            };
             // A bare library-op match belongs to the gated behaviour tier
             // (route_by_behavior ran first with the distinguishing gate). If a library
             // op still reaches tier 3, it is one that tier REJECTED as coincidental
             // (sum_of_digits reproducing abs's single-digit examples, disagreeing with
             // reverse_number on -99) — solve_problem's internal try_library has no such
             // gate. Don't resurrect it: only a genuine SYNTHESIS result returns here.
-            if !method.contains("library:") && !programs_disagree(&progs, examples) {
+            if !constant_overfit && !method.contains("library:") && !programs_disagree(&progs, examples) {
                 return Answer::Synthesized { method, code };
             }
         }

@@ -302,6 +302,11 @@ pub const OPS: &[LibOp] = &[
     // ── array reductions the base engine misses (1-arg [i64]) ──────────────
     LibOp { name: "count_evens", arity: 1, mog:
 "fn count_evens(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Sum of the even NUMBERS in a list. Was missing (only sum_evens_upto /
+    // sum_even_digits existed), so the combinator built a wrong program for "the sum
+    // of the even numbers" and it refused. Name tier resolves it directly now.
+    LibOp { name: "sum_evens", arity: 1, mog:
+"fn sum_evens(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
     LibOp { name: "count_odds", arity: 1, mog:
 "fn count_odds(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_positives", arity: 1, mog:
