@@ -309,6 +309,17 @@ pub(super) fn solve_problem_prefer_differentiable(problem: &Problem) -> SolveRes
     }
 }
 
+/// True when a global `NSYNTH_SOLVE_BUDGET_MS` is set and the elapsed solve time
+/// (from `t0`) has already exceeded it. Unset ⇒ always false (no behavior change).
+/// Mirrors `pipeline::solve_budget_ms` but is read here to gate the unbounded
+/// gradient/register-machine routes without a cross-module coupling.
+fn global_solve_budget_exhausted(t0: Instant) -> bool {
+    std::env::var("NSYNTH_SOLVE_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse::<u128>().ok())
+        .is_some_and(|budget| t0.elapsed().as_millis() > budget)
+}
+
 fn try_post_enumerative_route(
     problem: &Problem,
     ctx: &PostEnumerativeContext,
@@ -332,6 +343,23 @@ fn try_post_enumerative_route(
         return None;
     }
     if super::analogy::in_refit() && matches!(route, ROUTE_SCALAR_GRADIENT | ROUTE_ARRAY_GRADIENT) {
+        return None;
+    }
+    // Global solve-budget guard. The gradient + register-machine routes have NO
+    // internal wall-clock bound — their training runs on worker threads that do not
+    // inherit the thread-local train deadline, so one route can spin ~60s on data
+    // that never converges (measured: synthesize_gradient_only 61s, register_machine
+    // 24s on nth_composite), blowing far past a set budget. When a global
+    // NSYNTH_SOLVE_BUDGET_MS is set and ALREADY exhausted (an earlier route overran),
+    // skip these expensive routes so the solve degrades gracefully instead of
+    // cascading minutes of doomed search. Opt-in: with no budget set this is a no-op,
+    // so default behaviour (and the benchmark) is unchanged; it never skips a route
+    // reached while still within budget, so a legitimate gradient solve is preserved.
+    if matches!(
+        route,
+        ROUTE_SCALAR_GRADIENT | ROUTE_ARRAY_GRADIENT | ROUTE_REGISTER_MACHINE
+    ) && global_solve_budget_exhausted(t0)
+    {
         return None;
     }
 
