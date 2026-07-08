@@ -1523,6 +1523,13 @@ mod tests {
                 vec![iv(-7)],
                 iv(-1),
             ),
+            // count_unique_chars coincides with string_length on all-unique strings.
+            (
+                "the number of unique characters in a string",
+                vec![ex(vec![Value::Str("abc".into())], iv(3)), ex(vec![Value::Str("xy".into())], iv(2)), ex(vec![Value::Str("a".into())], iv(1))],
+                vec![Value::Str("aab".into())],
+                iv(2),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

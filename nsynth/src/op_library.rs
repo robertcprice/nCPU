@@ -412,6 +412,15 @@ pub const OPS: &[LibOp] = &[
 "fn to_lower(s: string) -> string {\n    return s.lower();\n}\n" },
     LibOp { name: "string_length", arity: 1, mog:
 "fn string_length(s: string) -> i64 {\n    return s.len;\n}\n" },
+    // Count of DISTINCT characters. Coincides with string_length on all-unique strings;
+    // string_length is wrong once a char repeats ("aab" -> 2 distinct, length 3).
+    LibOp { name: "count_unique_chars", arity: 1, mog:
+"fn count_unique_chars(s: string) -> i64 {\n    seen: string = \"\";\n    c: i64 = 0;\n    for ch in s {\n        dup: i64 = 0;\n        for u in seen {\n            if u == ch {\n                dup = 1;\n            }\n        }\n        if dup == 0 {\n            seen = seen + ch;\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Middle character (index len/2). Under-determined odd-length examples let the
+    // composition tier ship a wrong chain ("hello" -> \"le\", a 2-char slice); the named
+    // op resolves first.
+    LibOp { name: "middle_char", arity: 1, mog:
+"fn middle_char(s: string) -> string {\n    mid: i64 = s.len / 2;\n    i: i64 = 0;\n    for ch in s {\n        if i == mid {\n            return ch;\n        }\n        i = i + 1;\n    }\n    return \"\";\n}\n" },
     LibOp { name: "count_vowels", arity: 1, mog:
 "fn count_vowels(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_vowel() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     // Uppercase ONLY the vowels. Coincides with to_upper on all-vowel strings; to_upper
