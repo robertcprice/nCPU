@@ -856,6 +856,26 @@ pub fn answer_with_proposer(
                 )
             });
             let boolean_overfit = boolean_output && !library_corroborates;
+            // STRUCTURAL PIPELINE-OVERFIT GATE (generalizes the boolean case to any output type).
+            // When synthesis returns a LIBRARY PIPELINE (method "…pipeline:opA->opB->opC"), the
+            // ops are the interpretation the search stitched together. If NONE of those op names
+            // shares a content token with the prompt, the pipeline is semantically unrelated to
+            // what was asked — a coincidental fit to under-determined examples ("longest run of
+            // equal adjacent elements" -> sum_values->octal_to_decimal->unset_bits, wrong on a
+            // fresh input). With no library op corroborating either, refuse. (No battery case
+            // resolves via a library-pipeline method, so this never regresses a solve.)
+            let pipeline_overfit = if let Some(idx) = method.find("pipeline:") {
+                let ops_part = &method[idx + "pipeline:".len()..];
+                let prompt_toks: std::collections::HashSet<String> =
+                    content_tokens(prompt).into_iter().collect();
+                let any_overlap = ops_part
+                    .split("->")
+                    .flat_map(content_tokens)
+                    .any(|t| prompt_toks.contains(&t));
+                !any_overlap && !library_corroborates
+            } else {
+                false
+            };
             // CONSTANT-OVERFIT GUARD. When the examples share an output-derived
             // constant (pairs all averaging 5 -> "return 5"; abs single-positive
             // "return 5"), synthesis can return a CONSTANT function the holdout cannot
@@ -887,6 +907,7 @@ pub fn answer_with_proposer(
             // reverse_number on -99) — solve_problem's internal try_library has no such
             // gate. Don't resurrect it: only a genuine SYNTHESIS result returns here.
             if !boolean_overfit
+                && !pipeline_overfit
                 && !constant_overfit
                 && !method.contains("library:")
                 && !programs_disagree(&progs, examples)
