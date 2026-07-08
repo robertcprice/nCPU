@@ -428,6 +428,12 @@ pub const OPS: &[LibOp] = &[
 "fn remove_even_position(s: string) -> string {\n    out: string = \"\";\n    i: i64 = 0;\n    for ch in s {\n        if i % 2 == 0 {\n            out = out + ch;\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "first_char", arity: 1, mog:
 "fn first_char(s: string) -> string {\n    for ch in s {\n        return ch;\n    }\n    return \"\";\n}\n" },
+    // Number of WORDS = count of maximal non-space runs. Handles leading/trailing/
+    // repeated spaces (a word starts at each space->non-space transition). Closes the
+    // common 'number of words in a sentence' refusal (no coincidence: string_length
+    // gives the CHAR count, so it never reproduces a multi-word example).
+    LibOp { name: "count_words", arity: 1, mog:
+"fn count_words(s: string) -> i64 {\n    n: i64 = 0;\n    prev_space: i64 = 1;\n    for ch in s {\n        if ch == ' ' {\n            prev_space = 1;\n        } else {\n            if prev_space == 1 {\n                n = n + 1;\n            }\n            prev_space = 0;\n        }\n    }\n    return n;\n}\n" },
     LibOp { name: "all_chars_distinct", arity: 1, mog:
 "fn all_chars_distinct(s: string) -> bool {\n    seen: string = \"\";\n    for ch in s {\n        if seen.contains(ch) {\n            return false;\n        }\n        seen = seen + ch;\n    }\n    return true;\n}\n" },
     LibOp { name: "is_digit_string", arity: 1, mog:
