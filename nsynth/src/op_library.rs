@@ -293,6 +293,13 @@ pub const OPS: &[LibOp] = &[
     // tokens 'perfect' + 'cube' resolve it. Non-negative domain (examples are >= 0).
     LibOp { name: "is_perfect_cube", arity: 1, mog:
 "fn is_perfect_cube(n: i64) -> i64 {\n    if n < 0 {\n        return 0;\n    }\n    k: i64 = 0;\n    while k * k * k < n {\n        k = k + 1;\n    }\n    if k * k * k == n {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // Whether n is a perfect square. Without this op the router fell through to tier-3 synthesis,
+    // which OVERFIT a degenerate example set (all the square examples happened to be composite and
+    // all non-square examples prime) to the pipeline is_prime->is_even (= 'is composite'), shipping
+    // a confident-wrong on a composite non-square (6 -> 1 vs 0). The library op resolves before
+    // synthesis and computes the real predicate; 'perfect'+'square' out-cover 'square' alone.
+    LibOp { name: "is_perfect_square", arity: 1, mog:
+"fn is_perfect_square(n: i64) -> i64 {\n    if n < 0 {\n        return 0;\n    }\n    k: i64 = 0;\n    while k * k < n {\n        k = k + 1;\n    }\n    if k * k == n {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "digital_root", arity: 1, mog:
 "fn digital_root(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    while x >= 10 {\n        s: i64 = 0;\n        while x > 0 {\n            s = s + x % 10;\n            x = x / 10;\n        }\n        x = s;\n    }\n    return x;\n}\n" },
     LibOp { name: "is_negative", arity: 1, mog:

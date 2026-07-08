@@ -1875,6 +1875,16 @@ mod tests {
                 vec![iv(2), iv(9)],
                 iv(-7),
             ),
+            // Perfect-square with a degenerate example set (every square is composite, every
+            // non-square is prime) let tier-3 synthesis overfit the pipeline is_prime->is_even
+            // (= 'is composite'), wrong on a composite non-square (6 -> 1 vs 0). The is_perfect_square
+            // library op resolves before synthesis and computes the real predicate.
+            (
+                "whether a number is a perfect square",
+                vec![ex(vec![iv(4)], iv(1)), ex(vec![iv(9)], iv(1)), ex(vec![iv(3)], iv(0)), ex(vec![iv(16)], iv(1)), ex(vec![iv(7)], iv(0))],
+                vec![iv(6)],
+                iv(0),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

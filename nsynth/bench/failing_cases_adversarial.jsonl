@@ -24,3 +24,4 @@
 {"id":1322,"category":"string","hardness":"medium","fn":"to_lower","text":"convert a string to lowercase","examples":[{"in":["ABC"],"out":"abc"},{"in":["HI"],"out":"hi"},{"in":["DOG"],"out":"dog"}]}
 {"id":1323,"category":"int","hardness":"hard","fn":"fibonacci","text":"the nth fibonacci number","examples":[{"in":[0],"out":0},{"in":[1],"out":1},{"in":[5],"out":5},{"in":[6],"out":8},{"in":[7],"out":13}]}
 {"id":1324,"category":"int","hardness":"hard","fn":"power","text":"raise a number to a power","examples":[{"in":[2,3],"out":8},{"in":[3,2],"out":9},{"in":[5,1],"out":5}]}
+{"id":1325,"category":"int","hardness":"hard","fn":"is_perfect_square","text":"whether a number is a perfect square","examples":[{"in":[4],"out":1},{"in":[9],"out":1},{"in":[3],"out":0},{"in":[6],"out":0},{"in":[16],"out":1},{"in":[7],"out":0}]}
