@@ -1726,6 +1726,15 @@ mod tests {
                 vec![iv(122)],
                 iv(2),
             ),
+            // list_max (matching only the container noun 'list') coincides with
+            // sum-of-all-but-last when max == that sum; wrong on [9,1,2] (10 vs 9).
+            // sum_except_last resolves it by name.
+            (
+                "the sum of all elements except the last in a list",
+                vec![ex(vec![av(&[1, 2, 3])], iv(3)), ex(vec![av(&[10, 4])], iv(10)), ex(vec![av(&[2, 3, 5])], iv(5))],
+                vec![av(&[9, 1, 2])],
+                iv(10),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

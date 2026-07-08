@@ -394,6 +394,11 @@ pub const OPS: &[LibOp] = &[
     // the distinguishing gate refuses when the examples can't tell them apart.
     LibOp { name: "array_sum", arity: 1, mog:
 "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n" },
+    // Sum of all elements except the last. list_max (matching only the container noun
+    // 'list') coincided with this on examples where max == sum-of-all-but-last, shipping
+    // wrong on [9,1,2] (sum-except-last 10, list_max 9). 'sum' + 'except' + 'last' name it.
+    LibOp { name: "sum_except_last", arity: 1, mog:
+"fn sum_except_last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    s: i64 = 0;\n    i: i64 = 0;\n    while i < n - 1 {\n        s = s + arr[i];\n        i = i + 1;\n    }\n    return s;\n}\n" },
     // Sum of ABSOLUTE values. Coincides with array_sum on all-nonnegative input; array_sum
     // is wrong once a negative is present ([-3,-4] -> abs sum 7, array_sum -7). Name tokens
     // 'sum' + 'absolute' + 'value' resolve it.
