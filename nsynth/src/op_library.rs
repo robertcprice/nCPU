@@ -448,6 +448,11 @@ pub const OPS: &[LibOp] = &[
 "fn uppercase_vowels(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_vowel() {\n            out = out + ch.upper();\n        } else {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "count_consonants", arity: 1, mog:
 "fn count_consonants(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n            if ch.is_vowel() {\n            } else {\n                c = c + 1;\n            }\n        }\n    }\n    return c;\n}\n" },
+    // Count of alphabetic characters (letters). Coincides with string_length on all-letter
+    // strings; string_length is wrong once a non-letter is present (\"a1b\" -> 2 letters,
+    // length 3). The name token \"letter\" resolves it over the container noun \"string\".
+    LibOp { name: "count_letters", arity: 1, mog:
+"fn count_letters(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "is_palindrome", arity: 1, mog:
 "fn is_palindrome(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n" },
     // Balanced-parentheses is a stack/counter algorithm (a known algorithm, like

@@ -1620,6 +1620,13 @@ mod tests {
                 vec![av(&[3, 1, 8])],
                 iv(-5),
             ),
+            // count_letters coincides with string_length on all-letter strings.
+            (
+                "the number of letters in a string",
+                vec![ex(vec![Value::Str("abc".into())], iv(3)), ex(vec![Value::Str("hi".into())], iv(2)), ex(vec![Value::Str("xyz".into())], iv(3))],
+                vec![Value::Str("a1b".into())],
+                iv(2),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
