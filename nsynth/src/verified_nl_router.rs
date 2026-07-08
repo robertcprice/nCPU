@@ -1691,6 +1691,15 @@ mod tests {
                 vec![Value::Str("aBc".into())],
                 iv(2),
             ),
+            // 'less than zero' paraphrase: count_negatives reproduces but is un-named, so the
+            // composition tier shipped a wrong chain ([-1,0,3] -> 2); count_less_than_zero
+            // resolves it. (Note: 0 is NOT < 0, so the fresh input distinguishes.)
+            (
+                "how many numbers in a list are less than zero",
+                vec![ex(vec![av(&[-1, 2, -3])], iv(2)), ex(vec![av(&[1, 2])], iv(0)), ex(vec![av(&[-5, -6])], iv(2))],
+                vec![av(&[-1, 0, 3])],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

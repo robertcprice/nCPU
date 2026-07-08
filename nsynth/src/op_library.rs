@@ -429,6 +429,12 @@ pub const OPS: &[LibOp] = &[
 "fn array_range(arr: [i64]) -> i64 {\n    mx: i64 = arr[0];\n    mn: i64 = arr[0];\n    for e in arr {\n        if e > mx {\n            mx = e;\n        }\n        if e < mn {\n            mn = e;\n        }\n    }\n    return mx - mn;\n}\n" },
     LibOp { name: "count_negatives", arity: 1, mog:
 "fn count_negatives(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // 'less than zero' twin of count_negatives — same predicate, but the phrasing does not
+    // name 'negative', so it was un-named (sole-passer guard refused) and the composition
+    // tier shipped a wrong chain ([-1,0,3] -> 2, want 1). The 'less'/'than'/'zero'-named
+    // op resolves it in the library tier.
+    LibOp { name: "count_less_than_zero", arity: 1, mog:
+"fn count_less_than_zero(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     // Whether the list contains ANY negative (boolean). Coincides with count_negatives
     // when the examples have <=1 negative; count_negatives is wrong once there are 2+
     // ([-1,-2] -> contains 1, count 2). Name token \"contain\" resolves the boolean.
