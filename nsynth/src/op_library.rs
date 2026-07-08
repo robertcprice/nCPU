@@ -635,6 +635,11 @@ pub const OPS: &[LibOp] = &[
 "fn max_diff_after(arr: [i64]) -> i64 {\n    mn: i64 = arr[0];\n    best: i64 = arr[1] - arr[0];\n    i: i64 = 1;\n    while i < arr.len {\n        d: i64 = arr[i] - mn;\n        if d > best {\n            best = d;\n        }\n        if arr[i] < mn {\n            mn = arr[i];\n        }\n        i = i + 1;\n    }\n    return best;\n}\n" },
     LibOp { name: "consecutive_sums", arity: 1, mog:
 "fn consecutive_sums(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        j: i64 = i + 1;\n        out.push(arr[i] + arr[j]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    // Running (cumulative / prefix) sum: out[i] = arr[0]+..+arr[i]. Closes the 'running
+    // total of a list' refusal; matches via the token 'running' and no other op produces
+    // the same prefix-sum sequence, so it is the unique reproducer.
+    LibOp { name: "running_sum", arity: 1, mog:
+"fn running_sum(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    s: i64 = 0;\n    for e in arr {\n        s = s + e;\n        out.push(s);\n    }\n    return out;\n}\n" },
     LibOp { name: "consecutive_diffs", arity: 1, mog:
 "fn consecutive_diffs(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        j: i64 = i + 1;\n        out.push(arr[j] - arr[i]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "move_zeros_end", arity: 1, mog:
