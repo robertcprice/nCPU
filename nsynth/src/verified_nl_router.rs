@@ -301,6 +301,21 @@ pub fn route_by_behavior(prompt: &str, examples: &[crate::benchmark::Example]) -
         .iter()
         .find(|op| named.contains(op.name))
         .unwrap_or(&passing[0]);
+    // SOLE-PASSER GUARD. When the winner is NOT name-matched (the prompt names no
+    // operation this op performs), a behaviour match on a SCALAR/array output is a
+    // likely COINCIDENCE — many ops produce ints, and a lone reproducer the prompt
+    // doesn't name is as likely a look-alike (unset_bits for "trailing zeros") as the
+    // intended op. Refuse. STRUCTURED output (Map/Struct -> "?") is kept: a frequency
+    // map is structurally specific, so a behavioural match there (element_frequency
+    // for "how many times each value appears") is trustworthy even un-named.
+    let winner_named = named.contains(winner.name);
+    let out_ty = examples
+        .first()
+        .map(|e| value_type_str(&e.expected))
+        .unwrap_or("?");
+    if !winner_named && out_ty != "?" {
+        return None;
+    }
     let name_toks = content_tokens(winner.name);
     let spec = name_toks.len();
     Some(Route { op: winner, matched_tokens: name_toks, specificity: spec })
