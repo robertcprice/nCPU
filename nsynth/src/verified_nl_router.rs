@@ -1700,6 +1700,15 @@ mod tests {
                 vec![av(&[-1, 0, 3])],
                 iv(1),
             ),
+            // 'not zero' coincides with count_greater_than_zero on non-negative inputs
+            // (all >0 are also !=0); wrong once a negative is present ([-2,0,3] -> not-zero
+            // 2, but >0 count 1). count_not_zero ('not' + 'zero') resolves it.
+            (
+                "how many numbers in a list are not zero",
+                vec![ex(vec![av(&[1, 0, 3])], iv(2)), ex(vec![av(&[0, 0])], iv(0)), ex(vec![av(&[5, 6])], iv(2))],
+                vec![av(&[-2, 0, 3])],
+                iv(2),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

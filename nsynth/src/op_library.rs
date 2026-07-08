@@ -449,6 +449,11 @@ pub const OPS: &[LibOp] = &[
     // length gives the whole size, count_negatives gives 0 on non-negative input).
     LibOp { name: "count_zeros", arity: 1, mog:
 "fn count_zeros(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e == 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Count of NON-ZERO values. Without it, count_greater_than_zero matched 'not zero' via
+    // the shared 'zero' token and coincided on non-negative inputs, shipping wrong when a
+    // negative is present ([-2,0,3] -> not-zero 2, but >0 count 1). 'not' + 'zero' name it.
+    LibOp { name: "count_not_zero", arity: 1, mog:
+"fn count_not_zero(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e != 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     // ── batch 3: strings (1-arg string). Now expressible after the char-level
     // language extension (for-ch, char literals, .chars/.is_*/.ord/ordering). A
     // string op run on a non-string input errors -> reproduces nothing -> skipped.
