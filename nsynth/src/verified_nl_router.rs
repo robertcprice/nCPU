@@ -1809,6 +1809,15 @@ mod tests {
                 vec![av(&[1, -2, -3])],
                 iv(-5),
             ),
+            // first_last_diff (signed) coincides with the ABSOLUTE first/last difference whenever
+            // first >= last; wrong once last > first ([3,1,8] -> signed -5 vs |−5|=5). Guard refuses
+            // (both diff ops reproduce and disagree) or absolute_first_last_diff out-covers.
+            (
+                "the absolute difference between the first and last element",
+                vec![ex(vec![av(&[5, 1, 2])], iv(3)), ex(vec![av(&[10, 4])], iv(6)), ex(vec![av(&[8, 3])], iv(5))],
+                vec![av(&[3, 1, 8])],
+                iv(5),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

@@ -866,6 +866,13 @@ pub const OPS: &[LibOp] = &[
     // refusal; name tokens 'first' + 'last' + 'sum' resolve it (unique reproducer).
     LibOp { name: "first_last_sum", arity: 1, mog:
 "fn first_last_sum(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[0] + arr[n - 1];\n}\n" },
+    // ABSOLUTE difference of first and last. first_last_diff (signed) coincides whenever the
+    // first element >= the last, but is wrong once last > first ([3,1,8] -> signed -5 vs |−5|=5).
+    // Name tokens 'absolute' + 'first' + 'last' + 'diff' out-cover first_last_diff (content 4 vs 3);
+    // on the plain (unsigned) 'difference between first and last' prompt this op's coverage is
+    // 3/4 < first_last_diff's 3/3, so the signed op still wins there.
+    LibOp { name: "absolute_first_last_diff", arity: 1, mog:
+"fn absolute_first_last_diff(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    d: i64 = arr[0] - arr[n - 1];\n    if d < 0 {\n        d = 0 - d;\n    }\n    return d;\n}\n" },
     LibOp { name: "list_min", arity: 1, mog:
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:
