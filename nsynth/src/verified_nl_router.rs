@@ -35,11 +35,23 @@ fn stem(w: &str) -> String {
     for suf in ["ies", "es", "ed", "ing", "s"] {
         if w.len() > suf.len() + 2 && w.ends_with(suf) {
             let base = &w[..w.len() - suf.len()];
-            // "ies" -> "y" (binaries -> binary); others just drop the suffix.
-            return if suf == "ies" {
-                format!("{base}y")
-            } else {
-                base.to_string()
+            return match suf {
+                // "ies" -> "y" (binaries -> binary).
+                "ies" => format!("{base}y"),
+                // "-es" is the true plural suffix only after a sibilant (box->boxes,
+                // dish->dishes); after any other consonant it is just "-e" + "-s", so
+                // the base keeps its "e" (square->squares, value->values, name->names).
+                // Without this, "squares" stemmed to "squar" and never matched the op
+                // token "square".
+                "es" => {
+                    let sibilant = base.ends_with('s')
+                        || base.ends_with('x')
+                        || base.ends_with('z')
+                        || base.ends_with("ch")
+                        || base.ends_with("sh");
+                    if sibilant { base.to_string() } else { format!("{base}e") }
+                }
+                _ => base.to_string(),
             };
         }
     }
