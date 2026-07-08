@@ -1486,6 +1486,15 @@ mod tests {
                 vec![av(&[9, 1, 5, 3])],
                 iv(3),
             ),
+            // Under-determined divisibility examples let TIER-3 synthesis ship a
+            // coincidental library pipeline (binary_to_decimal->unset_bits, wrong on 15);
+            // the named is_multiple_of_five op resolves before tier 3.
+            (
+                "whether a number is a multiple of five",
+                vec![ex(vec![iv(5)], iv(1)), ex(vec![iv(10)], iv(1)), ex(vec![iv(7)], iv(0)), ex(vec![iv(3)], iv(0))],
+                vec![iv(15)],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

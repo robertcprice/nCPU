@@ -292,6 +292,12 @@ pub const OPS: &[LibOp] = &[
 "fn trailing_zeros(n: i64) -> i64 {\n    if n == 0 {\n        return 0;\n    }\n    x: i64 = n;\n    c: i64 = 0;\n    while x % 2 == 0 {\n        c = c + 1;\n        x = x / 2;\n    }\n    return c;\n}\n" },
     LibOp { name: "is_even", arity: 1, mog:
 "fn is_even(n: i64) -> i64 {\n    if n % 2 == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // Multiple-of-five predicate. Under-determined divisibility examples ({5,10}->1,
+    // {7,3}->0) let tier-3 synthesis ship a coincidental library pipeline
+    // (binary_to_decimal->unset_bits, wrong on 15); the NAMED op resolves before tier 3
+    // and is correct by construction.
+    LibOp { name: "is_multiple_of_five", arity: 1, mog:
+"fn is_multiple_of_five(n: i64) -> i64 {\n    if n % 5 == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     // ── number theory (2-arg i64) ──────────────────────────────────────────
     LibOp { name: "gcd", arity: 2, mog:
 "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        t: i64 = y;\n        y = x % y;\n        x = t;\n    }\n    return x;\n}\n" },
