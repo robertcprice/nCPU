@@ -740,6 +740,11 @@ pub const OPS: &[LibOp] = &[
     // op (first/last/diff all match) resolves it directly.
     LibOp { name: "first_last_diff", arity: 1, mog:
 "fn first_last_diff(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[0] - arr[n - 1];\n}\n" },
+    // Whether the first and last elements are equal (boolean). Closes the 'first and last
+    // are equal' refusal; name tokens 'first' + 'last' + 'equal' resolve it directly over
+    // the coincidental has_duplicates (which the prompt does not name).
+    LibOp { name: "first_last_equal", arity: 1, mog:
+"fn first_last_equal(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    if arr[0] == arr[n - 1] {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "list_min", arity: 1, mog:
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:
