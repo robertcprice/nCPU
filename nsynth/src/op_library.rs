@@ -261,6 +261,11 @@ pub const OPS: &[LibOp] = &[
     // distinguishing gate refuses when the examples are all-even (under-determined).
     LibOp { name: "count_even_digits", arity: 1, mog:
 "fn count_even_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    if x == 0 {\n        return 1;\n    }\n    c: i64 = 0;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d % 2 == 0 {\n            c = c + 1;\n        }\n        x = x / 10;\n    }\n    return c;\n}\n" },
+    // Count of ODD digits (twin of count_even_digits). Coincides with count_digits on
+    // all-odd-digit numbers; count_digits is wrong once an even digit is present
+    // (24 -> 0 odd digits, count_digits 2).
+    LibOp { name: "count_odd_digits", arity: 1, mog:
+"fn count_odd_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    if x == 0 {\n        return 0;\n    }\n    c: i64 = 0;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d % 2 != 0 {\n            c = c + 1;\n        }\n        x = x / 10;\n    }\n    return c;\n}\n" },
     LibOp { name: "sum_even_digits", arity: 1, mog:
 "fn sum_even_digits(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    s: i64 = 0;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d % 2 == 0 {\n            s = s + d;\n        }\n        x = x / 10;\n    }\n    return s;\n}\n" },
     LibOp { name: "reverse_number", arity: 1, mog:

@@ -1597,6 +1597,13 @@ mod tests {
                 vec![av(&[9, 1, 2, 3])],
                 iv(2),
             ),
+            // count_odd_digits coincides with count_digits on all-odd-digit numbers.
+            (
+                "the number of odd digits in a number",
+                vec![ex(vec![iv(1)], iv(1)), ex(vec![iv(13)], iv(2)), ex(vec![iv(357)], iv(3)), ex(vec![iv(5)], iv(1))],
+                vec![iv(24)],
+                iv(0),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
