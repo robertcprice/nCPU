@@ -4728,15 +4728,28 @@ fn synthesize_scalar_inner(problem: &Problem, use_templates: bool) -> Option<Sol
     // generous — far above any run that actually converges — so it only trims the
     // pathological tail and does not cost real solves coverage. Scaled by arg
     // count, mirroring the expr path's own budget.
-    let _train_deadline = crate::synthesis::common::TrainDeadline::set(
-        std::time::Duration::from_secs_f32(if n_args <= 2 {
-            60.0
-        } else if n_args <= 3 {
-            90.0
-        } else {
-            120.0
-        }),
-    );
+    //
+    // BUT: the caller (`solve_problem_inner`) may have installed a TIGHTER global
+    // budget via `NSYNTH_SOLVE_BUDGET_MS` — and `TrainDeadline::set` REPLACES the
+    // active deadline, so setting our generous default here would CLOBBER the
+    // caller's tight budget, letting the sweep grind ~60s past an 8s budget (the
+    // measured cause of the solve-budget being ignored on iterate-until-condition
+    // tasks). Cap our default by the caller's budget so the tighter of the two
+    // wins. Opt-in: with `NSYNTH_SOLVE_BUDGET_MS` unset the default is used
+    // verbatim, so this is a byte-identical no-op on the default (benchmark) path.
+    let default_secs: f32 = if n_args <= 2 {
+        60.0
+    } else if n_args <= 3 {
+        90.0
+    } else {
+        120.0
+    };
+    let sweep_secs = std::env::var("NSYNTH_SOLVE_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map_or(default_secs, |ms| default_secs.min(ms as f32 / 1000.0));
+    let _train_deadline =
+        crate::synthesis::common::TrainDeadline::set(std::time::Duration::from_secs_f32(sweep_secs));
 
     // Template fast-path: try reference code + common inline patterns before gradient descent
     if use_templates {

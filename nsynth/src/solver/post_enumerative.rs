@@ -357,7 +357,11 @@ fn try_post_enumerative_route(
     // reached while still within budget, so a legitimate gradient solve is preserved.
     if matches!(
         route,
-        ROUTE_SCALAR_GRADIENT | ROUTE_ARRAY_GRADIENT | ROUTE_REGISTER_MACHINE
+        ROUTE_SCALAR_GRADIENT
+            | ROUTE_ARRAY_GRADIENT
+            | ROUTE_REGISTER_MACHINE
+            | ROUTE_UNIVERSAL
+            | ROUTE_BRIDGE_GRADIENT
     ) && global_solve_budget_exhausted(t0)
     {
         return None;
