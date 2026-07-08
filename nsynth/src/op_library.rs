@@ -305,6 +305,12 @@ pub const OPS: &[LibOp] = &[
 "fn trailing_zeros(n: i64) -> i64 {\n    if n == 0 {\n        return 0;\n    }\n    x: i64 = n;\n    c: i64 = 0;\n    while x % 2 == 0 {\n        c = c + 1;\n        x = x / 2;\n    }\n    return c;\n}\n" },
     LibOp { name: "is_even", arity: 1, mog:
 "fn is_even(n: i64) -> i64 {\n    if n % 2 == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // Odd predicate. Without it, count_odd_digits (matches 'odd') was the sole 'odd'
+    // matcher and coincided with is-odd on single-digit examples, shipping wrong on
+    // multi-digit (13 -> is-odd 1, count_odd_digits 2). is_odd (coverage 1.0 on 'odd')
+    // outranks count_odd_digits (1/3) and resolves it.
+    LibOp { name: "is_odd", arity: 1, mog:
+"fn is_odd(n: i64) -> i64 {\n    if n % 2 != 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     // Multiple-of-five predicate. Under-determined divisibility examples ({5,10}->1,
     // {7,3}->0) let tier-3 synthesis ship a coincidental library pipeline
     // (binary_to_decimal->unset_bits, wrong on 15); the NAMED op resolves before tier 3

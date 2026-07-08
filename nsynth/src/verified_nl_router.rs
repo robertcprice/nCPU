@@ -1709,6 +1709,15 @@ mod tests {
                 vec![av(&[-2, 0, 3])],
                 iv(2),
             ),
+            // is-odd coincides with count_odd_digits on single-digit examples (one odd
+            // digit == is-odd); wrong on multi-digit (13 -> is-odd 1, count_odd_digits 2).
+            // is_odd (coverage 1.0 on 'odd') resolves it.
+            (
+                "whether a number is odd",
+                vec![ex(vec![iv(1)], iv(1)), ex(vec![iv(4)], iv(0)), ex(vec![iv(7)], iv(1)), ex(vec![iv(2)], iv(0))],
+                vec![iv(13)],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
