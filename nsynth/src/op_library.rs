@@ -346,6 +346,16 @@ pub const OPS: &[LibOp] = &[
     // name tier prefers it and the gate distinguishes them on negative probes.
     LibOp { name: "sum_positives", arity: 1, mog:
 "fn sum_positives(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e > 0 {\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
+    // Product of the EVEN numbers. Coincides with array_product on all-even inputs;
+    // array_product was shipped and is wrong when an odd is present ([2,3,4] -> product
+    // of evens 8, array_product 24).
+    LibOp { name: "product_evens", arity: 1, mog:
+"fn product_evens(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    for e in arr {\n        if e % 2 == 0 {\n            p = p * e;\n        }\n    }\n    return p;\n}\n" },
+    // Second-smallest value = second element in ASCENDING order (equal values kept).
+    // Coincides with second_largest on 3-distinct examples (the middle is both); wrong
+    // on 4+ elements ([9,1,5,3] -> second smallest 3, second largest 5).
+    LibOp { name: "second_smallest", arity: 1, mog:
+"fn second_smallest(arr: [i64]) -> i64 {\n    first: i64 = arr[0];\n    second: i64 = arr[0];\n    i: i64 = 0;\n    for e in arr {\n        if i == 0 {\n            first = e;\n        } else {\n            if e < first {\n                second = first;\n                first = e;\n            } else {\n                if i == 1 {\n                    second = e;\n                } else {\n                    if e < second {\n                        second = e;\n                    }\n                }\n            }\n        }\n        i = i + 1;\n    }\n    return second;\n}\n" },
     // Largest EVEN number. Coincides with list_max when the max is even; list_max was
     // shipped and is wrong when the max is odd (largest even of [7,4,9] = 4, not 9).
     LibOp { name: "max_even", arity: 1, mog:

@@ -1471,6 +1471,21 @@ mod tests {
                 vec![av(&[2, 7, 3])],
                 iv(3),
             ),
+            // product_evens coincides with array_product on all-even input.
+            (
+                "the product of the even numbers in a list",
+                vec![ex(vec![av(&[2, 4])], iv(8)), ex(vec![av(&[2, 2, 2])], iv(8)), ex(vec![av(&[6])], iv(6))],
+                vec![av(&[2, 3, 4])],
+                iv(8),
+            ),
+            // second_smallest coincides with second_largest on 3-distinct examples (the
+            // middle value is both) — wrong on 4+ elements.
+            (
+                "the second smallest value in a list",
+                vec![ex(vec![av(&[1, 2, 3])], iv(2)), ex(vec![av(&[5, 7, 9])], iv(7)), ex(vec![av(&[2, 4, 8])], iv(4))],
+                vec![av(&[9, 1, 5, 3])],
+                iv(3),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
