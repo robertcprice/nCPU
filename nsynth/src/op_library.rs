@@ -925,6 +925,12 @@ pub const OPS: &[LibOp] = &[
     // 'last' out-cover them and resolve it on 4+ elements ([7,1,5,3] -> 5).
     LibOp { name: "second_to_last", arity: 1, mog:
 "fn second_to_last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[n - 2];\n}\n" },
+    // The SECOND digit (from the left) of a number. Without this op the prompt fell to the
+    // composition tier, which overfit a positional pipeline that reproduced a few examples but was
+    // wrong on a fresh input (78 -> 5 vs 8). The named op resolves at the library tier before
+    // composition. d = digit count; the second digit is (x / 10^(d-2)) % 10.
+    LibOp { name: "second_digit", arity: 1, mog:
+"fn second_digit(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    d: i64 = 0;\n    t: i64 = x;\n    if t == 0 {\n        d = 1;\n    }\n    while t > 0 {\n        d = d + 1;\n        t = t / 10;\n    }\n    if d < 2 {\n        return 0;\n    }\n    p: i64 = 1;\n    i: i64 = 0;\n    while i < d - 2 {\n        p = p * 10;\n        i = i + 1;\n    }\n    return (x / p) % 10;\n}\n" },
     // Positional selectors. list_max coincides with these on examples where a[1]/a[2]
     // happens to be the max ([1,9,2] -> second 9 = max); wrong once it isn't ([5,3,9] ->
     // second 3). The named ops resolve the position directly; and when the examples are

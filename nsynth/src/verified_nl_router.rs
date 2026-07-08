@@ -2011,6 +2011,15 @@ mod tests {
                 vec![av(&[7, 7, 1, 1, 1])],
                 iv(3),
             ),
+            // With no second_digit op the prompt fell to the composition tier, which overfit a
+            // positional pipeline wrong on a fresh input (78 -> 5 vs 8). second_digit resolves it
+            // at the library tier before composition (frontier-measurement find).
+            (
+                "the second digit of a number",
+                vec![ex(vec![iv(123)], iv(2)), ex(vec![iv(456)], iv(5)), ex(vec![iv(90)], iv(0))],
+                vec![iv(78)],
+                iv(8),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

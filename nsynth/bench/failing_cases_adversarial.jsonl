@@ -37,3 +37,4 @@
 {"id":1335,"category":"int","hardness":"hard","fn":"odd_prime","text":"whether a number is prime and odd","examples":[{"in":[3],"out":1},{"in":[2],"out":0},{"in":[4],"out":0},{"in":[7],"out":1},{"in":[9],"out":0}]}
 {"id":1336,"category":"array","hardness":"hard","fn":"longest_run","text":"the length of the longest run of equal adjacent elements","examples":[{"in":[[1,1,2]],"out":2},{"in":[[3,3,3,1]],"out":3},{"in":[[1,2,3]],"out":1},{"in":[[5,5,5,5]],"out":4},{"in":[[7,7,1,1,1]],"out":3}]}
 {"id":1337,"category":"string","hardness":"hard","fn":"most_frequent_char","text":"the most frequent character in a string","examples":[{"in":["aab"],"out":"a"},{"in":["bbca"],"out":"b"},{"in":["ccca"],"out":"c"},{"in":["xyy"],"out":"y"}]}
+{"id":1338,"category":"int","hardness":"medium","fn":"second_digit","text":"the second digit of a number","examples":[{"in":[123],"out":2},{"in":[456],"out":5},{"in":[90],"out":0},{"in":[78],"out":8}]}
