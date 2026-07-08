@@ -1604,6 +1604,14 @@ mod tests {
                 vec![iv(24)],
                 iv(0),
             ),
+            // all_same coincides with has_duplicates on all-equal / all-distinct examples;
+            // wrong once a value repeats without ALL being equal ([7,7,8] -> 0 vs 1).
+            (
+                "whether all elements in a list are the same",
+                vec![ex(vec![av(&[2, 2, 2])], iv(1)), ex(vec![av(&[1, 2])], iv(0)), ex(vec![av(&[5, 5])], iv(1)), ex(vec![av(&[3, 4, 5])], iv(0))],
+                vec![av(&[7, 7, 8])],
+                iv(0),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

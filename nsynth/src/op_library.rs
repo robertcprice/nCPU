@@ -571,6 +571,13 @@ pub const OPS: &[LibOp] = &[
 "fn count_distinct(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        first: i64 = 1;\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                first = 0;\n            }\n            j = j + 1;\n        }\n        c = c + first;\n        i = i + 1;\n    }\n    return c;\n}\n" },
     LibOp { name: "has_duplicates", arity: 1, mog:
 "fn has_duplicates(arr: [i64]) -> i64 {\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                return 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return 0;\n}\n" },
+    // Whether every element equals the first. Coincides with has_duplicates on the
+    // examples that happen to be all-equal-or-all-distinct; wrong once a value repeats
+    // without ALL being equal ([7,7,8] -> all-same 0, has_duplicates 1). The named op
+    // resolves before synthesis; on under-determined examples the ambiguous-single-op
+    // guard refuses instead.
+    LibOp { name: "all_same", arity: 1, mog:
+"fn all_same(arr: [i64]) -> i64 {\n    for e in arr {\n        if e != arr[0] {\n            return 0;\n        }\n    }\n    return 1;\n}\n" },
     LibOp { name: "first_duplicate", arity: 1, mog:
 "fn first_duplicate(arr: [i64]) -> i64 {\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                return arr[i];\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return 0 - 1;\n}\n" },
     LibOp { name: "most_frequent", arity: 1, mog:
