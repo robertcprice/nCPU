@@ -846,6 +846,16 @@ pub const OPS: &[LibOp] = &[
 "fn first(arr: [i64]) -> i64 {\n    return arr[0];\n}\n" },
     LibOp { name: "last", arity: 1, mog:
 "fn last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[n - 1];\n}\n" },
+    // ABSOLUTE VALUE OF THE FIRST element = |arr[0]|. The bare `first` op coincides whenever the
+    // first element is non-negative but ships the signed value when it is negative ([-8,3] -> -8
+    // vs |−8|=8). 'absolute'+'first' out-cover `first` (content 2 vs 1). Unlike abs-of-max there is
+    // no rival reading of this token bag (|first| is the only sensible one), so an op is safe here.
+    LibOp { name: "absolute_first", arity: 1, mog:
+"fn absolute_first(arr: [i64]) -> i64 {\n    m: i64 = arr[0];\n    if m < 0 {\n        m = 0 - m;\n    }\n    return m;\n}\n" },
+    // ABSOLUTE VALUE OF THE LAST element = |arr[len-1]|. `last` coincides on a non-negative last
+    // element, wrong once it is negative ([3,-8] -> -8 vs 8). 'absolute'+'last' out-cover `last`.
+    LibOp { name: "absolute_last", arity: 1, mog:
+"fn absolute_last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    m: i64 = arr[n - 1];\n    if m < 0 {\n        m = 0 - m;\n    }\n    return m;\n}\n" },
     // Second-to-last element (arr[len-2]). On 3-element lists this equals the second
     // element (index 1), so second_element/last coincide on such examples; 'second' +
     // 'last' out-cover them and resolve it on 4+ elements ([7,1,5,3] -> 5).

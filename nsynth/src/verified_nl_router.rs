@@ -1850,6 +1850,22 @@ mod tests {
                 vec![av(&[-3, -8])],
                 iv(3),
             ),
+            // The bare `first`/`last` ops coincide with |first|/|last| on a non-negative element,
+            // wrong once it is negative ([-8,3] -> first -8 vs 8; [3,-8] -> last -8 vs 8).
+            // absolute_first / absolute_last resolve the determined case; the ambiguous all-positive
+            // set refuses (two passers diverge on the all-negative probe).
+            (
+                "the absolute value of the first element of a list",
+                vec![ex(vec![av(&[3, 5, 2])], iv(3)), ex(vec![av(&[1, 9])], iv(1)), ex(vec![av(&[4, 7])], iv(4))],
+                vec![av(&[-8, 3])],
+                iv(8),
+            ),
+            (
+                "the absolute value of the last element of a list",
+                vec![ex(vec![av(&[3, 5, 2])], iv(2)), ex(vec![av(&[1, 9])], iv(9)), ex(vec![av(&[4, 7])], iv(7))],
+                vec![av(&[3, -8])],
+                iv(8),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
