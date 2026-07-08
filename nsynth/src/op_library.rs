@@ -315,6 +315,16 @@ pub const OPS: &[LibOp] = &[
     // the distinguishing gate refuses when the examples can't tell them apart.
     LibOp { name: "array_sum", arity: 1, mog:
 "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n" },
+    // Sum of ONLY the positive numbers. Coincides with array_sum on all-positive
+    // inputs; the general array_sum was shipped (via a coincidental composition) and
+    // is wrong on negatives (sum of positives of [-3,5] = 5, not 2). With this op the
+    // name tier prefers it and the gate distinguishes them on negative probes.
+    LibOp { name: "sum_positives", arity: 1, mog:
+"fn sum_positives(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e > 0 {\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
+    // Largest EVEN number. Coincides with list_max when the max is even; list_max was
+    // shipped and is wrong when the max is odd (largest even of [7,4,9] = 4, not 9).
+    LibOp { name: "max_even", arity: 1, mog:
+"fn max_even(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e > m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
     LibOp { name: "array_product", arity: 1, mog:
 "fn array_product(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    for item in arr {\n        p = p * item;\n    }\n    return p;\n}\n" },
     // ── array + scalar (2-arg) ─────────────────────────────────────────────
