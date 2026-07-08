@@ -504,6 +504,11 @@ pub const OPS: &[LibOp] = &[
 "fn array_range(arr: [i64]) -> i64 {\n    mx: i64 = arr[0];\n    mn: i64 = arr[0];\n    for e in arr {\n        if e > mx {\n            mx = e;\n        }\n        if e < mn {\n            mn = e;\n        }\n    }\n    return mx - mn;\n}\n" },
     LibOp { name: "count_negatives", arity: 1, mog:
 "fn count_negatives(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether a list is sorted in DESCENDING order (non-strict, boolean). is_sorted is not a
+    // library op (the ascending prompt resolves via synthesis), and this op's boolean output does
+    // not reproduce ascending examples, so the two never collide. 'sorted' + 'descending' resolve it.
+    LibOp { name: "is_sorted_descending", arity: 1, mog:
+"fn is_sorted_descending(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    i: i64 = 1;\n    while i < n {\n        if arr[i - 1] < arr[i] {\n            return 0;\n        }\n        i = i + 1;\n    }\n    return 1;\n}\n" },
     // 'less than zero' twin of count_negatives — same predicate, but the phrasing does not
     // name 'negative', so it was un-named (sole-passer guard refused) and the composition
     // tier shipped a wrong chain ([-1,0,3] -> 2, want 1). The 'less'/'than'/'zero'-named
