@@ -420,8 +420,10 @@ fn parse_arrow_examples(body: &str) -> Vec<crate::benchmark::Example> {
 }
 
 /// Split at top-level commas (not inside `[..]` or `"..."`), parsing each token.
-fn parse_values(s: &str) -> Vec<crate::benchmark::Value> {
-    let mut vals = Vec::new();
+/// Split on TOP-LEVEL commas, respecting `[]` / `{}` nesting and `"..."` strings, so
+/// an array or map argument is not broken apart. Returns the raw slices.
+fn split_top(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
     let mut depth = 0i32;
     let mut in_str = false;
     let mut last = 0usize;
@@ -429,21 +431,21 @@ fn parse_values(s: &str) -> Vec<crate::benchmark::Value> {
     for (i, &c) in bytes.iter().enumerate() {
         match c {
             b'"' => in_str = !in_str,
-            b'[' if !in_str => depth += 1,
-            b']' if !in_str => depth -= 1,
+            b'[' | b'{' if !in_str => depth += 1,
+            b']' | b'}' if !in_str => depth -= 1,
             b',' if !in_str && depth == 0 => {
-                if let Some(v) = parse_value(&s[last..i]) {
-                    vals.push(v);
-                }
+                parts.push(&s[last..i]);
                 last = i + 1;
             }
             _ => {}
         }
     }
-    if let Some(v) = parse_value(&s[last..]) {
-        vals.push(v);
-    }
-    vals
+    parts.push(&s[last..]);
+    parts
+}
+
+fn parse_values(s: &str) -> Vec<crate::benchmark::Value> {
+    split_top(s).into_iter().filter_map(parse_value).collect()
 }
 
 /// One literal token -> Value: int, float, bool, `"string"`, or `[int,..]`.
@@ -473,6 +475,20 @@ fn parse_value(tok: &str) -> Option<crate::benchmark::Value> {
         if let Some(ints) = ints {
             return Some(Value::int_array(&ints));
         }
+    }
+    // Map literal `{k:v, k:v}` (frequency maps and the like). Split on top-level
+    // commas, then each entry on its FIRST colon; keys/values parse recursively.
+    if t.starts_with('{') && t.ends_with('}') {
+        let inner = &t[1..t.len() - 1];
+        if inner.trim().is_empty() {
+            return Some(Value::map_from_pairs(Vec::new()));
+        }
+        let mut pairs = Vec::new();
+        for entry in split_top(inner) {
+            let (k, v) = entry.split_once(':')?;
+            pairs.push((parse_value(k)?, parse_value(v)?));
+        }
+        return Some(Value::map_from_pairs(pairs));
     }
     if let Ok(f) = t.parse::<f64>() {
         return Some(Value::Float(f.to_bits()));

@@ -62,6 +62,14 @@ fn fmt_val(v: &Value) -> String {
             if s.contains('.') || s.contains('e') { s } else { format!("{s}.0") }
         }
         Value::Array(a) => format!("[{}]", a.iter().map(fmt_val).collect::<Vec<_>>().join(",")),
+        Value::Map(pairs) => format!(
+            "{{{}}}",
+            pairs
+                .iter()
+                .map(|(k, v)| format!("{}:{}", fmt_val(k), fmt_val(v)))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
         other => format!("{other:?}"),
     }
 }
