@@ -472,6 +472,11 @@ pub const OPS: &[LibOp] = &[
     // length 3). The name token \"letter\" resolves it over the container noun \"string\".
     LibOp { name: "count_letters", arity: 1, mog:
 "fn count_letters(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Count of alphanumeric characters. Coincides with string_length on all-alnum strings;
+    // string_length is wrong once a non-alnum (space/punct) is present (\"a b\" -> 2 alnum,
+    // length 3). Name tokens 'alphanumeric' + 'character' resolve it.
+    LibOp { name: "count_alphanumeric", arity: 1, mog:
+"fn count_alphanumeric(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alnum() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "is_palindrome", arity: 1, mog:
 "fn is_palindrome(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n" },
     // Whether two strings are equal (boolean). Closes the 'two strings are equal'

@@ -182,7 +182,7 @@ pub fn ranked_candidates(prompt: &str) -> Vec<&'static LibOp> {
         .filter(|t| !t.is_empty())
         .map(|t| t.to_ascii_lowercase())
         .collect();
-    let mut scored: Vec<(&'static LibOp, f64, usize, usize)> = Vec::new();
+    let mut scored: Vec<(&'static LibOp, f64, usize, usize, usize)> = Vec::new();
     for op in OPS {
         let name_toks = content_tokens(op.name);
         if name_toks.is_empty() {
@@ -216,15 +216,26 @@ pub fn ranked_candidates(prompt: &str) -> Vec<&'static LibOp> {
             .iter()
             .filter(|t| has(t) && !is_domain_type_token(t))
             .count();
-        scored.push((op, coverage, content_matched, matched.max(acronym as usize)));
+        // Total characters of the matched content tokens. A FINAL tiebreak: when two
+        // ops tie on coverage AND content-match COUNT, the one matching the LONGER (more
+        // specific) word wins — "lowercase letters" resolves count_lowercase (matched
+        // "lowercase", 9 chars) over count_letters (matched "letter", 6). Only reorders
+        // already-tied candidates, so it cannot change any strict ranking.
+        let content_len: usize = name_toks
+            .iter()
+            .filter(|t| has(t) && !is_domain_type_token(t))
+            .map(|t| t.len())
+            .sum();
+        scored.push((op, coverage, content_matched, matched.max(acronym as usize), content_len));
     }
     scored.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(b.2.cmp(&a.2))
             .then(b.3.cmp(&a.3))
+            .then(b.4.cmp(&a.4))
     });
-    scored.into_iter().map(|(op, _, _, _)| op).collect()
+    scored.into_iter().map(|(op, ..)| op).collect()
 }
 
 /// True if `name` (>=2 letters) is spelled by the first letters of some run of
@@ -1664,6 +1675,21 @@ mod tests {
                 vec![ex(vec![Value::Str("a1b".into())], iv(1)), ex(vec![Value::Str("abc".into())], iv(0)), ex(vec![Value::Str("x9".into())], iv(1)), ex(vec![Value::Str("yz".into())], iv(0))],
                 vec![Value::Str("a12".into())],
                 iv(1),
+            ),
+            // count_alphanumeric coincides with string_length on all-alnum strings.
+            (
+                "the number of alphanumeric characters in a string",
+                vec![ex(vec![Value::Str("ab1".into())], iv(3)), ex(vec![Value::Str("xy".into())], iv(2)), ex(vec![Value::Str("z9".into())], iv(2))],
+                vec![Value::Str("a b".into())],
+                iv(2),
+            ),
+            // count_lowercase coincides with count_letters on all-lowercase strings; the
+            // matched-token char-length tiebreak keeps count_lowercase ('lowercase' > 'letter').
+            (
+                "the number of lowercase letters in a string",
+                vec![ex(vec![Value::Str("abc".into())], iv(3)), ex(vec![Value::Str("hi".into())], iv(2)), ex(vec![Value::Str("z".into())], iv(1))],
+                vec![Value::Str("aBc".into())],
+                iv(2),
             ),
         ];
         for (prompt, exs, fresh, intended) in cases {
