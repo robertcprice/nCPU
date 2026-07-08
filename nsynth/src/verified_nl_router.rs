@@ -1627,6 +1627,14 @@ mod tests {
                 vec![Value::Str("a1b".into())],
                 iv(2),
             ),
+            // starts_with_uppercase coincides with count_uppercase on strings with <=1
+            // uppercase; count_uppercase is wrong once there are 2+ ("AB" -> 1 vs 2).
+            (
+                "whether a string starts with an uppercase letter",
+                vec![ex(vec![Value::Str("Hello".into())], iv(1)), ex(vec![Value::Str("world".into())], iv(0)), ex(vec![Value::Str("Xyz".into())], iv(1)), ex(vec![Value::Str("abc".into())], iv(0))],
+                vec![Value::Str("AB".into())],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

@@ -461,6 +461,11 @@ pub const OPS: &[LibOp] = &[
 "fn balanced_parentheses(s: string) -> i64 {\n    depth: i64 = 0;\n    for ch in s {\n        if ch == '(' {\n            depth = depth + 1;\n        }\n        if ch == ')' {\n            depth = depth - 1;\n        }\n        if depth < 0 {\n            return 0;\n        }\n    }\n    if depth == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "count_uppercase", arity: 1, mog:
 "fn count_uppercase(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_upper() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether the FIRST character is uppercase. Coincides with count_uppercase on strings
+    // with <=1 uppercase; count_uppercase is wrong once there are 2+ (\"AB\" -> starts-upper
+    // 1, count 2). The named op resolves the boolean directly.
+    LibOp { name: "starts_with_uppercase", arity: 1, mog:
+"fn starts_with_uppercase(s: string) -> i64 {\n    for ch in s {\n        if ch.is_upper() {\n            return 1;\n        }\n        return 0;\n    }\n    return 0;\n}\n" },
     LibOp { name: "count_lowercase", arity: 1, mog:
 "fn count_lowercase(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_lower() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_string_digits", arity: 1, mog:
