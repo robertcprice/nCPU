@@ -614,6 +614,13 @@ pub const OPS: &[LibOp] = &[
     // 1, count 2). The named op resolves the boolean directly.
     LibOp { name: "starts_with_uppercase", arity: 1, mog:
 "fn starts_with_uppercase(s: string) -> i64 {\n    for ch in s {\n        if ch.is_upper() {\n            return 1;\n        }\n        return 0;\n    }\n    return 0;\n}\n" },
+    // Whether a string is ALL uppercase (no lowercase letter). starts_with_uppercase coincides
+    // whenever the first character already decides it (all examples where the first char's case
+    // matches the whole string), but is wrong on a mixed-case string that merely starts uppercase
+    // ('Ab' -> starts-upper 1 vs all-upper 0). 'all'+'uppercase' out-cover starts_with_uppercase
+    // (which matches only 'uppercase'), so the library tier resolves the right predicate.
+    LibOp { name: "all_uppercase", arity: 1, mog:
+"fn all_uppercase(s: string) -> i64 {\n    for ch in s {\n        if ch.is_lower() {\n            return 0;\n        }\n    }\n    return 1;\n}\n" },
     LibOp { name: "count_lowercase", arity: 1, mog:
 "fn count_lowercase(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_lower() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_string_digits", arity: 1, mog:

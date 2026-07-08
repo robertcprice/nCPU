@@ -30,3 +30,4 @@
 {"id":1328,"category":"string","hardness":"medium","fn":"is_palindrome","text":"whether a string is a palindrome","examples":[{"in":["aba"],"out":1},{"in":["abc"],"out":0},{"in":["aa"],"out":1},{"in":["ab"],"out":0}]}
 {"id":1329,"category":"int","hardness":"hard","fn":"lcm","text":"the least common multiple of two numbers","examples":[{"in":[4,6],"out":12},{"in":[3,5],"out":15},{"in":[2,4],"out":4}]}
 {"id":1330,"category":"int","hardness":"hard","fn":"armstrong_number","text":"whether a number is an armstrong number","examples":[{"in":[1],"out":1},{"in":[5],"out":1},{"in":[9],"out":1},{"in":[10],"out":0},{"in":[25],"out":0},{"in":[153],"out":1}]}
+{"id":1331,"category":"string","hardness":"medium","fn":"all_uppercase","text":"whether a string is all uppercase","examples":[{"in":["AB"],"out":1},{"in":["XY"],"out":1},{"in":["ab"],"out":0},{"in":["aB"],"out":0},{"in":["Ab"],"out":0}]}

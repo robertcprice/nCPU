@@ -1894,6 +1894,15 @@ mod tests {
                 vec![iv(3), iv(9)],
                 iv(0),
             ),
+            // starts_with_uppercase coincides with ALL-uppercase whenever the first character
+            // already decides the outcome; wrong on a string that merely starts uppercase
+            // ('Ab' -> starts-upper 1 vs all-upper 0). all_uppercase out-covers it via 'all'.
+            (
+                "whether a string is all uppercase",
+                vec![ex(vec![Value::Str("AB".into())], iv(1)), ex(vec![Value::Str("XY".into())], iv(1)), ex(vec![Value::Str("ab".into())], iv(0)), ex(vec![Value::Str("aB".into())], iv(0))],
+                vec![Value::Str("Ab".into())],
+                iv(0),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
