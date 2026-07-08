@@ -475,6 +475,7 @@ mod tests {
                     confidence: 0.5,
                     unresolved: vec!["no registry match".into()],
                     evidence_entity_ids: Vec::new(),
+                    reference_code: String::new(),
                 }
             }),
             "cargo test nl_fixture_multiply --lib",

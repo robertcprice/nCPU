@@ -1596,6 +1596,7 @@ pub(crate) fn coding_intent_from_nl_description(
         confidence: 1.0,
         unresolved: Vec::new(),
         evidence_entity_ids: Vec::new(),
+        reference_code: String::new(),
     }
 }
 
@@ -2327,6 +2328,7 @@ mod tests {
             confidence: 1.0,
             unresolved: Vec::new(),
             evidence_entity_ids: Vec::new(),
+            reference_code: String::new(),
         };
         let hint = "pub fn add_two(a: i64, b: i64) -> i64 { a - b }\n";
         let body = repo_rust_body_for_nl(&add, "", Some(hint)).expect("add stub");
@@ -2343,6 +2345,7 @@ mod tests {
             confidence: 1.0,
             unresolved: Vec::new(),
             evidence_entity_ids: Vec::new(),
+            reference_code: String::new(),
         };
         let max_hint = "pub fn max_of(a: i64, b: i64) -> i64 { a }\n";
         let max_body = repo_rust_body_for_nl(&max, "", Some(max_hint)).expect("max stub");

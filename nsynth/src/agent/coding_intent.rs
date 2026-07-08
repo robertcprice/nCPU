@@ -20,6 +20,12 @@ pub struct CodingIntent {
     pub confidence: f32,
     pub unresolved: Vec<String>,
     pub evidence_entity_ids: Vec<u64>,
+    /// A verified reference implementation whose BEHAVIOUR is the spec (the `.mog`
+    /// of an op the router resolved from prose the bridge couldn't). When set and no
+    /// examples are present, [`Self::to_problem`] builds a reference-verified problem
+    /// (differential testing) instead of failing. Empty for example-derived intents.
+    #[serde(default)]
+    pub reference_code: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,14 +65,58 @@ impl CodingIntent {
             confidence: req.confidence,
             unresolved: req.unresolved.clone(),
             evidence_entity_ids: req.evidence_entity_ids.clone(),
+            reference_code: String::new(),
         }
     }
 
     /// Parse NL via Linguigenesis bridge (production path).
+    ///
+    /// FALLBACK: when the bridge can't resolve the prose (it returns
+    /// `ClarificationNeeded` for well-known ops named only in words — "greatest
+    /// common divisor", "reverse a string"), consult the never-wrong router's strict
+    /// name/acronym resolver [`verified_nl_router::declare`]. A hit is a CONFIDENT
+    /// single-op identification (unique strict-name or acronym match, else None); the
+    /// op's verified `.mog` is carried as `reference_code`, so `to_problem` builds a
+    /// reference-verified (differential-tested) spec — correct by construction, no
+    /// sampled-example pollution — and every consumer still re-verifies. This unblocks
+    /// bare-prose op requests in the older CodingIntent paths (agent_run, repair) that
+    /// predate the router, matching what the main `answer()` front door already does.
     pub fn from_nl(description: &str) -> Result<Self, BridgeError> {
         let bridge = LinguigenesisBridge::new();
-        let req = bridge.nl_to_requirement(description)?;
-        Ok(Self::from_requirement(&req))
+        match bridge.nl_to_requirement(description) {
+            Ok(req) => Ok(Self::from_requirement(&req)),
+            Err(err) => match crate::verified_nl_router::declare(description) {
+                Some(op) => Ok(Self::from_declared_op(op, description)),
+                None => Err(err),
+            },
+        }
+    }
+
+    /// Build an intent from a router-resolved library op: carry its verified `.mog`
+    /// as `reference_code` (the behaviour IS the spec) plus its name/signature; no
+    /// examples (the reference is the oracle).
+    fn from_declared_op(op: &crate::op_library::LibOp, description: &str) -> Self {
+        let signature = op
+            .mog
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches('{')
+            .trim()
+            .to_string();
+        Self {
+            function_name: op.name.to_string(),
+            signature,
+            category: String::new(),
+            description: description.to_string(),
+            examples: Vec::new(),
+            constraints: Vec::new(),
+            confidence: 0.7,
+            unresolved: Vec::new(),
+            evidence_entity_ids: Vec::new(),
+            reference_code: op.mog.to_string(),
+        }
     }
 
     /// Like [`Self::from_nl`], but accepts comprehend partials when clarification
@@ -110,6 +160,17 @@ impl CodingIntent {
     /// Convert to solver `Problem` when examples are present.
     pub fn to_problem(&self) -> Result<Problem, String> {
         if self.examples.is_empty() {
+            // No examples, but a router-resolved op gave us its verified reference —
+            // build a reference-verified problem (differential testing against the
+            // reference on manufactured + fresh inputs), which is correct-by-
+            // construction. Only when there is neither is the intent unsatisfiable.
+            if !self.reference_code.is_empty() {
+                return Self::problem_from_reference(
+                    &self.function_name,
+                    &self.signature,
+                    &self.reference_code,
+                );
+            }
             return Err("CodingIntent has no examples".to_string());
         }
         let examples: Vec<Example> = self
