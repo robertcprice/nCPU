@@ -46,6 +46,7 @@ pub mod morph_transduce;
 pub mod multi;
 pub mod multi_objective;
 pub mod op_library;
+pub mod semantic_op_proposer;
 pub mod verified_nl_router;
 pub mod op_pipeline;
 pub mod synth_evolve;
