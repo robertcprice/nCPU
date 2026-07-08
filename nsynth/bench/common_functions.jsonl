@@ -31,3 +31,6 @@
 {"id":2031,"category":"int","hardness":"medium","fn":"count_distinct_digits","text":"the number of distinct digits in a number","examples":[{"in":[123],"out":3},{"in":[122],"out":2},{"in":[777],"out":1},{"in":[45],"out":2}]}
 {"id":2032,"category":"int","hardness":"easy","fn":"is_negative","text":"whether a number is negative","examples":[{"in":[-3],"out":1},{"in":[5],"out":0},{"in":[-1],"out":1},{"in":[2],"out":0}]}
 {"id":2033,"category":"int","hardness":"medium","fn":"is_multiple_of_five","text":"whether a number is a multiple of five","examples":[{"in":[5],"out":1},{"in":[10],"out":1},{"in":[7],"out":0},{"in":[15],"out":1}]}
+{"id":2034,"category":"string","hardness":"medium","fn":"count_capitals","text":"the number of capital letters in a string","examples":[{"in":["aBc"],"out":1},{"in":["HI"],"out":2},{"in":["xYz"],"out":1},{"in":["abc"],"out":0}]}
+{"id":2035,"category":"array","hardness":"medium","fn":"second_to_last","text":"the second to last element of a list","examples":[{"in":[[7,1,5,3]],"out":5},{"in":[[2,8,6,0]],"out":6},{"in":[[4,9,1,2]],"out":1}]}
+{"id":2036,"category":"array","hardness":"medium","fn":"max_except_first","text":"the largest element except the first in a list","examples":[{"in":[[9,1,2]],"out":2},{"in":[[5,3,8]],"out":8},{"in":[[7,6,1]],"out":6},{"in":[[4,9,2]],"out":9}]}
