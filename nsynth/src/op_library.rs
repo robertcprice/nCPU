@@ -655,6 +655,11 @@ pub const OPS: &[LibOp] = &[
     // ── count / frequency without a dict (O(n²) scans) ─────────────────────
     LibOp { name: "count_distinct", arity: 1, mog:
 "fn count_distinct(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        first: i64 = 1;\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                first = 0;\n            }\n            j = j + 1;\n        }\n        c = c + first;\n        i = i + 1;\n    }\n    return c;\n}\n" },
+    // 'unique' twin of count_distinct — same behaviour, but the phrasing 'unique values'
+    // does not name 'distinct', so count_distinct was un-named and refused. The 'unique'-
+    // named op resolves it. (int->int, so string count_unique_chars can't collide.)
+    LibOp { name: "count_unique", arity: 1, mog:
+"fn count_unique(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    i: i64 = 0;\n    while i < arr.len {\n        first: i64 = 1;\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                first = 0;\n            }\n            j = j + 1;\n        }\n        c = c + first;\n        i = i + 1;\n    }\n    return c;\n}\n" },
     LibOp { name: "has_duplicates", arity: 1, mog:
 "fn has_duplicates(arr: [i64]) -> i64 {\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                return 1;\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return 0;\n}\n" },
     // Whether every element equals the first. Coincides with has_duplicates on the
