@@ -422,6 +422,12 @@ pub const OPS: &[LibOp] = &[
 "fn consecutive_products(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i + 1 < arr.len {\n        j: i64 = i + 1;\n        out.push(arr[i] * arr[j]);\n        i = i + 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "elements_once", arity: 1, mog:
 "fn elements_once(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        c: i64 = 0;\n        for u in arr {\n            if u == e {\n                c = c + 1;\n            }\n        }\n        if c == 1 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
+    // Deduplicate, keeping first occurrence. Without it, "remove duplicate values"
+    // given all-unique examples (where dedup == identity) was answered by a tier-3
+    // synthesis that reproduced them as the IDENTITY map ([1,1,2] -> [1,1,2], wrong).
+    // The name tier now resolves "remove duplicate" -> remove_duplicates directly.
+    LibOp { name: "remove_duplicates", arity: 1, mog:
+"fn remove_duplicates(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        seen: i64 = 0;\n        for u in out {\n            if u == e {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "duplicate_elements", arity: 1, mog:
 "fn duplicate_elements(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < arr.len {\n        c: i64 = 0;\n        for u in arr {\n            if u == arr[i] {\n                c = c + 1;\n            }\n        }\n        seen: i64 = 0;\n        for v in out {\n            if v == arr[i] {\n                seen = 1;\n            }\n        }\n        if c > 1 {\n            if seen == 0 {\n                out.push(arr[i]);\n            }\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "indices_of_max", arity: 1, mog:
