@@ -415,6 +415,11 @@ pub const OPS: &[LibOp] = &[
 "fn array_range(arr: [i64]) -> i64 {\n    mx: i64 = arr[0];\n    mn: i64 = arr[0];\n    for e in arr {\n        if e > mx {\n            mx = e;\n        }\n        if e < mn {\n            mn = e;\n        }\n    }\n    return mx - mn;\n}\n" },
     LibOp { name: "count_negatives", arity: 1, mog:
 "fn count_negatives(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether the list contains ANY negative (boolean). Coincides with count_negatives
+    // when the examples have <=1 negative; count_negatives is wrong once there are 2+
+    // ([-1,-2] -> contains 1, count 2). Name token \"contain\" resolves the boolean.
+    LibOp { name: "contains_negative", arity: 1, mog:
+"fn contains_negative(arr: [i64]) -> i64 {\n    for e in arr {\n        if e < 0 {\n            return 1;\n        }\n    }\n    return 0;\n}\n" },
     // Count of zeros. Closes the 'how many zeros in a list' refusal (no coincidence:
     // length gives the whole size, count_negatives gives 0 on non-negative input).
     LibOp { name: "count_zeros", arity: 1, mog:
@@ -441,6 +446,11 @@ pub const OPS: &[LibOp] = &[
 "fn middle_char(s: string) -> string {\n    mid: i64 = s.len / 2;\n    i: i64 = 0;\n    for ch in s {\n        if i == mid {\n            return ch;\n        }\n        i = i + 1;\n    }\n    return \"\";\n}\n" },
     LibOp { name: "count_vowels", arity: 1, mog:
 "fn count_vowels(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_vowel() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether the string contains ANY vowel (boolean). Coincides with count_vowels when
+    // the examples have <=1 vowel; count_vowels is wrong once there are 2+ (\"bee\" ->
+    // contains 1, count 2). Name token \"contain\" resolves the boolean directly.
+    LibOp { name: "contains_vowel", arity: 1, mog:
+"fn contains_vowel(s: string) -> i64 {\n    for ch in s {\n        if ch.is_vowel() {\n            return 1;\n        }\n    }\n    return 0;\n}\n" },
     // Uppercase ONLY the vowels. Coincides with to_upper on all-vowel strings; to_upper
     // was shipped and is wrong on mixed strings ("cat" -> "CAT" not "cAt"). The name
     // tier prefers uppercase_vowels (matches both "uppercase" and "vowel").

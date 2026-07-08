@@ -1635,6 +1635,22 @@ mod tests {
                 vec![Value::Str("AB".into())],
                 iv(1),
             ),
+            // contains_vowel coincides with count_vowels when examples have <=1 vowel;
+            // count_vowels is wrong once there are 2+ ("bee" -> contains 1, count 2).
+            (
+                "whether a string contains a vowel",
+                vec![ex(vec![Value::Str("cat".into())], iv(1)), ex(vec![Value::Str("xyz".into())], iv(0)), ex(vec![Value::Str("by".into())], iv(0)), ex(vec![Value::Str("dog".into())], iv(1))],
+                vec![Value::Str("bee".into())],
+                iv(1),
+            ),
+            // contains_negative coincides with count_negatives when examples have <=1
+            // negative; count_negatives is wrong once there are 2+ ([-1,-2] -> 1 vs 2).
+            (
+                "whether a list contains a negative number",
+                vec![ex(vec![av(&[1, -2, 3])], iv(1)), ex(vec![av(&[4, 5])], iv(0)), ex(vec![av(&[6, -1])], iv(1)), ex(vec![av(&[2, 3])], iv(0))],
+                vec![av(&[-1, -2])],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
