@@ -263,6 +263,15 @@ pub const OPS: &[LibOp] = &[
     // "collatz" / "steps" resolves and is example-verified.
     LibOp { name: "collatz_steps", arity: 1, mog:
 "fn collatz_steps(n: i64) -> i64 {\n    x: i64 = n;\n    steps: i64 = 0;\n    while x > 1 {\n        if x % 2 == 0 {\n            x = x / 2;\n        } else {\n            x = 3 * x + 1;\n        }\n        steps = steps + 1;\n    }\n    return steps;\n}\n" },
+    // Common 1-arg int helpers found missing by the common-functions battery.
+    LibOp { name: "square", arity: 1, mog:
+"fn square(n: i64) -> i64 {\n    return n * n;\n}\n" },
+    LibOp { name: "halve", arity: 1, mog:
+"fn halve(n: i64) -> i64 {\n    return n / 2;\n}\n" },
+    LibOp { name: "is_power_of_two", arity: 1, mog:
+"fn is_power_of_two(n: i64) -> i64 {\n    if n < 1 {\n        return 0;\n    }\n    x: i64 = n;\n    while x % 2 == 0 {\n        x = x / 2;\n    }\n    if x == 1 {\n        return 1;\n    }\n    return 0;\n}\n" },
+    LibOp { name: "digital_root", arity: 1, mog:
+"fn digital_root(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    while x >= 10 {\n        s: i64 = 0;\n        while x > 0 {\n            s = s + x % 10;\n            x = x / 10;\n        }\n        x = s;\n    }\n    return x;\n}\n" },
     LibOp { name: "is_even", arity: 1, mog:
 "fn is_even(n: i64) -> i64 {\n    if n % 2 == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     // ── number theory (2-arg i64) ──────────────────────────────────────────
