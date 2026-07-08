@@ -1801,6 +1801,14 @@ mod tests {
                 vec![av(&[-3, -8, 1])],
                 iv(1),
             ),
+            // array_sum coincides with sum-of-negatives on all-negative input; wrong once a
+            // positive is present ([1,-2,-3] -> -5 vs -4). sum_negatives out-covers array_sum.
+            (
+                "the sum of the negative numbers in a list",
+                vec![ex(vec![av(&[-1, -2, -3])], iv(-6)), ex(vec![av(&[-4, -5])], iv(-9)), ex(vec![av(&[-2])], iv(-2))],
+                vec![av(&[1, -2, -3])],
+                iv(-5),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

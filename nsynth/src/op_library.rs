@@ -437,6 +437,15 @@ pub const OPS: &[LibOp] = &[
     // name tier prefers it and the gate distinguishes them on negative probes.
     LibOp { name: "sum_positives", arity: 1, mog:
 "fn sum_positives(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e > 0 {\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
+    // Sum of the NEGATIVE numbers. Coincides with array_sum on all-negative input; wrong
+    // once a positive is present ([1,-2,-3] -> sum-of-negatives -5, array_sum -4). 'sum' +
+    // 'negative' out-cover array_sum ('sum' only).
+    LibOp { name: "sum_negatives", arity: 1, mog:
+"fn sum_negatives(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
+    // Product of the NEGATIVE numbers (companion; empty -> 1). Coincides with array_product
+    // on all-negative input; out-covers it via 'negative'.
+    LibOp { name: "product_negatives", arity: 1, mog:
+"fn product_negatives(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    for e in arr {\n        if e < 0 {\n            p = p * e;\n        }\n    }\n    return p;\n}\n" },
     // Product of the EVEN numbers. Coincides with array_product on all-even inputs;
     // array_product was shipped and is wrong when an odd is present ([2,3,4] -> product
     // of evens 8, array_product 24).
