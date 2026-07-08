@@ -305,6 +305,10 @@ pub const OPS: &[LibOp] = &[
     // ── number theory (2-arg i64) ──────────────────────────────────────────
     LibOp { name: "gcd", arity: 2, mog:
 "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        t: i64 = y;\n        y = x % y;\n        x = t;\n    }\n    return x;\n}\n" },
+    // Divisibility predicate (a % b == 0). Under-determined examples let tier-3 synthesis
+    // ship a coincidental program wrong on (8,4); the named op resolves before tier 3.
+    LibOp { name: "is_divisible", arity: 2, mog:
+"fn is_divisible(a: i64, b: i64) -> i64 {\n    if a % b == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "lcm", arity: 2, mog:
 "fn lcm(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        t: i64 = y;\n        y = x % y;\n        x = t;\n    }\n    return a / x * b;\n}\n" },
     LibOp { name: "power", arity: 2, mog:

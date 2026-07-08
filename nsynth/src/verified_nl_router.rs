@@ -1530,6 +1530,14 @@ mod tests {
                 vec![Value::Str("aab".into())],
                 iv(2),
             ),
+            // Under-determined 2-arg divisibility examples let tier-3 ship a coincidental
+            // program wrong on (8,4); the named is_divisible op resolves before tier 3.
+            (
+                "whether a is divisible by b",
+                vec![ex(vec![iv(6), iv(3)], iv(1)), ex(vec![iv(7), iv(2)], iv(0)), ex(vec![iv(10), iv(5)], iv(1)), ex(vec![iv(9), iv(4)], iv(0))],
+                vec![iv(8), iv(4)],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
