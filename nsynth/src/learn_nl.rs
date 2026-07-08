@@ -270,6 +270,13 @@ fn first_int(s: &str) -> Option<i64> {
 /// Parse `NAME of 7` or `NAME(7)` — a single-arg reuse call on an integer.
 fn parse_reuse(query: &str) -> Option<LearnIntake> {
     let q = query.trim().trim_end_matches('.').trim();
+    // A reuse call ("half of 7") never carries inline I/O examples. A query with
+    // `->` is a SYNTHESIS request ("half of the maximum value in a list: [2,8]->4")
+    // whose `NAME of <int>` prefix ("half of ... 2") would otherwise be misread as a
+    // reuse of op `half` on 2, pre-empting the verified answer() front door.
+    if q.contains("->") {
+        return None;
+    }
     // 'NAME of N' / 'NAME applied to N' / 'NAME with N'
     let lower = q.to_ascii_lowercase();
     for marker in [" of ", " applied to ", " with ", " on "] {
