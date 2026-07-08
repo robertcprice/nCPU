@@ -1135,6 +1135,11 @@ fn fresh_probe_inputs(examples: &[crate::benchmark::Example]) -> Vec<Vec<crate::
                             variants.push(rev);
                             // a fixed small mixed array, regime-independent catch-all
                             variants.push(vec![-2, 5, -1, 3]);
+                            // a DUPLICATE-containing array: dedup / identity /
+                            // elements_once all coincide on distinct-valued inputs, so
+                            // without repeats the gate can't tell them apart (a plain
+                            // dedup task looked like identity). This distinguishes them.
+                            variants.push(vec![4, 4, 1, 4, 7]);
                             for arr in variants {
                                 let mut tup = ex.inputs.clone();
                                 tup[pos] = Value::int_array(&arr);
