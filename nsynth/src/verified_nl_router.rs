@@ -1503,6 +1503,14 @@ mod tests {
                 vec![av(&[1, 2, 3, 4])],
                 av(&[2, 4]),
             ),
+            // Under-determined sign examples let the composition tier ship a coincidental
+            // chain (wrong on -7: gave -3); the named sign op resolves before composition.
+            (
+                "the sign of a number",
+                vec![ex(vec![iv(5)], iv(1)), ex(vec![iv(3)], iv(1)), ex(vec![iv(-2)], iv(-1)), ex(vec![iv(0)], iv(0))],
+                vec![iv(-7)],
+                iv(-1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

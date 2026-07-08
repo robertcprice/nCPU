@@ -283,6 +283,10 @@ pub const OPS: &[LibOp] = &[
 "fn digital_root(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    while x >= 10 {\n        s: i64 = 0;\n        while x > 0 {\n            s = s + x % 10;\n            x = x / 10;\n        }\n        x = s;\n    }\n    return x;\n}\n" },
     LibOp { name: "is_negative", arity: 1, mog:
 "fn is_negative(n: i64) -> i64 {\n    if n < 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // Signum: -1 / 0 / +1. Under-determined sign examples let the composition tier ship
+    // a coincidental chain (wrong on -7: gave -3, want -1); the named op resolves first.
+    LibOp { name: "sign", arity: 1, mog:
+"fn sign(n: i64) -> i64 {\n    if n > 0 {\n        return 1;\n    }\n    if n < 0 {\n        return -1;\n    }\n    return 0;\n}\n" },
     // trailing_zeros (consecutive 0-bits from the LSB). WITHOUT this op, a prompt
     // naming it was answered by the behaviour-match tier with the coincidental
     // `unset_bits` (total 0-bits), which agrees only on examples where the two
