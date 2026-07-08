@@ -444,6 +444,11 @@ pub const OPS: &[LibOp] = &[
 "fn max_odd(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e > m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
     LibOp { name: "array_product", arity: 1, mog:
 "fn array_product(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    for item in arr {\n        p = p * item;\n    }\n    return p;\n}\n" },
+    // Product of all elements except the first. array_product coincides when the first
+    // element is 1 (dropping it leaves the product unchanged); 'product' + 'except' +
+    // 'first' out-cover array_product so it wins when the examples are determined.
+    LibOp { name: "product_except_first", arity: 1, mog:
+"fn product_except_first(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    i: i64 = 1;\n    while i < arr.len {\n        p = p * arr[i];\n        i = i + 1;\n    }\n    return p;\n}\n" },
     // ── array + scalar (2-arg) ─────────────────────────────────────────────
     LibOp { name: "count_value", arity: 2, mog:
 "fn count_value(arr: [i64], x: i64) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e == x {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
