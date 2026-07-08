@@ -328,6 +328,10 @@ pub const OPS: &[LibOp] = &[
 "fn count_consonants(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n            if ch.is_vowel() {\n            } else {\n                c = c + 1;\n            }\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "is_palindrome", arity: 1, mog:
 "fn is_palindrome(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // Balanced-parentheses is a stack/counter algorithm (a known algorithm, like
+    // is_prime) — carry it so "check if parentheses are balanced" resolves + verifies.
+    LibOp { name: "balanced_parentheses", arity: 1, mog:
+"fn balanced_parentheses(s: string) -> i64 {\n    depth: i64 = 0;\n    for ch in s {\n        if ch == '(' {\n            depth = depth + 1;\n        }\n        if ch == ')' {\n            depth = depth - 1;\n        }\n        if depth < 0 {\n            return 0;\n        }\n    }\n    if depth == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "count_uppercase", arity: 1, mog:
 "fn count_uppercase(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_upper() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_lowercase", arity: 1, mog:
