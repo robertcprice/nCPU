@@ -572,6 +572,12 @@ pub const OPS: &[LibOp] = &[
     // composition building blocks (filter_evens then array_sum = sum of evens, etc).
     LibOp { name: "double_each", arity: 1, mog:
 "fn double_each(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e * 2);\n    }\n    return out;\n}\n" },
+    // Replace every negative with zero (elementwise relu). Closes the 'replace negative
+    // numbers with zero' refusal; name tokens 'negative' + 'zero' resolve it. On all-
+    // nonnegative input it equals identity, but no identity op name-matches, so it is the
+    // unique NL-matched reproducer.
+    LibOp { name: "negatives_to_zero", arity: 1, mog:
+"fn negatives_to_zero(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        if e < 0 {\n            out.push(0);\n        } else {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "increment_each", arity: 1, mog:
 "fn increment_each(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e + 1);\n    }\n    return out;\n}\n" },
     LibOp { name: "square_each", arity: 1, mog:
