@@ -507,6 +507,19 @@ pub const OPS: &[LibOp] = &[
     // The name tier now resolves "remove duplicate" -> remove_duplicates directly.
     LibOp { name: "remove_duplicates", arity: 1, mog:
 "fn remove_duplicates(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        seen: i64 = 0;\n        for u in out {\n            if u == e {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
+    // ── elementwise map / filter (array -> array) ─ foundational transforms, also
+    // composition building blocks (filter_evens then array_sum = sum of evens, etc).
+    LibOp { name: "double_each", arity: 1, mog:
+"fn double_each(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e * 2);\n    }\n    return out;\n}\n" },
+    LibOp { name: "increment_each", arity: 1, mog:
+"fn increment_each(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e + 1);\n    }\n    return out;\n}\n" },
+    LibOp { name: "square_each", arity: 1, mog:
+"fn square_each(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e * e);\n    }\n    return out;\n}\n" },
+    // Keep only the even numbers. On all-even input this equals identity; the
+    // distinguishing gate refuses that under-determined case and solves once an odd is
+    // present ([1,2,3,4] -> [2,4]).
+    LibOp { name: "filter_evens", arity: 1, mog:
+"fn filter_evens(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        if e % 2 == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "duplicate_elements", arity: 1, mog:
 "fn duplicate_elements(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    i: i64 = 0;\n    while i < arr.len {\n        c: i64 = 0;\n        for u in arr {\n            if u == arr[i] {\n                c = c + 1;\n            }\n        }\n        seen: i64 = 0;\n        for v in out {\n            if v == arr[i] {\n                seen = 1;\n            }\n        }\n        if c > 1 {\n            if seen == 0 {\n                out.push(arr[i]);\n            }\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "indices_of_max", arity: 1, mog:

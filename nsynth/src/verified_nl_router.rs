@@ -1495,6 +1495,14 @@ mod tests {
                 vec![iv(15)],
                 iv(1),
             ),
+            // filter_evens equals identity on all-even input; must stay never-wrong on a
+            // fresh mixed input (locks the coincidence in case an identity op is added).
+            (
+                "keep only the even numbers in a list",
+                vec![ex(vec![av(&[2, 4, 6])], av(&[2, 4, 6])), ex(vec![av(&[8])], av(&[8])), ex(vec![av(&[2, 10])], av(&[2, 10]))],
+                vec![av(&[1, 2, 3, 4])],
+                av(&[2, 4]),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
