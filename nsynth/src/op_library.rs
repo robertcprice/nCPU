@@ -881,6 +881,13 @@ pub const OPS: &[LibOp] = &[
 "fn toggle_case(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_upper() {\n            out = out + ch.lower();\n        } else {\n            out = out + ch.upper();\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "capitalize_first_last", arity: 1, mog:
 "fn capitalize_first_last(s: string) -> string {\n    n: i64 = s.len;\n    out: string = \"\";\n    i: i64 = 0;\n    for ch in s {\n        if i == 0 {\n            out = out + ch.upper();\n        } else {\n            if i == n - 1 {\n                out = out + ch.upper();\n            } else {\n                out = out + ch;\n            }\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
+    // Capitalize only the FIRST letter. Without it, "capitalize the first letter" was
+    // answered by capitalize_first_last (first AND last), which coincides only on
+    // single-char strings and is WRONG on longer ones ("hello" -> "HellO" not
+    // "Hello"). The name tier ranks capitalize_first (coverage 1.0) above
+    // capitalize_first_last (0.67, "last" unnamed) and returns the correct op.
+    LibOp { name: "capitalize_first", arity: 1, mog:
+"fn capitalize_first(s: string) -> string {\n    out: string = \"\";\n    i: i64 = 0;\n    for ch in s {\n        if i == 0 {\n            out = out + ch.upper();\n        } else {\n            out = out + ch;\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "keep_lowercase", arity: 1, mog:
 "fn keep_lowercase(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_lower() {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "keep_uppercase", arity: 1, mog:
