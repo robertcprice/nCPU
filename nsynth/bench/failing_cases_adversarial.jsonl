@@ -21,3 +21,6 @@
 {"id":1319,"category":"composition","hardness":"hard","fn":"sort_descending","text":"sort a list in descending order","examples":[{"in":[[1,3,2]],"out":[3,2,1]},{"in":[[4,5]],"out":[5,4]},{"in":[[9,1,5]],"out":[9,5,1]}]}
 {"id":1320,"category":"string","hardness":"medium","fn":"to_upper","text":"convert a string to uppercase","examples":[{"in":["abc"],"out":"ABC"},{"in":["hi"],"out":"HI"},{"in":["dog"],"out":"DOG"}]}
 {"id":1321,"category":"string","hardness":"medium","fn":"capitalize_first","text":"capitalize the first letter of a string","examples":[{"in":["abc"],"out":"Abc"},{"in":["hi"],"out":"Hi"},{"in":["dog"],"out":"Dog"}]}
+{"id":1322,"category":"string","hardness":"medium","fn":"to_lower","text":"convert a string to lowercase","examples":[{"in":["ABC"],"out":"abc"},{"in":["HI"],"out":"hi"},{"in":["DOG"],"out":"dog"}]}
+{"id":1323,"category":"int","hardness":"hard","fn":"fibonacci","text":"the nth fibonacci number","examples":[{"in":[0],"out":0},{"in":[1],"out":1},{"in":[5],"out":5},{"in":[6],"out":8},{"in":[7],"out":13}]}
+{"id":1324,"category":"int","hardness":"hard","fn":"power","text":"raise a number to a power","examples":[{"in":[2,3],"out":8},{"in":[3,2],"out":9},{"in":[5,1],"out":5}]}
