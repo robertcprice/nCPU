@@ -21,9 +21,32 @@ use mog_synth::benchmark::{Example, Problem, Value};
 use mog_synth::linguigenesis_bridge::infer_signature;
 use mog_synth::local_llm::propose_program;
 use mog_synth::op_library::record_proposed_op;
-use mog_synth::rlvr::{run_tool, ToolRequest};
-use mog_synth::runtime::{code_reproduces_examples, describe_first_failure};
+use mog_synth::runtime::{code_reproduces_examples, describe_first_failure, verify_problem_code_strict};
 use mog_synth::solver::solve_problem;
+
+/// Rename a program's entry fn (+ any self-recursive calls) to `target`, whole-word,
+/// so a verifier that invokes the entry by a fixed name can run a model program named
+/// arbitrarily. No-op if already `target` or no `fn <name>` found.
+fn rename_fn(code: &str, target: &str) -> String {
+    let Some((_, rest)) = code.split_once("fn ") else { return code.to_string() };
+    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    if name.is_empty() || name == target {
+        return code.to_string();
+    }
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(code.len());
+    let mut idx = 0;
+    while let Some(pos) = code[idx..].find(&name) {
+        let at = idx + pos;
+        let before_ok = at == 0 || !code[..at].chars().next_back().is_some_and(is_ident);
+        let after_ok = !code[at + name.len()..].chars().next().is_some_and(is_ident);
+        out.push_str(&code[idx..at]);
+        out.push_str(if before_ok && after_ok { target } else { &name });
+        idx = at + name.len();
+    }
+    out.push_str(&code[idx..]);
+    out
+}
 
 fn json_to_value(v: &serde_json::Value) -> Option<Value> {
     if let Some(b) = v.as_bool() {
@@ -83,15 +106,26 @@ fn engine_solves(problem: &Problem, all: &[Example]) -> (bool, String) {
     }
 }
 
-/// Drive the model to propose a verified program (best-of-4 with concrete repair),
-/// gated on reproduce-all-incl-held-out + rlvr strict-verify. Returns verified code.
+/// Drive the model to propose a verified program (best-of-8 with concrete repair).
+/// Two fast, sound gates — no oracle needed:
+///   1. reproduce-all-incl-HELD-OUT: the prompt shows only `seed`; the 2 held-out
+///      examples are the generalization oracle a fit-to-seed hallucination misses.
+///   2. robustness floor (`verify_problem_code_strict`, NO differential-consensus):
+///      the program must execute cleanly on perturbations of the examples, rejecting
+///      a candidate defined only on the narrow visible inputs (crashes on n<=0 etc.).
+/// Consensus is deliberately skipped: it re-synthesizes independently, but the whole
+/// point of the model tier is a task the ENGINE CANNOT synthesize — consensus would
+/// reject exactly the novel capability (and its 8x leave-one-out re-solve stalls for
+/// minutes on a hard task). This mirrors `record_proposed_op`, which skips it too.
 fn model_teach(name: &str, seed: &[Example], all: &[Example]) -> Option<String> {
     let mut request = format!("{name}\n\nExamples:\n");
     for ex in seed {
         request.push_str(&format!("  {:?} -> {:?}\n", ex.inputs, ex.expected));
     }
     request.push_str("\nWrite the Mog function `f`.");
-    let sig = infer_signature("f", seed);
+    // The robustness floor invokes the entry fn by the problem's name, so normalize
+    // the model's (arbitrarily-named) fn to match before verifying.
+    let verify_problem = build_problem(name, all);
     // Best-of-8 with a rising temperature schedule: proposal is STOCHASTIC, so a
     // single unlucky draw (or four) must not sink a task the model can express.
     // Low temps first (crisp), climbing for diversity if the crisp draws miss.
@@ -100,20 +134,14 @@ fn model_teach(name: &str, seed: &[Example], all: &[Example]) -> Option<String> 
     for &t in &temps {
         let p = prior.as_ref().map(|(c, e)| (c.as_str(), e.as_str()));
         let Some(code) = propose_program(&request, p, t) else { continue };
-        // Gate on the FULL example set (incl the 2 held out of the prompt): a
-        // fit-to-seed hallucination reproduces `seed` but misses these.
         match describe_first_failure(&code, all) {
-            None => {
-                let req = ToolRequest::VerifyProgram {
-                    signature: sig.clone(),
-                    code: code.clone(),
-                    examples: all.to_vec(),
-                };
-                if run_tool(&req).code().is_some() {
-                    return Some(code);
-                }
-                prior = Some((code, "strict-verify rejected it; try a cleaner form".to_string()));
-            }
+            None => match verify_problem_code_strict(&verify_problem, &rename_fn(&code, name)) {
+                Ok(()) => return Some(code),
+                Err(_) => prior = Some((
+                    code,
+                    "it crashes / misbehaves on nearby inputs — handle edge cases (n<=0, larger n)".to_string(),
+                )),
+            },
             // Feed the concrete mismatch back so the model fixes the ACTUAL bug.
             Some(why) => prior = Some((code, why)),
         }
