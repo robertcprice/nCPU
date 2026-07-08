@@ -340,6 +340,14 @@ pub const OPS: &[LibOp] = &[
     // shipped and is wrong when the max is odd (largest even of [7,4,9] = 4, not 9).
     LibOp { name: "max_even", arity: 1, mog:
 "fn max_even(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e > m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
+    // Smallest EVEN number. Coincides with list_min on all-even inputs; list_min was
+    // shipped and is wrong when the min is odd ([5,3,8,4] -> smallest even 4, list_min 3).
+    LibOp { name: "min_even", arity: 1, mog:
+"fn min_even(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e < m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
+    // Largest ODD number. Coincides with list_max on all-odd inputs; list_max was
+    // shipped and is wrong when the max is even ([2,7,8] -> largest odd 7, list_max 8).
+    LibOp { name: "max_odd", arity: 1, mog:
+"fn max_odd(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e > m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
     LibOp { name: "array_product", arity: 1, mog:
 "fn array_product(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    for item in arr {\n        p = p * item;\n    }\n    return p;\n}\n" },
     // ── array + scalar (2-arg) ─────────────────────────────────────────────

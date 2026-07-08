@@ -1447,6 +1447,22 @@ mod tests {
                 vec![av(&[-4, 3, -1])],
                 iv(-1),
             ),
+            // min_even coincides with list_min on all-even input (min is the smallest
+            // even too) — wrong once the min is odd ([5,3,8,4] -> smallest even 4, min 3).
+            (
+                "the smallest even number in a list",
+                vec![ex(vec![av(&[4, 2, 6])], iv(2)), ex(vec![av(&[8, 10])], iv(8)), ex(vec![av(&[6, 2, 4])], iv(2))],
+                vec![av(&[5, 3, 8, 4])],
+                iv(4),
+            ),
+            // max_odd coincides with list_max on all-odd input — wrong once the max is
+            // even ([2,7,8] -> largest odd 7, list_max 8).
+            (
+                "the largest odd number in a list",
+                vec![ex(vec![av(&[1, 3, 5])], iv(5)), ex(vec![av(&[7, 9])], iv(9)), ex(vec![av(&[3, 1, 5])], iv(5))],
+                vec![av(&[2, 7, 8])],
+                iv(7),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
