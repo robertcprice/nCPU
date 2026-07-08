@@ -1735,6 +1735,14 @@ mod tests {
                 vec![av(&[9, 1, 2])],
                 iv(10),
             ),
+            // list_max coincides with max-except-last when the max is not the last
+            // element; wrong once it is ([1,2,9] -> 2 vs 9). max_except_last resolves it.
+            (
+                "the largest element except the last in a list",
+                vec![ex(vec![av(&[9, 1, 2])], iv(9)), ex(vec![av(&[5, 3, 1])], iv(5)), ex(vec![av(&[8, 2, 4])], iv(8))],
+                vec![av(&[1, 2, 9])],
+                iv(2),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

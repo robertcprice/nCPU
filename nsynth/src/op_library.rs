@@ -399,6 +399,11 @@ pub const OPS: &[LibOp] = &[
     // wrong on [9,1,2] (sum-except-last 10, list_max 9). 'sum' + 'except' + 'last' name it.
     LibOp { name: "sum_except_last", arity: 1, mog:
 "fn sum_except_last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    s: i64 = 0;\n    i: i64 = 0;\n    while i < n - 1 {\n        s = s + arr[i];\n        i = i + 1;\n    }\n    return s;\n}\n" },
+    // Largest element among all but the last. list_max (container noun 'list' only)
+    // coincides when the max is not the last element; wrong once it is ([1,2,9] ->
+    // max-except-last 2, list_max 9). 'except' + 'last' outrank list_max.
+    LibOp { name: "max_except_last", arity: 1, mog:
+"fn max_except_last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    m: i64 = arr[0];\n    i: i64 = 1;\n    while i < n - 1 {\n        if arr[i] > m {\n            m = arr[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     // Sum of ABSOLUTE values. Coincides with array_sum on all-nonnegative input; array_sum
     // is wrong once a negative is present ([-3,-4] -> abs sum 7, array_sum -7). Name tokens
     // 'sum' + 'absolute' + 'value' resolve it.
