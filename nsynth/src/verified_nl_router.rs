@@ -365,6 +365,77 @@ pub fn route_composed(prompt: &str, examples: &[crate::benchmark::Example]) -> O
     Some(first)
 }
 
+/// BEHAVIOUR-match 2-op COMPOSITION. `route_composed` only chains NAME-matched
+/// candidates, so a described pipeline whose ops the prompt never names is missed —
+/// "double the sum of a list" is `times_two(array_sum(x))`, but "double" does not
+/// name `times_two`. This chains EVERY type-compatible pair of library ops by
+/// behaviour, gated by the same distinguishing power: a chain is kept only if it
+/// reproduces every example, and if two surviving chains diverge on fresh probes the
+/// spec is under-determined -> refuse. Requires >= 3 distinct examples (a 2-op chain
+/// has more freedom to coincide). The O(n^2) surface is bounded by TYPE-chaining
+/// (a: in->mid, b: mid->out) + an early reject on the first example, and it runs only
+/// as a fallback after the named tiers, so cost is paid rarely.
+pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Option<String> {
+    let first = examples.first()?;
+    if first.inputs.len() != 1 {
+        return None; // unary chains only
+    }
+    let distinct = crate::benchmark::dedup_consistent_examples(examples)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    if distinct < 3 {
+        return None;
+    }
+    let in_ty = value_type_str(&first.inputs[0]);
+    let out_ty = value_type_str(&first.expected);
+    let fname = "composed";
+    let seed1 = &examples[..1];
+    // Cap the collected chains: past this many reproducers the spec is almost surely
+    // under-determined, and we still gate whatever we gathered.
+    const MAX_CHAINS: usize = 16;
+    let mut chains: Vec<String> = Vec::new();
+    'outer: for a in OPS {
+        let (a_params, a_ret) = op_sig_types(a.mog);
+        if a_params.len() != 1 || a_params[0] != in_ty {
+            continue; // a: in_ty -> a_ret
+        }
+        let Some(a_entry) = op_entry_name(a.mog) else { continue };
+        for b in OPS {
+            if b.name == a.name {
+                continue;
+            }
+            let (b_params, b_ret) = op_sig_types(b.mog);
+            if b_params.len() != 1 || b_params[0] != a_ret || b_ret != out_ty {
+                continue; // b: a_ret -> out_ty
+            }
+            let Some(b_entry) = op_entry_name(b.mog) else { continue };
+            let code = format!(
+                "fn {fname}(x0: {in_ty}) -> {out_ty} {{\n    return {b_entry}({a_entry}(x0));\n}}\n\n{}\n{}",
+                a.mog.trim_end(),
+                b.mog.trim_end()
+            );
+            // Early reject on the FIRST example (one run) before verifying all.
+            if crate::runtime::code_reproduces_examples(&code, seed1)
+                && crate::runtime::code_reproduces_examples(&code, examples)
+            {
+                chains.push(code);
+                if chains.len() >= MAX_CHAINS {
+                    break 'outer;
+                }
+            }
+        }
+    }
+    let winner = chains.first()?.clone();
+    if chains.len() > 1 {
+        let progs: Vec<(String, String)> =
+            chains.iter().map(|c| (c.clone(), fname.to_string())).collect();
+        if programs_disagree(&progs, examples) {
+            return None;
+        }
+    }
+    Some(winner)
+}
+
 /// The unified never-wrong answer: one verified tier, or a refusal.
 pub enum Answer {
     /// A single verified library op.
@@ -576,6 +647,12 @@ pub fn answer_with_proposer(
     // -gated, so a coincidental match refuses instead of shipping wrong.
     if let Some(r) = route_by_behavior(prompt, examples) {
         return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+    }
+    // Tier 2.75 — BEHAVIOUR-match a 2-op COMPOSITION the prompt describes but does not
+    // name both ops of ("double the sum" = times_two(array_sum(x))). Distinguishing-
+    // gated; runs only after the single-op tiers, so its O(n^2) surface is paid rarely.
+    if let Some(code) = route_composed_by_behavior(examples) {
+        return Answer::Composition { code };
     }
     // Tier 3 — full synthesis with HOLDOUT discipline. Solve on a SEED and require
     // the result to reproduce EVERY example including the held-out ones; a fit-only-
@@ -1150,9 +1227,15 @@ mod tests {
         // 2n+1: no library op, but the engine synthesizes it. Six examples so a seed
         // of four determines the affine and two hold out.
         let affine = vec![ex(3, 7), ex(5, 11), ex(10, 21), ex(2, 5), ex(7, 15), ex(0, 1)];
+        // 2n+1 is reached beyond the single-op vocabulary EITHER by full synthesis OR
+        // by a verified 2-op composition (plus_one(times_two(n))) — the behaviour-
+        // composition tier finds the chain first. Both are correct, verified solves.
         assert!(
-            matches!(answer("two times n plus one", &affine), Answer::Synthesized { .. }),
-            "should synthesize 2n+1 beyond the library vocabulary"
+            matches!(
+                answer("two times n plus one", &affine),
+                Answer::Synthesized { .. } | Answer::Composition { .. }
+            ),
+            "should reach 2n+1 beyond the single-op vocabulary (synthesis or composition)"
         );
         // Random non-generalizing points: any fit to the seed fails the held-out
         // examples -> the holdout discipline refuses (never a confident overfit).
@@ -1268,6 +1351,35 @@ mod tests {
             matches!(answer("the square of a number", &degenerate), Answer::Refused),
             "under-determined synthesis (2 distinct points) must refuse, not guess"
         );
+    }
+
+    #[test]
+    fn behaviour_composition_reaches_a_pipeline_naming_neither_op() {
+        use crate::benchmark::{Example, Value};
+        let av = |a: &[i64]| Value::int_array(a);
+        let ex = |i: Vec<Value>, o: i64| Example { inputs: i, expected: Value::Int(o) };
+        // "double the sum" = times_two(array_sum(x)); "double" names neither op, so the
+        // NAME-based route_composed misses it. Behaviour-composition must find it.
+        let exs = vec![
+            ex(vec![av(&[1, 2, 3])], 12),
+            ex(vec![av(&[5])], 10),
+            ex(vec![av(&[10, 20])], 60),
+            ex(vec![av(&[-1, 3])], 4),
+        ];
+        let code = route_composed_by_behavior(&exs).expect("should find a 2-op chain");
+        assert!(crate::runtime::code_reproduces_examples(&code, &exs));
+        let entry = crate::site::fn_name_from_mog(&code).unwrap_or_else(|| "composed".into());
+        // fresh distinguishing input: 2*(2+5)=14
+        let out = crate::runtime::execute_function(&code, &entry, &[av(&[2, 5])], "p").unwrap();
+        assert_eq!(format!("{out:?}"), "Int(14)", "chain must be times_two(sum), not a coincidence");
+        // Random non-generalizing points: no 2-op chain reproduces them -> refuse.
+        let noise = vec![
+            ex(vec![av(&[1])], 99),
+            ex(vec![av(&[2])], 3),
+            ex(vec![av(&[3])], 41),
+            ex(vec![av(&[4])], 8),
+        ];
+        assert!(route_composed_by_behavior(&noise).is_none(), "must not fabricate a chain for noise");
     }
 
     #[test]
