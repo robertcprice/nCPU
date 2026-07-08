@@ -143,6 +143,12 @@ pub fn run_tool(req: &ToolRequest) -> ToolResponse {
             // code. So: fail strict-verify → Refused; else Verified iff corroborated,
             // Tentative otherwise (never refuse a program that passes).
             let problem = examples_problem(examples.clone(), Vec::new());
+            // The verifier calls the entry fn by `problem.function_name()` (inferred
+            // as `f` here). A model names its function whatever it likes (`nth_prime`,
+            // `solve`, …), so align the code's entry-fn name to what the verifier
+            // looks up — otherwise a perfectly CORRECT program is false-Refused merely
+            // for its name (the fn is never found). Correctness is name-independent.
+            let code = &normalize_entry_fn(code, &problem.function_name());
             if verify_problem_code_strict(&problem, code).is_err() {
                 return ToolResponse::Refused {
                     reason: "program failed strict verification against the examples".into(),
@@ -201,6 +207,32 @@ fn examples_problem(examples: Vec<Example>, holdouts: Vec<Example>) -> Problem {
         holdouts,
         ..Default::default()
     }
+}
+
+/// Rename a program's entry function (and any self-recursive calls to it) to
+/// `target`, so a verifier that invokes the entry by a fixed name can run a
+/// program the model named arbitrarily. Whole-word match only — never touches a
+/// variable/substring that merely contains the name. No-op if the name already
+/// matches or no `fn <name>` is found.
+fn normalize_entry_fn(code: &str, target: &str) -> String {
+    let Some((_, rest)) = code.split_once("fn ") else { return code.to_string() };
+    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    if name.is_empty() || name == target {
+        return code.to_string();
+    }
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(code.len());
+    let mut idx = 0;
+    while let Some(pos) = code[idx..].find(&name) {
+        let at = idx + pos;
+        let before_ok = at == 0 || !code[..at].chars().next_back().is_some_and(is_ident);
+        let after_ok = !code[at + name.len()..].chars().next().is_some_and(is_ident);
+        out.push_str(&code[idx..at]);
+        out.push_str(if before_ok && after_ok { target } else { &name });
+        idx = at + name.len();
+    }
+    out.push_str(&code[idx..]);
+    out
 }
 
 /// Strict-verify + consensus trust gate → Verified / Tentative / Refused.
@@ -282,6 +314,45 @@ mod tests {
         assert!(resp.code().is_some(), "model algorithm must be accepted, got {resp:?}");
         // Held-out oracle: it actually sums.
         assert!(rlvr_reward(&req, &[arr(&[7, 8, 9])]) >= 0.5, "sums correctly: {resp:?}");
+    }
+
+    #[test]
+    fn correct_program_not_refused_for_its_fn_name() {
+        // Regression: a CORRECT model program named anything but `f` must still be
+        // verified. Before normalize_entry_fn the verifier looked up `f`, never
+        // found the model's `nth_prime`, and false-Refused a perfect program — which
+        // silently sank every model-taught op in the distillation flywheel.
+        let e = |i: i64, o: i64| Example { inputs: vec![Value::Int(i)], expected: Value::Int(o) };
+        let named = "fn nth_prime(n: i64) -> i64 { count: i64 = 0; candidate: i64 = 2; \
+            while count < n { is_prime: i64 = 1; d: i64 = 2; while (d * d) <= candidate { \
+            if (candidate % d) == 0 { is_prime = 0; } d = d + 1; } if is_prime == 1 { \
+            count = count + 1; if count == n { return candidate; } } candidate = candidate + 1; } \
+            return candidate; }";
+        let examples = vec![e(1, 2), e(2, 3), e(3, 5), e(4, 7), e(5, 11), e(6, 13)];
+        let req = ToolRequest::VerifyProgram {
+            signature: "fn f(n: i64) -> i64".into(),
+            code: named.into(),
+            examples,
+        };
+        let resp = run_tool(&req);
+        assert!(resp.code().is_some(), "correctly-named-`nth_prime` must be accepted, got {resp:?}");
+        // Held-out oracle: it computes the real nth prime.
+        assert!(rlvr_reward(&req, &[e(7, 17), e(8, 19)]) >= 0.5, "computes nth prime: {resp:?}");
+    }
+
+    #[test]
+    fn normalize_entry_fn_is_whole_word_and_recursion_safe() {
+        // Whole-word rename of the entry fn + its self-calls; leaves lookalikes alone.
+        let src = "fn fib(n: i64) -> i64 { if n < 2 { return n; } return fib(n - 1) + fib(n - 2); }";
+        let got = normalize_entry_fn(src, "f");
+        assert_eq!(
+            got,
+            "fn f(n: i64) -> i64 { if n < 2 { return n; } return f(n - 1) + f(n - 2); }"
+        );
+        // A variable that merely CONTAINS the entry name (`ab` inside `abc`) is left
+        // alone; only the whole-word entry fn is renamed.
+        assert_eq!(normalize_entry_fn("fn ab(abc: i64) -> i64 { return abc + 1; }", "f"),
+                   "fn f(abc: i64) -> i64 { return abc + 1; }");
     }
 
     #[test]

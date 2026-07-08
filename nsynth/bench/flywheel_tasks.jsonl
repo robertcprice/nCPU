@@ -1,0 +1,5 @@
+{"name":"collatz_steps","examples":[{"in":[1],"out":0},{"in":[2],"out":1},{"in":[3],"out":7},{"in":[4],"out":2},{"in":[5],"out":5},{"in":[6],"out":8},{"in":[7],"out":16},{"in":[8],"out":3}]}
+{"name":"nth_prime","examples":[{"in":[1],"out":2},{"in":[2],"out":3},{"in":[3],"out":5},{"in":[4],"out":7},{"in":[5],"out":11},{"in":[6],"out":13},{"in":[7],"out":17},{"in":[8],"out":19}]}
+{"name":"prime_after","examples":[{"in":[2],"out":3},{"in":[7],"out":11},{"in":[10],"out":11},{"in":[13],"out":17},{"in":[14],"out":17},{"in":[20],"out":23},{"in":[1],"out":2},{"in":[100],"out":101}]}
+{"name":"nth_composite","examples":[{"in":[1],"out":4},{"in":[2],"out":6},{"in":[3],"out":8},{"in":[4],"out":9},{"in":[5],"out":10},{"in":[6],"out":12},{"in":[7],"out":14},{"in":[8],"out":15}]}
+{"name":"collatz_max","examples":[{"in":[1],"out":1},{"in":[2],"out":2},{"in":[3],"out":16},{"in":[4],"out":4},{"in":[5],"out":16},{"in":[6],"out":16},{"in":[7],"out":52},{"in":[8],"out":8}]}
