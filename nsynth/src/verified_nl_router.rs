@@ -1743,6 +1743,14 @@ mod tests {
                 vec![av(&[1, 2, 9])],
                 iv(2),
             ),
+            // list_min coincides with min-except-last when the min is not the last
+            // element; wrong once it is ([5,3,1] -> 3 vs 1). min_except_last resolves it.
+            (
+                "the smallest element except the last in a list",
+                vec![ex(vec![av(&[1, 5, 9])], iv(1)), ex(vec![av(&[2, 8, 3])], iv(2)), ex(vec![av(&[4, 6, 7])], iv(4))],
+                vec![av(&[5, 3, 1])],
+                iv(3),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
