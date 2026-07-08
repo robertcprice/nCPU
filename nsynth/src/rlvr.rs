@@ -209,18 +209,42 @@ fn examples_problem(examples: Vec<Example>, holdouts: Vec<Example>) -> Problem {
     }
 }
 
-/// Rename a program's entry function (and any self-recursive calls to it) to
-/// `target`, so a verifier that invokes the entry by a fixed name can run a
-/// program the model named arbitrarily. Whole-word match only — never touches a
-/// variable/substring that merely contains the name. No-op if the name already
-/// matches or no `fn <name>` is found.
+/// Rename a program's ENTRY function (and any self-recursive calls to it) to
+/// `target`, so a verifier that invokes the entry by a fixed name can run a program
+/// the model named arbitrarily. Whole-word match only — never touches a
+/// variable/substring that merely contains the name.
+///
+/// The entry is taken as the LAST `fn <ident>(` definition, not the first: a model
+/// that (against the one-function instruction) emits HELPER functions puts them
+/// BEFORE the entry, so the first `fn ` is often a helper — renaming that would
+/// leave the real entry (the one the verifier calls) untouched and silently verify
+/// the helper. Renaming the entry's whole-word name is safe for helpers: they have
+/// different names, so their definitions and calls-to-them are never rewritten.
+/// No-op if the entry name already matches `target` or no `fn <ident>(` is found.
+///
+/// Soundness: this only changes what the verifier can FIND/RUN. It cannot make a
+/// semantically-wrong program pass the example check — the SAME renamed artifact is
+/// what strict-verify executes and what is returned, so any pass is a true statement
+/// about that artifact. A misfire (e.g. the rare case of the name appearing inside a
+/// string literal) can only corrupt behavior into a FALSE REFUSAL, never a false
+/// accept.
 fn normalize_entry_fn(code: &str, target: &str) -> String {
-    let Some((_, rest)) = code.split_once("fn ") else { return code.to_string() };
-    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    // Find the LAST `fn <ident>(` — the entry when helpers precede it.
+    let mut name = String::new();
+    let mut search = 0;
+    while let Some(rel) = code[search..].find("fn ") {
+        let at = search + rel + 3; // char index just past "fn "
+        let cand: String = code[at..].chars().take_while(|c| is_ident(*c)).collect();
+        let after = &code[at + cand.len()..];
+        if !cand.is_empty() && after.trim_start().starts_with('(') {
+            name = cand; // a real definition; keep the last one seen
+        }
+        search = at;
+    }
     if name.is_empty() || name == target {
         return code.to_string();
     }
-    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::with_capacity(code.len());
     let mut idx = 0;
     while let Some(pos) = code[idx..].find(&name) {
@@ -353,6 +377,22 @@ mod tests {
         // alone; only the whole-word entry fn is renamed.
         assert_eq!(normalize_entry_fn("fn ab(abc: i64) -> i64 { return abc + 1; }", "f"),
                    "fn f(abc: i64) -> i64 { return abc + 1; }");
+    }
+
+    #[test]
+    fn normalize_entry_fn_targets_entry_not_leading_helper() {
+        // Regression: a model that emits a HELPER before the entry must have the
+        // ENTRY (last def) renamed to what the verifier calls — not the helper, which
+        // would silently verify the wrong function. Helper name + its call site stay.
+        let src = "fn helper(x: i64) -> i64 { return x * 2; } \
+                   fn compute(n: i64) -> i64 { return helper(n) + 1; }";
+        let got = normalize_entry_fn(src, "f");
+        assert_eq!(
+            got,
+            "fn helper(x: i64) -> i64 { return x * 2; } \
+             fn f(n: i64) -> i64 { return helper(n) + 1; }",
+            "entry (last fn) renamed, helper + its call untouched"
+        );
     }
 
     #[test]

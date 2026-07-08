@@ -5,7 +5,14 @@
 //! in a FRESH process, with NO model configured, load that store and solve each
 //! task MODEL-OFF — a `library-learned:` method proves the engine permanently kept
 //! the lesson on disk. try_learned RE-verifies each op against the task's own
-//! examples before firing, so a hit is also a correctness check, never a blind load.
+//! examples before firing, so a hit is an EXAMPLE-CONSISTENCY check (reproduces every
+//! listed example), never a blind load.
+//!
+//! Read the counts precisely: `RECALLED`/`missed` measure EXAMPLE-REPRODUCTION, not
+//! proven correctness of the intended function — an op fitting under-determined
+//! examples but computing the wrong function is still bucketed recalled/other, not
+//! missed. `solved-otherwise` is the engine's own (possibly overfit) non-distilled
+//! solve, shown for contrast, not certified correct.
 //!
 //! Usage: NSYNTH_LEARNED_OPS_PATH=<store> flywheel_recall <tasks.jsonl>
 //! (do NOT set NSYNTH_LOCAL_LLM_URL — the point is model-free recall.)

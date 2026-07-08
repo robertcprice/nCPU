@@ -3,11 +3,20 @@
 //! For each task the MODEL-FREE engine cannot synthesize, the served model (Qwen)
 //! proposes a program; it is accepted ONLY if it reproduces every example incl. the
 //! HELD-OUT ones (the examples-only oracle — a fit-to-seed hallucination fails them)
-//! AND passes rlvr strict-verify; the verified program is then DISTILLED into the
-//! learned store (record_proposed_op). Re-running the engine MODEL-OFF then solves
-//! the same task via `library-learned` — the model taught it once, the engine keeps
-//! it, model-free, forever. Never-wrong: every distilled op is held-out-verified,
-//! and try_learned RE-verifies against the task's examples before it can fire.
+//! AND passes the `verify_problem_code_strict` robustness floor; the verified
+//! program is then DISTILLED into the learned store (record_proposed_op). Re-running
+//! the engine MODEL-OFF then solves the same task via `library-learned` — the model
+//! taught it once, the engine keeps it, model-free, forever.
+//!
+//! SOUNDNESS — read precisely: the guarantee is EXAMPLE-CONSISTENCY, not absolute
+//! correctness. Every distilled op reproduces all examples incl. the 2 genuinely
+//! held-out, and `try_learned` RE-verifies against a task's own examples before it
+//! can fire — so the store can never emit an example-INCONSISTENT answer. It is NOT
+//! a proof of the intended function: an op under-determined by N examples can be
+//! distilled and later fire on a DIFFERENT task whose few examples it coincidentally
+//! reproduces (a confident intent-wrong answer). This is the SAME examples-only
+//! under-determination limit as the hand-written library's behaviour-match, held to
+//! example-consistency by the re-verify — distillation widens reach, not the oracle.
 //!
 //! Measurement hygiene: the BASELINE phase runs with the learned store DISABLED so a
 //! solver auto-record (maybe_record_learned) cannot pollute it — after teaching, the
