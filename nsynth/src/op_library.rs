@@ -1081,6 +1081,13 @@ pub const OPS: &[LibOp] = &[
     // signed a-b (coincides when a>=b, wrong on a<b: |2-10|=8 not -2). Named op fixes.
     LibOp { name: "abs_difference", arity: 2, mog:
 "fn abs_difference(a: i64, b: i64) -> i64 {\n    d: i64 = a - b;\n    if d < 0 {\n        d = 0 - d;\n    }\n    return d;\n}\n" },
+    // SIGNED difference a - b. abs_difference coincides whenever a >= b but ships |a-b| when a < b
+    // ([2,9] -> signed -7 vs abs 7). The bare 'difference between two numbers' names only
+    // 'difference' (coverage 1/1 = 1.0), out-ranking abs_difference (matches 'difference' only ->
+    // 1/2 = 0.5) on that prompt; the 'absolute difference' prompt still adds the 'abs' token so
+    // abs_difference wins there on content. arity 2, so it never competes with array prompts.
+    LibOp { name: "difference", arity: 2, mog:
+"fn difference(a: i64, b: i64) -> i64 {\n    return a - b;\n}\n" },
     // Average of two. tier-3 synth overfit degenerate examples (all averaging the same
     // constant) to that constant; the named op resolves it before synthesis.
     LibOp { name: "average_two", arity: 2, mog:

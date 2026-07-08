@@ -1866,6 +1866,15 @@ mod tests {
                 vec![av(&[3, -8])],
                 iv(8),
             ),
+            // SIGNED difference a-b: abs_difference coincides when a >= b, wrong on a < b
+            // ([2,9] -> a-b = -7 vs |a-b| = 7). The single-token 'difference' op out-ranks it on
+            // the bare prompt (coverage 1.0 vs 0.5).
+            (
+                "the difference between two numbers",
+                vec![ex(vec![iv(5), iv(2)], iv(3)), ex(vec![iv(9), iv(4)], iv(5)), ex(vec![iv(8), iv(1)], iv(7))],
+                vec![iv(2), iv(9)],
+                iv(-7),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
