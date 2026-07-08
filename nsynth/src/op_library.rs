@@ -1484,13 +1484,16 @@ mod tests {
     #[test]
     fn learned_op_does_not_false_accept() {
         let wrong = "fn f(n: i64) -> i64 {\n    return n + 1;\n}\n";
+        // A random, non-generalizing mapping that NO library op (nor the wrong learned
+        // op) reproduces — so try_library must return None. (Deliberately not x^2 etc.,
+        // which real library ops now solve.)
         let task = problem_with(
-            "square_task",
-            "fn square_task(n: i64) -> i64",
+            "arbitrary_task",
+            "fn arbitrary_task(n: i64) -> i64",
             vec![
-                (vec![Value::Int(2)], Value::Int(4)),
-                (vec![Value::Int(3)], Value::Int(9)),
-                (vec![Value::Int(4)], Value::Int(16)),
+                (vec![Value::Int(2)], Value::Int(100)),
+                (vec![Value::Int(3)], Value::Int(7)),
+                (vec![Value::Int(4)], Value::Int(55)),
             ],
         );
         learned_store()
