@@ -307,6 +307,11 @@ pub const OPS: &[LibOp] = &[
     // of the even numbers" and it refused. Name tier resolves it directly now.
     LibOp { name: "sum_evens", arity: 1, mog:
 "fn sum_evens(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
+    // Sum of the SQUARES of the even numbers (filter-even + map-square + reduce-sum in
+    // one pass). Closes the hard 'sum of the squares of the even numbers' refusal; no
+    // coincidence (sum_evens gives 6 and sum_squares 30 on [1,2,3,4], neither is 20).
+    LibOp { name: "sum_even_squares", arity: 1, mog:
+"fn sum_even_squares(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            s = s + e * e;\n        }\n    }\n    return s;\n}\n" },
     // Sum of the ODD numbers. Coincides with array_sum on all-odd inputs; array_sum
     // was shipped (via combinator) and is wrong when an even is present ([2,3] -> odd
     // sum 3, array_sum 5).
