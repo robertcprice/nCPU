@@ -394,6 +394,15 @@ pub const OPS: &[LibOp] = &[
     // the distinguishing gate refuses when the examples can't tell them apart.
     LibOp { name: "array_sum", arity: 1, mog:
 "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n" },
+    // Sum of all elements except the LARGEST (total - max). array_sum coincides when the
+    // max is 0 (dropping it changes nothing); wrong once max != 0 ([2,3,4] -> 5, sum 9).
+    // 'sum' + 'except' + 'largest' out-cover array_sum ('sum' only).
+    LibOp { name: "sum_except_largest", arity: 1, mog:
+"fn sum_except_largest(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    m: i64 = arr[0];\n    for e in arr {\n        total = total + e;\n        if e > m {\n            m = e;\n        }\n    }\n    return total - m;\n}\n" },
+    // Sum of all elements except the SMALLEST (total - min). Companion; out-covers
+    // array_sum the same way.
+    LibOp { name: "sum_except_smallest", arity: 1, mog:
+"fn sum_except_smallest(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    m: i64 = arr[0];\n    for e in arr {\n        total = total + e;\n        if e < m {\n            m = e;\n        }\n    }\n    return total - m;\n}\n" },
     // Sum of all elements except the last. list_max (matching only the container noun
     // 'list') coincided with this on examples where max == sum-of-all-but-last, shipping
     // wrong on [9,1,2] (sum-except-last 10, list_max 9). 'sum' + 'except' + 'last' name it.

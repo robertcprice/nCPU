@@ -1751,6 +1751,15 @@ mod tests {
                 vec![av(&[5, 3, 1])],
                 iv(3),
             ),
+            // array_sum coincides with sum-except-largest when the max is 0 (dropping it
+            // changes nothing); wrong once max != 0 ([2,3,4] -> 5 vs 9). sum_except_largest
+            // out-covers array_sum and resolves it.
+            (
+                "the sum of all elements except the largest in a list",
+                vec![ex(vec![av(&[-1, -2, 0])], iv(-3)), ex(vec![av(&[0, -4])], iv(-4)), ex(vec![av(&[-3, 0, -1])], iv(-4))],
+                vec![av(&[2, 3, 4])],
+                iv(5),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
