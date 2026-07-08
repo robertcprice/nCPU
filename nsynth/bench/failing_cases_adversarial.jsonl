@@ -34,3 +34,4 @@
 {"id":1332,"category":"string","hardness":"medium","fn":"all_letters","text":"whether a string contains only letters","examples":[{"in":["abc"],"out":1},{"in":["xyz"],"out":1},{"in":["1bc"],"out":0},{"in":["9yz"],"out":0},{"in":["ab1"],"out":0}]}
 {"id":1333,"category":"composition","hardness":"hard","fn":"sum_is_positive","text":"whether the sum of a list is positive","examples":[{"in":[[-5,10]],"out":1},{"in":[[1,2]],"out":1},{"in":[[-8,-1]],"out":0},{"in":[[3,-10]],"out":0}]}
 {"id":1334,"category":"string","hardness":"medium","fn":"ends_with_digit","text":"whether a string ends with a digit","examples":[{"in":["ab1"],"out":1},{"in":["xy9"],"out":1},{"in":["abc"],"out":0},{"in":["xyz"],"out":0},{"in":["a1b"],"out":0}]}
+{"id":1335,"category":"int","hardness":"hard","fn":"odd_prime","text":"whether a number is prime and odd","examples":[{"in":[3],"out":1},{"in":[2],"out":0},{"in":[4],"out":0},{"in":[7],"out":1},{"in":[9],"out":0}]}

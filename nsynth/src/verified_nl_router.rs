@@ -1963,6 +1963,15 @@ mod tests {
                 vec![iv(4)],
                 iv(0),
             ),
+            // is_prime coincides with the CONJUNCTION 'prime and odd' whenever the examples omit
+            // the sole even prime (2): every example prime is odd. Wrong on 2 (prime yet even).
+            // odd_prime makes the two passers diverge on 2 so the ambiguous set refuses.
+            (
+                "whether a number is prime and odd",
+                vec![ex(vec![iv(3)], iv(1)), ex(vec![iv(5)], iv(1)), ex(vec![iv(4)], iv(0)), ex(vec![iv(9)], iv(0))],
+                vec![iv(2)],
+                iv(0),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

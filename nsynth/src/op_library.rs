@@ -248,6 +248,13 @@ pub const OPS: &[LibOp] = &[
     // ── number theory (1-arg i64) ──────────────────────────────────────────
     LibOp { name: "is_prime", arity: 1, mog:
 "fn is_prime(n: i64) -> i64 {\n    if n < 2 {\n        return 0;\n    }\n    d: i64 = 2;\n    while d * d <= n {\n        if n % d == 0 {\n            return 0;\n        }\n        d = d + 1;\n    }\n    return 1;\n}\n" },
+    // Whether n is an ODD PRIME (prime AND odd). is_prime alone coincides with this conjunction
+    // whenever the examples omit the sole even prime (2): every example prime is odd, so is_prime
+    // reproduces, but is confidently wrong on 2 (prime yet even -> 0). Name tokens 'odd'+'prime'
+    // out-cover is_prime; on the ambiguous example set is_prime and odd_prime both pass and diverge
+    // on a fresh 2, so the gate refuses; a distinguishing example (2 -> 0) resolves odd_prime.
+    LibOp { name: "odd_prime", arity: 1, mog:
+"fn odd_prime(n: i64) -> i64 {\n    if n < 2 {\n        return 0;\n    }\n    if n % 2 == 0 {\n        return 0;\n    }\n    d: i64 = 3;\n    while d * d <= n {\n        if n % d == 0 {\n            return 0;\n        }\n        d = d + 1;\n    }\n    return 1;\n}\n" },
     LibOp { name: "factorial", arity: 1, mog:
 "fn factorial(n: i64) -> i64 {\n    acc: i64 = 1;\n    i: i64 = 2;\n    while i <= n {\n        acc = acc * i;\n        i = i + 1;\n    }\n    return acc;\n}\n" },
     LibOp { name: "sum_of_digits", arity: 1, mog:
