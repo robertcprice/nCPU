@@ -15,3 +15,5 @@
 {"id":1313,"category":"array","hardness":"medium","fn":"absolute_last","text":"the absolute value of the last element of a list","examples":[{"in":[[3,-8]],"out":8},{"in":[[5,2]],"out":2},{"in":[[1,9,-4]],"out":4}]}
 {"id":1314,"category":"array","hardness":"medium","fn":"absolute_product","text":"the absolute value of the product of a list","examples":[{"in":[[-2,3]],"out":6},{"in":[[2,2]],"out":4},{"in":[[-1,-5]],"out":5},{"in":[[4]],"out":4}]}
 {"id":1315,"category":"array","hardness":"medium","fn":"max_even","text":"the largest even number in a list","examples":[{"in":[[3,4,6,7]],"out":6},{"in":[[2,9]],"out":2},{"in":[[5,8,3]],"out":8}]}
+{"id":1316,"category":"composition","hardness":"hard","fn":"sum_odds","text":"the sum of the odd numbers in a list","examples":[{"in":[[1,2,3]],"out":4},{"in":[[4,5]],"out":5},{"in":[[2,7,1]],"out":8},{"in":[[6,3,4,1]],"out":4}]}
+{"id":1317,"category":"composition","hardness":"hard","fn":"product_evens","text":"the product of the even numbers in a list","examples":[{"in":[[2,3,4]],"out":8},{"in":[[5,6]],"out":6},{"in":[[1,2,2]],"out":4},{"in":[[3,2,5,4]],"out":8}]}
