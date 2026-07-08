@@ -373,6 +373,11 @@ pub const OPS: &[LibOp] = &[
     // the distinguishing gate refuses when the examples can't tell them apart.
     LibOp { name: "array_sum", arity: 1, mog:
 "fn array_sum(arr: [i64]) -> i64 {\n    total: i64 = 0;\n    for item in arr {\n        total = total + item;\n    }\n    return total;\n}\n" },
+    // Sum of ABSOLUTE values. Coincides with array_sum on all-nonnegative input; array_sum
+    // is wrong once a negative is present ([-3,-4] -> abs sum 7, array_sum -7). Name tokens
+    // 'sum' + 'absolute' + 'value' resolve it.
+    LibOp { name: "sum_absolute_values", arity: 1, mog:
+"fn sum_absolute_values(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        a: i64 = e;\n        if a < 0 {\n            a = 0 - a;\n        }\n        s = s + a;\n    }\n    return s;\n}\n" },
     // Sum of ONLY the positive numbers. Coincides with array_sum on all-positive
     // inputs; the general array_sum was shipped (via a coincidental composition) and
     // is wrong on negatives (sum of positives of [-3,5] = 5, not 2). With this op the
