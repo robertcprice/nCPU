@@ -866,6 +866,11 @@ pub const OPS: &[LibOp] = &[
     // matches 'absolute' (a content word), out-covering list_max's container-noun 'list'.
     LibOp { name: "max_absolute_value", arity: 1, mog:
 "fn max_absolute_value(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    for e in arr {\n        a: i64 = e;\n        if a < 0 {\n            a = 0 - a;\n        }\n        if a > m {\n            m = a;\n        }\n    }\n    return m;\n}\n" },
+    // Smallest ABSOLUTE value (companion). list_min coincides on all-nonnegative input;
+    // wrong once a negative dominates ([-3,-8,1] -> min-abs 1, list_min -8). 'absolute'
+    // out-covers list_min's container-noun 'list'.
+    LibOp { name: "min_absolute_value", arity: 1, mog:
+"fn min_absolute_value(arr: [i64]) -> i64 {\n    m: i64 = arr[0];\n    if m < 0 {\n        m = 0 - m;\n    }\n    for e in arr {\n        a: i64 = e;\n        if a < 0 {\n            a = 0 - a;\n        }\n        if a < m {\n            m = a;\n        }\n    }\n    return m;\n}\n" },
     // Second-largest value = the second element in descending order (equal values kept,
     // so [8,8,3] -> 8). One pass tracking the top two. Closes the common 'second largest
     // value in a list' refusal (list_max never reproduces it: max != second on any

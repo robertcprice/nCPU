@@ -1793,6 +1793,14 @@ mod tests {
                 vec![av(&[-3, -8, 1])],
                 iv(8),
             ),
+            // list_min coincides with the min ABSOLUTE value on all-nonnegative input;
+            // wrong once a negative dominates ([-3,-8,1] -> 1 vs -8). min_absolute_value.
+            (
+                "the minimum absolute value in a list",
+                vec![ex(vec![av(&[3, 5, 2])], iv(2)), ex(vec![av(&[1, 9])], iv(1)), ex(vec![av(&[4, 6])], iv(4))],
+                vec![av(&[-3, -8, 1])],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
