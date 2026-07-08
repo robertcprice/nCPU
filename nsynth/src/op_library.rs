@@ -307,6 +307,16 @@ pub const OPS: &[LibOp] = &[
     // of the even numbers" and it refused. Name tier resolves it directly now.
     LibOp { name: "sum_evens", arity: 1, mog:
 "fn sum_evens(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e % 2 == 0 {\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
+    // Sum of the ODD numbers. Coincides with array_sum on all-odd inputs; array_sum
+    // was shipped (via combinator) and is wrong when an even is present ([2,3] -> odd
+    // sum 3, array_sum 5).
+    LibOp { name: "sum_odds", arity: 1, mog:
+"fn sum_odds(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            s = s + e;\n        }\n    }\n    return s;\n}\n" },
+    // Smallest POSITIVE number. Coincides with list_min on all-positive inputs;
+    // list_min was shipped and is wrong when a negative is present ([-4,3,1] -> min
+    // positive 1, list_min -4).
+    LibOp { name: "min_positive", arity: 1, mog:
+"fn min_positive(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e > 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e < m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
     LibOp { name: "count_odds", arity: 1, mog:
 "fn count_odds(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_positives", arity: 1, mog:
