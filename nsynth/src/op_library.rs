@@ -401,6 +401,10 @@ pub const OPS: &[LibOp] = &[
 "fn array_range(arr: [i64]) -> i64 {\n    mx: i64 = arr[0];\n    mn: i64 = arr[0];\n    for e in arr {\n        if e > mx {\n            mx = e;\n        }\n        if e < mn {\n            mn = e;\n        }\n    }\n    return mx - mn;\n}\n" },
     LibOp { name: "count_negatives", arity: 1, mog:
 "fn count_negatives(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Count of zeros. Closes the 'how many zeros in a list' refusal (no coincidence:
+    // length gives the whole size, count_negatives gives 0 on non-negative input).
+    LibOp { name: "count_zeros", arity: 1, mog:
+"fn count_zeros(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e == 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     // ── batch 3: strings (1-arg string). Now expressible after the char-level
     // language extension (for-ch, char literals, .chars/.is_*/.ord/ordering). A
     // string op run on a non-string input errors -> reproduces nothing -> skipped.
