@@ -54,12 +54,21 @@ pub fn is_examples_only(problem: &Problem) -> bool {
 /// can burn ~30s (a search STAGE runs to completion internally, past the between-
 /// stages `NSYNTH_SOLVE_BUDGET_MS` check) — so N examples = N×30s, e.g. a measured
 /// 250s stall on nth_composite that froze the model-tier front door
-/// (`verified_nl_router`→rlvr verify→consensus) for minutes. Bounding gathering by
-/// wall clock is SOUND: fewer corroborators can only reduce a would-be `Verified`
-/// to `NoConsensus` (→ Tentative) or miss an `Ambiguous`, never MANUFACTURE a false
-/// `Verified` — the gate can only get MORE conservative, never confidently wrong.
-/// Default 20s (override `NSYNTH_CONSENSUS_BUDGET_MS`); the cheap enumerative
-/// candidate (a) always runs first since it is the usual fast corroborator.
+/// (`verified_nl_router`→rlvr verify→consensus) for minutes. Default 20s (override
+/// `NSYNTH_CONSENSUS_BUDGET_MS`).
+///
+/// SOUNDNESS of truncating the gather (this is subtle — an earlier version got it
+/// WRONG): dropping the SUFFIX of leave-one-out candidates is NOT automatically
+/// "more conservative". `Verified` requires ALL gathered candidates to agree, while
+/// `Ambiguous` fires on the FIRST disagreement. If the one disagreeing witness sits
+/// in the dropped suffix while an agreeing candidate was gathered first, the full
+/// run would be `Ambiguous` (→ Refused) but the truncated run would be `Verified`
+/// (→ confident accept) — an `Ambiguous`→`Verified` FLIP, i.e. a confidently-wrong
+/// upgrade at the front door. So truncation is made safe STRUCTURALLY: when the
+/// gather broke early, the gate may NOT return `Verified` — it downgrades to
+/// `NoConsensus` (→ Tentative). `Ambiguous` still stands (a disagreement actually
+/// observed is real regardless of truncation). Now truncation can only ever make
+/// the verdict MORE conservative, never manufacture a false `Verified`.
 fn consensus_budget_ms() -> u128 {
     std::env::var("NSYNTH_CONSENSUS_BUDGET_MS")
         .ok()
@@ -68,11 +77,18 @@ fn consensus_budget_ms() -> u128 {
 }
 
 /// Gather INDEPENDENT candidates that also satisfy every visible example and
-/// differ textually from the accepted candidate.
-fn independent_candidates(problem: &Problem, accepted_code: &str) -> Vec<String> {
+/// differ textually from the accepted candidate. Returns `(candidates, truncated)`
+/// where `truncated` is true iff the leave-one-out pass stopped EARLY on the
+/// wall-clock budget (so the candidate set is a possibly-incomplete PREFIX — the
+/// caller must not treat unanimous agreement among a truncated set as `Verified`).
+fn independent_candidates(
+    problem: &Problem,
+    accepted_code: &str,
+    budget_ms: u128,
+) -> (Vec<String>, bool) {
     let mut raw: Vec<String> = Vec::new();
     let start = std::time::Instant::now();
-    let budget = consensus_budget_ms();
+    let mut truncated = false;
 
     // (a) bottom-up enumerative engine.
     if let Some(r) = crate::enumerative::synthesize_enumerative(problem) {
@@ -88,7 +104,11 @@ fn independent_candidates(problem: &Problem, accepted_code: &str) -> Vec<String>
     // budget + one-solve overshoot — still bounded, unlike the unbounded N×solve.
     if problem.examples.len() >= 2 {
         for omit in 0..problem.examples.len() {
-            if start.elapsed().as_millis() > budget {
+            if start.elapsed().as_millis() > budget_ms {
+                // Stopped early: the remaining omit subsets (which might contain the
+                // sole disagreeing witness) were NOT examined. Flag it so the caller
+                // refuses to certify `Verified` on this incomplete set.
+                truncated = true;
                 break;
             }
             let mut sub = problem.clone();
@@ -118,12 +138,22 @@ fn independent_candidates(problem: &Problem, accepted_code: &str) -> Vec<String>
             out.push(code);
         }
     }
-    out
+    (out, truncated)
 }
 
 /// Run the differential-consensus gate. See the module docs for the verdicts.
 pub fn differential_consensus(problem: &Problem, accepted_code: &str) -> ConsensusVerdict {
-    let independents = independent_candidates(problem, accepted_code);
+    differential_consensus_with_budget(problem, accepted_code, consensus_budget_ms())
+}
+
+/// Core of [`differential_consensus`] with an explicit gather budget so the
+/// truncation-safety invariant is unit-testable without env/timing races.
+fn differential_consensus_with_budget(
+    problem: &Problem,
+    accepted_code: &str,
+    budget_ms: u128,
+) -> ConsensusVerdict {
+    let (independents, truncated) = independent_candidates(problem, accepted_code, budget_ms);
     if independents.is_empty() {
         return ConsensusVerdict::NoConsensus;
     }
@@ -145,6 +175,8 @@ pub fn differential_consensus(problem: &Problem, accepted_code: &str) -> Consens
                 Ok(other) => {
                     compared_here = true;
                     if !outputs_equal(&base, &other) {
+                        // A real observed disagreement — sound regardless of whether
+                        // the gather was truncated.
                         return ConsensusVerdict::Ambiguous {
                             witness: inputs.clone(),
                         };
@@ -163,6 +195,14 @@ pub fn differential_consensus(problem: &Problem, accepted_code: &str) -> Consens
     }
 
     if checked == 0 {
+        return ConsensusVerdict::NoConsensus;
+    }
+    // TRUNCATION SAFETY: unanimous agreement among a PREFIX of the candidate set is
+    // not proof of unanimity over the full set — the dropped suffix may hold the one
+    // disagreeing witness. Refuse to certify `Verified` here; downgrade to
+    // `NoConsensus` (→ Tentative) so a truncated gather can never manufacture a
+    // confident accept. See `consensus_budget_ms` docs.
+    if truncated {
         return ConsensusVerdict::NoConsensus;
     }
     ConsensusVerdict::Verified {
@@ -225,6 +265,37 @@ mod tests {
             matches!(verdict, ConsensusVerdict::Verified { .. }),
             "a determined affine spec with a correct candidate must reach \
              consensus, got {verdict:?}"
+        );
+    }
+
+    /// TRUNCATION SAFETY (the never-wrong invariant an earlier version broke): a
+    /// gather cut short by the wall-clock budget must NEVER certify `Verified`, else
+    /// dropping the sole disagreeing witness while keeping an agreeing candidate
+    /// flips a would-be `Ambiguous` into a confident `Verified` (a confidently-wrong
+    /// upgrade at the front door). Force truncation deterministically with budget=0
+    /// (the leave-one-out loop breaks on the first iteration) and assert the verdict
+    /// is never `Verified` — on the SAME determined-affine spec that IS `Verified`
+    /// with a full (non-truncated) budget.
+    #[test]
+    fn truncated_gather_never_certifies_verified() {
+        let problem = affine_problem(
+            "consensus_trunc_v0",
+            &[(1, 2), (2, 3), (3, 4), (4, 5), (5, 6)],
+        );
+        let correct = "fn consensus_trunc_v0(a: i64) -> i64 { return a + 1; }";
+        // Full budget → Verified (baseline: the spec is determined + corroborated).
+        assert!(
+            matches!(
+                differential_consensus_with_budget(&problem, correct, u128::MAX),
+                ConsensusVerdict::Verified { .. }
+            ),
+            "non-truncated gather should still Verify a determined affine"
+        );
+        // Budget 0 → gather truncates immediately → MUST NOT be Verified.
+        let truncated = differential_consensus_with_budget(&problem, correct, 0);
+        assert!(
+            !matches!(truncated, ConsensusVerdict::Verified { .. }),
+            "a truncated gather must never certify Verified, got {truncated:?}"
         );
     }
 
