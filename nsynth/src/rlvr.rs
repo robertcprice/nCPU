@@ -250,7 +250,14 @@ fn normalize_entry_fn(code: &str, target: &str) -> String {
     while let Some(pos) = code[idx..].find(&name) {
         let at = idx + pos;
         let before_ok = at == 0 || !code[..at].chars().next_back().is_some_and(is_ident);
-        let after_ok = !code[at + name.len()..].chars().next().is_some_and(is_ident);
+        let after = &code[at + name.len()..];
+        // Rename ONLY at a definition or call site: the name as a whole word
+        // immediately followed (after optional whitespace) by `(`. A function name
+        // only ever appears that way in `fn NAME(` and `NAME(args)`, so this rewrites
+        // exactly the def + self-calls while leaving the name INSIDE a string literal
+        // or comment untouched (those aren't followed by `(`) — avoiding corrupting a
+        // string constant, which would silently change the program's behavior.
+        let after_ok = !after.chars().next().is_some_and(is_ident) && after.trim_start().starts_with('(');
         out.push_str(&code[idx..at]);
         out.push_str(if before_ok && after_ok { target } else { &name });
         idx = at + name.len();
@@ -377,6 +384,13 @@ mod tests {
         // alone; only the whole-word entry fn is renamed.
         assert_eq!(normalize_entry_fn("fn ab(abc: i64) -> i64 { return abc + 1; }", "f"),
                    "fn f(abc: i64) -> i64 { return abc + 1; }");
+        // The entry name INSIDE a string literal (not followed by `(`) is preserved —
+        // renaming only touches definition/call sites, so the string constant is not
+        // corrupted.
+        assert_eq!(
+            normalize_entry_fn("fn greet(x: i64) -> string { return \"greet\"; }", "f"),
+            "fn f(x: i64) -> string { return \"greet\"; }"
+        );
     }
 
     #[test]
