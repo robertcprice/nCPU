@@ -517,6 +517,10 @@ pub const OPS: &[LibOp] = &[
 "fn digit_product(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    p: i64 = 1;\n    while x > 0 {\n        p = p * (x % 10);\n        x = x / 10;\n    }\n    return p;\n}\n" },
     LibOp { name: "largest_digit", arity: 1, mog:
 "fn largest_digit(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    m: i64 = 0;\n    while x > 0 {\n        d: i64 = x % 10;\n        if d > m {\n            m = d;\n        }\n        x = x / 10;\n    }\n    return m;\n}\n" },
+    // The number of TRAILING ZEROS of a number (factors of 10). Closes a frontier gap (no lib op,
+    // so the prompt refused). 'trailing'+'zeros' name it directly.
+    LibOp { name: "trailing_zeros", arity: 1, mog:
+"fn trailing_zeros(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    if x == 0 {\n        return 0;\n    }\n    c: i64 = 0;\n    while x % 10 == 0 {\n        c = c + 1;\n        x = x / 10;\n    }\n    return c;\n}\n" },
     // The SMALLEST digit of a number. Without this op the prompt fell to the composition tier,
     // whose lone-chain path (route_composed returns a single reproducing chain UNGATED) shipped a
     // coincidental positional chain wrong on a fresh input (638 -> 2 vs 3). The named op resolves
@@ -993,6 +997,11 @@ pub const OPS: &[LibOp] = &[
     // 2+-distinct example).
     LibOp { name: "second_largest", arity: 1, mog:
 "fn second_largest(arr: [i64]) -> i64 {\n    first: i64 = arr[0];\n    second: i64 = arr[0];\n    i: i64 = 0;\n    for e in arr {\n        if i == 0 {\n            first = e;\n        } else {\n            if e > first {\n                second = first;\n                first = e;\n            } else {\n                if i == 1 {\n                    second = e;\n                } else {\n                    if e > second {\n                        second = e;\n                    }\n                }\n            }\n        }\n        i = i + 1;\n    }\n    return second;\n}\n" },
+    // The second-largest DISTINCT value = the largest element strictly less than the maximum.
+    // Differs from second_largest (which keeps duplicates, so [9,9,5] -> 9 vs distinct 5). Closes a
+    // frontier gap; 'second'+'largest'+'distinct' out-cover second_largest so both keep their prompt.
+    LibOp { name: "second_largest_distinct", arity: 1, mog:
+"fn second_largest_distinct(arr: [i64]) -> i64 {\n    first: i64 = arr[0];\n    for e in arr {\n        if e > first {\n            first = e;\n        }\n    }\n    found: i64 = 0;\n    second: i64 = first;\n    for e in arr {\n        if e < first {\n            if found == 0 {\n                second = e;\n                found = 1;\n            } else {\n                if e > second {\n                    second = e;\n                }\n            }\n        }\n    }\n    return second;\n}\n" },
     // Largest NEGATIVE number. Coincides with list_max on all-negative inputs; list_max
     // was shipped and is wrong when a positive is present ([-4,3,-1] -> largest negative
     // -1, list_max 3). Returns 0 when there is no negative (under-determined all-positive
