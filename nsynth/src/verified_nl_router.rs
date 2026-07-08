@@ -98,6 +98,53 @@ fn content_tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Emergent SYNONYM layer. A WordNet-derived coding-synonym graph
+/// (`bench/coding_synonyms.json`, embedded at build time) groups the lemmas a prompt
+/// might use for the same operation (total~sum, twice~two, arrange~sort, size~length).
+/// Keys are STEMMED so they line up with [`content_tokens`] output. This is used ONLY to
+/// decide whether a behaviour-matched op is "named" by the prompt — the op must STILL
+/// reproduce every example and clear the distinguishing gate, so the synonym graph widens
+/// VOCABULARY without touching the never-wrong contract. Fails closed to an empty map on any
+/// parse error (then behaviour reverts to literal-token naming only).
+fn synonym_group_of() -> &'static std::collections::HashMap<String, u32> {
+    static SYN: std::sync::OnceLock<std::collections::HashMap<String, u32>> =
+        std::sync::OnceLock::new();
+    SYN.get_or_init(|| {
+        let mut map = std::collections::HashMap::new();
+        let raw = include_str!("../bench/coding_synonyms.json");
+        if let Ok(groups) = serde_json::from_str::<Vec<Vec<String>>>(raw) {
+            for (gid, group) in groups.iter().enumerate() {
+                for lemma in group {
+                    for t in content_tokens(lemma) {
+                        map.entry(t).or_insert(gid as u32);
+                    }
+                }
+            }
+        }
+        map
+    })
+}
+
+/// True if the prompt uses a SYNONYM (per the coding-synonym graph) of one of the op's name
+/// tokens — i.e. the prompt effectively names the operation without a literal token match
+/// ("the total of a list" names `array_sum` via total~sum). Never a soundness relaxation on its
+/// own: only reached for an op that already reproduces the examples and passed the gate.
+fn op_named_via_synonym(prompt: &str, op: &LibOp) -> bool {
+    let syn = synonym_group_of();
+    if syn.is_empty() {
+        return false;
+    }
+    let name_groups: std::collections::HashSet<u32> =
+        content_tokens(op.name).iter().filter_map(|t| syn.get(t).copied()).collect();
+    if name_groups.is_empty() {
+        return false;
+    }
+    content_tokens(prompt)
+        .iter()
+        .filter_map(|t| syn.get(t).copied())
+        .any(|g| name_groups.contains(&g))
+}
+
 /// A confident route to a verified op, with the evidence for why.
 pub struct Route {
     pub op: &'static LibOp,
@@ -339,12 +386,14 @@ pub fn route_by_behavior(prompt: &str, examples: &[crate::benchmark::Example]) -
     if passing.len() > 1 && passers_disagree(&passing, examples) {
         return None;
     }
-    // Winner: prefer a passer the prompt actually names (provenance); else the first.
+    // Winner: prefer a passer the prompt actually names (provenance) — literally, else via the
+    // synonym graph (total~sum); else the first.
     let named: std::collections::HashSet<&str> =
         ranked_candidates(prompt).iter().map(|op| op.name).collect();
     let winner = *passing
         .iter()
         .find(|op| named.contains(op.name))
+        .or_else(|| passing.iter().find(|op| op_named_via_synonym(prompt, op)))
         .unwrap_or(&passing[0]);
     // SOLE-PASSER GUARD. When the winner is NOT name-matched (the prompt names no
     // operation this op performs), a behaviour match on a SCALAR/array output is a
@@ -353,7 +402,7 @@ pub fn route_by_behavior(prompt: &str, examples: &[crate::benchmark::Example]) -
     // intended op. Refuse. STRUCTURED output (Map/Struct -> "?") is kept: a frequency
     // map is structurally specific, so a behavioural match there (element_frequency
     // for "how many times each value appears") is trustworthy even un-named.
-    let winner_named = named.contains(winner.name);
+    let winner_named = named.contains(winner.name) || op_named_via_synonym(prompt, winner);
     let out_ty = examples
         .first()
         .map(|e| value_type_str(&e.expected))

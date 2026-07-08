@@ -576,6 +576,11 @@ pub const OPS: &[LibOp] = &[
 "fn to_lower(s: string) -> string {\n    return s.lower();\n}\n" },
     LibOp { name: "string_length", arity: 1, mog:
 "fn string_length(s: string) -> i64 {\n    return s.len;\n}\n" },
+    // The LENGTH (number of elements) of a list. No such op existed, so even canonical phrasings
+    // ('the number of elements in a list', 'the size of a list') refused. 'list'+'length' name it;
+    // the synonym layer maps size->length so 'the size of a list' resolves too.
+    LibOp { name: "list_length", arity: 1, mog:
+"fn list_length(arr: [i64]) -> i64 {\n    return arr.len;\n}\n" },
     // Count of DISTINCT characters. Coincides with string_length on all-unique strings;
     // string_length is wrong once a char repeats ("aab" -> 2 distinct, length 3).
     LibOp { name: "count_unique_chars", arity: 1, mog:

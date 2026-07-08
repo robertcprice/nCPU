@@ -1,0 +1,13 @@
+[
+  ["maximum", "max", "largest", "biggest", "greatest", "highest"],
+  ["minimum", "min", "smallest", "lowest", "least"],
+  ["sum", "total", "aggregate"],
+  ["length", "size"],
+  ["reverse", "flip", "invert"],
+  ["double", "twice", "two"],
+  ["product", "multiply", "multiplication"],
+  ["sort", "arrange", "order", "organize", "sorted"],
+  ["first", "initial", "leading", "foremost"],
+  ["average", "mean"],
+  ["count", "tally"]
+]

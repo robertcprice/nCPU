@@ -13,6 +13,6 @@
 {"id":4013,"category":"synonym-abs","hardness":"medium","fn":"abs","text":"the magnitude of a number","examples":[{"in":[-3],"out":3},{"in":[5],"out":5},{"in":[-10],"out":10},{"in":[-7],"out":7}]}
 {"id":4014,"category":"synonym-double","hardness":"medium","fn":"times_two","text":"twice a number","examples":[{"in":[3],"out":6},{"in":[5],"out":10},{"in":[0],"out":0},{"in":[9],"out":18}]}
 {"id":4015,"category":"synonym-double","hardness":"medium","fn":"times_two","text":"a number multiplied by two","examples":[{"in":[3],"out":6},{"in":[5],"out":10},{"in":[0],"out":0},{"in":[9],"out":18}]}
-{"id":4016,"category":"synonym-product","hardness":"medium","fn":"array_product","text":"multiply all the numbers in a list together","examples":[{"in":[[2,3]],"out":6},{"in":[[4,5]],"out":20},{"in":[[2,2,2]],"out":8},{"in":[[3,3]],"out":9}]}
-{"id":4017,"category":"synonym-sort","hardness":"medium","fn":"sort","text":"arrange a list in increasing order","examples":[{"in":[[3,1,2]],"out":[1,2,3]},{"in":[[5,4]],"out":[4,5]},{"in":[[9,1,5]],"out":[1,5,9]}]}
+{"id":4016,"category":"synonym-product","hardness":"medium","fn":"array_product","text":"multiply all the numbers in a list together","examples":[{"in":[[2,3]],"out":6},{"in":[[-4,5]],"out":-20},{"in":[[2,2,2]],"out":8},{"in":[[3,-3]],"out":-9},{"in":[[7]],"out":7}]}
+{"id":4017,"category":"synonym-sort","hardness":"medium","fn":"sort","text":"arrange a list in increasing order","examples":[{"in":[[3,1,2,1]],"out":[1,1,2,3]},{"in":[[5,4,4]],"out":[4,4,5]},{"in":[[9,1,5]],"out":[1,5,9]},{"in":[[2,2,1]],"out":[1,2,2]}]}
 {"id":4018,"category":"synonym-first","hardness":"medium","fn":"first","text":"the initial element of a list","examples":[{"in":[[7,1,2]],"out":7},{"in":[[5,9]],"out":5},{"in":[[3,4,5]],"out":3}]}
