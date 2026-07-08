@@ -32,3 +32,4 @@
 {"id":1330,"category":"int","hardness":"hard","fn":"armstrong_number","text":"whether a number is an armstrong number","examples":[{"in":[1],"out":1},{"in":[5],"out":1},{"in":[9],"out":1},{"in":[10],"out":0},{"in":[25],"out":0},{"in":[153],"out":1}]}
 {"id":1331,"category":"string","hardness":"medium","fn":"all_uppercase","text":"whether a string is all uppercase","examples":[{"in":["AB"],"out":1},{"in":["XY"],"out":1},{"in":["ab"],"out":0},{"in":["aB"],"out":0},{"in":["Ab"],"out":0}]}
 {"id":1332,"category":"string","hardness":"medium","fn":"all_letters","text":"whether a string contains only letters","examples":[{"in":["abc"],"out":1},{"in":["xyz"],"out":1},{"in":["1bc"],"out":0},{"in":["9yz"],"out":0},{"in":["ab1"],"out":0}]}
+{"id":1333,"category":"composition","hardness":"hard","fn":"sum_is_positive","text":"whether the sum of a list is positive","examples":[{"in":[[-5,10]],"out":1},{"in":[[1,2]],"out":1},{"in":[[-8,-1]],"out":0},{"in":[[3,-10]],"out":0}]}

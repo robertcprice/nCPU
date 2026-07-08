@@ -1912,6 +1912,16 @@ mod tests {
                 vec![Value::Str("ab1".into())],
                 iv(0),
             ),
+            // all_positive (every element positive) coincides with 'the sum is positive' across an
+            // example set where the two happen to agree, but is wrong once a large positive
+            // outweighs a negative ([-5,10] -> sum 5 > 0 => 1, all_positive 0). sum_is_positive is
+            // the real aggregate-then-predicate op.
+            (
+                "whether the sum of a list is positive",
+                vec![ex(vec![av(&[1, 2])], iv(1)), ex(vec![av(&[3, 4])], iv(1)), ex(vec![av(&[-5, -6])], iv(0)), ex(vec![av(&[-1, -2])], iv(0))],
+                vec![av(&[-5, 10])],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

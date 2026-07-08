@@ -769,6 +769,14 @@ pub const OPS: &[LibOp] = &[
     // token "positive" resolves it and it is distinct from all-nonzero (differs on 0/neg).
     LibOp { name: "all_positive", arity: 1, mog:
 "fn all_positive(arr: [i64]) -> i64 {\n    for e in arr {\n        if e <= 0 {\n            return 0;\n        }\n    }\n    return 1;\n}\n" },
+    // Whether the SUM of a list is positive. all_positive coincides whenever 'every element is
+    // positive' happens to match 'the sum is positive' across the examples, but is wrong once a
+    // large positive outweighs a negative ([-5,10] -> sum 5 > 0 => 1, but all_positive 0). Name
+    // tokens 'sum'+'positive' out-cover all_positive (matches only 'positive'), so the right
+    // aggregate-then-predicate op wins; sum_positives (the SUM of positives) keeps its own prompt
+    // (coverage 2/2 there vs this op's 2/3).
+    LibOp { name: "sum_is_positive", arity: 1, mog:
+"fn sum_is_positive(arr: [i64]) -> i64 {\n    s: i64 = 0;\n    for e in arr {\n        s = s + e;\n    }\n    if s > 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "first_duplicate", arity: 1, mog:
 "fn first_duplicate(arr: [i64]) -> i64 {\n    i: i64 = 0;\n    while i < arr.len {\n        j: i64 = 0;\n        while j < i {\n            if arr[j] == arr[i] {\n                return arr[i];\n            }\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    return 0 - 1;\n}\n" },
     LibOp { name: "most_frequent", arity: 1, mog:
