@@ -589,6 +589,12 @@ pub const OPS: &[LibOp] = &[
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:
 "fn list_max(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] > m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
+    // Largest NEGATIVE number. Coincides with list_max on all-negative inputs; list_max
+    // was shipped and is wrong when a positive is present ([-4,3,-1] -> largest negative
+    // -1, list_max 3). Returns 0 when there is no negative (under-determined all-positive
+    // examples then let the distinguishing gate refuse rather than mis-route to list_max).
+    LibOp { name: "max_negative", arity: 1, mog:
+"fn max_negative(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e < 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e > m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
     // fib_list(n) -> [fib_0 .. fib_n]. Every fibonacci-SEQUENCE task (iterative /
     // memoized / recursive / binet / cached) emits the SAME list, so try_library
     // matches them all via one `library:fib_list` — the sort pattern again.

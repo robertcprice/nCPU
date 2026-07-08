@@ -61,6 +61,21 @@ fn is_generic_type_token(t: &str) -> bool {
     matches!(t, "number" | "integer" | "value" | "element" | "item")
 }
 
+/// Domain / container TYPE nouns, for RANKING only (a superset of the candidacy set
+/// above). A match on one of these describes the KIND of data ("in a STRING", "of a
+/// LIST"), not the operation, so when two ops TIE on coverage the one matching a real
+/// CONTENT token ("VOWEL") must outrank the one matching only a container noun
+/// ("STRING") — `count_vowels` beats `string_length` for "number of vowels in a
+/// string". Kept separate from `is_generic_type_token` so candidacy is unaffected:
+/// `list_min`/`string_length`/`array_sum` stay candidates (their container token still
+/// counts toward `matched`), they just lose the tiebreak to a content match.
+fn is_domain_type_token(t: &str) -> bool {
+    // NB: tokens are STEMMED before this check — `stem("string")` strips the "ing"
+    // suffix to "str", so the container noun is matched as "str", not "string".
+    is_generic_type_token(t)
+        || matches!(t, "str" | "string" | "list" | "array" | "sequence")
+}
+
 /// Split on any non-alphanumeric, drop stopwords, stem the rest.
 fn content_tokens(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
@@ -155,7 +170,7 @@ pub fn ranked_candidates(prompt: &str) -> Vec<&'static LibOp> {
         .filter(|t| !t.is_empty())
         .map(|t| t.to_ascii_lowercase())
         .collect();
-    let mut scored: Vec<(&'static LibOp, f64, usize)> = Vec::new();
+    let mut scored: Vec<(&'static LibOp, f64, usize, usize)> = Vec::new();
     for op in OPS {
         let name_toks = content_tokens(op.name);
         if name_toks.is_empty() {
@@ -183,14 +198,21 @@ pub fn ranked_candidates(prompt: &str) -> Vec<&'static LibOp> {
         } else {
             matched as f64 / name_toks.len() as f64
         };
-        scored.push((op, coverage, matched.max(acronym as usize)));
+        // Content-token matches (a real OPERATION word) rank above matches on only a
+        // container/type noun, breaking coverage ties toward the more specific op.
+        let content_matched = name_toks
+            .iter()
+            .filter(|t| has(t) && !is_domain_type_token(t))
+            .count();
+        scored.push((op, coverage, content_matched, matched.max(acronym as usize)));
     }
     scored.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(b.2.cmp(&a.2))
+            .then(b.3.cmp(&a.3))
     });
-    scored.into_iter().map(|(op, _, _)| op).collect()
+    scored.into_iter().map(|(op, _, _, _)| op).collect()
 }
 
 /// True if `name` (>=2 letters) is spelled by the first letters of some run of
@@ -1401,6 +1423,29 @@ mod tests {
                 vec![ex(vec![Value::Str("ae".into())], Value::Str("AE".into())), ex(vec![Value::Str("i".into())], Value::Str("I".into())), ex(vec![Value::Str("ou".into())], Value::Str("OU".into()))],
                 vec![Value::Str("cat".into())],
                 Value::Str("cAt".into()),
+            ),
+            // count_vowels coincides with string_length on all-vowel strings — the op
+            // matches the CONTENT token "vowel" and must outrank string_length (matches
+            // only the container noun "string", stemmed "str") on the coverage tie.
+            (
+                "the number of vowels in a string",
+                vec![ex(vec![Value::Str("aei".into())], iv(3)), ex(vec![Value::Str("oo".into())], iv(2)), ex(vec![Value::Str("a".into())], iv(1))],
+                vec![Value::Str("cat".into())],
+                iv(1),
+            ),
+            // count_consonants coincides with string_length on all-consonant strings.
+            (
+                "the number of consonants in a string",
+                vec![ex(vec![Value::Str("bcd".into())], iv(3)), ex(vec![Value::Str("xy".into())], iv(2)), ex(vec![Value::Str("rr".into())], iv(2))],
+                vec![Value::Str("cat".into())],
+                iv(2),
+            ),
+            // max_negative coincides with list_max on all-negative input.
+            (
+                "the largest negative number in a list",
+                vec![ex(vec![av(&[-5, -1, -3])], iv(-1)), ex(vec![av(&[-9, -2])], iv(-2)), ex(vec![av(&[-4, -8, -2])], iv(-2))],
+                vec![av(&[-4, 3, -1])],
+                iv(-1),
             ),
         ];
         for (prompt, exs, fresh, intended) in cases {
