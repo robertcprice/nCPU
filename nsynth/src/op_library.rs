@@ -284,6 +284,10 @@ pub const OPS: &[LibOp] = &[
 "fn halve(n: i64) -> i64 {\n    return n / 2;\n}\n" },
     LibOp { name: "is_power_of_two", arity: 1, mog:
 "fn is_power_of_two(n: i64) -> i64 {\n    if n < 1 {\n        return 0;\n    }\n    x: i64 = n;\n    while x % 2 == 0 {\n        x = x / 2;\n    }\n    if x == 1 {\n        return 1;\n    }\n    return 0;\n}\n" },
+    // Whether n is a perfect cube (k*k*k == n for some k >= 0). Known algorithm; name
+    // tokens 'perfect' + 'cube' resolve it. Non-negative domain (examples are >= 0).
+    LibOp { name: "is_perfect_cube", arity: 1, mog:
+"fn is_perfect_cube(n: i64) -> i64 {\n    if n < 0 {\n        return 0;\n    }\n    k: i64 = 0;\n    while k * k * k < n {\n        k = k + 1;\n    }\n    if k * k * k == n {\n        return 1;\n    }\n    return 0;\n}\n" },
     LibOp { name: "digital_root", arity: 1, mog:
 "fn digital_root(n: i64) -> i64 {\n    x: i64 = n;\n    if x < 0 {\n        x = 0 - x;\n    }\n    while x >= 10 {\n        s: i64 = 0;\n        while x > 0 {\n            s = s + x % 10;\n            x = x / 10;\n        }\n        x = s;\n    }\n    return x;\n}\n" },
     LibOp { name: "is_negative", arity: 1, mog:
