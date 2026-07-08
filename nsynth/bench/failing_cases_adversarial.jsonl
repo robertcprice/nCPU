@@ -13,3 +13,4 @@
 {"id":1311,"category":"array","hardness":"medium","fn":"sum_negatives","text":"the sum of the negative numbers in a list","examples":[{"in":[[1,-2,-3]],"out":-5},{"in":[[-4,5]],"out":-4},{"in":[[3,-1,-2]],"out":-3}]}
 {"id":1312,"category":"array","hardness":"medium","fn":"absolute_first","text":"the absolute value of the first element of a list","examples":[{"in":[[-8,3]],"out":8},{"in":[[5,2]],"out":5},{"in":[[-1,9,4]],"out":1}]}
 {"id":1313,"category":"array","hardness":"medium","fn":"absolute_last","text":"the absolute value of the last element of a list","examples":[{"in":[[3,-8]],"out":8},{"in":[[5,2]],"out":2},{"in":[[1,9,-4]],"out":4}]}
+{"id":1314,"category":"array","hardness":"medium","fn":"absolute_product","text":"the absolute value of the product of a list","examples":[{"in":[[-2,3]],"out":6},{"in":[[2,2]],"out":4},{"in":[[-1,-5]],"out":5},{"in":[[4]],"out":4}]}
