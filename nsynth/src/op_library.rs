@@ -361,6 +361,11 @@ pub const OPS: &[LibOp] = &[
 "fn string_length(s: string) -> i64 {\n    return s.len;\n}\n" },
     LibOp { name: "count_vowels", arity: 1, mog:
 "fn count_vowels(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_vowel() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Uppercase ONLY the vowels. Coincides with to_upper on all-vowel strings; to_upper
+    // was shipped and is wrong on mixed strings ("cat" -> "CAT" not "cAt"). The name
+    // tier prefers uppercase_vowels (matches both "uppercase" and "vowel").
+    LibOp { name: "uppercase_vowels", arity: 1, mog:
+"fn uppercase_vowels(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_vowel() {\n            out = out + ch.upper();\n        } else {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "count_consonants", arity: 1, mog:
 "fn count_consonants(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_alpha() {\n            if ch.is_vowel() {\n            } else {\n                c = c + 1;\n            }\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "is_palindrome", arity: 1, mog:
