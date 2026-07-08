@@ -1903,6 +1903,15 @@ mod tests {
                 vec![Value::Str("Ab".into())],
                 iv(0),
             ),
+            // The composition tier overfit an all-letters example set that coincided with
+            // first-char-is-a-letter, wrong on a string that only starts with a letter
+            // ('ab1' -> 1 vs 0). all_letters (library tier, before composition) is the real predicate.
+            (
+                "whether a string contains only letters",
+                vec![ex(vec![Value::Str("abc".into())], iv(1)), ex(vec![Value::Str("xyz".into())], iv(1)), ex(vec![Value::Str("1bc".into())], iv(0)), ex(vec![Value::Str("9yz".into())], iv(0))],
+                vec![Value::Str("ab1".into())],
+                iv(0),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

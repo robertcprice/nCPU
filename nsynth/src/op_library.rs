@@ -660,6 +660,12 @@ pub const OPS: &[LibOp] = &[
 "fn all_chars_distinct(s: string) -> bool {\n    seen: string = \"\";\n    for ch in s {\n        if seen.contains(ch) {\n            return false;\n        }\n        seen = seen + ch;\n    }\n    return true;\n}\n" },
     LibOp { name: "is_digit_string", arity: 1, mog:
 "fn is_digit_string(s: string) -> bool {\n    if s.len == 0 {\n        return false;\n    }\n    for ch in s {\n        if ch.is_digit() {\n        } else {\n            return false;\n        }\n    }\n    return true;\n}\n" },
+    // Whether a string is entirely LETTERS. Without this op the composition tier overfit a
+    // degenerate example set (all-letters coincided with first-char-is-a-letter) and shipped a
+    // confident-wrong on a string that only STARTS with a letter ('ab1' -> 1 vs 0). The library
+    // tier resolves before composition, so the real all-characters predicate wins.
+    LibOp { name: "all_letters", arity: 1, mog:
+"fn all_letters(s: string) -> i64 {\n    for ch in s {\n        if ch.is_alpha() {\n        } else {\n            return 0;\n        }\n    }\n    return 1;\n}\n" },
     LibOp { name: "has_letter_and_digit", arity: 1, mog:
 "fn has_letter_and_digit(s: string) -> bool {\n    hl: bool = false;\n    hd: bool = false;\n    for ch in s {\n        if ch.is_alpha() {\n            hl = true;\n        }\n        if ch.is_digit() {\n            hd = true;\n        }\n    }\n    return hl && hd;\n}\n" },
     LibOp { name: "split_words", arity: 1, mog:
