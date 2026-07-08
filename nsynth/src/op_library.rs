@@ -364,6 +364,11 @@ pub const OPS: &[LibOp] = &[
 "fn count_odds(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "count_positives", arity: 1, mog:
 "fn count_positives(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // 'greater than zero' twin of count_positives — the phrasing does not name 'positive',
+    // so count_positives is un-named and refuses; the 'greater'/'than'/'zero'-named op
+    // resolves it. (Companion to count_less_than_zero.)
+    LibOp { name: "count_greater_than_zero", arity: 1, mog:
+"fn count_greater_than_zero(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e > 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
     LibOp { name: "sum_of_squares", arity: 1, mog:
 "fn sum_of_squares(arr: [i64]) -> i64 {\n    acc: i64 = 0;\n    for e in arr {\n        acc = acc + e * e;\n    }\n    return acc;\n}\n" },
     // Fundamental reduces. Their ABSENCE was a real never-wrong hole: "sum of a
