@@ -470,6 +470,14 @@ pub const OPS: &[LibOp] = &[
 "fn max_odd(arr: [i64]) -> i64 {\n    m: i64 = 0;\n    found: i64 = 0;\n    for e in arr {\n        if e % 2 != 0 {\n            if found == 0 {\n                m = e;\n                found = 1;\n            } else {\n                if e > m {\n                    m = e;\n                }\n            }\n        }\n    }\n    return m;\n}\n" },
     LibOp { name: "array_product", arity: 1, mog:
 "fn array_product(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    for item in arr {\n        p = p * item;\n    }\n    return p;\n}\n" },
+    // ABSOLUTE value of the product. array_product coincides whenever the product is
+    // non-negative but is wrong once an odd number of negatives flips the sign
+    // ([-2,3] -> product -6 vs |−6| = 6). Name tokens 'absolute' + 'product' out-cover
+    // array_product (coverage 2/2 vs 1/2 since the prompt says 'list', not 'array'). On the
+    // plain 'product of a list' prompt with a sign-distinguishing example array_product is the
+    // unique reproducer, so it still wins there.
+    LibOp { name: "absolute_product", arity: 1, mog:
+"fn absolute_product(arr: [i64]) -> i64 {\n    p: i64 = 1;\n    for e in arr {\n        p = p * e;\n    }\n    if p < 0 {\n        p = 0 - p;\n    }\n    return p;\n}\n" },
     // Product of all elements except the first. array_product coincides when the first
     // element is 1 (dropping it leaves the product unchanged); 'product' + 'except' +
     // 'first' out-cover array_product so it wins when the examples are determined.

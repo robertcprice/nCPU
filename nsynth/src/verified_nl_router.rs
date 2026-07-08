@@ -1818,6 +1818,15 @@ mod tests {
                 vec![av(&[3, 1, 8])],
                 iv(5),
             ),
+            // array_product coincides with the ABSOLUTE product whenever the product is
+            // non-negative; wrong once an odd count of negatives flips the sign ([-2,3] -> -6 vs 6).
+            // absolute_product out-covers array_product via the 'absolute' token.
+            (
+                "the absolute value of the product of a list",
+                vec![ex(vec![av(&[2, 3])], iv(6)), ex(vec![av(&[1, 5])], iv(5)), ex(vec![av(&[2, 2])], iv(4))],
+                vec![av(&[-2, 3])],
+                iv(6),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
