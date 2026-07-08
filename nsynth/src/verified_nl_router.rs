@@ -1784,6 +1784,15 @@ mod tests {
                 vec![Value::Str("aBc".into())],
                 iv(1),
             ),
+            // list_max coincides with the max ABSOLUTE value on all-nonnegative input;
+            // wrong once a negative dominates ([-3,-8,1] -> 8 vs 1). max_absolute_value
+            // matches 'absolute' (content), out-covering list_max's 'list' (container).
+            (
+                "the maximum absolute value in a list",
+                vec![ex(vec![av(&[3, 5, 2])], iv(5)), ex(vec![av(&[1, 9])], iv(9)), ex(vec![av(&[4, 2])], iv(4))],
+                vec![av(&[-3, -8, 1])],
+                iv(8),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
