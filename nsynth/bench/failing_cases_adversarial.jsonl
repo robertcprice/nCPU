@@ -26,3 +26,7 @@
 {"id":1324,"category":"int","hardness":"hard","fn":"power","text":"raise a number to a power","examples":[{"in":[2,3],"out":8},{"in":[3,2],"out":9},{"in":[5,1],"out":5}]}
 {"id":1325,"category":"int","hardness":"hard","fn":"is_perfect_square","text":"whether a number is a perfect square","examples":[{"in":[4],"out":1},{"in":[9],"out":1},{"in":[3],"out":0},{"in":[6],"out":0},{"in":[16],"out":1},{"in":[7],"out":0}]}
 {"id":1326,"category":"int","hardness":"hard","fn":"is_coprime","text":"whether two numbers are coprime","examples":[{"in":[2,3],"out":1},{"in":[4,9],"out":1},{"in":[6,8],"out":0},{"in":[3,9],"out":0},{"in":[2,4],"out":0}]}
+{"id":1327,"category":"int","hardness":"hard","fn":"is_prime","text":"whether a number is prime","examples":[{"in":[2],"out":1},{"in":[3],"out":1},{"in":[4],"out":0},{"in":[7],"out":1},{"in":[9],"out":0}]}
+{"id":1328,"category":"string","hardness":"medium","fn":"is_palindrome","text":"whether a string is a palindrome","examples":[{"in":["aba"],"out":1},{"in":["abc"],"out":0},{"in":["aa"],"out":1},{"in":["ab"],"out":0}]}
+{"id":1329,"category":"int","hardness":"hard","fn":"lcm","text":"the least common multiple of two numbers","examples":[{"in":[4,6],"out":12},{"in":[3,5],"out":15},{"in":[2,4],"out":4}]}
+{"id":1330,"category":"int","hardness":"hard","fn":"armstrong_number","text":"whether a number is an armstrong number","examples":[{"in":[1],"out":1},{"in":[5],"out":1},{"in":[9],"out":1},{"in":[10],"out":0},{"in":[25],"out":0},{"in":[153],"out":1}]}
