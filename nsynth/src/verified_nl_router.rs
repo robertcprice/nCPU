@@ -1367,6 +1367,41 @@ mod tests {
                 vec![iv(10)],
                 iv(1),
             ),
+            // count_even_digits coincides with count_digits on all-even-digit numbers.
+            (
+                "the number of even digits in a number",
+                vec![ex(vec![iv(2)], iv(1)), ex(vec![iv(24)], iv(2)), ex(vec![iv(468)], iv(3)), ex(vec![iv(6)], iv(1))],
+                vec![iv(13)],
+                iv(0),
+            ),
+            // abs_difference coincides with signed a-b when a >= b.
+            (
+                "the absolute difference between two numbers",
+                vec![ex(vec![iv(7), iv(3)], iv(4)), ex(vec![iv(9), iv(2)], iv(7)), ex(vec![iv(5), iv(5)], iv(0)), ex(vec![iv(10), iv(4)], iv(6))],
+                vec![iv(2), iv(10)],
+                iv(8),
+            ),
+            // average_two overfits to a constant when all example pairs share an average.
+            (
+                "the average of two numbers",
+                vec![ex(vec![iv(4), iv(6)], iv(5)), ex(vec![iv(2), iv(8)], iv(5)), ex(vec![iv(10), iv(0)], iv(5)), ex(vec![iv(3), iv(7)], iv(5)), ex(vec![iv(1), iv(9)], iv(5))],
+                vec![iv(2), iv(4)],
+                iv(3),
+            ),
+            // capitalize_first coincides with capitalize_first_last on single-char strings.
+            (
+                "capitalize the first letter of a string",
+                vec![ex(vec![Value::Str("a".into())], Value::Str("A".into())), ex(vec![Value::Str("z".into())], Value::Str("Z".into())), ex(vec![Value::Str("x".into())], Value::Str("X".into()))],
+                vec![Value::Str("hello".into())],
+                Value::Str("Hello".into()),
+            ),
+            // uppercase_vowels coincides with to_upper on all-vowel strings.
+            (
+                "uppercase only the vowels in a string",
+                vec![ex(vec![Value::Str("ae".into())], Value::Str("AE".into())), ex(vec![Value::Str("i".into())], Value::Str("I".into())), ex(vec![Value::Str("ou".into())], Value::Str("OU".into()))],
+                vec![Value::Str("cat".into())],
+                Value::Str("cAt".into()),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {
