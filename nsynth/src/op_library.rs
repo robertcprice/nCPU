@@ -664,6 +664,15 @@ pub const OPS: &[LibOp] = &[
 "fn first(arr: [i64]) -> i64 {\n    return arr[0];\n}\n" },
     LibOp { name: "last", arity: 1, mog:
 "fn last(arr: [i64]) -> i64 {\n    n: i64 = arr.len;\n    return arr[n - 1];\n}\n" },
+    // Positional selectors. list_max coincides with these on examples where a[1]/a[2]
+    // happens to be the max ([1,9,2] -> second 9 = max); wrong once it isn't ([5,3,9] ->
+    // second 3). The named ops resolve the position directly; and when the examples are
+    // under-determined (a[1]==max throughout), the ambiguous-single-op guard in
+    // answer_with_proposer refuses rather than let composition ship the coincidence.
+    LibOp { name: "second_element", arity: 1, mog:
+"fn second_element(arr: [i64]) -> i64 {\n    return arr[1];\n}\n" },
+    LibOp { name: "third_element", arity: 1, mog:
+"fn third_element(arr: [i64]) -> i64 {\n    return arr[2];\n}\n" },
     LibOp { name: "list_min", arity: 1, mog:
 "fn list_min(a: [i64]) -> i64 {\n    m: i64 = a[0];\n    i: i64 = 1;\n    while i < a.len {\n        if a[i] < m {\n            m = a[i];\n        }\n        i = i + 1;\n    }\n    return m;\n}\n" },
     LibOp { name: "list_max", arity: 1, mog:

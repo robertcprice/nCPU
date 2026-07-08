@@ -685,6 +685,21 @@ fn parse_value(tok: &str) -> Option<crate::benchmark::Value> {
 /// MODEL propose a program for the hard tail the engine can't synthesize — gated the
 /// same way, so the model can NEVER produce a wrong answer. `proposer = None` (or an
 /// unavailable model) reduces exactly to the model-free door.
+/// Every library op whose parameter types accept the example inputs AND which
+/// reproduces every example. A >=2-op DISAGREEING result means the examples do not pin
+/// down even a single op — used to keep the composition/synthesis tiers from re-shipping
+/// one of the colliding ops as a confident coincidence.
+fn library_ops_reproducing(examples: &[crate::benchmark::Example]) -> Vec<&'static LibOp> {
+    let input_types: Vec<&'static str> = match examples.first() {
+        Some(e) => e.inputs.iter().map(value_type_str).collect(),
+        None => return Vec::new(),
+    };
+    OPS.iter()
+        .filter(|op| op_accepts_types(op.mog, &input_types))
+        .filter(|op| crate::runtime::code_reproduces_examples(op.mog, examples))
+        .collect()
+}
+
 pub fn answer_with_proposer(
     prompt: &str,
     examples: &[crate::benchmark::Example],
@@ -702,14 +717,34 @@ pub fn answer_with_proposer(
     if let Some(r) = route_verified(prompt, examples) {
         return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
     }
-    if let Some(code) = route_composed(prompt, examples) {
-        return Answer::Composition { code };
+    // AMBIGUOUS single-op spec? If TWO OR MORE library ops reproduce the examples yet
+    // DISAGREE on fresh inputs, the examples do not pin down even a single op — the
+    // behaviour tier refuses for exactly this reason. Composition/synthesis must then NOT
+    // run: a longer program would only RE-SHIP one of the colliding single ops as a
+    // confident coincidence ("the second element" with a[1]==max examples: both
+    // second_element and list_max fit, so a chain wrapping list_max ships the max, wrong
+    // on [5,3,9]). Requiring TWO DISAGREEING reproducers is the key — a legitimate
+    // composition/synthesis task may have ONE coincidental single-op fit that must still
+    // reach the composition tiers; only genuine single-op ambiguity is blocked.
+    let ambiguous_single_op = {
+        let reproducing = library_ops_reproducing(examples);
+        reproducing.len() >= 2 && passers_disagree(&reproducing, examples)
+    };
+    if !ambiguous_single_op {
+        if let Some(code) = route_composed(prompt, examples) {
+            return Answer::Composition { code };
+        }
     }
     // Tier 2.5 — BEHAVIOUR-match any library op the prompt describes but does not
     // name (element_frequency for "how many times each value appears"). Distinguishing
     // -gated, so a coincidental match refuses instead of shipping wrong.
     if let Some(r) = route_by_behavior(prompt, examples) {
         return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+    }
+    // The examples fit >=2 disagreeing single ops but the behaviour tier could not pick
+    // one — refuse rather than let composition/synthesis re-ship the coincidence.
+    if ambiguous_single_op {
+        return Answer::Refused;
     }
     // Tier 2.75 — BEHAVIOUR-match a 2-op COMPOSITION the prompt describes but does not
     // name both ops of ("double the sum" = times_two(array_sum(x))). Distinguishing-
@@ -1545,6 +1580,22 @@ mod tests {
                 vec![ex(vec![iv(6), iv(2)], iv(1)), ex(vec![iv(7), iv(3)], iv(0)), ex(vec![iv(9), iv(3)], iv(1)), ex(vec![iv(10), iv(4)], iv(0))],
                 vec![iv(8), iv(2)],
                 iv(1),
+            ),
+            // AMBIGUOUS-single-op guard: second_element and list_max both fit examples
+            // where a[1] is the max ([1,9,2]->9); the composition tier used to re-ship the
+            // max via a chain (wrong on [5,3,9]). The guard now refuses instead.
+            (
+                "the second element of a list",
+                vec![ex(vec![av(&[1, 9, 2])], iv(9)), ex(vec![av(&[3, 8])], iv(8)), ex(vec![av(&[2, 7, 1])], iv(7))],
+                vec![av(&[5, 3, 9])],
+                iv(3),
+            ),
+            // third_element vs list_max, same ambiguous-single-op collision.
+            (
+                "the third element of a list",
+                vec![ex(vec![av(&[1, 2, 3])], iv(3)), ex(vec![av(&[5, 6, 7])], iv(7)), ex(vec![av(&[2, 4, 8])], iv(8))],
+                vec![av(&[9, 1, 2, 3])],
+                iv(2),
             ),
         ];
         for (prompt, exs, fresh, intended) in cases {
