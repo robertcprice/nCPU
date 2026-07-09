@@ -1344,11 +1344,20 @@ fn rewrite_type_python(t: &str) -> String {
 }
 
 fn rewrite_type_rust(t: &str) -> String {
+    let t = t.trim();
     match t {
-        "i64" => "i64".into(),
-        "[i64]" => "Vec<i64>".into(),
+        "i64" | "bool" | "f64" => t.to_string(),
         "string" => "String".into(),
-        other => other.to_string(),
+        // RECURSIVE array lowering: `[T]` -> `Vec<rewrite(T)>`, so nested `[[i64]]` (pair lists /
+        // maps-as-pair-lists) becomes `Vec<Vec<i64>>` and `[string]` becomes `Vec<String>`. A flat
+        // match only handled `[i64]`, leaving every map/nested op as uncompilable `[[i64]]`.
+        _ => {
+            if let Some(inner) = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                format!("Vec<{}>", rewrite_type_rust(inner))
+            } else {
+                t.to_string()
+            }
+        }
     }
 }
 
@@ -1808,6 +1817,18 @@ mod inline_if_tests {
         let rp = to_rust(pal);
         assert!(rp.contains("s.chars().rev().collect::<String>()"), "s.reverse() not lowered: {rp}");
         assert!(!rp.contains("s.reverse()"), "raw s.reverse() survived: {rp}");
+    }
+
+    #[test]
+    fn rust_type_lowering_is_recursive_for_nested_arrays() {
+        // pair-list / map ops carry `[[i64]]`; a flat match left it uncompilable. Vec must nest.
+        let mog = "fn map_keys(pairs: [[i64]]) -> [i64] {\n    out: [i64] = [];\n    for p in pairs {\n        out.push(p[0]);\n    }\n    return out;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("pairs: Vec<Vec<i64>>"), "nested array not lowered: {rs}");
+        assert!(rs.contains("-> Vec<i64>"), "return array not lowered: {rs}");
+        // array-of-string too
+        let ms = "fn f(ws: [string]) -> i64 {\n    return ws.len;\n}\n";
+        assert!(to_rust(ms).contains("ws: Vec<String>"), "[string] not lowered");
     }
 
     #[test]
