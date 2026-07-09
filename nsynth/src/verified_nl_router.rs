@@ -1370,6 +1370,83 @@ pub fn declare_composed(prompt: &str) -> Option<String> {
     ))
 }
 
+/// Function / framing words that carry NO operation semantics — epistemic verbs
+/// ("check", "determine"), interrogatives ("how", "whether"), and quantifier adverbs
+/// ("every", "many"). Complements [`STOP`]; kept separate because it is used only by
+/// the confirmation completeness gate ([`names_only_op`]), not by routing/candidacy
+/// (where dropping a word could hide a real op token). Tokens arrive STEMMED. NB: it
+/// must NOT include any operation synonym — e.g. "total" (a `sum` synonym) is absent.
+fn is_framing_word(t: &str) -> bool {
+    matches!(
+        t,
+        "check" | "determine" | "tell" | "whether" | "if" | "how" | "many" | "much"
+            | "every" | "convert" | "turn" | "make" | "given" | "some" | "any" | "then"
+            | "whole" | "single"
+    )
+}
+
+/// The OPERATION-WORD signature of a phrase: its content tokens with container / generic
+/// type nouns and function/framing words removed, and each survivor canonicalized to its
+/// synonym-group id (so `total`==`sum`, `order`==`sort`, `double`==`two`, `list`/`array`
+/// both vanish as containers). Two phrases with the SAME signature name the same
+/// computation modulo vocabulary and data-shape wording. Emergent — built only from the
+/// resolver's tokenizer, synonym graph, and generic-noun sets; no per-op table.
+fn operation_signature(text: &str) -> std::collections::BTreeSet<String> {
+    let syn = synonym_group_of();
+    content_tokens(text)
+        .into_iter()
+        .filter(|t| !is_domain_type_token(t) && !is_framing_word(t))
+        .map(|t| syn.get(&t).map_or(t.clone(), |g| format!("#{g}")))
+        .collect()
+}
+
+/// EMERGENT reference resolution for oracle manufacturing. Returns the SINGLE library op
+/// whose operation-word signature ([`operation_signature`]) equals the prompt's AND whose
+/// parameter shape equals `want_param_types` (the candidate's own signature) — or, first,
+/// the unique op the prompt spells as an ACRONYM (gcd <- "greatest common divisor"). The
+/// operation-word equality is the completeness gate: it demands the prompt name this op and
+/// NOTHING more, so "sum of SQUARES" (extra `square`), "SECOND largest" (extra `second`),
+/// and "reverse then SORT" (two ops) all miss — a modified/compositional intent resolves to
+/// no single reference. Container/type wording is dropped from the operation words, so the
+/// SHAPE filter disambiguates ops that share operation words but differ in type
+/// (`reverse a LIST` -> `reverse_list`, not `reverse_string`/`reverse_number`). Ambiguity
+/// (two ops match) or no match returns None. The returned op's `.mog` is the VERIFIED
+/// reference a candidate is differentially checked against to confirm a bare-NL guess.
+pub fn reference_for(prompt: &str, want_param_types: &[String]) -> Option<&'static LibOp> {
+    let shape_ok = |op: &LibOp| op_sig_types(op.mog).0 == want_param_types;
+    // ACRONYM first: a spelled-out name is a stronger, more specific signal than a
+    // coincidental token overlap (mirrors [`declare`]).
+    let words: Vec<String> = prompt
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    let acro: Vec<&'static LibOp> = OPS
+        .iter()
+        .filter(|op| {
+            let toks = content_tokens(op.name);
+            toks.len() == 1 && is_acronym_of(&toks[0], &words) && shape_ok(op)
+        })
+        .collect();
+    if acro.len() == 1 {
+        return Some(acro[0]);
+    }
+    let want = operation_signature(prompt);
+    if want.is_empty() {
+        return None;
+    }
+    let mut hit: Option<&'static LibOp> = None;
+    for op in OPS {
+        if shape_ok(op) && operation_signature(op.name) == want {
+            if hit.is_some() {
+                return None; // two same-shape ops share the signature -> ambiguous -> refuse
+            }
+            hit = Some(op);
+        }
+    }
+    hit
+}
+
 /// Run an op on a few illustrative inputs so a user can confirm the behavior by
 /// recognition (the no-example safety mechanism). Returns (input, output) pairs the
 /// op actually produced; skips inputs it can't run on.
@@ -1637,6 +1714,36 @@ mod tests {
 
     fn routed_name(prompt: &str) -> Option<&'static str> {
         route(prompt).map(|r| r.op.name)
+    }
+
+    #[test]
+    fn reference_for_resolves_exact_single_op_and_refuses_modified_intent() {
+        // Emergent oracle reference: the prompt's operation-word signature must match one op's
+        // (container/generic/framing dropped, synonyms canonicalized) AND the op's parameter
+        // shape must equal the candidate's — the shape filter disambiguates ops that share
+        // operation words but differ in type.
+        let seq = &["[i64]".to_string()];
+        let scalar2 = &["i64".to_string(), "i64".to_string()];
+        let string1 = &["string".to_string()];
+        let name = |p: &str, sig: &[String]| reference_for(p, sig).map(|o| o.name);
+        // `reverse_list`, not `reverse_string`/`reverse_number`, via the [i64] shape.
+        assert_eq!(name("reverse a list", seq), Some("reverse_list"));
+        // container mismatch (list vs array) is ignored on the operation words -> `array_sum`.
+        assert_eq!(name("the sum of a list of numbers", seq), Some("array_sum"));
+        assert_eq!(name("the minimum element in a list", seq), Some("list_min"));
+        assert_eq!(name("count the vowels in a string", string1), Some("count_vowels"));
+        // "ascending"/"order" are sort synonyms -> plain `sort` still resolves.
+        assert_eq!(name("sort a list in ascending order", seq), Some("sort"));
+        // acronym path (two scalar args).
+        assert_eq!(name("greatest common divisor of two numbers", scalar2), Some("gcd"));
+        // A modified intent resolves to its OWN op when one exists (set-equality, not a
+        // simpler-op fallback): "sum of squares" -> `sum_of_squares`, NOT plain `array_sum`.
+        assert_eq!(name("the sum of the squares of a list", seq), Some("sum_of_squares"));
+        assert_eq!(name("the second largest element in a list", seq), Some("second_largest"));
+        // When NO op captures the full intent, refuse (stays tentative) — never a
+        // wrong-simpler-op: set-equality can't map these onto `array_sum`/`sort`.
+        assert!(name("the sum of the cubes of a list", seq).is_none()); // no sum-of-cubes-list op
+        assert!(name("reverse then sort a list", seq).is_none()); // two operations, no combined op
     }
 
     #[test]

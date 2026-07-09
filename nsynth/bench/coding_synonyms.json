@@ -1,14 +1,68 @@
 [
-  ["maximum", "max", "largest", "biggest", "greatest", "highest"],
-  ["minimum", "min", "smallest", "lowest", "least"],
-  ["sum", "total", "aggregate"],
-  ["length", "size"],
-  ["reverse", "flip", "invert"],
-  ["double", "twice", "two"],
-  ["product", "multiply", "multiplication"],
-  ["sort", "arrange", "order", "organize", "sorted"],
-  ["first", "initial", "leading", "foremost"],
-  ["average", "mean"],
-  ["count", "tally"],
-  ["unique", "distinct"]
+[
+"maximum",
+"max",
+"largest",
+"biggest",
+"greatest",
+"highest"
+],
+[
+"minimum",
+"min",
+"smallest",
+"lowest",
+"least"
+],
+[
+"sum",
+"total",
+"aggregate"
+],
+[
+"length",
+"size"
+],
+[
+"reverse",
+"flip",
+"invert"
+],
+[
+"double",
+"twice",
+"two"
+],
+[
+"product",
+"multiply",
+"multiplication"
+],
+[
+"sort",
+"arrange",
+"order",
+"organize",
+"sorted",
+"ascending",
+"increasing"
+],
+[
+"first",
+"initial",
+"leading",
+"foremost"
+],
+[
+"average",
+"mean"
+],
+[
+"count",
+"tally"
+],
+[
+"unique",
+"distinct"
+]
 ]

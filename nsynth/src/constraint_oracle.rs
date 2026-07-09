@@ -60,39 +60,6 @@ impl Property {
         }
     }
 
-    /// Infer the operation's decidable contract from an NL PROMPT — the operation word the
-    /// user named, not the resolved op. So a bare-NL request "reverse a list" carries a
-    /// COMPLETE spec (IsReversed) that can CONFIRM the resolution reference-free: a program
-    /// producing the reversed input on many fresh inputs IS reverse, regardless of which op
-    /// the resolver picked. Longest/most-specific match wins so "sum" in "maximum..." can't
-    /// mis-fire. Used to upgrade a correct bare-NL guess from tentative -> verified.
-    pub fn for_prompt(prompt: &str) -> Option<Property> {
-        let p = prompt.to_ascii_lowercase();
-        // (needle, property) — checked in order; a needle only fires as a whole word-ish
-        // substring. Each maps to a COMPLETE, reference-decidable spec.
-        const MAP: &[(&str, Property)] = &[
-            ("sort", Property::IsSortedAscending),
-            ("reverse", Property::IsReversed),
-            ("absolute value", Property::IsNonNegative),
-            ("maximum", Property::IsMax),
-            ("minimum", Property::IsMin),
-            ("largest", Property::IsMax),
-            ("smallest", Property::IsMin),
-            ("product", Property::IsProduct),
-        ];
-        // "sum" alone is ambiguous with "maximum sum" etc.; require it not to co-occur with a
-        // stronger array-reduce word. Handle it after the unambiguous needles.
-        for (needle, prop) in MAP {
-            if p.contains(needle) {
-                return Some(*prop);
-            }
-        }
-        if (p.contains("sum") || p.contains("total")) && !p.contains("max") && !p.contains("min") {
-            return Some(Property::IsSum);
-        }
-        None
-    }
-
     /// Whether the contract reads a single int-array input (vs a single scalar).
     fn wants_array(&self) -> bool {
         matches!(
@@ -225,18 +192,114 @@ pub fn verify_candidate(
     Ok(())
 }
 
-/// ORACLE MANUFACTURING: confirm a bare-NL resolution reference-free. When a no-example
-/// prompt names an operation with a COMPLETE decidable spec (sort/reverse/max/min/abs/sum/
-/// product), a program that satisfies that spec on many fresh random inputs IS that operation
-/// — stronger evidence than the 3-5 user examples that govern the whole never-wrong system,
-/// so the guess can be upgraded from tentative to VERIFIED. A wrong resolution fails the spec
-/// and stays tentative. Returns false when the prompt has no known complete spec (honest: the
-/// oracle simply does not apply, so the label stays tentative — never a confident wrong).
+/// ORACLE MANUFACTURING. Confirm a bare-NL (no-example) guess reference-free and
+/// EMERGENTLY. [`reference_for`] resolves the prompt to the SINGLE library op whose
+/// operation-word signature exactly equals the prompt's — the completeness gate that makes
+/// "sum of squares" / "second largest" / a two-op compose resolve to nothing — then the
+/// candidate is DIFFERENTIALLY executed against that op's verified `.mog` on many fresh
+/// inputs. Agreement everywhere means the candidate computes that exact operation, so the
+/// guess is confirmed (drop tentative); a wrong candidate (e.g. a mis-built max combinator)
+/// disagrees on a fresh input and stays tentative. Works for both a library match (candidate
+/// == reference => trivially agrees) and an untrusted synthesis (real differential check).
+/// The "spec" is the resolved reference's behavior, not a hand-written property table. Any
+/// no-match / shape-mismatch / crash => false (honest: stays tentative, never confident-wrong).
 pub fn confirm_from_prompt(code: &str, fn_name: &str, prompt: &str) -> bool {
-    let Some(prop) = Property::for_prompt(prompt) else {
+    let Some(cand_types) = sig_param_types(code) else {
         return false;
     };
-    verify_candidate(code, fn_name, &prop, 32, 0x00ac_1e50).is_ok()
+    let Some(reference) = crate::verified_nl_router::reference_for(prompt, &cand_types) else {
+        return false;
+    };
+    differential_matches(code, fn_name, reference.mog, 32, 0x00ac_1e50)
+}
+
+/// True iff `cand` (its `cand_fn`) computes the SAME function as the reference program
+/// `ref_mog` on `n` fresh inputs shaped to the reference's signature. Any disagreement, a
+/// crash on either side, or an un-buildable input shape => false (fail-closed).
+fn differential_matches(cand: &str, cand_fn: &str, ref_mog: &str, n: usize, seed: u64) -> bool {
+    let Some(ref_fn) = crate::site::fn_name_from_mog(ref_mog) else {
+        return false;
+    };
+    let Some(param_types) = sig_param_types(ref_mog) else {
+        return false;
+    };
+    for inputs in fresh_typed_args(&param_types, n, seed) {
+        let (Ok(a), Ok(b)) = (
+            execute_function(ref_mog, &ref_fn, &inputs, "constraint_oracle"),
+            execute_function(cand, cand_fn, &inputs, "constraint_oracle"),
+        ) else {
+            return false;
+        };
+        if !outputs_agree(&a, &b) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Parse a Mog signature's parameter TYPE strings, e.g. `fn f(a: i64, b: [i64]) -> i64`
+/// -> ["i64", "[i64]"]. `None` if the signature can't be parsed. Empty vec = nullary.
+fn sig_param_types(mog: &str) -> Option<Vec<String>> {
+    let (o, c) = (mog.find('(')?, mog.find(')')?);
+    if c < o {
+        return None;
+    }
+    let inner = mog[o + 1..c].trim();
+    if inner.is_empty() {
+        return Some(vec![]);
+    }
+    inner
+        .split(',')
+        .map(|p| p.split(':').nth(1).map(|t| t.trim().to_string()))
+        .collect()
+}
+
+/// Deterministic fresh argument tuples matching a list of Mog parameter types. Supports the
+/// shapes the oracle can build+compare (i64, [i64], string, bool); returns an empty batch if
+/// any type is unsupported so confirmation fails closed rather than guessing on a shape it
+/// can't sample.
+fn fresh_typed_args(param_types: &[String], n: usize, seed: u64) -> Vec<Vec<Value>> {
+    let mut state = seed ^ 0x2545_f491_4f6c_dd1d;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut args = Vec::with_capacity(param_types.len());
+        for ty in param_types {
+            match ty.as_str() {
+                // Scalars stay small (|n| <= 20) so exponential-growth ops don't overflow i64
+                // on a fresh input and fail closed: 20! < i64::MAX but 21! overflows, and a
+                // correct factorial/power op would be wrongly left tentative on a large sample.
+                "i64" => args.push(Value::Int((lcg(&mut state) % 41) as i64 - 20)),
+                "[i64]" => {
+                    let len = 1 + (lcg(&mut state) % 7) as usize; // 1..=7 (non-empty: max/min safe)
+                    let arr: Vec<i64> =
+                        (0..len).map(|_| (lcg(&mut state) % 41) as i64 - 20).collect();
+                    args.push(Value::int_array(&arr));
+                }
+                "string" => {
+                    let len = (lcg(&mut state) % 8) as usize; // 0..=7
+                    let s: String = (0..len)
+                        .map(|_| (b'a' + (lcg(&mut state) % 26) as u8) as char)
+                        .collect();
+                    args.push(Value::Str(s));
+                }
+                "bool" => args.push(Value::Bool(lcg(&mut state) % 2 == 0)),
+                _ => return Vec::new(), // unsupported shape -> fail closed
+            }
+        }
+        out.push(args);
+    }
+    out
+}
+
+/// Structural equality of two runtime outputs over the shapes the oracle differential-tests.
+fn outputs_agree(a: &RValue, b: &RValue) -> bool {
+    match (a, b) {
+        (RValue::Int(x), RValue::Int(y)) => x == y,
+        (RValue::Bool(x), RValue::Bool(y)) => x == y,
+        (RValue::Str(x), RValue::Str(y)) => x == y,
+        (RValue::Array(_), RValue::Array(_)) => rarr(a) == rarr(b),
+        _ => rt_eq(a, b),
+    }
 }
 
 /// Deterministic fresh inputs for a property's input shape. Deterministic (LCG,
@@ -534,19 +597,25 @@ mod tests {
     // max, but is not actually the maximum.
     const MAX_FAKE: &str = "fn array_max(arr: [i64]) -> i64 {\n    return arr[0];\n}\n";
 
+    const REF_MAX: &str = "fn array_max(arr: [i64]) -> i64 {\n    best := arr[0];\n    for item in arr {\n        if item > best {\n            best = item;\n        }\n    }\n    return best;\n}\n";
+
     #[test]
-    fn confirm_from_prompt_upgrades_correct_refutes_wrong() {
-        // ORACLE MANUFACTURING: a bare-NL prompt naming an operation with a complete spec
-        // CONFIRMS a correct program reference-free and REFUTES a subtle overfit — so a
-        // no-example guess can be upgraded from tentative to verified only when it is right.
-        assert!(confirm_from_prompt(MAX_OK, "array_max", "the maximum element in a list"));
-        assert!(!confirm_from_prompt(MAX_FAKE, "array_max", "the maximum element in a list"));
-        assert!(confirm_from_prompt(ABS_OK, "absolute", "the absolute value of a number"));
-        assert!(!confirm_from_prompt(ABS_FAKE, "absolute", "the absolute value of a number"));
-        // No complete spec for the prompt -> never confirm (stays tentative).
-        assert!(!confirm_from_prompt(MAX_OK, "array_max", "do something clever with a list"));
-        // A correct op but the WRONG operation named -> refuted (max is not a sort).
-        assert!(!confirm_from_prompt(MAX_OK, "array_max", "sort a list in ascending order"));
+    fn differential_confirm_is_vs_reference() {
+        // A correct candidate agrees with the reference on every fresh input; a subtle
+        // overfit (returns arr[0]) disagrees and stays tentative — no reference oracle needed
+        // beyond the resolved op's own verified impl.
+        assert!(differential_matches(MAX_OK, "array_max", REF_MAX, 32, 0x00ac_1e50));
+        assert!(!differential_matches(MAX_FAKE, "array_max", REF_MAX, 32, 0x00ac_1e50));
+    }
+
+    #[test]
+    fn sig_param_types_parses_shapes() {
+        assert_eq!(sig_param_types(REF_MAX), Some(vec!["[i64]".to_string()]));
+        assert_eq!(
+            sig_param_types("fn f(a: i64, b: [i64]) -> i64 { return a; }"),
+            Some(vec!["i64".to_string(), "[i64]".to_string()])
+        );
+        assert_eq!(sig_param_types("fn g() -> i64 { return 0; }"), Some(vec![]));
     }
 
     const ABS_OK: &str = "fn absolute(x: i64) -> i64 {\n    if x < 0 {\n        return 0 - x;\n    }\n    return x;\n}\n";

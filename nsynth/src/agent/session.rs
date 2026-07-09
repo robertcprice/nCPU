@@ -262,11 +262,12 @@ impl CodingAgentSession {
                     let unverified = examples.is_empty();
                     let nl = crate::verified_nl_router::split_prompt_examples(query).0;
                     // ORACLE MANUFACTURING: a bare-NL library/composition match is a GUESS at
-                    // intent → tentative. But when the prompt names an operation with a
-                    // COMPLETE decidable spec (sort/reverse/max/min/abs/sum/product), confirm
-                    // the matched program satisfies that spec on many fresh random inputs. A
-                    // program that does IS that operation (a mis-resolution fails the spec), so
-                    // the guess is CONFIRMED reference-free and drops the tentative label.
+                    // intent → tentative. Confirm it reference-free and EMERGENTLY (no per-op
+                    // spec table): resolve the prompt to the single op whose operation-word
+                    // signature it exactly matches and DIFFERENTIALLY execute the matched program
+                    // against that op's verified reference on fresh inputs. Agreement confirms the
+                    // guess (drop tentative); a mis-resolution / modified / compositional intent
+                    // resolves to no single op or fails the diff and keeps the tentative label.
                     let label = |base: String, code: &str| -> String {
                         if !unverified {
                             return base;
@@ -1146,13 +1147,14 @@ impl CodingAgentSession {
         // it is always false on this path today, but keeps the rule correct if a
         // future caller reaches run_synthesis with real examples.
         let user_oracle = !crate::verified_nl_router::split_prompt_examples(query).1.is_empty();
-        // ORACLE MANUFACTURING: even with no USER oracle, if the prompt names an operation
-        // with a COMPLETE decidable spec (sort/reverse/max/min/abs/sum/product), confirm the
-        // synthesized program satisfies that spec on many fresh random inputs. A program that
-        // does IS that operation (a wrong resolution — "average" -> sum — fails the spec), so
-        // the guess at intent is CONFIRMED reference-free and need not be flagged tentative.
-        // Never-wrong-safe: the spec is complete + checked on 32 fresh inputs (stronger than
-        // the user-example gate); no spec for the prompt -> false -> stays tentative.
+        // ORACLE MANUFACTURING (synthesis tier): even with no USER oracle, if the prompt names
+        // EXACTLY one op (emergently — token grounding + completeness gate), confirm the
+        // untrusted synthesized program DIFFERENTIALLY against that op's verified reference on
+        // many fresh inputs. Agreement everywhere means it computes that operation, so the guess
+        // at intent is CONFIRMED reference-free. A wrong synthesis (e.g. "average" mis-built, or
+        // a bad max combinator) disagrees on a fresh input and stays tentative. Never-wrong-safe:
+        // the reference is a proven impl and the check runs on 32 fresh inputs (stronger than the
+        // user-example gate); no exactly-named op -> false -> stays tentative.
         let nl = crate::verified_nl_router::split_prompt_examples(query).0;
         let confirmed = synthesis.success
             && crate::site::fn_name_from_mog(&synthesis.code).is_some_and(|entry| {
