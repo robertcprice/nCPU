@@ -186,3 +186,67 @@ fn gated_model_repairs_repo_beyond_deterministic_synthesis() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// Gated e2e for SELF-SYNTHESIS: the gated model repairs a fn beyond the symbolic engine
+/// (`has_dup`, nested scan) via the generic "fix the failing tests" path — the test-mining model
+/// tier — AND the verified solve is DISTILLED into the learned store (record_proposed_op), so the
+/// engine can solve it model-free next time. Skips unless a local model serves at
+/// NSYNTH_LOCAL_LLM_URL. Asserts BOTH the repair and the teach-back.
+#[test]
+fn gated_model_teaches_verified_solve_into_learned_store() {
+    if mog_synth::local_llm::propose_rust_fn("a function returning its i64 argument unchanged", None, 0.0)
+        .is_none()
+    {
+        eprintln!("skip: no local model at NSYNTH_LOCAL_LLM_URL");
+        return;
+    }
+    use mog_synth::agent::repo::RepoAgent;
+    use mog_synth::agent::runtime::CodeTaskSpec;
+    use mog_synth::agent::CodingIntent;
+    use mog_synth::agent::GuardrailPolicy;
+    use std::fs;
+
+    let store = std::env::temp_dir().join(format!("nsynth_gated_teach_{}.jsonl", std::process::id()));
+    let _ = fs::remove_file(&store);
+    std::env::set_var("NSYNTH_LEARNED_OPS_PATH", &store);
+
+    let root = std::env::temp_dir().join(format!("nsynth_gated_teach_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"gt\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+    )
+    .unwrap();
+    // 4 distinguishing examples so no example-induced overfit fits -> the solver genuinely fails ->
+    // the model tier fires (and its result reproduces every example before being accepted + taught).
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn has_dup(v: Vec<i64>) -> bool {\n    false\n}\n\n#[cfg(test)]\nmod tests {\n    use super::has_dup;\n    #[test]\n    fn t() {\n        assert_eq!(has_dup(vec![1, 2, 3]), false);\n        assert_eq!(has_dup(vec![1, 2, 2]), true);\n        assert_eq!(has_dup(vec![5, 5]), true);\n        assert_eq!(has_dup(vec![4, 5, 6, 4]), true);\n    }\n}\n",
+    )
+    .unwrap();
+
+    let issue = "fix the failing tests";
+    let intent = CodingIntent::from_nl_lenient(issue).expect("intent");
+    let spec = CodeTaskSpec::from_nl(
+        root.to_string_lossy(),
+        issue,
+        intent,
+        "cargo test".to_string(),
+        vec!["src/**".into()],
+        3,
+    );
+    let mut agent = RepoAgent::new(&root, GuardrailPolicy::default());
+    let result = agent.run(&spec);
+    assert!(
+        result.final_passed && result.success,
+        "gated model must repair has_dup beyond the engine; phases={:?}",
+        result.phases_completed
+    );
+    let taught = fs::read_to_string(&store).map(|s| s.lines().count()).unwrap_or(0);
+    assert!(taught >= 1, "the model's verified solve must be distilled into the learned store");
+
+    std::env::remove_var("NSYNTH_LEARNED_OPS_PATH");
+    let _ = fs::remove_file(&store);
+    let _ = fs::remove_dir_all(root);
+}

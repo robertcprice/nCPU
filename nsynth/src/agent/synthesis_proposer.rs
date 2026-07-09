@@ -2865,6 +2865,54 @@ mod tests {
         assert!(!out.contains("return 0;") && !out.contains("return 1;"), "raw i64 return survived: {out}");
     }
 
+    /// SELF-SYNTHESIS write side: a verified test-mined solve is distilled into the learned store
+    /// when NSYNTH_LEARNED_OPS_PATH is set. Model-independent (the solver produces the solve here),
+    /// so it guards the teach-back wire in CI without a served model.
+    #[test]
+    fn test_mined_synthesis_teaches_verified_solve_to_the_learned_store() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let store = std::env::temp_dir().join(format!("nsynth_teach_{}.jsonl", std::process::id()));
+        let _ = fs::remove_file(&store);
+        std::env::set_var("NSYNTH_LEARNED_OPS_PATH", &store);
+
+        let root = std::env::temp_dir().join(format!("nsynth_teachrepo_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"tc\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // A router-REFUSED affine (3n+7) with 4 examples: the generic query gives the router no name,
+        // so it falls to the raw solver (which fits the affine) — the branch that teaches.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn mystery(n: i64) -> i64 {\n    n\n}\n\n#[cfg(test)]\nmod tests {\n    use super::mystery;\n    #[test]\n    fn t() {\n        assert_eq!(mystery(1), 10);\n        assert_eq!(mystery(2), 13);\n        assert_eq!(mystery(0), 7);\n        assert_eq!(mystery(4), 19);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "teach".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: fix the failing tests".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let ctx = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let patch = try_test_mined_synthesis_patch(&task, &ctx, "fix the failing tests");
+        assert!(patch.is_some(), "raw-solver test-mining should repair 3n+7");
+        let taught = fs::read_to_string(&store).map(|s| s.lines().count()).unwrap_or(0);
+        assert!(taught >= 1, "the verified solve must be distilled into the learned store");
+
+        std::env::remove_var("NSYNTH_LEARNED_OPS_PATH");
+        let _ = fs::remove_file(&store);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// The model-synthesis lane is INERT with no served endpoint: try_model_synthesis returns None
     /// so the default (model-off) machine has zero behaviour change — the guarantee never depends on
     /// the model, and no network call is made in tests.
