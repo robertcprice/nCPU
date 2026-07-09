@@ -287,13 +287,64 @@ fn transpile(mog: &str, target: Target) -> String {
         return String::from("pass\n");
     }
     if target == Target::Rust {
-        return cast_ints_in_float_context(&add_mut_to_mutated_params(&infer_rust_vec_element_types(
-            &lower_rust_string_building(&lower_rust_char_ops(&rewrite_rust_string_splits(
-                &lower_rust_string_methods(&out),
+        return cast_ints_in_float_context(&clone_moved_index_reads(&add_mut_to_mutated_params(
+            &infer_rust_vec_element_types(&lower_rust_string_building(&lower_rust_char_ops(
+                &rewrite_rust_string_splits(&lower_rust_string_methods(&out)),
             ))),
         )));
     }
     out
+}
+
+/// `let x: T = vec[i];` where T is non-Copy (String / Vec<..>) MOVES the element out of the
+/// collection, which Rust forbids for an index read. Clone it: `= vec[i].clone();`. The LHS type
+/// gates non-Copy, so a Copy read (`let m: i64 = a[0];`) is left alone.
+fn clone_moved_index_reads(rust: &str) -> String {
+    let had_nl = rust.ends_with('\n');
+    let body: String = rust
+        .lines()
+        .map(|line| {
+            let t = line.trim_start();
+            let indent = &line[..line.len() - t.len()];
+            let (kw, rest) = if let Some(r) = t.strip_prefix("let mut ") {
+                ("let mut ", r)
+            } else if let Some(r) = t.strip_prefix("let ") {
+                ("let ", r)
+            } else {
+                return line.to_string();
+            };
+            let Some((decl, rhs_semi)) = rest.split_once(" = ") else {
+                return line.to_string();
+            };
+            let Some((_, ty)) = decl.split_once(':') else {
+                return line.to_string();
+            };
+            let ty = ty.trim();
+            if !(ty == "String" || ty.starts_with("Vec<")) {
+                return line.to_string();
+            }
+            let Some(rhs) = rhs_semi.strip_suffix(';') else {
+                return line.to_string();
+            };
+            let rhs = rhs.trim();
+            // An INDEX read: `IDENT[..]` — not a `vec![..]` macro or a `[..]` array literal.
+            let is_index_read = rhs.ends_with(']')
+                && !rhs.starts_with("vec!")
+                && !rhs.starts_with('[')
+                && !rhs.ends_with(".clone()");
+            if is_index_read {
+                format!("{indent}{kw}{decl} = {rhs}.clone();")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if had_nl {
+        body + "\n"
+    } else {
+        body
+    }
 }
 
 /// In an `-> f64` function, Mog freely mixes i64 idents into float arithmetic (`1.0 * n`, `1.0 / i`,
@@ -2174,6 +2225,15 @@ mod inline_if_tests {
         // An INTEGER fn must be completely untouched by the float pass.
         let intfn = "fn s(a: i64, b: i64) -> i64 {\n    return a * a + b;\n}\n";
         assert!(to_rust(intfn).contains("return a * a + b;"), "int fn touched by float pass");
+    }
+
+    #[test]
+    fn rust_clones_non_copy_index_reads_but_not_copy_or_literals() {
+        let mog = "fn f(pairs: [[i64]]) -> [i64] {\n    a: [i64] = pairs[0];\n    m: i64 = a[0];\n    out: [i64] = [];\n    return a;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("let mut a: Vec<i64> = pairs[(0) as usize].clone();"), "non-Copy index read not cloned: {rs}");
+        assert!(rs.contains("let mut m: i64 = a[(0) as usize];") && !rs.contains("a[(0) as usize].clone()"), "Copy read wrongly cloned: {rs}");
+        assert!(rs.contains("let mut out: Vec<i64> = vec![];"), "vec![] literal wrongly cloned: {rs}");
     }
 
     #[test]
