@@ -818,11 +818,11 @@ fn scan_holes(code: &str) -> Vec<Hole> {
             .unwrap_or_default();
         let fields = &self_fields;
         let is_mut = params_str.contains("&mut self");
-        let value_params: Vec<String> = parse_typed_params(params_str)
+        let value_typed: Vec<(String, String)> = parse_typed_params(params_str)
             .into_iter()
             .filter(|(n, _)| n != "self")
-            .map(|(n, _)| n)
             .collect();
+        let value_params: Vec<String> = value_typed.iter().map(|(n, _)| n.clone()).collect();
         let has_ret = !ret.is_empty() && ret != "()";
         let has_self = params_str.contains("self");
         let scalar_fields: Vec<&String> = fields.iter().filter(|(_, t)| t == "i64").map(|(n, _)| n).collect();
@@ -896,6 +896,37 @@ fn scan_holes(code: &str) -> Vec<Hole> {
                     }
                 }
             }
+            // CRUD READS. A bool getter over a collection field: is_empty / non-empty.
+            if ret == "bool" {
+                for (fname, fty) in fields {
+                    if fty.starts_with("Vec<") || fty == "String" {
+                        bodies.push(format!("return self.{fname}.is_empty();"));
+                        bodies.push(format!("return !self.{fname}.is_empty();"));
+                    }
+                }
+            }
+            // INDEXED read: a single i64 param addresses an element (`price_at(i) -> items[i].price`,
+            // `get(i) -> items[i].clone()`, or a scalar `Vec<i64>` element).
+            if value_typed.len() == 1 && value_typed[0].1 == "i64" {
+                let idx = &value_typed[0].0;
+                for (fname, fty) in fields {
+                    if fty == "Vec<i64>" && ret == "i64" {
+                        bodies.push(format!("return self.{fname}[{idx} as usize];"));
+                    }
+                    if let Some(elem) = elem_type(fty) {
+                        if ret == elem {
+                            bodies.push(format!("return self.{fname}[{idx} as usize].clone();"));
+                        }
+                        if ret == "i64" {
+                            for (rf, rft) in fields_of(&elem) {
+                                if rft == "i64" {
+                                    bodies.push(format!("return self.{fname}[{idx} as usize].{rf};"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         if is_mut {
             for (fname, fty) in fields {
@@ -943,6 +974,30 @@ fn scan_holes(code: &str) -> Vec<Hole> {
                     bodies.push(format!("self.{f} += 1; return self.{f};"));
                     for p in &value_params {
                         bodies.push(format!("self.{f} += {p}; return self.{f};"));
+                    }
+                }
+            }
+            // CRUD WRITES over a collection field: clear (no params), remove-by-index (one i64),
+            // and field-update-by-index (`set_price(i, p) -> items[i].price = p`).
+            for (fname, fty) in fields {
+                if !fty.starts_with("Vec<") {
+                    continue;
+                }
+                if value_typed.is_empty() {
+                    bodies.push(format!("self.{fname}.clear();"));
+                }
+                if value_typed.len() == 1 && value_typed[0].1 == "i64" {
+                    bodies.push(format!("self.{fname}.remove({} as usize);", value_typed[0].0));
+                }
+                if value_typed.len() == 2 && value_typed[0].1 == "i64" {
+                    if let Some(elem) = elem_type(fty) {
+                        let (idx, _) = &value_typed[0];
+                        let (val, vty) = &value_typed[1];
+                        for (rf, rft) in fields_of(&elem) {
+                            if &rft == vty {
+                                bodies.push(format!("self.{fname}[{idx} as usize].{rf} = {val};"));
+                            }
+                        }
                     }
                 }
             }
@@ -4215,6 +4270,18 @@ mod tests {
         // total -> aggregate over the record's i64 field, NOT `self.priority` (priority is Item's, not TodoList's).
         assert!(holes[2].candidates.iter().any(|b| b.contains("self.items.iter().map(|e| e.priority).sum()")), "no field-aggregate");
         assert!(holes[2].candidates.iter().all(|b| !b.contains("self.priority")), "leaked a non-self field");
+    }
+
+    #[test]
+    fn scan_holes_covers_full_crud_over_a_typed_collection() {
+        let code = "pub struct Item { pub name: String, pub price: i64 }\npub struct Cart { pub items: Vec<Item> }\nimpl Cart {\n pub fn is_empty(&self) -> bool {}\n pub fn clear(&mut self) {}\n pub fn remove_at(&mut self, i: i64) {}\n pub fn price_at(&self, i: i64) -> i64 {}\n pub fn set_price(&mut self, i: i64, p: i64) {}\n}\n";
+        let holes = scan_holes(code);
+        let has = |i: usize, needle: &str| holes[i].candidates.iter().any(|b| b.contains(needle));
+        assert!(has(0, "self.items.is_empty()"), "is_empty");
+        assert!(has(1, "self.items.clear();"), "clear");
+        assert!(has(2, "self.items.remove(i as usize);"), "remove-by-index");
+        assert!(has(3, "self.items[i as usize].price;"), "indexed field read");
+        assert!(has(4, "self.items[i as usize].price = p;"), "field update by index");
     }
 
     #[test]
