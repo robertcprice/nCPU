@@ -1963,9 +1963,16 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                 "match" => Token::Match,
                 "break" => Token::Break,
                 "continue" => Token::Continue,
-                "ok" => Token::Ok,
-                "err" => Token::Err,
-                "some" => Token::Some,
+                // Result/Option CONSTRUCTORS only when immediately APPLIED — `ok(v)`,
+                // `err(e)`, `some(v)` (the parser requires `(` after each). Bare `ok`/`err`/
+                // `some` (as a variable name — `ok: i64 = 1;`, `return ok;`) is now a plain
+                // identifier, so a program using them as locals no longer silently breaks (a
+                // real hazard for hand/model-authored Mog: `ok` is a natural flag name — it
+                // sank `count_substring`). `none` stays a keyword: it is NULLARY (bare `none`
+                // is the None value), so there is no `(` to disambiguate on.
+                "ok" if chars.peek() == Some(&'(') => Token::Ok,
+                "err" if chars.peek() == Some(&'(') => Token::Err,
+                "some" if chars.peek() == Some(&'(') => Token::Some,
                 "none" => Token::None,
                 "true" => Token::True,
                 "false" => Token::False,
@@ -6330,6 +6337,24 @@ fn main() -> i64 {
         assert!(!output_matches(&Value::Int(3), &BmValue::Str("3".to_string())));
         assert!(!output_matches(&Value::Array(vec![Value::Int(1)]), &BmValue::Int(1)));
         assert!(!output_matches(&Value::Pair(1, 2), &BmValue::Quad(1, 2, 0, 0)));
+    }
+
+    #[test]
+    fn ok_err_some_are_usable_as_identifiers() {
+        use crate::benchmark::Example;
+        // `ok`/`err`/`some` are Result/Option constructors ONLY when applied (`ok(v)`), so a
+        // program using them as plain variable names must run (it silently mis-parsed before
+        // — this sank the hand-authored `count_substring`). A flag named `ok` in a loop:
+        let flag = "fn f(a: [i64]) -> i64 {\n    ok: i64 = 1;\n    i: i64 = 0;\n    while i < a.len {\n        if a[i] == 0 {\n            ok = 0;\n        }\n        i = i + 1;\n    }\n    return ok;\n}\n";
+        assert!(code_reproduces_examples(flag, &[
+            Example { inputs: vec![BmValue::int_array(&[1, 2, 3])], expected: BmValue::Int(1) },
+            Example { inputs: vec![BmValue::int_array(&[1, 0, 3])], expected: BmValue::Int(0) },
+        ]));
+        // ...and the constructors themselves still parse when applied.
+        let ctor = "fn f(x: i64) -> i64 {\n    r: i64? = some(x);\n    return x;\n}\n";
+        assert!(code_reproduces_examples(ctor, &[
+            Example { inputs: vec![BmValue::Int(7)], expected: BmValue::Int(7) },
+        ]));
     }
 
     #[test]
