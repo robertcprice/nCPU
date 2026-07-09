@@ -513,13 +513,9 @@ pub fn try_multihole_fill_patch(
             continue;
         }
         let Some(text) = f.text.as_deref() else { continue };
-        let fields = parse_struct_fields(&text[..text.find("#[cfg(test)]").unwrap_or(text.len())]);
-        if fields.is_empty() {
-            continue;
-        }
         let ts = text.find("#[cfg(test)]").unwrap_or(text.len());
         let code = text[..ts].to_string();
-        let holes = scan_holes(&code, &fields);
+        let holes = scan_holes(&code);
         if holes.is_empty() {
             continue;
         }
@@ -656,12 +652,110 @@ struct Hole {
     is_prereq: bool,
 }
 
+/// Every `struct NAME { .. }` in `code` as (name, [(field, type)]).
+fn parse_structs(code: &str) -> Vec<(String, Vec<(String, String)>)> {
+    let mut out = Vec::new();
+    let cb = code.as_bytes();
+    let mut search = 0;
+    while let Some(rel) = code[search..].find("struct ") {
+        let at = search + rel;
+        search = at + 7;
+        if at > 0 && (cb[at - 1].is_ascii_alphanumeric() || cb[at - 1] == b'_') {
+            continue; // not a word-boundary `struct`
+        }
+        let after = &code[at + 7..];
+        let name_end = after.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(after.len());
+        let name = after[..name_end].to_string();
+        let Some(open) = after.find('{') else { continue };
+        let ab = after.as_bytes();
+        let mut depth = 0i32;
+        let mut close = None;
+        for i in open..ab.len() {
+            match ab[i] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        let fields = parse_typed_params(&after[open + 1..close])
+            .into_iter()
+            .map(|(n, t)| (n.trim_start_matches("pub ").trim().to_string(), t))
+            .filter(|(n, _)| !n.is_empty())
+            .collect();
+        out.push((name, fields));
+    }
+    out
+}
+
+/// Each `impl [Trait for] NAME { .. }` block as (self-type-name, body_open_byte, body_close_byte),
+/// so a method's `self` fields resolve to the RIGHT struct in a multi-struct file.
+fn impl_blocks(code: &str) -> Vec<(String, usize, usize)> {
+    let mut out = Vec::new();
+    let cb = code.as_bytes();
+    let mut search = 0;
+    while let Some(rel) = code[search..].find("impl").map(|r| search + r) {
+        let at = rel;
+        search = at + 4;
+        let before_ok = at == 0 || !(cb[at - 1].is_ascii_alphanumeric() || cb[at - 1] == b'_');
+        let after_ok = matches!(cb.get(at + 4), Some(b' ') | Some(b'<'));
+        if !before_ok || !after_ok {
+            continue;
+        }
+        let after = &code[at..];
+        let Some(open) = after.find('{') else { break };
+        let header = &after[4..open];
+        let ty = header.rsplit(" for ").next().unwrap_or(header).trim();
+        let name: String = ty.trim_start_matches('&').chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        if name.is_empty() {
+            continue;
+        }
+        let ab = after.as_bytes();
+        let mut depth = 0i32;
+        let mut close = None;
+        for i in open..ab.len() {
+            match ab[i] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else { continue };
+        out.push((name, at + open, at + close));
+    }
+    out
+}
+
 /// Scan `code` (the non-test part) for every function/method with an EMPTY body and build, per hole,
-/// its candidate bodies (field assign/op-assign/push/getter/computed/multi-statement/mutate-return)
-/// plus a type-default. Shared by generate_stub_fills (single-hole) and try_multihole_fill_patch
-/// (coordinate-descent over ALL holes at once — the case where the crate only compiles once every
-/// hole is filled).
-fn scan_holes(code: &str, fields: &[(String, String)]) -> Vec<Hole> {
+/// its candidate bodies plus a type-default. STRUCT-AWARE: a method's candidates use ITS impl's
+/// struct fields (right struct in a multi-struct file), and a `Vec<Record>` collection field unlocks
+/// typed-record templates — construct-and-push (`self.items.push(Item { title, priority })`) and
+/// field-aggregate getters (`self.items.iter().map(|e| e.priority).sum()`). Shared by
+/// generate_stub_fills (single-hole) and try_multihole_fill_patch (coordinate-descent over all holes).
+fn scan_holes(code: &str) -> Vec<Hole> {
+    let structs = parse_structs(code);
+    let impls = impl_blocks(code);
+    let fields_of = |name: &str| -> Vec<(String, String)> {
+        structs.iter().find(|(n, _)| n == name).map(|(_, f)| f.clone()).unwrap_or_default()
+    };
+    let elem_type = |vec_ty: &str| -> Option<String> {
+        vec_ty.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')).map(|s| s.trim().to_string())
+    };
     let mut holes = Vec::new();
     let cb = code.as_bytes();
     let mut search = 0;
@@ -716,6 +810,13 @@ fn scan_holes(code: &str, fields: &[(String, String)]) -> Vec<Hole> {
         if !code[body_open..close].trim().is_empty() {
             continue; // not an empty stub
         }
+        // Resolve `self` to the impl's struct (right fields in a multi-struct file).
+        let self_fields: Vec<(String, String)> = impls
+            .iter()
+            .find(|(_, o, c)| body_open > *o && body_open < *c)
+            .map(|(n, _, _)| fields_of(n))
+            .unwrap_or_default();
+        let fields = &self_fields;
         let is_mut = params_str.contains("&mut self");
         let value_params: Vec<String> = parse_typed_params(params_str)
             .into_iter()
@@ -781,13 +882,39 @@ fn scan_holes(code: &str, fields: &[(String, String)]) -> Vec<Hole> {
                         }
                     }
                 }
+                // Vec<Record> field -> aggregate over one of the record's i64 fields
+                // (`self.items.iter().map(|e| e.priority).sum()/max/min`).
+                for (fname, fty) in fields {
+                    if let Some(elem) = elem_type(fty) {
+                        for (rf, rft) in fields_of(&elem) {
+                            if rft == "i64" {
+                                bodies.push(format!("self.{fname}.iter().map(|e| e.{rf}).sum()"));
+                                bodies.push(format!("self.{fname}.iter().map(|e| e.{rf}).max().unwrap_or(0)"));
+                                bodies.push(format!("self.{fname}.iter().map(|e| e.{rf}).min().unwrap_or(0)"));
+                            }
+                        }
+                    }
+                }
             }
         }
         if is_mut {
             for (fname, fty) in fields {
-                if fty.starts_with("Vec<") {
-                    for p in &value_params {
-                        bodies.push(format!("self.{fname}.push({p});"));
+                if let Some(elem) = elem_type(fty) {
+                    let rf = fields_of(&elem);
+                    if rf.is_empty() {
+                        // primitive element (Vec<i64>/Vec<String>): push each param directly.
+                        for p in &value_params {
+                            bodies.push(format!("self.{fname}.push({p});"));
+                        }
+                    } else if !value_params.is_empty() && rf.len() == value_params.len() {
+                        // record element: CONSTRUCT the record from the params, then push.
+                        let inits = rf
+                            .iter()
+                            .zip(&value_params)
+                            .map(|((rn, _), p)| format!("{rn}: {p}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        bodies.push(format!("self.{fname}.push({elem} {{ {inits} }});"));
                     }
                 } else {
                     for p in &value_params {
@@ -849,12 +976,11 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
     let test_start = content.find("#[cfg(test)]").unwrap_or(content.len());
     let code = &content[..test_start];
     let tail = &content[test_start..];
-    let fields = parse_struct_fields(code);
-    if fields.is_empty() {
-        return Vec::new();
+    if parse_structs(code).is_empty() {
+        return Vec::new(); // single-hole stub-gen is for struct methods; free fns go to the synthesizer
     }
     let mut out = Vec::new();
-    for h in scan_holes(code, &fields) {
+    for h in scan_holes(code) {
         for body in &h.candidates {
             let mut m = String::with_capacity(content.len() + body.len() + 4);
             m.push_str(&code[..h.body_open]);
@@ -4075,11 +4201,27 @@ mod tests {
     }
 
     #[test]
+    fn scan_holes_is_struct_aware_across_multiple_structs() {
+        // A method's candidates must use ITS impl struct's fields, not a flat union of all structs.
+        let code = "pub struct Item { pub title: String, pub priority: i64 }\npub struct TodoList { pub items: Vec<Item> }\nimpl TodoList {\n pub fn add(&mut self, title: String, priority: i64) {}\n pub fn count(&self) -> i64 {}\n pub fn total(&self) -> i64 {}\n}\n";
+        let holes = scan_holes(code);
+        assert_eq!(holes.len(), 3);
+        // add -> construct-and-push a typed record from the params.
+        assert!(
+            holes[0].candidates.iter().any(|b| b.contains("self.items.push(Item { title: title, priority: priority });")),
+            "no construct-and-push: {:?}",
+            holes[0].candidates
+        );
+        // total -> aggregate over the record's i64 field, NOT `self.priority` (priority is Item's, not TodoList's).
+        assert!(holes[2].candidates.iter().any(|b| b.contains("self.items.iter().map(|e| e.priority).sum()")), "no field-aggregate");
+        assert!(holes[2].candidates.iter().all(|b| !b.contains("self.priority")), "leaked a non-self field");
+    }
+
+    #[test]
     fn prereq_flag_marks_pure_mutators_only() {
         // `&mut self` no-return is a prerequisite; a getter and a mutate-return are not.
         let code = "pub struct S { pub xs: Vec<i64>, pub n: i64 }\nimpl S {\n pub fn add(&mut self, x: i64) {}\n pub fn count(&self) -> i64 {}\n pub fn next(&mut self) -> i64 {}\n}\n";
-        let fields = parse_struct_fields(code);
-        let holes = scan_holes(code, &fields);
+        let holes = scan_holes(code);
         assert_eq!(holes.len(), 3);
         assert!(holes[0].is_prereq, "add is a prerequisite mutator");
         assert!(!holes[1].is_prereq, "count getter is not");
@@ -4096,8 +4238,7 @@ mod tests {
     #[test]
     fn scan_holes_finds_multiple_holes_with_candidates_and_defaults() {
         let code = "pub struct Cart { pub prices: Vec<i64> }\nimpl Cart {\n  pub fn add(&mut self, price: i64) {}\n  pub fn count(&self) -> i64 {}\n  pub fn total(&self) -> i64 {}\n}\n";
-        let fields = parse_struct_fields(code);
-        let holes = scan_holes(code, &fields);
+        let holes = scan_holes(code);
         assert_eq!(holes.len(), 3, "expected add/count/total holes");
         // `add` (unit mutator) -> a push candidate + an empty default.
         assert!(holes[0].candidates.iter().any(|b| b.contains("self.prices.push(price)")), "no push for add");
@@ -4111,8 +4252,7 @@ mod tests {
     fn scan_holes_gives_free_functions_param_arithmetic_not_self_fields() {
         // A free fn (no self) in a struct-bearing file must get PARAM arithmetic, never `self.X`.
         let code = "pub struct S { pub v: i64 }\npub fn net(balance: i64, fees: i64) -> i64 {}\n";
-        let fields = parse_struct_fields(code);
-        let holes = scan_holes(code, &fields);
+        let holes = scan_holes(code);
         let net = holes.last().expect("net hole");
         assert!(net.candidates.iter().any(|b| b.contains("balance - fees")), "no param subtraction for free fn");
         assert!(net.candidates.iter().all(|b| !b.contains("self.")), "free fn must not reference self");
