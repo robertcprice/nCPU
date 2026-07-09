@@ -365,8 +365,8 @@ pub fn try_test_mined_synthesis_patch(
     description: &str,
 ) -> Option<RepairPatch> {
     let intent = CodingIntent::from_nl_lenient(description).ok();
-    let target = pick_target_path(task, context, intent.as_ref()).ok()?;
-    let old_text = read_relative_file(context, &target).ok()?;
+    let mut target = pick_target_path(task, context, intent.as_ref()).ok()?;
+    let mut old_text = read_relative_file(context, &target).ok()?;
     let default_fn = intent
         .as_ref()
         .map(|i| i.function_name.strip_prefix("nl_").unwrap_or(&i.function_name).to_string())
@@ -412,6 +412,29 @@ pub fn try_test_mined_synthesis_patch(
     }
     if rows.is_empty() {
         return None;
+    }
+    // Repair the file that DEFINES repo_fn, not the one pick_target_path chose. The picked target
+    // follows the QUERY / assert site, which for a real repo is often NOT the definition: an
+    // integration test lives in `tests/`, and `src/lib.rs` may only declare `pub mod math;` while
+    // the function lives in `src/math.rs`. Editing the assert site or the module-declaring root
+    // would replace the wrong body or append a duplicate/misplaced definition. Only retarget when
+    // the defining file DIFFERS from the picked target (so single-file repairs are byte-for-byte
+    // unchanged), and re-read it through read_relative_file so old_text matches the on-disk content
+    // the patch apply will search for — the context snapshot can differ (trailing whitespace) and
+    // trip "expected exactly one occurrence".
+    if let Some(def_path) = context
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with(".rs") && f.path != target)
+        .find(|f| f.text.as_deref().map(|t| file_defines_function(t, &repo_fn)).unwrap_or(false))
+        .map(|f| f.path.clone())
+    {
+        if !old_text.contains(&format!("fn {repo_fn}")) {
+            if let Ok(def_text) = read_relative_file(context, &def_path) {
+                target = def_path;
+                old_text = def_text;
+            }
+        }
     }
     let repo_has_fn = old_text.contains(&format!("fn {repo_fn}"));
 
@@ -2556,6 +2579,54 @@ mod tests {
         assert!(
             patch.edits.iter().any(|e| e.path == "src/lib.rs" && e.new_text.contains('2')),
             "mystery body replaced with the solver's 2x+1"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Retarget-to-definition: `src/lib.rs` only declares `pub mod math;` and the failing function
+    /// lives in `src/math.rs`. pick_target_path follows the crate root, but the patch must edit the
+    /// DEFINING file — otherwise it appends a misplaced/duplicate definition and never satisfies the
+    /// oracle. The mined patch must land on src/math.rs.
+    #[test]
+    fn test_mined_synthesis_targets_the_defining_module_file_not_the_crate_root() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_retarget_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"rt\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(root.join("src/lib.rs"), "pub mod math;\n").expect("lib.rs");
+        fs::write(
+            root.join("src/math.rs"),
+            "pub fn mystery(n: i64) -> i64 {\n    n\n}\n\n#[cfg(test)]\nmod tests {\n    use super::mystery;\n    #[test]\n    fn t() {\n        assert_eq!(mystery(2), 5);\n        assert_eq!(mystery(3), 7);\n        assert_eq!(mystery(4), 9);\n    }\n}\n",
+        )
+        .expect("math.rs");
+
+        let task = RepoTaskSpec {
+            id: "retarget".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: fix the failing tests".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
+        assert!(
+            patch.edits.iter().any(|e| e.path == "src/math.rs"),
+            "patch must edit the DEFINING file src/math.rs, not the crate root: {:?}",
+            patch.edits.iter().map(|e| &e.path).collect::<Vec<_>>()
+        );
+        assert!(
+            !patch.edits.iter().any(|e| e.path == "src/lib.rs"),
+            "must NOT edit the module-declaring crate root"
         );
         let _ = fs::remove_dir_all(&root);
     }
