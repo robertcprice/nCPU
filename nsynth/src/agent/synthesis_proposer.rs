@@ -508,27 +508,37 @@ fn synthesize_mined_for_fn(
                 ..Default::default()
             };
             let res = crate::solver::solve_problem(&problem);
-            if !res.success {
-                return None;
-            }
-            if crate::runtime::verify_problem_code_strict(&problem, &res.code).is_err() {
-                return None;
-            }
-            // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
-            if crate::synth_confidence::is_memorization_overfit(&res.code, &exs) {
-                return None;
-            }
+            let (solved_code, solved_method) = if res.success {
+                if crate::runtime::verify_problem_code_strict(&problem, &res.code).is_err() {
+                    return None;
+                }
+                // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
+                if crate::synth_confidence::is_memorization_overfit(&res.code, &exs) {
+                    return None;
+                }
+                (res.code, res.method)
+            } else {
+                // BEYOND THE SYMBOLIC ENGINE: the model-free solver could not synthesize this. Reach
+                // for the served model (INERT without NSYNTH_LOCAL_LLM_URL, so zero change by
+                // default), accepting a proposal ONLY if it reproduces EVERY mined example and clears
+                // the robustness floor — the same never-wrong-against-the-tests gate the solver path
+                // uses. This is the self-synthesis of NOVEL logic: the model teaches the engine a
+                // capability it lacked, distilled below so the next occurrence is solved model-free.
+                let code = try_model_synthesis(&problem, &exs, repo_fn)?;
+                (code, "model-synthesis".to_string())
+            };
             // SELF-SYNTHESIS: teach this verified solve back into the learned store, so the engine
-            // absorbs the real functions it repairs and solves them model-free next time (the read
-            // side, try_learned in solve_problem, is already wired; this closes the write side for
-            // the repo path). Inert unless NSYNTH_LEARNED_OPS_PATH is set, and record_proposed_op
-            // re-gates it (rejects constants + already-library ops, runs the semantic-contract
-            // oracle, dedups); try_learned RE-verifies on read, so a narrow fit can never emit an
-            // example-inconsistent answer. Gate on >= 3 examples to prefer well-determined solves.
+            // absorbs the real functions it repairs (whether the solver OR the model produced them)
+            // and solves them model-free next time (the read side, try_learned in solve_problem, is
+            // already wired; this closes the write side for the repo path). Inert unless
+            // NSYNTH_LEARNED_OPS_PATH is set, and record_proposed_op re-gates it (rejects constants +
+            // already-library ops, runs the semantic-contract oracle, dedups); try_learned
+            // RE-verifies on read, so a narrow fit can never emit an example-inconsistent answer.
+            // Gate on >= 3 examples to prefer well-determined solves.
             if exs.len() >= 3 {
-                crate::op_library::record_proposed_op(&problem, &res.code);
+                crate::op_library::record_proposed_op(&problem, &solved_code);
             }
-            (res.code, res.method)
+            (solved_code, solved_method)
         }
     };
     let synthesized = rust_code_for_repo_synthesis(&synth_mog);
@@ -1666,6 +1676,48 @@ fn rename_first_fn(code: &str, new_name: &str) -> String {
 }
 
 /// Parameter list (raw text between parens) of `fn {name}(...)`.
+/// MODEL SYNTHESIS (self-synthesis of novel logic): when the symbolic engine cannot synthesize a
+/// mined problem, ask the served local model for a Mog program. INERT unless NSYNTH_LOCAL_LLM_URL is
+/// set (`propose_program` returns `None`), so there is zero behaviour change by default. Best-of-N
+/// with a rising-temperature schedule and concrete failure feedback (mirrors the flywheel's
+/// model_teach); a proposal is accepted ONLY if — renamed to the repo fn — it reproduces EVERY mined
+/// example AND clears the robustness floor (`verify_problem_code_strict`). The caller distils the
+/// accepted program into the learned store, so the engine solves the same shape model-free next
+/// time. The model never bypasses a gate: the guarantee is the example-reproduction + robustness
+/// checks here plus the repair loop's cargo-test oracle, not the model.
+fn try_model_synthesis(
+    problem: &crate::benchmark::Problem,
+    exs: &[crate::benchmark::Example],
+    repo_fn: &str,
+) -> Option<String> {
+    let mut request = format!("{repo_fn}\n\nExamples:\n");
+    for ex in exs {
+        request.push_str(&format!("  {:?} -> {:?}\n", ex.inputs, ex.expected));
+    }
+    request.push_str("\nWrite the Mog function.");
+    let mut prior: Option<(String, String)> = None;
+    for &t in &[0.1f64, 0.3, 0.5, 0.7] {
+        let p = prior.as_ref().map(|(c, e)| (c.as_str(), e.as_str()));
+        // `?` short-circuits the whole helper when there is no endpoint (first call is None), so the
+        // default (model-off) machine never spins the best-of loop.
+        let code = crate::local_llm::propose_program(&request, p, t)?;
+        let renamed = rename_first_fn(&code, repo_fn);
+        if !crate::runtime::code_reproduces_examples(&renamed, exs) {
+            prior = Some((code, "wrong output on one of the examples — fix the logic".to_string()));
+            continue;
+        }
+        if crate::runtime::verify_problem_code_strict(problem, &renamed).is_err() {
+            prior = Some((
+                code,
+                "crashes / misbehaves on nearby inputs — handle edge cases".to_string(),
+            ));
+            continue;
+        }
+        return Some(renamed);
+    }
+    None
+}
+
 /// The return type spelled in `fn NAME(..) -> RET {`. `None` if the fn or arrow is absent.
 fn fn_return_type(code: &str, name: &str) -> Option<String> {
     let start = code.find(&format!("fn {name}("))?;
@@ -2811,6 +2863,33 @@ mod tests {
         assert!(out.contains("return (0) != 0;"), "0-return not adapted: {out}");
         assert!(out.contains("return (1) != 0;"), "1-return not adapted: {out}");
         assert!(!out.contains("return 0;") && !out.contains("return 1;"), "raw i64 return survived: {out}");
+    }
+
+    /// The model-synthesis lane is INERT with no served endpoint: try_model_synthesis returns None
+    /// so the default (model-off) machine has zero behaviour change — the guarantee never depends on
+    /// the model, and no network call is made in tests.
+    #[test]
+    fn model_synthesis_is_inert_without_an_endpoint() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        use crate::benchmark::{Example, Problem, Value};
+        let exs = vec![
+            Example { inputs: vec![Value::Int(3)], expected: Value::Int(6) },
+            Example { inputs: vec![Value::Int(5)], expected: Value::Int(20) },
+            Example { inputs: vec![Value::Int(2)], expected: Value::Int(2) },
+        ];
+        let problem = Problem {
+            name: "f".into(),
+            category: "t",
+            description: "",
+            signature: "fn f(a: i64) -> i64",
+            examples: exs.clone(),
+            ..Default::default()
+        };
+        assert!(
+            try_model_synthesis(&problem, &exs, "f").is_none(),
+            "model lane must be inert without NSYNTH_LOCAL_LLM_URL"
+        );
     }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
