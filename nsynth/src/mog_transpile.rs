@@ -1322,10 +1322,15 @@ fn rewrite_index_brackets_rust(body: &str) -> String {
                         out.push_str(inner);
                         out.push(']');
                     } else {
-                        out.push_str(&format!("[({}) as usize]", inner.trim()));
+                        // Recurse: the index expression itself may index (`a[b[i]]`).
+                        out.push_str(&format!(
+                            "[({}) as usize]",
+                            rewrite_index_brackets_rust(inner.trim())
+                        ));
                     }
                 } else {
-                    out.push_str(&format!("vec![{inner}]"));
+                    // Recurse: an array literal may contain index reads (`vec![a[i], b[j]]`).
+                    out.push_str(&format!("vec![{}]", rewrite_index_brackets_rust(inner)));
                 }
                 i = end + 1;
                 continue;
@@ -2225,6 +2230,17 @@ mod inline_if_tests {
         // An INTEGER fn must be completely untouched by the float pass.
         let intfn = "fn s(a: i64, b: i64) -> i64 {\n    return a * a + b;\n}\n";
         assert!(to_rust(intfn).contains("return a * a + b;"), "int fn touched by float pass");
+    }
+
+    #[test]
+    fn rust_index_wrapping_recurses_into_literals_and_nested_indices() {
+        // Inner indices inside a vec! literal must be wrapped.
+        let mog = "fn f(a: [i64], b: [i64]) -> [[i64]] {\n    out: [[i64]] = [];\n    i: i64 = 0;\n    out.push([a[i], b[i]]);\n    return out;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("vec![a[(i) as usize], b[(i) as usize]]"), "inner literal indices not wrapped: {rs}");
+        // A nested index `a[b[i]]` must wrap both.
+        let mog2 = "fn g(a: [i64], b: [i64]) -> i64 {\n    i: i64 = 0;\n    return a[b[i]];\n}\n";
+        assert!(to_rust(mog2).contains("a[(b[(i) as usize]) as usize]"), "nested index not wrapped: {}", to_rust(mog2));
     }
 
     #[test]
