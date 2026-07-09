@@ -160,6 +160,18 @@ impl RepoRunSupervisor {
             .run_with_context(task, &context, &proposer)
             .map_err(|e| e.to_string())?;
 
+        // DISTILL a model-INTENT solve ONLY on a true repo-test accept: if the winning
+        // patch came from the gated model side door, its engine-synthesized program is
+        // absorbed into the learned store so a future run solves this task model-free
+        // (the model teaches once). Both calls are inert no-ops when no model was in the
+        // loop (nothing staged) — zero effect on any default run. A non-accepting run
+        // drops the staged candidate so a rejected spec never teaches the store.
+        if repair.success {
+            let _ = crate::agent::synthesis_proposer::distill_accepted_model_solve(&task.id);
+        } else {
+            crate::agent::synthesis_proposer::discard_model_distillation(&task.id);
+        }
+
         let agent_status = if run_path.exists() {
             Some(AgentRun::load(&run_path)?.status)
         } else {
@@ -277,6 +289,18 @@ pub fn nl_synthesis_proposer_with_run(
         &description,
         analysis,
     ) {
+        return Ok(patch);
+    }
+
+    // GATED MODEL-INTENT side door (terminal, after every deterministic lane): an
+    // optional local LLM proposes a SPEC (I/O examples), the engine synthesizes +
+    // strictly verifies, and the cargo-test oracle still gates the patch. Inert
+    // without NSYNTH_LOCAL_LLM_URL, so this is a zero-effect no-op on any default run.
+    // On acceptance the engine-synthesized program is distilled by the supervisor
+    // (see `execute_nl_task`) so a future run solves the same task model-free.
+    if let Some(patch) =
+        crate::agent::synthesis_proposer::try_model_intent_patch(task, context, &description)
+    {
         return Ok(patch);
     }
 

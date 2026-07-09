@@ -94,10 +94,15 @@ pub fn nl_synthesis_proposer(
         return Ok(patch);
     }
 
-    // GATED MODEL fallback: every deterministic path declined. An optional,
-    // untrusted local LLM proposes a fix from the failure — inert without
-    // NSYNTH_LOCAL_LLM_URL, and the cargo-test oracle still gates whatever it
-    // returns. Deterministic-first, model-last.
+    // GATED MODEL fallback: every deterministic path declined. Two optional,
+    // untrusted local-LLM lanes, inert without NSYNTH_LOCAL_LLM_URL. Deterministic-
+    // first, model-last. The INTENT lane goes first (model proposes a SPEC, the engine
+    // synthesizes + verifies, and an accepted solve DISTILLS so the model teaches
+    // once); the direct-body REPAIR lane is the fallback. Both are still gated by the
+    // cargo-test oracle downstream.
+    if let Some(patch) = try_model_intent_patch(task, context, &description) {
+        return Ok(patch);
+    }
     if let Some(patch) = try_model_repair_patch(task, context, &description, analysis) {
         return Ok(patch);
     }
@@ -332,6 +337,242 @@ fn model_body_to_new_text(old_text: &str, repo_fn: &str, program: &str) -> Optio
     }
     let new_text = reshape_to_repo_signature(old_text, repo_fn, &body)?;
     (new_text != *old_text).then_some(new_text)
+}
+
+// ── GATED MODEL-INTENT stage: model proposes a SPEC, the engine + oracle DISPOSE ──
+//
+// A second, distinct model lane from `try_model_repair_patch` (which asks the model
+// for a Rust BODY). Here the model proposes ONLY I/O examples (the WHAT); the
+// DETERMINISTIC ENGINE synthesizes the program (the HOW) and the repo cargo-test
+// oracle DISPOSES. On acceptance the engine-synthesized program is DISTILLED so the
+// capability is absorbed model-free — the model teaches once. The model never emits
+// code that reaches the repo unchecked, and the guarantee never depends on it.
+
+/// Staged model-INTENT distillation candidates, keyed by task id. A model-intent
+/// patch stashes its ENGINE-VERIFIED `(problem, code)` here; the supervisor consumes
+/// it (via [`distill_accepted_model_solve`]) ONLY after the repo cargo-test oracle
+/// ACCEPTS the patch — so a model spec that fails the repo test never teaches the
+/// store. Process-global + keyed by task id so it survives the closure boundary the
+/// repair loop crosses when it applies + re-verifies a patch.
+#[allow(clippy::type_complexity)]
+fn distillation_stage(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, (crate::benchmark::Problem, String)>>
+{
+    static STAGE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (crate::benchmark::Problem, String)>>,
+    > = std::sync::OnceLock::new();
+    STAGE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Stash an engine-verified `(problem, code)` for `task_id` awaiting repo-test accept.
+pub(crate) fn stage_model_distillation(
+    task_id: &str,
+    problem: crate::benchmark::Problem,
+    code: String,
+) {
+    if let Ok(mut g) = distillation_stage().lock() {
+        g.insert(task_id.to_string(), (problem, code));
+    }
+}
+
+/// Remove and return a staged candidate for `task_id` (does NOT record it).
+pub fn take_model_distillation(task_id: &str) -> Option<(crate::benchmark::Problem, String)> {
+    distillation_stage().lock().ok()?.remove(task_id)
+}
+
+/// Consume a staged model-INTENT distillation candidate for `task_id` and, IF one
+/// exists, DISTILL it via [`crate::op_library::record_proposed_op`] so a FUTURE run
+/// solves the same task MODEL-FREE (at the library/learned tier, before the model is
+/// ever consulted). Call ONLY after the repo cargo-test oracle ACCEPTED the patch.
+///
+/// Inert (returns `false`) when nothing was staged (no model in the loop — the common
+/// case with `NSYNTH_LOCAL_LLM_URL` unset) or the learned-store path is unset
+/// (`record_proposed_op` no-ops without `NSYNTH_LEARNED_OPS_PATH`). So this is a
+/// zero-effect call on any default run.
+pub fn distill_accepted_model_solve(task_id: &str) -> bool {
+    match take_model_distillation(task_id) {
+        Some((problem, code)) => crate::op_library::record_proposed_op(&problem, &code),
+        None => false,
+    }
+}
+
+/// Drop any staged candidate for `task_id` WITHOUT distilling — a run that did not end
+/// in a repo-test accept must never teach the store.
+pub fn discard_model_distillation(task_id: &str) {
+    let _ = take_model_distillation(task_id);
+}
+
+/// Map a raw JSON value from a model spec to a runtime `Value` (int / bool / string /
+/// int-array / heterogeneous array). `None` for anything outside the verified domains.
+fn model_json_to_value(v: &serde_json::Value) -> Option<crate::benchmark::Value> {
+    use crate::benchmark::Value;
+    if let Some(b) = v.as_bool() {
+        return Some(Value::Bool(b));
+    }
+    if let Some(i) = v.as_i64() {
+        return Some(Value::Int(i));
+    }
+    if let Some(s) = v.as_str() {
+        return Some(Value::Str(s.to_string()));
+    }
+    if let Some(arr) = v.as_array() {
+        if let Some(ints) = arr.iter().map(|x| x.as_i64()).collect::<Option<Vec<i64>>>() {
+            return Some(Value::int_array(&ints));
+        }
+        let vals: Option<Vec<Value>> = arr.iter().map(model_json_to_value).collect();
+        return Some(Value::Array(vals?));
+    }
+    None
+}
+
+/// GATED MODEL-INTENT stage — the untrusted SPEC proposer of last resort.
+///
+/// When every deterministic path has declined, an OPTIONAL local LLM proposes I/O
+/// EXAMPLES for the task; the engine then synthesizes + verifies deterministically.
+/// It is a PROPOSER OF INTENT ONLY — the model's examples are UNTRUSTED and the
+/// engine's synthesized program is reshaped to the repo fn's exact signature and
+/// handed back as an ordinary patch, so the caller's cargo-test acceptance oracle
+/// still decides.
+///
+/// Inert by default: with `NSYNTH_LOCAL_LLM_URL` unset the lane returns `None`
+/// immediately (and `propose_examples` is likewise off), so there is zero behaviour
+/// change on any machine without a model.
+pub fn try_model_intent_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+) -> Option<RepairPatch> {
+    // Off unless an endpoint is configured — the guarantee is the engine + cargo-test
+    // oracle, never the model. Checked here too (not only inside `propose_examples`)
+    // so the lane is provably inert without reaching the network layer.
+    if std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .is_none()
+    {
+        return None;
+    }
+    let request = format!(
+        "{description}\n\nGive correct input/output examples for this function \
+         (integers, arrays of integers, or booleans)."
+    );
+    let proposed = crate::local_llm::propose_examples(&request)?;
+    let rows: Vec<crate::benchmark::Example> = proposed
+        .iter()
+        .filter_map(|p| {
+            let inputs: Vec<crate::benchmark::Value> =
+                p.inputs.iter().map(model_json_to_value).collect::<Option<_>>()?;
+            let expected = model_json_to_value(&p.output)?;
+            Some(crate::benchmark::Example { inputs, expected })
+        })
+        .collect();
+    try_model_intent_patch_from_spec(task, context, description, rows)
+}
+
+/// Deterministic core of the model-INTENT stage: given a model-proposed SPEC (`rows`,
+/// UNTRUSTED I/O examples), synthesize + strictly verify a program and, on success,
+/// reshape it onto the repo fn's signature + STAGE it for distillation. Factored out
+/// so it is testable with NO server — a test passes a hand-crafted spec (a stub for
+/// the model's output) and asserts a deliberately-WRONG spec is REJECTED (never
+/// promoted to a patch, nothing staged) while a correct spec yields a verified patch.
+pub(crate) fn try_model_intent_patch_from_spec(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    description: &str,
+    mut rows: Vec<crate::benchmark::Example>,
+) -> Option<RepairPatch> {
+    use crate::benchmark::{Problem, Value};
+
+    let intent = CodingIntent::from_nl_lenient(description).ok();
+    let target = pick_target_path(task, context, intent.as_ref()).ok()?;
+    let old_text = read_relative_file(context, &target).ok()?;
+    let default_fn = intent
+        .as_ref()
+        .map(|i| {
+            i.function_name
+                .strip_prefix("nl_")
+                .unwrap_or(&i.function_name)
+                .to_string()
+        })
+        .unwrap_or_default();
+    let repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
+
+    rows.sort_by(|a, b| (&a.inputs, &a.expected).cmp(&(&b.inputs, &b.expected)));
+    rows.dedup();
+    // Need a genuine HELD-OUT split: enough points that the seed pins the function
+    // AND at least one example is withheld from synthesis to catch a fit-to-seed spec.
+    if rows.len() < 4 {
+        return None;
+    }
+    // Array-RETURNING functions need a Vec/slice reshape this proposer does not do;
+    // decline them (mirrors `try_test_mined_synthesis_patch`). Scalar and boolean
+    // outputs — incl. array->scalar folds — proceed.
+    if rows.iter().any(|e| matches!(e.expected, Value::Array(_))) {
+        return None;
+    }
+
+    // HELD-OUT split: synthesize from all-but-last, judge on ALL incl. the held-out.
+    let seed = &rows[..rows.len() - 1];
+    let sig: &'static str =
+        Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &rows).into_boxed_str());
+    let seed_problem = Problem {
+        name: repo_fn.clone(),
+        category: "repo-model-intent",
+        description: "",
+        signature: sig,
+        examples: seed.to_vec(),
+        ..Default::default()
+    };
+    let res = crate::solver::solve_problem(&seed_problem);
+    if !res.success {
+        return None;
+    }
+    // The engine's program must reproduce EVERY example incl. the genuinely held-out
+    // one — the generalization oracle a fit-to-seed model spec misses.
+    if !crate::runtime::code_reproduces_examples(&res.code, &rows) {
+        return None;
+    }
+    // Robustness floor: clean execution on perturbations of the examples.
+    let all_problem = Problem {
+        name: repo_fn.clone(),
+        category: "repo-model-intent",
+        description: "",
+        signature: sig,
+        examples: rows.clone(),
+        ..Default::default()
+    };
+    if crate::runtime::verify_problem_code_strict(&all_problem, &res.code).is_err() {
+        return None;
+    }
+    // Never adopt a magic-constant memorization fit.
+    if crate::synth_confidence::is_memorization_overfit(&res.code, &rows) {
+        return None;
+    }
+    let synthesized = rust_code_for_repo_synthesis(&res.code);
+    if !is_plain_rust_body(&synthesized) {
+        return None;
+    }
+    let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+    if new_text == old_text {
+        return None;
+    }
+
+    // STAGE the ENGINE-VERIFIED (problem, program) for distillation — the supervisor
+    // consumes it ONLY if the repo cargo-test oracle accepts this patch. Model teaches
+    // once, and only on a TRUE accept.
+    stage_model_distillation(&task.id, all_problem, res.code.clone());
+
+    Some(
+        RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                target,
+                old_text,
+                new_text,
+                "gated model-INTENT proposer (model spec -> engine-synthesized, verified; cargo-test gated)",
+            ))
+            .with_metadata("proposer", "model_intent")
+            .with_metadata("synthesis_method", res.method.clone()),
+    )
 }
 
 /// TEST-MINED SYNTHESIS — the deterministic lever that turns the repair loop's own
@@ -3353,6 +3594,158 @@ mod tests {
             .expect("verify");
         assert!(verification.success);
         let _ = fs::remove_dir_all(root);
+    }
+
+    // ── gated MODEL-INTENT stage: inert-by-default + verify-gated (no server) ──
+
+    /// Build an IN-MEMORY repair context (no disk) around a single source file, so
+    /// the model-intent core can be exercised without a live model or a real crate.
+    fn mi_context(text: &str) -> RepairContext {
+        RepairContext {
+            root: "/nonexistent/nsynth-mi-root".into(),
+            files: vec![crate::agent::repo::RepairFile {
+                path: "src/lib.rs".into(),
+                bytes: text.len(),
+                lines: text.lines().count(),
+                text: Some(text.to_string()),
+            }],
+        }
+    }
+
+    fn mi_task(id: &str) -> RepoTaskSpec {
+        RepoTaskSpec {
+            id: id.into(),
+            repo: "/nonexistent/nsynth-mi-root".into(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: double the number".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        }
+    }
+
+    /// GATE (i) — INERT BY DEFAULT: with `NSYNTH_LOCAL_LLM_URL` unset the model-intent
+    /// lane returns `None` immediately (never reaching the network layer) and stages
+    /// nothing. This is the zero-default-change guarantee.
+    #[test]
+    fn model_intent_lane_is_inert_without_url() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let ctx = mi_context("pub fn twice(n: i64) -> i64 {\n    n\n}\n");
+        let task = mi_task("mi-inert");
+        discard_model_distillation(&task.id);
+        assert!(
+            try_model_intent_patch(&task, &ctx, "double the number").is_none(),
+            "gated model-intent lane must be inert without NSYNTH_LOCAL_LLM_URL"
+        );
+        assert!(
+            take_model_distillation(&task.id).is_none(),
+            "an inert lane must stage no distillation candidate"
+        );
+    }
+
+    /// GATE (ii) — VERIFY-GATED: a deliberately-WRONG model spec (a stub for the model's
+    /// output — no server needed) is REJECTED by the engine's held-out oracle and never
+    /// promoted to a patch (and nothing is staged for distillation). A CORRECT spec, by
+    /// contrast, is synthesized + verified into a repo-signature patch and stages a
+    /// distillation candidate whose program reproduces the examples.
+    #[test]
+    fn model_intent_core_rejects_wrong_spec_and_verifies_correct_spec() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        use crate::benchmark::{Example, Value};
+        let ctx = mi_context("pub fn twice(n: i64) -> i64 {\n    n\n}\n");
+
+        // WRONG: identity on the seed, but a POISONED held-out row the seed-synthesized
+        // program cannot reproduce — the never-wrong held-out gate rejects it.
+        let wrong = vec![
+            Example { inputs: vec![Value::Int(0)], expected: Value::Int(0) },
+            Example { inputs: vec![Value::Int(1)], expected: Value::Int(1) },
+            Example { inputs: vec![Value::Int(2)], expected: Value::Int(2) },
+            Example { inputs: vec![Value::Int(3)], expected: Value::Int(3) },
+            Example { inputs: vec![Value::Int(10)], expected: Value::Int(999) },
+        ];
+        let wtask = mi_task("mi-wrong");
+        discard_model_distillation(&wtask.id);
+        assert!(
+            try_model_intent_patch_from_spec(&wtask, &ctx, "identity", wrong).is_none(),
+            "a held-out-inconsistent model spec must be REJECTED, never promoted"
+        );
+        assert!(
+            take_model_distillation(&wtask.id).is_none(),
+            "a rejected spec must stage NO distillation candidate"
+        );
+
+        // CORRECT: doubling. The engine synthesizes 2n, reproduces the held-out row, and
+        // passes strict-verify → a verified patch onto the repo `twice` signature.
+        let good = vec![
+            Example { inputs: vec![Value::Int(1)], expected: Value::Int(2) },
+            Example { inputs: vec![Value::Int(2)], expected: Value::Int(4) },
+            Example { inputs: vec![Value::Int(3)], expected: Value::Int(6) },
+            Example { inputs: vec![Value::Int(4)], expected: Value::Int(8) },
+            Example { inputs: vec![Value::Int(6)], expected: Value::Int(12) },
+        ];
+        let gtask = mi_task("mi-correct");
+        discard_model_distillation(&gtask.id);
+        let patch = try_model_intent_patch_from_spec(&gtask, &ctx, "double the number", good)
+            .expect("a correct model spec yields a verified patch");
+        assert!(
+            patch.metadata.iter().any(|(k, v)| k == "proposer" && v == "model_intent"),
+            "patch is tagged as the model-intent lane: {:?}",
+            patch.metadata
+        );
+        assert!(
+            patch.edits.iter().any(|e| e.new_text.contains("fn twice(n: i64)")),
+            "the repo fn signature is preserved by the reshape: {:?}",
+            patch.edits.iter().map(|e| e.new_text.clone()).collect::<Vec<_>>()
+        );
+        // An accepted-shaped solve stages a distillation candidate whose ENGINE program
+        // reproduces the examples — exactly what `record_proposed_op` would absorb.
+        let (problem, code) = take_model_distillation(&gtask.id)
+            .expect("a verified model-intent solve stages a distill candidate");
+        assert!(
+            crate::runtime::code_reproduces_examples(&code, &problem.examples),
+            "the staged program reproduces its examples: {code}"
+        );
+    }
+
+    /// The distillation plumbing is single-shot and INERT when nothing was staged (the
+    /// default-run case): `distill_accepted_model_solve` is a no-op with no candidate,
+    /// staging round-trips the exact `(problem, code)`, and `discard` clears without
+    /// recording. No env vars touched → no cross-test races.
+    #[test]
+    fn model_distillation_plumbing_single_shot_and_inert_when_empty() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        use crate::benchmark::{Example, Problem, Value};
+        let id = format!("mi-plumbing-{}", std::process::id());
+        discard_model_distillation(&id);
+        assert!(
+            !distill_accepted_model_solve(&id),
+            "no staged candidate -> distilling an accepted solve is a no-op"
+        );
+        let sig: &'static str = Box::leak("fn f(n: i64) -> i64".to_string().into_boxed_str());
+        let problem = Problem {
+            name: "f".into(),
+            signature: sig,
+            examples: vec![Example { inputs: vec![Value::Int(2)], expected: Value::Int(7) }],
+            ..Default::default()
+        };
+        let code = "fn f(n: i64) -> i64 {\n    return n * 3 + 1;\n}\n".to_string();
+        stage_model_distillation(&id, problem.clone(), code.clone());
+        let taken = take_model_distillation(&id).expect("staged candidate present");
+        assert_eq!(taken.1, code, "code round-trips through the stage");
+        assert_eq!(taken.0.examples, problem.examples, "problem round-trips through the stage");
+        assert!(
+            take_model_distillation(&id).is_none(),
+            "single-shot: the candidate is consumed"
+        );
+        stage_model_distillation(&id, problem, code);
+        discard_model_distillation(&id);
+        assert!(
+            take_model_distillation(&id).is_none(),
+            "discard clears the stage without recording"
+        );
     }
 }
 
