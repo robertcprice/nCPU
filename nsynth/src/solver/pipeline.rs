@@ -949,8 +949,12 @@ fn solve_problem_inner(problem: &Problem) -> SolveResult {
     // Under a global budget, cap ALL gradient training (the array/native cores are
     // the dominant time-sink — profiling showed synthesize_array burning ~11s on a
     // doomed task) via the thread-local train deadline. RAII: held for this solve.
+    // set_min, not set: this per-solve-attempt cap must never loosen an outer
+    // per-QUERY budget (QuerySolveBudget). solve_problem is called once per compose
+    // sub-attempt, so a plain `set` here reset the query clock on every attempt and
+    // left a multi-attempt query unbounded (the "move all zeroes" hang).
     let _train_deadline = solve_budget_ms()
-        .map(|ms| crate::synthesis::common::TrainDeadline::set(std::time::Duration::from_millis(ms as u64)));
+        .map(|ms| crate::synthesis::common::TrainDeadline::set_min(std::time::Duration::from_millis(ms as u64)));
 
     // Float SIGN PREDICATE first among the float lanes: a `f64 -> bool` sign
     // check (is_positive / is_negative). Exact c=0 comparisons only, so it's

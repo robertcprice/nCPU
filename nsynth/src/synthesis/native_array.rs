@@ -1556,7 +1556,9 @@ pub(super) fn synthesize_array_gradient_core(problem: &Problem) -> Option<SolveR
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .map_or(60.0, |ms| 60.0_f32.min(ms as f32 / 1000.0));
-    let _arr_deadline = crate::synthesis::common::TrainDeadline::set(
+    // set_min, not set: never loosen an outer per-query budget (QuerySolveBudget) —
+    // keeps a multi-attempt query bounded (see universal_array for the rationale).
+    let _arr_deadline = crate::synthesis::common::TrainDeadline::set_min(
         std::time::Duration::from_secs_f32(sweep_secs),
     );
     let scalar_names: Vec<&str> = if n_scalar == 0 {

@@ -29,6 +29,22 @@ pub use array::{synthesize_array, synthesize_array_from_teacher};
 pub use register_machine::synthesize_register_machine;
 pub use universal_array::prior_gen;
 
+/// Per-QUERY wall-clock budget for the whole solve, held by callers at the request
+/// boundary (the coding-agent product entry, the never-wrong sweep). The gradient
+/// synthesizers install their own per-ATTEMPT caps with `TrainDeadline::set_min`, so
+/// they can only ever TIGHTEN this shared deadline — a query that fans out into many
+/// sequential solve attempts still finishes within the budget instead of resetting
+/// the clock on every attempt (the cause of the "move all zeroes" multi-attempt hang).
+/// RAII: drop restores the previous deadline, so it nests cleanly. No-op when the
+/// process sets no budget.
+pub struct QuerySolveBudget(common::TrainDeadline);
+impl QuerySolveBudget {
+    /// Bound the current thread's solve to `millis` from now.
+    pub fn millis(millis: u64) -> Self {
+        QuerySolveBudget(common::TrainDeadline::set(std::time::Duration::from_millis(millis)))
+    }
+}
+
 // Re-exported so sibling modules (register_machine, universal_array) pick it
 // up via `use super::*;`. Internal to the synthesis module tree only.
 pub(crate) use native_array::ArrExample;

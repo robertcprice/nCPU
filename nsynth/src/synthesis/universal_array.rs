@@ -1515,7 +1515,10 @@ pub(super) fn synthesize_universal_array_fallback(
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .map_or(90.0, |ms| 90.0_f32.min(ms as f32 / 1000.0));
-    let _univ_deadline = crate::synthesis::common::TrainDeadline::set(
+    // set_min, not set: never loosen an outer per-query budget (QuerySolveBudget).
+    // Across the compose pipeline's sequential solve attempts this keeps the QUERY
+    // bounded — each attempt's cap only tightens the shared deadline.
+    let _univ_deadline = crate::synthesis::common::TrainDeadline::set_min(
         std::time::Duration::from_secs_f32(univ_deadline_secs),
     );
 

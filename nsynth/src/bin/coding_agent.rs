@@ -245,6 +245,15 @@ fn main() {
         }
     }
 
+    // Per-query wall-clock bound for the whole solve (all compose sub-attempts share
+    // it), so a hard task degrades to a refusal instead of spinning. Overridable via
+    // NSYNTH_QUERY_BUDGET_MS; the per-attempt NSYNTH_SOLVE_BUDGET_MS default above is
+    // a secondary cap. Held for the duration of the query, then dropped.
+    let query_budget_ms: u64 = env::var("NSYNTH_QUERY_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20000);
+    let _query_budget = mog_synth::synthesis::QuerySolveBudget::millis(query_budget_ms);
     let result = session.handle_query(query.trim());
     emit_result(&result, json_out);
     if let Some(lang) = &emit_lang {

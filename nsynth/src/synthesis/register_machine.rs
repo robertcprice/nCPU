@@ -593,6 +593,11 @@ pub fn synthesize_register_machine(problem: &Problem) -> Option<SolveResult> {
     // gone. `nr` was used for the biased-restart layout maths.
     let _ = nr;
     for restart in 0..N_RESTARTS_RM {
+        // Honor an installed wall-clock deadline (QuerySolveBudget / per-attempt cap)
+        // between restarts so this route can't overrun a bounded query.
+        if crate::synthesis::common::train_deadline_exceeded() {
+            break;
+        }
         let mut prog = SoftRegisterMachine::new(n_args);
         // No hand-coded restart biases — restart diversity comes purely from
         // pseudo-random noise. Cross-problem warm starts are now the
@@ -612,6 +617,9 @@ pub fn synthesize_register_machine(problem: &Problem) -> Option<SolveResult> {
         let mut loss_at_chk1 = f32::MAX;
 
         for step in 0..N_STEPS_RM {
+            if step % 16 == 0 && crate::synthesis::common::train_deadline_exceeded() {
+                break;
+            }
             if step == chk1 {
                 loss_at_chk1 = best_loss;
             }

@@ -30,6 +30,26 @@ impl TrainDeadline {
         let prev = TRAIN_DEADLINE.with(|c| c.replace(Some(Instant::now() + budget)));
         TrainDeadline { prev }
     }
+
+    /// Like [`set`], but NEVER loosens an already-installed deadline: the effective
+    /// deadline becomes `min(now + budget, existing)`. Use this for a per-*attempt*
+    /// cap nested inside a per-*query* budget — several sequential solve attempts each
+    /// install their own attempt cap, but none may extend past the shared query
+    /// deadline, so the whole query stays bounded (otherwise `set` would reset the
+    /// clock on every attempt and the query total would be unbounded). Restores the
+    /// previous deadline on drop, like `set`.
+    pub(crate) fn set_min(budget: Duration) -> Self {
+        let candidate = Instant::now() + budget;
+        let prev = TRAIN_DEADLINE.with(|c| {
+            let existing = c.get();
+            let effective = match existing {
+                Some(d) => d.min(candidate),
+                None => candidate,
+            };
+            c.replace(Some(effective))
+        });
+        TrainDeadline { prev }
+    }
 }
 impl Drop for TrainDeadline {
     fn drop(&mut self) {

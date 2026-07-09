@@ -32,6 +32,14 @@ fn classify(prompt: &str) -> (bool, String) {
     let root = std::env::temp_dir().join(format!("nwsweep_{:x}", prompt.as_ptr() as usize));
     let _ = std::fs::create_dir_all(&root);
     let mut session = CodingAgentSession::new(&root, GuardrailPolicy::default());
+    // Per-query wall-clock bound (this runs in the worker thread; the guard is
+    // thread-local). Matches the product path so the sweep measures the same
+    // bounded behavior. Overridable via NSYNTH_QUERY_BUDGET_MS.
+    let query_budget_ms: u64 = std::env::var("NSYNTH_QUERY_BUDGET_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20000);
+    let _query_budget = mog_synth::synthesis::QuerySolveBudget::millis(query_budget_ms);
     let r = session.handle_query(prompt);
     let _ = std::fs::remove_dir_all(&root);
     let method = r.synthesis_method.clone().unwrap_or_else(|| format!("{:?}", r.route));

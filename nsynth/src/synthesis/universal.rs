@@ -922,6 +922,11 @@ pub fn synthesize_universal_and_collect(
     const N_RESTARTS: usize = 5;
 
     for restart in 0..N_RESTARTS {
+        // Bail between restarts once a wall-clock deadline is spent (QuerySolveBudget
+        // / per-attempt cap) so the scalar universal route stays inside a bounded query.
+        if crate::synthesis::common::train_deadline_exceeded() {
+            break;
+        }
         let noise_scale = restart as f32 * 0.5;
         let mut prog = SoftUniversalProgram::new(n_args);
         if restart > 0 {
@@ -989,6 +994,9 @@ where
     let mut loss_at_chk2 = f32::MAX;
 
     for step in 0..n_steps {
+        if step % 16 == 0 && crate::synthesis::common::train_deadline_exceeded() {
+            break;
+        }
         if step == chk1 {
             loss_at_chk1 = best_loss;
         }
@@ -1187,6 +1195,9 @@ where
     let mut loss_at_chk2 = f32::MAX;
 
     for step in 0..n_steps {
+        if step % 16 == 0 && crate::synthesis::common::train_deadline_exceeded() {
+            break;
+        }
         if step == chk1 {
             loss_at_chk1 = best_loss;
         }

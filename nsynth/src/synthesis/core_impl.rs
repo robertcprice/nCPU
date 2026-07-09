@@ -4748,8 +4748,10 @@ fn synthesize_scalar_inner(problem: &Problem, use_templates: bool) -> Option<Sol
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .map_or(default_secs, |ms| default_secs.min(ms as f32 / 1000.0));
+    // set_min, not set: per-attempt cap must not loosen an outer per-query budget
+    // (QuerySolveBudget) — otherwise a scalar attempt resets the whole-query clock.
     let _train_deadline =
-        crate::synthesis::common::TrainDeadline::set(std::time::Duration::from_secs_f32(sweep_secs));
+        crate::synthesis::common::TrainDeadline::set_min(std::time::Duration::from_secs_f32(sweep_secs));
 
     // Template fast-path: try reference code + common inline patterns before gradient descent
     if use_templates {
