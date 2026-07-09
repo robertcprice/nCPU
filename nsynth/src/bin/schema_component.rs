@@ -36,17 +36,23 @@ impl FieldTy {
             FieldTy::Str => "String",
         }
     }
-    /// A concrete literal for the k-th record in the generated tests.
-    fn sample(self, name: &str, k: usize) -> String {
+    /// A concrete literal for the k-th record in the generated tests. `seed` is the field's column
+    /// index so DISTINCT int columns get DISTINCT data (else `total_quantity` can't be told from
+    /// `total_price` and the solver maps the wrong field).
+    fn sample(self, name: &str, seed: usize, k: usize) -> String {
         match self {
-            FieldTy::Int => (((k as i64) * 4) % 7 + 2).to_string(), // distinct-ish small ints
+            FieldTy::Int => Self::int_value(seed, k).to_string(),
             FieldTy::Bool => if k % 2 == 0 { "true".into() } else { "false".into() },
             FieldTy::Str => format!("\"{name}{k}\".to_string()"),
         }
     }
-    fn sample_value(self, k: usize) -> i64 {
-        // numeric value used to compute expected sums/maxes (mirrors sample() for Int)
-        ((k as i64) * 4) % 7 + 2
+    fn sample_value(self, seed: usize, k: usize) -> i64 {
+        Self::int_value(seed, k)
+    }
+    fn int_value(seed: usize, k: usize) -> i64 {
+        // per-column offset (11*seed) keeps columns distinct; the base still puts a non-extreme value
+        // at index 2 so an indexed read can't be faked by min/max/first/last.
+        ((k as i64) * 4) % 7 + 2 + (seed as i64) * 11
     }
 }
 
@@ -160,40 +166,65 @@ fn emit_crate(collection: &str, record: &str, fields: &[Field]) -> String {
         .map(|f| format!("{}: {}", f.name, f.ty.rust()))
         .collect::<Vec<_>>()
         .join(", ");
-    let int_fields: Vec<&Field> = fields.iter().filter(|f| f.ty == FieldTy::Int).collect();
+    // (column index, field) for the int fields — the index seeds distinct per-column sample data.
+    let int_fields: Vec<(usize, &Field)> = fields.iter().enumerate().filter(|(_, f)| f.ty == FieldTy::Int).collect();
 
-    // impl: new + add + count + per-int-field total_/max_ getters (STUBS the solver fills).
+    // impl: full CRUD over the typed collection (STUBS the solver fills). new/add/count/is_empty/
+    // clear/remove_at, and per-int-field total_/max_/<field>_at/set_<field>.
     let mut methods = String::new();
     methods.push_str(&format!("    pub fn new() -> Self {{ {collection} {{ items: vec![] }} }}\n"));
     methods.push_str(&format!("    pub fn add(&mut self, {add_params}) {{}}\n"));
     methods.push_str("    pub fn count(&self) -> i64 {}\n");
-    for f in &int_fields {
+    methods.push_str("    pub fn is_empty(&self) -> bool {}\n");
+    methods.push_str("    pub fn clear(&mut self) {}\n");
+    methods.push_str("    pub fn remove_at(&mut self, i: i64) {}\n");
+    for (_, f) in &int_fields {
         methods.push_str(&format!("    pub fn total_{}(&self) -> i64 {{}}\n", f.name));
         methods.push_str(&format!("    pub fn max_{}(&self) -> i64 {{}}\n", f.name));
+        methods.push_str(&format!("    pub fn {}_at(&self, i: i64) -> i64 {{}}\n", f.name));
+        methods.push_str(&format!("    pub fn set_{}(&mut self, i: i64, v: i64) {{}}\n", f.name));
     }
 
-    // Canonical tests: add 3 sample records, then assert count + per-int sum/max. ONE test PER
-    // ASSERTION (not one mega-test) so the multi-hole solver gets a gradient -- each correctly filled
-    // method flips exactly one test green, letting coordinate descent climb.
-    let n = 3usize;
+    // Canonical tests: add N sample records, then one assertion PER METHOD (not a mega-test) so the
+    // multi-hole solver gets a gradient. N=4 with the DISTINGUISHING value at index 2 (neither the
+    // min/max/sum nor the first/last element) so an INDEXED read can't be faked by an aggregate.
+    let n = 4usize;
+    let read_idx = 2usize;
     let add_calls: String = (0..n)
         .map(|k| {
-            let args: Vec<String> = fields.iter().map(|f| f.ty.sample(&f.name, k)).collect();
+            let args: Vec<String> = fields.iter().enumerate().map(|(fi, f)| f.ty.sample(&f.name, fi, k)).collect();
             format!("        c.add({});\n", args.join(", "))
         })
         .collect();
-    let one_test = |name: &str, call: &str, expected: i64| -> String {
+    // A test that fills c with the sample records then asserts one call.
+    let full = |name: &str, extra: &str, call: &str, expected: &str| -> String {
         format!(
-            "    #[test]\n    fn {name}() {{\n        let mut c = {collection}::new();\n{add_calls}        assert_eq!(c.{call}, {expected});\n    }}\n"
+            "    #[test]\n    fn {name}() {{\n        let mut c = {collection}::new();\n{add_calls}{extra}        assert_eq!(c.{call}, {expected});\n    }}\n"
         )
     };
-    let mut tests = one_test("t_count", "count()", n as i64);
-    for f in &int_fields {
-        let vals: Vec<i64> = (0..n).map(|k| f.ty.sample_value(k)).collect();
+    let mut tests = String::new();
+    tests.push_str(&full("t_count", "", "count()", &n.to_string()));
+    // is_empty on a FRESH collection is true (no adds).
+    tests.push_str(&format!(
+        "    #[test]\n    fn t_is_empty() {{\n        let c = {collection}::new();\n        assert_eq!(c.is_empty(), true);\n    }}\n"
+    ));
+    tests.push_str(&full("t_clear", "        c.clear();\n", "count()", "0"));
+    tests.push_str(&full("t_remove", "        c.remove_at(0);\n", "count()", &(n - 1).to_string()));
+    for (seed, f) in &int_fields {
+        let vals: Vec<i64> = (0..n).map(|k| f.ty.sample_value(*seed, k)).collect();
         let sum: i64 = vals.iter().sum();
         let max: i64 = *vals.iter().max().unwrap();
-        tests.push_str(&one_test(&format!("t_total_{}", f.name), &format!("total_{}()", f.name), sum));
-        tests.push_str(&one_test(&format!("t_max_{}", f.name), &format!("max_{}()", f.name), max));
+        let at = vals[read_idx];
+        tests.push_str(&full(&format!("t_total_{}", f.name), "", &format!("total_{}()", f.name), &sum.to_string()));
+        tests.push_str(&full(&format!("t_max_{}", f.name), "", &format!("max_{}()", f.name), &max.to_string()));
+        tests.push_str(&full(&format!("t_{}_at", f.name), "", &format!("{}_at({read_idx})", f.name), &at.to_string()));
+        // set then read back at the SAME index: pins set_<field> once <field>_at is right.
+        tests.push_str(&full(
+            &format!("t_set_{}", f.name),
+            &format!("        c.set_{}(0, 12345);\n", f.name),
+            &format!("{}_at(0)", f.name),
+            "12345",
+        ));
     }
 
     format!(
@@ -265,8 +296,13 @@ mod tests {
         assert!(src.contains("pub fn add(&mut self, price: i64) {}"), "add stub");
         assert!(src.contains("pub fn total_price(&self) -> i64 {}"), "sum getter stub");
         assert!(src.contains("pub fn max_price(&self) -> i64 {}"), "max getter stub");
+        // full CRUD stubs.
+        assert!(src.contains("pub fn is_empty(&self) -> bool {}"), "is_empty stub");
+        assert!(src.contains("pub fn remove_at(&mut self, i: i64) {}"), "remove stub");
+        assert!(src.contains("pub fn price_at(&self, i: i64) -> i64 {}"), "indexed read stub");
+        assert!(src.contains("pub fn set_price(&mut self, i: i64, v: i64) {}"), "field-update stub");
         // per-METHOD tests give the solver a gradient (each fill flips one test), not one mega-test.
-        assert!(src.contains("fn t_count()") && src.contains("fn t_total_price()") && src.contains("fn t_max_price()"));
-        assert_eq!(src.matches("#[test]").count(), 3, "one test per method");
+        assert!(src.contains("fn t_count()") && src.contains("fn t_price_at()") && src.contains("fn t_set_price()"));
+        assert_eq!(src.matches("#[test]").count(), 8, "count/is_empty/clear/remove + 4 per int field");
     }
 }
