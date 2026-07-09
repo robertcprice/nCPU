@@ -450,7 +450,7 @@ fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>,
 /// only captures cleanly-verifiable examples.
 fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
     use crate::benchmark::Value;
-    let t = tok.trim();
+    let mut t = tok.trim();
     if let Ok(i) = t.parse::<i64>() {
         return Some(Value::Int(i));
     }
@@ -464,6 +464,26 @@ fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
         if !body.contains('\\') {
             return Some(Value::Str(body.to_string()));
         }
+    }
+    // INTEGER ARRAY / SLICE / VEC literal: `&[1, 2, 3]`, `[1, 2, 3]`, `vec![1, 2, 3]`. A failing
+    // test on a collection function (`assert_eq!(sum_of_evens(&[1,2,3,4]), 6)`) carries its I/O
+    // spec as a slice literal here; without parsing it, the entire class of list-processing
+    // functions can never be mined from tests. Strip a leading reference and an optional `vec!`
+    // macro, then parse a comma-separated list of integer literals.
+    t = t.strip_prefix('&').unwrap_or(t).trim_start();
+    if let Some(rest) = t.strip_prefix("vec!") {
+        t = rest.trim_start();
+    }
+    if t.starts_with('[') && t.ends_with(']') {
+        let inner = t[1..t.len() - 1].trim();
+        if inner.is_empty() {
+            return Some(Value::int_array(&[]));
+        }
+        let elems: Option<Vec<i64>> = split_top_level_comma(inner)
+            .iter()
+            .map(|e| e.trim().parse::<i64>().ok())
+            .collect();
+        return elems.map(|v| Value::int_array(&v));
     }
     None
 }
