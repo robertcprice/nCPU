@@ -2102,6 +2102,14 @@ mod tests {
                 vec![av(&[9, 9, 9, 9])],
                 iv(0),
             ),
+            // count_spaces (the COUNT of spaces) coincides with 'contains a space' when the examples
+            // hold at most one space; wrong once two are present ('a b c' -> count 2 vs contains 1).
+            (
+                "whether a string contains a space",
+                vec![ex(vec![Value::Str("a b".into())], iv(1)), ex(vec![Value::Str("abc".into())], iv(0)), ex(vec![Value::Str("x y".into())], iv(1)), ex(vec![Value::Str("z".into())], iv(0))],
+                vec![Value::Str("a b c".into())],
+                iv(1),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

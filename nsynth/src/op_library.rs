@@ -687,6 +687,11 @@ pub const OPS: &[LibOp] = &[
 "fn contains_digit(s: string) -> i64 {\n    for ch in s {\n        if ch.is_digit() {\n            return 1;\n        }\n    }\n    return 0;\n}\n" },
     LibOp { name: "count_spaces", arity: 1, mog:
 "fn count_spaces(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch == ' ' {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether a string CONTAINS a space (boolean). count_spaces (the COUNT of spaces) coincides
+    // while the examples hold at most one space, wrong once two are present ('a b c' -> count 2 vs
+    // contains 1). 'contains'+'space' out-cover count_spaces.
+    LibOp { name: "contains_space", arity: 1, mog:
+"fn contains_space(s: string) -> i64 {\n    for ch in s {\n        if ch == ' ' {\n            return 1;\n        }\n    }\n    return 0;\n}\n" },
     // ── batch 18: STRING DOMAIN (Loop 1). char-level build via `out = out + ch`,
     // predicates via ch.is_*(), ords via ch.ord(), words via s.split(" ").
     LibOp { name: "ascii_of_first", arity: 1, mog:

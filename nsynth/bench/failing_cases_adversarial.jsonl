@@ -46,3 +46,4 @@
 {"id":1344,"category":"array","hardness":"medium","fn":"unique","text":"the distinct values in a list","examples":[{"in":[[1,1,2]],"out":[1,2]},{"in":[[3,3,3]],"out":[3]},{"in":[[4,5,4]],"out":[4,5]},{"in":[[2,2,7,7]],"out":[2,7]}]}
 {"id":1345,"category":"array","hardness":"medium","fn":"contains_zero","text":"whether a list contains the value zero","examples":[{"in":[[0,0,3]],"out":1},{"in":[[1,2]],"out":0},{"in":[[0,5,0]],"out":1},{"in":[[7]],"out":0},{"in":[[3,0]],"out":1}]}
 {"id":1346,"category":"array","hardness":"medium","fn":"is_empty","text":"whether a list is empty","examples":[{"in":[[]],"out":1},{"in":[[1]],"out":0},{"in":[[1,2]],"out":0},{"in":[[9,9,9,9]],"out":0}]}
+{"id":1347,"category":"string","hardness":"medium","fn":"contains_space","text":"whether a string contains a space","examples":[{"in":["a b c"],"out":1},{"in":["abc"],"out":0},{"in":["x y"],"out":1},{"in":["z"],"out":0},{"in":["p q r"],"out":1}]}
