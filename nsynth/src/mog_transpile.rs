@@ -287,9 +287,144 @@ fn transpile(mog: &str, target: Target) -> String {
         return String::from("pass\n");
     }
     if target == Target::Rust {
-        return add_mut_to_mutated_params(&lower_rust_char_ops(&lower_rust_string_methods(&out)));
+        return add_mut_to_mutated_params(&lower_rust_string_building(&lower_rust_char_ops(
+            &lower_rust_string_methods(&out),
+        )));
     }
     out
+}
+
+/// Lower Mog string BUILDING to Rust, scoped to String-typed operands. Mog accumulates a string
+/// with `out = out + ch` (or `+ ch.upper()`, `+ other_string`, `+ " "`) and inits/returns bare
+/// `""` literals — none of which are valid Rust (`String + char`, `String = &str`). The whole
+/// char-string-building op family (~39 ops: reverse-ish, filters, case maps) depends on it. Two
+/// rewrites: `A = A + t1 + t2 ..` (A a String) -> `A = format!("{}{}..", A, t1, t2 ..)` (char, str,
+/// String and ToUppercase all impl Display); and a bare string LITERAL assigned to a String
+/// binding or returned from a `-> String` fn -> `"lit".to_string()` (or `String::new()` for `""`).
+fn lower_rust_string_building(rust: &str) -> String {
+    use std::collections::HashSet;
+    let had_nl = rust.ends_with('\n');
+    let mut lines: Vec<String> = Vec::new();
+    let mut string_idents: HashSet<String> = HashSet::new();
+    let mut returns_string = false;
+    for line in rust.lines() {
+        let t = line.trim_start();
+        let indent = &line[..line.len() - t.len()];
+        if t.starts_with("fn ") || t.starts_with("pub fn ") {
+            string_idents.clear();
+            returns_string = line.contains("-> String");
+            if let Some(op) = line.find('(') {
+                if let Some(cp) = line[op..].find(')') {
+                    for p in line[op + 1..op + cp].split(',') {
+                        if let Some((nm, ty)) = p.split_once(':') {
+                            if ty.trim().starts_with("String") {
+                                string_idents
+                                    .insert(nm.trim().trim_start_matches("mut ").trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(rest) = t.strip_prefix("let mut ").or_else(|| t.strip_prefix("let ")) {
+            if let Some((nm, ty)) = rest.split_once(':') {
+                if ty.trim_start().starts_with("String") {
+                    string_idents.insert(nm.trim().to_string());
+                }
+            }
+        }
+        let stmt = t.trim_end();
+        let rewritten = rewrite_string_accum(stmt, &string_idents)
+            .or_else(|| rewrite_string_literal_stmt(stmt, &string_idents, returns_string));
+        lines.push(match rewritten {
+            Some(r) => format!("{indent}{r}"),
+            None => line.to_string(),
+        });
+    }
+    let mut out = lines.join("\n");
+    if had_nl {
+        out.push('\n');
+    }
+    out
+}
+
+/// `A = A + t1 + t2 ..;` (A a String ident) -> `A = format!("{}{}..", A, t1, t2 ..);`.
+fn rewrite_string_accum(stmt: &str, idents: &std::collections::HashSet<String>) -> Option<String> {
+    let s = stmt.strip_suffix(';')?.trim();
+    let (lhs, rhs) = s.split_once('=')?;
+    let lhs = lhs.trim();
+    if !idents.contains(lhs) || lhs.contains(char::is_whitespace) {
+        return None;
+    }
+    let terms = split_plus_depth0(rhs.trim());
+    if terms.len() < 2 || terms[0] != lhs {
+        return None; // only rewrite genuine accumulation `A = A + ..`
+    }
+    let fmt = "{}".repeat(terms.len());
+    Some(format!("{lhs} = format!(\"{fmt}\", {});", terms.join(", ")))
+}
+
+/// A bare string literal assigned to a String binding or returned from a `-> String` fn needs
+/// `.to_string()` (or `String::new()` for `""`): `let x: String = "";`, `x = "a";`, `return "b";`.
+fn rewrite_string_literal_stmt(
+    stmt: &str,
+    idents: &std::collections::HashSet<String>,
+    returns_string: bool,
+) -> Option<String> {
+    let s = stmt.strip_suffix(';')?.trim();
+    if let Some(ret) = s.strip_prefix("return ") {
+        if returns_string {
+            let w = wrap_string_literal(ret)?;
+            return Some(format!("return {w};"));
+        }
+        return None;
+    }
+    let (lhs, rhs) = s.split_once('=')?;
+    let w = wrap_string_literal(rhs.trim())?;
+    let lhs_t = lhs.trim();
+    // `let [mut] NAME: String = ..` OR `NAME = ..` where NAME is a known String ident.
+    let is_string_decl = lhs_t.starts_with("let ") && lhs.contains(": String");
+    let name = lhs_t.rsplit(':').next().unwrap_or("").trim();
+    let bare_name = name.rsplit(' ').next().unwrap_or("").trim();
+    if is_string_decl || idents.contains(bare_name) || idents.contains(lhs_t) {
+        return Some(format!("{lhs}= {w};"));
+    }
+    None
+}
+
+/// A pure double-quoted string literal -> its owned-String form; `None` if not a bare literal.
+fn wrap_string_literal(rhs: &str) -> Option<String> {
+    let r = rhs.trim();
+    if r.len() >= 2 && r.starts_with('"') && r.ends_with('"') && r[1..r.len() - 1].find('"').is_none()
+    {
+        return Some(if r == "\"\"" {
+            "String::new()".to_string()
+        } else {
+            format!("{r}.to_string()")
+        });
+    }
+    None
+}
+
+/// Split on `+` at bracket/paren depth 0 (so `arr[i + 1]` stays one term).
+fn split_plus_depth0(s: &str) -> Vec<String> {
+    let b = s.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut last = 0usize;
+    for (i, &c) in b.iter().enumerate() {
+        match c {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'+' if depth == 0 => {
+                parts.push(s[last..i].trim().to_string());
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(s[last..].trim().to_string());
+    parts
 }
 
 /// Lower Mog per-CHARACTER string ops to Rust, scoped to String-typed operands so array code is
@@ -1590,6 +1725,21 @@ mod inline_if_tests {
         // An ARRAY loop `for e in arr` must NOT get `.chars()`.
         let arr = "fn sum(arr: [i64]) -> i64 {\n    t: i64 = 0;\n    for e in arr {\n        t = t + e;\n    }\n    return t;\n}\n";
         assert!(!to_rust(arr).contains(".chars()"), "array loop wrongly got .chars()");
+    }
+
+    #[test]
+    fn rust_lowers_string_building_concat_and_literals() {
+        // A char-by-char string builder: `out = ""`, `out = out + ch`, `+ ch.upper()`, and a bare
+        // literal return — all invalid Rust as emitted, all lowered here.
+        let mog = "fn cap(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        out = out + ch.upper();\n    }\n    if s == \"\" {\n        return \"empty\";\n    }\n    return out;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("out: String = String::new();"), "empty init not lowered: {rs}");
+        assert!(rs.contains("out = format!(\"{}{}\", out, ch.to_uppercase());"), "concat not lowered: {rs}");
+        assert!(rs.contains("return \"empty\".to_string();"), "literal return not lowered: {rs}");
+        assert!(!rs.contains("out + ch"), "raw String+char survived: {rs}");
+        // Integer accumulation `c = c + 1` must NOT be turned into a format!.
+        let ints = "fn cnt(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        c = c + 1;\n    }\n    return c;\n}\n";
+        assert!(!to_rust(ints).contains("format!"), "int accumulation wrongly formatted");
     }
 
     #[test]
