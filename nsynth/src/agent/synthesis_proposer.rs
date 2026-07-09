@@ -377,6 +377,13 @@ pub fn try_test_mined_synthesis_patch(
             expected: out.clone(),
         })
         .collect();
+    // Array-RETURNING functions (reverse, sort) need a Vec/slice reshape this proposer does not yet
+    // get right for every signature; declining defers them to the existing proposers (the behaviour
+    // before test-mining was wired into this ladder), avoiding a bad-patch short-circuit. Scalar and
+    // boolean outputs — the verified domains, incl. array->scalar folds like sum_of_evens — proceed.
+    if exs.iter().any(|e| matches!(e.expected, crate::benchmark::Value::Array(_))) {
+        return None;
+    }
     let sig: &'static str =
         Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str());
     let problem = crate::benchmark::Problem {
@@ -1244,6 +1251,11 @@ fn defined_fn_names(text: &str) -> Vec<String> {
 fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
     let fns = split_top_level_functions(synthesized);
 
+    let repo_has_fn = old_text.contains(&format!("fn {repo_fn}"));
+    // Slice adapters bridge the synthesizer's owned `Vec<i64>` params to a repo `&[i64]` slice
+    // signature (see slice_param_adapters). Only meaningful when the repo fn exists.
+    let adapters = if repo_has_fn { slice_param_adapters(old_text, repo_fn) } else { String::new() };
+
     if fns.len() > 1 {
         let main_idx = fns
             .iter()
@@ -1256,9 +1268,28 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
                 helpers.push_str("\n\n");
             }
         }
+        // SLICE PATH: keep the repo's `&[i64]` signature, run the Vec-based synthesized main body
+        // behind a `.to_vec()` bridge, and insert the (Vec-based) helpers as sibling functions.
+        if repo_has_fn && !adapters.is_empty() {
+            let synth_idents = fn_header_params(&fns[main_idx].1, &fns[main_idx].0)
+                .map(|p| parse_param_idents(&p))
+                .unwrap_or_default();
+            let repo_idents = parse_param_idents(&fn_header_params(old_text, repo_fn).unwrap_or_default());
+            let mut body = fn_body(&fns[main_idx].1)?;
+            if synth_idents.len() == repo_idents.len() {
+                for (from, to) in synth_idents.iter().zip(repo_idents.iter()) {
+                    if from != to {
+                        body = rename_ident(&body, from, to);
+                    }
+                }
+            }
+            let new_body = format!("{adapters}{body}");
+            let with_body = replace_body_only(old_text, repo_fn, &new_body).ok()?;
+            return Some(insert_before_fn_def(&with_body, repo_fn, helpers.trim()));
+        }
         let main_renamed = ensure_pub_fn(&rename_first_fn(&fns[main_idx].1, repo_fn));
         let new_impl = format!("{helpers}{}", main_renamed.trim());
-        return if old_text.contains(&format!("fn {repo_fn}")) {
+        return if repo_has_fn {
             replace_function_body(old_text, repo_fn, &new_impl).ok()
         } else {
             Some(format!("{}\n", new_impl.trim()))
@@ -1266,7 +1297,7 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
     }
 
     let synth_body = fn_body(synthesized)?;
-    if !old_text.contains(&format!("fn {repo_fn}")) {
+    if !repo_has_fn {
         let renamed = ensure_pub_fn(&rename_first_fn(synthesized, repo_fn));
         return Some(format!("{}\n", renamed.trim()));
     }
@@ -1284,7 +1315,23 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
             }
         }
     }
+    // Prepend slice adapters so a `&[i64]`-signature repo fn compiles against the Vec-based body.
+    let body = format!("{adapters}{body}");
     replace_body_only(old_text, repo_fn, &body).ok()
+}
+
+/// Insert `block` (sibling top-level functions) immediately before the definition of `fn_name`.
+fn insert_before_fn_def(source: &str, fn_name: &str, block: &str) -> String {
+    if block.is_empty() {
+        return source.to_string();
+    }
+    let pos = source
+        .find(&format!("pub fn {fn_name}"))
+        .or_else(|| source.find(&format!("fn {fn_name}")));
+    match pos {
+        Some(p) => format!("{}{}\n\n{}", &source[..p], block, &source[p..]),
+        None => source.to_string(),
+    }
 }
 
 /// Split a Rust source into top-level `(name, full_text)` function definitions,
@@ -1411,6 +1458,54 @@ fn parse_param_idents(params: &str) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Parameter TYPES parallel to [`parse_param_idents`]: the text after each `:`.
+fn parse_param_types(params: &str) -> Vec<String> {
+    params
+        .split(',')
+        .filter_map(|p| {
+            let p = p.trim();
+            if p.is_empty() {
+                return None;
+            }
+            let (_name, ty) = p.split_once(':')?;
+            Some(ty.trim().to_string())
+        })
+        .collect()
+}
+
+/// `.to_vec()` shadow lines for each repo parameter whose type is a slice (`&[..]`), so the
+/// Vec-based synthesized body compiles against a slice signature. A collection repo function
+/// (`pub fn sum_of_evens(xs: &[i64]) -> i64`) keeps its slice signature (matching the test's
+/// call convention) while the synthesized logic sees an owned `Vec` — the minimal bridge that
+/// unblocks list-processing repo repairs without rewriting iteration.
+fn slice_param_adapters(old_text: &str, repo_fn: &str) -> String {
+    // Only bridge slice params for SCALAR-returning functions (array->scalar folds/predicates like
+    // sum_of_evens -> i64). A collection-returning function (reverse -> Vec<i64>) reshapes correctly
+    // through the original path; applying the adapter there would mangle the Vec return, regressing
+    // it. Detect the repo return type from the signature.
+    if let Some(start) = old_text.find(&format!("fn {repo_fn}(")) {
+        let after = &old_text[start..];
+        if let Some(arrow) = after.find("->") {
+            if let Some(brace_rel) = after[arrow..].find('{') {
+                let ret = after[arrow + 2..arrow + brace_rel].trim();
+                if ret.contains("Vec") || ret.contains('[') {
+                    return String::new();
+                }
+            }
+        }
+    }
+    let params = fn_header_params(old_text, repo_fn).unwrap_or_default();
+    let idents = parse_param_idents(&params);
+    let types = parse_param_types(&params);
+    let mut out = String::new();
+    for (name, ty) in idents.iter().zip(types.iter()) {
+        if ty.contains("&[") {
+            out.push_str(&format!("let {name} = {name}.to_vec();\n"));
+        }
+    }
+    out
 }
 
 /// Inner text of the first `{ ... }` body in `code`.

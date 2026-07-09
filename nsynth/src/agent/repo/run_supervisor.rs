@@ -240,9 +240,27 @@ pub fn nl_synthesis_proposer_with_run(
         true
     };
     if budget_allows_synthesis {
-        if let Some(patch) =
-            crate::agent::synthesis_proposer::try_real_synthesis_patch(task, context, &description)
-        {
+        // Two synthesis candidates, both budget-gated (bypassing the budget here would defeat the
+        // exhaustion guard): (1) REAL synthesis from prose examples, and (2) TEST-MINED synthesis
+        // — a bare "fix the failing tests" request carries no prose examples, but the failing
+        // test's `assert_eq!` calls ARE I/O examples; mine them and solve the real function
+        // (deterministic, verified, no model). This step was present in the standalone
+        // `nl_synthesis_proposer` but MISSING here, so every bare-NL repo repair used to fall
+        // straight through to the empty-intent fallback and fail with "CodingIntent has no
+        // examples".
+        let synth = crate::agent::synthesis_proposer::try_real_synthesis_patch(
+            task,
+            context,
+            &description,
+        )
+        .or_else(|| {
+            crate::agent::synthesis_proposer::try_test_mined_synthesis_patch(
+                task,
+                context,
+                &description,
+            )
+        });
+        if let Some(patch) = synth {
             if run_path.exists() {
                 if let Ok(mut run) = AgentRun::load(run_path) {
                     let _ = run.budget.record_synthesis_candidate();
