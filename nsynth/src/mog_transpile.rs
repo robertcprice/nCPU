@@ -653,7 +653,11 @@ fn lower_rust_char_ops(rust: &str) -> String {
         // the loop-var form here (the common one). The remaining char methods map to a Rust method
         // NAME (or a cast), independent of the operand, so they lower GLOBALLY below.
         for cv in &char_vars {
-            l = l.replace(&format!("{cv}.is_vowel()"), &format!("\"aeiouAEIOU\".contains({cv})"));
+            l = l
+                .replace(&format!("{cv}.is_vowel()"), &format!("\"aeiouAEIOU\".contains({cv})"))
+                // `return ch;` returns a char, but a Mog fn that returns a char is spelled
+                // `-> string`, so the Rust return type is String — materialize the char.
+                .replace(&format!("return {cv};"), &format!("return {cv}.to_string();"));
         }
         // GLOBAL char-method lowering: these Mog methods only ever apply to a `char`, so rewriting
         // the method token wherever it appears is safe — including chars produced by string INDEXING
