@@ -1057,6 +1057,16 @@ fn scan_holes(code: &str) -> Vec<Hole> {
                             if &rft == vty {
                                 bodies.push(format!("self.{fname}[{idx} as usize].{rf} = {val};"));
                             }
+                            // Record-field OPERATIONS WITH RULES: change a record's i64 field by index,
+                            // guarded (`sell(i, qty) { if qty <= items[i].stock { items[i].stock -= qty; } }`)
+                            // or plain (`restock(i, qty) { items[i].stock += qty; }`). Guarded first so it
+                            // survives the joint-search truncation.
+                            if rft == "i64" && vty == "i64" {
+                                let slot = format!("self.{fname}[{idx} as usize].{rf}");
+                                bodies.push(format!("if {val} <= {slot} {{ {slot} -= {val}; }}"));
+                                bodies.push(format!("{slot} -= {val};"));
+                                bodies.push(format!("{slot} += {val};"));
+                            }
                         }
                     }
                 }
@@ -4330,6 +4340,17 @@ mod tests {
         // total -> aggregate over the record's i64 field, NOT `self.priority` (priority is Item's, not TodoList's).
         assert!(holes[2].candidates.iter().any(|b| b.contains("self.items.iter().map(|e| e.priority).sum()")), "no field-aggregate");
         assert!(holes[2].candidates.iter().all(|b| !b.contains("self.priority")), "leaked a non-self field");
+    }
+
+    #[test]
+    fn scan_holes_covers_record_field_operations_with_rules() {
+        let code = "pub struct Product { pub name: String, pub stock: i64 }\npub struct Shop { pub items: Vec<Product> }\nimpl Shop {\n pub fn restock(&mut self, i: i64, qty: i64) {}\n pub fn sell(&mut self, i: i64, qty: i64) {}\n}\n";
+        let holes = scan_holes(code);
+        assert!(holes[0].candidates.iter().any(|b| b == "self.items[i as usize].stock += qty;"), "no field +=");
+        assert!(
+            holes[1].candidates.iter().any(|b| b == "if qty <= self.items[i as usize].stock { self.items[i as usize].stock -= qty; }"),
+            "no guarded field -="
+        );
     }
 
     #[test]
