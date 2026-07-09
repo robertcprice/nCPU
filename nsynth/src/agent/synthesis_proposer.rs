@@ -489,11 +489,13 @@ fn synthesize_mined_for_fn(
             if rows.len() < 2 {
                 return None;
             }
-            // Raw-solver fallback declines array-RETURNING functions (its Vec/slice reshape is not
-            // reliable for them); the router above already handles those cleanly.
-            if exs.iter().any(|e| matches!(e.expected, crate::benchmark::Value::Array(_))) {
-                return None;
-            }
+            // Array-RETURNING functions (sort, map/double_each) are now handled: the transpiler
+            // lowers index-style + `mut`-param op bodies to valid Rust and reshape shadows mutated
+            // params, so the solver's decompose-map / decompose-sort output reshapes onto the repo
+            // signature. Any shape that still fails to reshape is caught by strict-verify + the
+            // cargo-test oracle (a rejected patch, never a wrong one), so admitting array output is
+            // safe. This is the path generic "fix the failing tests" queries take for array->array
+            // functions, which the router refuses without a semantic name.
             let sig: &'static str = Box::leak(
                 crate::linguigenesis_bridge::infer_signature(repo_fn, &exs).into_boxed_str(),
             );
@@ -1523,8 +1525,21 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
             }
         }
     }
-    // Prepend slice adapters so a `&[i64]`-signature repo fn compiles against the Vec-based body.
-    let body = format!("{adapters}{body}");
+    // A repo param the (renamed) body MUTATES in place — sort's `a[i] = ..`, an in-place reverse —
+    // needs a `mut` binding, but the repo signature declares the param immutable. Shadow it as
+    // mutable at the top of the body (mirrors the slice `.to_vec()` adapter). Owned params only;
+    // `&[..]` slice params already get a fresh owned binding through `adapters` above.
+    let repo_types = fn_header_params(old_text, repo_fn)
+        .map(|p| parse_param_types(&p))
+        .unwrap_or_default();
+    let mut mut_shadows = String::new();
+    for (name, ty) in repo_params.iter().zip(repo_types.iter()) {
+        if !ty.contains("&[") && crate::mog_transpile::param_is_mutated(&body, name) {
+            mut_shadows.push_str(&format!("let mut {name} = {name};\n"));
+        }
+    }
+    // Prepend slice adapters + mut shadows so the repo signature compiles against the Vec-based body.
+    let body = format!("{adapters}{mut_shadows}{body}");
     replace_body_only(old_text, repo_fn, &body).ok()
 }
 

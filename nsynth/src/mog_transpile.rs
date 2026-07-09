@@ -287,9 +287,143 @@ fn transpile(mog: &str, target: Target) -> String {
         return String::from("pass\n");
     }
     if target == Target::Rust {
-        return lower_rust_string_methods(&out);
+        return add_mut_to_mutated_params(&lower_rust_string_methods(&out));
     }
     out
+}
+
+/// A Rust fn parameter that the body MUTATES (index-assign `a[i] = ..`, reassign `a = ..`,
+/// compound-assign `a += ..`, or an in-place method `a.push(..)/.sort()/..`) must be declared
+/// `mut a: T`. Mog is untyped-mutability (every binding is assignable), so its hand-written
+/// in-place ops (sort, in-place reverse) mutate their array parameter directly — without this the
+/// emitted Rust fails to compile (`cannot borrow as mutable`). The synthesizer's own output never
+/// mutates a parameter, so this only lifts the library-op shapes.
+fn add_mut_to_mutated_params(rust: &str) -> String {
+    let bytes = rust.as_bytes();
+    let mut out = String::with_capacity(rust.len() + 16);
+    let mut i = 0;
+    while i < rust.len() {
+        let at_fn = rust[i..].starts_with("fn ")
+            && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'));
+        if at_fn {
+            if let Some((ps, pe)) = rust[i..]
+                .find('(')
+                .map(|o| i + o)
+                .and_then(|open| balanced_region(rust, open, b'(', b')'))
+            {
+                if let Some((bs, be)) = rust[pe..]
+                    .find('{')
+                    .map(|o| pe + o)
+                    .and_then(|brace| balanced_region(rust, brace, b'{', b'}'))
+                {
+                    let body = &rust[bs..be];
+                    let new_params = rust[ps..pe]
+                        .split(',')
+                        .map(|p| {
+                            let pt = p.trim();
+                            let name = pt.split(':').next().unwrap_or("").trim();
+                            if !pt.is_empty()
+                                && !pt.starts_with("mut ")
+                                && !name.is_empty()
+                                && param_is_mutated(body, name)
+                            {
+                                let lead = &p[..p.len() - p.trim_start().len()];
+                                format!("{lead}mut {pt}")
+                            } else {
+                                p.to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    out.push_str(&rust[i..ps]);
+                    out.push_str(&new_params);
+                    i = pe;
+                    continue;
+                }
+            }
+        }
+        let ch = rust[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// `(inner_start, close_index)` of the balanced region beginning at `at` (where `s[at] == open`).
+fn balanced_region(s: &str, at: usize, open: u8, close: u8) -> Option<(usize, usize)> {
+    let b = s.as_bytes();
+    if b.get(at) != Some(&open) {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut i = at;
+    while i < b.len() {
+        if b[i] == open {
+            depth += 1;
+        } else if b[i] == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some((at + 1, i));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Whether `body` mutates the binding `name`: `name = ..` (single `=`, not `==`), `name[..] = ..`,
+/// `name += ..` (and `-= *= /= %=`), or an in-place method call `name.push(/.sort(/...`.
+pub(crate) fn param_is_mutated(body: &str, name: &str) -> bool {
+    let b = body.as_bytes();
+    let mut i = 0;
+    while let Some(rel) = body[i..].find(name) {
+        let at = i + rel;
+        let end = at + name.len();
+        i = end;
+        // word boundary on both sides
+        if at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_') {
+            continue;
+        }
+        if end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_') {
+            continue;
+        }
+        let mut j = end;
+        while j < b.len() && b[j] == b' ' {
+            j += 1;
+        }
+        // skip a balanced index `[..]`
+        if j < b.len() && b[j] == b'[' {
+            if let Some((_, close)) = balanced_region(body, j, b'[', b']') {
+                j = close + 1;
+                while j < b.len() && b[j] == b' ' {
+                    j += 1;
+                }
+            }
+        }
+        if j >= b.len() {
+            continue;
+        }
+        // plain assignment `=` (not `==`)
+        if b[j] == b'=' && b.get(j + 1) != Some(&b'=') {
+            return true;
+        }
+        // compound assignment `+= -= *= /= %=`
+        if matches!(b[j], b'+' | b'-' | b'*' | b'/' | b'%') && b.get(j + 1) == Some(&b'=') {
+            return true;
+        }
+        // in-place method
+        if b[j] == b'.' {
+            let rest = &body[j + 1..];
+            const MUTATORS: [&str; 11] = [
+                "push(", "sort(", "sort_by", "insert(", "remove(", "pop(", "clear(", "reverse(",
+                "swap(", "truncate(", "retain(",
+            ];
+            if MUTATORS.iter().any(|m| rest.starts_with(m)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Lower Mog string methods to their Rust equivalents, SCOPED to `String`-returning
@@ -1363,6 +1497,25 @@ mod inline_if_tests {
     fn inline_if_rust() {
         let rs = to_rust(MOG);
         assert!(rs.contains("if b >= a { v0 = a; }"), "got: {rs}");
+    }
+
+    #[test]
+    fn rust_adds_mut_to_index_assigned_param() {
+        // In-place bubble sort mutates its array parameter via `a[j] = ..` — the emitted Rust
+        // param must be `mut a` or it fails to compile (`cannot borrow as mutable`).
+        let mog = "fn srt(a: [i64]) -> [i64] {\n    i: i64 = 0;\n    while i < a.len {\n        a[i] = a[i];\n        i = i + 1;\n    }\n    return a;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("fn srt(mut a: Vec<i64>)"), "param not made mut: {rs}");
+    }
+
+    #[test]
+    fn rust_leaves_unmutated_and_iterated_params_immutable() {
+        // `double_each` iterates `arr` (moved) and builds a fresh `out`; `arr` is NOT mutated and
+        // must stay immutable (a spurious `mut` would be wrong and warn).
+        let mog = "fn double_each(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        out.push(e * 2);\n    }\n    return out;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("fn double_each(arr: Vec<i64>)"), "arr wrongly made mut: {rs}");
+        assert!(!rs.contains("mut arr"), "arr wrongly made mut: {rs}");
     }
 
     #[test]
