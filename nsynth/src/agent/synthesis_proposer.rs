@@ -1267,6 +1267,29 @@ fn reshape_to_repo_signature_inner(old_text: &str, repo_fn: &str, synthesized: &
     let fns = split_top_level_functions(synthesized);
 
     let repo_has_fn = old_text.contains(&format!("fn {repo_fn}"));
+
+    // ARITY GUARD: decline when the synthesized ENTRY fn takes a different number of
+    // params than the repo fn. A body written for the wrong arity can never satisfy the
+    // signature — e.g. "maximum of two numbers" (repo `max_of(a,b)`) resolves via the NL
+    // intent to a 1-arg ARRAY max (`array_max(xs)`); reshaping it onto 2 scalar params
+    // yields a type mismatch that cargo rejects, and returning it here short-circuits the
+    // proposer ladder before the test-mined stage (which mines the 2-arg asserts and
+    // solves it correctly). Declining lets the ladder fall through to that stage.
+    if repo_has_fn {
+        let repo_n = fn_header_params(old_text, repo_fn).map(|p| parse_param_idents(&p).len());
+        let entry = fns
+            .iter()
+            .find(|(n, _)| n == repo_fn)
+            .or_else(|| fns.iter().find(|(_, t)| t.trim_start().starts_with("pub ")))
+            .or_else(|| fns.last());
+        let entry_n = entry.and_then(|(n, t)| fn_header_params(t, n).map(|p| parse_param_idents(&p).len()));
+        if let (Some(a), Some(b)) = (repo_n, entry_n) {
+            if a != b {
+                return None;
+            }
+        }
+    }
+
     // Slice adapters bridge the synthesizer's owned `Vec<i64>` params to a repo `&[i64]` slice
     // signature (see slice_param_adapters). Only meaningful when the repo fn exists.
     let adapters = if repo_has_fn { slice_param_adapters(old_text, repo_fn) } else { String::new() };
