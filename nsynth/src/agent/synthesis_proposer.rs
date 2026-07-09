@@ -384,35 +384,58 @@ pub fn try_test_mined_synthesis_patch(
         rows.dedup();
         rows
     };
-    let mut repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
-    let mut rows = mine_for(&repo_fn);
-    // The intent's guessed name may not match the repo's actual failing function. If too few
-    // asserts were mined, try (a) every function DEFINED in the target file, then (b) every
-    // function CALLED by an assert but DEFINED NOWHERE — a MISSING function the failing test
-    // references (feature-add). Adopt the (name, rows) with the most examples.
-    if rows.len() < 2 {
-        let defined = defined_fn_names(&old_text);
-        let mut candidates: Vec<String> = defined.clone();
-        for f in &context.files {
-            if let Some(t) = f.text.as_deref() {
-                for c in assert_called_fn_names(t) {
-                    if !defined.contains(&c) && !candidates.contains(&c) {
-                        candidates.push(c);
-                    }
+    // Candidate functions to repair, most-determined first: the resolved primary name, then every
+    // function DEFINED in any context .rs file, then functions an assert CALLS but nothing defines
+    // (feature-add). Each is tried in turn and the FIRST that yields a CHANGING verified patch wins.
+    // When several functions are broken, successive repair iterations fix them one by one — an
+    // already-correct function re-synthesizes to a no-op (new_text == old_text), is skipped, and the
+    // loop moves to the next still-broken function instead of stalling on a repatch of the same one.
+    let primary = resolve_repo_fn_name(&default_fn, Some(&old_text));
+    let mut candidates: Vec<String> = vec![primary];
+    for f in &context.files {
+        let Some(t) = f.text.as_deref() else { continue };
+        if f.path.ends_with(".rs") {
+            for d in defined_fn_names(t) {
+                if !candidates.contains(&d) {
+                    candidates.push(d);
                 }
             }
         }
-        for cand in candidates {
-            let cand_rows = mine_for(&cand);
-            if cand_rows.len() > rows.len() {
-                rows = cand_rows;
-                repo_fn = cand;
+        for c in assert_called_fn_names(t) {
+            if !candidates.contains(&c) {
+                candidates.push(c);
             }
         }
     }
-    if rows.is_empty() {
-        return None;
+    for repo_fn in candidates {
+        let rows = mine_for(&repo_fn);
+        if rows.is_empty() {
+            continue;
+        }
+        if let Some(patch) =
+            synthesize_mined_for_fn(context, description, &repo_fn, rows, &target, &old_text)
+        {
+            return Some(patch);
+        }
     }
+    None
+}
+
+/// Synthesize one verified repair for `repo_fn` from its mined I/O `rows`. Returns `None` when the
+/// examples don't resolve/verify OR when the result would not change the file (the function is
+/// already correct) — the latter lets the multi-function caller skip past already-fixed functions.
+/// `picked_target`/`picked_old_text` are pick_target_path's choice, used as the feature-add append
+/// site when no context file defines `repo_fn`.
+fn synthesize_mined_for_fn(
+    context: &RepairContext,
+    description: &str,
+    repo_fn: &str,
+    rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)>,
+    picked_target: &str,
+    picked_old_text: &str,
+) -> Option<RepairPatch> {
+    let mut target = picked_target.to_string();
+    let mut old_text = picked_old_text.to_string();
     // Repair the file that DEFINES repo_fn, not the one pick_target_path chose. The picked target
     // follows the QUERY / assert site, which for a real repo is often NOT the definition: an
     // integration test lives in `tests/`, and `src/lib.rs` may only declare `pub mod math;` while
@@ -426,7 +449,7 @@ pub fn try_test_mined_synthesis_patch(
         .files
         .iter()
         .filter(|f| f.path.ends_with(".rs") && f.path != target)
-        .find(|f| f.text.as_deref().map(|t| file_defines_function(t, &repo_fn)).unwrap_or(false))
+        .find(|f| f.text.as_deref().map(|t| file_defines_function(t, repo_fn)).unwrap_or(false))
         .map(|f| f.path.clone())
     {
         if !old_text.contains(&format!("fn {repo_fn}")) {
@@ -472,10 +495,10 @@ pub fn try_test_mined_synthesis_patch(
                 return None;
             }
             let sig: &'static str = Box::leak(
-                crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str(),
+                crate::linguigenesis_bridge::infer_signature(repo_fn, &exs).into_boxed_str(),
             );
             let problem = crate::benchmark::Problem {
-                name: repo_fn.clone(),
+                name: repo_fn.to_string(),
                 category: "repo-test-mined",
                 description: "",
                 signature: sig,
@@ -501,11 +524,11 @@ pub fn try_test_mined_synthesis_patch(
         return None;
     }
     let new_text = if repo_has_fn {
-        reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?
+        reshape_to_repo_signature(&old_text, repo_fn, &synthesized)?
     } else {
         // MISSING function (feature-add): reshape yields the standalone fn source; APPEND it to
         // the file rather than replacing the file contents.
-        let new_fn = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+        let new_fn = reshape_to_repo_signature(&old_text, repo_fn, &synthesized)?;
         format!("{}\n\n{}\n", old_text.trim_end(), new_fn.trim())
     };
     if new_text == old_text {
@@ -2627,6 +2650,66 @@ mod tests {
         assert!(
             !patch.edits.iter().any(|e| e.path == "src/lib.rs"),
             "must NOT edit the module-declaring crate root"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Multi-function repair: two broken functions in one file. A single proposer call fixes ONE
+    /// (the loop over candidates returns the first CHANGING patch); once it is corrected, a second
+    /// call must skip the now-correct function (its re-synthesis is a no-op) and patch the other —
+    /// so the repair loop converges instead of stalling on one function.
+    #[test]
+    fn test_mined_synthesis_repairs_each_of_several_broken_functions_in_turn() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_multifn_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"mf\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        let broken = "pub fn triple(n: i64) -> i64 {\n    0\n}\npub fn twice(n: i64) -> i64 {\n    0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn a() {\n        assert_eq!(triple(4), 12);\n        assert_eq!(triple(0), 0);\n    }\n    #[test]\n    fn b() {\n        assert_eq!(twice(4), 8);\n        assert_eq!(twice(5), 10);\n    }\n}\n";
+        fs::write(root.join("src/lib.rs"), broken).expect("lib.rs");
+
+        let task = RepoTaskSpec {
+            id: "multifn".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: fix the failing tests".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 4,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+
+        // Drive the test-mined stage directly (the loop that rotates over candidate functions),
+        // applying each patch between calls, so the second call sees the first repair as done.
+        let norm = |s: &str| s.split_whitespace().collect::<String>();
+        let ctx1 = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx1");
+        let patch1 = try_test_mined_synthesis_patch(&task, &ctx1, "fix the failing tests")
+            .expect("first proposal fixes one function");
+        let edit1 = &patch1.edits[0];
+        fs::write(root.join(&edit1.path), &edit1.new_text).expect("apply patch1");
+
+        let ctx2 = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx2");
+        let patch2 = try_test_mined_synthesis_patch(&task, &ctx2, "fix the failing tests")
+            .expect("second proposal targets the STILL-broken function, not a re-patch of the fixed one");
+        let edit2 = &patch2.edits[0];
+        fs::write(root.join(&edit2.path), &edit2.new_text).expect("apply patch2");
+
+        // Neither function still returns the bare `0` stub — both were repaired across the two calls.
+        let final_src = fs::read_to_string(root.join("src/lib.rs")).expect("read");
+        let f = norm(&final_src);
+        assert!(
+            !f.contains("fntriple(n:i64)->i64{0}"),
+            "triple still stubbed:\n{final_src}"
+        );
+        assert!(
+            !f.contains("fntwice(n:i64)->i64{0}"),
+            "twice still stubbed:\n{final_src}"
         );
         let _ = fs::remove_dir_all(&root);
     }
