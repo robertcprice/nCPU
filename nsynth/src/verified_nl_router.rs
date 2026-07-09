@@ -2085,6 +2085,23 @@ mod tests {
                 vec![av(&[8, 2, 6])],
                 iv(6),
             ),
+            // count_zeros (the COUNT of zeros) coincides with 'contains a zero' when the examples
+            // hold at most one zero; wrong once two are present ([0,0,3] -> count 2 vs contains 1).
+            // contains_zero out-covers it via 'contains'.
+            (
+                "whether a list contains the value zero",
+                vec![ex(vec![av(&[1, 0, 2])], iv(1)), ex(vec![av(&[3, 4])], iv(0)), ex(vec![av(&[0])], iv(1)), ex(vec![av(&[5, 6, 7])], iv(0))],
+                vec![av(&[0, 0, 3])],
+                iv(1),
+            ),
+            // With no is_empty op the prompt fell to the composition tier, which overfit a chain
+            // wrong on a fresh non-empty list ([9,9,9,9] -> 1 vs 0). is_empty resolves it.
+            (
+                "whether a list is empty",
+                vec![ex(vec![av(&[])], iv(1)), ex(vec![av(&[1])], iv(0)), ex(vec![av(&[1, 2])], iv(0))],
+                vec![av(&[9, 9, 9, 9])],
+                iv(0),
+            ),
         ];
         for (prompt, exs, fresh, intended) in cases {
             let code = match answer(prompt, &exs) {

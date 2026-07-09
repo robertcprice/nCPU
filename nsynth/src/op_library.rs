@@ -560,6 +560,16 @@ pub const OPS: &[LibOp] = &[
     // length gives the whole size, count_negatives gives 0 on non-negative input).
     LibOp { name: "count_zeros", arity: 1, mog:
 "fn count_zeros(arr: [i64]) -> i64 {\n    c: i64 = 0;\n    for e in arr {\n        if e == 0 {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n" },
+    // Whether a list CONTAINS a zero (boolean). count_zeros (the COUNT of zeros) coincides whenever
+    // the examples have at most one zero, but is wrong once two or more are present ([0,0,3] ->
+    // count 2 vs contains 1). 'contains'+'zero' out-cover count_zeros ('zero' only).
+    LibOp { name: "contains_zero", arity: 1, mog:
+"fn contains_zero(arr: [i64]) -> i64 {\n    for e in arr {\n        if e == 0 {\n            return 1;\n        }\n    }\n    return 0;\n}\n" },
+    // Whether a list is EMPTY (boolean). With no such op the prompt fell to the composition tier,
+    // which overfit a chain wrong on a fresh non-empty list ([9,9,9,9] -> 1 vs 0). The named op
+    // resolves at the library tier before composition.
+    LibOp { name: "is_empty", arity: 1, mog:
+"fn is_empty(arr: [i64]) -> i64 {\n    if arr.len == 0 {\n        return 1;\n    }\n    return 0;\n}\n" },
     // Count of NON-ZERO values. Without it, count_greater_than_zero matched 'not zero' via
     // the shared 'zero' token and coincided on non-negative inputs, shipping wrong when a
     // negative is present ([-2,0,3] -> not-zero 2, but >0 count 1). 'not' + 'zero' name it.
