@@ -348,6 +348,12 @@ fn generate_mutations(content: &str) -> Vec<String> {
             i += 1;
         }
     }
+    // STRUCTURAL guard templates: insert an early-return edge guard at a function body's start —
+    // `if p == 0 { return <edge>; }` / `if p.is_empty() { .. }` — with <edge> inferred from the
+    // return type (None / 0 / false / empty). The classic missing-edge-case bug: `safe_div(a,b) ->
+    // Some(a/b)` should guard `b == 0 -> None`. A single token swap can't express this; a template
+    // can. Bounded and last-ish; cargo picks the guard/edge that actually passes.
+    out.extend(structural_guard_mutations(code, tail));
     // OPERAND function-wrap: a bare identifier operand `x` -> `F(x)` for each single-arg function F
     // defined in the code (the "wrong sub-expression" bug: `double(x) + x` -> `double(x) + double(x)`).
     // Last, so the cheaper operator/assignment/const fixes are tried first under the mutation cap.
@@ -384,6 +390,124 @@ fn generate_mutations(content: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Insert an early-return edge guard at the start of each function body: `if <cond> { return
+/// <edge>; }`, where `<edge>` is inferred from the return type and `<cond>` from each parameter
+/// (`p == 0` for an int, `p.is_empty()` for a String/Vec). Covers the missing-edge-case bug class.
+fn structural_guard_mutations(code: &str, tail: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut search = 0;
+    while let Some(rel) = code[search..].find("fn ") {
+        let fstart = search + rel;
+        search = fstart + 3;
+        // parse `fn NAME(params) -> RET {`
+        let after = &code[fstart..];
+        let Some(op) = after.find('(') else { continue };
+        let ab = after.as_bytes();
+        let mut depth = 0i32;
+        let mut cp = None;
+        for i in op..ab.len() {
+            match ab[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        cp = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(cp) = cp else { continue };
+        let params_str = &after[op + 1..cp];
+        // find `->` RET and the body-open `{` after the params
+        let post = &after[cp + 1..];
+        let (ret, brace_rel) = match (post.find("->"), post.find('{')) {
+            (Some(a), Some(bpos)) if a < bpos => (post[a + 2..bpos].trim().to_string(), bpos),
+            (_, Some(bpos)) => (String::new(), bpos),
+            _ => continue,
+        };
+        let body_open = fstart + cp + 1 + brace_rel + 1; // just after `{`
+        let edges = guard_edge_returns(&ret);
+        if edges.is_empty() {
+            continue;
+        }
+        for (name, ty) in parse_typed_params(params_str) {
+            if name == "self" {
+                continue;
+            }
+            let conds: Vec<String> = if ty.contains("i64") {
+                vec![format!("{name} == 0"), format!("{name} < 0")]
+            } else if ty.contains("String") || ty.contains("Vec<") || ty.contains("[") {
+                vec![format!("{name}.is_empty()")]
+            } else {
+                continue;
+            };
+            for cond in &conds {
+                for edge in &edges {
+                    let guard = format!(" if {cond} {{ return {edge}; }}");
+                    let mut m = String::with_capacity(code.len() + tail.len() + guard.len() + 2);
+                    m.push_str(&code[..body_open]);
+                    m.push_str(&guard);
+                    m.push_str(&code[body_open..]);
+                    m.push_str(tail);
+                    out.push(m);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Candidate edge return expressions for a Rust return type.
+fn guard_edge_returns(ret: &str) -> Vec<&'static str> {
+    let r = ret.trim();
+    if r.starts_with("Option<") {
+        vec!["None"]
+    } else if r == "bool" {
+        vec!["false", "true"]
+    } else if r == "i64" {
+        vec!["0"]
+    } else if r == "String" {
+        vec!["String::new()"]
+    } else if r.starts_with("Vec<") {
+        vec!["Vec::new()"]
+    } else {
+        vec![]
+    }
+}
+
+/// Parse `name: TYPE, ...` into (name, type) pairs (handles `&mut self`, `mut x`, generics via a
+/// depth-aware comma split).
+fn parse_typed_params(params: &str) -> Vec<(String, String)> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut depth = 0i32;
+    let mut last = 0;
+    for (i, c) in params.char_indices() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(params[last..i].to_string());
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(params[last..].to_string());
+    parts
+        .into_iter()
+        .filter_map(|p| {
+            let p = p.trim();
+            if p.is_empty() {
+                return None;
+            }
+            let (nm, ty) = p.split_once(':')?;
+            Some((nm.trim().trim_start_matches("mut ").trim().to_string(), ty.trim().to_string()))
+        })
+        .collect()
 }
 
 /// Names of functions defined in `code` that take exactly one parameter — candidates for wrapping a
@@ -3153,6 +3277,20 @@ mod tests {
             muts.iter().all(|m| m.contains("assert_eq!(f(5), 15)")),
             "a mutation altered the test assertion"
         );
+    }
+
+    #[test]
+    fn structural_guard_templates_insert_edge_early_returns() {
+        // Option return: a divide fn should get an `if b == 0 { return None; }` guard candidate.
+        let code = "pub fn safe_div(a: i64, b: i64) -> Option<i64> { Some(a / b) }\n";
+        let muts = structural_guard_mutations(code, "");
+        assert!(
+            muts.iter().any(|m| m.contains("if b == 0 { return None; }") && m.contains("Some(a / b)")),
+            "no `b == 0 -> None` guard: {muts:?}"
+        );
+        // i64 return -> edge 0.
+        let c2 = "pub fn f(n: i64) -> i64 { n }\n";
+        assert!(structural_guard_mutations(c2, "").iter().any(|m| m.contains("return 0;")));
     }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
