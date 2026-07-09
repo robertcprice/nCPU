@@ -654,6 +654,22 @@ fn solve_string_output(problem: &Problem) -> Option<SolveResult> {
         });
     }
 
+    // Case-conversion / delimiter-change / char-filter shapes (snake<->camel,
+    // "a,b,c"->"a-b-c", keep-alpha, …) — statement-level string->string shapes the
+    // expression synthesizer cannot express. Self-verified through the interpreter,
+    // tried after the expression + word generalizers decline but BEFORE the
+    // memorizing lexicon fallback.
+    if let Some(wr) = crate::string_synth::synthesize_case_program(&params, &all) {
+        let code = wr.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+        return Some(SolveResult {
+            success: true,
+            code,
+            method: wr.method,
+            error: None,
+            metadata: Default::default(),
+        });
+    }
+
     // Whole-word lexicon lookup (LAST resort): for arbitrary string->string maps no
     // suffix transduction OR generalizing string program explains (e.g. irregular
     // inflection: have->has, be->is). This memorizes the training pairs, so it is
@@ -727,6 +743,69 @@ fn try_word_program(problem: &Problem) -> Option<SolveResult> {
     Some(SolveResult { success: true, code, method: wr.method, error: None, metadata: Default::default() })
 }
 
+/// Case-conversion / delimiter-change / char-filter `string -> string` shapes
+/// (snake<->camel, "a,b,c"->"a-b-c", keep-alpha, …) — genuine gaps the expression
+/// grammar cannot reach (single-char `replace` is out of grammar, there is no
+/// `join` node, and no per-char loop). Runs as a TOP tier for the same reason as
+/// `try_word_program`: `search_decompose`'s typed-enum lane can seed-overfit a
+/// case/filter spec (or emit an interpreter-only char loop that breaks Rust
+/// transpilation) and runs before `solve_string_output` where this synthesizer
+/// otherwise lives. Correct-by-construction + self-verifies every example through
+/// the interpreter, so it never returns a wrong program and declines (None) for any
+/// spec that is not one of its shapes, leaving all other specs on their normal path.
+fn try_case_program(problem: &Problem) -> Option<SolveResult> {
+    if !problem
+        .signature
+        .replace(' ', "")
+        .to_ascii_lowercase()
+        .contains("->string")
+    {
+        return None;
+    }
+    let params: Vec<String> = problem
+        .signature
+        .split_once('(')
+        .and_then(|(_, r)| r.split_once(')'))
+        .map(|(p, _)| p)
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|p| p.split(':').next().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+        .collect();
+    let params = if params.is_empty() { vec!["s".to_string()] } else { params };
+    // All examples must be string-input, string-output.
+    let all: Vec<crate::string_synth::StrSynthExample> = problem
+        .examples
+        .iter()
+        .filter_map(|e| {
+            let ins: Option<Vec<String>> = e
+                .inputs
+                .iter()
+                .map(|v| match v {
+                    Value::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect();
+            match (ins, &e.expected) {
+                (Some(i), Value::Str(o)) => {
+                    Some(crate::string_synth::StrSynthExample { inputs: i, expected: o.clone() })
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if all.len() != problem.examples.len() {
+        return None;
+    }
+    // STRUCTURED shapes only in the top tier: the lossy strip/char-filter shapes can
+    // reproduce a single-word `trim`'s examples and must not pre-empt the expression
+    // synthesizer's `s.trim()`; those run later in `solve_string_output`'s full pass.
+    let wr = crate::string_synth::synthesize_case_program_structured(&params, &all)?;
+    let fn_name = problem.function_name();
+    let code = wr.code.replacen("fn transform(", &format!("fn {fn_name}("), 1);
+    Some(SolveResult { success: true, code, method: wr.method, error: None, metadata: Default::default() })
+}
+
 /// `string -> int` aggregations (char count / word count) — a genuine gap: no tier
 /// synthesizes a novel string-input int-output program (only a matching library op
 /// could). Self-verified + declines for anything that isn't one of its shapes.
@@ -784,6 +863,17 @@ pub(super) fn solve_problem(problem: &Problem) -> SolveResult {
     // (longest/shortest-word etc.). Self-verified + correct-by-construction, so this
     // only ever returns a program that reproduces every example; declines otherwise.
     if let Some(result) = try_word_program(problem) {
+        if recordable {
+            crate::solved_cache::record(problem, &result.method, &result.code);
+            crate::op_library::maybe_record_learned(problem, &result);
+        }
+        return result;
+    }
+
+    // Case-conversion / delimiter-change / char-filter shapes (snake<->camel,
+    // "a,b,c"->"a-b-c", keep-alpha, …). Same top-priority placement + rationale as
+    // the word shapes: self-verified + correct-by-construction, declines otherwise.
+    if let Some(result) = try_case_program(problem) {
         if recordable {
             crate::solved_cache::record(problem, &result.method, &result.code);
             crate::op_library::maybe_record_learned(problem, &result);

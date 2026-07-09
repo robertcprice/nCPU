@@ -876,6 +876,324 @@ pub fn synthesize_word_program(
     None
 }
 
+// ── case conversion / delimiter re-splitting / char filters ──────────────────
+//
+// Real SWE constantly reshapes identifiers and delimited fields: snake_case ->
+// camelCase and back, "a,b,c" -> "a-b-c" (change the delimiter / join a list on a
+// new separator), and "keep only the letters" / "strip the spaces". None of these
+// are reachable by the expression grammar above — `SExpr::Replace` is gated to
+// multi-char literals (single-char delimiters can't be replaced), there is no
+// `join` node, and there is no per-char loop — so before this tier they all
+// REFUSED. Each shape here emits a statement-level Mog program and is SELF-VERIFIED
+// against every example through the real interpreter before it is returned, so a
+// wrong shape or a bad emit can never be a false accept — never-wrong by
+// construction. The search is tiny (a fixed handful of shapes, delimiters mined
+// from the data) and declines (None) for anything it does not exactly reproduce.
+
+/// Verify a candidate `string -> string` Mog program reproduces every example
+/// through the real interpreter (the never-wrong gate for the shapes below).
+fn verify_str_str(code: &str, examples: &[StrSynthExample]) -> bool {
+    let bench: Vec<crate::benchmark::Example> = examples
+        .iter()
+        .map(|ex| crate::benchmark::Example {
+            inputs: ex
+                .inputs
+                .iter()
+                .map(|s| crate::benchmark::Value::Str(s.clone()))
+                .collect(),
+            expected: crate::benchmark::Value::Str(ex.expected.clone()),
+        })
+        .collect();
+    crate::runtime::code_reproduces_examples(code, &bench)
+}
+
+/// snake_case / kebab-case / space-separated -> camelCase. Split on `sep`, keep
+/// the first word verbatim, and cap-first every following word, joining with "".
+/// Rust mirror of the emitted Mog (`w.slice(0,1).upper() + w.slice(1, w.len)`).
+fn to_camel(s: &str, sep: &str) -> String {
+    let mut it = s.split(sep);
+    let mut out = it.next().unwrap_or("").to_string();
+    for w in it {
+        out.push_str(&cap_first(w));
+    }
+    out
+}
+
+fn emit_to_camel(p: &str, sep: &str) -> String {
+    let sep = esc(sep);
+    format!(
+        "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: string = words[0];\n    i: i64 = 1;\n    while i < words.len {{\n        w: string = words[i];\n        out = out + w.slice(0, 1).upper() + w.slice(1, w.len);\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+    )
+}
+
+/// camelCase / PascalCase -> snake_case. Walk the chars; before every uppercase
+/// letter insert `sep` and lowercase it, else keep the char. Rust mirror of the
+/// emitted Mog (`if c.is_upper() { out = out + sep + c.lower() } else { out = out + c }`).
+/// `c.is_uppercase() && !c.is_lowercase()` mirrors the interpreter's `is_upper` on a
+/// 1-char string exactly.
+fn to_delimited_lower(s: &str, sep: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_uppercase() && !c.is_lowercase() {
+            out.push_str(sep);
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn emit_to_delimited_lower(p: &str, sep: &str) -> String {
+    let sep = esc(sep);
+    format!(
+        "fn transform({p}: string) -> string {{\n    out: string = \"\";\n    i: i64 = 0;\n    while i < {p}.len {{\n        c: string = {p}.slice(i, i + 1);\n        if c.is_upper() {{\n            out = out + \"{sep}\" + c.lower();\n        }} else {{\n            out = out + c;\n        }}\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+    )
+}
+
+/// split on `a`, rejoin on `b` — change the delimiter of a delimited field
+/// ("a,b,c" -> "a-b-c"), or strip the delimiter when `b` is "" ("a b c" -> "abc").
+fn resplit_join(s: &str, a: &str, b: &str) -> String {
+    s.split(a).collect::<Vec<_>>().join(b)
+}
+
+fn emit_resplit_join(p: &str, a: &str, b: &str) -> String {
+    format!(
+        "fn transform({p}: string) -> string {{\n    return {p}.split(\"{}\").join(\"{}\");\n}}\n",
+        esc(a),
+        esc(b)
+    )
+}
+
+/// Which 1-char predicate a keep-filter uses (mirrors the interpreter method of
+/// the same name applied to a 1-char string).
+#[derive(Clone, Copy)]
+enum CharClass {
+    Alpha,
+    Alnum,
+    Digit,
+}
+
+impl CharClass {
+    fn method(self) -> &'static str {
+        match self {
+            CharClass::Alpha => "is_alpha",
+            CharClass::Alnum => "is_alnum",
+            CharClass::Digit => "is_digit",
+        }
+    }
+    fn keep(self, c: char) -> bool {
+        match self {
+            CharClass::Alpha => c.is_alphabetic(),
+            CharClass::Alnum => c.is_alphanumeric(),
+            CharClass::Digit => c.is_ascii_digit(),
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            CharClass::Alpha => "keep_alpha",
+            CharClass::Alnum => "keep_alnum",
+            CharClass::Digit => "keep_digits",
+        }
+    }
+}
+
+/// keep only the chars of a given class (drop everything else): "h3llo!" ->("h llo").
+fn keep_class(s: &str, cc: CharClass) -> String {
+    s.chars().filter(|c| cc.keep(*c)).collect()
+}
+
+fn emit_keep_class(p: &str, cc: CharClass) -> String {
+    let m = cc.method();
+    format!(
+        "fn transform({p}: string) -> string {{\n    out: string = \"\";\n    i: i64 = 0;\n    while i < {p}.len {{\n        c: string = {p}.slice(i, i + 1);\n        if c.{m}() {{\n            out = out + c;\n        }}\n        i = i + 1;\n    }}\n    return out;\n}}\n"
+    )
+}
+
+/// Synthesize a case-conversion / delimiter-change / char-filter `string -> string`
+/// program from single-string-arg examples. Returns a SELF-VERIFIED Mog program or
+/// None. Never-wrong: a candidate is only returned if it reproduces EVERY example
+/// through the real interpreter; declines for anything it does not exactly match.
+///
+/// The FULL set — includes the LOSSY shapes (delimiter STRIP `split(a).join("")` and
+/// whole-class char filters like keep-alpha). Those can reproduce a single-word
+/// `trim`'s examples (`"  hi  "` -> `"hi"`), so this variant must only run in
+/// `solve_string_output`, AFTER the expression synthesizer has already claimed
+/// `trim`/`upper`/etc. — never as a first-look top tier. Use
+/// `synthesize_case_program_structured` for the top tier.
+pub fn synthesize_case_program(
+    params: &[String],
+    examples: &[StrSynthExample],
+) -> Option<StrSynthResult> {
+    case_shapes(params, examples, /*include_lossy=*/ true)
+}
+
+/// The STRUCTURED shapes only (snake<->camel, delimiter CHANGE with a non-empty new
+/// separator). None of these can reproduce a simpler op's examples — a delimiter
+/// change to a non-empty separator inserts that separator into the output, and the
+/// case joins are position-specific — so they cannot hijack `trim`/`upper`/lowercase
+/// the way a char-filter or delimiter-strip can. Safe to run as a TOP tier (before
+/// `search_decompose`, which would otherwise seed-overfit them).
+pub fn synthesize_case_program_structured(
+    params: &[String],
+    examples: &[StrSynthExample],
+) -> Option<StrSynthResult> {
+    case_shapes(params, examples, /*include_lossy=*/ false)
+}
+
+fn case_shapes(
+    params: &[String],
+    examples: &[StrSynthExample],
+    include_lossy: bool,
+) -> Option<StrSynthResult> {
+    if params.len() != 1 || examples.len() < 2 {
+        return None;
+    }
+    if examples.iter().any(|ex| ex.inputs.len() != 1) {
+        return None;
+    }
+    // Identity is not one of these ops.
+    if examples.iter().all(|ex| ex.inputs[0] == ex.expected) {
+        return None;
+    }
+    let p = &params[0];
+
+    // A predicted transform must reproduce EVERY example (fast Rust pre-filter) and
+    // then survive the interpreter gate before being returned. `guard` lets each
+    // shape require a discriminating property of the DATA so a coincidental narrow
+    // match on tiny examples does not fire (the interpreter gate is the soundness
+    // guarantee; guards protect generalization quality).
+    let consider =
+        |predict: &dyn Fn(&str) -> String, guard: bool, code: String, method: &str| -> Option<StrSynthResult> {
+            if !guard {
+                return None;
+            }
+            if !examples.iter().all(|ex| predict(&ex.inputs[0]) == ex.expected) {
+                return None;
+            }
+            if verify_str_str(&code, examples) {
+                return Some(StrSynthResult {
+                    success: true,
+                    code,
+                    method: method.to_string(),
+                    error: None,
+                });
+            }
+            None
+        };
+
+    // 1. Delimiter change / join-on-separator: split on `a`, rejoin on `b`. Mine
+    //    `a` from separators actually present in the inputs; `b` from separators in
+    //    the outputs plus "" (strip). Requires `a != b` and `a` present in some
+    //    input (a real re-delimiting, not the identity).
+    let in_seps = delim_candidates(examples, /*from_inputs=*/ true);
+    let out_seps = {
+        let mut v = delim_candidates(examples, /*from_inputs=*/ false);
+        if !v.iter().any(|s| s.is_empty()) {
+            v.push(String::new());
+        }
+        v
+    };
+    for a in &in_seps {
+        if a.is_empty() {
+            continue;
+        }
+        let a_present = examples.iter().any(|ex| ex.inputs[0].contains(a.as_str()));
+        for b in &out_seps {
+            if a == b {
+                continue;
+            }
+            // A STRIP (empty new separator, `split(a).join("")`) is lossy — it can
+            // reproduce a single-word `trim`'s examples — so it is held out of the
+            // top tier and only tried in the full (`include_lossy`) fall-through.
+            if b.is_empty() && !include_lossy {
+                continue;
+            }
+            let predict = |s: &str| resplit_join(s, a, b);
+            if let Some(r) = consider(
+                &predict,
+                a_present,
+                emit_resplit_join(p, a, b),
+                "str-resplit_join",
+            ) {
+                return Some(r);
+            }
+        }
+    }
+
+    // 2. snake/kebab/space -> camelCase. Fire only when the separator is actually
+    //    present in some input (so it is a real join, not the identity).
+    for sep in ["_", "-", " "] {
+        let present = examples.iter().any(|ex| ex.inputs[0].contains(sep));
+        let predict = |s: &str| to_camel(s, sep);
+        if let Some(r) = consider(&predict, present, emit_to_camel(p, sep), "str-snake_to_camel") {
+            return Some(r);
+        }
+    }
+
+    // 3. camelCase/PascalCase -> snake_case (or kebab-case). Fire only when some
+    //    input actually contains an interior uppercase letter to split on.
+    let has_interior_upper = examples.iter().any(|ex| {
+        let s = &ex.inputs[0];
+        s.chars().skip(1).any(|c| c.is_uppercase() && !c.is_lowercase())
+    });
+    for sep in ["_", "-"] {
+        let predict = |s: &str| to_delimited_lower(s, sep);
+        if let Some(r) = consider(
+            &predict,
+            has_interior_upper,
+            emit_to_delimited_lower(p, sep),
+            "str-camel_to_snake",
+        ) {
+            return Some(r);
+        }
+    }
+
+    // 4. keep-only-a-char-class filters (strip everything else). Guarded to fire only
+    //    when some example drops a NON-WHITESPACE char: that is what distinguishes a
+    //    genuine keep-class filter from `trim`/whitespace-strip (which drop only
+    //    whitespace and would otherwise be hijacked). With that guard the filter
+    //    cannot reproduce a single-word `trim`'s examples, so it is safe in the top
+    //    (structured) tier — where it must run to BEAT `search_decompose`'s
+    //    `decompose-char-filter`, which seed-overfits a denylist of the SEEN dropped
+    //    chars and fails a held-out input carrying a fresh out-of-class char.
+    for cc in [CharClass::Alpha, CharClass::Alnum, CharClass::Digit] {
+        let drops_non_ws = examples
+            .iter()
+            .any(|ex| ex.inputs[0].chars().any(|c| !cc.keep(c) && !c.is_whitespace()));
+        let predict = |s: &str| keep_class(s, cc);
+        if let Some(r) = consider(&predict, drops_non_ws, emit_keep_class(p, cc), cc.name()) {
+            return Some(r);
+        }
+    }
+
+    None
+}
+
+/// Candidate delimiters: common separators plus every non-alphanumeric char that
+/// occurs in the inputs (or outputs when `from_inputs` is false).
+fn delim_candidates(examples: &[StrSynthExample], from_inputs: bool) -> Vec<String> {
+    let mut set: HashSet<String> = HashSet::new();
+    for d in [" ", ",", "-", "_", "/", ":", ";", ".", "|", "\t"] {
+        set.insert(d.to_string());
+    }
+    for ex in examples {
+        let src: Box<dyn Iterator<Item = char>> = if from_inputs {
+            Box::new(ex.inputs.iter().flat_map(|s| s.chars()))
+        } else {
+            Box::new(ex.expected.chars())
+        };
+        for c in src {
+            if !c.is_alphanumeric() {
+                set.insert(c.to_string());
+            }
+        }
+    }
+    let mut v: Vec<String> = set.into_iter().collect();
+    v.sort();
+    v
+}
+
 // ── string -> int aggregations ───────────────────────────────────────────────
 //
 // A novel `string -> int` task (e.g. "count the words") has no synthesizer today:
@@ -1073,6 +1391,251 @@ mod tests {
         let p = vec!["s".to_string()];
         let r = synthesize_word_program(&p, &[wex("hello", "olleh"), wex("world", "xyz")]);
         assert!(r.is_none());
+    }
+
+    // ── case / delimiter / char-filter shapes ────────────────────────────────
+
+    fn case(exs: &[(&str, &str)]) -> Option<StrSynthResult> {
+        let p = vec!["s".to_string()];
+        let e: Vec<StrSynthExample> = exs.iter().map(|(i, o)| wex(i, o)).collect();
+        synthesize_case_program(&p, &e)
+    }
+
+    #[test]
+    fn case_snake_to_camel() {
+        let r = case(&[
+            ("hello_world", "helloWorld"),
+            ("foo_bar_baz", "fooBarBaz"),
+            ("one_two", "oneTwo"),
+        ]);
+        let r = r.expect("snake->camel should synthesize");
+        assert_eq!(r.method, "str-snake_to_camel", "{}", r.code);
+        // Generalizes to a held-out input through the interpreter.
+        assert!(crate::runtime::code_reproduces_examples(
+            &r.code,
+            &[crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Str("get_user_id".into())],
+                expected: crate::benchmark::Value::Str("getUserId".into()),
+            }]
+        ));
+    }
+
+    #[test]
+    fn case_camel_to_snake() {
+        let r = case(&[
+            ("helloWorld", "hello_world"),
+            ("fooBarBaz", "foo_bar_baz"),
+            ("getUserId", "get_user_id"),
+        ]);
+        let r = r.expect("camel->snake should synthesize");
+        assert_eq!(r.method, "str-camel_to_snake", "{}", r.code);
+        assert!(crate::runtime::code_reproduces_examples(
+            &r.code,
+            &[crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Str("parseHttpRequest".into())],
+                expected: crate::benchmark::Value::Str("parse_http_request".into()),
+            }]
+        ));
+    }
+
+    #[test]
+    fn case_delimiter_change() {
+        let r = case(&[
+            ("a,b,c", "a-b-c"),
+            ("x,y", "x-y"),
+            ("one,two,three", "one-two-three"),
+        ]);
+        let r = r.expect("delimiter change should synthesize");
+        assert_eq!(r.method, "str-resplit_join", "{}", r.code);
+        assert!(crate::runtime::code_reproduces_examples(
+            &r.code,
+            &[crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Str("p,q,r,s".into())],
+                expected: crate::benchmark::Value::Str("p-q-r-s".into()),
+            }]
+        ));
+    }
+
+    #[test]
+    fn case_join_on_separator() {
+        // split words on space, rejoin on "_" (join a list on a new separator).
+        let r = case(&[
+            ("hello world", "hello_world"),
+            ("a b c", "a_b_c"),
+            ("foo bar", "foo_bar"),
+        ]);
+        let r = r.expect("space->underscore rejoin should synthesize");
+        assert_eq!(r.method, "str-resplit_join", "{}", r.code);
+    }
+
+    #[test]
+    fn case_keep_alpha() {
+        let r = case(&[
+            ("h3llo!", "hllo"),
+            ("a1b2c3", "abc"),
+            ("x.y-z", "xyz"),
+        ]);
+        let r = r.expect("keep-alpha should synthesize");
+        assert_eq!(r.method, "keep_alpha", "{}", r.code);
+        assert!(crate::runtime::code_reproduces_examples(
+            &r.code,
+            &[crate::benchmark::Example {
+                inputs: vec![crate::benchmark::Value::Str("1a2b!c?".into())],
+                expected: crate::benchmark::Value::Str("abc".into()),
+            }]
+        ));
+    }
+
+    #[test]
+    fn case_keep_digits() {
+        let r = case(&[
+            ("a1b2c3", "123"),
+            ("phone: 555", "555"),
+            ("x9y", "9"),
+        ]);
+        let r = r.expect("keep-digits should synthesize");
+        assert_eq!(r.method, "keep_digits", "{}", r.code);
+    }
+
+    /// Never-wrong: an example set no shape reproduces returns None (no guess).
+    #[test]
+    fn case_refuses_unmatched() {
+        let r = case(&[("hello_world", "HELLOworld"), ("a_b", "zzz")]);
+        assert!(r.is_none());
+    }
+
+    /// BEFORE/AFTER: prove these are GENUINELY-NEW shapes. The two pre-existing
+    /// string->string synthesizers (`synthesize_string_program` = the `SExpr`
+    /// expression grammar; `synthesize_word_program` = the word-list shapes) both
+    /// REFUSE snake->camel, delimiter-change, and keep-alpha, while the new
+    /// `synthesize_case_program` SOLVES each — so this tier is load-bearing, not a
+    /// re-route of something already covered.
+    #[test]
+    fn case_shapes_were_unreachable_before() {
+        let p = vec!["s".to_string()];
+        let cases: [(&str, &[(&str, &str)]); 3] = [
+            (
+                "str-snake_to_camel",
+                &[("hello_world", "helloWorld"), ("foo_bar_baz", "fooBarBaz"), ("a_b", "aB")],
+            ),
+            (
+                "str-resplit_join",
+                &[("a,b,c", "a-b-c"), ("x,y", "x-y"), ("m,n,o", "m-n-o")],
+            ),
+            (
+                "keep_alpha",
+                &[("h3llo!", "hllo"), ("a1b2", "ab"), ("x.y", "xy")],
+            ),
+        ];
+        for (want_method, exs) in cases {
+            let e: Vec<StrSynthExample> = exs.iter().map(|(i, o)| wex(i, o)).collect();
+            // BEFORE: neither pre-existing string->string synthesizer solves it.
+            let expr = synthesize_string_program(&p, &e);
+            assert!(
+                !expr.success,
+                "{want_method}: expression grammar unexpectedly solved (code={})",
+                expr.code
+            );
+            assert!(
+                synthesize_word_program(&p, &e).is_none(),
+                "{want_method}: word-list synth unexpectedly solved"
+            );
+            // AFTER: the new tier solves it with the expected shape.
+            let got = synthesize_case_program(&p, &e).expect("new tier should solve");
+            assert_eq!(got.method, want_method, "code={}", got.code);
+        }
+    }
+
+    /// END-TO-END: snake_case -> camelCase solves through the real `solve_problem`
+    /// pipeline (proves the tier is actually REACHED) and GENERALIZES to a held-out
+    /// input the examples never showed.
+    #[test]
+    fn solve_problem_snake_to_camel_end_to_end() {
+        use crate::benchmark::{Example, Problem, Value};
+        let ex = |i: &str, o: &str| Example {
+            inputs: vec![Value::Str(i.to_string())],
+            expected: Value::Str(o.to_string()),
+        };
+        let problem = Problem {
+            name: "to_camel".to_string(),
+            signature: "fn to_camel(s: string) -> string",
+            examples: vec![
+                ex("hello_world", "helloWorld"),
+                ex("foo_bar", "fooBar"),
+                ex("one_two_three", "oneTwoThree"),
+                ex("get_user_name", "getUserName"),
+            ],
+            ..Default::default()
+        };
+        let r = crate::solver::solve_problem(&problem);
+        assert!(r.success, "snake->camel should solve end-to-end: {:?}", r.error);
+        assert!(
+            crate::runtime::code_reproduces_examples(
+                &r.code,
+                &[ex("parse_json_body", "parseJsonBody")]
+            ),
+            "solved program must generalise to a held-out identifier; method={}",
+            r.method
+        );
+    }
+
+    /// END-TO-END: keep-alpha (strip every non-letter) solves through the real
+    /// pipeline and GENERALIZES. This is a LOSSY shape, so it is reached via the full
+    /// `solve_string_output` fall-through (not the structured top tier); the assertion
+    /// that it generalizes to a held-out input guards against a seed-overfit shadow.
+    #[test]
+    fn solve_problem_keep_alpha_end_to_end() {
+        use crate::benchmark::{Example, Problem, Value};
+        let ex = |i: &str, o: &str| Example {
+            inputs: vec![Value::Str(i.to_string())],
+            expected: Value::Str(o.to_string()),
+        };
+        let problem = Problem {
+            name: "only_letters".to_string(),
+            signature: "fn only_letters(s: string) -> string",
+            examples: vec![
+                ex("h3llo!", "hllo"),
+                ex("a1b2c3", "abc"),
+                ex("x.y-z", "xyz"),
+                ex("42foo99", "foo"),
+            ],
+            ..Default::default()
+        };
+        let r = crate::solver::solve_problem(&problem);
+        assert!(r.success, "keep-alpha should solve end-to-end: {:?}", r.error);
+        assert!(
+            crate::runtime::code_reproduces_examples(&r.code, &[ex("1a!2b@3c", "abc")]),
+            "keep-alpha must generalise to a held-out input; method={}",
+            r.method
+        );
+    }
+
+    /// END-TO-END: delimiter change ("a,b,c" -> "a-b-c") solves through the real
+    /// pipeline and generalizes — a shape that REFUSED before this tier (single-char
+    /// `replace` is out of the expression grammar and there is no `join` node).
+    #[test]
+    fn solve_problem_delimiter_change_end_to_end() {
+        use crate::benchmark::{Example, Problem, Value};
+        let ex = |i: &str, o: &str| Example {
+            inputs: vec![Value::Str(i.to_string())],
+            expected: Value::Str(o.to_string()),
+        };
+        let problem = Problem {
+            name: "redelim".to_string(),
+            signature: "fn redelim(s: string) -> string",
+            examples: vec![
+                ex("a,b,c", "a-b-c"),
+                ex("x,y", "x-y"),
+                ex("one,two,three,four", "one-two-three-four"),
+            ],
+            ..Default::default()
+        };
+        let r = crate::solver::solve_problem(&problem);
+        assert!(r.success, "delimiter change should solve end-to-end: {:?}", r.error);
+        assert!(crate::runtime::code_reproduces_examples(
+            &r.code,
+            &[ex("p,q,r", "p-q-r")]
+        ));
     }
 
     #[test]
