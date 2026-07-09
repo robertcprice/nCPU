@@ -789,12 +789,14 @@ fn lower_rust_char_ops(rust: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut string_idents: HashSet<String> = HashSet::new();
     let mut vec_idents: HashSet<String> = HashSet::new();
+    let mut vec_string_idents: HashSet<String> = HashSet::new();
     let mut char_vars: HashSet<String> = HashSet::new();
     for line in rust.lines() {
         let t = line.trim_start();
         if t.starts_with("fn ") || t.starts_with("pub fn ") {
             string_idents.clear();
             vec_idents.clear();
+            vec_string_idents.clear();
             char_vars.clear();
             if let Some(op) = line.find('(') {
                 if let Some(cp) = line[op..].find(')') {
@@ -805,6 +807,9 @@ fn lower_rust_char_ops(rust: &str) -> String {
                             if ty.starts_with("String") {
                                 string_idents.insert(name);
                             } else if ty.starts_with("Vec<") {
+                                if ty.starts_with("Vec<String>") {
+                                    vec_string_idents.insert(name.clone());
+                                }
                                 vec_idents.insert(name);
                             }
                         }
@@ -820,6 +825,9 @@ fn lower_rust_char_ops(rust: &str) -> String {
                 if ty.starts_with("String") {
                     string_idents.insert(name);
                 } else if ty.starts_with("Vec<") {
+                    if ty.starts_with("Vec<String>") {
+                        vec_string_idents.insert(name.clone());
+                    }
                     vec_idents.insert(name);
                 }
             }
@@ -860,6 +868,10 @@ fn lower_rust_char_ops(rust: &str) -> String {
                 // `return ch;` returns a char, but a Mog fn that returns a char is spelled
                 // `-> string`, so the Rust return type is String — materialize the char.
                 .replace(&format!("return {cv};"), &format!("return {cv}.to_string();"));
+            // Pushing a char into a `Vec<String>` needs the char as a String.
+            for vs in &vec_string_idents {
+                l = l.replace(&format!("{vs}.push({cv})"), &format!("{vs}.push({cv}.to_string())"));
+            }
         }
         // GLOBAL char-method lowering: these Mog methods only ever apply to a `char`, so rewriting
         // the method token wherever it appears is safe — including chars produced by string INDEXING
