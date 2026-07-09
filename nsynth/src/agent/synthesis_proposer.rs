@@ -8,7 +8,7 @@ use crate::agent::agent_run::AgentRun;
 use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{
     FailureAnalysis, FailureKind, GuardrailPolicy, RepairContext, RepairEdit, RepairPatch,
-    RepairVerifier, RepoTaskSpec,
+    RepairVerification, RepairVerifier, RepoTaskSpec,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -333,22 +333,224 @@ pub fn try_mutation_repair_patch(
     None
 }
 
+/// Passing-test count summed across every `test result:` line in cargo's stdout — the score the
+/// multi-hole search maximizes (a per-hole fill can turn its own test green while others stay red,
+/// so all-or-nothing `success` is too coarse to drive coordinate descent).
+fn passed_count(stdout: &str) -> usize {
+    stdout
+        .lines()
+        .filter_map(|l| l.find(" passed").map(|i| &l[..i]))
+        .filter_map(|prefix| prefix.split_whitespace().last())
+        .filter_map(|n| n.parse::<usize>().ok())
+        .sum()
+}
+
+/// PHASE 1 — MULTI-HOLE COORDINATION (model-free). A repo with SEVERAL empty stubs across a struct's
+/// methods (and free fns) that only COMPILES once every hole is filled defeats single-hole proposers:
+/// no one fill produces a compiling crate, so nothing verifies. This fills every hole with a
+/// type-default (the compile floor -> tests run) then coordinate-descends: for each hole, try its
+/// field-derived candidate bodies holding the others fixed, keep the fill that maximizes passing
+/// tests, iterate until all green or no pass improves. Returns ONE multi-file patch. All cargo-gated,
+/// no model. Fires only when >=2 holes exist (single-hole is handled by stub-gen in the mutation tier).
+pub fn try_multihole_fill_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    _analysis: Option<&FailureAnalysis>,
+) -> Option<RepairPatch> {
+    struct FileHoles {
+        path: String,
+        abs: std::path::PathBuf,
+        orig: String,
+        code: String,
+        tail: String,
+        holes: Vec<Hole>,
+        choice: Vec<String>,
+    }
+    let mut files: Vec<FileHoles> = Vec::new();
+    let mut total_holes = 0usize;
+    for f in &context.files {
+        if !f.path.ends_with(".rs") {
+            continue;
+        }
+        let Some(text) = f.text.as_deref() else { continue };
+        let fields = parse_struct_fields(&text[..text.find("#[cfg(test)]").unwrap_or(text.len())]);
+        if fields.is_empty() {
+            continue;
+        }
+        let ts = text.find("#[cfg(test)]").unwrap_or(text.len());
+        let code = text[..ts].to_string();
+        let holes = scan_holes(&code, &fields);
+        if holes.is_empty() {
+            continue;
+        }
+        total_holes += holes.len();
+        let choice = holes.iter().map(|h| h.default.clone()).collect();
+        files.push(FileHoles {
+            path: f.path.clone(),
+            abs: std::path::Path::new(&context.root).join(&f.path),
+            orig: text.to_string(),
+            tail: text[ts..].to_string(),
+            code,
+            holes,
+            choice,
+        });
+    }
+    if total_holes < 2 {
+        return None; // single-hole: stub-gen in the mutation tier covers it
+    }
+    let render = |fh: &FileHoles| -> String {
+        let mut s = fh.code.clone();
+        for (h, body) in fh.holes.iter().zip(&fh.choice).rev() {
+            s.replace_range(h.body_open..h.close, &format!(" {body} "));
+        }
+        s.push_str(&fh.tail);
+        s
+    };
+    let verifier = RepairVerifier::new(&context.root, GuardrailPolicy::default());
+    let revert_all = |files: &[FileHoles]| {
+        for fh in files {
+            let _ = std::fs::write(&fh.abs, &fh.orig);
+        }
+    };
+    // Compile floor: write every hole at its default; the crate must now compile (tests run+fail).
+    for fh in &files {
+        if std::fs::write(&fh.abs, render(fh)).is_err() {
+            revert_all(&files);
+            return None;
+        }
+    }
+    let score = |v: &Result<RepairVerification, String>| -> (bool, usize, bool) {
+        match v {
+            Ok(r) => (
+                r.success,
+                passed_count(&r.stdout),
+                !r.stderr.contains("error[") && !r.stderr.contains("could not compile"),
+            ),
+            Err(_) => (false, 0, false),
+        }
+    };
+    let floor = verifier.verify(&task.test_command);
+    let (floor_ok, mut cur_passed, floor_compiled) = score(&floor);
+    if floor_ok {
+        // The defaults already pass (degenerate) — nothing to search; let another tier handle it.
+        revert_all(&files);
+        return None;
+    }
+    if !floor_compiled {
+        revert_all(&files); // type-defaults didn't compile -> unsupported shape
+        return None;
+    }
+    let start = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(150);
+    let mut runs = 0usize;
+    const MAX_RUNS: usize = 240;
+    let finish = |files: &[FileHoles]| -> Option<RepairPatch> {
+        let mut patch = RepairPatch::new().with_metadata("proposer", "multihole_fill");
+        let mut changed = false;
+        for fh in files {
+            let rendered = render(fh);
+            if rendered != fh.orig {
+                patch = patch.with_edit(RepairEdit::new(
+                    fh.path.clone(),
+                    fh.orig.clone(),
+                    rendered,
+                    "multi-hole fill (model-free; cargo-test gated)",
+                ));
+                changed = true;
+            }
+        }
+        changed.then_some(patch)
+    };
+    for _pass in 0..6 {
+        let mut improved = false;
+        for fi in 0..files.len() {
+            for hi in 0..files[fi].holes.len() {
+                let cands = files[fi].holes[hi].candidates.clone();
+                let default_body = files[fi].holes[hi].default.clone();
+                let mut best_body = files[fi].choice[hi].clone();
+                let mut best_passed = cur_passed;
+                // First candidate that COMPILES — a guess to commit when no candidate raises the score.
+                let mut first_guess: Option<String> = None;
+                for cand in cands {
+                    if runs >= MAX_RUNS || start.elapsed() > budget {
+                        // settle on the best-so-far and stop; return if it's a full solve
+                        files[fi].choice[hi] = best_body.clone();
+                        let _ = std::fs::write(&files[fi].abs, render(&files[fi]));
+                        let done = verifier.verify(&task.test_command).map(|v| v.success).unwrap_or(false);
+                        revert_all(&files);
+                        return if done { finish(&files) } else { None };
+                    }
+                    files[fi].choice[hi] = cand.clone();
+                    if std::fs::write(&files[fi].abs, render(&files[fi])).is_err() {
+                        continue;
+                    }
+                    runs += 1;
+                    let v = verifier.verify(&task.test_command);
+                    let (ok, passed, compiled) = score(&v);
+                    if ok {
+                        let patch = finish(&files);
+                        revert_all(&files);
+                        return patch;
+                    }
+                    if compiled {
+                        if first_guess.is_none() {
+                            first_guess = Some(cand.clone());
+                        }
+                        if passed > best_passed {
+                            best_passed = passed;
+                            best_body = cand.clone();
+                        }
+                    }
+                }
+                if best_passed > cur_passed {
+                    // A real improvement: commit it.
+                    files[fi].choice[hi] = best_body;
+                    cur_passed = best_passed;
+                    improved = true;
+                } else if files[fi].choice[hi] == default_body {
+                    // No candidate raised the score AND this hole is still a bare default — commit the
+                    // first compiling guess. This UNSTICKS a prerequisite mutator (e.g. `add` pushes to
+                    // a Vec that every getter test reads) whose effect is invisible until a getter is
+                    // also filled; the getters self-correct against the score on a later pass.
+                    if let Some(g) = first_guess {
+                        files[fi].choice[hi] = g;
+                        improved = true;
+                    }
+                } // else keep the prior-pass choice
+                let _ = std::fs::write(&files[fi].abs, render(&files[fi]));
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+    revert_all(&files);
+    None
+}
+
 /// MODEL-FREE STUB GENERATION for non-pure methods (coding ARBITRARY programs, not just repairing):
 /// a `&mut self` method or getter with an EMPTY body — which the example-based synthesizer can't
 /// reach (no `f(x)=y` pairs) and mutation can't touch (nothing to edit) — is filled from templates
 /// built out of the struct's own fields: `self.F = P;`, `self.F += P;`, `self.F.push(P)`, `self.F +=
 /// 1;`, `return self.F;`, etc. Each candidate is cargo-tested; the one that passes IS the
 /// implementation. Bounded; enumerated over (field x param x template).
-fn generate_stub_fills(content: &str) -> Vec<String> {
-    let test_start = content.find("#[cfg(test)]").unwrap_or(content.len());
-    let code = &content[..test_start];
-    let tail = &content[test_start..];
-    let fields = parse_struct_fields(code);
-    if fields.is_empty() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    // Find each `fn NAME(params) [-> RET] {` whose body is EMPTY (whitespace only).
+/// An empty-body method/function hole: its body span in `code` (`[body_open, close)`, between the
+/// braces), a type-correct DEFAULT body that compiles (for the multi-hole compile floor), and the
+/// field-derived candidate bodies to try.
+struct Hole {
+    body_open: usize,
+    close: usize,
+    default: String,
+    candidates: Vec<String>,
+}
+
+/// Scan `code` (the non-test part) for every function/method with an EMPTY body and build, per hole,
+/// its candidate bodies (field assign/op-assign/push/getter/computed/multi-statement/mutate-return)
+/// plus a type-default. Shared by generate_stub_fills (single-hole) and try_multihole_fill_patch
+/// (coordinate-descent over ALL holes at once — the case where the crate only compiles once every
+/// hole is filled).
+fn scan_holes(code: &str, fields: &[(String, String)]) -> Vec<Hole> {
+    let mut holes = Vec::new();
     let cb = code.as_bytes();
     let mut search = 0;
     while let Some(rel) = code[search..].find("fn ") {
@@ -356,7 +558,6 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
         search = fstart + 3;
         let after = &code[fstart..];
         let Some(op) = after.find('(') else { continue };
-        // balanced params
         let ab = after.as_bytes();
         let mut depth = 0i32;
         let mut cp = None;
@@ -382,7 +583,6 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
             _ => continue,
         };
         let body_open = fstart + cp + 1 + brace_rel + 1; // just after `{`
-        // matching `}` for the body
         let mut d = 1i32;
         let mut close = None;
         let mut k = body_open;
@@ -411,23 +611,53 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
             .map(|(n, _)| n)
             .collect();
         let has_ret = !ret.is_empty() && ret != "()";
-        let scalar_fields: Vec<&String> = fields
-            .iter()
-            .filter(|(_, t)| t == "i64")
-            .map(|(n, _)| n)
-            .collect();
+        let has_self = params_str.contains("self");
+        let scalar_fields: Vec<&String> = fields.iter().filter(|(_, t)| t == "i64").map(|(n, _)| n).collect();
         let mut bodies: Vec<String> = Vec::new();
-        if has_ret {
-            // getter: return a field, a derived scalar, or a COMPUTED combination of two fields.
-            for (fname, fty) in &fields {
+        // FREE FUNCTION hole (no self): a pure combination of its VALUE params — `net(balance,fees) ->
+        // balance - fees`. Light arithmetic templates so a pure fn coupled with struct-method holes
+        // (same crate won't compile until all are filled) is fillable in the same coordinate descent;
+        // standalone pure fns are still handled by the full synthesizer tier before this one.
+        if !has_self && has_ret && !value_params.is_empty() {
+            let ps = &value_params;
+            if ret == "i64" {
+                for p in ps {
+                    bodies.push(format!("return {p};"));
+                }
+                for i in 0..ps.len() {
+                    for j in 0..ps.len() {
+                        if i == j {
+                            continue;
+                        }
+                        for op in ["+", "-", "*"] {
+                            bodies.push(format!("return {} {op} {};", ps[i], ps[j]));
+                        }
+                    }
+                }
+            } else if ret == "bool" && ps.len() >= 2 {
+                for op in ["==", "!=", "<", ">", "<=", ">="] {
+                    bodies.push(format!("return {} {op} {};", ps[0], ps[1]));
+                }
+            }
+        }
+        if has_self && has_ret {
+            for (fname, fty) in fields {
                 if type_compatible(fty, &ret) {
                     bodies.push(format!("return self.{fname};"));
                 }
                 if ret == "i64" && (fty.starts_with("Vec<") || fty == "String") {
                     bodies.push(format!("return self.{fname}.len() as i64;"));
                 }
+                // Vec<i64> field -> a scalar AGGREGATE (sum/max/min/first/last) — the common
+                // "total()/most_expensive()/cheapest()" getters over a collection field.
+                if ret == "i64" && fty == "Vec<i64>" {
+                    bodies.push(format!("self.{fname}.iter().sum()"));
+                    bodies.push(format!("self.{fname}.iter().copied().max().unwrap_or(0)"));
+                    bodies.push(format!("self.{fname}.iter().copied().min().unwrap_or(0)"));
+                    bodies.push(format!("*self.{fname}.first().unwrap_or(&0)"));
+                    bodies.push(format!("*self.{fname}.last().unwrap_or(&0)"));
+                }
             }
-            // `total() -> a + b`: bounded pairwise combinations of the scalar fields.
             if ret == "i64" {
                 for a in 0..scalar_fields.len() {
                     for b in 0..scalar_fields.len() {
@@ -442,7 +672,7 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
             }
         }
         if is_mut {
-            for (fname, fty) in &fields {
+            for (fname, fty) in fields {
                 if fty.starts_with("Vec<") {
                     for p in &value_params {
                         bodies.push(format!("self.{fname}.push({p});"));
@@ -459,8 +689,6 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
                     }
                 }
             }
-            // MULTI-STATEMENT mutator: pair params to scalar fields positionally
-            // (`shift(dx,dy) { self.x OP dx; self.y OP dy; }`), one op applied across the pairing.
             if value_params.len() >= 2 && scalar_fields.len() >= value_params.len() {
                 for op in ["=", "+=", "-="] {
                     let stmts: String = value_params
@@ -471,7 +699,6 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
                     bodies.push(stmts.trim_end().to_string());
                 }
             }
-            // MUTATE-AND-RETURN: `next(&mut self) -> i64 { self.n += 1; return self.n; }`.
             if has_ret && ret == "i64" {
                 for f in &scalar_fields {
                     bodies.push(format!("self.{f} += 1; return self.{f};"));
@@ -481,13 +708,47 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
                 }
             }
         }
-        for body in bodies {
+        holes.push(Hole {
+            body_open,
+            close,
+            default: type_default(&ret),
+            candidates: bodies,
+        });
+    }
+    holes
+}
+
+/// A type-correct placeholder body (no trailing statement terminator) so an empty hole COMPILES —
+/// the compile floor the multi-hole search stands on. `()` returns get an empty body.
+fn type_default(ret: &str) -> String {
+    match ret {
+        "" | "()" => String::new(),
+        "i64" | "i32" | "u64" | "usize" | "u32" => "0".to_string(),
+        "bool" => "false".to_string(),
+        "String" => "String::new()".to_string(),
+        "f64" | "f32" => "0.0".to_string(),
+        t if t.starts_with("Vec<") => "Vec::new()".to_string(),
+        _ => "Default::default()".to_string(),
+    }
+}
+
+fn generate_stub_fills(content: &str) -> Vec<String> {
+    let test_start = content.find("#[cfg(test)]").unwrap_or(content.len());
+    let code = &content[..test_start];
+    let tail = &content[test_start..];
+    let fields = parse_struct_fields(code);
+    if fields.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for h in scan_holes(code, &fields) {
+        for body in &h.candidates {
             let mut m = String::with_capacity(content.len() + body.len() + 4);
-            m.push_str(&code[..body_open]);
+            m.push_str(&code[..h.body_open]);
             m.push(' ');
-            m.push_str(&body);
+            m.push_str(body);
             m.push(' ');
-            m.push_str(&code[close..]);
+            m.push_str(&code[h.close..]);
             m.push_str(tail);
             out.push(m);
         }
@@ -3685,6 +3946,38 @@ mod tests {
     fn mutation_method_name_swaps() {
         let code = "pub fn f(s: String) -> String { s.to_lowercase() }\n";
         assert!(generate_mutations(code).iter().any(|m| m.contains(".to_uppercase()")), "no case swap");
+    }
+
+    #[test]
+    fn passed_count_sums_across_test_binaries() {
+        let out = "test result: ok. 3 passed; 0 failed; 0 ignored\ntest result: FAILED. 2 passed; 1 failed";
+        assert_eq!(passed_count(out), 5);
+        assert_eq!(passed_count("no test lines here"), 0);
+    }
+
+    #[test]
+    fn scan_holes_finds_multiple_holes_with_candidates_and_defaults() {
+        let code = "pub struct Cart { pub prices: Vec<i64> }\nimpl Cart {\n  pub fn add(&mut self, price: i64) {}\n  pub fn count(&self) -> i64 {}\n  pub fn total(&self) -> i64 {}\n}\n";
+        let fields = parse_struct_fields(code);
+        let holes = scan_holes(code, &fields);
+        assert_eq!(holes.len(), 3, "expected add/count/total holes");
+        // `add` (unit mutator) -> a push candidate + an empty default.
+        assert!(holes[0].candidates.iter().any(|b| b.contains("self.prices.push(price)")), "no push for add");
+        assert_eq!(holes[0].default, "", "unit default should be empty");
+        // getters over the Vec field include both len and sum + an i64 default.
+        assert!(holes[2].candidates.iter().any(|b| b.contains("self.prices.iter().sum()")), "no sum getter");
+        assert_eq!(holes[2].default, "0");
+    }
+
+    #[test]
+    fn scan_holes_gives_free_functions_param_arithmetic_not_self_fields() {
+        // A free fn (no self) in a struct-bearing file must get PARAM arithmetic, never `self.X`.
+        let code = "pub struct S { pub v: i64 }\npub fn net(balance: i64, fees: i64) -> i64 {}\n";
+        let fields = parse_struct_fields(code);
+        let holes = scan_holes(code, &fields);
+        let net = holes.last().expect("net hole");
+        assert!(net.candidates.iter().any(|b| b.contains("balance - fees")), "no param subtraction for free fn");
+        assert!(net.candidates.iter().all(|b| !b.contains("self.")), "free fn must not reference self");
     }
 
     #[test]

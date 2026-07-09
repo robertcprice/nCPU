@@ -309,6 +309,17 @@ pub fn nl_synthesis_proposer_with_run(
         return Ok(patch);
     }
 
+    // PHASE 1 — MULTI-HOLE COORDINATION (model-free): a repo with SEVERAL empty stubs that only
+    // compiles once every hole is filled defeats single-hole proposers (no one fill compiles). Fill
+    // all holes to a type-default (compile floor), then coordinate-descend field-derived candidate
+    // bodies per hole, keeping fills that raise the passing-test count until the suite is green. One
+    // multi-file patch, cargo-gated, no model. Inert (returns fast) when <2 holes exist.
+    if let Some(patch) =
+        crate::agent::synthesis_proposer::try_multihole_fill_patch(task, context, analysis)
+    {
+        return Ok(patch);
+    }
+
     // MODEL-FREE MUTATION REPAIR: before reaching for the model, let the deterministic engine code
     // BEYOND pure-function synthesis — search single-edit mutations of the EXISTING buggy code
     // (wrong operator, off-by-one, `=` vs `+=`, a bug in a struct method with no I/O pairs to mine)
