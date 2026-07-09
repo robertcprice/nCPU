@@ -225,6 +225,18 @@ pub fn nl_synthesis_proposer_with_run(
 ) -> Result<crate::agent::repo::RepairPatch, String> {
     let description = nl_description_from_issue(&task.issue).unwrap_or_else(|| task.issue.clone());
 
+    // Cheap deterministic edits first (no synthesis budget): a RENAME refactor or an ADD-PARAM
+    // request. Present in the standalone nl_synthesis_proposer but MISSING from this supervisor
+    // ladder (which was an incomplete copy), so repo repairs never reached them.
+    if let Some(patch) = crate::agent::synthesis_proposer::try_rename_patch(context, &description) {
+        return Ok(patch);
+    }
+    if let Some(patch) =
+        crate::agent::synthesis_proposer::try_add_param_patch(context, &description)
+    {
+        return Ok(patch);
+    }
+
     // Primary path: genuine verified synthesis (bridge + solver), generalizing
     // to any demonstrated function (registry op or inline I/O examples) rather
     // than the canned keyword shapes. Real synthesis *is* a synthesis candidate,
@@ -248,11 +260,28 @@ pub fn nl_synthesis_proposer_with_run(
         // `nl_synthesis_proposer` but MISSING here, so every bare-NL repo repair used to fall
         // straight through to the empty-intent fallback and fail with "CodingIntent has no
         // examples".
-        let synth = crate::agent::synthesis_proposer::try_real_synthesis_patch(
+        // Synthesis candidates in the standalone-ladder order, all budget-gated: (1) EMERGENT
+        // synthesis of an existing fn from bare NL, (2) FEATURE-ADD — synthesize a MISSING function
+        // referenced by a failing test and append it (was missing here, so feature-add never fired
+        // via the repo loop), (3) REAL synthesis from prose examples, (4) TEST-MINED synthesis from
+        // the failing test's asserts.
+        let synth = crate::agent::synthesis_proposer::try_emergent_synthesis_patch(
             task,
             context,
             &description,
+            analysis,
         )
+        .or_else(|| {
+            crate::agent::synthesis_proposer::try_emergent_addition_patch(
+                task,
+                context,
+                &description,
+                analysis,
+            )
+        })
+        .or_else(|| {
+            crate::agent::synthesis_proposer::try_real_synthesis_patch(task, context, &description)
+        })
         .or_else(|| {
             crate::agent::synthesis_proposer::try_test_mined_synthesis_patch(
                 task,
