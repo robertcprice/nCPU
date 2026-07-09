@@ -439,30 +439,39 @@ fn lower_rust_char_ops(rust: &str) -> String {
     let had_nl = rust.ends_with('\n');
     let mut lines: Vec<String> = Vec::new();
     let mut string_idents: HashSet<String> = HashSet::new();
+    let mut vec_idents: HashSet<String> = HashSet::new();
     let mut char_vars: HashSet<String> = HashSet::new();
     for line in rust.lines() {
         let t = line.trim_start();
         if t.starts_with("fn ") || t.starts_with("pub fn ") {
             string_idents.clear();
+            vec_idents.clear();
             char_vars.clear();
             if let Some(op) = line.find('(') {
                 if let Some(cp) = line[op..].find(')') {
                     for p in line[op + 1..op + cp].split(',') {
                         if let Some((nm, ty)) = p.split_once(':') {
-                            if ty.trim().starts_with("String") {
-                                string_idents
-                                    .insert(nm.trim().trim_start_matches("mut ").trim().to_string());
+                            let name = nm.trim().trim_start_matches("mut ").trim().to_string();
+                            let ty = ty.trim();
+                            if ty.starts_with("String") {
+                                string_idents.insert(name);
+                            } else if ty.starts_with("Vec<") {
+                                vec_idents.insert(name);
                             }
                         }
                     }
                 }
             }
         }
-        // Local `let [mut] NAME: String` declares a String binding.
+        // Local `let [mut] NAME: TYPE` declares a String / Vec binding.
         if let Some(rest) = t.strip_prefix("let mut ").or_else(|| t.strip_prefix("let ")) {
             if let Some((nm, ty)) = rest.split_once(':') {
-                if ty.trim_start().starts_with("String") {
-                    string_idents.insert(nm.trim().to_string());
+                let name = nm.trim().to_string();
+                let ty = ty.trim_start();
+                if ty.starts_with("String") {
+                    string_idents.insert(name);
+                } else if ty.starts_with("Vec<") {
+                    vec_idents.insert(name);
                 }
             }
         }
@@ -479,17 +488,37 @@ fn lower_rust_char_ops(rust: &str) -> String {
                 if !ident.is_empty() && string_idents.contains(&ident) {
                     l = l.replacen(&format!("in {ident}"), &format!("in {ident}.chars()"), 1);
                     char_vars.insert(var);
+                } else if !ident.is_empty() && vec_idents.contains(&ident) {
+                    // `for X in VEC` moves VEC — a nested/subsequent use then fails to compile
+                    // (`use of moved value`). Iterate a borrow and clone each element so VEC stays
+                    // usable and X is owned (no deref rewrites needed). Cheap for the i64/bool
+                    // element types these ops carry; correctness-first for the rest.
+                    let _ = &var;
+                    l = l.replacen(
+                        &format!("in {ident}"),
+                        &format!("in {ident}.iter().cloned()"),
+                        1,
+                    );
                 }
             }
         }
+        // `.is_vowel()` maps to `"aeiouAEIOU".contains(OPERAND)`, so it needs the operand — handle
+        // the loop-var form here (the common one). The remaining char methods map to a Rust method
+        // NAME (or a cast), independent of the operand, so they lower GLOBALLY below.
         for cv in &char_vars {
-            l = l
-                .replace(&format!("{cv}.is_vowel()"), &format!("\"aeiouAEIOU\".contains({cv})"))
-                .replace(&format!("{cv}.is_alpha()"), &format!("{cv}.is_alphabetic()"))
-                .replace(&format!("{cv}.is_digit()"), &format!("{cv}.is_ascii_digit()"))
-                .replace(&format!("{cv}.is_upper()"), &format!("{cv}.is_uppercase()"))
-                .replace(&format!("{cv}.is_lower()"), &format!("{cv}.is_lowercase()"));
+            l = l.replace(&format!("{cv}.is_vowel()"), &format!("\"aeiouAEIOU\".contains({cv})"));
         }
+        // GLOBAL char-method lowering: these Mog methods only ever apply to a `char`, so rewriting
+        // the method token wherever it appears is safe — including chars produced by string INDEXING
+        // (`s.chars().nth(i).unwrap().is_upper()`), which the loop-var pass above cannot see. `.ord()`
+        // (char code point) becomes an `as i64` cast.
+        l = l
+            .replace(".is_upper()", ".is_uppercase()")
+            .replace(".is_lower()", ".is_lowercase()")
+            .replace(".is_alpha()", ".is_alphabetic()")
+            .replace(".is_alnum()", ".is_alphanumeric()")
+            .replace(".is_digit()", ".is_ascii_digit()")
+            .replace(".ord()", " as i64");
         // WHOLE-string methods on a String operand, in ANY fn (lower_rust_string_methods only fires
         // for `-> String` fns, so `s.reverse()` inside a `-> bool` palindrome check was left raw).
         // Only the forms that REMOVE the original method token — re-running over already-lowered
@@ -1616,7 +1645,8 @@ mod tests {
         let out = to_rust(SAMPLE);
         assert!(out.contains("fn sum_negatives(arr: Vec<i64>) -> i64 {"));
         assert!(out.contains("let mut acc: i64 = 0;"));
-        assert!(out.contains("for item in arr {"));
+        // Vec iteration borrows + clones each element so the collection is not moved (E0382).
+        assert!(out.contains("for item in arr.iter().cloned() {"));
         assert!(out.contains("if item < 0 {"));
         assert!(out.contains("return acc;"));
         assert!(out.ends_with("}\n"));
@@ -1817,6 +1847,20 @@ mod inline_if_tests {
         let rp = to_rust(pal);
         assert!(rp.contains("s.chars().rev().collect::<String>()"), "s.reverse() not lowered: {rp}");
         assert!(!rp.contains("s.reverse()"), "raw s.reverse() survived: {rp}");
+    }
+
+    #[test]
+    fn rust_borrows_vec_in_for_loops_and_lowers_char_methods_globally() {
+        // A Vec iterated then reused (nested loop) would `use of moved value`; iterate a borrow.
+        let dedup = "fn f(arr: [i64]) -> i64 {\n    seen: [i64] = [];\n    for e in arr {\n        for u in seen {\n            if u == e {\n            }\n        }\n        seen.push(e);\n    }\n    return seen.len;\n}\n";
+        let rs = to_rust(dedup);
+        assert!(rs.contains("for e in arr.iter().cloned()"), "outer not borrowed: {rs}");
+        assert!(rs.contains("for u in seen.iter().cloned()"), "inner (reused) not borrowed: {rs}");
+        // char methods lower even on a char from INDEXING, not just a `for ch in s` loop var.
+        let idx = "fn g(s: string) -> i64 {\n    if s[0].is_upper() {\n        return s[1].ord();\n    }\n    return 0;\n}\n";
+        let rg = to_rust(idx);
+        assert!(rg.contains(".is_uppercase()") && !rg.contains(".is_upper()"), "is_upper: {rg}");
+        assert!(rg.contains(" as i64") && !rg.contains(".ord()"), "ord not cast: {rg}");
     }
 
     #[test]
