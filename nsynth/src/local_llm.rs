@@ -509,6 +509,50 @@ fn extract_code(content: &str) -> Option<String> {
     None
 }
 
+/// PHASE 3 — the model writes the SPEC, the engine writes the code. Given a prose program request,
+/// ask the model for a Rust `lib.rs` = the struct(s) + method SIGNATURES with EMPTY bodies + a
+/// `#[cfg(test)]` module whose `#[test]` functions pin the intended behavior. The model implements
+/// NOTHING; its output is a CHECKABLE artifact (runnable tests + signatures). The engine's multi-hole
+/// / mutation / synthesis tiers then fill the empty bodies and `cargo test` gates the result — so the
+/// model can propose behavior for logic a fixed schema can't decide, yet never writes trusted code.
+/// `None` when disabled (no `NSYNTH_LOCAL_LLM_URL`) or on any error. UNTRUSTED: a wrong/contradictory
+/// test set just makes the fill fail (surfaced honestly), never a wrong accepted program.
+pub fn propose_spec(request: &str) -> Option<String> {
+    let url = std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty())?;
+    let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+    let sys = "You are given a program request. Output ONLY a Rust library file in a ```rust code \
+               block, and NOTHING else. In it: (1) define the struct(s) with their fields; (2) write \
+               each method's SIGNATURE with an EMPTY body `{}` — implement NOTHING; (3) add a \
+               `#[cfg(test)]` mod tests with one `#[test]` fn PER method asserting the intended \
+               behavior with concrete values. The tests ARE the specification; leave every method \
+               body empty. Use plain Rust and i64 for integers.";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": format!("{sys}\n\nRequest:\n{request}\n\n/no_think")}],
+        "chat_template_kwargs": {"enable_thinking": false},
+        "temperature": 0.2,
+        "max_tokens": 4096
+    });
+    let out = Command::new("curl")
+        .args(["-s", "-m", "120", &url, "-H", "Content-Type: application/json", "-d", &body.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let resp: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let msg = &resp["choices"][0]["message"];
+    let content = msg["content"].as_str().filter(|s| !s.trim().is_empty()).or_else(|| msg["reasoning"].as_str())?;
+    parse_spec(content)
+}
+
+/// Pull a spec crate out of the model's reply: a fenced ```rust block that actually contains a
+/// `#[test]` module (so a stray snippet or prose is rejected, never written as a crate).
+fn parse_spec(content: &str) -> Option<String> {
+    let code = extract_code(content)?;
+    (code.contains("#[test]") && code.contains("fn ")).then_some(code)
+}
+
 /// One LLM-proposed sub-function with an embedded I/O CONTRACT: a fn name, a NL
 /// description, AND >=3 example rows. Unlike `ProposedComponent` (Mode C, which
 /// re-derives examples downstream), this carries the examples directly so the
@@ -999,6 +1043,26 @@ mod tests {
         let nested = "```\nfn h(a: i64) -> i64 {\n    if a > 0 {\n        return 1;\n    }\n    return 0;\n}\n```";
         assert!(extract_code(nested).unwrap().contains("if a > 0"));
         assert!(extract_code("no code here").is_none());
+    }
+
+    #[test]
+    fn parse_spec_accepts_a_stub_crate_and_rejects_prose() {
+        // A fenced crate with empty-body methods + a #[test] module is a valid spec.
+        let reply = "Sure:\n```rust\npub struct A { pub b: i64 }\nimpl A { pub fn new() -> Self { A { b: 0 } } pub fn get(&self) -> i64 {} }\n#[cfg(test)]\nmod tests { use super::*; #[test] fn t() { assert_eq!(A::new().get(), 0); } }\n```";
+        let spec = parse_spec(reply).expect("valid spec");
+        assert!(spec.contains("pub struct A") && spec.contains("#[test]"));
+        // A snippet with NO tests is rejected (we won't write a crate the engine can't verify).
+        assert!(parse_spec("```rust\nfn f(x: i64) -> i64 { x + 1 }\n```").is_none());
+        assert!(parse_spec("just some prose, no code").is_none());
+    }
+
+    #[test]
+    fn propose_spec_is_inert_without_an_endpoint() {
+        // Guard: no served model -> None (never a network call, never a wrong write). Env is process-
+        // global, so only assert the None path when the var is actually unset in this run.
+        if std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty()).is_none() {
+            assert!(propose_spec("a bank account").is_none());
+        }
     }
 
     #[test]
