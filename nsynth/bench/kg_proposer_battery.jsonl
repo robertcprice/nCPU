@@ -1,0 +1,12 @@
+{"id":5001,"fn":"array_sum","text":"add up all the numbers in a list","examples":[{"in":[[3,1,2]],"out":6},{"in":[[10,-5]],"out":5},{"in":[[0]],"out":0},{"in":[[4,4,4]],"out":12}]}
+{"id":5002,"fn":"array_sum","text":"accumulate every value in the array","examples":[{"in":[[2,3]],"out":5},{"in":[[7,7,7]],"out":21},{"in":[[-1,1]],"out":0},{"in":[[9]],"out":9}]}
+{"id":5003,"fn":"array_sum","text":"the aggregate of all the values","examples":[{"in":[[1,2,3,4]],"out":10},{"in":[[5,5]],"out":10},{"in":[[-3,3]],"out":0},{"in":[[8]],"out":8}]}
+{"id":5004,"fn":"list_max","text":"the peak value in the list","examples":[{"in":[[3,9,2]],"out":9},{"in":[[-1,-5]],"out":-1},{"in":[[7]],"out":7},{"in":[[4,4]],"out":4}]}
+{"id":5005,"fn":"list_max","text":"the topmost number among these","examples":[{"in":[[1,8,3]],"out":8},{"in":[[-9,-2]],"out":-2},{"in":[[5]],"out":5},{"in":[[6,6]],"out":6}]}
+{"id":5006,"fn":"list_min","text":"the least value among the numbers","examples":[{"in":[[3,9,2]],"out":2},{"in":[[-1,-5]],"out":-5},{"in":[[7]],"out":7},{"in":[[4,4]],"out":4}]}
+{"id":5007,"fn":"list_min","text":"the bottommost number in the array","examples":[{"in":[[8,1,3]],"out":1},{"in":[[-2,-9]],"out":-9},{"in":[[5]],"out":5},{"in":[[6,6]],"out":6}]}
+{"id":5008,"fn":"reverse_list","text":"invert the order of the array","examples":[{"in":[[1,2,3]],"out":[3,2,1]},{"in":[[5]],"out":[5]},{"in":[[1,2]],"out":[2,1]},{"in":[[9,8,7,6]],"out":[6,7,8,9]}]}
+{"id":5009,"fn":"reverse_list","text":"flip the list end over end","examples":[{"in":[[4,5,6]],"out":[6,5,4]},{"in":[[1]],"out":[1]},{"in":[[7,8]],"out":[8,7]},{"in":[[2,4,6,8]],"out":[8,6,4,2]}]}
+{"id":5010,"fn":"array_product","text":"multiply all the numbers together","examples":[{"in":[[2,3,4]],"out":24},{"in":[[5,1]],"out":5},{"in":[[0,9]],"out":0},{"in":[[2,2,2]],"out":8}]}
+{"id":5011,"fn":"array_product","text":"the product of every value in the list","examples":[{"in":[[3,3]],"out":9},{"in":[[4,2,1]],"out":8},{"in":[[10,0]],"out":0},{"in":[[6]],"out":6}]}
+{"id":5012,"fn":"count_evens","text":"how many numbers are divisible by two","examples":[{"in":[[1,2,3,4]],"out":2},{"in":[[2,4,6]],"out":3},{"in":[[1,3,5]],"out":0},{"in":[[0,1]],"out":1}]}

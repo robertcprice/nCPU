@@ -86,6 +86,7 @@ fn main() {
     let mut total = 0usize;
     let mut solved = 0usize;
     let mut refused = 0usize;
+    let mut recoverable = 0usize;
     let mut wrong = 0usize;
     let mut solved_ids: Vec<String> = Vec::new();
 
@@ -119,7 +120,28 @@ fn main() {
 
         let a = answer(&text, train);
         match code_of(&a) {
-            None => refused += 1,
+            None => {
+                refused += 1;
+                // RECOVERABILITY: would wiring the KG semantic proposer into the
+                // provenance check turn this refusal into a VERIFIED solve? Yes iff a
+                // KG-surfaced op actually reproduces the FULL example set (train+held).
+                // That op, once given provenance, clears route_by_behavior's sole-passer
+                // guard and the verify gate confirms it. This measures the proposer's
+                // ceiling WITHOUT editing the (sibling-hot) router.
+                let cands = mog_synth::semantic_op_proposer::semantic_op_candidates(&text, 0.7, 12);
+                let recov: Vec<&str> = cands
+                    .iter()
+                    .filter(|o| mog_synth::runtime::code_reproduces_examples(o.mog, &all))
+                    .map(|o| o.name)
+                    .collect();
+                if !recov.is_empty() {
+                    recoverable += 1;
+                    println!("REFUSED {label}  \"{text}\"  -> RECOVERABLE via {recov:?}");
+                } else {
+                    let names: Vec<&str> = cands.iter().map(|o| o.name).collect();
+                    println!("REFUSED {label}  \"{text}\"  (KG-cands={names:?}, none reproduce)");
+                }
+            }
             Some(code) => {
                 // Never-wrong check: the returned code must also reproduce the held-out
                 // example (and, trivially, the training set). A miss is a real violation.
@@ -141,6 +163,12 @@ fn main() {
         "proposer={} total={total} solved={solved} refused={refused} WRONG={wrong}  ({:.0}% solved)",
         if on { "ON" } else { "OFF" },
         100.0 * solved as f32 / total.max(1) as f32
+    );
+    println!(
+        "  of {refused} refused, {recoverable} are RECOVERABLE by the KG proposer \
+         (would be {} solved = {:.0}% if wired, still 0 wrong)",
+        solved + recoverable,
+        100.0 * (solved + recoverable) as f32 / total.max(1) as f32
     );
     println!("solved: {}", solved_ids.join(", "));
     if wrong > 0 {
