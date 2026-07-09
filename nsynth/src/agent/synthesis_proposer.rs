@@ -955,6 +955,27 @@ fn scan_holes(code: &str) -> Vec<Hole> {
             }
         }
         if is_mut {
+            // AUTH-GATED mutation (access control as verified behavior): a param whose NAME matches a
+            // struct field is a CREDENTIAL; gate the mutation on it so the wrong credential is a no-op
+            // (`withdraw(amount, pin) { if pin == self.pin && amount <= self.balance { self.balance -=
+            // amount; } }`). Emitted FIRST so the credential form survives the joint-search truncation.
+            let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+            let creds: Vec<&str> =
+                value_typed.iter().filter(|(n, t)| t == "i64" && field_names.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
+            let amounts: Vec<&str> =
+                value_typed.iter().filter(|(n, t)| t == "i64" && !field_names.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
+            for c in &creds {
+                for (f, fty) in fields {
+                    if fty != "i64" || f == c {
+                        continue; // target a DIFFERENT scalar field than the credential
+                    }
+                    for a in &amounts {
+                        bodies.push(format!("if {c} == self.{c} && {a} <= self.{f} {{ self.{f} -= {a}; }}"));
+                        bodies.push(format!("if {c} == self.{c} {{ self.{f} -= {a}; }}"));
+                        bodies.push(format!("if {c} == self.{c} {{ self.{f} += {a}; }}"));
+                    }
+                }
+            }
             for (fname, fty) in fields {
                 if let Some(elem) = elem_type(fty) {
                     let rf = fields_of(&elem);
@@ -4309,6 +4330,19 @@ mod tests {
         // total -> aggregate over the record's i64 field, NOT `self.priority` (priority is Item's, not TodoList's).
         assert!(holes[2].candidates.iter().any(|b| b.contains("self.items.iter().map(|e| e.priority).sum()")), "no field-aggregate");
         assert!(holes[2].candidates.iter().all(|b| !b.contains("self.priority")), "leaked a non-self field");
+    }
+
+    #[test]
+    fn scan_holes_covers_auth_gated_mutation() {
+        // A param named like a field (pin ~ self.pin) is a credential -> the mutation is access-gated.
+        let code = "pub struct Account { pub balance: i64, pub pin: i64 }\nimpl Account { pub fn withdraw(&mut self, amount: i64, pin: i64) {} }\n";
+        let cands = &scan_holes(code)[0].candidates;
+        assert!(
+            cands.iter().any(|b| b == "if pin == self.pin && amount <= self.balance { self.balance -= amount; }"),
+            "no auth+overdraft guard"
+        );
+        // never gates the credential field against itself.
+        assert!(cands.iter().all(|b| !b.contains("self.pin -= amount")), "targeted the credential field");
     }
 
     #[test]
