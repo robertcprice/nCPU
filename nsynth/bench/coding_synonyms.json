@@ -9,5 +9,6 @@
   ["sort", "arrange", "order", "organize", "sorted"],
   ["first", "initial", "leading", "foremost"],
   ["average", "mean"],
-  ["count", "tally"]
+  ["count", "tally"],
+  ["unique", "distinct"]
 ]

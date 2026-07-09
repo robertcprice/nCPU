@@ -759,6 +759,12 @@ pub const OPS: &[LibOp] = &[
     // The name tier now resolves "remove duplicate" -> remove_duplicates directly.
     LibOp { name: "remove_duplicates", arity: 1, mog:
 "fn remove_duplicates(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        seen: i64 = 0;\n        for u in out {\n            if u == e {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
+    // The UNIQUE / DISTINCT values of a list (first occurrence order). Behaviourally identical to
+    // remove_duplicates, but named for the common 'the unique values' / 'the distinct values'
+    // phrasing that names neither 'remove' nor 'duplicate' (so those prompts refused). The synonym
+    // graph maps unique~distinct so both resolve.
+    LibOp { name: "unique", arity: 1, mog:
+"fn unique(arr: [i64]) -> [i64] {\n    out: [i64] = [];\n    for e in arr {\n        seen: i64 = 0;\n        for u in out {\n            if u == e {\n                seen = 1;\n            }\n        }\n        if seen == 0 {\n            out.push(e);\n        }\n    }\n    return out;\n}\n" },
     // ── elementwise map / filter (array -> array) ─ foundational transforms, also
     // composition building blocks (filter_evens then array_sum = sum of evens, etc).
     LibOp { name: "double_each", arity: 1, mog:
