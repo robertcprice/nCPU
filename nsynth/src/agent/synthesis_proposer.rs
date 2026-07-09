@@ -1575,6 +1575,35 @@ fn reshape_to_repo_signature_inner(old_text: &str, repo_fn: &str, synthesized: &
         }
     }
 
+    // ARG-ORDER SWAP: when the synth entry's param TYPES form the same multiset as the repo
+    // target's but in a DIFFERENT, unambiguous order, a positional rename would MIS-BIND params
+    // (e.g. repo `(k: i64, xs: Vec<i64>)` vs a library op `(arr, k)`). Emit a wrapper that calls
+    // the synth impl with the repo params reordered BY TYPE instead. `arg_reorder_permutation`
+    // returns `None` (fall through to the normal path) for identity order, ambiguous same-typed
+    // params, or arity/type mismatches — so this never fires on the aligned case.
+    if repo_has_fn {
+        if let Some(entry_idx) = fns
+            .iter()
+            .position(|(n, _)| n == repo_fn)
+            .or_else(|| fns.iter().position(|(_, t)| t.trim_start().starts_with("pub ")))
+            .or_else(|| (!fns.is_empty()).then(|| fns.len() - 1))
+        {
+            let synth_types = fn_header_params(&fns[entry_idx].1, &fns[entry_idx].0)
+                .map(|p| parse_param_types(&p))
+                .unwrap_or_default();
+            let repo_types = fn_header_params(old_text, repo_fn)
+                .map(|p| parse_param_types(&p))
+                .unwrap_or_default();
+            if let Some(perm) = arg_reorder_permutation(&synth_types, &repo_types) {
+                if let Some(new_text) =
+                    emit_arg_reorder_wrapper(old_text, repo_fn, &fns, entry_idx, &perm)
+                {
+                    return Some(new_text);
+                }
+            }
+        }
+    }
+
     // Slice adapters bridge the synthesizer's owned `Vec<i64>` params to a repo `&[i64]` slice
     // signature (see slice_param_adapters). Only meaningful when the repo fn exists.
     let adapters = if repo_has_fn { slice_param_adapters(old_text, repo_fn) } else { String::new() };
@@ -1806,6 +1835,107 @@ fn parse_param_types(params: &str) -> Vec<String> {
             Some(ty.trim().to_string())
         })
         .collect()
+}
+
+/// ARG-ORDER reconciliation: when the synthesized entry fn's parameter TYPES form the same
+/// multiset as the repo target's but in a DIFFERENT order, compute the reordering of the REPO
+/// params that supplies the synth's positional arguments. `perm[i]` is the index into the repo
+/// params feeding the synth's i-th parameter.
+///
+/// Returns `Some(perm)` ONLY when the mapping is a genuine, UNAMBIGUOUS, non-identity
+/// permutation: every canonical type KIND is DISTINCT (so each synth slot maps to exactly one
+/// repo param), the multisets match, and the order truly differs. Returns `None` — a clean
+/// decline that keeps the caller's existing behaviour — when: arities differ, any type is
+/// un-mappable, any KIND repeats (ambiguous: two params share a type, so a swap could silently
+/// mis-bind them), or the orders already match (identity: the normal positional rename is
+/// correct). Never guesses across an ambiguous mapping.
+fn arg_reorder_permutation(synth_types: &[String], repo_types: &[String]) -> Option<Vec<usize>> {
+    if synth_types.is_empty() || synth_types.len() != repo_types.len() {
+        return None;
+    }
+    let synth_kinds: Vec<&'static str> = synth_types
+        .iter()
+        .map(|t| crate::library_probe::canonical_kind(t))
+        .collect::<Option<_>>()?;
+    let repo_kinds: Vec<&'static str> = repo_types
+        .iter()
+        .map(|t| crate::library_probe::canonical_kind(t))
+        .collect::<Option<_>>()?;
+    // Ambiguity guard: every KIND must be unique on BOTH sides. A repeated kind means a
+    // reorder could silently swap two same-typed params without a compile error — decline.
+    for kinds in [&synth_kinds, &repo_kinds] {
+        let mut seen = std::collections::HashSet::new();
+        for k in kinds.iter() {
+            if !seen.insert(*k) {
+                return None;
+            }
+        }
+    }
+    // Build the permutation: synth slot i wants the repo param whose kind matches. Distinct
+    // kinds guarantee `position` is unique; a missing kind (multiset mismatch) declines.
+    let mut perm = Vec::with_capacity(synth_kinds.len());
+    for sk in &synth_kinds {
+        perm.push(repo_kinds.iter().position(|rk| rk == sk)?);
+    }
+    // Identity (orders already align) → the normal rename path is correct; not our case.
+    if perm.iter().enumerate().all(|(i, &p)| i == p) {
+        return None;
+    }
+    Some(perm)
+}
+
+/// Emit an arg-order-reconciling WRAPPER: keep the synthesized entry fn as a private sibling
+/// (renamed to `{repo_fn}_reorder_impl` so it never collides with the repo fn), keep any other
+/// synthesized helper fns as siblings, and rewrite the repo fn's body to call the sibling with
+/// its own parameters reordered per `perm` (adding `.to_vec()` where the repo passes a slice into
+/// the Vec-based impl). The repo signature is preserved verbatim, so the caller's tests keep
+/// their call convention. Returns `None` if any structural step fails.
+fn emit_arg_reorder_wrapper(
+    old_text: &str,
+    repo_fn: &str,
+    fns: &[(String, String)],
+    entry_idx: usize,
+    perm: &[usize],
+) -> Option<String> {
+    let (entry_name, entry_text) = &fns[entry_idx];
+    let impl_name = format!("{repo_fn}_reorder_impl");
+    // Rename ALL word-boundary occurrences of the entry name (declaration + any self-calls) so a
+    // recursive op keeps working under the new name.
+    let entry_renamed = rename_ident(entry_text, entry_name, &impl_name);
+
+    // Sibling block: the renamed entry first, then every other synthesized helper verbatim.
+    let mut helpers = String::new();
+    helpers.push_str(entry_renamed.trim());
+    helpers.push_str("\n\n");
+    for (k, (_, text)) in fns.iter().enumerate() {
+        if k != entry_idx {
+            helpers.push_str(text.trim());
+            helpers.push_str("\n\n");
+        }
+    }
+
+    // Reordered call args from the repo's own parameters.
+    let repo_params = fn_header_params(old_text, repo_fn)?;
+    let repo_idents = parse_param_idents(&repo_params);
+    let repo_types = parse_param_types(&repo_params);
+    if repo_idents.len() != repo_types.len() || perm.len() != repo_idents.len() {
+        return None;
+    }
+    let mut call_args = Vec::with_capacity(perm.len());
+    for &ri in perm {
+        let name = repo_idents.get(ri)?;
+        let ty = repo_types.get(ri)?;
+        // Bridge a slice repo param into the owned-Vec impl param.
+        if ty.contains("&[") {
+            call_args.push(format!("{name}.to_vec()"));
+        } else {
+            call_args.push(name.clone());
+        }
+    }
+    let wrapper_body = format!("return {impl_name}({});", call_args.join(", "));
+
+    let with_helpers = insert_before_fn_def(old_text, repo_fn, helpers.trim());
+    replace_body_only(&with_helpers, repo_fn, &wrapper_body).ok()
 }
 
 /// `.to_vec()` shadow lines for each repo parameter whose type is a slice (`&[..]`), so the
@@ -2738,6 +2868,149 @@ mod tests {
             "stub body must be replaced with a real count"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// LEVER C END TO END: a repo `k_largest(xs: Vec<i64>, k: i64) -> Vec<i64>` stub is repaired by
+    /// resolving the unique library op `k_largest` (a 2-arg `(array, scalar) -> array` param-carrying
+    /// op) whose behaviour reproduces the mined asserts, then reshaping it onto the repo signature.
+    /// This is the `(Vec, k) -> Vec` shape that previously declined at reshape/resolution.
+    #[test]
+    fn test_mined_k_largest_two_arg_array_scalar_to_array_end_to_end() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_klargest_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"kl\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn k_largest(xs: Vec<i64>, k: i64) -> Vec<i64> {\n    Vec::new()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::k_largest;\n    #[test]\n    fn t() {\n        assert_eq!(k_largest(vec![5, 1, 9, 3], 2), vec![9, 5]);\n        assert_eq!(k_largest(vec![4, 4, 2, 8, 1], 3), vec![8, 4, 4]);\n        assert_eq!(k_largest(vec![3, 1], 9), vec![3, 1]);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "kl".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: the k largest elements".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        // Aligned (array, scalar) -> array shape resolves via the front door (prose names the op)
+        // OR the behaviour probe (mined asserts pin the unique library op), then reshapes cleanly.
+        let patch = try_test_mined_synthesis_patch(&task, &context, "the k largest elements")
+            .or_else(|| {
+                crate::library_probe::try_library_behavior_patch(
+                    &task,
+                    &context,
+                    "the k largest elements",
+                )
+            })
+            .expect("k_largest (Vec,k)->Vec must resolve end to end");
+        let edit = patch
+            .edits
+            .iter()
+            .find(|e| e.path == "src/lib.rs")
+            .expect("edit to lib.rs");
+        assert!(
+            !edit.new_text.contains("Vec::new()\n}"),
+            "stub body must be replaced by the real k-largest logic: {}",
+            edit.new_text
+        );
+        // The reshaped body must keep the repo signature and compile-shape (sort/push present).
+        assert!(
+            edit.new_text.contains("fn k_largest(xs: Vec<i64>, k: i64) -> Vec<i64>"),
+            "repo signature preserved: {}",
+            edit.new_text
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// ARG-ORDER SWAP adapter, tested directly: a clean two-param swap of distinct types yields
+    /// the reordering permutation; ambiguous (repeated type) and different-arity cases decline;
+    /// identity order declines (the normal rename path is correct there).
+    #[test]
+    fn arg_reorder_permutation_accepts_clean_swap_declines_ambiguous() {
+        let vec_i64 = "Vec<i64>".to_string();
+        let i64_t = "i64".to_string();
+        // synth (i64, Vec<i64>) vs repo (Vec<i64>, i64): synth slot 0 (int) -> repo idx 1,
+        // synth slot 1 (array) -> repo idx 0  => perm [1, 0].
+        assert_eq!(
+            arg_reorder_permutation(&[i64_t.clone(), vec_i64.clone()], &[vec_i64.clone(), i64_t.clone()]),
+            Some(vec![1, 0]),
+            "distinct-type swap must produce the reordering permutation"
+        );
+        // Identity order: already aligned, decline (normal path handles it).
+        assert_eq!(
+            arg_reorder_permutation(&[vec_i64.clone(), i64_t.clone()], &[vec_i64.clone(), i64_t.clone()]),
+            None,
+            "identity order must decline"
+        );
+        // Ambiguous: two params share a type (both i64) -> cannot pin a mapping -> decline.
+        assert_eq!(
+            arg_reorder_permutation(&[i64_t.clone(), i64_t.clone()], &[i64_t.clone(), i64_t.clone()]),
+            None,
+            "repeated type must decline (ambiguous)"
+        );
+        // Different arity: decline outright.
+        assert_eq!(
+            arg_reorder_permutation(&[i64_t.clone()], &[vec_i64.clone(), i64_t.clone()]),
+            None,
+            "arity mismatch must decline"
+        );
+        // Un-mappable type: decline.
+        assert_eq!(
+            arg_reorder_permutation(&["Foo".to_string(), i64_t.clone()], &[i64_t.clone(), "Foo".to_string()]),
+            None,
+            "un-mappable type must decline"
+        );
+    }
+
+    /// Reshape emits a WRAPPER when the synthesized entry's param order differs from the repo's.
+    /// Repo `k_largest(k: i64, xs: Vec<i64>)` (scalar-first) + a library-shaped synth
+    /// `k_largest(arr: Vec<i64>, k: i64)` (array-first) must NOT be positionally renamed (which
+    /// would mis-bind `arr`/`k`); instead a `_reorder_impl` sibling is emitted and the repo fn
+    /// calls it with the params reordered by type: `k_largest_reorder_impl(xs, k)`.
+    #[test]
+    fn reshape_emits_arg_reorder_wrapper_for_scalar_first_repo() {
+        let old = "pub fn k_largest(k: i64, xs: Vec<i64>) -> Vec<i64> {\n    Vec::new()\n}\n";
+        let synth = "pub fn k_largest(arr: Vec<i64>, k: i64) -> Vec<i64> {\n    let mut tmp = arr;\n    tmp.sort();\n    let mut out: Vec<i64> = Vec::new();\n    let n = tmp.len() as i64;\n    let mut lim = k;\n    if lim > n { lim = n; }\n    let mut i = 0i64;\n    while i < lim { out.push(tmp[(n - 1 - i) as usize]); i = i + 1; }\n    return out;\n}\n";
+        let new = reshape_to_repo_signature(old, "k_largest", synth)
+            .expect("scalar-first repo must reshape via arg-order wrapper");
+        // Repo signature preserved verbatim.
+        assert!(
+            new.contains("pub fn k_largest(k: i64, xs: Vec<i64>) -> Vec<i64>"),
+            "repo signature must be preserved: {new}"
+        );
+        // A renamed sibling impl exists (no duplicate `k_largest` definition).
+        assert!(new.contains("fn k_largest_reorder_impl("), "impl sibling must be emitted: {new}");
+        // The wrapper calls the impl with the params reordered by type: array `xs` first, `k` second.
+        assert!(
+            new.contains("k_largest_reorder_impl(xs, k)"),
+            "wrapper must reorder args by type (xs, k): {new}"
+        );
+        let _ = new;
+    }
+
+    /// Reshape adapter for a SLICE-typed scalar-first repo param: the array param is `&[i64]`,
+    /// so the reordered call must bridge it into the Vec-based impl via `.to_vec()`.
+    #[test]
+    fn reshape_arg_reorder_wrapper_bridges_slice_param() {
+        let old = "pub fn take_top(k: i64, xs: &[i64]) -> Vec<i64> {\n    Vec::new()\n}\n";
+        let synth = "pub fn take_top(arr: Vec<i64>, k: i64) -> Vec<i64> {\n    let mut tmp = arr;\n    tmp.truncate(k as usize);\n    return tmp;\n}\n";
+        let new = reshape_to_repo_signature(old, "take_top", synth)
+            .expect("slice scalar-first repo must reshape via arg-order wrapper");
+        assert!(
+            new.contains("take_top_reorder_impl(xs.to_vec(), k)"),
+            "slice repo param must be bridged with .to_vec() in the reordered call: {new}"
+        );
     }
 
     /// Array-OUTPUT repo fn via the front door: "reverse a list" (`Vec<i64> -> Vec<i64>`) is a

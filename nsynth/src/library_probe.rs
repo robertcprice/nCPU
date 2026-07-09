@@ -35,7 +35,7 @@ use crate::benchmark::Example;
 /// (`Vec<i64>`, `&[i64]`, `i64`, `usize`, `String`, `&str`, `bool`) onto one of four
 /// kinds so the two sides can be compared. Unknown → `None` (fail-safe: an
 /// un-mappable type can't be shape-matched, so the op/target is excluded).
-fn canonical_kind(ty: &str) -> Option<&'static str> {
+pub(crate) fn canonical_kind(ty: &str) -> Option<&'static str> {
     // Strip references / mut / whitespace so `&[i64]`, `& mut [i64]`, ` Vec<i64> ` all normalise.
     let mut t: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
     while let Some(rest) = t.strip_prefix('&') {
