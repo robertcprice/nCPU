@@ -354,21 +354,49 @@ pub fn try_test_mined_synthesis_patch(
         .as_ref()
         .map(|i| i.function_name.strip_prefix("nl_").unwrap_or(&i.function_name).to_string())
         .unwrap_or_default();
-    let repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
-
-    // Mine integer asserts for `repo_fn` across every context file (tests may live in
-    // a sibling module), dedup, and require enough points to PIN the function.
-    let mut rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
-    for f in &context.files {
-        if let Some(t) = f.text.as_deref() {
-            rows.extend(mine_asserts(t, &repo_fn));
+    // Mine integer asserts for a function across every context file (tests may live in a sibling
+    // module), dedup, and require enough points to PIN the function.
+    let mine_for = |name: &str| {
+        let mut rows: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                rows.extend(mine_asserts(t, name));
+            }
+        }
+        rows.sort();
+        rows.dedup();
+        rows
+    };
+    let mut repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
+    let mut rows = mine_for(&repo_fn);
+    // The intent's guessed name may not match the repo's actual failing function. If too few
+    // asserts were mined, try (a) every function DEFINED in the target file, then (b) every
+    // function CALLED by an assert but DEFINED NOWHERE — a MISSING function the failing test
+    // references (feature-add). Adopt the (name, rows) with the most examples.
+    if rows.len() < 2 {
+        let defined = defined_fn_names(&old_text);
+        let mut candidates: Vec<String> = defined.clone();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                for c in assert_called_fn_names(t) {
+                    if !defined.contains(&c) && !candidates.contains(&c) {
+                        candidates.push(c);
+                    }
+                }
+            }
+        }
+        for cand in candidates {
+            let cand_rows = mine_for(&cand);
+            if cand_rows.len() > rows.len() {
+                rows = cand_rows;
+                repo_fn = cand;
+            }
         }
     }
-    rows.sort();
-    rows.dedup();
     if rows.len() < 2 {
         return None;
     }
+    let repo_has_fn = old_text.contains(&format!("fn {repo_fn}"));
 
     let exs: Vec<crate::benchmark::Example> = rows
         .iter()
@@ -409,7 +437,14 @@ pub fn try_test_mined_synthesis_patch(
     if !is_plain_rust_body(&synthesized) {
         return None;
     }
-    let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+    let new_text = if repo_has_fn {
+        reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?
+    } else {
+        // MISSING function (feature-add): reshape yields the standalone fn source; APPEND it to
+        // the file rather than replacing the file contents.
+        let new_fn = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
+        format!("{}\n\n{}\n", old_text.trim_end(), new_fn.trim())
+    };
     if new_text == old_text {
         return None;
     }
@@ -431,6 +466,41 @@ pub fn try_test_mined_synthesis_patch(
 /// (`"abc"`), and boolean (`true`/`false`) literals are captured — the solver's
 /// verified domains; anything else (floats, expressions, method chains) is skipped.
 /// Name matching is word-boundary safe, so `add` never matches `add_two`.
+/// Identifiers called as functions inside `assert_eq!(..)` args (e.g. `triple` from
+/// `assert_eq!(triple(3), 9)`). Used to find a MISSING function a failing test references — the
+/// feature-add target that no `mine_asserts(defined_name)` would ever pin. Skips the `vec` macro
+/// and numeric leads.
+fn assert_called_fn_names(text: &str) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    let mut cur = text;
+    while let Some(rel) = cur.find("assert_eq!") {
+        let after = &cur[rel + "assert_eq!".len()..];
+        cur = after;
+        let Some(open) = after.find('(') else { continue };
+        let Some(inner) = balanced_parens(&after[open..]) else { continue };
+        for arg in split_top_level_comma(inner) {
+            let a = arg.trim();
+            if let Some(p) = a.find('(') {
+                let ident: String = a[..p]
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                if !ident.is_empty()
+                    && !ident.starts_with(|c: char| c.is_ascii_digit())
+                    && ident != "vec"
+                {
+                    names.insert(ident);
+                }
+            }
+        }
+    }
+    names.into_iter().collect()
+}
+
 fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> {
     let mut out = Vec::new();
     let mut cur = text;
