@@ -323,12 +323,29 @@ pub fn route_verified(prompt: &str, examples: &[crate::benchmark::Example]) -> O
         .first()
         .map(|e| e.inputs.iter().map(value_type_str).collect())
         .unwrap_or_default();
-    let passing: Vec<&'static LibOp> = ranked_candidates(prompt)
+    let mut passing: Vec<&'static LibOp> = ranked_candidates(prompt)
         .into_iter()
         .filter(|op| op_accepts_types(op.mog, &input_types))
         .take(MAX_TRIED)
         .filter(|op| crate::runtime::code_reproduces_examples(op.mog, examples))
         .collect();
+    // KG SEMANTIC FALLBACK (lazy). If NO name/synonym candidate verified, try the ops
+    // the linguigenesis KG grounds the prompt's words to — "invert the order" ->
+    // reverse_list, "add up all the numbers" -> array_sum — synonyms/hypernyms the
+    // token + WordNet layers miss. KG grounding is PROVENANCE, so these join the tier-1
+    // candidate set (which only tries REFERENCED ops) rather than the all-ops behaviour
+    // sweep in route_by_behavior — avoiding its co-passer flood (reverse_list vs
+    // sort_descending coincide on monotonic examples -> that gate over-refuses "invert").
+    // The example gate + distinguishing gate below still own correctness, so this widens
+    // recall with zero never-wrong risk. The 500k-registry bridge loads ONLY here, on the
+    // name-miss path, never on the fast path. NSYNTH_SEMANTIC_PROPOSER=0 disables.
+    if passing.is_empty() && std::env::var("NSYNTH_SEMANTIC_PROPOSER").map_or(true, |v| v != "0") {
+        passing = crate::semantic_op_proposer::semantic_op_candidates(prompt, 0.7, MAX_TRIED)
+            .into_iter()
+            .filter(|op| op_accepts_types(op.mog, &input_types))
+            .filter(|op| crate::runtime::code_reproduces_examples(op.mog, examples))
+            .collect();
+    }
     let winner = *passing.first()?; // NL-top among the passers
 
     // DISTINGUISHING-POWER GATE. If more than one DISTINCT op reproduces the
