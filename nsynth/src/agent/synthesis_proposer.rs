@@ -170,6 +170,23 @@ pub fn try_real_synthesis_patch(
     if !is_plain_rust_body(&synthesized) {
         return None;
     }
+    // ARITY GATE (mirrors try_emergent_synthesis_patch): from_nl_lenient can invent example inputs
+    // whose arity disagrees with the repo signature — "maximum of two numbers" yields a 1-arg
+    // (single-list) intent that solves to a 1-param fn, but the repo's `max_of(a, b)` takes two
+    // scalars; reshaping the wrong shape onto the wrong params is the observed type mismatch.
+    // Declining hands such cases to the example-grounded, never-wrong test-mining router.
+    let repo_arity = fn_header_params(&old_text, &repo_fn)
+        .map(|p| parse_param_idents(&p).len())
+        .unwrap_or(0);
+    let synth_arity = fn_header_params(&synthesized, &repo_fn)
+        .or_else(|| {
+            first_fn_name_in_source(&synthesized).and_then(|n| fn_header_params(&synthesized, &n))
+        })
+        .map(|p| parse_param_idents(&p).len())
+        .unwrap_or(0);
+    if repo_arity != 0 && synth_arity != 0 && repo_arity != synth_arity {
+        return None;
+    }
     let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
     if new_text == old_text {
         return None;
@@ -393,7 +410,7 @@ pub fn try_test_mined_synthesis_patch(
             }
         }
     }
-    if rows.len() < 2 {
+    if rows.is_empty() {
         return None;
     }
     let repo_has_fn = old_text.contains(&format!("fn {repo_fn}"));
@@ -405,35 +422,58 @@ pub fn try_test_mined_synthesis_patch(
             expected: out.clone(),
         })
         .collect();
-    // Array-RETURNING functions (reverse, sort) need a Vec/slice reshape this proposer does not yet
-    // get right for every signature; declining defers them to the existing proposers (the behaviour
-    // before test-mining was wired into this ladder), avoiding a bad-patch short-circuit. Scalar and
-    // boolean outputs — the verified domains, incl. array->scalar folds like sum_of_evens — proceed.
-    if exs.iter().any(|e| matches!(e.expected, crate::benchmark::Value::Array(_))) {
-        return None;
-    }
-    let sig: &'static str =
-        Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str());
-    let problem = crate::benchmark::Problem {
-        name: repo_fn.clone(),
-        category: "repo-test-mined",
-        description: "",
-        signature: sig,
-        examples: exs.clone(),
-        ..Default::default()
+    // Prefer the VERIFIED NL ROUTER over the raw solver. It grounds the prose+examples in the
+    // hardened op library behind a distinguishing gate: it resolves "maximum of a list" to list_max
+    // and REJECTS coincidental overfits (max_except_last, which merely reproduces under-determined
+    // examples), returns max_two for "maximum of two numbers", and reverse_list for "reverse a list"
+    // from a single example — the never-wrong guarantee carried into repo repair. Because the router
+    // is name-grounded + example-verified, one example suffices; the raw-solver fallback still needs
+    // >= 2 and declines array-returning shapes it does not reshape reliably.
+    let (synth_mog, method) = match crate::verified_nl_router::answer(description, &exs) {
+        crate::verified_nl_router::Answer::Library { name, code } => {
+            (code, format!("verified-nl-router:library:{name}"))
+        }
+        crate::verified_nl_router::Answer::Composition { code } => {
+            (code, "verified-nl-router:composition".to_string())
+        }
+        crate::verified_nl_router::Answer::Synthesized { method, code } => {
+            (code, format!("verified-nl-router:{method}"))
+        }
+        _ => {
+            if rows.len() < 2 {
+                return None;
+            }
+            // Raw-solver fallback declines array-RETURNING functions (its Vec/slice reshape is not
+            // reliable for them); the router above already handles those cleanly.
+            if exs.iter().any(|e| matches!(e.expected, crate::benchmark::Value::Array(_))) {
+                return None;
+            }
+            let sig: &'static str = Box::leak(
+                crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str(),
+            );
+            let problem = crate::benchmark::Problem {
+                name: repo_fn.clone(),
+                category: "repo-test-mined",
+                description: "",
+                signature: sig,
+                examples: exs.clone(),
+                ..Default::default()
+            };
+            let res = crate::solver::solve_problem(&problem);
+            if !res.success {
+                return None;
+            }
+            if crate::runtime::verify_problem_code_strict(&problem, &res.code).is_err() {
+                return None;
+            }
+            // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
+            if crate::synth_confidence::is_memorization_overfit(&res.code, &exs) {
+                return None;
+            }
+            (res.code, res.method)
+        }
     };
-    let res = crate::solver::solve_problem(&problem);
-    if !res.success {
-        return None;
-    }
-    if crate::runtime::verify_problem_code_strict(&problem, &res.code).is_err() {
-        return None;
-    }
-    // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
-    if crate::synth_confidence::is_memorization_overfit(&res.code, &exs) {
-        return None;
-    }
-    let synthesized = rust_code_for_repo_synthesis(&res.code);
+    let synthesized = rust_code_for_repo_synthesis(&synth_mog);
     if !is_plain_rust_body(&synthesized) {
         return None;
     }
@@ -457,7 +497,7 @@ pub fn try_test_mined_synthesis_patch(
                 "test-mined synthesis proposer (examples from failing asserts; verified, no LLM)",
             ))
             .with_metadata("proposer", "nl_test_mined_synthesis")
-            .with_metadata("synthesis_method", res.method.clone()),
+            .with_metadata("synthesis_method", method),
     )
 }
 
@@ -682,6 +722,25 @@ pub fn try_emergent_synthesis_patch(
         return None;
     }
     let old_text = read_relative_file(context, &target).ok()?;
+    // ARITY GATE: a bare-NL comprehension that lands on a DIFFERENT-arity function than the repo
+    // signature cannot repair it — the reshape would fit the wrong shape onto the wrong parameters.
+    // Concretely, the bridge mis-reads "maximum of two numbers" (two scalars) as an array max —
+    // `fn max_of(xs: [i64])`, one param — while the repo fn is `max_of(a, b)`, two params; reshaping
+    // an array body onto two scalars yields a type mismatch. Declining here defers such cases to the
+    // example-grounded test-mining router, which distinguishes max_two from list_max via the failing
+    // test's I/O. Same-arity comprehensions (abs, reverse, array folds) are unaffected.
+    let repo_arity = fn_header_params(&old_text, &repo_fn)
+        .map(|p| parse_param_idents(&p).len())
+        .unwrap_or(0);
+    let synth_arity = fn_header_params(&synthesized, &repo_fn)
+        .or_else(|| {
+            first_fn_name_in_source(&synthesized).and_then(|n| fn_header_params(&synthesized, &n))
+        })
+        .map(|p| parse_param_idents(&p).len())
+        .unwrap_or(0);
+    if repo_arity != 0 && synth_arity != 0 && repo_arity != synth_arity {
+        return None;
+    }
     let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
     if new_text == old_text {
         return None;
@@ -1551,21 +1610,10 @@ fn parse_param_types(params: &str) -> Vec<String> {
 /// call convention) while the synthesized logic sees an owned `Vec` — the minimal bridge that
 /// unblocks list-processing repo repairs without rewriting iteration.
 fn slice_param_adapters(old_text: &str, repo_fn: &str) -> String {
-    // Only bridge slice params for SCALAR-returning functions (array->scalar folds/predicates like
-    // sum_of_evens -> i64). A collection-returning function (reverse -> Vec<i64>) reshapes correctly
-    // through the original path; applying the adapter there would mangle the Vec return, regressing
-    // it. Detect the repo return type from the signature.
-    if let Some(start) = old_text.find(&format!("fn {repo_fn}(")) {
-        let after = &old_text[start..];
-        if let Some(arrow) = after.find("->") {
-            if let Some(brace_rel) = after[arrow..].find('{') {
-                let ret = after[arrow + 2..arrow + brace_rel].trim();
-                if ret.contains("Vec") || ret.contains('[') {
-                    return String::new();
-                }
-            }
-        }
-    }
+    // Bridge every `&[..]` slice PARAM to an owned Vec (the shape the synthesizer emits), regardless
+    // of the return type: `sum_of_evens(xs: &[i64]) -> i64` and `reverse(xs: &[i64]) -> Vec<i64>`
+    // both need `let xs = xs.to_vec();` at the top of the body so the Vec-based synthesized logic
+    // compiles against the slice signature.
     let params = fn_header_params(old_text, repo_fn).unwrap_or_default();
     let idents = parse_param_idents(&params);
     let types = parse_param_types(&params);

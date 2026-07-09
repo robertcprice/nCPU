@@ -217,6 +217,15 @@ fn transpile(mog: &str, target: Target) -> String {
         // (where X is an identifier) to `len(X)`. The Python-style
         // indentation pass already ran; this is the only Go-specific
         // syntactic transformation on top of the brace handler.
+        // Rust index-style array rewrite: hand-written library ops (list_max,
+        // reverse_list, list_length, *_except_*) index arrays with an i64
+        // counter and read `arr.len` as a property — neither is valid Rust.
+        // The synthesizer's own output is iterator-style (`for x in arr`) and
+        // has none of these, so this pass only touches the library-op shapes.
+        if target == Target::Rust {
+            body = rewrite_arrays_rust(&body);
+        }
+
         if target == Target::Go {
             body = rewrite_dot_len_go(&body);
             body = rewrite_dot_sort_go(&body);
@@ -448,6 +457,108 @@ fn rewrite_dot_len_go(body: &str) -> String {
         }
         out.push(bytes[i] as char);
         i += 1;
+    }
+    out
+}
+
+/// Lower Mog's index-style array idioms to valid Rust. Mog is an untyped-index
+/// language (every value is `i64`); Rust indices are `usize` and `.len` is a
+/// method returning `usize`. Three fixes on a post-body-rewrite line:
+///   * `X.len` (bare property) -> `(X.len() as i64)` so it composes with the
+///     surrounding i64 arithmetic (`arr.len - 1`, `i < arr.len`);
+///   * `IDENT[expr]` (indexing) -> `IDENT[(expr) as usize]`;
+///   * an array LITERAL used as a value (`[]`, `[1, 2, 3]`) -> `vec![...]`.
+/// The synthesizer emits iterator-style code (`for x in arr`) with none of
+/// these tokens, so existing synthesized output is unaffected; this only makes
+/// the hand-written index-style library ops transpile to compiling Rust.
+fn rewrite_arrays_rust(body: &str) -> String {
+    rewrite_index_brackets_rust(&rewrite_dot_len_rust(body))
+}
+
+/// `X.len` (property access) -> `(X.len() as i64)`. Skips `.len(` (already a
+/// call) and `.len<alnum>` (e.g. `.length`) so only the bare Mog property is
+/// rewritten.
+fn rewrite_dot_len_rust(body: &str) -> String {
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len() + 16);
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 4 <= bytes.len()
+            && &bytes[i..i + 4] == b".len"
+            && (i + 4 == bytes.len()
+                || !(bytes[i + 4].is_ascii_alphanumeric()
+                    || bytes[i + 4] == b'('
+                    || bytes[i + 4] == b'_'))
+        {
+            let mut start = i;
+            while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_')
+            {
+                start -= 1;
+            }
+            if start < i {
+                let ident_len = i - start;
+                out.truncate(out.len() - ident_len);
+                let ident = std::str::from_utf8(&bytes[start..i]).unwrap_or("");
+                out.push_str(&format!("({ident}.len() as i64)"));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// `IDENT[expr]` -> `IDENT[(expr) as usize]`; a bracket NOT preceded by an
+/// identifier/`)`/`]` is an array literal, rewritten `[..]` -> `vec![..]`.
+fn rewrite_index_brackets_rust(body: &str) -> String {
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len() + 16);
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'[' {
+            // Find the matching close bracket.
+            let mut depth = 0i32;
+            let mut j = i;
+            let mut end = None;
+            while j < bytes.len() {
+                match bytes[j] {
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(j);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            if let Some(end) = end {
+                let inner = &body[i + 1..end];
+                let prev = out.trim_end().chars().last();
+                let is_index =
+                    matches!(prev, Some(c) if c.is_alphanumeric() || c == '_' || c == ')' || c == ']');
+                if is_index {
+                    if inner.trim().is_empty() || inner.contains("as usize") {
+                        out.push('[');
+                        out.push_str(inner);
+                        out.push(']');
+                    } else {
+                        out.push_str(&format!("[({}) as usize]", inner.trim()));
+                    }
+                } else {
+                    out.push_str(&format!("vec![{inner}]"));
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        let ch = body[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }
