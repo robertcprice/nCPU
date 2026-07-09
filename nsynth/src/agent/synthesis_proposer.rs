@@ -517,29 +517,67 @@ fn generate_mutations(content: &str) -> Vec<String> {
     let code = &content[..test_start];
     let tail = &content[test_start..];
     let mut out = Vec::new();
-    const SWAPS: &[(&str, &[&str])] = &[
-        (" == ", &[" != "]),
-        (" != ", &[" == "]),
-        (" <= ", &[" < "]),
-        (" >= ", &[" > "]),
-        (" < ", &[" <= ", " > "]),
-        (" > ", &[" >= ", " < "]),
-        (" += ", &[" -= ", " = "]),
-        (" -= ", &[" += "]),
-        (" + ", &[" - ", " * "]),
-        (" - ", &[" + "]),
-        (" * ", &[" + ", " / "]),
-        (" / ", &[" * "]),
-        (" % ", &[" / "]),
-    ];
-    for (from, tos) in SWAPS {
-        let mut idx = 0;
-        while let Some(pos) = code[idx..].find(from) {
-            let at = idx + pos;
-            for to in *tos {
-                out.push(splice_mutation(code, tail, at, from.len(), to));
+    // Space-INSENSITIVE binary-operator swaps. Real Rust has `a+b`, `i<n`, `self.n=x` as often as the
+    // spaced forms; a spaced-string match (` = `) silently MISSES the unspaced ones (this is why an
+    // unspaced `self.n=x` off-by-op bug went unrepaired). Scan char by char, classify each operator
+    // token with boundary checks (compound ops `==`/`+=`/`->`/`=>`, generics `Vec<T>`, unary `-1`,
+    // deref `*x`, trait `->` all excluded), and replace only the operator so spacing is preserved.
+    let cb = code.as_bytes();
+    let eff_prev = |i: usize| -> u8 {
+        let mut j = i;
+        while j > 0 {
+            j -= 1;
+            if cb[j] != b' ' && cb[j] != b'\t' {
+                return cb[j];
             }
-            idx = at + from.len();
+        }
+        0
+    };
+    let operand_end = |b: u8| b.is_ascii_alphanumeric() || b == b')' || b == b']' || b == b'_';
+    let mut i = 0usize;
+    while i < code.len() {
+        let c = cb[i];
+        let n1 = cb.get(i + 1).copied().unwrap_or(0);
+        let p1 = if i > 0 { cb[i - 1] } else { 0 };
+        let sp = p1 == b' ' || n1 == b' '; // a real comparison is usually spaced; a generic `<` never is
+        let (len, reps): (usize, &[&str]) = if c == b'<' && n1 == b'=' {
+            (2, &["<", ">="])
+        } else if c == b'>' && n1 == b'=' {
+            (2, &[">", "<="])
+        } else if c == b'=' && n1 == b'=' {
+            (2, &["!="])
+        } else if c == b'!' && n1 == b'=' {
+            (2, &["=="])
+        } else if c == b'<' && n1 != b'=' && n1 != b'<' && p1 != b'<' && sp {
+            (1, &["<=", ">"])
+        } else if c == b'>' && n1 != b'=' && n1 != b'>' && p1 != b'>' && p1 != b'-' && p1 != b'=' && sp {
+            (1, &[">=", "<"])
+        } else if c == b'='
+            && n1 != b'='
+            && n1 != b'>'
+            && !matches!(p1, b'=' | b'<' | b'>' | b'!' | b'+' | b'-' | b'*' | b'/' | b'%')
+        {
+            (1, &["+=", "-="])
+        } else if c == b'+' && n1 != b'=' && n1 != b'+' && p1 != b'+' && operand_end(eff_prev(i)) {
+            (1, &["-", "*"])
+        } else if c == b'-' && n1 != b'=' && n1 != b'>' && n1 != b'-' && p1 != b'-' && operand_end(eff_prev(i)) {
+            (1, &["+"])
+        } else if c == b'*' && n1 != b'=' && n1 != b'*' && p1 != b'*' && operand_end(eff_prev(i)) {
+            (1, &["+", "/"])
+        } else if c == b'/' && n1 != b'=' && n1 != b'/' && n1 != b'*' && p1 != b'/' && operand_end(eff_prev(i)) {
+            (1, &["*"])
+        } else if c == b'%' && n1 != b'=' && operand_end(eff_prev(i)) {
+            (1, &["/"])
+        } else {
+            (0, &[])
+        };
+        if len > 0 {
+            for to in reps {
+                out.push(splice_mutation(code, tail, i, len, to));
+            }
+            i += len;
+        } else {
+            i += 1;
         }
     }
     // METHOD-NAME swaps: a wrong stdlib method call (`.to_lowercase()` should be `.to_uppercase()`,
@@ -561,15 +599,6 @@ fn generate_mutations(content: &str) -> Vec<String> {
             let at = idx + pos;
             out.push(splice_mutation(code, tail, at, from.len(), to));
             idx = at + from.len();
-        }
-    }
-    // Bare spaced assignment ` = ` (not ==,<=,>=,!=,+=,... which are [=][=] / [op][=], never [SP][=][SP]).
-    let cb = code.as_bytes();
-    for i in 0..code.len().saturating_sub(2) {
-        if &cb[i..i + 3] == b" = " {
-            for to in [" += ", " -= "] {
-                out.push(splice_mutation(code, tail, i, 3, to));
-            }
         }
     }
     // Integer literals -> +-1 (off-by-one).
@@ -613,8 +642,27 @@ fn generate_mutations(content: &str) -> Vec<String> {
                 // A VALUE operand: not a call (`x(`), not a field/method (`x.`/`.x`), not a keyword.
                 let next = code[i..].chars().next();
                 let after_dot = s > 0 && cb[s - 1] == b'.';
+                // Skip TYPE positions/names: wrapping a type (`-> i64` -> `-> f(i64)`, `: Vec` ->
+                // `: f(Vec)`) only makes non-compiling garbage that burns a cargo run. Cheap guards:
+                // a primitive/known type name, an Uppercase-led ident (types/variants), or a type
+                // annotation position (prev non-space char is `:`, or we sit just after `->`).
+                let prev_ns = {
+                    let mut j = s;
+                    while j > 0 && (cb[j - 1] == b' ' || cb[j - 1] == b'\t') {
+                        j -= 1;
+                    }
+                    (j > 0).then(|| cb[j - 1]).unwrap_or(0)
+                };
+                let after_arrow = prev_ns == b'>' && s >= 2 && code[..s].trim_end().ends_with("->");
+                let is_type = prev_ns == b':'
+                    || prev_ns == b'<'
+                    || after_arrow
+                    || ident.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    || matches!(ident, "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16"
+                        | "u32" | "u64" | "u128" | "usize" | "f32" | "f64" | "bool" | "char" | "str");
                 let is_value = !matches!(next, Some('(') | Some('.') | Some('!'))
                     && !after_dot
+                    && !is_type
                     && !matches!(ident, "let" | "mut" | "fn" | "if" | "else" | "return" | "while"
                         | "for" | "in" | "self" | "pub" | "struct" | "impl" | "true" | "false"
                         | "as" | "match" | "Some" | "None" | "Ok" | "Err");
@@ -3549,6 +3597,25 @@ mod tests {
         // A no-param mutator (inc) -> `self.n += 1`.
         let inc = "pub struct C { pub n: i64 }\nimpl C { pub fn inc(&mut self) {} }\n";
         assert!(generate_stub_fills(inc).iter().any(|m| m.contains("self.n += 1;")), "no inc body");
+    }
+
+    #[test]
+    fn mutation_operators_are_space_insensitive() {
+        // UNSPACED assignment (the regression): `self.n=x` must yield `self.n+=x` and `self.n-=x`.
+        let unspaced = "impl C { fn add(&mut self, x: i64) { self.n=x; } }\n";
+        let m = generate_mutations(unspaced);
+        assert!(m.iter().any(|s| s.contains("self.n+=x")), "no += for unspaced assign: had {}", m.len());
+        assert!(m.iter().any(|s| s.contains("self.n-=x")), "no -= for unspaced assign");
+        // UNSPACED arithmetic `w+h` -> `w-h`, `w*h`.
+        let arith = generate_mutations("fn a(w: i64, h: i64) -> i64 { w+h }\n");
+        assert!(arith.iter().any(|s| s.contains("w-h")), "no - for unspaced add");
+        assert!(arith.iter().any(|s| s.contains("w*h")), "no * for unspaced add");
+        // A generic `Vec<i64>` must NOT be mangled into `Vec<=i64>` / `Vec>i64>`.
+        let generic = generate_mutations("fn f(v: Vec<i64>) -> i64 { 0 }\n");
+        assert!(!generic.iter().any(|s| s.contains("Vec<=") || s.contains("Vec>")), "generic got mutated");
+        // Arrow `->` and match `=>` must survive (no `-` / `=` operator match on them).
+        let arrows = generate_mutations("fn f(x: i64) -> i64 { match x { 0 => 1, _ => x } }\n");
+        assert!(arrows.iter().all(|s| s.contains("-> i64")), "return arrow was mutated");
     }
 
     #[test]
