@@ -246,33 +246,82 @@ pub fn try_mutation_repair_patch(
         !preferred.as_deref().map(|pf| pf.ends_with(p) || p.ends_with(pf)).unwrap_or(false)
     });
 
+    let mk_patch = |path: &str, orig: &str, mutated: String| {
+        Some(
+            RepairPatch::new()
+                .with_edit(RepairEdit::new(
+                    path.to_string(),
+                    orig.to_string(),
+                    mutated,
+                    "mutation repair (model-free; cargo-test gated)",
+                ))
+                .with_metadata("proposer", "mutation_repair"),
+        )
+    };
     let start = std::time::Instant::now();
-    let budget = std::time::Duration::from_secs(75);
-    const MAX_MUTATIONS: usize = 32;
+    let budget = std::time::Duration::from_secs(90);
+    const MAX_SINGLE: usize = 32;
+    const MAX_BASES: usize = 8;
+    const MAX_PAIR: usize = 24;
     let mut tried = 0usize;
+    // The first file's mutations that COMPILE but still fail — bases for a second edit (the built-in
+    // compile pre-filter: cargo test already told us which mutations type-check).
+    let mut two_edit: Option<(String, String, std::path::PathBuf, Vec<String>)> = None;
     for (path, orig) in &files {
         let abs = std::path::Path::new(&context.root).join(path);
+        let mut bases: Vec<String> = Vec::new();
         for mutated in generate_mutations(orig) {
-            if tried >= MAX_MUTATIONS || start.elapsed() > budget {
-                return None;
+            if tried >= MAX_SINGLE || start.elapsed() > budget {
+                break;
             }
             tried += 1;
             if std::fs::write(&abs, &mutated).is_err() {
                 continue;
             }
-            let passed = verifier.verify(&task.test_command).map(|v| v.success).unwrap_or(false);
+            let v = verifier.verify(&task.test_command);
             let _ = std::fs::write(&abs, orig); // revert; the loop re-applies the winning patch
-            if passed {
-                return Some(
-                    RepairPatch::new()
-                        .with_edit(RepairEdit::new(
-                            path.clone(),
-                            orig.clone(),
-                            mutated,
-                            "mutation repair (model-free; cargo-test gated)",
-                        ))
-                        .with_metadata("proposer", "mutation_repair"),
-                );
+            match v {
+                Ok(ver) if ver.success => return mk_patch(path, orig, mutated),
+                // Compiled (no rustc error) but the test failed -> a candidate base for a 2nd edit.
+                Ok(ver)
+                    if bases.len() < MAX_BASES
+                        && !ver.stderr.contains("error[")
+                        && !ver.stderr.contains("could not compile") =>
+                {
+                    bases.push(mutated)
+                }
+                _ => {}
+            }
+        }
+        if two_edit.is_none() && !bases.is_empty() {
+            two_edit = Some((path.clone(), orig.clone(), abs.clone(), bases));
+        }
+        if tried >= MAX_SINGLE || start.elapsed() > budget {
+            break;
+        }
+    }
+    // TWO-EDIT search: for the non-pure multi-edit bug the single pass + the synthesizer both miss
+    // (a struct method with two wrong tokens, no I/O pairs to mine). Layer a second single-edit
+    // mutation onto each compiling base and cargo-test it. Tightly bounded; best-effort before the LLM.
+    if let Some((path, orig, abs, bases)) = two_edit {
+        let mut tried2 = 0usize;
+        for base in &bases {
+            for m2 in generate_mutations(base) {
+                if tried2 >= MAX_PAIR || start.elapsed() > budget {
+                    return None;
+                }
+                if m2 == orig {
+                    continue; // a second edit that undoes the first
+                }
+                tried2 += 1;
+                if std::fs::write(&abs, &m2).is_err() {
+                    continue;
+                }
+                let passed = verifier.verify(&task.test_command).map(|v| v.success).unwrap_or(false);
+                let _ = std::fs::write(&abs, &orig);
+                if passed {
+                    return mk_patch(&path, &orig, m2);
+                }
             }
         }
     }
