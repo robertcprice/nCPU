@@ -13,6 +13,23 @@ fn main() {
         eprintln!("registry load error: {e}");
         return;
     }
+    // Arg mode: probe each supplied WORD directly, showing all KG candidates + scores.
+    // `probe_semantic_op topmost least bottommost peak first` — diagnoses whether a
+    // superlative/positional synonym has a KG edge (tunable) or none (cross-project data).
+    let words: Vec<String> = std::env::args().skip(1).collect();
+    if !words.is_empty() {
+        for w in &words {
+            let cands = bridge.probe_op_candidates(w);
+            let s: String = cands
+                .iter()
+                .take(8)
+                .map(|(op, sc, m)| format!("{op}@{sc:.2}({m})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("{w:<16} -> [{s}]");
+        }
+        return;
+    }
     // Phrasings deliberately OUTSIDE the hand synonym table (capability_miner nl_surface):
     // synonyms / paraphrases the token-only matcher would REFUSE today.
     let phrases = [
