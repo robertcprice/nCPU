@@ -287,11 +287,136 @@ fn transpile(mog: &str, target: Target) -> String {
         return String::from("pass\n");
     }
     if target == Target::Rust {
-        return add_mut_to_mutated_params(&lower_rust_string_building(&lower_rust_char_ops(
-            &lower_rust_string_methods(&out),
+        return add_mut_to_mutated_params(&infer_rust_vec_element_types(&lower_rust_string_building(
+            &lower_rust_char_ops(&lower_rust_string_methods(&out)),
         )));
     }
     out
+}
+
+/// Per-function element-type INFERENCE for `Vec<i64>` locals that actually hold non-i64 elements.
+/// Mog uses `[i64]` as an untyped "list", so a list of chars or of strings is emitted as
+/// `Vec<i64>` and then push/compare a `char`/`String` — a type mismatch Rust rejects. Infer the real
+/// element type from the pushes: a Vec pushed a char (loop var over `.chars()`, a `'c'` literal, or
+/// `s.chars().nth(..)`) is `Vec<char>`; a Vec pushed a `String` value is `Vec<String>`. Only the
+/// declaration is retyped — indexing/compare/return then type-check against the real element.
+fn infer_rust_vec_element_types(rust: &str) -> String {
+    let had_nl = rust.ends_with('\n');
+    let lines: Vec<&str> = rust.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim_start();
+        if t.starts_with("fn ") || t.starts_with("pub fn ") {
+            // Gather the whole function body (balanced braces) and rewrite its Vec decls together.
+            let start = i;
+            let mut depth = 0i32;
+            let mut opened = false;
+            let mut j = i;
+            while j < lines.len() {
+                for c in lines[j].chars() {
+                    if c == '{' {
+                        depth += 1;
+                        opened = true;
+                    } else if c == '}' {
+                        depth -= 1;
+                    }
+                }
+                if opened && depth <= 0 {
+                    break;
+                }
+                j += 1;
+            }
+            let end = j.min(lines.len() - 1);
+            out.extend(rewrite_fn_vec_element_types(&lines[start..=end]));
+            i = end + 1;
+        } else {
+            out.push(lines[i].to_string());
+            i += 1;
+        }
+    }
+    let mut s = out.join("\n");
+    if had_nl {
+        s.push('\n');
+    }
+    s
+}
+
+fn rewrite_fn_vec_element_types(fn_lines: &[&str]) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+    // char loop vars: `for VAR in <expr>.chars()`.
+    let mut char_vars: HashSet<String> = HashSet::new();
+    for l in fn_lines {
+        if let Some(fp) = l.find("for ") {
+            if let Some(ip) = l[fp + 4..].find(" in ") {
+                let var = l[fp + 4..fp + 4 + ip].trim().trim_start_matches('&').trim();
+                if l[fp + 4 + ip..].contains(".chars()") && !var.is_empty() {
+                    char_vars.insert(var.to_string());
+                }
+            }
+        }
+    }
+    // String-typed locals (already spelled `: String`) to recognise String pushes.
+    let mut string_vars: HashSet<String> = HashSet::new();
+    for l in fn_lines {
+        let t = l.trim_start();
+        if let Some(rest) = t.strip_prefix("let mut ").or_else(|| t.strip_prefix("let ")) {
+            if let Some((nm, ty)) = rest.split_once(':') {
+                if ty.trim_start().starts_with("String") {
+                    string_vars.insert(nm.trim().to_string());
+                }
+            }
+        }
+    }
+    // Infer each Vec's element type from a push whose argument is a char or a String.
+    let mut vec_elem: HashMap<String, &'static str> = HashMap::new();
+    for l in fn_lines {
+        let mut from = 0;
+        while let Some(rel) = l[from..].find(".push(") {
+            let at = from + rel;
+            let before = &l[..at];
+            let vec: String = before
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            from = at + 6;
+            if let Some((_, close)) = balanced_region(l, at + 5, b'(', b')') {
+                let arg = l[at + 6..close].trim();
+                let elem = if arg.starts_with('\'')
+                    || char_vars.contains(arg)
+                    || arg.contains(".chars().nth(")
+                {
+                    Some("char")
+                } else if string_vars.contains(arg)
+                    || arg.ends_with(".to_string()")
+                    || arg.starts_with("format!(")
+                {
+                    Some("String")
+                } else {
+                    None
+                };
+                if let (false, Some(e)) = (vec.is_empty(), elem) {
+                    vec_elem.insert(vec, e);
+                }
+            }
+        }
+    }
+    fn_lines
+        .iter()
+        .map(|l| {
+            let mut s = l.to_string();
+            for (v, e) in &vec_elem {
+                s = s
+                    .replace(&format!("let mut {v}: Vec<i64>"), &format!("let mut {v}: Vec<{e}>"))
+                    .replace(&format!("let {v}: Vec<i64>"), &format!("let {v}: Vec<{e}>"));
+            }
+            s
+        })
+        .collect()
 }
 
 /// Lower Mog string BUILDING to Rust, scoped to String-typed operands. Mog accumulates a string
@@ -1861,6 +1986,20 @@ mod inline_if_tests {
         let rg = to_rust(idx);
         assert!(rg.contains(".is_uppercase()") && !rg.contains(".is_upper()"), "is_upper: {rg}");
         assert!(rg.contains(" as i64") && !rg.contains(".ord()"), "ord not cast: {rg}");
+    }
+
+    #[test]
+    fn rust_infers_vec_char_element_type_from_char_pushes() {
+        // A Mog `[i64]` list that actually accumulates chars must become `Vec<char>`, else the
+        // `push(ch)` / `keys[i] == ch` type-mismatch.
+        let mog = "fn f(s: string) -> i64 {\n    seen: [i64] = [];\n    for ch in s {\n        seen.push(ch);\n    }\n    return seen.len;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("seen: Vec<char>"), "char-holding vec not retyped: {rs}");
+        // A parallel i64 list in the same fn stays Vec<i64>.
+        let mog2 = "fn g(s: string) -> i64 {\n    keys: [i64] = [];\n    counts: [i64] = [];\n    for ch in s {\n        keys.push(ch);\n        counts.push(1);\n    }\n    return counts.len;\n}\n";
+        let rs2 = to_rust(mog2);
+        assert!(rs2.contains("keys: Vec<char>"), "keys not char: {rs2}");
+        assert!(rs2.contains("counts: Vec<i64>"), "counts wrongly retyped: {rs2}");
     }
 
     #[test]
