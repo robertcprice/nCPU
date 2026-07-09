@@ -21,7 +21,7 @@ struct Field {
     ty: FieldTy,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum FieldTy {
     Int,
     Bool,
