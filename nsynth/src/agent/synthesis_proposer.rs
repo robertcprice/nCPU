@@ -1249,6 +1249,21 @@ fn defined_fn_names(text: &str) -> Vec<String> {
 /// repo function definition wholesale. The main is identified by name match to
 /// the repo function, else the last function defined.
 fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
+    let r = reshape_to_repo_signature_inner(old_text, repo_fn, synthesized);
+    if std::env::var_os("NSYNTH_DEBUG_RESHAPE").is_some() {
+        eprintln!("=== RESHAPE repo_fn={repo_fn}\n--- SYNTHESIZED ---\n{synthesized}\n--- RESULT ---\n{}\n===",
+            r.as_deref().unwrap_or("<None>"));
+    }
+    r
+}
+
+fn reshape_to_repo_signature_inner(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
+    // Normalize the generated Rust FIRST (the same pass the fixture scaffolder runs):
+    // Mog-lowered bodies carry `: Vec<i64> = []` (E0308), bare `.len`, uncast `arr[i]`,
+    // moved-Vec loops. Without this a Vec-RETURNING synth (reverse) reached cargo with
+    // `let mut out: Vec<i64> = [];` -> type mismatch. Scalar folds happened to avoid the
+    // `= []` shape, which is why only the collection cases regressed.
+    let synthesized = &crate::agent::repo::gencode_normalize::normalize_component(synthesized);
     let fns = split_top_level_functions(synthesized);
 
     let repo_has_fn = old_text.contains(&format!("fn {repo_fn}"));
@@ -1257,9 +1272,19 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
     let adapters = if repo_has_fn { slice_param_adapters(old_text, repo_fn) } else { String::new() };
 
     if fns.len() > 1 {
+        // Pick the ENTRY function: the repo fn by name, else the `pub` entry the
+        // synthesizer emits (helpers are non-pub), else the last. Falling straight to
+        // `fns.len()-1` mis-selected a private HELPER as main when the synthesized entry
+        // was named for the op (e.g. `pub fn array_max` calling `fn max_except_last`,
+        // repo fn `biggest`) — the helper got renamed to the repo fn while the real
+        // entry was kept verbatim, producing a duplicate/dangling def (E0428).
         let main_idx = fns
             .iter()
             .position(|(name, _)| name == repo_fn)
+            .or_else(|| {
+                fns.iter()
+                    .position(|(_, text)| text.trim_start().starts_with("pub "))
+            })
             .unwrap_or(fns.len() - 1);
         let mut helpers = String::new();
         for (k, (_, text)) in fns.iter().enumerate() {
@@ -1481,21 +1506,13 @@ fn parse_param_types(params: &str) -> Vec<String> {
 /// call convention) while the synthesized logic sees an owned `Vec` — the minimal bridge that
 /// unblocks list-processing repo repairs without rewriting iteration.
 fn slice_param_adapters(old_text: &str, repo_fn: &str) -> String {
-    // Only bridge slice params for SCALAR-returning functions (array->scalar folds/predicates like
-    // sum_of_evens -> i64). A collection-returning function (reverse -> Vec<i64>) reshapes correctly
-    // through the original path; applying the adapter there would mangle the Vec return, regressing
-    // it. Detect the repo return type from the signature.
-    if let Some(start) = old_text.find(&format!("fn {repo_fn}(")) {
-        let after = &old_text[start..];
-        if let Some(arrow) = after.find("->") {
-            if let Some(brace_rel) = after[arrow..].find('{') {
-                let ret = after[arrow + 2..arrow + brace_rel].trim();
-                if ret.contains("Vec") || ret.contains('[') {
-                    return String::new();
-                }
-            }
-        }
-    }
+    // Bridge a repo `&[i64]` slice PARAM to the synthesizer's owned `Vec<i64>` body by
+    // shadowing the param: `let xs = xs.to_vec();`. This is safe for ANY return type —
+    // it only rebinds the parameter, so a Vec-RETURNING fn (reverse -> Vec<i64>) still
+    // returns its Vec unchanged. (Earlier this early-returned empty for Vec/[]-returning
+    // fns to "avoid mangling the return", but the param shadow never touches the return;
+    // skipping it left reverse's slice param bound to a Vec-based body -> E0308 type
+    // mismatch. Only reverse has a &[i64] param among the fixtures, so this is surgical.)
     let params = fn_header_params(old_text, repo_fn).unwrap_or_default();
     let idents = parse_param_idents(&params);
     let types = parse_param_types(&params);
