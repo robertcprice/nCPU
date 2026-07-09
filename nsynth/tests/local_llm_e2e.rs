@@ -250,3 +250,56 @@ fn gated_model_teaches_verified_solve_into_learned_store() {
     let _ = fs::remove_file(&store);
     let _ = fs::remove_dir_all(root);
 }
+
+/// Gated e2e for the LLM EDIT LANE on REAL code the pure-function synthesizer cannot express: a
+/// struct method with state (`self.n = x` should be `self.n += x`). The generic "fix the failing
+/// tests" query gives no function name, and the failing test exercises several methods (`new`,
+/// `add`) — so the model must READ the code + failure, LOCALIZE to `add`, and edit it. Skips unless
+/// a local model serves at NSYNTH_LOCAL_LLM_URL. Guards the coding-agent edit path end-to-end.
+#[test]
+fn gated_model_edits_the_right_struct_method_by_localizing() {
+    if mog_synth::local_llm::propose_rust_fn("a function returning its i64 argument unchanged", None, 0.0)
+        .is_none()
+    {
+        eprintln!("skip: no local model at NSYNTH_LOCAL_LLM_URL");
+        return;
+    }
+    use mog_synth::agent::repo::RepoAgent;
+    use mog_synth::agent::runtime::CodeTaskSpec;
+    use mog_synth::agent::CodingIntent;
+    use mog_synth::agent::GuardrailPolicy;
+    use std::fs;
+
+    let root = std::env::temp_dir().join(format!("nsynth_gated_method_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"gm\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub struct Counter { pub n: i64 }\nimpl Counter {\n    pub fn new() -> Self { Counter { n: 0 } }\n    pub fn add(&mut self, x: i64) { self.n = x; }\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn t() {\n        let mut c = Counter::new();\n        c.add(3);\n        c.add(4);\n        assert_eq!(c.n, 7);\n    }\n}\n",
+    )
+    .unwrap();
+
+    let issue = "fix the failing tests";
+    let intent = CodingIntent::from_nl_lenient(issue).expect("intent");
+    let spec = CodeTaskSpec::from_nl(
+        root.to_string_lossy(),
+        issue,
+        intent,
+        "cargo test".to_string(),
+        vec!["src/**".into()],
+        3,
+    );
+    let mut agent = RepoAgent::new(&root, GuardrailPolicy::default());
+    let result = agent.run(&spec);
+    assert!(
+        result.final_passed && result.success,
+        "model must localize to `add` and edit the struct method; phases={:?}",
+        result.phases_completed
+    );
+    let _ = fs::remove_dir_all(root);
+}
