@@ -520,12 +520,16 @@ fn extract_code(content: &str) -> Option<String> {
 pub fn propose_spec(request: &str) -> Option<String> {
     let url = std::env::var("NSYNTH_LOCAL_LLM_URL").ok().filter(|s| !s.is_empty())?;
     let model = std::env::var("NSYNTH_LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
-    let sys = "You are given a program request. Output ONLY a Rust library file in a ```rust code \
-               block, and NOTHING else. In it: (1) define the struct(s) with their fields; (2) write \
-               each method's SIGNATURE with an EMPTY body `{}` — implement NOTHING; (3) add a \
-               `#[cfg(test)]` mod tests with one `#[test]` fn PER method asserting the intended \
-               behavior with concrete values. The tests ARE the specification; leave every method \
-               body empty. Use plain Rust and i64 for integers.";
+    let sys = "You are given a program request. First INFER the full requirements a competent engineer \
+               expects, INCLUDING what is IMPLIED but unstated — access control / credentials, input \
+               validation, and edge cases (treat a rejected operation as a no-op). Then output ONLY a \
+               Rust library file in a ```rust block, and NOTHING else: (1) a `//! REQUIREMENTS:` doc \
+               comment listing each requirement as a `//! - ` bullet (so nothing implied stays silent); \
+               (2) the struct(s) with their fields; (3) each method SIGNATURE with an EMPTY body `{}` — \
+               implement NOTHING; (4) a `#[cfg(test)]` mod tests with one `#[test]` fn PER requirement \
+               asserting the behavior with concrete values (e.g. a wrong credential is a no-op, an \
+               over-limit request is rejected). The tests ARE the specification; leave every body empty. \
+               Use plain Rust and i64 for integers.";
     let body = serde_json::json!({
         "model": model,
         "messages": [{"role": "user", "content": format!("{sys}\n\nRequest:\n{request}\n\n/no_think")}],

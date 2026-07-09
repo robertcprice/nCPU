@@ -48,9 +48,18 @@ fn main() {
         eprintln!("write failed");
         std::process::exit(1);
     }
+    // Surface the INFERRED requirements (the implied concerns the model made explicit) so nothing
+    // stays silent -- the point of requirements-expansion.
+    let reqs: Vec<&str> = lib.lines().filter(|l| l.trim_start().starts_with("//!")).collect();
+    if !reqs.is_empty() {
+        println!("inferred requirements (review these — implied concerns made explicit):");
+        for r in &reqs {
+            println!("  {}", r.trim_start().trim_start_matches("//!").trim());
+        }
+    }
     let n_tests = lib.matches("#[test]").count();
     let n_methods = lib.matches("fn ").count();
-    println!("model wrote a spec: {n_methods} fns, {n_tests} tests");
+    println!("model wrote a spec: {n_methods} fns, {n_tests} tests (each requirement is a test)");
     println!("wrote crate to {}", out_dir.display());
     println!("fill + verify:  coding_agent --root {} query \"fix the failing tests\"", out_dir.display());
 }
