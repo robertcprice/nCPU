@@ -125,6 +125,14 @@ impl RepoWorkflowRunner {
     pub fn run_query(&mut self, query: &str) -> crate::agent::session::AgentQueryResult {
         let mut session =
             crate::agent::session::CodingAgentSession::new(self.supervisor.root(), self.supervisor.policy().clone());
+        // Per-task wall-clock bound so a hard repo task degrades to a refusal instead of
+        // spinning in the unbounded array-gradient (the same liveness fix the product
+        // bins carry). Default 20s, NSYNTH_QUERY_BUDGET_MS override. Held for this solve.
+        let budget_ms: u64 = std::env::var("NSYNTH_QUERY_BUDGET_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(20000);
+        let _budget = crate::synthesis::QuerySolveBudget::millis(budget_ms);
         session.handle_query(query)
     }
 

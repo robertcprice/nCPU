@@ -59,6 +59,14 @@ impl RepoAgent {
         let started = Instant::now();
         let mut phases_completed = Vec::new();
         let mut budget = spec.budget.clone();
+        // Bound the inner synthesis to the task's own wall budget: the phase-level
+        // tick_wall checks below only fire BETWEEN phases, but a single solve_problem
+        // inside the synthesis phase can spin unbounded in the array-gradient. Install a
+        // QuerySolveBudget from max_wall_ms so that solve degrades to a refusal within
+        // budget instead of overrunning it (repo_workflow --fixtures overran ~61s on a
+        // hard task). Held for the whole run; no-op when no wall budget is set.
+        let _solve_budget = (budget.max_wall_ms > 0)
+            .then(|| crate::synthesis::QuerySolveBudget::millis(budget.max_wall_ms));
         let mut retrieved_files = Vec::new();
         let mut indexed_files = 0usize;
         let mut baseline_passed = false;
