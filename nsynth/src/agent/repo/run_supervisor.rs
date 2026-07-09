@@ -253,21 +253,6 @@ pub fn nl_synthesis_proposer_with_run(
         }
     }
 
-    // TEST-MINED synthesis: a "fix the failing tests" request carries no examples in its
-    // prose, but the failing test's `assert_eq!` calls ARE I/O examples. Mine them and solve
-    // the real function — deterministic, verified, no model. This step was present in the
-    // standalone `nl_synthesis_proposer` but MISSING from this supervisor path, so every
-    // bare-NL repo repair fell straight through to the empty-intent fallback and failed with
-    // "CodingIntent has no examples". Placed after real-synthesis (which needs prose examples)
-    // and before the keyword fast-patch, mirroring the standalone ladder.
-    if let Some(patch) = crate::agent::synthesis_proposer::try_test_mined_synthesis_patch(
-        task,
-        context,
-        &description,
-    ) {
-        return Ok(patch);
-    }
-
     if let Some(patch) = crate::agent::synthesis_proposer::try_nl_repo_fast_patch(
         task,
         context,
