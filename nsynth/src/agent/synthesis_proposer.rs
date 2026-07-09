@@ -410,15 +410,34 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
             .filter(|(n, _)| n != "self")
             .map(|(n, _)| n)
             .collect();
+        let has_ret = !ret.is_empty() && ret != "()";
+        let scalar_fields: Vec<&String> = fields
+            .iter()
+            .filter(|(_, t)| t == "i64")
+            .map(|(n, _)| n)
+            .collect();
         let mut bodies: Vec<String> = Vec::new();
-        if !ret.is_empty() && ret != "()" {
-            // getter: return a field (or a derived scalar).
+        if has_ret {
+            // getter: return a field, a derived scalar, or a COMPUTED combination of two fields.
             for (fname, fty) in &fields {
                 if type_compatible(fty, &ret) {
                     bodies.push(format!("return self.{fname};"));
                 }
                 if ret == "i64" && (fty.starts_with("Vec<") || fty == "String") {
                     bodies.push(format!("return self.{fname}.len() as i64;"));
+                }
+            }
+            // `total() -> a + b`: bounded pairwise combinations of the scalar fields.
+            if ret == "i64" {
+                for a in 0..scalar_fields.len() {
+                    for b in 0..scalar_fields.len() {
+                        if a == b {
+                            continue;
+                        }
+                        for op in ["+", "-", "*"] {
+                            bodies.push(format!("return self.{} {op} self.{};", scalar_fields[a], scalar_fields[b]));
+                        }
+                    }
                 }
             }
         }
@@ -437,6 +456,27 @@ fn generate_stub_fills(content: &str) -> Vec<String> {
                     if value_params.is_empty() {
                         bodies.push(format!("self.{fname} += 1;"));
                         bodies.push(format!("self.{fname} -= 1;"));
+                    }
+                }
+            }
+            // MULTI-STATEMENT mutator: pair params to scalar fields positionally
+            // (`shift(dx,dy) { self.x OP dx; self.y OP dy; }`), one op applied across the pairing.
+            if value_params.len() >= 2 && scalar_fields.len() >= value_params.len() {
+                for op in ["=", "+=", "-="] {
+                    let stmts: String = value_params
+                        .iter()
+                        .enumerate()
+                        .map(|(k, p)| format!("self.{} {op} {p}; ", scalar_fields[k]))
+                        .collect();
+                    bodies.push(stmts.trim_end().to_string());
+                }
+            }
+            // MUTATE-AND-RETURN: `next(&mut self) -> i64 { self.n += 1; return self.n; }`.
+            if has_ret && ret == "i64" {
+                for f in &scalar_fields {
+                    bodies.push(format!("self.{f} += 1; return self.{f};"));
+                    for p in &value_params {
+                        bodies.push(format!("self.{f} += {p}; return self.{f};"));
                     }
                 }
             }
@@ -599,6 +639,29 @@ fn generate_mutations(content: &str) -> Vec<String> {
             let at = idx + pos;
             out.push(splice_mutation(code, tail, at, from.len(), to));
             idx = at + from.len();
+        }
+    }
+    // FIELD-NAME swaps: a wrong struct field read/written (`first(&self) { self.b }` should be
+    // `self.a`). For each `self.FIELD` whose FIELD is a known struct field, swap to each other field.
+    let struct_fields = parse_struct_fields(code);
+    if struct_fields.len() >= 2 {
+        let names: Vec<&str> = struct_fields.iter().map(|(n, _)| n.as_str()).collect();
+        let mut idx = 0;
+        while let Some(pos) = code[idx..].find("self.") {
+            let at = idx + pos + 5; // just past "self."
+            let mut e = at;
+            while e < code.len() && (cb[e].is_ascii_alphanumeric() || cb[e] == b'_') {
+                e += 1;
+            }
+            let field = &code[at..e];
+            if names.contains(&field) {
+                for other in &names {
+                    if *other != field {
+                        out.push(splice_mutation(code, tail, at, field.len(), other));
+                    }
+                }
+            }
+            idx = (idx + pos + 5).max(e);
         }
     }
     // Integer literals -> +-1 (off-by-one).
@@ -3622,6 +3685,32 @@ mod tests {
     fn mutation_method_name_swaps() {
         let code = "pub fn f(s: String) -> String { s.to_lowercase() }\n";
         assert!(generate_mutations(code).iter().any(|m| m.contains(".to_uppercase()")), "no case swap");
+    }
+
+    #[test]
+    fn mutation_field_name_swaps() {
+        // `first(&self){ self.b }` should read `self.a` -- swap each self.FIELD to each other field.
+        let code = "pub struct P { pub a: i64, pub b: i64 }\nimpl P { pub fn first(&self) -> i64 { self.b } }\n";
+        assert!(generate_mutations(code).iter().any(|m| m.contains("{ self.a }")), "no field swap b->a");
+    }
+
+    #[test]
+    fn stub_fills_generate_multistatement_and_computed_bodies() {
+        // Computed getter over two fields: `total() -> self.a + self.b`.
+        let g = "pub struct P { pub a: i64, pub b: i64 }\nimpl P { pub fn total(&self) -> i64 {} }\n";
+        assert!(generate_stub_fills(g).iter().any(|m| m.contains("return self.a + self.b;")), "no computed getter");
+        // Multi-statement mutator: `shift(dx,dy) { self.x = dx; self.y = dy; }`.
+        let m = "pub struct Pt { pub x: i64, pub y: i64 }\nimpl Pt { pub fn shift(&mut self, dx: i64, dy: i64) {} }\n";
+        assert!(
+            generate_stub_fills(m).iter().any(|b| b.contains("self.x = dx;") && b.contains("self.y = dy;")),
+            "no multi-statement mutator"
+        );
+        // Mutate-and-return: `next(&mut self) -> i64 { self.n += 1; return self.n; }`.
+        let n = "pub struct C { pub n: i64 }\nimpl C { pub fn next(&mut self) -> i64 {} }\n";
+        assert!(
+            generate_stub_fills(n).iter().any(|b| b.contains("self.n += 1; return self.n;")),
+            "no mutate-and-return"
+        );
     }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
