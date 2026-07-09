@@ -905,6 +905,32 @@ fn scan_holes(code: &str) -> Vec<Hole> {
                     }
                 }
             }
+            // LOOKUP BY KEY: a single String param selects a record by a String field, then either
+            // reports existence (`contains(name) -> bool`) or returns one of its i64 fields
+            // (`price_of(name) -> i64`). The everyday "query the collection by its key" operation.
+            if value_typed.len() == 1 && value_typed[0].1 == "String" {
+                let key = &value_typed[0].0;
+                for (fname, fty) in fields {
+                    if let Some(elem) = elem_type(fty) {
+                        let ef = fields_of(&elem);
+                        for (sf, sft) in &ef {
+                            if sft != "String" {
+                                continue;
+                            }
+                            if ret == "bool" {
+                                bodies.push(format!("return self.{fname}.iter().any(|e| e.{sf} == {key});"));
+                            }
+                            if ret == "i64" {
+                                for (rf, rft) in &ef {
+                                    if rft == "i64" {
+                                        bodies.push(format!("self.{fname}.iter().find(|e| e.{sf} == {key}).map(|e| e.{rf}).unwrap_or(0)"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // INDEXED read: a single i64 param addresses an element (`price_at(i) -> items[i].price`,
             // `get(i) -> items[i].clone()`, or a scalar `Vec<i64>` element).
             if value_typed.len() == 1 && value_typed[0].1 == "i64" {
@@ -4270,6 +4296,17 @@ mod tests {
         // total -> aggregate over the record's i64 field, NOT `self.priority` (priority is Item's, not TodoList's).
         assert!(holes[2].candidates.iter().any(|b| b.contains("self.items.iter().map(|e| e.priority).sum()")), "no field-aggregate");
         assert!(holes[2].candidates.iter().all(|b| !b.contains("self.priority")), "leaked a non-self field");
+    }
+
+    #[test]
+    fn scan_holes_covers_lookup_by_string_key() {
+        let code = "pub struct Product { pub name: String, pub price: i64 }\npub struct Store { pub items: Vec<Product> }\nimpl Store {\n pub fn contains(&self, name: String) -> bool {}\n pub fn price_of(&self, name: String) -> i64 {}\n}\n";
+        let holes = scan_holes(code);
+        assert!(holes[0].candidates.iter().any(|b| b.contains("self.items.iter().any(|e| e.name == name)")), "no contains-by-key");
+        assert!(
+            holes[1].candidates.iter().any(|b| b.contains("self.items.iter().find(|e| e.name == name).map(|e| e.price).unwrap_or(0)")),
+            "no lookup-by-key"
+        );
     }
 
     #[test]

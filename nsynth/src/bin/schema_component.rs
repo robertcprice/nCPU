@@ -184,6 +184,14 @@ fn emit_crate(collection: &str, record: &str, fields: &[Field]) -> String {
         methods.push_str(&format!("    pub fn {}_at(&self, i: i64) -> i64 {{}}\n", f.name));
         methods.push_str(&format!("    pub fn set_{}(&mut self, i: i64, v: i64) {{}}\n", f.name));
     }
+    // Query by KEY: if the record has a String field, add contains + per-int-field lookup-by-key.
+    let key_field: Option<&Field> = fields.iter().find(|f| f.ty == FieldTy::Str);
+    if let Some(kf) = key_field {
+        methods.push_str(&format!("    pub fn contains(&self, {}: String) -> bool {{}}\n", kf.name));
+        for (_, f) in &int_fields {
+            methods.push_str(&format!("    pub fn {}_of(&self, {}: String) -> i64 {{}}\n", f.name, kf.name));
+        }
+    }
 
     // Canonical tests: add N sample records, then one assertion PER METHOD (not a mega-test) so the
     // multi-hole solver gets a gradient. N=4 with the DISTINGUISHING value at index 2 (neither the
@@ -225,6 +233,16 @@ fn emit_crate(collection: &str, record: &str, fields: &[Field]) -> String {
             &format!("{}_at(0)", f.name),
             "12345",
         ));
+    }
+    // Query-by-key tests, looking up the DISTINGUISHING record (index `read_idx`) by its String key.
+    if let Some(kf) = key_field {
+        let key = format!("\"{}{read_idx}\".to_string()", kf.name);
+        tests.push_str(&full("t_contains", "", &format!("contains({key})"), "true"));
+        tests.push_str(&full("t_not_contains", "", "contains(\"__absent__\".to_string())", "false"));
+        for (seed, f) in &int_fields {
+            let at = f.ty.sample_value(*seed, read_idx);
+            tests.push_str(&full(&format!("t_{}_of", f.name), "", &format!("{}_of({key})", f.name), &at.to_string()));
+        }
     }
 
     format!(
