@@ -521,6 +521,38 @@ pub fn route_composed(prompt: &str, examples: &[crate::benchmark::Example]) -> O
 /// has more freedom to coincide). The O(n^2) surface is bounded by TYPE-chaining
 /// (a: in->mid, b: mid->out) + an early reject on the first example, and it runs only
 /// as a fallback after the named tiers, so cost is paid rarely.
+/// True when `code` special-cases an INTERIOR example input with a hardcoded literal
+/// return — the memorization signature of a search that fit a formula to most points and
+/// patched the one it missed (`if 10 != x { ... } return 17;` for "sum of primes"). Fires
+/// only for a single scalar-int input `c` with `|c| > 2` (so genuine boundary base cases —
+/// `if n == 0 { return 1 }` in factorial — are never flagged) whose exact output `L` is
+/// both compared against and returned as a bare literal. Purely structural, no oracle.
+fn special_case_memorizes_example(code: &str, examples: &[crate::benchmark::Example]) -> bool {
+    use crate::benchmark::Value;
+    for ex in examples {
+        let [Value::Int(c)] = ex.inputs.as_slice() else { continue };
+        if c.abs() <= 2 {
+            continue; // boundary (0/1/-1/2) — a legitimate base case, not memorization
+        }
+        let Value::Int(l) = ex.expected else { continue };
+        // An (in)equality branch testing the input against this interior example input.
+        let has_cmp = [
+            format!("== {c}"), format!("=={c}"), format!("{c} =="), format!("{c}=="),
+            format!("!= {c}"), format!("!={c}"), format!("{c} !="), format!("{c}!="),
+        ]
+        .iter()
+        .any(|p| code.contains(p.as_str()));
+        // ...and a bare-literal return of this example's exact output.
+        let has_ret = code.contains(&format!("return {l};"))
+            || code.contains(&format!("return {l} "))
+            || code.contains(&format!("return {l}\n"));
+        if has_cmp && has_ret {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Option<String> {
     let first = examples.first()?;
     if first.inputs.len() != 1 {
@@ -529,11 +561,23 @@ pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Opt
     let distinct = crate::benchmark::dedup_consistent_examples(examples)
         .map(|v| v.len())
         .unwrap_or(0);
-    if distinct < 3 {
-        return None;
-    }
     let in_ty = value_type_str(&first.inputs[0]);
     let out_ty = value_type_str(&first.expected);
+    // A behaviour composition names NEITHER op, so it searches ~every type-compatible op
+    // PAIR — a large coincidence surface. A bare scalar int/bool output is the worst case:
+    // for a number-theoretic tail (e.g. "sum of primes"), an OPAQUE chain can fit a handful
+    // of points by accident and clear the distinguishing gate (measured: sum_of_primes ->
+    // sum_of_primes_below(x | (x+1)) reproduces 3 examples, confident-WRONG on held-out).
+    // Require one MORE distinct example (4, not 3) to pin a scalar-output un-named chain:
+    // a 3-point monotonic spec (e.g. sum_of_primes on {2,5,10}) is where the opaque
+    // coincidences fit, while a well-determined 4-point scalar spec that spans the domain
+    // (abs on {-3,5,-10,0}) still resolves. Structured / array / string outputs are
+    // specific enough that a coincidence is unlikely, so they keep the 3-example floor.
+    // Named compositions (route_composed) are unaffected.
+    let floor = if matches!(out_ty, "i64" | "bool") { 4 } else { 3 };
+    if distinct < floor {
+        return None;
+    }
     let fname = "composed";
     let first_expected = &first.expected;
     // Cap the collected chains: past this many reproducers the spec is almost surely
@@ -986,6 +1030,17 @@ pub fn answer_with_proposer(
                     outs.len() >= 3 && outs.iter().all(|v| v == &outs[0])
                 }
             };
+            // SPECIAL-CASE MEMORIZATION GATE. For a function the engine cannot truly
+            // synthesize (a number-theoretic tail like "sum of primes"), the branch
+            // search fits a smooth formula to most points and HARDCODES the one input
+            // where it fails: `if 10 != x { return (x/2)*x; } return 17;` reproduces
+            // every example yet is confidently WRONG elsewhere. The holdout can't catch
+            // it (the memorized point is inside the examples) and two seed-syntheses
+            // converge on the same overfit, so programs_disagree stays silent. Detect it
+            // structurally: an equality branch that tests the input against an INTERIOR
+            // example input (|c| > 2, so genuine boundary base cases `if n==0 { 1 }` are
+            // NOT flagged) AND returns that example's exact output as a bare literal.
+            let special_case_overfit = special_case_memorizes_example(&code, examples);
             // A bare library-op match belongs to the gated behaviour tier
             // (route_by_behavior ran first with the distinguishing gate). If a library
             // op still reaches tier 3, it is one that tier REJECTED as coincidental
@@ -995,6 +1050,7 @@ pub fn answer_with_proposer(
             if !boolean_overfit
                 && !pipeline_overfit
                 && !constant_overfit
+                && !special_case_overfit
                 && !method.contains("library:")
                 && !programs_disagree(&progs, examples)
             {
