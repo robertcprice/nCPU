@@ -283,6 +283,18 @@ pub fn nl_synthesis_proposer_with_run(
         }
     }
 
+    // BEHAVIOR-DRIVEN LIBRARY RESOLUTION (free, no synthesis budget): a bare "fix the failing
+    // test" carries no prose to name an op, but its `assert_eq!` I/O pins the behavior. Find the
+    // SINGLE verified library op that reproduces every mined example (unique-or-defer), so a
+    // library-covered function is repaired by behavior alone — no NL, sidestepping the lg-core
+    // comprehension collapse. A wrong library guess that fit the few points is caught by the
+    // real cargo-test oracle; ambiguity refuses rather than guesses.
+    if let Some(patch) =
+        crate::library_probe::try_library_behavior_patch(task, context, &description)
+    {
+        return Ok(patch);
+    }
+
     if let Some(patch) = crate::agent::synthesis_proposer::try_nl_repo_fast_patch(
         task,
         context,
