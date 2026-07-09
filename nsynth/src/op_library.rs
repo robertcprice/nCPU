@@ -1618,6 +1618,14 @@ fn op_types_match(mog: &str, inputs: &[crate::benchmark::Value]) -> bool {
     true
 }
 
+/// Snapshot of the learned-op store (bundled distilled ops + any runtime-grown ones).
+/// Lets the NL router propose a learned op BY NAME (its Mog fn name) so a prompt that
+/// names the operation routes to it through the verified, name-matched path — surfacing
+/// distilled capability the behaviour tiers correctly refuse when the prompt names no op.
+pub fn learned_ops_snapshot() -> Vec<LearnedOp> {
+    learned_store().lock().map(|s| s.clone()).unwrap_or_default()
+}
+
 /// The runtime-grown tier: behaviour-match the learned-op store (see
 /// [`LearnedOp`]). Empty (and free) unless `NSYNTH_LEARNED_OPS_PATH` is set.
 fn try_learned(problem: &Problem, arity: usize) -> Option<SolveResult> {

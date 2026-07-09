@@ -553,6 +553,87 @@ fn special_case_memorizes_example(code: &str, examples: &[crate::benchmark::Exam
     false
 }
 
+/// Route to a DISTILLED (learned/bundled) op the prompt NAMES. `ranked_candidates` only
+/// proposes hand ops (`OPS`), so a prompt naming a flywheel-taught op ("the nth prime
+/// number" -> the distilled `nth_prime`) never reaches it, and the behaviour tiers refuse
+/// the un-named scalar match (sole-passer guard). This proposes learned ops BY their Mog fn
+/// name: a name-token match is PROVENANCE, exactly like `route_verified`'s hand-op match, so
+/// returning a verified passer is never-wrong-safe. Requires an OPERATION-bearing token
+/// match (not a generic type noun); multi-passer divergence on fresh probes -> refuse.
+/// Returns (code, entry_fn_name).
+pub fn route_learned_by_name(
+    prompt: &str,
+    examples: &[crate::benchmark::Example],
+) -> Option<(String, String)> {
+    if examples.is_empty() {
+        return None;
+    }
+    let learned = crate::op_library::learned_ops_snapshot();
+    if learned.is_empty() {
+        return None;
+    }
+    let ptoks = content_tokens(prompt);
+    if ptoks.is_empty() {
+        return None;
+    }
+    // DISTINCT-example floor. A learned op with a partial name overlap ("square" in
+    // `digit_sum_of_square`) can reproduce a handful of degenerate points while computing a
+    // DIFFERENT function; the store's large size makes such a coincidence likely on thin
+    // specs. Require enough distinct points to pin a scalar-output op (i64/bool are the
+    // coincidence-prone case); structured/array outputs are specific enough to keep 3.
+    let distinct = crate::benchmark::dedup_consistent_examples(examples)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let out_ty = examples.first().map(|e| value_type_str(&e.expected)).unwrap_or("?");
+    let floor = if matches!(out_ty, "i64" | "bool") { 4 } else { 3 };
+    if distinct < floor {
+        return None;
+    }
+    let has = |t: &str| ptoks.iter().any(|p| p == t || (t.len() >= 4 && p.starts_with(t)));
+    let input_types: Vec<&'static str> = examples
+        .first()
+        .map(|e| e.inputs.iter().map(value_type_str).collect())
+        .unwrap_or_default();
+    // (code, entry_fn, name-coverage) — coverage = matched name tokens / total, so the op
+    // the prompt most-fully NAMES wins (like ranked_candidates), not a partial-overlap op.
+    let mut passing: Vec<(String, String, f64)> = Vec::new();
+    for op in &learned {
+        let Some(fname) = crate::site::fn_name_from_mog(&op.mog) else {
+            continue;
+        };
+        let name_toks = content_tokens(&fname);
+        if name_toks.is_empty() {
+            continue;
+        }
+        // Candidacy: at least one OPERATION-bearing token (not a generic type noun).
+        let matched_specific = name_toks
+            .iter()
+            .filter(|t| has(t) && !is_generic_type_token(t))
+            .count();
+        if matched_specific == 0 {
+            continue;
+        }
+        if !op_accepts_types(&op.mog, &input_types) {
+            continue;
+        }
+        if crate::runtime::code_reproduces_examples(&op.mog, examples) {
+            let matched = name_toks.iter().filter(|t| has(t)).count();
+            let coverage = matched as f64 / name_toks.len() as f64;
+            passing.push((op.mog.clone(), fname, coverage));
+        }
+    }
+    // Prefer the most-named op (highest coverage). A `square` op (coverage 1.0) outranks
+    // `digit_sum_of_square` (coverage 1/3) for "the square of a number".
+    passing.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    // Distinguishing gate: if >1 DISTINCT named passer diverges on fresh probes, the
+    // examples under-determine the choice -> refuse (same as the hand-op tiers).
+    let progs: Vec<(String, String)> = passing.iter().map(|(c, n, _)| (c.clone(), n.clone())).collect();
+    if progs.len() > 1 && programs_disagree(&progs, examples) {
+        return None;
+    }
+    passing.into_iter().next().map(|(c, n, _)| (c, n))
+}
+
 pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Option<String> {
     let first = examples.first()?;
     if first.inputs.len() != 1 {
@@ -857,6 +938,12 @@ pub fn answer_with_proposer(
     }
     if let Some(r) = route_verified(prompt, examples) {
         return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+    }
+    // NAME-MATCHED DISTILLED op: a prompt that names a flywheel-taught op ("the nth prime
+    // number" -> distilled `nth_prime`) routes here — same name-match provenance as
+    // route_verified, so it is never-wrong-safe (verified + distinguishing-gated inside).
+    if let Some((code, fname)) = route_learned_by_name(prompt, examples) {
+        return Answer::Synthesized { method: format!("library-learned:{fname}"), code };
     }
     // AMBIGUOUS single-op spec? If TWO OR MORE library ops reproduce the examples yet
     // DISAGREE on fresh inputs, the examples do not pin down even a single op — the
@@ -2254,6 +2341,40 @@ mod tests {
         assert!(
             matches!(answer("the square of a number", &degenerate), Answer::Refused),
             "under-determined synthesis (2 distinct points) must refuse, not guess"
+        );
+    }
+
+    #[test]
+    fn named_distilled_op_routes_via_name() {
+        use crate::benchmark::{Example, Value};
+        let ex = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+        // The bundled distilled `nth_prime` (flywheel-taught) must route via NAME —
+        // "the nth prime number" shares tokens {nth, prime} with the op's fn name — instead
+        // of refusing as an un-named behavioural match. 5 distinct points (above the floor).
+        let exs = vec![ex(1, 2), ex(2, 3), ex(3, 5), ex(5, 11), ex(10, 29)];
+        let a = answer("the nth prime number", &exs);
+        let code = match &a {
+            Answer::Synthesized { code, .. } | Answer::Library { code, .. } => code.clone(),
+            _ => panic!("named distilled nth_prime should route (got refusal/other tier)"),
+        };
+        // ...and GENERALIZE: the 7th prime is 17, never shown to the router.
+        assert!(
+            crate::runtime::code_reproduces_examples(&code, &[ex(7, 17)]),
+            "routed nth_prime must be correct on a fresh input"
+        );
+    }
+
+    #[test]
+    fn partial_name_overlap_on_thin_examples_refuses() {
+        use crate::benchmark::{Example, Value};
+        let ex = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+        // A learned op sharing a NAME token ("square" in digit_sum_of_square) can reproduce a
+        // few degenerate points while computing a different function. The distinct-example
+        // floor must refuse — never confidently ship a partial-name coincidence.
+        let thin = vec![ex(0, 0), ex(1, 1), ex(0, 0)];
+        assert!(
+            matches!(answer("the square of a number", &thin), Answer::Refused),
+            "partial-name learned match on <4 distinct scalar points must refuse"
         );
     }
 
