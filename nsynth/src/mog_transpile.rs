@@ -504,6 +504,12 @@ fn lower_rust_char_ops(rust: &str) -> String {
                 .replace(&format!("{si}.upper()"), &format!("{si}.to_uppercase()"))
                 .replace(&format!("{si}.lower()"), &format!("{si}.to_lowercase()"));
         }
+        // String INDEXING: Rust `String` is not `Index<usize>`. The array pass already rewrote
+        // `s[i]` -> `s[(i) as usize]`; turn that (for String idents) into a char lookup
+        // `s.chars().nth((i) as usize).unwrap()`. Enables first==last / char-at ops.
+        if !string_idents.is_empty() {
+            l = lower_string_index(&l, &string_idents);
+        }
         lines.push(l);
     }
     let mut out = lines.join("\n");
@@ -564,6 +570,38 @@ fn add_mut_to_mutated_params(rust: &str) -> String {
             }
         }
         let ch = rust[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Rewrite `IDENT[EXPR]` -> `IDENT.chars().nth(EXPR).unwrap()` for each IDENT in `idents` (a set of
+/// String-typed bindings). The array pass has already wrapped the index as `(..) as usize`, so EXPR
+/// is a valid `.nth` argument. Bounded by a word-boundary check so `IDENT` is not a suffix of a
+/// longer identifier.
+fn lower_string_index(line: &str, idents: &std::collections::HashSet<String>) -> String {
+    let b = line.as_bytes();
+    let mut out = String::with_capacity(line.len() + 24);
+    let mut i = 0;
+    while i < line.len() {
+        if b[i] == b'[' {
+            let ob = out.as_bytes();
+            let mut s = out.len();
+            while s > 0 && (ob[s - 1].is_ascii_alphanumeric() || ob[s - 1] == b'_') {
+                s -= 1;
+            }
+            let ident = out[s..].to_string();
+            if !ident.is_empty() && idents.contains(&ident) {
+                if let Some((_, close)) = balanced_region(line, i, b'[', b']') {
+                    let inner = &line[i + 1..close];
+                    out.push_str(&format!(".chars().nth({inner}).unwrap()"));
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = line[i..].chars().next().unwrap();
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -1770,6 +1808,21 @@ mod inline_if_tests {
         let rp = to_rust(pal);
         assert!(rp.contains("s.chars().rev().collect::<String>()"), "s.reverse() not lowered: {rp}");
         assert!(!rp.contains("s.reverse()"), "raw s.reverse() survived: {rp}");
+    }
+
+    #[test]
+    fn rust_lowers_string_indexing_to_chars_nth() {
+        // first == last: `s[0] == s[s.len - 1]` on a String needs char lookups, not `s[usize]`.
+        let mog = "fn f(s: string) -> i64 {\n    if s[0] == s[s.len - 1] {\n        return 1;\n    }\n    return 0;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("s.chars().nth((0) as usize).unwrap()"), "s[0] not lowered: {rs}");
+        assert!(rs.contains(".chars().nth(") && rs.contains(".unwrap()"), "index not lowered: {rs}");
+        assert!(!rs.contains("s[("), "raw String index survived: {rs}");
+        // ARRAY indexing must stay `arr[(i) as usize]` (Vec IS Index<usize>).
+        let arr = "fn g(arr: [i64]) -> i64 {\n    return arr[0];\n}\n";
+        let rg = to_rust(arr);
+        assert!(rg.contains("arr[(0) as usize]"), "array index wrongly changed: {rg}");
+        assert!(!rg.contains(".chars()"), "array index got .chars(): {rg}");
     }
 
     #[test]
