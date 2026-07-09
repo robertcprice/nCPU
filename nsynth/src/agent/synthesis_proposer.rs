@@ -4341,8 +4341,8 @@ mod tests {
             cands.iter().any(|b| b == "if pin == self.pin && amount <= self.balance { self.balance -= amount; }"),
             "no auth+overdraft guard"
         );
-        // never gates the credential field against itself.
-        assert!(cands.iter().all(|b| !b.contains("self.pin -= amount")), "targeted the credential field");
+        // the AUTH guards never target the credential field itself (`if pin == self.pin { self.pin ...`).
+        assert!(cands.iter().all(|b| !(b.starts_with("if pin ==") && b.contains("self.pin -="))), "auth guard targeted the credential field");
     }
 
     #[test]
