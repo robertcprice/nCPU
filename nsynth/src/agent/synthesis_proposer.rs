@@ -605,7 +605,7 @@ pub fn try_multihole_fill_patch(
             .iter()
             .map(|(fi, hi)| {
                 let mut c = files[*fi].holes[*hi].candidates.clone();
-                c.truncate(4);
+                c.truncate(6); // keep the guarded-mutation candidates, not just the 4 plain op-assigns
                 c
             })
             .collect();
@@ -614,7 +614,7 @@ pub fn try_multihole_fill_patch(
             .enumerate()
             .map(|(fi, f)| (0..f.holes.len()).map(|hi| prereqs.contains(&(fi, hi))).collect())
             .collect();
-        for combo in bounded_product(&lists, 24) {
+        for combo in bounded_product(&lists, 40) {
             if runs >= MAX_RUNS || start.elapsed() > budget {
                 break;
             }
@@ -977,6 +977,19 @@ fn scan_holes(code: &str) -> Vec<Hole> {
                     for p in &value_params {
                         for op in ["=", "+=", "-=", "*="] {
                             bodies.push(format!("self.{fname} {op} {p};"));
+                        }
+                    }
+                    // GUARDED mutation: conditional op-assign for the common "rules" -- no-overdraft
+                    // (`if amount <= self.balance {{ self.balance -= amount; }}`), keep-max / keep-min
+                    // (`if p > self.f {{ self.f = p; }}`). This is the logic a schema can't decide, so
+                    // it's the reach that makes Phase 3 fills real.
+                    if fty == "i64" {
+                        for (p, pt) in &value_typed {
+                            if pt == "i64" {
+                                bodies.push(format!("if {p} <= self.{fname} {{ self.{fname} -= {p}; }}"));
+                                bodies.push(format!("if {p} > self.{fname} {{ self.{fname} = {p}; }}"));
+                                bodies.push(format!("if {p} < self.{fname} {{ self.{fname} = {p}; }}"));
+                            }
                         }
                     }
                     if value_params.is_empty() {
@@ -4296,6 +4309,15 @@ mod tests {
         // total -> aggregate over the record's i64 field, NOT `self.priority` (priority is Item's, not TodoList's).
         assert!(holes[2].candidates.iter().any(|b| b.contains("self.items.iter().map(|e| e.priority).sum()")), "no field-aggregate");
         assert!(holes[2].candidates.iter().all(|b| !b.contains("self.priority")), "leaked a non-self field");
+    }
+
+    #[test]
+    fn scan_holes_covers_guarded_mutation() {
+        // A scalar-field mutator with an i64 param gets the conditional-rule guards (no-overdraft etc.).
+        let code = "pub struct Account { pub balance: i64 }\nimpl Account { pub fn withdraw(&mut self, amount: i64) {} }\n";
+        let cands = &scan_holes(code)[0].candidates;
+        assert!(cands.iter().any(|b| b == "if amount <= self.balance { self.balance -= amount; }"), "no overdraft guard");
+        assert!(cands.iter().any(|b| b == "if amount > self.balance { self.balance = amount; }"), "no keep-max guard");
     }
 
     #[test]
