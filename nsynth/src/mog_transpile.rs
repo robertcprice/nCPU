@@ -486,7 +486,23 @@ fn lower_rust_char_ops(rust: &str) -> String {
             l = l
                 .replace(&format!("{cv}.is_vowel()"), &format!("\"aeiouAEIOU\".contains({cv})"))
                 .replace(&format!("{cv}.is_alpha()"), &format!("{cv}.is_alphabetic()"))
-                .replace(&format!("{cv}.is_digit()"), &format!("{cv}.is_ascii_digit()"));
+                .replace(&format!("{cv}.is_digit()"), &format!("{cv}.is_ascii_digit()"))
+                .replace(&format!("{cv}.is_upper()"), &format!("{cv}.is_uppercase()"))
+                .replace(&format!("{cv}.is_lower()"), &format!("{cv}.is_lowercase()"));
+        }
+        // WHOLE-string methods on a String operand, in ANY fn (lower_rust_string_methods only fires
+        // for `-> String` fns, so `s.reverse()` inside a `-> bool` palindrome check was left raw).
+        // Only the forms that REMOVE the original method token — re-running over already-lowered
+        // `-> String` output is then a no-op. (`.trim()` keeps its token, so it stays with the
+        // `-> String`-scoped pass to avoid a double `.to_string()`.)
+        for si in &string_idents {
+            l = l
+                .replace(
+                    &format!("{si}.reverse()"),
+                    &format!("{si}.chars().rev().collect::<String>()"),
+                )
+                .replace(&format!("{si}.upper()"), &format!("{si}.to_uppercase()"))
+                .replace(&format!("{si}.lower()"), &format!("{si}.to_lowercase()"));
         }
         lines.push(l);
     }
@@ -1740,6 +1756,20 @@ mod inline_if_tests {
         // Integer accumulation `c = c + 1` must NOT be turned into a format!.
         let ints = "fn cnt(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        c = c + 1;\n    }\n    return c;\n}\n";
         assert!(!to_rust(ints).contains("format!"), "int accumulation wrongly formatted");
+    }
+
+    #[test]
+    fn rust_lowers_case_predicates_and_whole_string_reverse_in_any_fn() {
+        // swap-case: `ch.is_upper()/.is_lower()` char predicates.
+        let sc = "fn f(s: string) -> string {\n    out: string = \"\";\n    for ch in s {\n        if ch.is_upper() {\n            out = out + ch;\n        }\n    }\n    return out;\n}\n";
+        let rs = to_rust(sc);
+        assert!(rs.contains("ch.is_uppercase()"), "is_upper not lowered: {rs}");
+        assert!(!rs.contains(".is_upper()"), "raw .is_upper() survived: {rs}");
+        // palindrome: `s.reverse()` on a String inside a NON-String fn (returns i64/bool).
+        let pal = "fn f(s: string) -> i64 {\n    if s == s.reverse() {\n        return 1;\n    }\n    return 0;\n}\n";
+        let rp = to_rust(pal);
+        assert!(rp.contains("s.chars().rev().collect::<String>()"), "s.reverse() not lowered: {rp}");
+        assert!(!rp.contains("s.reverse()"), "raw s.reverse() survived: {rp}");
     }
 
     #[test]
