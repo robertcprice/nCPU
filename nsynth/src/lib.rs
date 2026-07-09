@@ -29,6 +29,7 @@ pub mod synth_confidence;
 pub mod ffi;
 pub mod http;
 pub mod hybrid;
+pub mod invariant_oracle;
 pub mod interactive;
 pub mod interactive_legacy;
 pub mod knowledge;

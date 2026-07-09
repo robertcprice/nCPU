@@ -1134,10 +1134,17 @@ pub fn answer_with_proposer(
             // (sum_of_digits reproducing abs's single-digit examples, disagreeing with
             // reverse_number on -99) — solve_problem's internal try_library has no such
             // gate. Don't resurrect it: only a genuine SYNTHESIS result returns here.
+            // INVARIANT ORACLE (reference-free): for an array transform, refuse a synthesis
+            // that reproduces the examples but BREAKS a structural invariant discovered from
+            // them (length/multiset/subset/sorted) on a fresh input — a SOLE overfit the
+            // distinguishing gate (needing a second disagreeing program) cannot see. No-op
+            // for non-array tasks / when no non-trivial invariant is discoverable.
+            let array_overfit = crate::invariant_oracle::array_transform_overfit(&code, &entry, examples);
             if !boolean_overfit
                 && !pipeline_overfit
                 && !constant_overfit
                 && !special_case_overfit
+                && !array_overfit
                 && !method.contains("library:")
                 && !programs_disagree(&progs, examples)
             {
