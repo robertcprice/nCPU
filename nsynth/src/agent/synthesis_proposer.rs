@@ -348,7 +348,64 @@ fn generate_mutations(content: &str) -> Vec<String> {
             i += 1;
         }
     }
+    // OPERAND function-wrap: a bare identifier operand `x` -> `F(x)` for each single-arg function F
+    // defined in the code (the "wrong sub-expression" bug: `double(x) + x` -> `double(x) + double(x)`).
+    // Last, so the cheaper operator/assignment/const fixes are tried first under the mutation cap.
+    let fns: Vec<String> = single_arg_fn_names(code);
+    if !fns.is_empty() {
+        let mut i = 0;
+        while i < code.len() {
+            let is_ident_start = cb[i].is_ascii_alphabetic() || cb[i] == b'_';
+            let boundary_before = i == 0 || !(cb[i - 1].is_ascii_alphanumeric() || cb[i - 1] == b'_');
+            if is_ident_start && boundary_before {
+                let s = i;
+                while i < cb.len() && (cb[i].is_ascii_alphanumeric() || cb[i] == b'_') {
+                    i += 1;
+                }
+                let ident = &code[s..i];
+                // A VALUE operand: not a call (`x(`), not a field/method (`x.`/`.x`), not a keyword.
+                let next = code[i..].chars().next();
+                let after_dot = s > 0 && cb[s - 1] == b'.';
+                let is_value = !matches!(next, Some('(') | Some('.') | Some('!'))
+                    && !after_dot
+                    && !matches!(ident, "let" | "mut" | "fn" | "if" | "else" | "return" | "while"
+                        | "for" | "in" | "self" | "pub" | "struct" | "impl" | "true" | "false"
+                        | "as" | "match" | "Some" | "None" | "Ok" | "Err");
+                if is_value {
+                    for f in &fns {
+                        if f != ident {
+                            out.push(splice_mutation(code, tail, s, ident.len(), &format!("{f}({ident})")));
+                        }
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
     out
+}
+
+/// Names of functions defined in `code` that take exactly one parameter — candidates for wrapping a
+/// bare operand as `F(operand)`.
+fn single_arg_fn_names(code: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = code;
+    while let Some(p) = rest.find("fn ") {
+        let after = &rest[p + 3..];
+        let name: String = after.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        if let Some(op) = after.find('(') {
+            if let Some(cp) = after[op..].find(')') {
+                let params = &after[op + 1..op + cp];
+                let n = params.split(',').filter(|s| !s.trim().is_empty()).count();
+                if n == 1 && !name.is_empty() && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        rest = &after;
+    }
+    names
 }
 
 pub fn try_model_repair_patch(
