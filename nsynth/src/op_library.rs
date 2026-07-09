@@ -50,17 +50,35 @@ fn learned_ops_path() -> Option<std::path::PathBuf> {
     std::env::var_os("NSYNTH_LEARNED_OPS_PATH").map(std::path::PathBuf::from)
 }
 
-/// Process-wide in-memory store, lazily seeded from the on-disk JSONL (so a FRESH
-/// process inherits every op a prior run learned — the cross-run flywheel).
+/// The distilled ops the flywheel has taught, SHIPPED with the engine. Each was proposed
+/// by the model, verified against held-out examples + a robustness floor, then fresh-input
+/// re-verified before landing here — so it is a MODEL-FREE capability the product recovers
+/// by default (no NSYNTH_LEARNED_OPS_PATH needed). `try_learned` still checks arity, types,
+/// and reproduce-ALL-examples on every recall, so a bundled op is never returned unless it
+/// actually reproduces the task's examples. Refresh by copying a grown runtime store here.
+const BUNDLED_LEARNED_OPS: &str = include_str!("../bench/harvested_ops.jsonl");
+
+/// Process-wide in-memory store, lazily seeded from the BUNDLED distilled ops plus any
+/// on-disk JSONL a `NSYNTH_LEARNED_OPS_PATH` points at (so a FRESH process inherits both
+/// the shipped flywheel gains and every op a prior run learned — the cross-run flywheel).
 fn learned_store() -> &'static Mutex<Vec<LearnedOp>> {
     static STORE: OnceLock<Mutex<Vec<LearnedOp>>> = OnceLock::new();
     STORE.get_or_init(|| {
         let mut v = Vec::new();
+        // Baseline: the shipped distilled ops, always loaded.
+        for line in BUNDLED_LEARNED_OPS.lines() {
+            if let Ok(op) = serde_json::from_str::<LearnedOp>(line) {
+                v.push(op);
+            }
+        }
+        // Plus the growing runtime store (deduped by exact program text against the bundle).
         if let Some(path) = learned_ops_path() {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 for line in text.lines() {
                     if let Ok(op) = serde_json::from_str::<LearnedOp>(line) {
-                        v.push(op);
+                        if !v.iter().any(|o| o.mog == op.mog) {
+                            v.push(op);
+                        }
                     }
                 }
             }
