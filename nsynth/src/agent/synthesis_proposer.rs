@@ -270,7 +270,12 @@ pub fn try_mutation_repair_patch(
     for (path, orig) in &files {
         let abs = std::path::Path::new(&context.root).join(path);
         let mut bases: Vec<String> = Vec::new();
-        for mutated in generate_mutations(orig) {
+        // STUB GENERATION first (fill empty non-pure methods from struct-field templates), then
+        // single-edit MUTATIONS of existing code.
+        let candidates = generate_stub_fills(orig)
+            .into_iter()
+            .chain(generate_mutations(orig));
+        for mutated in candidates {
             if tried >= MAX_SINGLE || start.elapsed() > budget {
                 break;
             }
@@ -328,6 +333,172 @@ pub fn try_mutation_repair_patch(
     None
 }
 
+/// MODEL-FREE STUB GENERATION for non-pure methods (coding ARBITRARY programs, not just repairing):
+/// a `&mut self` method or getter with an EMPTY body — which the example-based synthesizer can't
+/// reach (no `f(x)=y` pairs) and mutation can't touch (nothing to edit) — is filled from templates
+/// built out of the struct's own fields: `self.F = P;`, `self.F += P;`, `self.F.push(P)`, `self.F +=
+/// 1;`, `return self.F;`, etc. Each candidate is cargo-tested; the one that passes IS the
+/// implementation. Bounded; enumerated over (field x param x template).
+fn generate_stub_fills(content: &str) -> Vec<String> {
+    let test_start = content.find("#[cfg(test)]").unwrap_or(content.len());
+    let code = &content[..test_start];
+    let tail = &content[test_start..];
+    let fields = parse_struct_fields(code);
+    if fields.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    // Find each `fn NAME(params) [-> RET] {` whose body is EMPTY (whitespace only).
+    let cb = code.as_bytes();
+    let mut search = 0;
+    while let Some(rel) = code[search..].find("fn ") {
+        let fstart = search + rel;
+        search = fstart + 3;
+        let after = &code[fstart..];
+        let Some(op) = after.find('(') else { continue };
+        // balanced params
+        let ab = after.as_bytes();
+        let mut depth = 0i32;
+        let mut cp = None;
+        for i in op..ab.len() {
+            match ab[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        cp = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(cp) = cp else { continue };
+        let params_str = &after[op + 1..cp];
+        let post = &after[cp + 1..];
+        let (ret, brace_rel) = match (post.find("->"), post.find('{')) {
+            (Some(a), Some(bpos)) if a < bpos => (post[a + 2..bpos].trim().to_string(), bpos),
+            (_, Some(bpos)) => (String::new(), bpos),
+            _ => continue,
+        };
+        let body_open = fstart + cp + 1 + brace_rel + 1; // just after `{`
+        // matching `}` for the body
+        let mut d = 1i32;
+        let mut close = None;
+        let mut k = body_open;
+        while k < cb.len() {
+            match cb[k] {
+                b'{' => d += 1,
+                b'}' => {
+                    d -= 1;
+                    if d == 0 {
+                        close = Some(k);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        let Some(close) = close else { continue };
+        if !code[body_open..close].trim().is_empty() {
+            continue; // not an empty stub
+        }
+        let is_mut = params_str.contains("&mut self");
+        let value_params: Vec<String> = parse_typed_params(params_str)
+            .into_iter()
+            .filter(|(n, _)| n != "self")
+            .map(|(n, _)| n)
+            .collect();
+        let mut bodies: Vec<String> = Vec::new();
+        if !ret.is_empty() && ret != "()" {
+            // getter: return a field (or a derived scalar).
+            for (fname, fty) in &fields {
+                if type_compatible(fty, &ret) {
+                    bodies.push(format!("return self.{fname};"));
+                }
+                if ret == "i64" && (fty.starts_with("Vec<") || fty == "String") {
+                    bodies.push(format!("return self.{fname}.len() as i64;"));
+                }
+            }
+        }
+        if is_mut {
+            for (fname, fty) in &fields {
+                if fty.starts_with("Vec<") {
+                    for p in &value_params {
+                        bodies.push(format!("self.{fname}.push({p});"));
+                    }
+                } else {
+                    for p in &value_params {
+                        for op in ["=", "+=", "-=", "*="] {
+                            bodies.push(format!("self.{fname} {op} {p};"));
+                        }
+                    }
+                    if value_params.is_empty() {
+                        bodies.push(format!("self.{fname} += 1;"));
+                        bodies.push(format!("self.{fname} -= 1;"));
+                    }
+                }
+            }
+        }
+        for body in bodies {
+            let mut m = String::with_capacity(content.len() + body.len() + 4);
+            m.push_str(&code[..body_open]);
+            m.push(' ');
+            m.push_str(&body);
+            m.push(' ');
+            m.push_str(&code[close..]);
+            m.push_str(tail);
+            out.push(m);
+        }
+    }
+    out
+}
+
+/// `pub? name: TYPE` fields of every `struct NAME { .. }` in `code`.
+fn parse_struct_fields(code: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut search = 0;
+    while let Some(rel) = code[search..].find("struct ") {
+        let at = search + rel;
+        search = at + 7;
+        let after = &code[at..];
+        let Some(open) = after.find('{') else { continue };
+        let ab = after.as_bytes();
+        let mut depth = 0i32;
+        let mut close = None;
+        for i in open..ab.len() {
+            match ab[i] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else { continue };
+        for (nm, ty) in parse_typed_params(&after[open + 1..close]) {
+            let nm = nm.trim_start_matches("pub ").trim().to_string();
+            if !nm.is_empty() {
+                out.push((nm, ty));
+            }
+        }
+    }
+    out
+}
+
+/// Loose field-type vs return-type compatibility for a getter body.
+fn type_compatible(field_ty: &str, ret: &str) -> bool {
+    field_ty == ret
+        || (field_ty == "i64" && ret == "i64")
+        || (field_ty == "bool" && ret == "bool")
+        || (field_ty == "String" && ret == "String")
+}
+
 /// Splice `to` in place of `from_len` bytes at `at` in `code`, then reappend `tail` (the test module).
 fn splice_mutation(code: &str, tail: &str, at: usize, from_len: usize, to: &str) -> String {
     let mut m = String::with_capacity(code.len() + tail.len() + 2);
@@ -368,6 +539,27 @@ fn generate_mutations(content: &str) -> Vec<String> {
             for to in *tos {
                 out.push(splice_mutation(code, tail, at, from.len(), to));
             }
+            idx = at + from.len();
+        }
+    }
+    // METHOD-NAME swaps: a wrong stdlib method call (`.to_lowercase()` should be `.to_uppercase()`,
+    // `.first()` vs `.last()`, `.min()` vs `.max()`, `.pop()` vs `.remove(0)`, iterate forward vs
+    // reversed). Whole-token replacement wherever it appears.
+    const METHOD_SWAPS: &[(&str, &str)] = &[
+        (".to_uppercase()", ".to_lowercase()"),
+        (".to_lowercase()", ".to_uppercase()"),
+        (".first()", ".last()"),
+        (".last()", ".first()"),
+        (".min()", ".max()"),
+        (".max()", ".min()"),
+        (".iter()", ".iter().rev()"),
+        (".pop()", ".remove(0)"),
+    ];
+    for (from, to) in METHOD_SWAPS {
+        let mut idx = 0;
+        while let Some(pos) = code[idx..].find(from) {
+            let at = idx + pos;
+            out.push(splice_mutation(code, tail, at, from.len(), to));
             idx = at + from.len();
         }
     }
@@ -3340,6 +3532,29 @@ mod tests {
         // i64 return -> edge 0.
         let c2 = "pub fn f(n: i64) -> i64 { n }\n";
         assert!(structural_guard_mutations(c2, "").iter().any(|m| m.contains("return 0;")));
+    }
+
+    #[test]
+    fn stub_fills_generate_stateful_method_bodies_from_struct_fields() {
+        // A `&mut self` setter stub -> `self.v = x` (among candidates).
+        let setter = "pub struct S { pub v: i64 }\nimpl S { pub fn set(&mut self, x: i64) {} }\n";
+        let f1 = generate_stub_fills(setter);
+        assert!(f1.iter().any(|m| m.contains("self.v = x;")), "no setter body: {f1:?}");
+        // A Vec field -> push.
+        let pusher = "pub struct L { pub items: Vec<i64> }\nimpl L { pub fn add(&mut self, x: i64) {} }\n";
+        assert!(generate_stub_fills(pusher).iter().any(|m| m.contains("self.items.push(x)")), "no push body");
+        // A getter stub -> return a field.
+        let getter = "pub struct C { pub n: i64 }\nimpl C { pub fn get(&self) -> i64 {} }\n";
+        assert!(generate_stub_fills(getter).iter().any(|m| m.contains("return self.n;")), "no getter body");
+        // A no-param mutator (inc) -> `self.n += 1`.
+        let inc = "pub struct C { pub n: i64 }\nimpl C { pub fn inc(&mut self) {} }\n";
+        assert!(generate_stub_fills(inc).iter().any(|m| m.contains("self.n += 1;")), "no inc body");
+    }
+
+    #[test]
+    fn mutation_method_name_swaps() {
+        let code = "pub fn f(s: String) -> String { s.to_lowercase() }\n";
+        assert!(generate_mutations(code).iter().any(|m| m.contains(".to_uppercase()")), "no case swap");
     }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
