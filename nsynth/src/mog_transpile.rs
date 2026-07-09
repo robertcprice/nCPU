@@ -287,7 +287,77 @@ fn transpile(mog: &str, target: Target) -> String {
         return String::from("pass\n");
     }
     if target == Target::Rust {
-        return add_mut_to_mutated_params(&lower_rust_string_methods(&out));
+        return add_mut_to_mutated_params(&lower_rust_char_ops(&lower_rust_string_methods(&out)));
+    }
+    out
+}
+
+/// Lower Mog per-CHARACTER string ops to Rust, scoped to String-typed operands so array code is
+/// untouched. Mog iterates a string with `for ch in s` and tests chars with `.is_vowel()` /
+/// `.is_alpha()` / `.is_digit()`; Rust needs `for ch in s.chars()` and real predicates. This
+/// unlocks the char-counting op family (count_vowels/count_consonants/count_letters/
+/// count_non_letters/contains_vowel) which returns i64 — outside lower_rust_string_methods' `->
+/// String` scope. Ops that also concat chars or index the string (uppercase_vowels, middle_char)
+/// need more machinery and are left for the cargo oracle to reject.
+fn lower_rust_char_ops(rust: &str) -> String {
+    use std::collections::HashSet;
+    let had_nl = rust.ends_with('\n');
+    let mut lines: Vec<String> = Vec::new();
+    let mut string_idents: HashSet<String> = HashSet::new();
+    let mut char_vars: HashSet<String> = HashSet::new();
+    for line in rust.lines() {
+        let t = line.trim_start();
+        if t.starts_with("fn ") || t.starts_with("pub fn ") {
+            string_idents.clear();
+            char_vars.clear();
+            if let Some(op) = line.find('(') {
+                if let Some(cp) = line[op..].find(')') {
+                    for p in line[op + 1..op + cp].split(',') {
+                        if let Some((nm, ty)) = p.split_once(':') {
+                            if ty.trim().starts_with("String") {
+                                string_idents
+                                    .insert(nm.trim().trim_start_matches("mut ").trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Local `let [mut] NAME: String` declares a String binding.
+        if let Some(rest) = t.strip_prefix("let mut ").or_else(|| t.strip_prefix("let ")) {
+            if let Some((nm, ty)) = rest.split_once(':') {
+                if ty.trim_start().starts_with("String") {
+                    string_idents.insert(nm.trim().to_string());
+                }
+            }
+        }
+        let mut l = line.to_string();
+        // `for VAR in IDENT {` over a String -> iterate `.chars()`; VAR is then a `char`.
+        if let Some(fp) = l.find("for ") {
+            let after = &l[fp + 4..];
+            if let Some(ip) = after.find(" in ") {
+                let var = after[..ip].trim().to_string();
+                let ident: String = after[ip + 4..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !ident.is_empty() && string_idents.contains(&ident) {
+                    l = l.replacen(&format!("in {ident}"), &format!("in {ident}.chars()"), 1);
+                    char_vars.insert(var);
+                }
+            }
+        }
+        for cv in &char_vars {
+            l = l
+                .replace(&format!("{cv}.is_vowel()"), &format!("\"aeiouAEIOU\".contains({cv})"))
+                .replace(&format!("{cv}.is_alpha()"), &format!("{cv}.is_alphabetic()"))
+                .replace(&format!("{cv}.is_digit()"), &format!("{cv}.is_ascii_digit()"));
+        }
+        lines.push(l);
+    }
+    let mut out = lines.join("\n");
+    if had_nl {
+        out.push('\n');
     }
     out
 }
@@ -1506,6 +1576,20 @@ mod inline_if_tests {
         let mog = "fn srt(a: [i64]) -> [i64] {\n    i: i64 = 0;\n    while i < a.len {\n        a[i] = a[i];\n        i = i + 1;\n    }\n    return a;\n}\n";
         let rs = to_rust(mog);
         assert!(rs.contains("fn srt(mut a: Vec<i64>)"), "param not made mut: {rs}");
+    }
+
+    #[test]
+    fn rust_lowers_string_char_iteration_and_predicates() {
+        // count_vowels returns i64 (outside the `-> String` string-method scope) and iterates a
+        // string char-by-char with `.is_vowel()` — both must be lowered or it fails to compile.
+        let mog = "fn count_vowels(s: string) -> i64 {\n    c: i64 = 0;\n    for ch in s {\n        if ch.is_vowel() {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("for ch in s.chars()"), "string not iterated by chars: {rs}");
+        assert!(rs.contains("\"aeiouAEIOU\".contains(ch)"), "is_vowel not lowered: {rs}");
+        assert!(!rs.contains(".is_vowel()"), "raw .is_vowel() survived: {rs}");
+        // An ARRAY loop `for e in arr` must NOT get `.chars()`.
+        let arr = "fn sum(arr: [i64]) -> i64 {\n    t: i64 = 0;\n    for e in arr {\n        t = t + e;\n    }\n    return t;\n}\n";
+        assert!(!to_rust(arr).contains(".chars()"), "array loop wrongly got .chars()");
     }
 
     #[test]
