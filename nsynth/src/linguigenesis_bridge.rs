@@ -3121,9 +3121,24 @@ fn unsound_confident_solve_categorized(
     // (already returned above), the named op was silently dropped — fail closed.
     // If NO content word names the resolved op at all, it was not understood.
     if !ops.is_empty() {
+        // Tokens of the RESOLVED op's own name (array_sum -> {array, sum}). A surface
+        // word that IS one of these names the resolved op even if the synonym graph
+        // ALSO maps it to a different library op — "sum of a list" resolves array_sum,
+        // and "sum" independently resolves to `add`, but "sum" is literally what
+        // array_sum does, so it is single-op naming, not a dropped composition.
+        let resolved_name_tokens: Vec<String> = req
+            .function_name
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(str::to_lowercase)
+            .collect();
         let mut names_resolved_op = false;
         for op in &ops {
-            if op.fn_name == req.function_name {
+            if op.fn_name == req.function_name
+                || resolved_name_tokens.contains(&op.surface.to_lowercase())
+            {
+                // Names the resolved op — literally (fn match) or because its surface
+                // is a token of the resolved op's name (see above). Not a drop.
                 names_resolved_op = true;
             } else {
                 return Some(GateRefusal {
