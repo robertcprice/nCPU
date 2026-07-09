@@ -892,6 +892,21 @@ fn lower_rust_char_ops(rust: &str) -> String {
         if !string_idents.is_empty() {
             l = lower_string_index(&l, &string_idents);
         }
+        // char -> String coercion: `let x: String = <char expr>;` needs `.to_string()`. A char
+        // producer is `s.chars().nth(..).unwrap()` (string indexing, above) or a bare char loop var.
+        if let Some(eq) = l.find(": String = ") {
+            let rhs_start = eq + ": String = ".len();
+            let rhs = l[rhs_start..].trim_end();
+            if let Some(rhs) = rhs.strip_suffix(';') {
+                let rhs = rhs.trim();
+                let is_char = (rhs.ends_with(".unwrap()") && rhs.contains(".chars().nth("))
+                    || char_vars.contains(rhs);
+                if is_char {
+                    let prefix = &l[..rhs_start];
+                    l = format!("{prefix}{rhs}.to_string();");
+                }
+            }
+        }
         lines.push(l);
     }
     let mut out = lines.join("\n");
@@ -2250,6 +2265,14 @@ mod inline_if_tests {
         assert!(rs.contains("let mut a: Vec<i64> = pairs[(0) as usize].clone();"), "non-Copy index read not cloned: {rs}");
         assert!(rs.contains("let mut m: i64 = a[(0) as usize];") && !rs.contains("a[(0) as usize].clone()"), "Copy read wrongly cloned: {rs}");
         assert!(rs.contains("let mut out: Vec<i64> = vec![];"), "vec![] literal wrongly cloned: {rs}");
+    }
+
+    #[test]
+    fn rust_coerces_char_to_string_in_string_binding() {
+        // `c: string = s[i]` (a char read) assigned to a String needs `.to_string()`.
+        let mog = "fn f(s: string) -> i64 {\n    c: string = s[0];\n    if c == \"1\" {\n        return 1;\n    }\n    return 0;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains(".unwrap().to_string();"), "char read not coerced to String: {rs}");
     }
 
     #[test]
