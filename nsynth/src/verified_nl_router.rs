@@ -1140,11 +1140,16 @@ pub fn answer_with_proposer(
             // distinguishing gate (needing a second disagreeing program) cannot see. No-op
             // for non-array tasks / when no non-trivial invariant is discoverable.
             let array_overfit = crate::invariant_oracle::array_transform_overfit(&code, &entry, examples);
+            // Scalar sibling: a monotonic i64->i64 task whose synthesis reproduces the
+            // examples but SPIKES out of the example-derived monotonic bounds on a fresh
+            // input (the sum_of_primes/nth_prime coincidence class) -> overfit -> refuse.
+            let mono_overfit = crate::invariant_oracle::scalar_monotonicity_overfit(&code, &entry, examples);
             if !boolean_overfit
                 && !pipeline_overfit
                 && !constant_overfit
                 && !special_case_overfit
                 && !array_overfit
+                && !mono_overfit
                 && !method.contains("library:")
                 && !programs_disagree(&progs, examples)
             {

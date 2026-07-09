@@ -166,6 +166,137 @@ fn fresh_probes(examples: &[Example]) -> Vec<Vec<Value>> {
         .collect()
 }
 
+/// Monotonic direction of a scalar `i64 -> i64` function, discovered from examples.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Monotonic {
+    NonDecreasing,
+    NonIncreasing,
+}
+
+/// Discover monotonicity of a UNARY `i64 -> i64` task from its examples. Returns a direction
+/// only with STRONG evidence: >= 5 DISTINCT inputs spanning a range, outputs strictly follow
+/// one direction as inputs increase, and outputs actually vary (not constant). Conservative
+/// on purpose — a spurious monotonicity would only ever OVER-refuse (never make a wrong
+/// answer), but we still want it rare, so a periodic/modular fn (whose wide-span examples are
+/// not monotonic) is not mistaken for monotonic.
+fn discover_monotonic(examples: &[Example]) -> Option<Monotonic> {
+    let mut pts: Vec<(i64, i64)> = examples
+        .iter()
+        .filter_map(|e| {
+            if e.inputs.len() != 1 {
+                return None;
+            }
+            match (&e.inputs[0], &e.expected) {
+                (Value::Int(i), Value::Int(o)) => Some((*i, *o)),
+                _ => None,
+            }
+        })
+        .collect();
+    if pts.len() != examples.len() {
+        return None; // not all i64 -> i64
+    }
+    pts.sort_unstable();
+    pts.dedup_by_key(|p| p.0);
+    if pts.len() < 5 {
+        return None; // too few distinct inputs to trust a direction
+    }
+    let nondec = pts.windows(2).all(|w| w[1].1 >= w[0].1);
+    let noninc = pts.windows(2).all(|w| w[1].1 <= w[0].1);
+    let varies = pts.first().map(|p| p.1) != pts.last().map(|p| p.1);
+    if !varies {
+        return None; // constant output — no useful monotonic bound
+    }
+    match (nondec, noninc) {
+        (true, false) => Some(Monotonic::NonDecreasing),
+        (false, true) => Some(Monotonic::NonIncreasing),
+        _ => None,
+    }
+}
+
+/// TRUE when `code` reproduces the examples of a monotonic `i64 -> i64` task but VIOLATES that
+/// monotonicity on a fresh probe: for non-decreasing f, `f(x)` must be >= every example output
+/// at an input <= x and <= every example output at an input >= x. A candidate outside those
+/// example-derived bounds is not the intended monotonic function -> overfit -> refuse. This
+/// catches a SOLE number-theoretic coincidence (e.g. sum_of_primes fit that spikes on a fresh
+/// input) the distinguishing gate cannot see. Reference-free; discovered from data.
+pub fn scalar_monotonicity_overfit(code: &str, entry: &str, examples: &[Example]) -> bool {
+    let Some(dir) = discover_monotonic(examples) else {
+        return false;
+    };
+    let pts: Vec<(i64, i64)> = examples
+        .iter()
+        .filter_map(|e| match (&e.inputs[0], &e.expected) {
+            (Value::Int(i), Value::Int(o)) => Some((*i, *o)),
+            _ => None,
+        })
+        .collect();
+    for probe in scalar_fresh_probes(examples) {
+        let Some(&Value::Int(x)) = probe.first() else {
+            continue;
+        };
+        let Ok(out_rt) = crate::runtime::execute_function(code, entry, &probe, "inv_mono") else {
+            continue;
+        };
+        let Ok(out_bv) = crate::runtime::benchmark_value_from_runtime(&out_rt) else {
+            continue;
+        };
+        let Value::Int(fx) = out_bv else {
+            return true; // a scalar-int task returning a non-int on a fresh input is broken
+        };
+        // Bounds from the examples that bracket x.
+        let below = pts.iter().filter(|(i, _)| *i <= x).map(|(_, o)| *o);
+        let above = pts.iter().filter(|(i, _)| *i >= x).map(|(_, o)| *o);
+        let violated = match dir {
+            Monotonic::NonDecreasing => {
+                below.clone().max().is_some_and(|lo| fx < lo)
+                    || above.clone().min().is_some_and(|hi| fx > hi)
+            }
+            Monotonic::NonIncreasing => {
+                below.clone().min().is_some_and(|lo| fx > lo)
+                    || above.clone().max().is_some_and(|hi| fx < hi)
+            }
+        };
+        if violated {
+            return true;
+        }
+    }
+    false
+}
+
+/// Fresh single-`i64` probe inputs for a scalar task: values BETWEEN and just BEYOND the
+/// example inputs (where a monotonic bound bites), excluding any example input.
+fn scalar_fresh_probes(examples: &[Example]) -> Vec<Vec<Value>> {
+    let mut ins: Vec<i64> = examples
+        .iter()
+        .filter_map(|e| match e.inputs.first() {
+            Some(Value::Int(i)) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    ins.sort_unstable();
+    ins.dedup();
+    let seen: std::collections::HashSet<i64> = ins.iter().copied().collect();
+    let mut cands: Vec<i64> = Vec::new();
+    // midpoints between consecutive example inputs
+    for w in ins.windows(2) {
+        let mid = w[0] + (w[1] - w[0]) / 2;
+        if mid != w[0] && mid != w[1] {
+            cands.push(mid);
+        }
+    }
+    // just beyond the range
+    if let (Some(&lo), Some(&hi)) = (ins.first(), ins.last()) {
+        cands.push(lo - 1);
+        cands.push(hi + 1);
+        cands.push(hi + 3);
+    }
+    cands
+        .into_iter()
+        .filter(|x| !seen.contains(x))
+        .map(|x| vec![Value::Int(x)])
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +342,33 @@ mod tests {
             array_transform_overfit(swap, "f", &exs),
             "swap-first-two overfit must be caught: a fresh longer input breaks MultisetPreserved"
         );
+    }
+
+    fn si(inp: i64, out: i64) -> Example {
+        Example { inputs: vec![Value::Int(inp)], expected: Value::Int(out) }
+    }
+
+    #[test]
+    fn catches_a_monotonic_spike_overfit() {
+        // A monotonic non-decreasing task (identity on 1..5). An overfit reproduces the
+        // examples but collapses to 0 beyond them -> below the f(5)=5 lower bound on a fresh
+        // input -> caught. The distinguishing gate (needing a second program) is blind to it.
+        let exs = vec![si(1, 1), si(2, 2), si(3, 3), si(4, 4), si(5, 5)];
+        assert_eq!(discover_monotonic(&exs), Some(Monotonic::NonDecreasing));
+        let overfit = "fn f(x: i64) -> i64 {\n    if x <= 5 {\n        return x;\n    }\n    return 0;\n}\n";
+        assert!(crate::runtime::code_reproduces_examples(overfit, &exs), "overfit fits 1..5");
+        assert!(scalar_monotonicity_overfit(overfit, "f", &exs), "spike-to-0 breaks monotonicity");
+        // A correct monotonic identity passes.
+        assert!(!scalar_monotonicity_overfit("fn f(x: i64) -> i64 { return x; }", "f", &exs));
+    }
+
+    #[test]
+    fn non_monotonic_discovers_nothing() {
+        // Not monotonic (dips at 3) -> no direction discovered -> the gate never fires, so a
+        // correct non-monotonic function is never over-refused by this oracle.
+        let exs = vec![si(0, 0), si(1, 1), si(2, 2), si(3, 0), si(4, 1)];
+        assert_eq!(discover_monotonic(&exs), None);
+        assert!(!scalar_monotonicity_overfit("fn f(x: i64) -> i64 { return x; }", "f", &exs));
     }
 
     #[test]
