@@ -390,7 +390,7 @@ pub fn route_by_behavior(prompt: &str, examples: &[crate::benchmark::Example]) -
     // synonym graph (total~sum); else the first.
     let named: std::collections::HashSet<&str> =
         ranked_candidates(prompt).iter().map(|op| op.name).collect();
-    let winner = *passing
+    let mut winner = *passing
         .iter()
         .find(|op| named.contains(op.name))
         .or_else(|| passing.iter().find(|op| op_named_via_synonym(prompt, op)))
@@ -402,11 +402,31 @@ pub fn route_by_behavior(prompt: &str, examples: &[crate::benchmark::Example]) -
     // intended op. Refuse. STRUCTURED output (Map/Struct -> "?") is kept: a frequency
     // map is structurally specific, so a behavioural match there (element_frequency
     // for "how many times each value appears") is trustworthy even un-named.
-    let winner_named = named.contains(winner.name) || op_named_via_synonym(prompt, winner);
+    let mut winner_named = named.contains(winner.name) || op_named_via_synonym(prompt, winner);
     let out_ty = examples
         .first()
         .map(|e| value_type_str(&e.expected))
         .unwrap_or("?");
+    if !winner_named && out_ty != "?" {
+        // Last-chance PROVENANCE via the KG semantic proposer: recover a passer the
+        // prompt DESCRIBES with a synonym/hypernym the token + WordNet layers miss
+        // ("add up all the numbers" -> array_sum, "invert the order" -> reverse_list).
+        // LAZY — computed only here, on the about-to-refuse path, so the 500k-registry
+        // bridge never loads on the fast path. It only supplies PROVENANCE: every
+        // `passing` op already reproduced the examples (behaviour gate) and the
+        // distinguishing gate above already refused any under-determined multi-passer
+        // spec (e.g. array_product vs absolute_product on non-negative examples). So a
+        // grounded passer here is uniquely determined AND example-verified — recall
+        // widens with zero never-wrong risk.
+        // Kill-switch / A-B gate (default ON): NSYNTH_SEMANTIC_PROPOSER=0 disables.
+        if std::env::var("NSYNTH_SEMANTIC_PROPOSER").map_or(true, |v| v != "0") {
+            let kg = crate::semantic_op_proposer::semantic_op_candidates(prompt, 0.7, 24);
+            if let Some(grounded) = passing.iter().find(|p| kg.iter().any(|o| o.name == p.name)) {
+                winner = *grounded;
+                winner_named = true;
+            }
+        }
+    }
     if !winner_named && out_ty != "?" {
         return None;
     }
