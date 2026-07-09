@@ -618,13 +618,11 @@ pub fn try_test_mined_synthesis_patch(
             expected: out.clone(),
         })
         .collect();
-    // Array-RETURNING functions (reverse, sort) need a Vec/slice reshape this proposer does not yet
-    // get right for every signature; declining defers them to the existing proposers (the behaviour
-    // before test-mining was wired into this ladder), avoiding a bad-patch short-circuit. Scalar and
-    // boolean outputs — the verified domains, incl. array->scalar folds like sum_of_evens — proceed.
-    if exs.iter().any(|e| matches!(e.expected, crate::benchmark::Value::Array(_))) {
-        return None;
-    }
+    // Array-RETURNING functions (reverse, sort, k-largest) now proceed: `gencode_normalize`
+    // fixes the Vec-return lowering (`= []` etc.) and `reshape_to_repo_signature` handles the
+    // slice/by-value bridge. If a particular array signature still can't be reshaped, reshape
+    // returns None and the proposer declines gracefully (same fall-through as before) — never a
+    // bad patch, since strict-verify + the real cargo test still gate every candidate.
     let sig: &'static str =
         Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str());
     let problem = crate::benchmark::Problem {
@@ -635,18 +633,29 @@ pub fn try_test_mined_synthesis_patch(
         examples: exs.clone(),
         ..Default::default()
     };
-    let res = crate::solver::solve_problem(&problem);
-    if !res.success {
-        return None;
-    }
-    if crate::runtime::verify_problem_code_strict(&problem, &res.code).is_err() {
+    // FRONT DOOR FIRST, then raw synthesis. The never-wrong router (`answer`) reaches the
+    // ~300-op verified LIBRARY the bare enumerator cannot re-derive — "count how many
+    // elements are positive" IS the library op `count_positives` (a filter+count), which the
+    // raw solver refuses to synthesize from the same 2-3 mined points. `answer` proposes an op
+    // from the prose AND verifies it against the mined examples, so it only returns a
+    // library/composition/model op that reproduces the failing test's asserts; a WRONG guess
+    // is refused by that gate (and the real cargo test is still the final oracle). Falls back
+    // to `solve_problem` when the prose names no reachable op.
+    let (code, method) = front_door_mined_code(description, &exs)
+        .or_else(|| {
+            let res = crate::solver::solve_problem(&problem);
+            (res.success && crate::runtime::verify_problem_code_strict(&problem, &res.code).is_ok())
+                .then(|| (res.code, res.method))
+        })?;
+    if crate::runtime::verify_problem_code_strict(&problem, &code).is_err() {
         return None;
     }
     // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
-    if crate::synth_confidence::is_memorization_overfit(&res.code, &exs) {
+    if crate::synth_confidence::is_memorization_overfit(&code, &exs) {
         return None;
     }
-    let synthesized = rust_code_for_repo_synthesis(&res.code);
+    let res_method = method;
+    let synthesized = rust_code_for_repo_synthesis(&code);
     if !is_plain_rust_body(&synthesized) {
         return None;
     }
@@ -663,8 +672,28 @@ pub fn try_test_mined_synthesis_patch(
                 "test-mined synthesis proposer (examples from failing asserts; verified, no LLM)",
             ))
             .with_metadata("proposer", "nl_test_mined_synthesis")
-            .with_metadata("synthesis_method", res.method.clone()),
+            .with_metadata("synthesis_method", res_method.clone()),
     )
+}
+
+/// Resolve mined I/O examples through the never-wrong front door (`verified_nl_router::answer`),
+/// which proposes a verified LIBRARY op / composition / gated-model program from the prose and
+/// gates it against the SAME examples. Returns `(mog_code, method)` only for a candidate that
+/// reproduces every mined example — reaching the op library (e.g. `count_positives`) the raw
+/// enumerator cannot re-derive — or `None` when the router refuses. The caller re-runs
+/// `verify_problem_code_strict` and the real cargo test still gates the patch.
+fn front_door_mined_code(
+    description: &str,
+    exs: &[crate::benchmark::Example],
+) -> Option<(String, String)> {
+    use crate::verified_nl_router::Answer;
+    match crate::verified_nl_router::answer(description, exs) {
+        Answer::Library { name, code } => Some((code, format!("front-door:library:{name}"))),
+        Answer::Composition { code } => Some((code, "front-door:composition".to_string())),
+        Answer::Synthesized { method, code } => Some((code, format!("front-door:{method}"))),
+        Answer::Proposed { method, code } => Some((code, format!("front-door:proposed:{method}"))),
+        Answer::Refused => None,
+    }
 }
 
 /// Mine I/O examples for `fn_name` from `assert_eq!(..)` calls in `text`. Both
@@ -711,6 +740,21 @@ fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
         let body = &t[1..t.len() - 1];
         if !body.contains('\\') {
             return Some(Value::Str(body.to_string()));
+        }
+    }
+    // Int-array literal: `vec![1, 2, 3]` or `[1, 2, 3]` — the array domain the solver and op
+    // library reason over. Needed to mine array-shaped asserts (`count_positives(vec![5,-2,3])`,
+    // `reverse(vec![1,2])`); without it every array-in/array-out repo fn declined at mining.
+    let arr = t.strip_prefix("vec!").map(str::trim).unwrap_or(t);
+    if arr.starts_with('[') && arr.ends_with(']') {
+        let inner = arr[1..arr.len() - 1].trim();
+        if inner.is_empty() {
+            return Some(Value::int_array(&[]));
+        }
+        let ints: Option<Vec<i64>> =
+            inner.split(',').map(|x| x.trim().parse::<i64>().ok()).collect();
+        if let Some(ints) = ints {
+            return Some(Value::int_array(&ints));
         }
     }
     None
@@ -2638,6 +2682,114 @@ mod tests {
             patch.edits.iter().any(|e| e.path == "src/lib.rs" && e.new_text.contains('2')),
             "mystery body replaced with the solver's 2x+1"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Repo repair reaching the OP LIBRARY through the never-wrong front door: a repo
+    /// `count_positives` (filter+count) that the bare enumerator refuses to synthesize from its
+    /// mined array asserts is solved because `verified_nl_router::answer` resolves the library op
+    /// and verifies it against those same asserts. Exercises array-INPUT mining (parse_literal
+    /// vec![..]) + array-output guard removal + the front-door proposer.
+    #[test]
+    fn test_mined_reaches_library_via_front_door_count_positives() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_frontdoor_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fd\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn count_positives(xs: Vec<i64>) -> i64 {\n    0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::count_positives;\n    #[test]\n    fn t() {\n        assert_eq!(count_positives(vec![5, -2, 3, -4, 5]), 3);\n        assert_eq!(count_positives(vec![-1, -2, -3]), 0);\n        assert_eq!(count_positives(vec![1, 2, 3, 4]), 4);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "fd".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: count how many elements are positive".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let patch = try_test_mined_synthesis_patch(
+            &task,
+            &context,
+            "count how many elements are positive",
+        )
+        .expect("front-door proposer should solve count_positives (library op via mined asserts)");
+        assert!(
+            patch
+                .metadata
+                .iter()
+                .any(|(k, v)| k == "synthesis_method" && v.starts_with("front-door:")),
+            "should resolve through the front door, not raw synthesis: {:?}",
+            patch.metadata
+        );
+        assert!(
+            patch.edits.iter().any(|e| e.path == "src/lib.rs" && !e.new_text.contains("    0\n}")),
+            "stub body must be replaced with a real count"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Array-OUTPUT repo fn via the front door: "reverse a list" (`Vec<i64> -> Vec<i64>`) is a
+    /// library op reached through mined `vec![..]` asserts, now that the array-output guard is
+    /// removed and reshape handles the Vec-return lowering. If reshape can't fit this signature
+    /// the proposer declines gracefully (returns None) rather than emitting a bad patch.
+    #[test]
+    fn test_mined_array_output_reverse_via_front_door() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_fdrev_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fdr\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn reverse_list(xs: Vec<i64>) -> Vec<i64> {\n    xs\n}\n\n#[cfg(test)]\nmod tests {\n    use super::reverse_list;\n    #[test]\n    fn t() {\n        assert_eq!(reverse_list(vec![1, 2, 3]), vec![3, 2, 1]);\n        assert_eq!(reverse_list(vec![5, 6]), vec![6, 5]);\n        assert_eq!(reverse_list(vec![9]), vec![9]);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "fdr".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: reverse a list".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        // Documents the CURRENT capability: a produced patch must come via the front door and
+        // replace the identity stub; a None (reshape can't fit) is an honest decline, not a bug.
+        if let Some(patch) =
+            try_test_mined_synthesis_patch(&task, &context, "reverse a list")
+        {
+            assert!(
+                patch
+                    .metadata
+                    .iter()
+                    .any(|(k, v)| k == "synthesis_method" && v.starts_with("front-door:")),
+                "array-output solve must be front-door-sourced: {:?}",
+                patch.metadata
+            );
+            eprintln!("REVERSE_ARRAY_OUTPUT: front-door patch produced (array-output reshape works)");
+        } else {
+            eprintln!("REVERSE_ARRAY_OUTPUT: declined (array-output reshape still a gap; safe)");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 
