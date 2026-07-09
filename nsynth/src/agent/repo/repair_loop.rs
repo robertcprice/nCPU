@@ -190,6 +190,10 @@ pub struct RepairLoop {
     agent: super::RepairAgent,
     verifier: RepairVerifier,
     experience_path: Option<PathBuf>,
+    /// Capability: when `false` (the default) any edit to a Cargo manifest is
+    /// rejected outright. When `true`, manifest edits are still restricted to the
+    /// safe additive subset validated by `patch_gate::validate_manifest_edit`.
+    manifest_edits: bool,
 }
 
 impl RepairLoop {
@@ -199,12 +203,26 @@ impl RepairLoop {
             agent: super::RepairAgent::with_policy(&root, policy.clone()),
             verifier: RepairVerifier::new(root, policy),
             experience_path: None,
+            manifest_edits: false,
         }
     }
 
     pub fn with_experience_path(mut self, experience_path: impl Into<PathBuf>) -> Self {
         self.experience_path = Some(experience_path.into());
         self
+    }
+
+    /// Opt in to safe manifest editing. Off by default; even when enabled, only
+    /// additive dependency/feature changes that pass `validate_manifest_edit`
+    /// are applied.
+    pub fn with_manifest_edits(mut self, enabled: bool) -> Self {
+        self.manifest_edits = enabled;
+        self
+    }
+
+    /// Whether the safe-manifest-edit capability is currently enabled.
+    pub fn manifest_edits_enabled(&self) -> bool {
+        self.manifest_edits
     }
 
     pub fn verifier(&self) -> &RepairVerifier {
@@ -441,15 +459,48 @@ impl RepairLoop {
     }
 
     fn apply_patch(&self, task: &RepoTaskSpec, patch: &RepairPatch) -> Result<(), String> {
+        // Pre-flight: validate every path (allowed-files + guardrails) and enforce
+        // the manifest-edit capability BEFORE opening the transaction, so a
+        // rejected patch leaves the working tree untouched.
         for edit in &patch.edits {
             let path = self.resolve_path(&edit.path)?;
             self.check_edit_allowed(task, &path)?;
+            if crate::agent::repo::patch_gate::is_manifest_path(&edit.path) && !self.manifest_edits {
+                return Err(format!(
+                    "manifest edit to '{}' is not permitted (manifest-edit capability disabled)",
+                    edit.path
+                ));
+            }
         }
+
+        // Apply the ENTIRE patch as one in-memory transaction. Nothing reaches
+        // disk until `commit`, so any failure below is a clean no-op.
         let mut tx = crate::agent::edit::EditTransaction::begin(&self.verifier.root);
         if let Err(error) = tx.apply_repair_patch(patch) {
             let _ = tx.rollback();
             return Err(error);
         }
+
+        // Manifest safety: for any manifest the patch touches, validate the
+        // RESULTING file content (before -> after) is a safe additive edit.
+        for edit in &patch.edits {
+            if !crate::agent::repo::patch_gate::is_manifest_path(&edit.path) {
+                continue;
+            }
+            let path = self.resolve_path(&edit.path)?;
+            let before = fs::read_to_string(&path).unwrap_or_default();
+            let after = tx
+                .working_content(&edit.path)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if let Err(reason) = crate::agent::repo::patch_gate::validate_manifest_edit(&before, &after)
+            {
+                let _ = tx.rollback();
+                return Err(format!("manifest edit rejected: {reason}"));
+            }
+        }
+
         tx.commit()
     }
 
@@ -716,6 +767,220 @@ mod tests {
         assert!(fs::read_to_string(root.join("src/lib.rs"))
             .unwrap()
             .contains("pub fn value() -> i64 { 0 }"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // ---- Multi-file patch atomicity -------------------------------------
+
+    #[test]
+    fn multi_file_patch_applies_atomically() {
+        let root = temp_repo("multi_apply");
+        fs::write(root.join("src/util.rs"), "pub fn util() -> i64 { 0 }\n").unwrap();
+        let task = task(&root, LOOP_CARGO_TEST);
+        let loop_runner = RepairLoop::new(&root, GuardrailPolicy::default());
+
+        let patch = RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                "src/lib.rs",
+                "pub fn value() -> i64 { 0 }",
+                "pub fn value() -> i64 { 1 }",
+                "fix lib",
+            ))
+            .with_edit(RepairEdit::new(
+                "src/util.rs",
+                "pub fn util() -> i64 { 0 }",
+                "pub fn util() -> i64 { 2 }",
+                "fix util",
+            ));
+
+        loop_runner.apply_patch(&task, &patch).unwrap();
+        assert!(fs::read_to_string(root.join("src/lib.rs"))
+            .unwrap()
+            .contains("pub fn value() -> i64 { 1 }"));
+        assert!(fs::read_to_string(root.join("src/util.rs"))
+            .unwrap()
+            .contains("pub fn util() -> i64 { 2 }"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn multi_file_patch_rejected_whole_when_one_edit_invalid() {
+        let root = temp_repo("multi_reject");
+        fs::write(root.join("src/util.rs"), "pub fn util() -> i64 { 0 }\n").unwrap();
+        let task = task(&root, LOOP_CARGO_TEST);
+        let loop_runner = RepairLoop::new(&root, GuardrailPolicy::default());
+
+        // First edit is valid; second edit's old_text does not exist -> whole
+        // patch must be rejected with NO partial write.
+        let patch = RepairPatch::new()
+            .with_edit(RepairEdit::new(
+                "src/lib.rs",
+                "pub fn value() -> i64 { 0 }",
+                "pub fn value() -> i64 { 1 }",
+                "fix lib",
+            ))
+            .with_edit(RepairEdit::new(
+                "src/util.rs",
+                "NON_EXISTENT_ANCHOR",
+                "pub fn util() -> i64 { 2 }",
+                "bad util",
+            ));
+
+        let err = loop_runner.apply_patch(&task, &patch).unwrap_err();
+        assert!(err.contains("found 0"), "unexpected error: {err}");
+        // Neither file changed: the earlier valid edit was NOT half-applied.
+        assert!(fs::read_to_string(root.join("src/lib.rs"))
+            .unwrap()
+            .contains("pub fn value() -> i64 { 0 }"));
+        assert!(fs::read_to_string(root.join("src/util.rs"))
+            .unwrap()
+            .contains("pub fn util() -> i64 { 0 }"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    const MULTI_CARGO_TOML: &str = r#"[package]
+name = "multi-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"#;
+
+    const MULTI_LIB: &str = r#"pub mod a;
+pub mod b;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn combined_oracle() {
+        assert_eq!(crate::a::a() + crate::b::b(), 3);
+    }
+}
+"#;
+
+    #[test]
+    fn loop_applies_multi_file_patch_and_reverifies_as_unit() {
+        let root =
+            std::env::temp_dir().join(format!("nsynth_repo_multi_loop_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("Cargo.toml"), MULTI_CARGO_TOML).unwrap();
+        fs::write(root.join("src/lib.rs"), MULTI_LIB).unwrap();
+        fs::write(root.join("src/a.rs"), "pub fn a() -> i64 { 0 }\n").unwrap();
+        fs::write(root.join("src/b.rs"), "pub fn b() -> i64 { 0 }\n").unwrap();
+
+        let task = task(&root, "cargo test combined_oracle --lib");
+        let mut loop_runner = RepairLoop::new(&root, GuardrailPolicy::default());
+        let result = loop_runner
+            .run(&task, &|_, _, _| {
+                Ok(RepairPatch::new()
+                    .with_edit(RepairEdit::new(
+                        "src/a.rs",
+                        "pub fn a() -> i64 { 0 }",
+                        "pub fn a() -> i64 { 1 }",
+                        "fix a",
+                    ))
+                    .with_edit(RepairEdit::new(
+                        "src/b.rs",
+                        "pub fn b() -> i64 { 0 }",
+                        "pub fn b() -> i64 { 2 }",
+                        "fix b",
+                    )))
+            })
+            .unwrap();
+
+        assert!(result.success, "multi-file loop should succeed");
+        assert_eq!(result.iterations, 1);
+        assert!(fs::read_to_string(root.join("src/a.rs"))
+            .unwrap()
+            .contains("{ 1 }"));
+        assert!(fs::read_to_string(root.join("src/b.rs"))
+            .unwrap()
+            .contains("{ 2 }"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // ---- Safe manifest editing (capability-gated) -----------------------
+
+    fn manifest_task(root: &Path) -> RepoTaskSpec {
+        RepoTaskSpec {
+            id: "manifest-test".to_string(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::Feature,
+            issue: "add a dependency".to_string(),
+            test_command: LOOP_CARGO_TEST.to_string(),
+            allowed_files: vec!["src/**".to_string(), "Cargo.toml".to_string()],
+            max_iterations: 3,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::FeatureWithTests),
+            signals: Vec::new(),
+        }
+    }
+
+    fn add_dependency_patch() -> RepairPatch {
+        RepairPatch::new().with_edit(RepairEdit::new(
+            "Cargo.toml",
+            "[lib]\npath = \"src/lib.rs\"\n",
+            "[lib]\npath = \"src/lib.rs\"\n\n[dependencies]\nregex = \"1\"\n",
+            "add regex dependency",
+        ))
+    }
+
+    #[test]
+    fn manifest_edit_rejected_when_capability_disabled() {
+        let root = temp_repo("manifest_off");
+        let task = manifest_task(&root);
+        // Default loop: manifest capability is OFF.
+        let loop_runner = RepairLoop::new(&root, GuardrailPolicy::default());
+        assert!(!loop_runner.manifest_edits_enabled());
+
+        let err = loop_runner
+            .apply_patch(&task, &add_dependency_patch())
+            .unwrap_err();
+        assert!(err.contains("capability disabled"), "got: {err}");
+        // Manifest untouched.
+        assert!(!fs::read_to_string(root.join("Cargo.toml"))
+            .unwrap()
+            .contains("[dependencies]"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_edit_accepted_when_capability_enabled() {
+        let root = temp_repo("manifest_on");
+        let task = manifest_task(&root);
+        let loop_runner =
+            RepairLoop::new(&root, GuardrailPolicy::default()).with_manifest_edits(true);
+
+        loop_runner
+            .apply_patch(&task, &add_dependency_patch())
+            .unwrap();
+        let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("[dependencies]"));
+        assert!(manifest.contains("regex = \"1\""));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_forbidden_edit_rejected_even_with_capability() {
+        let root = temp_repo("manifest_forbidden");
+        let task = manifest_task(&root);
+        let loop_runner =
+            RepairLoop::new(&root, GuardrailPolicy::default()).with_manifest_edits(true);
+
+        // Inject a build script into [package] -> must be rejected as a whole.
+        let patch = RepairPatch::new().with_edit(RepairEdit::new(
+            "Cargo.toml",
+            "name = \"loop-fixture\"\n",
+            "name = \"loop-fixture\"\nbuild = \"build.rs\"\n",
+            "sneak in a build script",
+        ));
+        let err = loop_runner.apply_patch(&task, &patch).unwrap_err();
+        assert!(err.contains("manifest edit rejected"), "got: {err}");
+        // Manifest untouched.
+        assert!(!fs::read_to_string(root.join("Cargo.toml"))
+            .unwrap()
+            .contains("build.rs"));
         let _ = fs::remove_dir_all(root);
     }
 }
