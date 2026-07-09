@@ -288,8 +288,30 @@ fn transpile(mog: &str, target: Target) -> String {
     }
     if target == Target::Rust {
         return add_mut_to_mutated_params(&infer_rust_vec_element_types(&lower_rust_string_building(
-            &lower_rust_char_ops(&lower_rust_string_methods(&out)),
+            &lower_rust_char_ops(&rewrite_rust_string_splits(&lower_rust_string_methods(&out))),
         )));
+    }
+    out
+}
+
+/// `X.split(SEP)` in Mog produces a LIST of strings, but Rust's `str::split` yields a lazy iterator
+/// of `&str`. Materialize it: `X.split(SEP)` -> `X.split(SEP).map(|w| w.to_string()).collect::<Vec<
+/// String>>()`, so it type-checks against the `Vec<String>` the surrounding word-list op expects.
+fn rewrite_rust_string_splits(rust: &str) -> String {
+    let mut out = String::with_capacity(rust.len() + 64);
+    let mut i = 0;
+    while i < rust.len() {
+        if rust[i..].starts_with(".split(") {
+            if let Some((_, close)) = balanced_region(rust, i + 6, b'(', b')') {
+                out.push_str(&rust[i..=close]);
+                out.push_str(".map(|w| w.to_string()).collect::<Vec<String>>()");
+                i = close + 1;
+                continue;
+            }
+        }
+        let ch = rust[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }
@@ -1986,6 +2008,16 @@ mod inline_if_tests {
         let rg = to_rust(idx);
         assert!(rg.contains(".is_uppercase()") && !rg.contains(".is_upper()"), "is_upper: {rg}");
         assert!(rg.contains(" as i64") && !rg.contains(".ord()"), "ord not cast: {rg}");
+    }
+
+    #[test]
+    fn rust_materializes_string_split_into_vec_string() {
+        let mog = "fn split_words(s: string) -> [string] {\n    return s.split(\" \");\n}\n";
+        let rs = to_rust(mog);
+        assert!(
+            rs.contains("s.split(\" \").map(|w| w.to_string()).collect::<Vec<String>>()"),
+            "split not materialized: {rs}"
+        );
     }
 
     #[test]
