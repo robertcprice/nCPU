@@ -260,13 +260,32 @@ impl CodingAgentSession {
                     // verified. This is general epistemics (no examples ⇒ tentative), not
                     // a per-case rule.
                     let unverified = examples.is_empty();
-                    let tent = |m: String| if unverified { format!("{m}:tentative") } else { m };
+                    let nl = crate::verified_nl_router::split_prompt_examples(query).0;
+                    // ORACLE MANUFACTURING: a bare-NL library/composition match is a GUESS at
+                    // intent → tentative. But when the prompt names an operation with a
+                    // COMPLETE decidable spec (sort/reverse/max/min/abs/sum/product), confirm
+                    // the matched program satisfies that spec on many fresh random inputs. A
+                    // program that does IS that operation (a mis-resolution fails the spec), so
+                    // the guess is CONFIRMED reference-free and drops the tentative label.
+                    let label = |base: String, code: &str| -> String {
+                        if !unverified {
+                            return base;
+                        }
+                        let confirmed = crate::site::fn_name_from_mog(code).is_some_and(|e| {
+                            crate::constraint_oracle::confirm_from_prompt(code, &e, &nl)
+                        });
+                        if confirmed {
+                            base
+                        } else {
+                            format!("{base}:tentative")
+                        }
+                    };
                     let (method, code) = match ans {
                         Answer::Library { name, code } => {
-                            (tent(format!("verified-nl-router:library:{name}")), code)
+                            (label(format!("verified-nl-router:library:{name}"), &code), code)
                         }
                         Answer::Composition { code } => {
-                            (tent("verified-nl-router:composition".to_string()), code)
+                            (label("verified-nl-router:composition".to_string(), &code), code)
                         }
                         Answer::Synthesized { method, code } => {
                             (format!("verified-nl-router:synth:{method}"), code)
@@ -1127,8 +1146,21 @@ impl CodingAgentSession {
         // it is always false on this path today, but keeps the rule correct if a
         // future caller reaches run_synthesis with real examples.
         let user_oracle = !crate::verified_nl_router::split_prompt_examples(query).1.is_empty();
+        // ORACLE MANUFACTURING: even with no USER oracle, if the prompt names an operation
+        // with a COMPLETE decidable spec (sort/reverse/max/min/abs/sum/product), confirm the
+        // synthesized program satisfies that spec on many fresh random inputs. A program that
+        // does IS that operation (a wrong resolution — "average" -> sum — fails the spec), so
+        // the guess at intent is CONFIRMED reference-free and need not be flagged tentative.
+        // Never-wrong-safe: the spec is complete + checked on 32 fresh inputs (stronger than
+        // the user-example gate); no spec for the prompt -> false -> stays tentative.
+        let nl = crate::verified_nl_router::split_prompt_examples(query).0;
+        let confirmed = synthesis.success
+            && crate::site::fn_name_from_mog(&synthesis.code).is_some_and(|entry| {
+                crate::constraint_oracle::confirm_from_prompt(&synthesis.code, &entry, &nl)
+            });
         let method = if synthesis.success
             && !user_oracle
+            && !confirmed
             && !synthesis.method.contains(":tentative")
         {
             format!("{}:tentative", synthesis.method)

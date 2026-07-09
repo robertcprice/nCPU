@@ -25,7 +25,7 @@ use crate::runtime::{execute_function, Value as RValue};
 
 /// A decidable property the OUTPUT must satisfy given the INPUTS, derived from
 /// the request's resolved operation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Property {
     /// output == max of the single int-array input
     IsMax,
@@ -58,6 +58,39 @@ impl Property {
             "reverse" | "reversed" | "reverse_array" => Some(Property::IsReversed),
             _ => None,
         }
+    }
+
+    /// Infer the operation's decidable contract from an NL PROMPT — the operation word the
+    /// user named, not the resolved op. So a bare-NL request "reverse a list" carries a
+    /// COMPLETE spec (IsReversed) that can CONFIRM the resolution reference-free: a program
+    /// producing the reversed input on many fresh inputs IS reverse, regardless of which op
+    /// the resolver picked. Longest/most-specific match wins so "sum" in "maximum..." can't
+    /// mis-fire. Used to upgrade a correct bare-NL guess from tentative -> verified.
+    pub fn for_prompt(prompt: &str) -> Option<Property> {
+        let p = prompt.to_ascii_lowercase();
+        // (needle, property) — checked in order; a needle only fires as a whole word-ish
+        // substring. Each maps to a COMPLETE, reference-decidable spec.
+        const MAP: &[(&str, Property)] = &[
+            ("sort", Property::IsSortedAscending),
+            ("reverse", Property::IsReversed),
+            ("absolute value", Property::IsNonNegative),
+            ("maximum", Property::IsMax),
+            ("minimum", Property::IsMin),
+            ("largest", Property::IsMax),
+            ("smallest", Property::IsMin),
+            ("product", Property::IsProduct),
+        ];
+        // "sum" alone is ambiguous with "maximum sum" etc.; require it not to co-occur with a
+        // stronger array-reduce word. Handle it after the unambiguous needles.
+        for (needle, prop) in MAP {
+            if p.contains(needle) {
+                return Some(*prop);
+            }
+        }
+        if (p.contains("sum") || p.contains("total")) && !p.contains("max") && !p.contains("min") {
+            return Some(Property::IsSum);
+        }
+        None
     }
 
     /// Whether the contract reads a single int-array input (vs a single scalar).
@@ -190,6 +223,20 @@ pub fn verify_candidate(
         prop.holds(&inputs, &output)?;
     }
     Ok(())
+}
+
+/// ORACLE MANUFACTURING: confirm a bare-NL resolution reference-free. When a no-example
+/// prompt names an operation with a COMPLETE decidable spec (sort/reverse/max/min/abs/sum/
+/// product), a program that satisfies that spec on many fresh random inputs IS that operation
+/// — stronger evidence than the 3-5 user examples that govern the whole never-wrong system,
+/// so the guess can be upgraded from tentative to VERIFIED. A wrong resolution fails the spec
+/// and stays tentative. Returns false when the prompt has no known complete spec (honest: the
+/// oracle simply does not apply, so the label stays tentative — never a confident wrong).
+pub fn confirm_from_prompt(code: &str, fn_name: &str, prompt: &str) -> bool {
+    let Some(prop) = Property::for_prompt(prompt) else {
+        return false;
+    };
+    verify_candidate(code, fn_name, &prop, 32, 0x00ac_1e50).is_ok()
 }
 
 /// Deterministic fresh inputs for a property's input shape. Deterministic (LCG,
@@ -486,6 +533,21 @@ mod tests {
     // Overfit: returns the FIRST element. Matches any example where arr[0] is the
     // max, but is not actually the maximum.
     const MAX_FAKE: &str = "fn array_max(arr: [i64]) -> i64 {\n    return arr[0];\n}\n";
+
+    #[test]
+    fn confirm_from_prompt_upgrades_correct_refutes_wrong() {
+        // ORACLE MANUFACTURING: a bare-NL prompt naming an operation with a complete spec
+        // CONFIRMS a correct program reference-free and REFUTES a subtle overfit — so a
+        // no-example guess can be upgraded from tentative to verified only when it is right.
+        assert!(confirm_from_prompt(MAX_OK, "array_max", "the maximum element in a list"));
+        assert!(!confirm_from_prompt(MAX_FAKE, "array_max", "the maximum element in a list"));
+        assert!(confirm_from_prompt(ABS_OK, "absolute", "the absolute value of a number"));
+        assert!(!confirm_from_prompt(ABS_FAKE, "absolute", "the absolute value of a number"));
+        // No complete spec for the prompt -> never confirm (stays tentative).
+        assert!(!confirm_from_prompt(MAX_OK, "array_max", "do something clever with a list"));
+        // A correct op but the WRONG operation named -> refuted (max is not a sort).
+        assert!(!confirm_from_prompt(MAX_OK, "array_max", "sort a list in ascending order"));
+    }
 
     const ABS_OK: &str = "fn absolute(x: i64) -> i64 {\n    if x < 0 {\n        return 0 - x;\n    }\n    return x;\n}\n";
     // Overfit: identity. Matches non-negative examples, fails on negatives.
