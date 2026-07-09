@@ -287,9 +287,160 @@ fn transpile(mog: &str, target: Target) -> String {
         return String::from("pass\n");
     }
     if target == Target::Rust {
-        return add_mut_to_mutated_params(&infer_rust_vec_element_types(&lower_rust_string_building(
-            &lower_rust_char_ops(&rewrite_rust_string_splits(&lower_rust_string_methods(&out))),
+        return cast_ints_in_float_context(&add_mut_to_mutated_params(&infer_rust_vec_element_types(
+            &lower_rust_string_building(&lower_rust_char_ops(&rewrite_rust_string_splits(
+                &lower_rust_string_methods(&out),
+            ))),
         )));
+    }
+    out
+}
+
+/// In an `-> f64` function, Mog freely mixes i64 idents into float arithmetic (`1.0 * n`, `1.0 / i`,
+/// `a * a + b * b`), which Rust rejects (`cannot multiply f64 by i64`). Cast the integer operands:
+/// on any assignment/return whose RHS is a float context (contains a decimal literal or an f64
+/// ident), rewrite `as i64` -> `as f64` and cast bare non-f64 value idents to `(IDENT as f64)`.
+/// Gated to functions that actually carry an f64 type, so the integer library (the vast majority) is
+/// untouched.
+fn cast_ints_in_float_context(rust: &str) -> String {
+    let had_nl = rust.ends_with('\n');
+    let lines: Vec<&str> = rust.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim_start();
+        if t.starts_with("fn ") || t.starts_with("pub fn ") {
+            let start = i;
+            let mut depth = 0i32;
+            let mut opened = false;
+            let mut j = i;
+            while j < lines.len() {
+                for c in lines[j].chars() {
+                    if c == '{' {
+                        depth += 1;
+                        opened = true;
+                    } else if c == '}' {
+                        depth -= 1;
+                    }
+                }
+                if opened && depth <= 0 {
+                    break;
+                }
+                j += 1;
+            }
+            let end = j.min(lines.len() - 1);
+            let block = &lines[start..=end];
+            let is_float_fn = block.iter().any(|l| l.contains(": f64") || l.contains("-> f64"));
+            if is_float_fn {
+                // f64 idents: `: f64` params + `let [mut] X: f64` locals.
+                let mut f64_idents: std::collections::HashSet<String> = std::collections::HashSet::new();
+                for l in block {
+                    let bt = l.trim_start();
+                    if let Some(rest) = bt.strip_prefix("let mut ").or_else(|| bt.strip_prefix("let ")) {
+                        if let Some((nm, ty)) = rest.split_once(':') {
+                            if ty.trim_start().starts_with("f64") {
+                                f64_idents.insert(nm.trim().to_string());
+                            }
+                        }
+                    }
+                }
+                if let Some(op) = block[0].find('(') {
+                    if let Some(cp) = block[0][op..].find(')') {
+                        for p in block[0][op + 1..op + cp].split(',') {
+                            if let Some((nm, ty)) = p.split_once(':') {
+                                if ty.trim().starts_with("f64") {
+                                    f64_idents
+                                        .insert(nm.trim().trim_start_matches("mut ").trim().to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                out.extend(block.iter().map(|l| cast_float_line(l, &f64_idents)));
+            } else {
+                out.extend(block.iter().map(|l| l.to_string()));
+            }
+            i = end + 1;
+        } else {
+            out.push(lines[i].to_string());
+            i += 1;
+        }
+    }
+    let mut s = out.join("\n");
+    if had_nl {
+        s.push('\n');
+    }
+    s
+}
+
+fn cast_float_line(line: &str, f64_idents: &std::collections::HashSet<String>) -> String {
+    let t = line.trim_start();
+    let indent = &line[..line.len() - t.len()];
+    // Only assignments / returns carry an arithmetic RHS.
+    let (prefix, rhs) = if let Some(r) = t.strip_prefix("return ").and_then(|r| r.strip_suffix(';')) {
+        ("return ", r)
+    } else if let Some(eq) = t.find(" = ") {
+        if t.ends_with(';') {
+            (&t[..eq + 3], &t[eq + 3..t.len() - 1])
+        } else {
+            return line.to_string();
+        }
+    } else {
+        return line.to_string();
+    };
+    // Float context: a decimal literal (digit '.' digit) OR an f64 ident referenced in the RHS.
+    let has_float_lit = {
+        let b = rhs.as_bytes();
+        (1..b.len().saturating_sub(1)).any(|k| {
+            b[k] == b'.' && b[k - 1].is_ascii_digit() && b[k + 1].is_ascii_digit()
+        })
+    };
+    let refs_f64 = f64_idents.iter().any(|id| {
+        rhs.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).any(|tok| tok == id)
+    });
+    if !has_float_lit && !refs_f64 {
+        return line.to_string();
+    }
+    let casted = cast_float_expr(rhs, f64_idents);
+    format!("{indent}{prefix}{casted};")
+}
+
+/// Cast the integer operands of a float expression: `as i64` -> `as f64`, and each bare value
+/// identifier not known to be f64 -> `(IDENT as f64)`. Identifiers followed by `(`/`.`/`[` (calls,
+/// methods, indexing) are left alone.
+fn cast_float_expr(expr: &str, f64_idents: &std::collections::HashSet<String>) -> String {
+    let expr = expr.replace(" as i64", " as f64");
+    let b = expr.as_bytes();
+    let mut out = String::with_capacity(expr.len() + 16);
+    let mut i = 0;
+    while i < expr.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let s = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let ident = &expr[s..i];
+            let next = expr[i..].chars().next();
+            let is_call = matches!(next, Some('(') | Some('.') | Some('['));
+            let prev = out.trim_end().chars().last();
+            let after_as = out.trim_end().ends_with(" as");
+            if !is_call
+                && !after_as
+                && ident != "as"
+                && ident != "f64"
+                && ident != "i64"
+                && !f64_idents.contains(ident)
+                && prev != Some('.')
+            {
+                out.push_str(&format!("({ident} as f64)"));
+            } else {
+                out.push_str(ident);
+            }
+        } else {
+            out.push(c as char);
+            i += 1;
+        }
     }
     out
 }
@@ -2012,6 +2163,17 @@ mod inline_if_tests {
         let rg = to_rust(idx);
         assert!(rg.contains(".is_uppercase()") && !rg.contains(".is_upper()"), "is_upper: {rg}");
         assert!(rg.contains(" as i64") && !rg.contains(".ord()"), "ord not cast: {rg}");
+    }
+
+    #[test]
+    fn rust_casts_ints_in_float_context_only_in_float_fns() {
+        let mog = "fn hyp(a: i64, b: i64) -> f64 {\n    x: f64 = 1.0 * a * a + b * b;\n    i: i64 = 0;\n    while i < 3 {\n        i = i + 1;\n    }\n    return x;\n}\n";
+        let rs = to_rust(mog);
+        assert!(rs.contains("1.0 * (a as f64) * (a as f64) + (b as f64) * (b as f64)"), "ints not cast in float RHS: {rs}");
+        assert!(rs.contains("i = i + 1;"), "pure-int counter wrongly cast: {rs}");
+        // An INTEGER fn must be completely untouched by the float pass.
+        let intfn = "fn s(a: i64, b: i64) -> i64 {\n    return a * a + b;\n}\n";
+        assert!(to_rust(intfn).contains("return a * a + b;"), "int fn touched by float pass");
     }
 
     #[test]
