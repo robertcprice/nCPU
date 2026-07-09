@@ -309,6 +309,24 @@ pub fn nl_synthesis_proposer_with_run(
         return Ok(patch);
     }
 
+    // LLM EDIT LANE (the real coding-agent driver): when every deterministic proposer declines —
+    // the case for real code the pure-function synthesizer can't express (struct methods, state,
+    // Option/Result, a bug in a called fn) — the gated local model reads the CURRENT function body +
+    // the concrete cargo failure and proposes a targeted Rust edit. The RepairLoop applies it, runs
+    // cargo test, and feeds any failure back for the next iteration. INERT without NSYNTH_LOCAL_LLM_URL
+    // (propose_rust_fn returns None), and the model NEVER bypasses a gate: the acceptance oracle is
+    // still cargo test, so a wrong or non-compiling proposal is rolled back like any other patch.
+    // This is the lane the standalone nl_synthesis_proposer already has; the supervisor (CLI) path
+    // was missing it, so the CLI never reached the model — the gap that made real code fall through.
+    if let Some(patch) = crate::agent::synthesis_proposer::try_model_repair_patch(
+        task,
+        context,
+        &description,
+        analysis,
+    ) {
+        return Ok(patch);
+    }
+
     let mut run = if run_path.exists() {
         AgentRun::load(run_path)?
     } else {
