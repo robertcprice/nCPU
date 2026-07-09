@@ -1467,10 +1467,12 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
     let adapters = if repo_has_fn { slice_param_adapters(old_text, repo_fn) } else { String::new() };
 
     if fns.len() > 1 {
-        let main_idx = fns
-            .iter()
-            .position(|(name, _)| name == repo_fn)
-            .unwrap_or(fns.len() - 1);
+        // Pick the ENTRY function: the one named like the repo fn if present, else the FIRST fn.
+        // Mog emits the entry first with helpers after it (the router's composition names its entry
+        // `composed` and appends `reverse_string`/`count_vowels`; the solver names its entry after
+        // the problem and appends `rd0`/`elem`). Defaulting to the LAST fn mis-selected a helper
+        // (e.g. `count_vowels`) as the body, dropping the actual entry.
+        let main_idx = fns.iter().position(|(name, _)| name == repo_fn).unwrap_or(0);
         let mut helpers = String::new();
         for (k, (_, text)) in fns.iter().enumerate() {
             if k != main_idx {
@@ -2727,6 +2729,22 @@ mod tests {
             "twice still stubbed:\n{final_src}"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Multi-fn reshape must adopt the ENTRY function, not a trailing helper, when no synthesized
+    /// fn is named like the repo fn. The router's composition names its entry `composed` and appends
+    /// helpers; defaulting to the last fn selected a helper (`count_vowels`) and dropped the real
+    /// pipeline. The repaired `vc` body must call the composition, and the helpers must be inlined.
+    #[test]
+    fn reshape_multifn_adopts_entry_fn_not_trailing_helper() {
+        let old = "pub fn vc(s: String) -> i64 {\n    0\n}\n";
+        let synthesized = "fn composed(x0: String) -> i64 {\n    return count_vowels(reverse_string(x0));\n}\n\nfn reverse_string(s: String) -> String {\n    return s.chars().rev().collect::<String>();\n}\nfn count_vowels(s: String) -> i64 {\n    let mut c: i64 = 0;\n    for ch in s.chars() {\n        if \"aeiouAEIOU\".contains(ch) {\n            c = c + 1;\n        }\n    }\n    return c;\n}\n";
+        let out = reshape_to_repo_signature(old, "vc", synthesized).expect("reshape");
+        assert!(
+            out.contains("fn vc(") && out.contains("count_vowels(reverse_string("),
+            "vc must call the composition entry, not become a helper body:\n{out}"
+        );
+        assert!(out.contains("fn count_vowels(") && out.contains("fn reverse_string("), "helpers must be inlined:\n{out}");
     }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
