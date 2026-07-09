@@ -352,20 +352,160 @@ fn passed_count(stdout: &str) -> usize {
 /// field-derived candidate bodies holding the others fixed, keep the fill that maximizes passing
 /// tests, iterate until all green or no pass improves. Returns ONE multi-file patch. All cargo-gated,
 /// no model. Fires only when >=2 holes exist (single-hole is handled by stub-gen in the mutation tier).
+/// One `.rs` file with empty-body holes and the current body chosen for each.
+struct FileHoles {
+    path: String,
+    abs: std::path::PathBuf,
+    orig: String,
+    code: String,
+    tail: String,
+    holes: Vec<Hole>,
+    choice: Vec<String>,
+}
+
+impl FileHoles {
+    /// The file with every hole's current `choice` spliced in (test module reattached).
+    fn render(&self) -> String {
+        let mut s = self.code.clone();
+        for (h, body) in self.holes.iter().zip(&self.choice).rev() {
+            s.replace_range(h.body_open..h.close, &format!(" {body} "));
+        }
+        s.push_str(&self.tail);
+        s
+    }
+}
+
+/// (all-pass, #passing-tests, compiled) from a cargo verification.
+fn mh_score(v: &Result<RepairVerification, String>) -> (bool, usize, bool) {
+    match v {
+        Ok(r) => (
+            r.success,
+            passed_count(&r.stdout),
+            !r.stderr.contains("error[") && !r.stderr.contains("could not compile"),
+        ),
+        Err(_) => (false, 0, false),
+    }
+}
+
+/// Bounded cartesian product of candidate lists (caps the number of combinations so the joint search
+/// can't explode on a struct with many mutators).
+fn bounded_product(lists: &[Vec<String>], cap: usize) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = vec![vec![]];
+    for list in lists {
+        let mut next = Vec::new();
+        'outer: for prefix in &out {
+            for item in list {
+                if next.len() >= cap {
+                    break 'outer;
+                }
+                let mut v = prefix.clone();
+                v.push(item.clone());
+                next.push(v);
+            }
+        }
+        out = next;
+        if out.is_empty() {
+            break;
+        }
+    }
+    out
+}
+
+/// One coordinate-descent solve over the non-`fixed` holes: reset them to their defaults, then for
+/// each try its candidates holding the rest fixed, keeping the fill that raises the passing-test
+/// count (and committing a first-compiling guess to unstick a prerequisite whose effect is invisible
+/// until a getter is filled). `fixed[fi][hi]` pins a hole (used by the joint search to hold a mutator
+/// combo). Returns true on a full solve, leaving `files` AT the solution. Writes as it goes.
+#[allow(clippy::too_many_arguments)]
+fn mh_descend(
+    files: &mut [FileHoles],
+    fixed: &[Vec<bool>],
+    verifier: &RepairVerifier,
+    cmd: &str,
+    start: std::time::Instant,
+    budget: std::time::Duration,
+    runs: &mut usize,
+    max_runs: usize,
+) -> bool {
+    for fi in 0..files.len() {
+        for hi in 0..files[fi].holes.len() {
+            if !fixed[fi][hi] {
+                files[fi].choice[hi] = files[fi].holes[hi].default.clone();
+            }
+        }
+    }
+    for fh in files.iter() {
+        let _ = std::fs::write(&fh.abs, fh.render());
+    }
+    let (ok, mut cur_passed, compiled) = mh_score(&verifier.verify(cmd));
+    if ok {
+        return true;
+    }
+    if !compiled {
+        return false;
+    }
+    for _pass in 0..6 {
+        let mut improved = false;
+        for fi in 0..files.len() {
+            for hi in 0..files[fi].holes.len() {
+                if fixed[fi][hi] {
+                    continue;
+                }
+                let cands = files[fi].holes[hi].candidates.clone();
+                let default_body = files[fi].holes[hi].default.clone();
+                let mut best_body = files[fi].choice[hi].clone();
+                let mut best_passed = cur_passed;
+                let mut first_guess: Option<String> = None;
+                for cand in cands {
+                    if *runs >= max_runs || start.elapsed() > budget {
+                        files[fi].choice[hi] = best_body.clone();
+                        let _ = std::fs::write(&files[fi].abs, files[fi].render());
+                        return verifier.verify(cmd).map(|v| v.success).unwrap_or(false);
+                    }
+                    files[fi].choice[hi] = cand.clone();
+                    if std::fs::write(&files[fi].abs, files[fi].render()).is_err() {
+                        continue;
+                    }
+                    *runs += 1;
+                    let (o, passed, comp) = mh_score(&verifier.verify(cmd));
+                    if o {
+                        return true;
+                    }
+                    if comp {
+                        if first_guess.is_none() {
+                            first_guess = Some(cand.clone());
+                        }
+                        if passed > best_passed {
+                            best_passed = passed;
+                            best_body = cand.clone();
+                        }
+                    }
+                }
+                if best_passed > cur_passed {
+                    files[fi].choice[hi] = best_body;
+                    cur_passed = best_passed;
+                    improved = true;
+                } else if files[fi].choice[hi] == default_body {
+                    if let Some(g) = first_guess {
+                        files[fi].choice[hi] = g;
+                        improved = true;
+                    }
+                }
+                let _ = std::fs::write(&files[fi].abs, files[fi].render());
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+    verifier.verify(cmd).map(|v| v.success).unwrap_or(false)
+}
+
 pub fn try_multihole_fill_patch(
     task: &RepoTaskSpec,
     context: &RepairContext,
     _analysis: Option<&FailureAnalysis>,
 ) -> Option<RepairPatch> {
-    struct FileHoles {
-        path: String,
-        abs: std::path::PathBuf,
-        orig: String,
-        code: String,
-        tail: String,
-        holes: Vec<Hole>,
-        choice: Vec<String>,
-    }
     let mut files: Vec<FileHoles> = Vec::new();
     let mut total_holes = 0usize;
     for f in &context.files {
@@ -398,57 +538,17 @@ pub fn try_multihole_fill_patch(
     if total_holes < 2 {
         return None; // single-hole: stub-gen in the mutation tier covers it
     }
-    let render = |fh: &FileHoles| -> String {
-        let mut s = fh.code.clone();
-        for (h, body) in fh.holes.iter().zip(&fh.choice).rev() {
-            s.replace_range(h.body_open..h.close, &format!(" {body} "));
-        }
-        s.push_str(&fh.tail);
-        s
-    };
     let verifier = RepairVerifier::new(&context.root, GuardrailPolicy::default());
     let revert_all = |files: &[FileHoles]| {
         for fh in files {
             let _ = std::fs::write(&fh.abs, &fh.orig);
         }
     };
-    // Compile floor: write every hole at its default; the crate must now compile (tests run+fail).
-    for fh in &files {
-        if std::fs::write(&fh.abs, render(fh)).is_err() {
-            revert_all(&files);
-            return None;
-        }
-    }
-    let score = |v: &Result<RepairVerification, String>| -> (bool, usize, bool) {
-        match v {
-            Ok(r) => (
-                r.success,
-                passed_count(&r.stdout),
-                !r.stderr.contains("error[") && !r.stderr.contains("could not compile"),
-            ),
-            Err(_) => (false, 0, false),
-        }
-    };
-    let floor = verifier.verify(&task.test_command);
-    let (floor_ok, mut cur_passed, floor_compiled) = score(&floor);
-    if floor_ok {
-        // The defaults already pass (degenerate) — nothing to search; let another tier handle it.
-        revert_all(&files);
-        return None;
-    }
-    if !floor_compiled {
-        revert_all(&files); // type-defaults didn't compile -> unsupported shape
-        return None;
-    }
-    let start = std::time::Instant::now();
-    let budget = std::time::Duration::from_secs(150);
-    let mut runs = 0usize;
-    const MAX_RUNS: usize = 240;
     let finish = |files: &[FileHoles]| -> Option<RepairPatch> {
         let mut patch = RepairPatch::new().with_metadata("proposer", "multihole_fill");
         let mut changed = false;
         for fh in files {
-            let rendered = render(fh);
+            let rendered = fh.render();
             if rendered != fh.orig {
                 patch = patch.with_edit(RepairEdit::new(
                     fh.path.clone(),
@@ -461,67 +561,75 @@ pub fn try_multihole_fill_patch(
         }
         changed.then_some(patch)
     };
-    for _pass in 0..6 {
-        let mut improved = false;
-        for fi in 0..files.len() {
-            for hi in 0..files[fi].holes.len() {
-                let cands = files[fi].holes[hi].candidates.clone();
-                let default_body = files[fi].holes[hi].default.clone();
-                let mut best_body = files[fi].choice[hi].clone();
-                let mut best_passed = cur_passed;
-                // First candidate that COMPILES — a guess to commit when no candidate raises the score.
-                let mut first_guess: Option<String> = None;
-                for cand in cands {
-                    if runs >= MAX_RUNS || start.elapsed() > budget {
-                        // settle on the best-so-far and stop; return if it's a full solve
-                        files[fi].choice[hi] = best_body.clone();
-                        let _ = std::fs::write(&files[fi].abs, render(&files[fi]));
-                        let done = verifier.verify(&task.test_command).map(|v| v.success).unwrap_or(false);
-                        revert_all(&files);
-                        return if done { finish(&files) } else { None };
-                    }
-                    files[fi].choice[hi] = cand.clone();
-                    if std::fs::write(&files[fi].abs, render(&files[fi])).is_err() {
-                        continue;
-                    }
-                    runs += 1;
-                    let v = verifier.verify(&task.test_command);
-                    let (ok, passed, compiled) = score(&v);
-                    if ok {
-                        let patch = finish(&files);
-                        revert_all(&files);
-                        return patch;
-                    }
-                    if compiled {
-                        if first_guess.is_none() {
-                            first_guess = Some(cand.clone());
-                        }
-                        if passed > best_passed {
-                            best_passed = passed;
-                            best_body = cand.clone();
-                        }
-                    }
-                }
-                if best_passed > cur_passed {
-                    // A real improvement: commit it.
-                    files[fi].choice[hi] = best_body;
-                    cur_passed = best_passed;
-                    improved = true;
-                } else if files[fi].choice[hi] == default_body {
-                    // No candidate raised the score AND this hole is still a bare default — commit the
-                    // first compiling guess. This UNSTICKS a prerequisite mutator (e.g. `add` pushes to
-                    // a Vec that every getter test reads) whose effect is invisible until a getter is
-                    // also filled; the getters self-correct against the score on a later pass.
-                    if let Some(g) = first_guess {
-                        files[fi].choice[hi] = g;
-                        improved = true;
-                    }
-                } // else keep the prior-pass choice
-                let _ = std::fs::write(&files[fi].abs, render(&files[fi]));
-            }
+    // Compile floor: write every hole at its default; the crate must now compile (tests run+fail).
+    for fh in &files {
+        if std::fs::write(&fh.abs, fh.render()).is_err() {
+            revert_all(&files);
+            return None;
         }
-        if !improved {
-            break;
+    }
+    let (floor_ok, _, floor_compiled) = mh_score(&verifier.verify(&task.test_command));
+    if floor_ok || !floor_compiled {
+        // defaults already pass (let another tier own it) OR type-defaults don't compile (unsupported)
+        revert_all(&files);
+        return None;
+    }
+    let start = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(150);
+    let mut runs = 0usize;
+    const MAX_RUNS: usize = 400;
+    let cmd = &task.test_command;
+
+    // Phase 1: plain coordinate descent (no pinned holes).
+    let none_fixed: Vec<Vec<bool>> = files.iter().map(|f| vec![false; f.holes.len()]).collect();
+    if mh_descend(&mut files, &none_fixed, &verifier, cmd, start, budget, &mut runs, MAX_RUNS) {
+        let patch = finish(&files);
+        revert_all(&files);
+        return patch;
+    }
+
+    // Phase 1.5: JOINT search over prerequisite (mutator) combos. On a multi-field struct the plain
+    // descent gets stuck in a local minimum — a prerequisite mutator's first-candidate guess targets
+    // the wrong field and no single move escapes. Pin each mutator to a candidate combination and let
+    // the getters descend against it; the right combo (e.g. deposit->push, charge_fee->fees=f) makes
+    // the getter tests reachable. Bounded product so it can't explode.
+    let prereqs: Vec<(usize, usize)> = files
+        .iter()
+        .enumerate()
+        .flat_map(|(fi, f)| {
+            f.holes
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| h.is_prereq && h.candidates.len() > 1)
+                .map(move |(hi, _)| (fi, hi))
+        })
+        .collect();
+    if !prereqs.is_empty() {
+        let lists: Vec<Vec<String>> = prereqs
+            .iter()
+            .map(|(fi, hi)| {
+                let mut c = files[*fi].holes[*hi].candidates.clone();
+                c.truncate(4);
+                c
+            })
+            .collect();
+        let fixed: Vec<Vec<bool>> = files
+            .iter()
+            .enumerate()
+            .map(|(fi, f)| (0..f.holes.len()).map(|hi| prereqs.contains(&(fi, hi))).collect())
+            .collect();
+        for combo in bounded_product(&lists, 24) {
+            if runs >= MAX_RUNS || start.elapsed() > budget {
+                break;
+            }
+            for ((fi, hi), body) in prereqs.iter().zip(&combo) {
+                files[*fi].choice[*hi] = body.clone();
+            }
+            if mh_descend(&mut files, &fixed, &verifier, cmd, start, budget, &mut runs, MAX_RUNS) {
+                let patch = finish(&files);
+                revert_all(&files);
+                return patch;
+            }
         }
     }
     revert_all(&files);
@@ -542,6 +650,10 @@ struct Hole {
     close: usize,
     default: String,
     candidates: Vec<String>,
+    /// A pure state mutator (`&mut self`, no return) — a PREREQUISITE whose effect is only visible
+    /// through a getter, so it must be pinned during the joint search that escapes coordinate-descent
+    /// local minima on multi-field structs.
+    is_prereq: bool,
 }
 
 /// Scan `code` (the non-test part) for every function/method with an EMPTY body and build, per hole,
@@ -713,6 +825,7 @@ fn scan_holes(code: &str, fields: &[(String, String)]) -> Vec<Hole> {
             close,
             default: type_default(&ret),
             candidates: bodies,
+            is_prereq: is_mut && !has_ret,
         });
     }
     holes
@@ -3946,6 +4059,31 @@ mod tests {
     fn mutation_method_name_swaps() {
         let code = "pub fn f(s: String) -> String { s.to_lowercase() }\n";
         assert!(generate_mutations(code).iter().any(|m| m.contains(".to_uppercase()")), "no case swap");
+    }
+
+    #[test]
+    fn bounded_product_caps_and_covers() {
+        let lists = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["x".to_string(), "y".to_string()],
+        ];
+        let full = bounded_product(&lists, 99);
+        assert_eq!(full.len(), 4, "2x2 product");
+        assert_eq!(full[0], vec!["a".to_string(), "x".to_string()], "first combo is all-first-candidates");
+        assert!(bounded_product(&lists, 2).len() <= 2, "cap respected");
+        assert_eq!(bounded_product(&[], 9), vec![Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn prereq_flag_marks_pure_mutators_only() {
+        // `&mut self` no-return is a prerequisite; a getter and a mutate-return are not.
+        let code = "pub struct S { pub xs: Vec<i64>, pub n: i64 }\nimpl S {\n pub fn add(&mut self, x: i64) {}\n pub fn count(&self) -> i64 {}\n pub fn next(&mut self) -> i64 {}\n}\n";
+        let fields = parse_struct_fields(code);
+        let holes = scan_holes(code, &fields);
+        assert_eq!(holes.len(), 3);
+        assert!(holes[0].is_prereq, "add is a prerequisite mutator");
+        assert!(!holes[1].is_prereq, "count getter is not");
+        assert!(!holes[2].is_prereq, "next (mutate+return) is not a pure prerequisite");
     }
 
     #[test]
