@@ -247,40 +247,46 @@ pub fn try_model_repair_patch(
         .unwrap_or_default();
     let repo_fn = resolve_repo_fn_name(&default_fn, Some(&old_text));
 
-    // Feed the model the CURRENT body + the concrete failure so it repairs THIS
-    // error rather than guessing blind. Both are optional (best-effort feedback).
-    let prior_code = crate::doc_ingest::extract_rust_fn_sources(&old_text)
-        .into_iter()
-        .find(|(n, _)| n == &repo_fn)
-        .map(|(_, s)| s);
+    // Give the model the CODE + the concrete failure and let IT localize — a real coding-agent edit.
+    // A pre-localized single-fn rewrite picks the WRONG function when the query is generic and the
+    // failing test exercises several (e.g. a struct with `new` + `add`, where only `add` is buggy):
+    // the model must SEE the code and the failure to know which function to fix. It returns the
+    // corrected function(s), which are then applied by NAME to whichever repo file defines them.
     let failure = analysis
-        .map(|a| format!("{} (suggested: {})", a.message, a.suggested_action))
+        .map(|a| format!("\n\nThe failure: {} ({})", a.message, a.suggested_action))
         .unwrap_or_default();
-    let prior: Option<(&str, &str)> = match (&prior_code, failure.is_empty()) {
-        (Some(code), false) => Some((code.as_str(), failure.as_str())),
-        _ => None,
-    };
     let request = format!(
-        "{description}\n\nWrite the Rust function `{repo_fn}` so the failing test passes. \
-         Return only the function definition."
+        "A test is failing. Here is the code:\n```rust\n{old_text}\n```{failure}\n\n\
+         Task: {description}\n\nOutput ONLY the single corrected Rust function (its full signature \
+         and body, e.g. `pub fn ...`) that makes the failing test pass. Change nothing else."
     );
 
-    // Ask for RUST, not Mog: the repo-repair oracle is cargo test over real Rust, and
-    // small local models write Rust well but not the Mog DSL.
-    let program = crate::local_llm::propose_rust_fn(&request, prior, 0.2)?;
-    // MULTI-FILE: if the model returned several functions that map onto EXISTING repo
-    // files (e.g. a fix touching a handler and its helper), coordinate them into one
-    // atomic patch. The cargo-test oracle still gates the whole thing all-or-nothing.
-    // Falls back to the single-file body swap below.
+    // Ask for RUST, not Mog: the repo-repair oracle is cargo test over real Rust, and small local
+    // models write Rust well but not the Mog DSL.
+    let program = crate::local_llm::propose_rust_fn(&request, None, 0.2)?;
+    // Apply the model's function(s) to whichever repo file DEFINES them, by name (handles the model
+    // localizing to a different function than we'd have guessed, and multi-file fixes).
     if let Some(patch) = model_response_to_multifile_patch(context, &program) {
         return Some(patch);
     }
-    let new_text = model_body_to_new_text(&old_text, &repo_fn, &program)?;
+    // Fallback: apply the returned function by ITS OWN name (the model localized) to the file that
+    // defines it; else the pre-resolved repo_fn / picked target (feature-add appends).
+    let model_fn = first_fn_name_in_source(&program).unwrap_or_else(|| repo_fn.clone());
+    let (tgt, tgt_text) = context
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with(".rs"))
+        .find_map(|f| {
+            let t = f.text.as_deref()?;
+            file_defines_function(t, &model_fn).then(|| (f.path.clone(), t.to_string()))
+        })
+        .unwrap_or((target, old_text));
+    let new_text = model_body_to_new_text(&tgt_text, &model_fn, &program)?;
     Some(
         RepairPatch::new()
             .with_edit(RepairEdit::new(
-                target,
-                old_text,
+                tgt,
+                tgt_text,
                 new_text,
                 "gated model-repair proposer (untrusted; cargo-test gated)",
             ))
