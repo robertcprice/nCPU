@@ -7,7 +7,8 @@
 use crate::agent::agent_run::AgentRun;
 use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{
-    FailureAnalysis, FailureKind, RepairContext, RepairEdit, RepairPatch, RepoTaskSpec,
+    FailureAnalysis, FailureKind, GuardrailPolicy, RepairContext, RepairEdit, RepairPatch,
+    RepairVerifier, RepoTaskSpec,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -216,6 +217,140 @@ pub fn try_real_synthesis_patch(
 ///
 /// Inert by default: with `NSYNTH_LOCAL_LLM_URL` unset the lane returns `None`
 /// immediately, so there is zero behaviour change on any machine without a model.
+/// MODEL-FREE MUTATION REPAIR — the deterministic engine coding BEYOND pure-function synthesis. When
+/// code already EXISTS but has a small bug the example-based synthesizer can't reach — a wrong
+/// operator, an off-by-one, `=` where `+=` was meant, a bug in a struct METHOD (no `f(x)=y` pairs to
+/// mine) — enumerate single-edit mutations of the existing NON-test code, apply each to the isolated
+/// work copy, and run the repo's own test command. The first mutation that makes cargo test pass IS
+/// the repair: no model, no I/O examples, just search + the compiler/test oracle. Bounded in count +
+/// wall-clock so it stays a fast model-free tier; runs AFTER the synthesizers (which handle stubs)
+/// and BEFORE the LLM lane.
+pub fn try_mutation_repair_patch(
+    task: &RepoTaskSpec,
+    context: &RepairContext,
+    analysis: Option<&FailureAnalysis>,
+) -> Option<RepairPatch> {
+    let verifier = RepairVerifier::new(&context.root, GuardrailPolicy::default());
+    let preferred = analysis.and_then(|a| a.file.clone());
+    let mut files: Vec<(String, String)> = context
+        .files
+        .iter()
+        .filter(|f| f.path.ends_with(".rs"))
+        .filter_map(|f| {
+            let t = f.text.as_deref()?;
+            t.contains("fn ").then(|| (f.path.clone(), t.to_string()))
+        })
+        .collect();
+    // Mutate the failure-implicated file first.
+    files.sort_by_key(|(p, _)| {
+        !preferred.as_deref().map(|pf| pf.ends_with(p) || p.ends_with(pf)).unwrap_or(false)
+    });
+
+    let start = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(75);
+    const MAX_MUTATIONS: usize = 32;
+    let mut tried = 0usize;
+    for (path, orig) in &files {
+        let abs = std::path::Path::new(&context.root).join(path);
+        for mutated in generate_mutations(orig) {
+            if tried >= MAX_MUTATIONS || start.elapsed() > budget {
+                return None;
+            }
+            tried += 1;
+            if std::fs::write(&abs, &mutated).is_err() {
+                continue;
+            }
+            let passed = verifier.verify(&task.test_command).map(|v| v.success).unwrap_or(false);
+            let _ = std::fs::write(&abs, orig); // revert; the loop re-applies the winning patch
+            if passed {
+                return Some(
+                    RepairPatch::new()
+                        .with_edit(RepairEdit::new(
+                            path.clone(),
+                            orig.clone(),
+                            mutated,
+                            "mutation repair (model-free; cargo-test gated)",
+                        ))
+                        .with_metadata("proposer", "mutation_repair"),
+                );
+            }
+        }
+    }
+    None
+}
+
+/// Splice `to` in place of `from_len` bytes at `at` in `code`, then reappend `tail` (the test module).
+fn splice_mutation(code: &str, tail: &str, at: usize, from_len: usize, to: &str) -> String {
+    let mut m = String::with_capacity(code.len() + tail.len() + 2);
+    m.push_str(&code[..at]);
+    m.push_str(to);
+    m.push_str(&code[at + from_len..]);
+    m.push_str(tail);
+    m
+}
+
+/// Single-edit mutations of the NON-test code: operator swaps, `=`->`+=`/`-=`, integer +-1. One
+/// changed occurrence per candidate. The `#[cfg(test)]` module is left untouched (never "fix" the
+/// test to make it pass).
+fn generate_mutations(content: &str) -> Vec<String> {
+    let test_start = content.find("#[cfg(test)]").unwrap_or(content.len());
+    let code = &content[..test_start];
+    let tail = &content[test_start..];
+    let mut out = Vec::new();
+    const SWAPS: &[(&str, &[&str])] = &[
+        (" == ", &[" != "]),
+        (" != ", &[" == "]),
+        (" <= ", &[" < "]),
+        (" >= ", &[" > "]),
+        (" < ", &[" <= ", " > "]),
+        (" > ", &[" >= ", " < "]),
+        (" += ", &[" -= ", " = "]),
+        (" -= ", &[" += "]),
+        (" + ", &[" - ", " * "]),
+        (" - ", &[" + "]),
+        (" * ", &[" + ", " / "]),
+        (" / ", &[" * "]),
+        (" % ", &[" / "]),
+    ];
+    for (from, tos) in SWAPS {
+        let mut idx = 0;
+        while let Some(pos) = code[idx..].find(from) {
+            let at = idx + pos;
+            for to in *tos {
+                out.push(splice_mutation(code, tail, at, from.len(), to));
+            }
+            idx = at + from.len();
+        }
+    }
+    // Bare spaced assignment ` = ` (not ==,<=,>=,!=,+=,... which are [=][=] / [op][=], never [SP][=][SP]).
+    let cb = code.as_bytes();
+    for i in 0..code.len().saturating_sub(2) {
+        if &cb[i..i + 3] == b" = " {
+            for to in [" += ", " -= "] {
+                out.push(splice_mutation(code, tail, i, 3, to));
+            }
+        }
+    }
+    // Integer literals -> +-1 (off-by-one).
+    let mut i = 0;
+    while i < code.len() {
+        if cb[i].is_ascii_digit() && (i == 0 || !(cb[i - 1].is_ascii_alphanumeric() || cb[i - 1] == b'_')) {
+            let s = i;
+            while i < cb.len() && cb[i].is_ascii_digit() {
+                i += 1;
+            }
+            if let Ok(n) = code[s..i].parse::<i64>() {
+                for d in [n + 1, n - 1] {
+                    out.push(splice_mutation(code, tail, s, i - s, &d.to_string()));
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 pub fn try_model_repair_patch(
     task: &RepoTaskSpec,
     context: &RepairContext,
@@ -2943,6 +3078,23 @@ mod tests {
         assert!(
             try_model_synthesis(&problem, &exs, "f").is_none(),
             "model lane must be inert without NSYNTH_LOCAL_LLM_URL"
+        );
+    }
+
+    #[test]
+    fn mutation_generator_covers_operator_swaps_assignment_and_offbyone_and_spares_the_test() {
+        let code = "pub fn f(n: i64) -> i64 {\n    let mut s = 0;\n    let mut i = 1;\n    while i < n { s = i; }\n    s\n}\n#[cfg(test)]\nmod tests { fn t() { assert_eq!(f(5), 15); } }\n";
+        let muts = generate_mutations(code);
+        // operator swap `<` -> `<=`
+        assert!(muts.iter().any(|m| m.contains("while i <= n")), "no <= mutation");
+        // assignment `=` -> `+=` (the struct-method / accumulator fix)
+        assert!(muts.iter().any(|m| m.contains("s += i;")), "no += mutation");
+        // off-by-one on a constant
+        assert!(muts.iter().any(|m| m.contains("let mut i = 2;") || m.contains("let mut i = 0;")), "no const +-1");
+        // the test module is NEVER mutated (would be cheating).
+        assert!(
+            muts.iter().all(|m| m.contains("assert_eq!(f(5), 15)")),
+            "a mutation altered the test assertion"
         );
     }
 

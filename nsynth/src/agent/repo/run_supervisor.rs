@@ -309,6 +309,17 @@ pub fn nl_synthesis_proposer_with_run(
         return Ok(patch);
     }
 
+    // MODEL-FREE MUTATION REPAIR: before reaching for the model, let the deterministic engine code
+    // BEYOND pure-function synthesis — search single-edit mutations of the EXISTING buggy code
+    // (wrong operator, off-by-one, `=` vs `+=`, a bug in a struct method with no I/O pairs to mine)
+    // and keep the first whose edit makes cargo test pass. No model, no examples — search + the test
+    // oracle. Runs after the synthesizers (which handle stubs) and before the LLM.
+    if let Some(patch) =
+        crate::agent::synthesis_proposer::try_mutation_repair_patch(task, context, analysis)
+    {
+        return Ok(patch);
+    }
+
     // LLM EDIT LANE (the real coding-agent driver): when every deterministic proposer declines —
     // the case for real code the pure-function synthesizer can't express (struct methods, state,
     // Option/Result, a bug in a called fn) — the gated local model reads the CURRENT function body +
