@@ -1465,6 +1465,16 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
     // Slice adapters bridge the synthesizer's owned `Vec<i64>` params to a repo `&[i64]` slice
     // signature (see slice_param_adapters). Only meaningful when the repo fn exists.
     let adapters = if repo_has_fn { slice_param_adapters(old_text, repo_fn) } else { String::new() };
+    // i64->bool adapter: the solver expresses a boolean predicate as an i64-returning function
+    // (0/1, or truthy-nonzero — e.g. is_positive found as `reverse_number`, whose value is nonzero
+    // iff n>0). The repo signature declares `-> bool`, so the i64 body type-mismatches. When the
+    // repo fn returns bool but the synthesized entry returns i64, wrap each bare `return EXPR;` as
+    // `return (EXPR) != 0;` (Mog's truthiness). Same-type (bool->bool combinators) are untouched.
+    let needs_bool_adapt = fn_return_type(old_text, repo_fn).as_deref() == Some("bool")
+        && first_fn_name_in_source(synthesized)
+            .and_then(|n| fn_return_type(synthesized, &n))
+            .as_deref()
+            == Some("i64");
 
     if fns.len() > 1 {
         // Pick the ENTRY function: the one named like the repo fn if present, else the FIRST fn.
@@ -1526,6 +1536,9 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
                 body = rename_ident(&body, from, to);
             }
         }
+    }
+    if needs_bool_adapt {
+        body = wrap_bare_returns_as_bool(&body);
     }
     // A repo param the (renamed) body MUTATES in place — sort's `a[i] = ..`, an in-place reverse —
     // needs a `mut` binding, but the repo signature declares the param immutable. Shadow it as
@@ -1643,6 +1656,36 @@ fn rename_first_fn(code: &str, new_name: &str) -> String {
 }
 
 /// Parameter list (raw text between parens) of `fn {name}(...)`.
+/// The return type spelled in `fn NAME(..) -> RET {`. `None` if the fn or arrow is absent.
+fn fn_return_type(code: &str, name: &str) -> Option<String> {
+    let start = code.find(&format!("fn {name}("))?;
+    let after = &code[start..];
+    let arrow = after.find("->")?;
+    let brace = after[arrow..].find('{')?;
+    Some(after[arrow + 2..arrow + brace].trim().to_string())
+}
+
+/// Wrap each bare `return EXPR;` as `return (EXPR) != 0;` (Mog truthiness), so an i64 predicate
+/// body satisfies a `-> bool` signature. `return true/false;` and bare `return;` are left as-is.
+fn wrap_bare_returns_as_bool(body: &str) -> String {
+    body.lines()
+        .map(|line| {
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix("return ") {
+                if let Some(expr) = rest.strip_suffix(';') {
+                    let e = expr.trim();
+                    if !e.is_empty() && e != "true" && e != "false" {
+                        let indent = &line[..line.len() - t.len()];
+                        return format!("{indent}return ({e}) != 0;");
+                    }
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn fn_header_params(code: &str, name: &str) -> Option<String> {
     let start = code.find(&format!("fn {name}("))?;
     let after = &code[start..];
@@ -2745,6 +2788,19 @@ mod tests {
             "vc must call the composition entry, not become a helper body:\n{out}"
         );
         assert!(out.contains("fn count_vowels(") && out.contains("fn reverse_string("), "helpers must be inlined:\n{out}");
+    }
+
+    /// i64->bool adapter: the solver expresses a predicate as an i64 fn (0/1 or truthy), but the
+    /// repo fn returns bool. Reshape must wrap the bare returns as `(EXPR) != 0` so it type-checks.
+    #[test]
+    fn reshape_adapts_i64_predicate_body_to_bool_signature() {
+        let old = "pub fn f(n: i64) -> bool {\n    false\n}\n";
+        let synth = "fn f(n: i64) -> i64 {\n    if n < 2 {\n        return 0;\n    }\n    return 1;\n}\n";
+        let out = reshape_to_repo_signature(old, "f", synth).expect("reshape");
+        assert!(out.contains("-> bool"), "repo bool signature kept: {out}");
+        assert!(out.contains("return (0) != 0;"), "0-return not adapted: {out}");
+        assert!(out.contains("return (1) != 0;"), "1-return not adapted: {out}");
+        assert!(!out.contains("return 0;") && !out.contains("return 1;"), "raw i64 return survived: {out}");
     }
 
     static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
