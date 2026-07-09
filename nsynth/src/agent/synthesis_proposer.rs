@@ -562,9 +562,14 @@ fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>,
     out
 }
 
-/// Parse a Rust literal token into a `Value`: integer, `true`/`false`, or a simple
-/// double-quoted string (no escapes). Returns `None` for anything else so the miner
-/// only captures cleanly-verifiable examples.
+/// Parse a Rust literal token into a `Value`: integer, `true`/`false`, a simple
+/// double-quoted string (no escapes), an owned-string constructor (`"x".to_string()`,
+/// `String::from("x")`), or an ARRAY/SLICE/VEC literal (`[1,2]`, `&[1,2]`, `vec![1,2]`,
+/// nested). Returns `None` for anything else so the miner only captures cleanly-
+/// verifiable examples. Array + owned-string forms are what a real test uses to pass a
+/// list or `String` argument — without them the CLI's generic "fix the failing tests"
+/// query mines 0 rows for every collection/string function (the semantic issue path in
+/// the bench sidesteps mining via name-match, hiding this).
 fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
     use crate::benchmark::Value;
     let t = tok.trim();
@@ -581,6 +586,34 @@ fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
         if !body.contains('\\') {
             return Some(Value::Str(body.to_string()));
         }
+    }
+    // Owned-`String` constructors: unwrap and re-parse the inner string literal.
+    for suffix in [".to_string()", ".to_owned()", ".into()"] {
+        if let Some(inner) = t.strip_suffix(suffix) {
+            return parse_literal(inner.trim());
+        }
+    }
+    if let Some(inner) = t.strip_prefix("String::from(").and_then(|r| r.strip_suffix(')')) {
+        return parse_literal(inner.trim());
+    }
+    // Array / slice / vec literals: strip the container spelling, then parse each element
+    // recursively (nested arrays work) and collect. `[]` / `vec![]` -> empty array.
+    let mut body = t;
+    if let Some(r) = body.strip_prefix("vec!") {
+        body = r.trim();
+    }
+    if let Some(r) = body.strip_prefix('&') {
+        body = r.trim();
+    }
+    if body.starts_with('[') && body.ends_with(']') {
+        let content = &body[1..body.len() - 1];
+        let elems: Option<Vec<Value>> = split_top_level_comma(content)
+            .iter()
+            .map(|e| e.trim())
+            .filter(|e| !e.is_empty())
+            .map(parse_literal)
+            .collect();
+        return elems.map(Value::Array);
     }
     None
 }
@@ -2280,6 +2313,55 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Mutex;
+
+    // --- literal + assert mining: array/slice/vec + owned-string forms (pure, deterministic) ---
+
+    #[test]
+    fn parse_literal_handles_array_slice_vec_and_owned_string_forms() {
+        use crate::benchmark::Value;
+        // scalars still work
+        assert_eq!(parse_literal("42"), Some(Value::Int(42)));
+        assert_eq!(parse_literal("-3"), Some(Value::Int(-3)));
+        assert_eq!(parse_literal("true"), Some(Value::Bool(true)));
+        assert_eq!(parse_literal("\"hi\""), Some(Value::Str("hi".into())));
+        // array / slice / vec literals -> Value::Array
+        let arr = Value::Array(vec![Value::Int(5), Value::Int(2), Value::Int(8), Value::Int(1)]);
+        assert_eq!(parse_literal("[5, 2, 8, 1]"), Some(arr.clone()));
+        assert_eq!(parse_literal("&[5,2,8,1]"), Some(arr.clone()));
+        assert_eq!(parse_literal("vec![5, 2, 8, 1]"), Some(arr));
+        assert_eq!(parse_literal("vec![]"), Some(Value::Array(vec![])));
+        assert_eq!(parse_literal("[]"), Some(Value::Array(vec![])));
+        // owned-String constructors -> the inner string literal
+        assert_eq!(parse_literal("\"abc\".to_string()"), Some(Value::Str("abc".into())));
+        assert_eq!(parse_literal("\"x\".to_owned()"), Some(Value::Str("x".into())));
+        assert_eq!(parse_literal("\"y\".into()"), Some(Value::Str("y".into())));
+        assert_eq!(parse_literal("String::from(\"z\")"), Some(Value::Str("z".into())));
+        // non-literals still decline
+        assert_eq!(parse_literal("some_var"), None);
+    }
+
+    #[test]
+    fn mine_asserts_recovers_array_and_owned_string_io_pairs() {
+        use crate::benchmark::Value;
+        // array INPUT, scalar output — the CLI "fix the failing tests" shape for a list fn
+        let text = "assert_eq!(mn(vec![5,2,8,1]), 1); assert_eq!(mn(vec![-3,-1,-9]), -9);";
+        let rows = mine_asserts(text, "mn");
+        assert_eq!(rows.len(), 2, "both array-input asserts must be mined");
+        assert_eq!(rows[0].0.len(), 1);
+        assert!(matches!(rows[0].0[0], Value::Array(_)));
+        // two-arg: slice + scalar
+        let text2 = "assert_eq!(cnt(&[1,2,2,3,2], 2), 3);";
+        let rows2 = mine_asserts(text2, "cnt");
+        assert_eq!(rows2.len(), 1);
+        assert_eq!(rows2[0].0.len(), 2, "slice arg and scalar arg both parsed");
+        assert_eq!(rows2[0].1, Value::Int(3));
+        // owned-String argument + String result
+        let text3 = "assert_eq!(rev(\"abc\".to_string()), \"cba\".to_string());";
+        let rows3 = mine_asserts(text3, "rev");
+        assert_eq!(rows3.len(), 1);
+        assert_eq!(rows3[0].0[0], Value::Str("abc".into()));
+        assert_eq!(rows3[0].1, Value::Str("cba".into()));
+    }
 
     // --- gated model-repair stage: the pure, model-free core (deterministic) ---
 
