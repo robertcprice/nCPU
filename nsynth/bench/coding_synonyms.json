@@ -64,5 +64,15 @@
 [
 "unique",
 "distinct"
+],
+[
+"upper",
+"uppercase",
+"capitalize"
+],
+[
+"lower",
+"lowercase",
+"downcase"
 ]
 ]
