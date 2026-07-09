@@ -296,9 +296,15 @@ impl CodingAgentSession {
                         }
                         Answer::Refused => unreachable!(),
                     };
+                    // HONESTY (defect C): a bare-NL match whose intent could NOT be confirmed is
+                    // labelled `:tentative` — it is a name-grounded GUESS, not a verified solve.
+                    // `success` must reflect that: a tentative answer is NOT a confident success
+                    // (so the CLI never prints `success: true` over a wrong-count composition).
+                    // The code + honest tentative label are still returned for the user to inspect.
+                    let confident = !method.contains(":tentative");
                     let result = AgentQueryResult {
                         route: QueryRoute::SynthesizeFunction,
-                        success: true,
+                        success: confident,
                         response: code,
                         workflow: "synthesize_function".to_string(),
                         clarification_questions: Vec::new(),

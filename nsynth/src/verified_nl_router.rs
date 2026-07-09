@@ -982,6 +982,14 @@ pub fn answer_with_proposer(
     proposer: Option<&Proposer>,
 ) -> Answer {
     if examples.is_empty() {
+        // DEFECT-A GUARD: a prompt that names exactly ONE complete library op must resolve to
+        // that single op, never a 2-op composition that merely reuses its tokens. The correct
+        // single op wins over any behavior-composition for the SAME prompt: `count_positives`
+        // fully explains "count how many elements are positive", so the type-compatible chain
+        // is_positive(count_positives(x)) (returns 0/1, not the count) must NOT preempt it.
+        if let Some(op) = sole_op_for_prompt(prompt) {
+            return Answer::Library { name: op.name, code: op.mog.to_string() };
+        }
         if let Some(code) = declare_composed(prompt) {
             return Answer::Composition { code };
         }
@@ -1319,6 +1327,14 @@ pub fn declare(prompt: &str) -> Option<&'static LibOp> {
 /// or their types don't chain in prompt order. Like [`declare`], the honest
 /// completion is [`demonstrate`] — show the chain's behavior for the user to confirm.
 pub fn declare_composed(prompt: &str) -> Option<String> {
+    // DISTINGUISHING ORACLE, part 1 (defect B): if a SINGLE library op already explains the
+    // whole prompt (its operation-word signature equals the prompt's), the chain must not
+    // preempt it — that op is the intent. This is what stops is_positive(count_positives(x))
+    // from shadowing `count_positives` for "count how many elements are positive". Defer to the
+    // single-op tier (`declare` / the caller's sole-op guard) rather than ship a chain.
+    if sole_op_for_prompt(prompt).is_some() {
+        return None;
+    }
     // Ordered prompt words (lowercase); a prefix (>=4 chars) counts, so "uppercase"
     // matches the op token "upper".
     let words: Vec<String> = prompt
@@ -1362,26 +1378,38 @@ pub fn declare_composed(prompt: &str) -> Option<String> {
         return None; // types don't chain in prompt order
     }
     let (a_entry, b_entry) = (op_entry_name(a.mog)?, op_entry_name(b.mog)?);
-    Some(format!(
+    let code = format!(
         "fn composed(x0: {}) -> {b_ret} {{\n    return {b_entry}({a_entry}(x0));\n}}\n\n{}\n{}",
         a_params[0],
         a.mog.trim_end(),
         b.mog.trim_end()
-    ))
+    );
+    // DISTINGUISHING ORACLE, part 2 (defect B): the chain must do OBSERVABLE work beyond its
+    // inner op `a`. If b(a(x)) == a(x) on every fresh input, the outer op is behaviorally a
+    // no-op and the prompt is really a single-op request — refuse the chain and let the
+    // single-op tier answer. Reuses the constraint-oracle fresh-input differential; fail-safe
+    // (unsupported input shape => indistinguishable => refuse), never confidently wrong.
+    if !crate::constraint_oracle::programs_distinguishable(&code, "composed", a.mog, a_entry) {
+        return None;
+    }
+    Some(code)
 }
 
 /// Function / framing words that carry NO operation semantics — epistemic verbs
-/// ("check", "determine"), interrogatives ("how", "whether"), and quantifier adverbs
-/// ("every", "many"). Complements [`STOP`]; kept separate because it is used only by
-/// the confirmation completeness gate ([`names_only_op`]), not by routing/candidacy
-/// (where dropping a word could hide a real op token). Tokens arrive STEMMED. NB: it
-/// must NOT include any operation synonym — e.g. "total" (a `sum` synonym) is absent.
+/// ("check", "determine"), interrogatives ("how", "whether"), quantifier adverbs
+/// ("every", "many"), and copulas ("are", "be" — the plural/base of the already-stop
+/// "is", so "elements ARE positive" reduces to the same operation words as `count_positives`).
+/// Complements [`STOP`]; kept separate because it is used only by the operation-signature /
+/// confirmation-completeness gates ([`operation_signature`], [`names_only_op`]), not by
+/// routing/candidacy (where dropping a word could hide a real op token). Tokens arrive
+/// STEMMED. NB: it must NOT include any operation synonym — e.g. "total" (a `sum` synonym) is
+/// absent.
 fn is_framing_word(t: &str) -> bool {
     matches!(
         t,
         "check" | "determine" | "tell" | "whether" | "if" | "how" | "many" | "much"
             | "every" | "convert" | "turn" | "make" | "given" | "some" | "any" | "then"
-            | "whole" | "single"
+            | "whole" | "single" | "are" | "be"
     )
 }
 
@@ -1440,6 +1468,34 @@ pub fn reference_for(prompt: &str, want_param_types: &[String]) -> Option<&'stat
         if shape_ok(op) && operation_signature(op.name) == want {
             if hit.is_some() {
                 return None; // two same-shape ops share the signature -> ambiguous -> refuse
+            }
+            hit = Some(op);
+        }
+    }
+    hit
+}
+
+/// The SINGLE library op whose operation-word signature ([`operation_signature`]) EXACTLY
+/// equals the prompt's, for ANY parameter shape. Unlike [`reference_for`] this does not filter
+/// by a candidate's parameter types — it answers "does the prompt name exactly ONE complete
+/// operation, and nothing more?" A unique hit means the prompt is a SINGLE-OP request and a
+/// 2-op composition MUST NOT preempt it: `count_positives` alone fully explains "count how
+/// many elements are positive" (op-words {count, positive}); the type-compatible chain
+/// `is_positive(count_positives(x))` merely double-counts the shared `positive` token and is
+/// behaviorally wrong. The operation-word set-equality is the completeness gate — a genuinely
+/// compositional prompt ("reverse then uppercase" -> {reverse, upper}) matches no single op and
+/// returns None, so real compositions still reach the composition tier. Ambiguity (>=2 ops
+/// share the signature, e.g. two shapes of the same op-words) or no exact match => None.
+pub fn sole_op_for_prompt(prompt: &str) -> Option<&'static LibOp> {
+    let want = operation_signature(prompt);
+    if want.is_empty() {
+        return None;
+    }
+    let mut hit: Option<&'static LibOp> = None;
+    for op in OPS {
+        if operation_signature(op.name) == want {
+            if hit.is_some() {
+                return None; // ambiguous -> defer to the gated composition/refuse tiers
             }
             hit = Some(op);
         }
@@ -2643,6 +2699,37 @@ mod tests {
         assert!(code.contains("to_upper(reverse_string"), "chain must be reverse THEN upper");
         // Single-op prompt names only one op -> no chain.
         assert!(declare_composed("reverse a string").is_none());
+    }
+
+    #[test]
+    fn sole_op_wins_over_spurious_composition_for_single_op_prompt() {
+        // DEFECT A/B regression: "count how many elements are positive" is a SINGLE-OP request
+        // (`count_positives`). The bare-NL composition tier used to prefer the type-compatible
+        // chain is_positive(count_positives(x)) — which returns 0/1, not the count — and label
+        // it a confident success. The correct single op must win.
+        let prompt = "count how many elements are positive";
+        // The prompt's operation-word signature resolves to exactly one op.
+        assert_eq!(sole_op_for_prompt(prompt).map(|o| o.name), Some("count_positives"));
+        // A genuinely compositional prompt still names no single op -> stays available to the
+        // composition tier.
+        assert!(sole_op_for_prompt("reverse then uppercase a string").is_none());
+        // The bare-NL composition tier must REFUSE to build a chain for the single-op prompt.
+        assert!(
+            declare_composed(prompt).is_none(),
+            "composition tier must not preempt the correct single op"
+        );
+        // End-to-end: answer() with NO examples returns the single op, not a wrong chain.
+        match answer(prompt, &[]) {
+            Answer::Library { name, .. } => assert_eq!(name, "count_positives"),
+            other => panic!(
+                "expected the single op count_positives, got {}",
+                match other {
+                    Answer::Composition { code } => format!("composition:\n{code}"),
+                    Answer::Refused => "refused".to_string(),
+                    _ => "other".to_string(),
+                }
+            ),
+        }
     }
 
     #[test]

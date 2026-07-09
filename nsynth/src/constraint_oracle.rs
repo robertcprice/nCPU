@@ -237,6 +237,41 @@ fn differential_matches(cand: &str, cand_fn: &str, ref_mog: &str, n: usize, seed
     true
 }
 
+/// True iff `p` (its fn `p_fn`) and `q` (its fn `q_fn`) are DISTINGUISHABLE — they produce
+/// a DIFFERENT output for at least one fresh input shaped to `p`'s signature. Reuses the same
+/// fresh-input differential as [`confirm_from_prompt`]. Used by the bare-NL composition tier
+/// to reject a 2-op chain `b(a(x))` that is INDISTINGUISHABLE from its own inner op `a` (the
+/// outer op does nothing observable, so the prompt is really a single-op request). A crash on
+/// exactly one side is an observable difference (distinguishable); if `p`'s signature can't be
+/// parsed or its inputs can't be sampled, returns false (fail-safe: treat as indistinguishable
+/// so the caller refuses the chain rather than shipping an unproven composition).
+pub fn programs_distinguishable(p: &str, p_fn: &str, q: &str, q_fn: &str) -> bool {
+    let Some(param_types) = sig_param_types(p) else {
+        return false;
+    };
+    let args = fresh_typed_args(&param_types, 32, 0x51a9_bd27_0e13_c4a1);
+    if args.is_empty() {
+        return false; // unsupported input shape -> cannot sample -> fail-safe
+    }
+    for inputs in args {
+        match (
+            execute_function(p, p_fn, &inputs, "constraint_oracle"),
+            execute_function(q, q_fn, &inputs, "constraint_oracle"),
+        ) {
+            (Ok(a), Ok(b)) => {
+                if !outputs_agree(&a, &b) {
+                    return true; // observed a difference
+                }
+            }
+            // exactly one side errs on a valid input => observably different behaviour;
+            // both err => no evidence of a difference (keep scanning / stay closed).
+            (Ok(_), Err(_)) | (Err(_), Ok(_)) => return true,
+            (Err(_), Err(_)) => {}
+        }
+    }
+    false
+}
+
 /// Parse a Mog signature's parameter TYPE strings, e.g. `fn f(a: i64, b: [i64]) -> i64`
 /// -> ["i64", "[i64]"]. `None` if the signature can't be parsed. Empty vec = nullary.
 fn sig_param_types(mog: &str) -> Option<Vec<String>> {
@@ -606,6 +641,14 @@ mod tests {
         // beyond the resolved op's own verified impl.
         assert!(differential_matches(MAX_OK, "array_max", REF_MAX, 32, 0x00ac_1e50));
         assert!(!differential_matches(MAX_FAKE, "array_max", REF_MAX, 32, 0x00ac_1e50));
+    }
+
+    #[test]
+    fn programs_distinguishable_detects_observable_difference() {
+        // Two identical impls are NOT distinguishable (agree on every fresh input).
+        assert!(!programs_distinguishable(MAX_OK, "array_max", REF_MAX, "array_max"));
+        // max vs first-element: they disagree on some fresh array -> distinguishable.
+        assert!(programs_distinguishable(MAX_OK, "array_max", MAX_FAKE, "array_max"));
     }
 
     #[test]
