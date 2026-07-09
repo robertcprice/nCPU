@@ -518,6 +518,16 @@ fn synthesize_mined_for_fn(
             if crate::synth_confidence::is_memorization_overfit(&res.code, &exs) {
                 return None;
             }
+            // SELF-SYNTHESIS: teach this verified solve back into the learned store, so the engine
+            // absorbs the real functions it repairs and solves them model-free next time (the read
+            // side, try_learned in solve_problem, is already wired; this closes the write side for
+            // the repo path). Inert unless NSYNTH_LEARNED_OPS_PATH is set, and record_proposed_op
+            // re-gates it (rejects constants + already-library ops, runs the semantic-contract
+            // oracle, dedups); try_learned RE-verifies on read, so a narrow fit can never emit an
+            // example-inconsistent answer. Gate on >= 3 examples to prefer well-determined solves.
+            if exs.len() >= 3 {
+                crate::op_library::record_proposed_op(&problem, &res.code);
+            }
             (res.code, res.method)
         }
     };
