@@ -26,3 +26,4 @@
 {"id": 8403, "fn": "x", "text": "the majority element in an array", "examples": [{"in": [[3, 2, 3]], "out": 3}, {"in": [[2, 2, 1, 1, 1, 2, 2]], "out": 2}, {"in": [[5, 5, 5]], "out": 5}, {"in": [[1, 2, 1]], "out": 1}, {"in": [[9, 9, 9, 1, 2]], "out": 9}]}
 {"id": 8404, "fn": "x", "text": "count the number of inversions in an array", "examples": [{"in": [[2, 3, 8, 6, 1]], "out": 5}, {"in": [[1, 2, 3]], "out": 0}, {"in": [[3, 2, 1]], "out": 3}, {"in": [[1, 3, 2, 3, 1]], "out": 4}, {"in": [[5]], "out": 0}]}
 {"id": 8405, "fn": "x", "text": "length of the longest valid parentheses substring", "examples": [{"in": ["(()"], "out": 2}, {"in": [")()())"], "out": 4}, {"in": [""], "out": 0}, {"in": ["()(()"], "out": 2}, {"in": ["()()"], "out": 4}]}
+{"id":8500,"fn":"x","text":"repeatedly sum the digits of a number until a single digit remains","examples":[{"in":[0],"out":0},{"in":[38],"out":2},{"in":[123],"out":6},{"in":[9999],"out":9},{"in":[10],"out":1},{"in":[77],"out":5}]}

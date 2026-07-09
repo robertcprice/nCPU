@@ -634,6 +634,60 @@ pub fn route_learned_by_name(
     passing.into_iter().next().map(|(c, n, _)| (c, n))
 }
 
+/// FIXPOINT comprehension — the emergent handle on a DEFINITIONAL prompt. "repeatedly
+/// <OP> until <it stabilizes>" describes the FIXPOINT of a named operation: "repeatedly sum
+/// the digits of a number until a single digit remains" is the fixpoint of sum_of_digits
+/// (= the digital root), which the prompt never NAMES. Resolve the operation PHRASE (the span
+/// between the iteration trigger and "until") to a unary i64->i64 library op, synthesize a
+/// bounded `while op(v) != v` fixpoint driver, and verify it against the examples. Condition-
+/// FREE: iterating to the op's own fixpoint sidesteps parsing the termination clause ("a
+/// single digit"), so there is no hand-list. The op is NAME-resolved (provenance) AND the
+/// result is EXAMPLE-verified, so this is as never-wrong-safe as route_verified. Returns
+/// (code, entry_fn).
+pub fn route_fixpoint(
+    prompt: &str,
+    examples: &[crate::benchmark::Example],
+) -> Option<(String, String)> {
+    let first = examples.first()?;
+    // Scalar fixpoint only: a unary i64 -> i64 task.
+    if first.inputs.len() != 1
+        || value_type_str(&first.inputs[0]) != "i64"
+        || value_type_str(&first.expected) != "i64"
+    {
+        return None;
+    }
+    let lower = prompt.to_lowercase();
+    if !lower.contains("until") {
+        return None;
+    }
+    // Iteration trigger: "repeatedly" / "repeat" / "keep".
+    let trig_end = ["repeatedly", "repeat", "keep"]
+        .iter()
+        .find_map(|t| lower.find(t).map(|i| i + t.len()))?;
+    let until_at = lower.find("until")?;
+    if until_at <= trig_end {
+        return None;
+    }
+    // The operation phrase, resolved to a unary i64->i64 library op via the usual name path.
+    let phrase = prompt[trig_end..until_at].trim();
+    let op = declare(phrase)?;
+    let (params, ret) = op_sig_types(op.mog);
+    if params.len() != 1 || params[0] != "i64" || ret != "i64" {
+        return None;
+    }
+    let entry = op_entry_name(op.mog)?;
+    // Bounded fixpoint driver (a non-converging op can never stall this) + the op's own def.
+    let code = format!(
+        "fn fixpoint(v0: i64) -> i64 {{\n    v: i64 = v0;\n    guard: i64 = 0;\n    while guard < 100000 {{\n        nv: i64 = {entry}(v);\n        if nv == v {{\n            return v;\n        }}\n        v = nv;\n        guard = guard + 1;\n    }}\n    return v;\n}}\n{}",
+        op.mog
+    );
+    if crate::runtime::code_reproduces_examples(&code, examples) {
+        Some((code, "fixpoint".to_string()))
+    } else {
+        None
+    }
+}
+
 pub fn route_composed_by_behavior(examples: &[crate::benchmark::Example]) -> Option<String> {
     let first = examples.first()?;
     if first.inputs.len() != 1 {
@@ -968,6 +1022,11 @@ pub fn answer_with_proposer(
     // -gated, so a coincidental match refuses instead of shipping wrong.
     if let Some(r) = route_by_behavior(prompt, examples) {
         return Answer::Library { name: r.op.name, code: r.op.mog.to_string() };
+    }
+    // FIXPOINT tier — a definitional "repeatedly <OP> until ..." prompt (digital root =
+    // repeatedly sum digits). Name-resolved op + example-verified fixpoint -> never-wrong.
+    if let Some((code, _)) = route_fixpoint(prompt, examples) {
+        return Answer::Synthesized { method: "fixpoint".to_string(), code };
     }
     // The examples fit >=2 disagreeing single ops but the behaviour tier could not pick
     // one — refuse rather than let composition/synthesis re-ship the coincidence.
@@ -2374,6 +2433,26 @@ mod tests {
             crate::runtime::code_reproduces_examples(&code, &[ex(7, 17)]),
             "routed nth_prime must be correct on a fresh input"
         );
+    }
+
+    #[test]
+    fn fixpoint_tier_solves_definitional_digital_root() {
+        use crate::benchmark::{Example, Value};
+        let ex = |n: i64, o: i64| Example { inputs: vec![Value::Int(n)], expected: Value::Int(o) };
+        // The digital root, described definitionally ("repeatedly sum the digits ... until a
+        // single digit") — the prompt never NAMES the op. The fixpoint tier resolves the
+        // operation phrase "sum the digits" -> sum_of_digits and iterates to its fixpoint.
+        let exs = vec![ex(0, 0), ex(38, 2), ex(123, 6), ex(9999, 9), ex(10, 1)];
+        let a = answer(
+            "repeatedly sum the digits of a number until a single digit remains",
+            &exs,
+        );
+        let code = match &a {
+            Answer::Synthesized { code, .. } | Answer::Library { code, .. } => code.clone(),
+            _ => panic!("definitional digital root should solve via the fixpoint tier"),
+        };
+        // Generalizes: digital_root(77) = 7+7=14 -> 1+4 = 5, never shown.
+        assert!(crate::runtime::code_reproduces_examples(&code, &[ex(77, 5)]));
     }
 
     #[test]
