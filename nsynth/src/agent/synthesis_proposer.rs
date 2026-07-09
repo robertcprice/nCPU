@@ -701,7 +701,7 @@ fn front_door_mined_code(
 /// (`"abc"`), and boolean (`true`/`false`) literals are captured — the solver's
 /// verified domains; anything else (floats, expressions, method chains) is skipped.
 /// Name matching is word-boundary safe, so `add` never matches `add_two`.
-fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> {
+pub(crate) fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> {
     let mut out = Vec::new();
     let mut cur = text;
     while let Some(rel) = cur.find("assert_eq!") {
@@ -1533,7 +1533,7 @@ fn defined_fn_names(text: &str) -> Vec<String> {
 /// the main function renamed to the repo function and made `pub`, replacing the
 /// repo function definition wholesale. The main is identified by name match to
 /// the repo function, else the last function defined.
-fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
+pub(crate) fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -> Option<String> {
     let r = reshape_to_repo_signature_inner(old_text, repo_fn, synthesized);
     if std::env::var_os("NSYNTH_DEBUG_RESHAPE").is_some() {
         eprintln!("=== RESHAPE repo_fn={repo_fn}\n--- SYNTHESIZED ---\n{synthesized}\n--- RESULT ---\n{}\n===",
