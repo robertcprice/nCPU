@@ -794,6 +794,16 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             .copied()
             .collect::<Vec<_>>()
             .join(sep),
+        WordShape::UpperEachWord => words
+            .iter()
+            .map(|w| w.to_uppercase())
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::LowerEachWord => words
+            .iter()
+            .map(|w| w.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(sep),
     }
 }
 
@@ -830,6 +840,12 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::FilterOddLen => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len % 2 == 1 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
         ),
+        WordShape::UpperEachWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].upper());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::LowerEachWord => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].lower());\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
     }
 }
 
@@ -854,7 +870,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 9] = [
+    const SHAPES: [WordShape; 11] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -864,6 +880,8 @@ pub fn synthesize_word_program(
         WordShape::Initials,
         WordShape::FilterEvenLen,
         WordShape::FilterOddLen,
+        WordShape::UpperEachWord,
+        WordShape::LowerEachWord,
     ];
     for sep in SEPS {
         // A word shape only applies to GENUINE multi-word input: at least one
@@ -1404,6 +1422,16 @@ mod tests {
             ],
         );
         assert_eq!(r.map(|r| r.method), Some("word-filter_odd_len".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_upper_each_word() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(
+            &p,
+            &[wex("hello world", "HELLO WORLD"), wex("a Bb", "A BB")],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-upper_each_word".to_string()));
     }
 
     /// Reachability probe: is longest-word solved by THIS synthesizer, or shadowed
