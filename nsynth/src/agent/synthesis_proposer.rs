@@ -3748,11 +3748,23 @@ fn reshape_to_repo_signature_inner(old_text: &str, repo_fn: &str, synthesized: &
             })
             .unwrap_or(fns.len() - 1);
         let mut helpers = String::new();
-        for (k, (_, text)) in fns.iter().enumerate() {
-            if k != main_idx {
-                helpers.push_str(text.trim());
-                helpers.push_str("\n\n");
+        let mut emitted: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (k, (name, text)) in fns.iter().enumerate() {
+            if k == main_idx {
+                continue;
             }
+            // De-dup helpers so a composition that lists the same helper twice (e.g. `array_sum`
+            // used at two call sites) does not emit two `fn array_sum` definitions (E0428), and
+            // skip any helper the repo file ALREADY defines (same E0428) — a synthesized helper
+            // that clashes with an existing one is redundant, not a second definition.
+            if !emitted.insert(name.as_str()) {
+                continue;
+            }
+            if repo_has_fn && old_text.contains(&format!("fn {name}(")) {
+                continue;
+            }
+            helpers.push_str(text.trim());
+            helpers.push_str("\n\n");
         }
         // SLICE PATH: keep the repo's `&[i64]` signature, run the Vec-based synthesized main body
         // behind a `.to_vec()` bridge, and insert the (Vec-based) helpers as sibling functions.
@@ -5422,6 +5434,38 @@ mod tests {
             "slice repo param must be bridged with .to_vec() in the reordered call: {new}"
         );
         assert!(new.contains(".truncate("), "impl must retain the real body: {new}");
+    }
+
+    /// A synthesized composition that emits the SAME helper twice (e.g. `array_sum` at two call
+    /// sites) must reshape to a SINGLE `fn array_sum` — two definitions are E0428 and the compile
+    /// gate rejects the whole patch (observed: prefix-sums). De-dup by helper name.
+    #[test]
+    fn reshape_dedups_duplicate_synthesized_helpers() {
+        let old = "pub fn prefix_sums(xs: Vec<i64>) -> Vec<i64> {\n    Vec::new()\n}\n";
+        let helper = "fn array_sum(a: Vec<i64>) -> i64 {\n    let mut s: i64 = 0;\n    for e in a.iter().copied() {\n        s = s + e;\n    }\n    return s;\n}\n";
+        let synth = format!(
+            "pub fn prefix_sums(arr: Vec<i64>) -> Vec<i64> {{\n    let mut out: Vec<i64> = Vec::new();\n    return out;\n}}\n\n{helper}\n{helper}"
+        );
+        let new = reshape_to_repo_signature(old, "prefix_sums", &synth)
+            .expect("multi-fn composition must reshape");
+        assert_eq!(
+            new.matches("fn array_sum(").count(),
+            1,
+            "the array_sum helper must appear exactly once (E0428 otherwise): {new}"
+        );
+    }
+
+    /// A synthesized helper that already exists in the repo file is skipped (E0428 otherwise).
+    #[test]
+    fn reshape_skips_helper_already_in_repo() {
+        let old = "pub fn array_sum(a: Vec<i64>) -> i64 {\n    0\n}\n\npub fn prefix_sums(xs: Vec<i64>) -> Vec<i64> {\n    Vec::new()\n}\n";
+        let synth = "pub fn prefix_sums(arr: Vec<i64>) -> Vec<i64> {\n    let mut out: Vec<i64> = Vec::new();\n    return out;\n}\n\nfn array_sum(a: Vec<i64>) -> i64 {\n    let mut s: i64 = 0;\n    for e in a.iter().copied() {\n        s = s + e;\n    }\n    return s;\n}\n";
+        let new = reshape_to_repo_signature(old, "prefix_sums", synth).expect("reshape");
+        assert_eq!(
+            new.matches("fn array_sum(").count(),
+            1,
+            "the pre-existing array_sum must not be re-emitted: {new}"
+        );
     }
 
     // ---- Lever D: extract-helper refactor ----
