@@ -304,7 +304,7 @@ pub fn try_mutation_repair_patch(
             .map(|pf| pf.ends_with(path.as_str()) || path.ends_with(pf))
             .unwrap_or(false)
         {
-            target_line.and_then(|ln| function_span_at_line(orig, ln as usize))
+            target_line.and_then(|ln| production_target_span(orig, ln as usize))
         } else {
             None
         };
@@ -1266,6 +1266,99 @@ fn function_span_at_line(code: &str, line: usize) -> Option<(usize, usize)> {
         }
     }
     best
+}
+
+/// The production function to localize the mutation search to, given the failing `line`. If the line
+/// is inside a production function (a panic-in-code bug), that function. If it is inside the
+/// `#[cfg(test)]` module (an `assert_eq!` failure reports the ASSERT's line, not the code's), the
+/// production function NAMED in that assertion — so an assert bug still localizes to the code UNDER
+/// TEST, never the test, and never a sibling like a reference impl the assert also calls.
+fn production_target_span(code: &str, line: usize) -> Option<(usize, usize)> {
+    let test_start = code.find("#[cfg(test)]").unwrap_or(code.len());
+    if let Some((s, e)) = function_span_at_line(code, line) {
+        if s < test_start {
+            return Some((s, e));
+        }
+    }
+    named_production_fn_span(code, line, test_start)
+}
+
+/// Span of the first production function whose name is CALLED on the given (1-indexed) line.
+fn named_production_fn_span(code: &str, line: usize, test_start: usize) -> Option<(usize, usize)> {
+    let text = code.lines().nth(line.checked_sub(1)?)?;
+    for name in called_idents(text) {
+        if let Some(span) = fn_def_span_by_name(&code[..test_start], &name) {
+            return Some(span);
+        }
+    }
+    None
+}
+
+/// Free-function call names on a line: `NAME(` where `NAME` is neither a macro (`NAME!(` — the `!`
+/// breaks the identifier walk) nor a method call (`.NAME(`). In source order, deduped.
+fn called_idents(line: &str) -> Vec<String> {
+    let b = line.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'(' && i > 0 {
+            let mut j = i;
+            while j > 0 && (b[j - 1].is_ascii_alphanumeric() || b[j - 1] == b'_') {
+                j -= 1;
+            }
+            if j < i {
+                let name = &line[j..i];
+                let prev = if j > 0 { b[j - 1] } else { 0 };
+                let starts_ident = name.as_bytes()[0].is_ascii_alphabetic() || name.as_bytes()[0] == b'_';
+                if prev != b'.' && starts_ident && !out.iter().any(|s| s == name) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Byte span `[start, end)` of a top-level `fn NAME(...) { ... }` definition by name, brace-matched.
+fn fn_def_span_by_name(code: &str, name: &str) -> Option<(usize, usize)> {
+    let needle = format!("fn {name}");
+    let cb = code.as_bytes();
+    let mut search = 0usize;
+    while let Some(rel) = code[search..].find(&needle) {
+        let at = search + rel;
+        search = at + needle.len();
+        // token boundary before `fn`
+        if at > 0 {
+            let p = cb[at - 1];
+            if p.is_ascii_alphanumeric() || p == b'_' {
+                continue;
+            }
+        }
+        // token boundary after the name: `(`, `<` (generics), or whitespace
+        match code[at + needle.len()..].chars().next() {
+            Some('(') | Some('<') | Some(' ') | Some('\t') => {}
+            _ => continue,
+        }
+        let Some(brel) = code[at..].find('{') else { continue };
+        let bopen = at + brel;
+        let mut depth = 0i32;
+        let mut k = bopen;
+        while k < cb.len() {
+            match cb[k] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((at, k + 1));
+                    }
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+    }
+    None
 }
 
 /// Mutations to try in order: first the localized function's variants (spliced back into the full
@@ -5004,6 +5097,25 @@ mod tests {
             !generate_mutations(c).iter().any(|m| m.contains("!(")),
             "negated a non-bool return"
         );
+    }
+
+    #[test]
+    fn assert_failure_localizes_to_the_named_production_fn_not_the_test_or_a_sibling() {
+        // `subject` is the buggy fn; `reference` is a sibling the assert also calls. An assert failure
+        // must localize to `subject` (named first in the assert), NOT the test and NOT `reference`.
+        let code = "pub fn subject(a: i64) -> i64 { a + 1 }\n\
+                    pub fn reference(a: i64) -> i64 { a - 1 }\n\n\
+                    #[cfg(test)]\nmod tests {\n use super::*;\n #[test]\n fn t() {\n  \
+                    assert_eq!(subject(5), reference(5));\n }\n}\n";
+        // the assert line (1-indexed)
+        let assert_line = code[..code.find("assert_eq!").unwrap()].matches('\n').count() + 1;
+        let span = production_target_span(code, assert_line).expect("named-fn span");
+        // the span starts at `fn subject` (the `pub ` prefix stays outside, preserved by the splice)
+        assert!(code[span.0..span.1].starts_with("fn subject"), "got: {:?}", &code[span.0..span.1]);
+        assert!(code[span.0..span.1].contains("a + 1") && !code[span.0..span.1].contains("reference"));
+        // called_idents skips the macro and finds the free calls in order.
+        assert_eq!(called_idents("assert_eq!(subject(5), reference(5));"), vec!["subject", "reference"]);
+        assert_eq!(called_idents("let x = obj.method(3) + free(4);"), vec!["free"]);
     }
 
     #[test]
