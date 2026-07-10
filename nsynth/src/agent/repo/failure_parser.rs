@@ -99,7 +99,7 @@ impl FailureParser {
         {
             (
                 FailureKind::TestFailure,
-                extract_file_path(output, "panicked at"),
+                extract_line(output, "panicked at"),
                 "test assertion or runtime expectation failed".to_string(),
                 "inspect failing test and adjust implementation or test hypothesis".to_string(),
             )
@@ -159,34 +159,22 @@ fn extract_line(output: &str, needle: &str) -> String {
         .to_string()
 }
 
-/// The FILE PATH implicated by the needle line — `panicked at src/lib.rs:140:78` -> `src/lib.rs`.
-/// Falls back to the whole line when no `<path>.rs` token is present, so `.file` is a real path the
-/// repair proposers can prioritize (they treat `.file` as the failure-implicated file to mutate first).
-fn extract_file_path(output: &str, needle: &str) -> String {
-    let line = extract_line(output, needle);
-    for tok in line.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',') {
-        if let Some(idx) = tok.find(".rs") {
-            let raw = &tok[..idx + 3];
-            let path = raw.trim_start_matches(|c: char| {
-                !(c.is_ascii_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-')
-            });
-            if !path.is_empty() {
-                return path.to_string();
-            }
-        }
-    }
-    line
-}
-
 fn extract_file_and_line(output: &str) -> (Option<String>, Option<u32>) {
     for line in output.lines() {
         let parts: Vec<&str> = line.split(':').collect();
         for index in 1..parts.len() {
             if let Ok(number) = parts[index].trim().parse::<u32>() {
-                let mut file_candidate = parts[..index].join(":").trim().to_string();
-                if let Some(stripped) = file_candidate.strip_prefix("--> ") {
-                    file_candidate = stripped.to_string();
-                }
+                let joined = parts[..index].join(":");
+                // Take only the last whitespace-separated token so a panic line
+                // (`thread '..' panicked at src/lib.rs`) or a diagnostic arrow (`--> src/lib.rs`)
+                // yields the clean PATH `src/lib.rs`, not the whole prefix — the repair proposers
+                // treat `.file` as the file to mutate first.
+                let file_candidate = joined
+                    .rsplit(char::is_whitespace)
+                    .next()
+                    .unwrap_or(joined.trim())
+                    .trim()
+                    .to_string();
                 if file_candidate.contains('.')
                     || file_candidate.contains('/')
                     || file_candidate.contains('\\')
@@ -217,5 +205,17 @@ mod tests {
         let parser = FailureParser;
         let analysis = parser.parse("test timed out after 30s");
         assert_eq!(analysis.kind, FailureKind::Timeout);
+    }
+
+    #[test]
+    fn panic_line_yields_clean_path_and_line_not_the_whole_message() {
+        // A real test panic line embeds the path AFTER prose; `.file` must be the bare path (repair
+        // proposers mutate `.file` first and localize to `.line`), not `thread '..' panicked at ..`.
+        let parser = FailureParser;
+        let out = "running 1 test\nthread 'tests::t' panicked at src/lib.rs:140:78:\nassertion `left == right` failed";
+        let analysis = parser.parse(out);
+        assert_eq!(analysis.kind, FailureKind::TestFailure);
+        assert_eq!(analysis.file.as_deref(), Some("src/lib.rs"));
+        assert_eq!(analysis.line, Some(140));
     }
 }

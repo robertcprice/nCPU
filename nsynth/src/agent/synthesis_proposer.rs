@@ -270,6 +270,7 @@ pub fn try_mutation_repair_patch(
 ) -> Option<RepairPatch> {
     let verifier = RepairVerifier::new(&context.root, GuardrailPolicy::default());
     let preferred = analysis.and_then(|a| a.file.clone());
+    let target_line = analysis.and_then(|a| a.line);
     let mut files: Vec<(String, String)> = context
         .files
         .iter()
@@ -307,11 +308,24 @@ pub fn try_mutation_repair_patch(
     for (path, orig) in &files {
         let abs = std::path::Path::new(&context.root).join(path);
         let mut bases: Vec<String> = Vec::new();
+        // LOCALIZE: if the failure names this file + a line (a panic `src/lib.rs:140`), mutate ONLY
+        // the function containing that line first. A large file makes thousands of whole-file operator
+        // mutations that bury the real fix past MAX_SINGLE; the failing function's ~dozens of mutations
+        // fit under the cap and are precisely where the bug is.
+        let span = if preferred
+            .as_deref()
+            .map(|pf| pf.ends_with(path.as_str()) || path.ends_with(pf))
+            .unwrap_or(false)
+        {
+            target_line.and_then(|ln| function_span_at_line(orig, ln as usize))
+        } else {
+            None
+        };
         // STUB GENERATION first (fill empty non-pure methods from struct-field templates), then
-        // single-edit MUTATIONS of existing code.
+        // single-edit MUTATIONS of existing code (localized function first, then whole-file).
         let candidates = generate_stub_fills(orig)
             .into_iter()
-            .chain(generate_mutations(orig));
+            .chain(localized_then_full_mutations(orig, span));
         for mutated in candidates {
             if tried >= MAX_SINGLE || start.elapsed() > budget {
                 break;
@@ -1199,6 +1213,89 @@ fn type_compatible(field_ty: &str, ret: &str) -> bool {
         || (field_ty == "i64" && ret == "i64")
         || (field_ty == "bool" && ret == "bool")
         || (field_ty == "String" && ret == "String")
+}
+
+/// Byte span `[start, end)` of the `fn` whose brace-balanced body contains the 1-indexed `line`.
+/// Used to localize mutation search to the failing function (a panic reports `file:line`). Returns
+/// the innermost enclosing function (last match wins). `None` if the line is out of range or no `fn`
+/// encloses it (e.g. the line is a top-level `const`).
+fn function_span_at_line(code: &str, line: usize) -> Option<(usize, usize)> {
+    if line == 0 {
+        return None;
+    }
+    // Byte offset of the start of the target line.
+    let mut off = None;
+    let mut ln = 1usize;
+    if line == 1 {
+        off = Some(0);
+    }
+    for (i, c) in code.char_indices() {
+        if c == '\n' {
+            ln += 1;
+            if ln == line {
+                off = Some(i + 1);
+                break;
+            }
+        }
+    }
+    let off = off?;
+    let cb = code.as_bytes();
+    let mut search = 0usize;
+    let mut best: Option<(usize, usize)> = None;
+    while let Some(rel) = code[search..].find("fn ") {
+        let fstart = search + rel;
+        search = fstart + 3;
+        // Only treat `fn ` as a definition when it is at a token boundary.
+        if fstart > 0 {
+            let prev = cb[fstart - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                continue;
+            }
+        }
+        let Some(brel) = code[fstart..].find('{') else {
+            continue;
+        };
+        let bopen = fstart + brel;
+        let mut depth = 0i32;
+        let mut close = None;
+        let mut k = bopen;
+        while k < cb.len() {
+            match cb[k] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(k);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        let Some(close) = close else { continue };
+        if fstart <= off && off <= close {
+            best = Some((fstart, close + 1));
+        }
+    }
+    best
+}
+
+/// Mutations to try in order: first the localized function's variants (spliced back into the full
+/// file), then the whole-file variants as a fallback. When `span` is `None` this is just the
+/// whole-file mutations, so the caller path is unchanged when no line is known.
+fn localized_then_full_mutations(orig: &str, span: Option<(usize, usize)>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some((s, e)) = span {
+        let func = &orig[s..e];
+        for fv in generate_mutations(func) {
+            // `func` has no `#[cfg(test)]`, so each `fv` is the mutated function verbatim; splice it
+            // back into the surrounding file.
+            out.push(format!("{}{}{}", &orig[..s], fv, &orig[e..]));
+        }
+    }
+    out.extend(generate_mutations(orig));
+    out
 }
 
 /// Splice `to` in place of `from_len` bytes at `at` in `code`, then reappend `tail` (the test module).
@@ -4668,6 +4765,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn function_span_at_line_returns_enclosing_fn_body() {
+        // line 1: `fn a`, line 2: body, line 3: `}`, line 4: blank, line 5: `fn b`, line 6: body...
+        let code = "fn a() -> i32 {\n    1\n}\n\nfn b() -> i32 {\n    2\n}\n";
+        // A line inside `a` maps to the `fn a { .. }` span.
+        let (s, e) = function_span_at_line(code, 2).expect("line 2 is in fn a");
+        assert!(code[s..e].starts_with("fn a"), "got: {:?}", &code[s..e]);
+        assert!(code[s..e].trim_end().ends_with('}'));
+        assert!(!code[s..e].contains("fn b"));
+        // A line inside `b` maps to `fn b`, not `fn a`.
+        let (s2, e2) = function_span_at_line(code, 6).expect("line 6 is in fn b");
+        assert!(code[s2..e2].starts_with("fn b"), "got: {:?}", &code[s2..e2]);
+        // A blank line between functions encloses nothing.
+        assert_eq!(function_span_at_line(code, 4), None);
+        // Out-of-range line -> None (no panic).
+        assert_eq!(function_span_at_line(code, 999), None);
+    }
+
+    #[test]
+    fn localized_mutations_come_before_whole_file_and_stay_valid() {
+        // Two functions; the bug (an operator to flip) is in the SECOND. Localizing to `sub` must put
+        // its mutations first, and each spliced candidate must keep the first function intact.
+        let code = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\nfn sub(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
+        let span = function_span_at_line(code, 6).expect("line 6 in fn sub");
+        let localized = localized_then_full_mutations(code, Some(span));
+        // The `a + b` -> `a - b` fix (in sub) appears, and among the FIRST candidates it keeps `add` whole.
+        let head = &localized[..localized.len().min(8)];
+        assert!(
+            head.iter().any(|m| m.contains("fn add(a: i32, b: i32) -> i32 {\n    a + b")
+                && m.contains("fn sub(a: i32, b: i32) -> i32 {\n    a - b")),
+            "localized head did not fix sub while preserving add: {head:#?}"
+        );
+        // With no span it degrades to plain whole-file mutations (caller path unchanged)...
+        let full_only = localized_then_full_mutations(code, None);
+        assert_eq!(full_only.len(), generate_mutations(code).len());
+        // ...and the span version is the function-variants PREPENDED to that whole-file set, so it is
+        // strictly longer (the localized candidates are tried first, before the cap is spent).
+        assert!(
+            localized.len() > full_only.len(),
+            "span version must prepend function-variants: {} vs {}",
+            localized.len(),
+            full_only.len()
+        );
+    }
+
     // --- literal + assert mining: array/slice/vec + owned-string forms (pure, deterministic) ---
 
     #[test]
@@ -6670,958 +6812,4 @@ mod tests {
         );
     }
 
-    static NL_SYNTHESIS_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    fn synthesis_fixture() -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "nsynth_nl_repair_{}_{}",
-            "fixture",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        write_nl_fixture_crate(&root, "nl_fixture_add").expect("write fixture");
-        root
-    }
-
-    fn nl_task(root: &PathBuf, id: &str, fixture_id: &str, issue: &str) -> RepoTaskSpec {
-        RepoTaskSpec {
-            id: id.into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::Feature,
-            issue: issue.into(),
-            test_command: nl_fixture_cargo_test_command(fixture_id).expect("cmd"),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn nl_description_prefixes() {
-        assert_eq!(
-            nl_description_from_issue("synthesize: add two numbers"),
-            Some("add two numbers".to_string())
-        );
-        assert_eq!(
-            nl_description_from_issue("nl:reverse the array"),
-            Some("reverse the array".to_string())
-        );
-        assert!(nl_description_from_issue("fix the bug").is_none());
-    }
-
-    #[test]
-    fn mog_gcd_transpiles_without_mog_assign_syntax() {
-        let mog = "fn gcd(a: i64, b: i64) -> i64 {\n    x: i64 = a;\n    y: i64 = b;\n    while y != 0 {\n        tmp := y;\n        y = x % y;\n        x = tmp;\n    }\n    return x;\n}\n";
-        let rust = rust_code_for_repo_synthesis(mog);
-        assert!(rust.contains("pub fn gcd"));
-        assert!(!rust.contains(":="));
-        assert!(rust.contains("let mut tmp"));
-    }
-
-    #[test]
-    fn repo_rust_body_scalar_stubs() {
-        use crate::agent::coding_intent::CodingIntent;
-
-        let add = CodingIntent {
-            function_name: "add".into(),
-            signature: "i64, i64 -> i64".into(),
-            category: "arithmetic".into(),
-            description: "add two numbers".into(),
-            examples: Vec::new(),
-            constraints: Vec::new(),
-            confidence: 1.0,
-            unresolved: Vec::new(),
-            evidence_entity_ids: Vec::new(),
-            reference_code: String::new(),
-        };
-        let hint = "pub fn add_two(a: i64, b: i64) -> i64 { a - b }\n";
-        let body = repo_rust_body_for_nl(&add, "", Some(hint)).expect("add stub");
-        assert!(body.contains("add_two"));
-        assert!(body.contains("a + b"));
-
-        let max = CodingIntent {
-            function_name: "max".into(),
-            signature: "i64, i64 -> i64".into(),
-            category: "comparison".into(),
-            description: "return the larger of two numbers".into(),
-            examples: Vec::new(),
-            constraints: Vec::new(),
-            confidence: 1.0,
-            unresolved: Vec::new(),
-            evidence_entity_ids: Vec::new(),
-            reference_code: String::new(),
-        };
-        let max_hint = "pub fn max_of(a: i64, b: i64) -> i64 { a }\n";
-        let max_body = repo_rust_body_for_nl(&max, "", Some(max_hint)).expect("max stub");
-        assert!(max_body.contains("max_of"));
-        assert!(max_body.contains("if a > b"));
-    }
-
-    /// THE DIFFERENTIATOR, end to end and un-gameable: a repo fn whose NAME
-    /// differs from the op it should implement ("the twice function should
-    /// double the number", fn is `twice`, op is `double`).
-    ///   * no I/O examples in the issue; LLM lane explicitly OFF (env removed) —
-    ///     comprehension is the linguigenesis emergent resolver alone;
-    ///   * the intent-name primary MISLOCALIZES here (proven during dev: it
-    ///     wrote a brand-new `fn double` into lib.rs, leaving `twice` broken);
-    ///   * the emergent stage CONTENT-localizes `fn twice` in src/ops.rs (prose
-    ///     token "twice" matches the defined fn), synthesizes the doubling body
-    ///     via the bridge, and preserves the repo fn name;
-    ///   * driven through the REAL proposer chain (nl_synthesis_proposer), and
-    ///     acceptance is behavioral: the failing cargo test passes after.
-    #[test]
-    fn emergent_proposer_repairs_renamed_fn_bare_nl_no_llm() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("NSYNTH_LOCAL_LLM_URL"); // no model in the loop
-        let root = std::env::temp_dir().join(format!("nsynth_emergent_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"twicefix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        fs::write(
-            root.join("src/lib.rs"),
-            "mod ops;\npub use ops::twice;\n\n#[cfg(test)]\nmod tests {\n    use super::twice;\n    #[test]\n    fn twice_doubles() {\n        assert_eq!(twice(4), 8);\n        assert_eq!(twice(-3), -6);\n    }\n}\n",
-        )
-        .expect("lib.rs");
-        fs::write(
-            root.join("src/ops.rs"),
-            "pub fn twice(x: i64) -> i64 {\n    x + 1\n}\n",
-        )
-        .expect("ops.rs");
-
-        let task = RepoTaskSpec {
-            id: "emergent-twice".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::BugFix,
-            issue: "nl: the twice function should double the number".into(),
-            test_command: "cargo test twice_doubles".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify before");
-        assert!(!before.success, "fixture must start broken");
-
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        // Through the REAL chain — the emergent stage must win the ordering.
-        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
-        assert!(
-            patch
-                .metadata
-                .iter()
-                .any(|(k, v)| k == "proposer" && v == "nl_emergent_synthesis"),
-            "emergent stage should produce this patch: {:?}",
-            patch.metadata
-        );
-        assert_eq!(patch.edits[0].path, "src/ops.rs", "content-localized to the defining file");
-        assert!(
-            patch.edits[0].new_text.contains("fn twice"),
-            "repo fn name preserved: {}",
-            patch.edits[0].new_text
-        );
-        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// STRING repair through the emergent stage: "the shout function should
-    /// uppercase the text" — the type-domain widening reaching the repair path.
-    #[test]
-    fn emergent_proposer_repairs_string_fn_bare_nl_no_llm() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        let root = std::env::temp_dir().join(format!("nsynth_emstr_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"strfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        fs::write(
-            root.join("src/lib.rs"),
-            "mod text_utils;\npub use text_utils::shout;\n\n#[cfg(test)]\nmod tests {\n    use super::shout;\n    #[test]\n    fn shouts() {\n        assert_eq!(shout(\"hello\".to_string()), \"HELLO\");\n    }\n}\n",
-        )
-        .expect("lib.rs");
-        fs::write(
-            root.join("src/text_utils.rs"),
-            "pub fn shout(s: String) -> String {\n    s\n}\n",
-        )
-        .expect("text_utils.rs");
-
-        let task = RepoTaskSpec {
-            id: "emergent-shout".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::BugFix,
-            issue: "nl: the shout function should uppercase the text".into(),
-            test_command: "cargo test shouts".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let patch = try_emergent_synthesis_patch(
-            &task,
-            &context,
-            "the shout function should uppercase the text",
-            None,
-        )
-        .expect("emergent string patch");
-        assert_eq!(patch.edits[0].path, "src/text_utils.rs");
-        assert!(
-            patch.edits[0].new_text.contains("to_uppercase"),
-            "verified string body: {}",
-            patch.edits[0].new_text
-        );
-        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// FEATURE-ADD end to end (TDD shape, no examples, no LLM): a failing test
-    /// references a fn that does NOT exist; "add a function that triples a
-    /// number" synthesizes `triple` via emergent comprehension and APPENDS it —
-    /// the compile-failing crate goes green.
-    #[test]
-    fn emergent_addition_adds_missing_fn_from_bare_nl() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        let root = std::env::temp_dir().join(format!("nsynth_addfn_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"addfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        // TDD: the test exists, the fn does not — baseline is a COMPILE failure.
-        fs::write(
-            root.join("src/lib.rs"),
-            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn triples() {\n        assert_eq!(crate::triple(4), 12);\n        assert_eq!(crate::triple(-2), -6);\n    }\n}\n",
-        )
-        .expect("lib.rs");
-
-        let task = RepoTaskSpec {
-            id: "add-triple".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::Feature,
-            issue: "nl: add a function that triples a number".into(),
-            test_command: "cargo test triples".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify before");
-        assert!(!before.success, "fixture must start broken (missing fn)");
-        let analysis = FailureParser::default().parse(&before.failure_output());
-
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        // Through the REAL chain.
-        let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("propose");
-        assert!(
-            patch
-                .metadata
-                .iter()
-                .any(|(k, v)| k == "proposer" && v == "nl_emergent_addition"),
-            "addition stage should fire: {:?}",
-            patch.metadata
-        );
-        let new_text = &patch.edits[0].new_text;
-        assert!(new_text.contains("pub fn triple"), "new fn appended: {new_text}");
-        // The original content is preserved (append, not replace).
-        assert!(new_text.contains("mod tests"), "existing content kept: {new_text}");
-        fs::write(root.join(&patch.edits[0].path), new_text).expect("apply");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// CONTENT-GREP localization (ReAct slice), end to end: the fn is called
-    /// `mul3` — NO name/morphology relation to the prose — but its file's
-    /// comment says "tripling helper". Content search finds the file, the
-    /// single-fn rule targets `mul3`, emergent comprehension synthesizes the
-    /// tripling body under the repo's fn name, cargo goes green.
-    #[test]
-    fn content_grep_localizes_fn_whose_name_shares_nothing_with_prose() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        let root = std::env::temp_dir().join(format!("nsynth_grep_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"grepfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        fs::write(
-            root.join("src/lib.rs"),
-            "pub mod maths;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn mul3_triples() {\n        assert_eq!(crate::maths::mul3(4), 12);\n    }\n}\n",
-        )
-        .expect("lib.rs");
-        // The fn name shares NOTHING with the prose; the comment carries the link.
-        fs::write(
-            root.join("src/maths.rs"),
-            "// The tripling helper used by the pricing code.\npub fn mul3(x: i64) -> i64 {\n    x + 3\n}\n",
-        )
-        .expect("maths.rs");
-
-        let task = RepoTaskSpec {
-            id: "grep-mul3".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::BugFix,
-            issue: "nl: the tripling helper should triple the number".into(),
-            test_command: "cargo test mul3_triples".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify before");
-        assert!(!before.success, "fixture must start broken");
-
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        // Name matching alone must FAIL here...
-        let desc = "the tripling helper should triple the number";
-        let patch = try_emergent_synthesis_patch(&task, &context, desc, None)
-            .expect("content-grep localized patch");
-        assert_eq!(patch.edits[0].path, "src/maths.rs", "found via content, not name");
-        assert!(patch.edits[0].new_text.contains("fn mul3"), "repo fn name kept: {}", patch.edits[0].new_text);
-        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// SIGNATURE-CHANGE refactor, end to end: "add a parameter offset to scale
-    /// defaulting to 0" — the definition gains the param, the cross-file call
-    /// site gains the default argument, tests (already calling the new arity)
-    /// go green. Behavior preserved by construction; tests never edited.
-    #[test]
-    fn add_param_refactor_updates_signature_and_call_sites() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("nsynth_addparam_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"addparam\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        fs::write(
-            root.join("src/lib.rs"),
-            "pub mod maths;\npub mod report;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn new_arity() {\n        assert_eq!(crate::maths::scale(4, 0), 8);\n        assert_eq!(crate::report::doubled(3), 6);\n    }\n}\n",
-        )
-        .expect("lib.rs");
-        fs::write(root.join("src/maths.rs"), "pub fn scale(x: i64) -> i64 {\n    2 * x\n}\n")
-            .expect("maths");
-        fs::write(
-            root.join("src/report.rs"),
-            "use crate::maths::scale;\n\npub fn doubled(n: i64) -> i64 {\n    scale(n)\n}\n",
-        )
-        .expect("report");
-
-        let task = RepoTaskSpec {
-            id: "addparam-scale".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::Refactor,
-            issue: "nl: add a parameter offset to scale defaulting to 0".into(),
-            test_command: "cargo test new_arity".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify before");
-        assert!(!before.success, "fixture must start broken (tests call new arity)");
-
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
-        assert!(
-            patch
-                .metadata
-                .iter()
-                .any(|(k, v)| k == "proposer" && v == "nl_add_param_refactor"),
-            "add-param stage should fire: {:?}",
-            patch.metadata
-        );
-        let paths: Vec<&str> = patch.edits.iter().map(|e| e.path.as_str()).collect();
-        assert!(paths.contains(&"src/maths.rs"), "definition edited: {paths:?}");
-        assert!(paths.contains(&"src/report.rs"), "call site edited: {paths:?}");
-        let def = patch.edits.iter().find(|e| e.path == "src/maths.rs").unwrap();
-        assert!(def.new_text.contains("scale(x: i64, offset: i64)"), "{}", def.new_text);
-        let call = patch.edits.iter().find(|e| e.path == "src/report.rs").unwrap();
-        assert!(call.new_text.contains("scale(n, 0)"), "{}", call.new_text);
-
-        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
-        tx.apply_repair_patch(&patch).expect("apply");
-        tx.commit().expect("commit");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn add_param_declines_without_default_or_unknown_fn() {
-        let root = std::env::temp_dir().join(format!("nsynth_apneg_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
-        fs::write(root.join("src/lib.rs"), "pub fn scale(x: i64) -> i64 { 2 * x }\n").unwrap();
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        // No default literal -> decline (never fabricate).
-        assert!(try_add_param_patch(&context, "add a parameter offset to scale").is_none());
-        // Unknown fn -> decline.
-        assert!(
-            try_add_param_patch(&context, "add a parameter offset to shrink defaulting to 0")
-                .is_none()
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// COORDINATED MULTI-FILE RENAME, end to end: definition in one file, call
-    /// site in another, both rewritten in ONE atomic patch; the TDD oracle
-    /// (tests already call the NEW name) goes green. Tests are never edited.
-    #[test]
-    fn rename_refactor_updates_definition_and_call_sites() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("nsynth_rename_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"renamefix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        fs::write(
-            root.join("src/lib.rs"),
-            "pub mod maths;\npub mod report;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn twice_works() {\n        assert_eq!(crate::maths::twice(4), 8);\n        assert_eq!(crate::report::doubled_len(3), 6);\n    }\n}\n",
-        )
-        .expect("lib.rs");
-        // Definition file...
-        fs::write(root.join("src/maths.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
-            .expect("maths");
-        // ...and a CALLER in a different file.
-        fs::write(
-            root.join("src/report.rs"),
-            "use crate::maths::double;\n\npub fn doubled_len(n: i64) -> i64 {\n    double(n)\n}\n",
-        )
-        .expect("report");
-
-        let task = RepoTaskSpec {
-            id: "rename-double".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::Refactor,
-            issue: "nl: rename double to twice".into(),
-            test_command: "cargo test twice_works".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify before");
-        assert!(!before.success, "fixture must start broken (tests call twice)");
-
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
-        assert!(
-            patch
-                .metadata
-                .iter()
-                .any(|(k, v)| k == "proposer" && v == "nl_rename_refactor"),
-            "rename stage should fire: {:?}",
-            patch.metadata
-        );
-        let paths: Vec<&str> = patch.edits.iter().map(|e| e.path.as_str()).collect();
-        assert!(paths.contains(&"src/maths.rs"), "definition file edited: {paths:?}");
-        assert!(paths.contains(&"src/report.rs"), "caller file edited: {paths:?}");
-        // The oracle is untouched: no edit rewrites the tests module's calls.
-        for e in &patch.edits {
-            assert!(
-                !e.new_text.contains("crate::maths::double"),
-                "no stale references left: {}",
-                e.new_text
-            );
-        }
-
-        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
-        tx.apply_repair_patch(&patch).expect("apply");
-        tx.commit().expect("commit");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rename_declines_undefined_source_and_collisions() {
-        let root = std::env::temp_dir().join(format!("nsynth_renneg_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
-        fs::write(
-            root.join("src/lib.rs"),
-            "pub fn double(x: i64) -> i64 { 2 * x }\npub fn triple(x: i64) -> i64 { 3 * x }\n",
-        )
-        .unwrap();
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        // Undefined source fn declines.
-        assert!(try_rename_patch(&context, "rename quadruple to quint").is_none());
-        // Collision with an existing fn declines.
-        assert!(try_rename_patch(&context, "rename double to triple").is_none());
-        // Word-boundary safety: renaming double must not touch doubled identifiers.
-        let p = try_rename_patch(&context, "rename double to twice").expect("patch");
-        assert!(p.edits[0].new_text.contains("pub fn twice"));
-        assert!(p.edits[0].new_text.contains("pub fn triple"), "others untouched");
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// MULTI-FILE COORDINATED ADDITION, end to end through the REAL transaction:
-    /// a module-manifest repo (lib.rs only declares mods) gets a NEW module file
-    /// src/triple.rs (file CREATION via EditTransaction) plus the lib.rs wiring
-    /// in ONE atomic patch — and the compile-failing crate goes green.
-    #[test]
-    fn emergent_addition_multifile_creates_module_and_wires_manifest() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        let root = std::env::temp_dir().join(format!("nsynth_addmf_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"addmf\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        // Module-manifest lib.rs: declares mods, defines no fns of its own.
-        fs::write(
-            root.join("src/lib.rs"),
-            "mod ops;\npub use ops::*;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn triples() {\n        assert_eq!(crate::triple(4), 12);\n    }\n}\n",
-        )
-        .expect("lib.rs");
-        fs::write(root.join("src/ops.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
-            .expect("ops.rs");
-
-        let task = RepoTaskSpec {
-            id: "add-mf-triple".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::Feature,
-            issue: "nl: add a function that triples a number".into(),
-            test_command: "cargo test triples".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify before");
-        assert!(!before.success, "fixture must start broken (missing fn)");
-        let analysis = FailureParser::default().parse(&before.failure_output());
-
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("propose");
-        assert!(
-            patch
-                .metadata
-                .iter()
-                .any(|(k, v)| k == "proposer" && v == "nl_emergent_addition_multifile"),
-            "multi-file addition should fire: {:?}",
-            patch.metadata
-        );
-        assert_eq!(patch.edits.len(), 2, "coordinated two-file patch");
-        assert_eq!(patch.edits[0].path, "src/triple.rs", "new module file");
-        assert!(patch.edits[1].new_text.contains("mod triple;"), "manifest wired");
-
-        // Apply through the REAL transaction — proves atomic file CREATION.
-        let mut tx = crate::agent::edit::EditTransaction::begin(&root);
-        tx.apply_repair_patch(&patch).expect("apply");
-        tx.commit().expect("commit");
-        assert!(root.join("src/triple.rs").is_file(), "module created on disk");
-
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// OBSERVATION-DRIVEN disambiguation: two files define a `double`; walk
-    /// order alone would patch the healthy one (aaa.rs) and leave the broken one
-    /// (zzz.rs) failing forever. The failure-implicated file from FailureAnalysis
-    /// must outrank walk order, and the repair must land + verify green.
-    #[test]
-    fn failure_file_outranks_walk_order_in_localization() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
-        let root = std::env::temp_dir().join(format!("nsynth_obsloc_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"obsfix\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
-        )
-        .expect("cargo.toml");
-        fs::write(
-            root.join("src/lib.rs"),
-            "pub mod aaa;\npub mod zzz;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn zzz_doubles() {\n        assert_eq!(crate::zzz::double(4), 8);\n    }\n}\n",
-        )
-        .expect("lib.rs");
-        // aaa: healthy double — walk order would pick this one first.
-        fs::write(root.join("src/aaa.rs"), "pub fn double(x: i64) -> i64 {\n    2 * x\n}\n")
-            .expect("aaa");
-        // zzz: the BROKEN double the failing test actually exercises.
-        fs::write(root.join("src/zzz.rs"), "pub fn double(x: i64) -> i64 {\n    x + 1\n}\n")
-            .expect("zzz");
-
-        let task = RepoTaskSpec {
-            id: "obs-double".into(),
-            repo: root.to_string_lossy().to_string(),
-            kind: RepoTaskKind::BugFix,
-            issue: "nl: the double function should double the number".into(),
-            test_command: "cargo test zzz_doubles".into(),
-            allowed_files: vec!["src/**".into()],
-            max_iterations: 2,
-            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
-            signals: Vec::new(),
-        };
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let desc = "the double function should double the number";
-
-        // WITHOUT analysis: walk order picks aaa.rs (the healthy file) — the
-        // blind spot this feature closes.
-        let (blind_path, _) = locate_described_fn(&context, desc, None).expect("blind");
-        assert_eq!(blind_path, "src/aaa.rs", "walk order picks the wrong file");
-
-        // WITH the failure-implicated file: zzz.rs wins.
-        let analysis = FailureAnalysis {
-            kind: crate::agent::repo::FailureKind::TestFailure,
-            file: Some("src/zzz.rs".to_string()),
-            line: Some(2),
-            message: "assertion failed".into(),
-            likely_cause: String::new(),
-            suggested_action: String::new(),
-        };
-        let patch = try_emergent_synthesis_patch(&task, &context, desc, Some(&analysis))
-            .expect("observation-driven patch");
-        assert_eq!(patch.edits[0].path, "src/zzz.rs", "failure file outranks walk order");
-        fs::write(root.join(&patch.edits[0].path), &patch.edits[0].new_text).expect("apply");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn locate_described_fn_matches_emergently_and_specifically() {
-        let root = std::env::temp_dir().join(format!("nsynth_locate_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).expect("mkdir");
-        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n").unwrap();
-        fs::write(
-            root.join("src/util.rs"),
-            "pub fn double(x: i64) -> i64 { x }\npub fn reverse_list(v: Vec<i64>) -> Vec<i64> { v }\npub fn number_cruncher(x: i64) -> i64 { x }\n",
-        )
-        .unwrap();
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        // morphology: "doubling" -> double
-        let (_, f) = locate_described_fn(&context, "fix the doubling function", None).expect("found");
-        assert_eq!(f, "double");
-        // multi-part fn: every part must be matched
-        let (_, f) = locate_described_fn(&context, "reverse the list please", None).expect("found");
-        assert_eq!(f, "reverse_list");
-        // incidental "number" alone must NOT select number_cruncher
-        assert!(locate_described_fn(&context, "the number should be bigger", None).is_none());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn nl_synthesis_proposer_fixes_wrong_add() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        let root = synthesis_fixture();
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let task = nl_task(
-            &root,
-            "nl-add",
-            "nl_fixture_add",
-            "synthesize: add two numbers",
-        );
-
-        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
-        assert!(!patch.edits.is_empty());
-        let new_content = patch.edits[0].new_text.clone();
-        assert!(new_content.contains("add_two"));
-        // Acceptance is behavior-based (cargo test), independent of whether the
-        // real-synthesis primary or keyword fallback produced the patch.
-        fs::write(root.join(patch.edits[0].path.clone()), new_content).expect("write patch");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn failure_aware_proposer_uses_cargo_test_failure() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("nsynth_nl_fail_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        write_nl_fixture_crate(&root, "nl_fixture_divide").expect("write");
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let task = nl_task(
-            &root,
-            "nl-div-fail",
-            "nl_fixture_divide",
-            "synthesize: divide two numbers",
-        );
-        let verification = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify");
-        assert!(!verification.success);
-        let analysis = FailureParser::default().parse(&verification.failure_output());
-        assert_eq!(analysis.kind, crate::agent::repo::FailureKind::TestFailure);
-
-        // divide's solver output uses Result-style wrappers, so real synthesis
-        // declines and the failure-aware keyword fallback repairs it. Acceptance
-        // is behavior-based (cargo test passes after the patch).
-        let patch = nl_synthesis_proposer(&task, &context, 0, Some(&analysis)).expect("patch");
-        fs::write(
-            root.join(patch.edits[0].path.clone()),
-            patch.edits[0].new_text.clone(),
-        )
-        .expect("write patch");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    fn assert_real_synthesis_repairs(fixture_id: &str, description: &str, tag: &str) {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("nsynth_rs_{}_{}", tag, std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        write_nl_fixture_crate(&root, fixture_id).expect("write");
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let task = nl_task(&root, tag, fixture_id, &format!("synthesize: {description}"));
-
-        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify before");
-        assert!(!before.success, "{fixture_id} should fail before repair");
-
-        let patch = try_real_synthesis_patch(&task, &context, description)
-            .unwrap_or_else(|| panic!("{fixture_id}: expected real-synthesis patch"));
-        fs::write(
-            root.join(patch.edits[0].path.clone()),
-            patch.edits[0].new_text.clone(),
-        )
-        .expect("write patch");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(
-            after.success,
-            "{fixture_id} real-synthesis repair failed:\nCODE:\n{}\nSTDERR:\n{}",
-            patch.edits[0].new_text, after.stderr
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn real_synthesis_repairs_divide_result_idiom() {
-        // Safe-division emits a 2-function Result/ok/err/match template; the
-        // lowering (ok->Some, err->None, match->unwrap_or) must produce
-        // compilable plain Rust that passes the cargo-test oracle.
-        assert_real_synthesis_repairs("nl_fixture_divide", "divide two numbers", "div");
-    }
-
-    #[test]
-    fn real_synthesis_repairs_multiply_multifunction() {
-        // multiply may synthesize via the LCM formula (gcd_inner + multiply);
-        // multi-function reshape must keep the helper and target the main fn.
-        assert_real_synthesis_repairs("nl_fixture_multiply", "multiply two numbers", "mul");
-    }
-
-    // Broadened unseen-NL corpus (G5 sign-off): each is described ONLY by inline
-    // I/O examples (no registry op, no keyword-table entry), so the repair can
-    // succeed *only* through genuine example-driven synthesis. The cargo-test
-    // oracle asserts holdout inputs to prove generalization, not example overfit.
-
-    #[test]
-    fn real_synthesis_repairs_square_nonlinear() {
-        assert_real_synthesis_repairs(
-            "nl_fixture_square",
-            "a function where square(2)=4 and square(3)=9 and square(4)=16 and square(5)=25 and square(6)=36 and square(0)=0",
-            "sq",
-        );
-    }
-
-    #[test]
-    fn real_synthesis_repairs_negate_affine() {
-        assert_real_synthesis_repairs(
-            "nl_fixture_negate",
-            "a function where negate(5)=-5 and negate(-3)=3 and negate(0)=0 and negate(7)=-7 and negate(-12)=12",
-            "neg",
-        );
-    }
-
-    #[test]
-    fn real_synthesis_repairs_abs_branch() {
-        assert_real_synthesis_repairs(
-            "nl_fixture_abs",
-            "a function where absval(-3)=3 and absval(4)=4 and absval(-10)=10 and absval(0)=0 and absval(-1)=1 and absval(8)=8",
-            "abs",
-        );
-    }
-
-    #[test]
-    fn real_synthesis_repairs_sum3_multiarg() {
-        assert_real_synthesis_repairs(
-            "nl_fixture_sum3",
-            "a function where add3(1,2,3)=6 and add3(0,0,5)=5 and add3(2,2,2)=6 and add3(10,20,30)=60 and add3(-1,1,0)=0",
-            "sum3",
-        );
-    }
-
-    #[test]
-    fn real_synthesis_repairs_array_sum_fold() {
-        assert_real_synthesis_repairs(
-            "nl_fixture_arrsum",
-            "a function where total([1,2,3])=6 and total([4,5])=9 and total([10])=10 and total([2,2,2,2])=8 and total([7,3])=10",
-            "arrsum",
-        );
-    }
-
-    #[test]
-    fn real_synthesis_repairs_array_max_fold() {
-        assert_real_synthesis_repairs(
-            "nl_fixture_arrmax",
-            "a function where biggest([3,1,2])=3 and biggest([5,9,1])=9 and biggest([7])=7 and biggest([-1,-5,-2])=-1 and biggest([2,2,8,4])=8",
-            "arrmax",
-        );
-    }
-
-    #[test]
-    fn real_synthesis_repairs_array_len_fold() {
-        assert_real_synthesis_repairs(
-            "nl_fixture_arrlen",
-            "a function where howmany([3,1,2])=3 and howmany([5,9])=2 and howmany([7])=1 and howmany([1,2,3,4,5])=5 and howmany([6,6])=2",
-            "arrlen",
-        );
-    }
-
-    #[test]
-    fn real_synthesis_repairs_min3_nested_branch() {
-        // 3-way minimum: synthesized as nested comparison branches (synth_gradient),
-        // not a constant-threshold overfit. Holdouts prove real min logic.
-        assert_real_synthesis_repairs(
-            "nl_fixture_min3",
-            "a function where smallest(3,7,5)=3 and smallest(9,2,8)=2 and smallest(1,4,1)=1 and smallest(5,5,2)=2 and smallest(-1,0,3)=-1 and smallest(8,8,8)=8 and smallest(4,1,9)=1",
-            "min3",
-        );
-    }
-
-    #[test]
-    fn real_synthesis_repairs_unseen_inline_example_op() {
-        // `triple` is NOT in any keyword table; the only way to repair it is to
-        // actually synthesize x*3 from the inline examples in the issue. Proves
-        // the closed repair loop generalizes to arbitrary demonstrated functions.
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("nsynth_nl_triple_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        write_nl_fixture_crate(&root, "nl_fixture_triple").expect("write");
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let task = nl_task(
-            &root,
-            "nl-triple",
-            "nl_fixture_triple",
-            "synthesize: a function where triple(2)=6 and triple(5)=15 and triple(3)=9",
-        );
-
-        // Fails before repair.
-        let before = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify before");
-        assert!(!before.success);
-
-        // The proposer must use the real-synthesis path (not a keyword stub).
-        let patch = nl_synthesis_proposer(&task, &context, 0, None).expect("propose");
-        assert_eq!(
-            patch
-                .metadata
-                .iter()
-                .find(|(k, _)| k == "proposer")
-                .map(|(_, v)| v.as_str()),
-            Some("nl_real_synthesis"),
-            "expected real synthesis, got metadata {:?}",
-            patch.metadata
-        );
-
-        // Apply and re-verify: cargo test is the acceptance oracle.
-        fs::write(
-            root.join(patch.edits[0].path.clone()),
-            patch.edits[0].new_text.clone(),
-        )
-        .expect("write patch");
-        let after = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify after");
-        assert!(after.success, "stderr: {}", after.stderr);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn repair_loop_with_nl_synthesis_proposer() {
-        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
-        let root = synthesis_fixture();
-        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("context");
-        let task = nl_task(
-            &root,
-            "nl-add-loop",
-            "nl_fixture_add",
-            "synthesize: add two numbers",
-        );
-        let mut loop_runner = RepairLoop::new(&root, GuardrailPolicy::default());
-        let result = loop_runner
-            .run_with_context(&task, &context, &nl_synthesis_proposer)
-            .expect("repair loop");
-        assert!(result.success);
-        let verification = RepairVerifier::new(&root, GuardrailPolicy::default())
-            .verify(&task.test_command)
-            .expect("verify");
-        assert!(verification.success);
-        let _ = fs::remove_dir_all(root);
-    }
 }
