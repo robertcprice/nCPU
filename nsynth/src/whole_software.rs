@@ -1,13 +1,16 @@
-//! Whole-software product path (WP1): prose → scaffold oracle → fill → cargo gate.
+//! Whole-software product path: prose → scaffold oracle → fill → cargo gate.
 //!
 //! Closes the gap where Phases 2–3 existed only as standalone bins. The product
 //! `handle_query` route calls [`try_scaffold`] then the caller runs the repo-agent
 //! ladder against the emitted crate.
 //!
 //! - **Tier A (model-free):** schema-decidable prose → stubs + per-method tests.
+//! - **Tier A′ (model-free):** characterization from ≥2 inline examples.
 //! - **Tier B (gated):** `propose_spec` when `NSYNTH_LOCAL_LLM_URL` is set.
+//! - **Tier C (gated):** project decompose via `NSYNTH_LOCAL_LLM_PROJECT` / URL.
 //! - Otherwise: `None` so the session falls through to honest refuse/clarify.
 
+use crate::characterization;
 use crate::local_llm;
 use crate::schema_component::{self, WrittenSchemaCrate};
 use std::path::{Path, PathBuf};
@@ -17,6 +20,8 @@ use std::path::{Path, PathBuf};
 pub enum ScaffoldKind {
     Schema,
     Spec,
+    Characterization,
+    Decompose,
 }
 
 /// A checkable crate written under `root`, ready for the hole-filler ladder.
@@ -47,13 +52,37 @@ impl From<WrittenSchemaCrate> for ScaffoldedCrate {
 
 /// Try to manufacture a checkable scaffold for `prose` under `out_dir`.
 ///
-/// Order: schema (decidable, model-free) → gated `propose_spec`. Returns `None`
-/// when neither applies (caller must refuse/clarify — never invent unverified code).
+/// Order: schema → characterization (≥2 inline examples) → gated `propose_spec`.
+/// Returns `None` when none apply (caller must refuse/clarify).
 pub fn try_scaffold(out_dir: &Path, prose: &str) -> Option<ScaffoldedCrate> {
     if let Some(written) = schema_component::try_write_schema_crate(out_dir, prose) {
         return Some(written.into());
     }
+    if let Some(char_sc) = try_scaffold_characterization(out_dir, prose) {
+        return Some(char_sc);
+    }
     try_scaffold_from_spec(out_dir, prose)
+}
+
+/// WP2: bootstrap a characterization oracle from inline examples in prose.
+pub fn try_scaffold_characterization(out_dir: &Path, prose: &str) -> Option<ScaffoldedCrate> {
+    let examples = characterization::parse_inline_char_examples(prose);
+    if examples.len() < 2 {
+        return None;
+    }
+    let fn_name = characterization::fn_name_from_prose(prose);
+    let written =
+        characterization::write_characterization_crate(out_dir, &fn_name, &examples).ok()?;
+    Some(ScaffoldedCrate {
+        root: out_dir.to_path_buf(),
+        kind: ScaffoldKind::Characterization,
+        method: written.method,
+        summary: format!(
+            "characterization fn {} ({} tests)",
+            written.fn_name, written.n_tests
+        ),
+        n_tests: written.n_tests,
+    })
 }
 
 /// Phase-3 path: model writes SPEC (signatures + tests), never trusted code.
@@ -90,11 +119,77 @@ pub fn try_scaffold_from_spec(out_dir: &Path, prose: &str) -> Option<ScaffoldedC
     })
 }
 
+/// WP3: gated multi-component decompose → verified project write.
+///
+/// Requires `NSYNTH_LOCAL_LLM_PROJECT` or `NSYNTH_LOCAL_LLM_URL`. On success with
+/// ≥1 verified component, writes via [`write_verified_project`] and returns a
+/// [`ScaffoldKind::Decompose`] crate.
+pub fn try_decompose_project(root: &Path, prose: &str) -> Option<ScaffoldedCrate> {
+    let project_set = std::env::var("NSYNTH_LOCAL_LLM_PROJECT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some();
+    let url_set = std::env::var("NSYNTH_LOCAL_LLM_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some();
+    if !project_set && !url_set {
+        return None;
+    }
+    // synthesize_project_with_contracts itself gates on NSYNTH_LOCAL_LLM_PROJECT;
+    // when only URL is set, temporarily enable the project flag for this call.
+    let _project_guard = if !project_set && url_set {
+        std::env::set_var("NSYNTH_LOCAL_LLM_PROJECT", "1");
+        Some(EnvRestore {
+            key: "NSYNTH_LOCAL_LLM_PROJECT",
+            prev: None,
+        })
+    } else {
+        None
+    };
+
+    let bridge = crate::linguigenesis_bridge::LinguigenesisBridge::new();
+    let (verified, _failed) = bridge.synthesize_project_with_contracts(prose)?;
+    if verified.is_empty() {
+        return None;
+    }
+    let components: Vec<(String, String, Vec<crate::benchmark::Example>)> = verified
+        .into_iter()
+        .map(|v| (v.name, v.result.code, v.examples))
+        .collect();
+    let n = components.len();
+    let _outcome =
+        crate::agent::repo::write_verified_project(root, "decompose_crate", &components).ok()?;
+    Some(ScaffoldedCrate {
+        root: root.to_path_buf(),
+        kind: ScaffoldKind::Decompose,
+        method: "whole-software:decompose",
+        summary: format!("decomposed project ({n} verified components)"),
+        n_tests: n,
+    })
+}
+
+struct EnvRestore {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl Drop for EnvRestore {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
 /// True when prose should attempt the whole-software door before honest refuse.
 /// Schema-shaped prose always qualifies; otherwise a construction verb is required
 /// so we don't hijack informational queries into a model-spec call.
 pub fn should_attempt_whole_software(prose: &str) -> bool {
-    schema_component::is_schema_prose(prose) || has_construction_verb(prose)
+    schema_component::is_schema_prose(prose)
+        || has_construction_verb(prose)
+        || characterization::parse_inline_char_examples(prose).len() >= 2
 }
 
 fn has_construction_verb(query: &str) -> bool {
@@ -124,6 +219,123 @@ pub fn write_spec_crate(out_dir: &Path, lib_rs: &str) -> Result<ScaffoldedCrate,
     })
 }
 
+/// WP7 telemetry: bounded scaffold → fill → observe loop phases.
+#[derive(Debug, Clone, Default)]
+pub struct BuildPlan {
+    pub phases: Vec<String>,
+}
+
+impl BuildPlan {
+    pub fn new() -> Self {
+        Self { phases: Vec::new() }
+    }
+
+    pub fn record(&mut self, phase: impl Into<String>) {
+        self.phases.push(phase.into());
+    }
+}
+
+/// Record scaffold → fill → observe phases for WP7 telemetry.
+pub fn run_bounded_loop(plan: &mut BuildPlan, scaffold_label: &str) {
+    plan.record(format!("scaffold:{scaffold_label}"));
+    plan.record("fill");
+    plan.record("observe");
+}
+
+/// WP4 product-facing helper: parse `property:` / `satisfies:` Mog predicate requests.
+///
+/// Expected shape (flexible whitespace):
+/// ```text
+/// property: fn inc(x: i64) -> i64 satisfies: fn gt(x: i64, out: i64) -> i64 { … }
+/// ```
+pub fn parse_property_request(
+    prose: &str,
+) -> Option<(String, String, String, String, String)> {
+    let lower = prose.to_lowercase();
+    if !lower.contains("property:") && !lower.contains("satisfies:") {
+        return None;
+    }
+    let sat_idx = lower.find("satisfies:")?;
+    let after_sat = prose[sat_idx + "satisfies:".len()..].trim_start();
+    let (pred_name, pred_sig, pred_code) = parse_fn_with_body(after_sat)?;
+
+    let cand_src = if let Some(p) = lower.find("property:") {
+        let start = p + "property:".len();
+        prose[start..sat_idx].trim()
+    } else {
+        prose[..sat_idx].trim()
+    };
+    let (cand_name, cand_sig) = parse_fn_sig(cand_src)?;
+    Some((cand_name, cand_sig, pred_name, pred_sig, pred_code))
+}
+
+fn parse_fn_sig(src: &str) -> Option<(String, String)> {
+    let s = src.trim();
+    let body_cut = s.find('{').map(|i| &s[..i]).unwrap_or(s).trim();
+    let after_fn = if let Some(i) = body_cut.find("fn ") {
+        body_cut[i + 3..].trim_start()
+    } else {
+        body_cut
+    };
+    let name_end = after_fn
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .unwrap_or(after_fn.len());
+    let name = after_fn[..name_end].to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let rest = after_fn[name_end..].trim_start();
+    if !rest.starts_with('(') {
+        return None;
+    }
+    Some((name.clone(), format!("fn {name}{rest}").trim().to_string()))
+}
+
+fn parse_fn_with_body(src: &str) -> Option<(String, String, String)> {
+    let (name, sig) = parse_fn_sig(src)?;
+    let brace = src.find('{')?;
+    let body_src = &src[brace..];
+    let mut depth = 0i32;
+    let mut end = None;
+    for (i, c) in body_src.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    let body = body_src[..end].trim();
+    let code = format!("{sig} {body}");
+    Some((name, sig, code))
+}
+
+/// WP4: verify candidate code against a Mog property predicate.
+pub fn try_property_verify(
+    candidate_code: &str,
+    candidate_name: &str,
+    candidate_signature: &str,
+    predicate_name: &str,
+    predicate_signature: &str,
+    predicate_code: &str,
+) -> Result<(), String> {
+    use crate::agent::coding_intent::Spec;
+    let spec = Spec::Property {
+        candidate_name: candidate_name.to_string(),
+        candidate_signature: candidate_signature.to_string(),
+        predicate_name: predicate_name.to_string(),
+        predicate_signature: predicate_signature.to_string(),
+        predicate_code: predicate_code.to_string(),
+    };
+    spec.verify(candidate_code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +355,20 @@ mod tests {
         assert_eq!(s.kind, ScaffoldKind::Schema);
         assert!(s.n_tests >= 8);
         assert!(root.join("src/lib.rs").is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn characterization_scaffold_from_inline_examples() {
+        let root = std::env::temp_dir().join(format!(
+            "nsynth_ws_char_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let s = try_scaffold(&root, "double(2)=4, double(3)=6")
+            .expect("characterization scaffold");
+        assert_eq!(s.kind, ScaffoldKind::Characterization);
+        assert_eq!(s.n_tests, 2);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -208,5 +434,23 @@ mod tests {
         assert_eq!(s.kind, ScaffoldKind::Spec);
         assert_eq!(s.n_tests, 2);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn build_plan_records_bounded_loop_phases() {
+        let mut plan = BuildPlan::new();
+        run_bounded_loop(&mut plan, "schema");
+        assert_eq!(plan.phases, ["scaffold:schema", "fill", "observe"]);
+    }
+
+    #[test]
+    fn parse_property_request_extracts_parts() {
+        let prose = "property: fn inc(x: i64) -> i64 satisfies: fn gt(x: i64, out: i64) -> i64 { if out > x { return 1; } return 0; }";
+        let (n, s, pn, ps, pc) = parse_property_request(prose).expect("parse");
+        assert_eq!(n, "inc");
+        assert!(s.contains("inc"));
+        assert_eq!(pn, "gt");
+        assert!(ps.contains("gt"));
+        assert!(pc.contains("out > x"));
     }
 }

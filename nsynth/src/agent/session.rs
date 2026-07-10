@@ -218,10 +218,50 @@ impl CodingAgentSession {
         // WHOLE-SOFTWARE schema door FIRST: "a todo list where each task has …" is a
         // decidable scaffold, not an op-library guess. Must run BEFORE verified_nl_router
         // so a bare-NL schema is not mis-labeled as a tentative library match.
+        // Characterization (≥2 examples) runs inside try_scaffold / the later
+        // construction door — not here — so example-bearing PBE still hits the
+        // never-wrong front door first.
         if crate::schema_component::is_schema_prose(query) {
             if let Some(result) = self.try_run_whole_software(query) {
                 self.record_result(query, &result);
                 return result;
+            }
+        }
+
+        // WP4: property:/satisfies: with a candidate already on disk → verify only.
+        if let Some((name, _sig, _pn, _ps, _pc)) =
+            crate::whole_software::parse_property_request(query)
+        {
+            let cand_path = self.root.join("src/lib.rs");
+            if let Ok(code) = std::fs::read_to_string(&cand_path) {
+                if code.contains(&format!("fn {name}")) || code.contains(&format!("fn {name}(")) {
+                    let result = match self.verify_property_spec(query, &code) {
+                        Ok(()) => AgentQueryResult {
+                            route: QueryRoute::WholeSoftware,
+                            success: true,
+                            response: format!(
+                                "Property spec verified for `{name}` against Mog predicate."
+                            ),
+                            workflow: "property_verify".into(),
+                            clarification_questions: Vec::new(),
+                            synthesis_method: Some("whole-software:property".into()),
+                            repo_result: None,
+                            tool_trace: vec![("property.verify".into(), name.clone())],
+                        },
+                        Err(e) => AgentQueryResult {
+                            route: QueryRoute::WholeSoftware,
+                            success: false,
+                            response: format!("Property verify failed for `{name}`: {e}"),
+                            workflow: "property_verify".into(),
+                            clarification_questions: Vec::new(),
+                            synthesis_method: Some("whole-software:property".into()),
+                            repo_result: None,
+                            tool_trace: vec![("property.verify".into(), e)],
+                        },
+                    };
+                    self.record_result(query, &result);
+                    return result;
+                }
             }
         }
 
@@ -1736,12 +1776,72 @@ impl CodingAgentSession {
         }
     }
 
-    /// WP1 product path: scaffold a checkable crate (schema or gated spec), then
-    /// run the repo-agent hole-filler against `cargo test`. Returns `None` when
-    /// neither scaffold tier applies (caller falls through).
+    /// Whole-software product path: scaffold an oracle crate (schema /
+    /// characterization / gated spec / gated decompose), then run the repo-agent
+    /// hole-filler against `cargo test`. Returns `None` when no scaffold tier
+    /// applies (caller falls through).
     fn try_run_whole_software(&mut self, query: &str) -> Option<AgentQueryResult> {
-        let scaffolded = crate::whole_software::try_scaffold(&self.root, query)?;
-        Some(self.fill_scaffolded_whole_software(query, &scaffolded))
+        let mut plan = crate::whole_software::BuildPlan::new();
+        let scaffolded = crate::whole_software::try_scaffold(&self.root, query).or_else(|| {
+            // WP3: construction intent + model available, schema/spec/char failed.
+            if crate::whole_software::should_attempt_whole_software(query) {
+                crate::whole_software::try_decompose_project(&self.root, query)
+            } else {
+                None
+            }
+        })?;
+        crate::whole_software::run_bounded_loop(&mut plan, scaffolded.method);
+        let mut result = self.fill_scaffolded_whole_software(query, &scaffolded);
+        result.tool_trace.push((
+            "whole_software.phases".into(),
+            plan.phases.join(" → "),
+        ));
+        // WP5: after a successful schema (or other) fill, promote best-effort.
+        if result.success {
+            let lib_path = self.root.join("src/lib.rs");
+            if let Ok(lib) = std::fs::read_to_string(&lib_path) {
+                let name = match scaffolded.kind {
+                    crate::whole_software::ScaffoldKind::Schema => {
+                        // Prefer collection name from summary, else generic.
+                        scaffolded
+                            .summary
+                            .split_whitespace()
+                            .nth(1)
+                            .unwrap_or("schema_component")
+                            .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                            .to_string()
+                    }
+                    crate::whole_software::ScaffoldKind::Characterization => {
+                        crate::characterization::fn_name_from_prose(query)
+                    }
+                    _ => "whole_software_component".into(),
+                };
+                let surfaces = vec![name.clone(), query.chars().take(48).collect()];
+                let _ = crate::component::promote_schema_component(
+                    &self.root,
+                    &name,
+                    &surfaces,
+                    &lib,
+                );
+            }
+        }
+        Some(result)
+    }
+
+    /// WP4: if the query carries a `property:` / `satisfies:` Mog predicate and a
+    /// candidate body is available under the session root, verify it.
+    pub fn verify_property_spec(&self, query: &str, candidate_code: &str) -> Result<(), String> {
+        let (name, sig, pred_name, pred_sig, pred_code) =
+            crate::whole_software::parse_property_request(query)
+                .ok_or_else(|| "query has no property:/satisfies: Mog predicate".to_string())?;
+        crate::agent::coding_intent::try_property_verify(
+            candidate_code,
+            &name,
+            &sig,
+            &pred_name,
+            &pred_sig,
+            &pred_code,
+        )
     }
 
     fn fill_scaffolded_whole_software(
@@ -1958,12 +2058,13 @@ impl CodingAgentSession {
                 response: format!(
                     "I couldn't confidently understand \"{}\" as something I can build \
                      or compute — nothing resolved to a known operation, component, \
-                     schema, or artifact. Try a decidable schema (e.g. \"a todo list \
-                     where each task has a title and a priority number\"), a function \
-                     with an example (e.g. \"a function f where f(2)=4\"), a website/page, \
-                     an api, or a component like a counter. For non-schema logic \
-                     (auth/guards), set NSYNTH_LOCAL_LLM_URL so the model can write a \
-                     checkable SPEC the engine then fills.",
+                     schema, characterization examples, or artifact. Try a decidable \
+                     schema (e.g. \"a todo list where each task has a title and a \
+                     priority number\"), a function with ≥2 examples (e.g. \
+                     \"double(2)=4, double(3)=6\"), a website/page, an api, or a \
+                     component like a counter. For non-schema logic (auth/guards) set \
+                     NSYNTH_LOCAL_LLM_URL so the model can write a checkable SPEC; for \
+                     multi-file decompose set NSYNTH_LOCAL_LLM_PROJECT (or URL).",
                     truncate(query, 100)
                 ),
                 workflow: "unknown".into(),

@@ -324,6 +324,25 @@ impl Spec {
     }
 }
 
+/// WP4 product-facing wrapper: verify `candidate_code` against a Mog predicate.
+pub fn try_property_verify(
+    candidate_code: &str,
+    candidate_name: &str,
+    candidate_signature: &str,
+    predicate_name: &str,
+    predicate_signature: &str,
+    predicate_code: &str,
+) -> Result<(), String> {
+    let spec = Spec::Property {
+        candidate_name: candidate_name.to_string(),
+        candidate_signature: candidate_signature.to_string(),
+        predicate_name: predicate_name.to_string(),
+        predicate_signature: predicate_signature.to_string(),
+        predicate_code: predicate_code.to_string(),
+    };
+    spec.verify(candidate_code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +434,27 @@ mod tests {
         assert!(spec
             .verify("fn inc(x: i64) -> i64 { return x - 1; }")
             .is_err());
+    }
+
+    #[test]
+    fn try_property_verify_wrapper_matches_spec_arm() {
+        try_property_verify(
+            "fn inc(x: i64) -> i64 { return x + 1; }",
+            "inc",
+            "fn inc(x: i64) -> i64",
+            "gt",
+            "fn gt(x: i64, out: i64) -> i64",
+            "fn gt(x: i64, out: i64) -> i64 { if out > x { return 1; } return 0; }",
+        )
+        .expect("satisfying candidate");
+        assert!(try_property_verify(
+            "fn inc(x: i64) -> i64 { return x - 1; }",
+            "inc",
+            "fn inc(x: i64) -> i64",
+            "gt",
+            "fn gt(x: i64, out: i64) -> i64",
+            "fn gt(x: i64, out: i64) -> i64 { if out > x { return 1; } return 0; }",
+        )
+        .is_err());
     }
 }
