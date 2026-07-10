@@ -2160,7 +2160,7 @@ fn arg_reorder_permutation(synth_types: &[String], repo_types: &[String]) -> Opt
 }
 
 /// Emit an arg-order-reconciling WRAPPER: keep the synthesized entry fn as a private sibling
-/// (renamed to `{repo_fn}_reorder_impl` so it never collides with the repo fn), keep any other
+/// (renamed to `reordered_{repo_fn}` — a PREFIX so `find("fn {repo_fn}")` never lands on it), keep any other
 /// synthesized helper fns as siblings, and rewrite the repo fn's body to call the sibling with
 /// its own parameters reordered per `perm` (adding `.to_vec()` where the repo passes a slice into
 /// the Vec-based impl). The repo signature is preserved verbatim, so the caller's tests keep
@@ -2173,7 +2173,11 @@ fn emit_arg_reorder_wrapper(
     perm: &[usize],
 ) -> Option<String> {
     let (entry_name, entry_text) = &fns[entry_idx];
-    let impl_name = format!("{repo_fn}_reorder_impl");
+    // Prefix (not suffix) the helper name: `replace_body_only` / `insert_before_fn_def` locate
+    // a fn by the substring `fn {repo_fn}`, so a suffix name (`k_largest_reorder_impl`) is matched
+    // FIRST when we later target `k_largest`, corrupting the impl instead of the repo fn. A
+    // prefix (`reordered_k_largest`) never contains `fn k_largest`, so targeting stays exact.
+    let impl_name = format!("reordered_{repo_fn}");
     // Rename ALL word-boundary occurrences of the entry name (declaration + any self-calls) so a
     // recursive op keeps working under the new name.
     let entry_renamed = rename_ident(entry_text, entry_name, &impl_name);
@@ -3251,8 +3255,8 @@ mod tests {
     /// Reshape emits a WRAPPER when the synthesized entry's param order differs from the repo's.
     /// Repo `k_largest(k: i64, xs: Vec<i64>)` (scalar-first) + a library-shaped synth
     /// `k_largest(arr: Vec<i64>, k: i64)` (array-first) must NOT be positionally renamed (which
-    /// would mis-bind `arr`/`k`); instead a `_reorder_impl` sibling is emitted and the repo fn
-    /// calls it with the params reordered by type: `k_largest_reorder_impl(xs, k)`.
+    /// would mis-bind `arr`/`k`); instead a `reordered_{repo_fn}` sibling is emitted and the repo fn
+    /// calls it with the params reordered by type: `reordered_k_largest(xs, k)`.
     #[test]
     fn reshape_emits_arg_reorder_wrapper_for_scalar_first_repo() {
         let old = "pub fn k_largest(k: i64, xs: Vec<i64>) -> Vec<i64> {\n    Vec::new()\n}\n";
@@ -3264,14 +3268,17 @@ mod tests {
             new.contains("pub fn k_largest(k: i64, xs: Vec<i64>) -> Vec<i64>"),
             "repo signature must be preserved: {new}"
         );
-        // A renamed sibling impl exists (no duplicate `k_largest` definition).
-        assert!(new.contains("fn k_largest_reorder_impl("), "impl sibling must be emitted: {new}");
-        // The wrapper calls the impl with the params reordered by type: array `xs` first, `k` second.
+        // A renamed sibling impl exists (PREFIX name — never collides with the repo fn target).
+        assert!(new.contains("fn reordered_k_largest("), "impl sibling must be emitted: {new}");
+        // The impl KEEPS the real body (the earlier bug replaced it with a self-call, losing this).
+        assert!(new.contains(".sort()"), "impl must retain the real body, not a self-call: {new}");
+        // The REPO fn body is the reordered call into the impl (array `xs` first, `k` second).
         assert!(
-            new.contains("k_largest_reorder_impl(xs, k)"),
-            "wrapper must reorder args by type (xs, k): {new}"
+            new.contains("return reordered_k_largest(xs, k)"),
+            "repo fn must call the impl with args reordered by type (xs, k): {new}"
         );
-        let _ = new;
+        // The repo fn is no longer the empty stub.
+        assert!(!new.contains("-> Vec<i64> {\n    Vec::new()\n}"), "repo stub must be replaced: {new}");
     }
 
     /// Reshape adapter for a SLICE-typed scalar-first repo param: the array param is `&[i64]`,
@@ -3283,9 +3290,10 @@ mod tests {
         let new = reshape_to_repo_signature(old, "take_top", synth)
             .expect("slice scalar-first repo must reshape via arg-order wrapper");
         assert!(
-            new.contains("take_top_reorder_impl(xs.to_vec(), k)"),
+            new.contains("return reordered_take_top(xs.to_vec(), k)"),
             "slice repo param must be bridged with .to_vec() in the reordered call: {new}"
         );
+        assert!(new.contains(".truncate("), "impl must retain the real body: {new}");
     }
 
     // ---- Lever D: extract-helper refactor ----

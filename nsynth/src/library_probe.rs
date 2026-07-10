@@ -142,6 +142,47 @@ fn op_shape_matches(mog: &str, target_shape: &[&'static str]) -> bool {
     raw.iter().zip(target_shape).all(|(ty, want)| canonical_kind(ty) == Some(*want))
 }
 
+/// The op's parameter kinds (canonical), or `None` if any is un-mappable.
+fn op_kinds(mog: &str) -> Option<Vec<&'static str>> {
+    header_param_types(mog)?.iter().map(|t| canonical_kind(t)).collect()
+}
+
+/// True when every kind in `shape` is distinct — the only case in which reordering
+/// arguments purely BY TYPE is unambiguous (and the exact condition the reshape arg-swap
+/// wrapper requires before it will emit a reordered call).
+fn all_distinct_kinds(shape: &[&'static str]) -> bool {
+    shape.iter().enumerate().all(|(i, k)| !shape[..i].contains(k))
+}
+
+/// True when `a` and `b` are the same MULTISET of kinds (a permutation of each other).
+fn is_kind_permutation(a: &[&'static str], b: &[&'static str]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let (mut sa, mut sb) = (a.to_vec(), b.to_vec());
+    sa.sort_unstable();
+    sb.sort_unstable();
+    sa == sb
+}
+
+/// If `mog`'s parameter kinds are a DISTINCT-kind permutation of `repo_param_types` (the
+/// arg-order fallback case), return the mapping from each OP-parameter position to the repo
+/// input index feeding it — so callers can present inputs in the op's native order. `None` when
+/// the order already matches, types repeat, or shapes differ (i.e. no reordering is needed/safe).
+fn op_native_permutation(mog: &str, repo_param_types: &[String]) -> Option<Vec<usize>> {
+    let repo: Vec<&'static str> =
+        repo_param_types.iter().map(|t| canonical_kind(t)).collect::<Option<_>>()?;
+    let op = op_kinds(mog)?;
+    if op.len() != repo.len()
+        || op == repo
+        || !all_distinct_kinds(&repo)
+        || !is_kind_permutation(&op, &repo)
+    {
+        return None;
+    }
+    Some(op.iter().map(|k| repo.iter().position(|t| t == k).unwrap()).collect())
+}
+
 /// BEHAVIOUR-DRIVEN library resolution: return the SINGLE library behaviour that
 /// reproduces every example, or `None` when zero reproduce or the examples fail to
 /// pin a unique behaviour (see module docs). `target_param_types` are the repo fn's
@@ -188,6 +229,54 @@ pub fn library_op_reproducing(
         if crate::runtime::code_reproduces_examples(&op.mog, examples) {
             candidates.push((op.name.clone(), op.mog.clone()));
         }
+    }
+
+    // ARG-ORDER FALLBACK: no op matched the target's param order exactly. Try ops whose param
+    // KINDS are a permutation of the target's (a scalar-first repo fn `k_largest(k, xs)`
+    // resolving to the array-first library op `k_largest(arr, k)`). Each example's inputs are
+    // reordered into the op's param order before verifying, and reshape's arg-swap wrapper then
+    // reorders the CALL to preserve the repo signature. Gated to ALL-DISTINCT target kinds
+    // (unambiguous type reorder) and EXACTLY ONE reproducing op — 0 or ambiguous defers. This
+    // only runs when the exact-order pass found nothing, so existing resolutions are unchanged.
+    if candidates.is_empty() && all_distinct_kinds(&target_shape) {
+        let mut hits: Vec<(String, String)> = Vec::new();
+        let mut consider = |name: &str, mog: &str| {
+            let Some(op_shape) = op_kinds(mog) else { return };
+            if op_shape.len() != arity
+                || op_shape.as_slice() == target_shape.as_slice()
+                || !is_kind_permutation(&op_shape, &target_shape)
+            {
+                return;
+            }
+            // op param position p is fed by the (unique, since distinct) target input whose
+            // kind equals op_shape[p].
+            let perm: Vec<usize> = op_shape
+                .iter()
+                .map(|k| target_shape.iter().position(|t| t == k).unwrap())
+                .collect();
+            let reordered: Vec<Example> = examples
+                .iter()
+                .map(|e| Example {
+                    inputs: perm.iter().map(|&i| e.inputs[i].clone()).collect(),
+                    expected: e.expected.clone(),
+                })
+                .collect();
+            if crate::runtime::code_reproduces_examples(mog, &reordered) {
+                hits.push((name.to_string(), mog.to_string()));
+            }
+        };
+        for op in crate::op_library::OPS {
+            if op.arity == arity {
+                consider(op.name, op.mog);
+            }
+        }
+        for op in crate::op_library::learned_ops_snapshot() {
+            if op.arity == arity {
+                consider(&op.name, &op.mog);
+            }
+        }
+        // Exactly one reproducing op -> confident; 0 or ambiguous -> defer (never guess).
+        return (hits.len() == 1).then(|| hits.into_iter().next().unwrap());
     }
 
     if candidates.is_empty() {
@@ -282,17 +371,32 @@ pub fn try_library_behavior_patch(
 
     let (op_name, mog) = library_op_reproducing(&exs, &target_param_types)?;
 
+    // When the op was resolved via the arg-order fallback, its parameter order is a permutation
+    // of the repo's, so strict-verify must see the inputs in the OP's NATIVE order (identity
+    // otherwise). reshape's arg-swap wrapper restores the repo call order afterwards.
+    let verify_exs: Vec<Example> = match op_native_permutation(&mog, &target_param_types) {
+        Some(perm) => exs
+            .iter()
+            .map(|e| Example {
+                inputs: perm.iter().map(|&i| e.inputs[i].clone()).collect(),
+                expected: e.expected.clone(),
+            })
+            .collect(),
+        None => exs.clone(),
+    };
+
     // Strict-verify the resolved behaviour against the mined examples (independent of the
     // reproduce-all selection gate), then transpile Mog → Rust and reshape onto the repo
     // signature. Any failure declines gracefully.
-    let sig: &'static str =
-        Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str());
+    let sig: &'static str = Box::leak(
+        crate::linguigenesis_bridge::infer_signature(&repo_fn, &verify_exs).into_boxed_str(),
+    );
     let problem = crate::benchmark::Problem {
         name: repo_fn.clone(),
         category: "repo-library-behavior",
         description: "",
         signature: sig,
-        examples: exs.clone(),
+        examples: verify_exs.clone(),
         ..Default::default()
     };
     crate::runtime::verify_problem_code_strict(&problem, &mog).ok()?;
@@ -465,6 +569,83 @@ mod tests {
             Some(vec!["Vec<i64>".to_string()])
         );
         assert_eq!(header_param_types("fn nullary() -> i64 { 0 }"), Some(vec![]));
+    }
+
+    /// ARG-ORDER FALLBACK: a SCALAR-FIRST target signature (k: i64, xs: [i64]) -> [i64] resolves
+    /// to the ARRAY-FIRST library op `k_largest(arr, k)` — examples given in target order are
+    /// reordered to the op's order for verification. Activates the reshape arg-swap wrapper.
+    #[test]
+    fn arg_order_fallback_resolves_a_reordered_op() {
+        let exs = vec![
+            ex(vec![Value::Int(2), iv(&[5, 1, 9, 3])], iv(&[9, 5])),
+            ex(vec![Value::Int(1), iv(&[7, 2, 5])], iv(&[7])),
+            ex(vec![Value::Int(3), iv(&[4, 4, 2, 8, 1])], iv(&[8, 4, 4])),
+        ];
+        let got = library_op_reproducing(&exs, &["i64".to_string(), "[i64]".to_string()]);
+        let (name, _) = got.expect("reordered k_largest must resolve via the multiset fallback");
+        assert_eq!(name, "k_largest");
+    }
+
+    /// The fallback still DEFERS (never guesses) when no permutation of any op reproduces the
+    /// examples — never-wrong holds for the reordered path too.
+    #[test]
+    fn arg_order_fallback_defers_when_no_op_reproduces() {
+        let exs = vec![
+            ex(vec![Value::Int(1), iv(&[1, 2, 3])], Value::Int(99)),
+            ex(vec![Value::Int(2), iv(&[4, 5])], Value::Int(88)),
+            ex(vec![Value::Int(0), iv(&[7])], Value::Int(77)),
+        ];
+        assert!(library_op_reproducing(&exs, &["i64".to_string(), "[i64]".to_string()]).is_none());
+    }
+
+    /// END TO END, ARG-ORDER ACTIVATED: a SCALAR-FIRST repo fn `k_largest(k: i64, xs: Vec<i64>)`
+    /// — an argument-order MISMATCH against the array-first library op that could not be repaired
+    /// before — is now solved: the behaviour probe resolves the op via the multiset fallback and
+    /// reshape's arg-swap wrapper reorders the call to preserve the repo signature.
+    #[test]
+    fn scalar_first_k_largest_repairs_via_arg_swap() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("nsynth_argswap_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"as\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn k_largest(k: i64, xs: Vec<i64>) -> Vec<i64> {\n    Vec::new()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::k_largest;\n    #[test]\n    fn t() {\n        assert_eq!(k_largest(2, vec![5, 1, 9, 3]), vec![9, 5]);\n        assert_eq!(k_largest(1, vec![7, 2, 5]), vec![7]);\n        assert_eq!(k_largest(3, vec![4, 4, 2, 8, 1]), vec![8, 4, 4]);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = crate::agent::repo::RepoTaskSpec {
+            id: "as".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: crate::agent::repo::RepoTaskKind::BugFix,
+            issue: "the k largest elements".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: crate::agent::repo::HardnessProfile::for_expected_tier(
+                crate::agent::repo::HardnessTier::SingleFileBug,
+            ),
+            signals: Vec::new(),
+        };
+        let context = crate::agent::repo::RepairContext::build(
+            &root,
+            &crate::agent::repo::GuardrailPolicy::default(),
+        )
+        .expect("ctx");
+        let patch = try_library_behavior_patch(&task, &context, "the k largest elements")
+            .expect("scalar-first k_largest must resolve via the arg-order fallback + swap");
+        assert!(
+            patch.edits.iter().any(|e| e.path == "src/lib.rs"
+                && e.new_text.contains("reordered_k_largest(xs, k)")
+                && e.new_text.contains(".sort()")),
+            "repo fn must call the reordered impl with swapped args, and the impl must carry the \
+             real k-largest logic (sort + take-k)"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// END TO END on a BARE prompt: a repo `count_positives` stub with failing asserts and the
