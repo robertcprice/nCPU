@@ -1826,6 +1826,7 @@ impl CodingAgentSession {
                     &surfaces,
                     &lib,
                 );
+                crate::schema_miner::append_harvest_row(query, &lib);
             }
         }
         Some(result)
@@ -1887,6 +1888,18 @@ impl CodingAgentSession {
         // (or surface the failed fill as WholeSoftware so the user sees the attempt).
         if result.success {
             result.synthesis_method = Some("whole-software:example-rust-lane".into());
+            // Phase-4 flywheel: promote + harvest the verified Rust body.
+            let lib_path = self.root.join("src/lib.rs");
+            if let Ok(lib) = std::fs::read_to_string(&lib_path) {
+                let surfaces = vec![fn_name.clone(), query.chars().take(48).collect()];
+                let _ = crate::component::promote_schema_component(
+                    &self.root,
+                    &fn_name,
+                    &surfaces,
+                    &lib,
+                );
+                crate::schema_miner::append_harvest_row(query, &lib);
+            }
         }
         Some(result)
     }

@@ -43,9 +43,9 @@ impl CharValue {
 /// Parse simple inline examples from prose: `f(1,2)=3`, `f([1,2]) -> 3`, `name: 2->4, 3->6`.
 pub fn parse_inline_char_examples(prose: &str) -> Vec<CharExample> {
     let mut out = Vec::new();
-    // Pattern: name(args)=result  OR  name(args) -> result  (comma-separated rows)
     let lower = prose.replace("→", "->");
-    for chunk in lower.split(|c| c == ',' || c == ';') {
+    // Split on top-level commas/semicolons (not inside () / [] / "").
+    for chunk in split_top_level(&lower) {
         let chunk = chunk.trim();
         if chunk.is_empty() {
             continue;
@@ -53,7 +53,6 @@ pub fn parse_inline_char_examples(prose: &str) -> Vec<CharExample> {
         let (lhs, rhs) = if let Some(i) = chunk.find("->") {
             (&chunk[..i], &chunk[i + 2..])
         } else if let Some(i) = chunk.find('=') {
-            // Avoid matching `==` inside asserts; require fn-call shape on lhs.
             if chunk.contains("==") {
                 continue;
             }
@@ -63,20 +62,58 @@ pub fn parse_inline_char_examples(prose: &str) -> Vec<CharExample> {
         };
         let lhs = lhs.trim();
         let rhs = rhs.trim();
-        let Some(open) = lhs.find('(') else { continue };
-        let Some(close) = lhs.rfind(')') else { continue };
-        if close <= open {
-            continue;
+        // Call-shaped: name(args)
+        if let (Some(open), Some(close)) = (lhs.find('('), lhs.rfind(')')) {
+            if close > open {
+                let args_src = &lhs[open + 1..close];
+                if let (Some(inputs), Some(expected)) =
+                    (parse_arg_list(args_src), parse_value(rhs))
+                {
+                    out.push(CharExample { inputs, expected });
+                    continue;
+                }
+            }
         }
-        let args_src = &lhs[open + 1..close];
-        let inputs = match parse_arg_list(args_src) {
-            Some(v) => v,
-            None => continue,
-        };
-        let Some(expected) = parse_value(rhs) else { continue };
-        out.push(CharExample { inputs, expected });
+        // Bare arrow row: `2->4` or multi-arg `2,3->5` (lhs has no parens).
+        if let (Some(inputs), Some(expected)) = (parse_arg_list(lhs), parse_value(rhs)) {
+            if !inputs.is_empty() {
+                out.push(CharExample { inputs, expected });
+            }
+        }
+    }
+    // Also accept verified_nl_router form: "prompt: 2->4, 3->6"
+    if out.len() < 2 && prose.contains("->") {
+        let (_, bench) = crate::verified_nl_router::split_prompt_examples(prose);
+        if let Some(converted) = char_examples_from_bench(&bench) {
+            if converted.len() >= 2 {
+                return converted;
+            }
+        }
     }
     out
+}
+
+/// Split on `,` / `;` at depth 0 (respecting `()` / `[]` / `"..."`).
+fn split_top_level(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut last = 0usize;
+    let bytes = s.as_bytes();
+    for (i, &c) in bytes.iter().enumerate() {
+        match c {
+            b'"' => in_str = !in_str,
+            b'(' | b'[' if !in_str => depth += 1,
+            b')' | b']' if !in_str => depth -= 1,
+            b',' | b';' if !in_str && depth == 0 => {
+                parts.push(&s[last..i]);
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[last..]);
+    parts
 }
 
 fn parse_arg_list(src: &str) -> Option<Vec<CharValue>> {
@@ -361,5 +398,12 @@ mod tests {
         let c = char_examples_from_bench(&ex).expect("convert");
         assert_eq!(c.len(), 2);
         assert!(matches!(c[0].expected, CharValue::Int(4)));
+    }
+
+    #[test]
+    fn parses_arrow_prompt_examples() {
+        let ex = parse_inline_char_examples("double a number: 2->4, 3->6, 0->0");
+        assert!(ex.len() >= 2, "got {ex:?}");
+        assert!(matches!(ex[0].expected, CharValue::Int(4)));
     }
 }

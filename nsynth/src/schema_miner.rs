@@ -231,6 +231,32 @@ pub fn load_templates_from_env() -> Option<Vec<MinedTemplate>> {
     load_templates_json(Path::new(&path)).ok()
 }
 
+/// Append one verified (task, code) row to `NSYNTH_HARVEST` JSONL (Phase-4 flywheel).
+/// Best-effort; never fails the caller. No-op when the env var is unset.
+pub fn append_harvest_row(task: &str, code: &str) {
+    let Some(path) = std::env::var_os("NSYNTH_HARVEST") else {
+        return;
+    };
+    if path.is_empty() || code.trim().is_empty() {
+        return;
+    }
+    let row = serde_json::json!({
+        "task": task,
+        "code": code,
+    });
+    let Ok(line) = serde_json::to_string(&row) else {
+        return;
+    };
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 /// Format top templates for CLI stdout.
 pub fn format_top_templates(templates: &[MinedTemplate]) -> String {
     let mut out = String::new();
@@ -510,5 +536,19 @@ mod tests {
     fn count_const_holes_reads_max_index() {
         assert_eq!(count_const_holes("return ?v1 * ?c0 + ?c1;"), 2);
         assert_eq!(count_const_holes("return ?v1;"), 0);
+    }
+
+    #[test]
+    fn append_harvest_row_writes_jsonl() {
+        let path = std::env::temp_dir().join(format!("nsynth_harvest_{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("NSYNTH_HARVEST", &path);
+        append_harvest_row("double", "fn double(x: i64) -> i64 { return x * 2; }");
+        append_harvest_row("triple", "fn triple(x: i64) -> i64 { return x * 3; }");
+        let text = std::fs::read_to_string(&path).expect("harvest file");
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains("\"task\":\"double\""));
+        std::env::remove_var("NSYNTH_HARVEST");
+        let _ = std::fs::remove_file(&path);
     }
 }
