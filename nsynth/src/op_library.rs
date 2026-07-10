@@ -1423,7 +1423,7 @@ pub const OPS: &[LibOp] = &[
     // tasks emit fixed MESSAGE strings; each op hardcodes its task's message
     // pair and behavior-matching picks the right pattern per task.
     LibOp { name: "snake_to_camel", arity: 1, mog:
-"fn snake_to_camel(s: string) -> string {\n    out: string = \"\";\n    up: i64 = 1;\n    for ch in s {\n        if ch == '_' {\n            up = 1;\n        } else {\n            if up == 1 {\n                out = out + ch.upper();\n                up = 0;\n            } else {\n                out = out + ch;\n            }\n        }\n    }\n    return out;\n}\n" },
+"fn snake_to_camel(s: string) -> string {\n    out: string = \"\";\n    up: i64 = 0;\n    for ch in s {\n        if ch == '_' {\n            up = 1;\n        } else {\n            if up == 1 {\n                out = out + ch.upper();\n                up = 0;\n            } else {\n                out = out + ch;\n            }\n        }\n    }\n    return out;\n}\n" },
     LibOp { name: "camel_to_snake", arity: 1, mog:
 "fn camel_to_snake(s: string) -> string {\n    out: string = \"\";\n    i: i64 = 0;\n    for ch in s {\n        if ch.is_upper() {\n            if i > 0 {\n                out = out + \"_\";\n            }\n            out = out + ch.lower();\n        } else {\n            out = out + ch;\n        }\n        i = i + 1;\n    }\n    return out;\n}\n" },
     LibOp { name: "toggle_case", arity: 1, mog:
@@ -1720,6 +1720,9 @@ mod tests {
             ("reverse_string", vec![Value::Str("abc".into())], Value::Str("cba".into())),
             ("to_upper", vec![Value::Str("aBc".into())], Value::Str("ABC".into())),
             ("to_lower", vec![Value::Str("aBc".into())], Value::Str("abc".into())),
+            ("snake_to_camel", vec![Value::Str("hello_world".into())], Value::Str("helloWorld".into())),
+            ("snake_to_camel", vec![Value::Str("parse_json_body".into())], Value::Str("parseJsonBody".into())),
+            ("camel_to_snake", vec![Value::Str("helloWorld".into())], Value::Str("hello_world".into())),
             ("string_length", vec![Value::Str("hello".into())], Value::Int(5)),
             ("count_vowels", vec![Value::Str("banana".into())], Value::Int(3)),
             ("count_consonants", vec![Value::Str("banana".into())], Value::Int(3)),

@@ -2299,8 +2299,17 @@ fn parse_literal(tok: &str) -> Option<crate::benchmark::Value> {
         "false" => return Some(Value::Bool(false)),
         _ => {}
     }
-    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
-        let body = &t[1..t.len() - 1];
+    // A bare `"..."` OR a String constructor around one: `"x".to_string()`, `"x".into()`,
+    // `String::from("x")`. Repo fns often take `String`, so their asserts wrap the literal.
+    let s = t.strip_suffix(".to_string()").or_else(|| t.strip_suffix(".into()")).unwrap_or(t);
+    let s = s.trim();
+    let s = s
+        .strip_prefix("String::from(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .map(str::trim)
+        .unwrap_or(s);
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        let body = &s[1..s.len() - 1];
         if !body.contains('\\') {
             return Some(Value::Str(body.to_string()));
         }

@@ -694,4 +694,67 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&root);
     }
+
+    /// STRING TRANSFORM by behavior: snake_case -> camelCase is a library op (`snake_to_camel`),
+    /// so the behaviour probe resolves it from the mined string asserts. (The mined repo path
+    /// previously failed these — the resolved string-building body hit the gencode local-Vec
+    /// move-bug; fixed in 593b2f5.)
+    #[test]
+    fn string_transform_snake_to_camel_by_behavior() {
+        let got = library_op_reproducing(
+            &[
+                Example { inputs: vec![Value::Str("parse_json".into())], expected: Value::Str("parseJson".into()) },
+                Example { inputs: vec![Value::Str("to_do_list".into())], expected: Value::Str("toDoList".into()) },
+                Example { inputs: vec![Value::Str("x".into())], expected: Value::Str("x".into()) },
+            ],
+            &["String".to_string()],
+        );
+        let (name, _) = got.expect("snake->camel must resolve to a library op by behavior");
+        assert_eq!(name, "snake_to_camel");
+    }
+
+    /// END TO END: a repo `snake_to_camel(s: String) -> String` stub with failing asserts is
+    /// repaired via the behaviour probe (string transforms now reachable in the mined repo path).
+    #[test]
+    fn repo_snake_to_camel_repairs_by_behavior() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("nsynth_strwire_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"sw\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn snake_to_camel(s: String) -> String {\n    String::new()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::snake_to_camel;\n    #[test]\n    fn t() {\n        assert_eq!(snake_to_camel(\"parse_json\".to_string()), \"parseJson\");\n        assert_eq!(snake_to_camel(\"to_do_list\".to_string()), \"toDoList\");\n        assert_eq!(snake_to_camel(\"x\".to_string()), \"x\");\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = crate::agent::repo::RepoTaskSpec {
+            id: "sw".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: crate::agent::repo::RepoTaskKind::BugFix,
+            issue: "convert snake_case to camelCase".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: crate::agent::repo::HardnessProfile::for_expected_tier(
+                crate::agent::repo::HardnessTier::SingleFileBug,
+            ),
+            signals: Vec::new(),
+        };
+        let context = crate::agent::repo::RepairContext::build(
+            &root,
+            &crate::agent::repo::GuardrailPolicy::default(),
+        )
+        .expect("ctx");
+        let patch = try_library_behavior_patch(&task, &context, "convert snake_case to camelCase")
+            .expect("repo snake_to_camel must repair via the behaviour probe");
+        assert!(
+            patch.edits.iter().any(|e| e.path == "src/lib.rs" && !e.new_text.contains("String::new()\n}")),
+            "stub body must be replaced with the real transform"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
 }
