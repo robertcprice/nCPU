@@ -696,6 +696,10 @@ enum WordShape {
     ShortestWord,
     /// First character of each word, concatenated (initials): "hi there" -> "ht".
     Initials,
+    /// Keep words whose char-count is even (order-preserving filter).
+    FilterEvenLen,
+    /// Keep words whose char-count is odd (order-preserving filter).
+    FilterOddLen,
 }
 
 impl WordShape {
@@ -708,6 +712,8 @@ impl WordShape {
             WordShape::LongestWord => "longest_word",
             WordShape::ShortestWord => "shortest_word",
             WordShape::Initials => "initials",
+            WordShape::FilterEvenLen => "filter_even_len",
+            WordShape::FilterOddLen => "filter_odd_len",
         }
     }
 }
@@ -770,6 +776,18 @@ fn apply_word_shape(input: &str, sep: &str, shape: WordShape) -> String {
             .iter()
             .map(|w| w.chars().next().map(String::from).unwrap_or_default())
             .collect::<String>(),
+        WordShape::FilterEvenLen => words
+            .iter()
+            .filter(|w| w.chars().count() % 2 == 0)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(sep),
+        WordShape::FilterOddLen => words
+            .iter()
+            .filter(|w| w.chars().count() % 2 == 1)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(sep),
     }
 }
 
@@ -800,6 +818,12 @@ fn emit_word_program(p: &str, sep: &str, shape: WordShape) -> String {
         WordShape::Initials => format!(
             "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        out.push(words[i].slice(0, 1));\n        i = i + 1;\n    }}\n    return out.join(\"\");\n}}\n"
         ),
+        WordShape::FilterEvenLen => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len % 2 == 0 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
+        WordShape::FilterOddLen => format!(
+            "fn transform({p}: string) -> string {{\n    words: [string] = {p}.split(\"{sep}\");\n    out: [string] = [];\n    i: i64 = 0;\n    while i < words.len {{\n        if words[i].len % 2 == 1 {{\n            out.push(words[i]);\n        }}\n        i = i + 1;\n    }}\n    return out.join(\"{sep}\");\n}}\n"
+        ),
     }
 }
 
@@ -824,7 +848,7 @@ pub fn synthesize_word_program(
     }
     let p = &params[0];
     const SEPS: [&str; 5] = [" ", "-", "_", ",", "/"];
-    const SHAPES: [WordShape; 7] = [
+    const SHAPES: [WordShape; 9] = [
         WordShape::TitleCase,
         WordShape::ReverseEachWord,
         WordShape::SortWords,
@@ -832,6 +856,8 @@ pub fn synthesize_word_program(
         WordShape::LongestWord,
         WordShape::ShortestWord,
         WordShape::Initials,
+        WordShape::FilterEvenLen,
+        WordShape::FilterOddLen,
     ];
     for sep in SEPS {
         // A word shape only applies to GENUINE multi-word input: at least one
@@ -1345,6 +1371,33 @@ mod tests {
             &[wex("hello world", "hw"), wex("the quick brown", "tqb"), wex("a b c", "abc")],
         );
         assert_eq!(r.map(|r| r.method), Some("word-initials".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_filter_even_len() {
+        let p = vec!["s".to_string()];
+        // even-char words only: "aa"(2) "cc"(2); "bb"(2) "dd"(2)
+        let r = synthesize_word_program(
+            &p,
+            &[
+                wex("aa bbb cc d", "aa cc"),
+                wex("a bb ccc dd", "bb dd"),
+            ],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-filter_even_len".to_string()));
+    }
+
+    #[test]
+    fn word_program_synthesizes_filter_odd_len() {
+        let p = vec!["s".to_string()];
+        let r = synthesize_word_program(
+            &p,
+            &[
+                wex("aa bbb cc d", "bbb d"),
+                wex("a bb ccc dd", "a ccc"),
+            ],
+        );
+        assert_eq!(r.map(|r| r.method), Some("word-filter_odd_len".to_string()));
     }
 
     /// Reachability probe: is longest-word solved by THIS synthesizer, or shadowed
