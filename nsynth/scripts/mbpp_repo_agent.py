@@ -9,8 +9,8 @@
 # optional). Prep: python3 scripts/mbpp_prepare.py /tmp/mbpp_bench.jsonl
 
 import json, os, subprocess, sys, tempfile
-AGENT="/Users/bobbyprice/projects/nCPU/nsynth/target/release/coding_agent"
-BENCH="/tmp/mbpp_bench.jsonl"
+AGENT=os.environ.get("NSYNTH_CODING_AGENT") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "target", "release", "coding_agent")
+BENCH=os.environ.get("NSYNTH_MBPP_BENCH", "/tmp/mbpp_bench.jsonl")
 N=int(sys.argv[1]) if len(sys.argv)>1 else 40
 TMO=int(os.environ.get("SC_TIMEOUT","200"))
 

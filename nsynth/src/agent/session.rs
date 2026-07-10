@@ -278,14 +278,17 @@ impl CodingAgentSession {
             let prompt = if nl.is_empty() { query.to_string() } else { nl };
             match crate::verified_nl_router::answer(&prompt, &examples) {
                 crate::verified_nl_router::Answer::Refused => {
-                    // If the query CARRIED examples, it is a function-synthesis request
-                    // and answer() already tried the whole verified stack (library /
-                    // composition / synthesis / gated model). Its refusal is FINAL:
-                    // refuse honestly rather than fall through to the legacy guessing
-                    // path, which would ship a confident-wrong answer with no oracle.
-                    // With NO examples the query may be a site/project/teach request the
-                    // op-router can't recognize, so those still fall through below.
+                    // If the query CARRIED examples, answer() already tried the Mog
+                    // verified stack. Before honest refuse, try the Rust repo-agent
+                    // lane (scaffold characterization crate + hole-filler) — the
+                    // measured 13%→58% synergy path. Still never-wrong: cargo gates.
                     if !examples.is_empty() {
+                        if let Some(result) =
+                            self.try_example_bearing_rust_lane(query, &examples)
+                        {
+                            self.record_result(query, &result);
+                            return result;
+                        }
                         let result = AgentQueryResult {
                             route: QueryRoute::SynthesizeFunction,
                             success: false,
@@ -1824,6 +1827,66 @@ impl CodingAgentSession {
                     &lib,
                 );
             }
+        }
+        Some(result)
+    }
+
+    /// Example-bearing Rust lane (MBPP 13%→58% synergy): when the Mog never-wrong
+    /// door refuses, scaffold a characterization crate from the parsed examples and
+    /// run the repo-agent hole-filler. Cargo-gated; returns `None` if the examples
+    /// are not Rust-representable or the fill fails to start.
+    fn try_example_bearing_rust_lane(
+        &mut self,
+        query: &str,
+        examples: &[crate::benchmark::Example],
+    ) -> Option<AgentQueryResult> {
+        if examples.len() < 2 {
+            return None;
+        }
+        let (nl, _) = crate::verified_nl_router::split_prompt_examples(query);
+        let fn_name = {
+            let from_prose = crate::characterization::fn_name_from_prose(if nl.is_empty() {
+                query
+            } else {
+                &nl
+            });
+            if from_prose == "f" && !nl.is_empty() {
+                // Prefer a snake token from the NL prompt when no call-site name.
+                let tok = nl
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .find(|t| t.len() > 2 && t.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+                tok.unwrap_or("f").to_string()
+            } else {
+                from_prose
+            }
+        };
+        let written = crate::characterization::write_characterization_from_bench(
+            &self.root,
+            &fn_name,
+            examples,
+        )
+        .ok()?;
+        let scaffolded = crate::whole_software::ScaffoldedCrate {
+            root: self.root.clone(),
+            kind: crate::whole_software::ScaffoldKind::Characterization,
+            method: "whole-software:example-rust-lane",
+            summary: format!(
+                "example-bearing Rust lane fn {} ({} tests)",
+                written.fn_name, written.n_tests
+            ),
+            n_tests: written.n_tests,
+        };
+        let mut plan = crate::whole_software::BuildPlan::new();
+        crate::whole_software::run_bounded_loop(&mut plan, scaffolded.method);
+        let mut result = self.fill_scaffolded_whole_software(query, &scaffolded);
+        result.tool_trace.push((
+            "example_rust_lane.phases".into(),
+            plan.phases.join(" → "),
+        ));
+        // Only claim the route when fill succeeded; on failure let caller refuse
+        // (or surface the failed fill as WholeSoftware so the user sees the attempt).
+        if result.success {
+            result.synthesis_method = Some("whole-software:example-rust-lane".into());
         }
         Some(result)
     }

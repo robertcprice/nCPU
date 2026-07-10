@@ -9,11 +9,16 @@
 # (needs NSYNTH_LOCAL_LLM_URL + /tmp/mbpp_bench.jsonl + /tmp/vibe/mbpp_full.json).
 
 import json, os, re, subprocess, sys, tempfile, urllib.request
-AGENT="/Users/bobbyprice/projects/nCPU/nsynth/target/release/coding_agent"
-URL="http://127.0.0.1:8080/v1/chat/completions"; MODEL="mlx-community/VibeThinker-3B-4bit"
-full={t["id"]:t for t in json.load(open("/tmp/vibe/mbpp_full.json"))}
-tasks=[json.loads(l) for l in open("/tmp/mbpp_bench.jsonl")]
+AGENT=os.environ.get("NSYNTH_CODING_AGENT") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "target", "release", "coding_agent")
+# Prefer the first-class `solve` bin when present (same dual-lane contract).
+SOLVE=os.environ.get("NSYNTH_SOLVE") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "target", "release", "solve")
+URL=os.environ.get("NSYNTH_LOCAL_LLM_URL", "http://127.0.0.1:8080/v1/chat/completions"); MODEL=os.environ.get("NSYNTH_LOCAL_LLM_MODEL", "mlx-community/VibeThinker-3B-4bit")
+full={t["id"]:t for t in json.load(open("/tmp/vibe/mbpp_full.json"))} if os.path.exists("/tmp/vibe/mbpp_full.json") else {}
+tasks=[json.loads(l) for l in open("/tmp/mbpp_bench.jsonl")] if os.path.exists("/tmp/mbpp_bench.jsonl") else []
 N=int(sys.argv[1]) if len(sys.argv)>1 else 25
+if not tasks:
+    print("dual_lane_solve: missing /tmp/mbpp_bench.jsonl — run scripts/mbpp_prepare.py first", file=sys.stderr)
+    sys.exit(2)
 base=tempfile.mkdtemp(prefix="un_"); os.environ["HOME"]=base+"/home"; os.makedirs(os.environ["HOME"],exist_ok=True)
 
 def rtype(v):

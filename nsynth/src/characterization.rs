@@ -216,6 +216,55 @@ pub fn append_characterization_tests(
     Ok(examples.len())
 }
 
+/// Convert verified_nl_router / benchmark examples into characterization rows.
+/// Returns `None` when any value is outside the Rust scaffold type set
+/// (i64 / bool / String / Vec<i64>).
+pub fn char_examples_from_bench(
+    examples: &[crate::benchmark::Example],
+) -> Option<Vec<CharExample>> {
+    let mut out = Vec::with_capacity(examples.len());
+    for ex in examples {
+        let mut inputs = Vec::with_capacity(ex.inputs.len());
+        for v in &ex.inputs {
+            inputs.push(bench_value_to_char(v)?);
+        }
+        let expected = bench_value_to_char(&ex.expected)?;
+        out.push(CharExample { inputs, expected });
+    }
+    Some(out)
+}
+
+fn bench_value_to_char(v: &crate::benchmark::Value) -> Option<CharValue> {
+    use crate::benchmark::Value;
+    match v {
+        Value::Int(n) => Some(CharValue::Int(*n)),
+        Value::Bool(b) => Some(CharValue::Bool(*b)),
+        Value::Str(s) => Some(CharValue::Str(s.clone())),
+        Value::Array(xs) => {
+            let mut ints = Vec::with_capacity(xs.len());
+            for x in xs {
+                match x {
+                    Value::Int(n) => ints.push(*n),
+                    _ => return None,
+                }
+            }
+            Some(CharValue::IntList(ints))
+        }
+        _ => None,
+    }
+}
+
+/// Write a characterization crate from benchmark examples (the 58% Rust-lane path).
+pub fn write_characterization_from_bench(
+    root: &Path,
+    fn_name: &str,
+    examples: &[crate::benchmark::Example],
+) -> Result<CharacterizationScaffold, String> {
+    let char_ex = char_examples_from_bench(examples)
+        .ok_or_else(|| "examples contain unsupported value shapes for Rust scaffold".to_string())?;
+    write_characterization_crate(root, fn_name, &char_ex)
+}
+
 /// Extract a plausible fn name from prose (`fix f`, `function add`, `fn foo`, else `f`).
 pub fn fn_name_from_prose(prose: &str) -> String {
     let lower = prose.to_lowercase();
@@ -294,5 +343,23 @@ mod tests {
     #[test]
     fn fn_name_from_call_site() {
         assert_eq!(fn_name_from_prose("add(1,2)=3, add(4,5)=9"), "add");
+    }
+
+    #[test]
+    fn converts_bench_examples_to_char() {
+        use crate::benchmark::{Example, Value};
+        let ex = vec![
+            Example {
+                inputs: vec![Value::Int(2)],
+                expected: Value::Int(4),
+            },
+            Example {
+                inputs: vec![Value::Int(3)],
+                expected: Value::Int(6),
+            },
+        ];
+        let c = char_examples_from_bench(&ex).expect("convert");
+        assert_eq!(c.len(), 2);
+        assert!(matches!(c[0].expected, CharValue::Int(4)));
     }
 }
