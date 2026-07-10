@@ -9,7 +9,9 @@ use crate::agent::coding_intent::CodingIntent;
 use crate::agent::repo::{
     FailureAnalysis, FailureKind, GuardrailPolicy, RepairContext, RepairEdit, RepairPatch, RepairVerification, RepairVerifier, RepoTaskSpec, RepoTaskKind,
 };
+use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 /// Extract NL description from task issue (supports `nl:` and `synthesize:` prefixes).
@@ -425,6 +427,35 @@ fn mh_score(v: &Result<RepairVerification, String>) -> (bool, usize, bool) {
     }
 }
 
+/// Fingerprint of the current multi-hole fill choices (for verify-result caching).
+fn mh_files_fingerprint(files: &[FileHoles]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for fh in files {
+        fh.path.hash(&mut h);
+        for c in &fh.choice {
+            c.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// Cached `cargo test` score: joint search revisits identical fill states across
+/// combo × descent passes; skipping a redundant verify is the main ~50s lever.
+fn mh_score_cached(
+    files: &[FileHoles],
+    verifier: &RepairVerifier,
+    cmd: &str,
+    cache: &mut HashMap<u64, (bool, usize, bool)>,
+) -> (bool, usize, bool) {
+    let fp = mh_files_fingerprint(files);
+    if let Some(&s) = cache.get(&fp) {
+        return s;
+    }
+    let s = mh_score(&verifier.verify(cmd));
+    cache.insert(fp, s);
+    s
+}
+
 /// Bounded cartesian product of candidate lists (caps the number of combinations so the joint search
 /// can't explode on a struct with many mutators).
 fn bounded_product(lists: &[Vec<String>], cap: usize) -> Vec<Vec<String>> {
@@ -454,6 +485,7 @@ fn bounded_product(lists: &[Vec<String>], cap: usize) -> Vec<Vec<String>> {
 /// count (and committing a first-compiling guess to unstick a prerequisite whose effect is invisible
 /// until a getter is filled). `fixed[fi][hi]` pins a hole (used by the joint search to hold a mutator
 /// combo). Returns true on a full solve, leaving `files` AT the solution. Writes as it goes.
+/// `cache` memoizes verify scores by fill fingerprint (joint-search perf).
 #[allow(clippy::too_many_arguments)]
 fn mh_descend(
     files: &mut [FileHoles],
@@ -464,6 +496,7 @@ fn mh_descend(
     budget: std::time::Duration,
     runs: &mut usize,
     max_runs: usize,
+    cache: &mut HashMap<u64, (bool, usize, bool)>,
 ) -> bool {
     for fi in 0..files.len() {
         for hi in 0..files[fi].holes.len() {
@@ -475,7 +508,7 @@ fn mh_descend(
     for fh in files.iter() {
         let _ = std::fs::write(&fh.abs, fh.render());
     }
-    let (ok, mut cur_passed, compiled) = mh_score(&verifier.verify(cmd));
+    let (ok, mut cur_passed, compiled) = mh_score_cached(files, verifier, cmd, cache);
     if ok {
         return true;
     }
@@ -498,14 +531,14 @@ fn mh_descend(
                     if *runs >= max_runs || start.elapsed() > budget {
                         files[fi].choice[hi] = best_body.clone();
                         let _ = std::fs::write(&files[fi].abs, files[fi].render());
-                        return verifier.verify(cmd).map(|v| v.success).unwrap_or(false);
+                        return mh_score_cached(files, verifier, cmd, cache).0;
                     }
                     files[fi].choice[hi] = cand.clone();
                     if std::fs::write(&files[fi].abs, files[fi].render()).is_err() {
                         continue;
                     }
                     *runs += 1;
-                    let (o, passed, comp) = mh_score(&verifier.verify(cmd));
+                    let (o, passed, comp) = mh_score_cached(files, verifier, cmd, cache);
                     if o {
                         return true;
                     }
@@ -523,11 +556,19 @@ fn mh_descend(
                     files[fi].choice[hi] = best_body;
                     cur_passed = best_passed;
                     improved = true;
-                } else if files[fi].choice[hi] == default_body {
+                } else if best_body == default_body {
+                    // No score lift: commit first compiling guess to unstick a
+                    // prerequisite whose effect is invisible until a getter fills.
+                    // (Was incorrectly checking choice==default after the cand loop
+                    // left choice on the last candidate — first_guess never fired.)
                     if let Some(g) = first_guess {
                         files[fi].choice[hi] = g;
                         improved = true;
+                    } else {
+                        files[fi].choice[hi] = default_body;
                     }
+                } else {
+                    files[fi].choice[hi] = best_body;
                 }
                 let _ = std::fs::write(&files[fi].abs, files[fi].render());
             }
@@ -536,7 +577,7 @@ fn mh_descend(
             break;
         }
     }
-    verifier.verify(cmd).map(|v| v.success).unwrap_or(false)
+    mh_score_cached(files, verifier, cmd, cache).0
 }
 
 pub fn try_multihole_fill_patch(
@@ -613,10 +654,21 @@ pub fn try_multihole_fill_patch(
     let mut runs = 0usize;
     const MAX_RUNS: usize = 400;
     let cmd = &task.test_command;
+    let mut cache: HashMap<u64, (bool, usize, bool)> = HashMap::new();
 
     // Phase 1: plain coordinate descent (no pinned holes).
     let none_fixed: Vec<Vec<bool>> = files.iter().map(|f| vec![false; f.holes.len()]).collect();
-    if mh_descend(&mut files, &none_fixed, &verifier, cmd, start, budget, &mut runs, MAX_RUNS) {
+    if mh_descend(
+        &mut files,
+        &none_fixed,
+        &verifier,
+        cmd,
+        start,
+        budget,
+        &mut runs,
+        MAX_RUNS,
+        &mut cache,
+    ) {
         let patch = finish(&files);
         revert_all(&files);
         return patch;
@@ -659,7 +711,17 @@ pub fn try_multihole_fill_patch(
             for ((fi, hi), body) in prereqs.iter().zip(&combo) {
                 files[*fi].choice[*hi] = body.clone();
             }
-            if mh_descend(&mut files, &fixed, &verifier, cmd, start, budget, &mut runs, MAX_RUNS) {
+            if mh_descend(
+                &mut files,
+                &fixed,
+                &verifier,
+                cmd,
+                start,
+                budget,
+                &mut runs,
+                MAX_RUNS,
+                &mut cache,
+            ) {
                 let patch = finish(&files);
                 revert_all(&files);
                 return patch;
@@ -6873,6 +6935,25 @@ mod tests {
         assert_eq!(full[0], vec!["a".to_string(), "x".to_string()], "first combo is all-first-candidates");
         assert!(bounded_product(&lists, 2).len() <= 2, "cap respected");
         assert_eq!(bounded_product(&[], 9), vec![Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn mh_fingerprint_stable_for_same_choices() {
+        let make = || FileHoles {
+            path: "src/lib.rs".into(),
+            abs: PathBuf::from("/tmp/x"),
+            orig: String::new(),
+            tail: String::new(),
+            code: String::new(),
+            holes: Vec::new(),
+            choice: vec!["self.a += x;".into(), "self.b".into()],
+        };
+        let a = mh_files_fingerprint(&[make()]);
+        let b = mh_files_fingerprint(&[make()]);
+        assert_eq!(a, b);
+        let mut other = make();
+        other.choice[0] = "self.a = x;".into();
+        assert_ne!(a, mh_files_fingerprint(&[other]));
     }
 
     #[test]
