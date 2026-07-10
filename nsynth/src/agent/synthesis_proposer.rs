@@ -2368,73 +2368,53 @@ pub fn try_test_mined_synthesis_patch(
     }
     rows.sort();
     rows.dedup();
+
+    // NAME-RECOVERY FALLBACK. The NL intent can mis-resolve the function name — "count how many
+    // elements are positive" resolves to `is_positive` (the "positive" cue), whose asserts don't
+    // exist — or the function is MISSING entirely, so there is no definition for `resolve_repo_fn_name`
+    // to anchor on. In both cases mining the resolved name pins too few rows. But the failing asserts
+    // NAME the function they call (`assert_eq!(count_positives(..), 3)`), so recover the dominant
+    // asserted call-name and re-mine. Purely additive: this runs ONLY when the resolved name already
+    // failed to pin ≥2 rows, so it can never override a correctly-resolved name, and the recovered
+    // candidate is still strict-verified + cargo-gated downstream (never-wrong preserved).
+    let mut repo_fn = repo_fn;
     if rows.len() < 2 {
-        return None;
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                accumulate_asserted_call_names(t, &mut counts);
+            }
+        }
+        let recovered = counts
+            .into_iter()
+            .filter(|(n, _)| n != &repo_fn)
+            .max_by_key(|(_, c)| *c)
+            .map(|(n, _)| n);
+        let Some(name) = recovered else { return None };
+        let mut rows2: Vec<(Vec<crate::benchmark::Value>, crate::benchmark::Value)> = Vec::new();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                rows2.extend(mine_asserts(t, &name));
+            }
+        }
+        rows2.sort();
+        rows2.dedup();
+        if rows2.len() < 2 {
+            return None;
+        }
+        rows = rows2;
+        repo_fn = name;
     }
 
-    let exs: Vec<crate::benchmark::Example> = rows
-        .iter()
-        .map(|(ins, out)| crate::benchmark::Example {
-            inputs: ins.clone(),
-            expected: out.clone(),
-        })
-        .collect();
-    // Array-RETURNING functions (reverse, sort, k-largest) now proceed: `gencode_normalize`
-    // fixes the Vec-return lowering (`= []` etc.) and `reshape_to_repo_signature` handles the
-    // slice/by-value bridge. If a particular array signature still can't be reshaped, reshape
-    // returns None and the proposer declines gracefully (same fall-through as before) — never a
-    // bad patch, since strict-verify + the real cargo test still gate every candidate.
-    let sig: &'static str =
-        Box::leak(crate::linguigenesis_bridge::infer_signature(&repo_fn, &exs).into_boxed_str());
-    let problem = crate::benchmark::Problem {
-        name: repo_fn.to_string(),
-        category: "repo-test-mined",
-        description: "",
-        signature: sig,
-        examples: exs.clone(),
-        ..Default::default()
-    };
-    // FRONT DOOR FIRST, then raw synthesis. The never-wrong router (`answer`) reaches the
-    // ~300-op verified LIBRARY the bare enumerator cannot re-derive — "count how many
-    // elements are positive" IS the library op `count_positives` (a filter+count), which the
-    // raw solver refuses to synthesize from the same 2-3 mined points. `answer` proposes an op
-    // from the prose AND verifies it against the mined examples, so it only returns a
-    // library/composition/model op that reproduces the failing test's asserts; a WRONG guess
-    // is refused by that gate (and the real cargo test is still the final oracle). Falls back
-    // to `solve_problem` when the prose names no reachable op.
-    let (code, method) = front_door_mined_code(description, &exs)
-        .or_else(|| {
-            let res = crate::solver::solve_problem(&problem);
-            (res.success && crate::runtime::verify_problem_code_strict(&problem, &res.code).is_ok())
-                .then(|| (res.code, res.method))
-        })?;
-    if crate::runtime::verify_problem_code_strict(&problem, &code).is_err() {
-        return None;
-    }
-    // Same memorization guard as the CLI/teach paths: never adopt a magic-constant fit.
-    if crate::synth_confidence::is_memorization_overfit(&code, &exs) {
-        return None;
-    }
-    let res_method = method;
-    let synthesized = rust_code_for_repo_synthesis(&code);
-    if !is_plain_rust_body(&synthesized) {
-        return None;
-    }
-    let new_text = reshape_to_repo_signature(&old_text, &repo_fn, &synthesized)?;
-    if new_text == old_text {
-        return None;
-    }
-    Some(
-        RepairPatch::new()
-            .with_edit(RepairEdit::new(
-                target,
-                old_text,
-                new_text,
-                "test-mined synthesis proposer (examples from failing asserts; verified, no LLM)",
-            ))
-            .with_metadata("proposer", "nl_test_mined_synthesis")
-            .with_metadata("synthesis_method", res_method.clone()),
-    )
+    // Delegate the synthesis+verify+reshape to `synthesize_mined_for_fn`, which is the SAME body
+    // this used to inline but with two capabilities the inline copy lacked: (1) it retargets the
+    // edit to the file that DEFINES `repo_fn` (a real repo often asserts in `tests/` while the
+    // function lives in `src/math.rs`), and (2) it APPENDS a missing function as a feature-add.
+    // Both are gated identically (front door → solver, strict-verify, memorization guard, reshape),
+    // so the never-wrong property is unchanged and single-file repairs stay byte-for-byte identical
+    // (the retarget only fires when a DIFFERENT context file defines the fn and the picked target
+    // does not). `target`/`old_text` are passed as the feature-add append site.
+    synthesize_mined_for_fn(context, description, &repo_fn, rows, &target, &old_text)
 }
 
 /// Synthesize one verified repair for `repo_fn` from its mined I/O `rows`. Returns `None` when the
@@ -2624,6 +2604,50 @@ pub(crate) fn mine_asserts(text: &str, fn_name: &str) -> Vec<(Vec<crate::benchma
         }
     }
     out
+}
+
+/// Accumulate, into `counts`, the name of the function each `assert_eq!` in `text` CALLS. For
+/// `assert_eq!(count_positives(vec![..]), 3)` the call side is `count_positives(vec![..])` (the
+/// argument that is NOT a bare literal) and the recorded name is `count_positives`. Lets the
+/// test-mined stage recover the function the test actually pins when the NL intent guessed a
+/// different (or missing) name. Frequency-counted so the dominant asserted call wins.
+fn accumulate_asserted_call_names(text: &str, counts: &mut std::collections::HashMap<String, usize>) {
+    let mut cur = text;
+    while let Some(rel) = cur.find("assert_eq!") {
+        let after = &cur[rel + "assert_eq!".len()..];
+        cur = after;
+        let Some(open) = after.find('(') else { continue };
+        let Some(inner) = balanced_parens(&after[open..]) else { continue };
+        for arg in split_top_level_comma(inner) {
+            let arg = arg.trim();
+            // The call side is the argument that is NOT itself a bare literal.
+            if parse_literal(arg).is_some() {
+                continue;
+            }
+            if let Some(name) = leading_call_ident(arg) {
+                *counts.entry(name).or_default() += 1;
+            }
+        }
+    }
+}
+
+/// The identifier that begins a `NAME( … )` call at the start of `s` (after leading whitespace and
+/// an optional `&`/`*`), or `None` when `s` does not start with a call. Rust-identifier chars only.
+fn leading_call_ident(s: &str) -> Option<String> {
+    let s = s.trim_start().trim_start_matches(['&', '*', ' ']);
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        i += 1;
+    }
+    if i == 0 || bytes[0].is_ascii_digit() {
+        return None;
+    }
+    // Must actually be a call: the next non-space character is `(`.
+    if !s[i..].trim_start().starts_with('(') {
+        return None;
+    }
+    Some(s[..i].to_string())
 }
 
 /// Parse a Rust literal token into a `Value`: integer, `true`/`false`, a simple
@@ -5193,6 +5217,28 @@ mod tests {
         assert_eq!(rows3[0].1, Value::Str("cba".into()));
     }
 
+    #[test]
+    fn asserted_call_name_recovers_the_dominant_called_function() {
+        let mut counts = std::collections::HashMap::new();
+        // call side is the NON-literal argument; the expected value may be on either side
+        accumulate_asserted_call_names(
+            "assert_eq!(count_positives(vec![5, -2, 3]), 2);\n\
+             assert_eq!(0, count_positives(vec![-1, -2]));\n\
+             assert_eq!(count_positives(vec![1]), 1);",
+            &mut counts,
+        );
+        assert_eq!(counts.get("count_positives"), Some(&3), "dominant call recovered from both arg orders");
+        // a bare literal on both sides records nothing; `vec![..]` is not a call
+        let mut empty = std::collections::HashMap::new();
+        accumulate_asserted_call_names("assert_eq!(1 + 1, 2); assert_eq!(vec![1], vec![1]);", &mut empty);
+        assert!(empty.is_empty(), "no function call → no name; vec! macro is not a call: {empty:?}");
+        // leading_call_ident: a call vs a non-call
+        assert_eq!(leading_call_ident("count_positives(vec![1,2])").as_deref(), Some("count_positives"));
+        assert_eq!(leading_call_ident("&foo(3)").as_deref(), Some("foo"));
+        assert_eq!(leading_call_ident("some_var"), None);
+        assert_eq!(leading_call_ident("42"), None);
+    }
+
     // --- gated model-repair stage: the pure, model-free core (deterministic) ---
 
     #[test]
@@ -5441,6 +5487,65 @@ mod tests {
         assert!(
             patch.edits.iter().any(|e| e.path == "src/lib.rs" && !e.new_text.contains("    0\n}")),
             "stub body must be replaced with a real count"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// FEATURE-ADD (missing function): the failing asserts CALL `count_positives` but no file
+    /// DEFINES it — the crate won't even compile. The old inline test-mined path always ran
+    /// `reshape_to_repo_signature` as a body REPLACEMENT and had no branch for a function that
+    /// isn't there. Delegating to `synthesize_mined_for_fn` takes its `repo_has_fn == false`
+    /// branch, which synthesizes the verified op and APPENDS it to the file (feature-add) rather
+    /// than replacing existing contents. The library op `count_positives` shares the repo fn's
+    /// name, so the redundant strict re-verify (`problem.name`) still matches — this test isolates
+    /// the append behavior, not the orthogonal name-mismatch case. Verifies the patch preserves
+    /// the original asserts (append, not overwrite) and adds a real `fn count_positives`.
+    #[test]
+    fn test_mined_feature_adds_missing_function_by_appending() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_featadd_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fa\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // No definition of `count_positives` anywhere — only the failing asserts that call it.
+        let original = "#[cfg(test)]\nmod tests {\n    use super::count_positives;\n    #[test]\n    fn t() {\n        assert_eq!(count_positives(vec![5, -2, 3, -4, 5]), 3);\n        assert_eq!(count_positives(vec![-1, -2, -3]), 0);\n        assert_eq!(count_positives(vec![1, 2, 3, 4]), 4);\n    }\n}\n";
+        fs::write(root.join("src/lib.rs"), original).expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "fa".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: count how many elements are positive".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        let patch = try_test_mined_synthesis_patch(
+            &task,
+            &context,
+            "count how many elements are positive",
+        )
+        .expect("feature-add: missing `count_positives` should be synthesized and appended");
+        let edit = patch
+            .edits
+            .iter()
+            .find(|e| e.path == "src/lib.rs")
+            .expect("edit must target src/lib.rs");
+        assert!(
+            edit.new_text.contains("fn count_positives"),
+            "a real `fn count_positives` must be added, got: {}",
+            edit.new_text
+        );
+        assert!(
+            edit.new_text.contains("assert_eq!(count_positives(vec![5, -2, 3, -4, 5]), 3)"),
+            "append must PRESERVE the original asserts, not overwrite the file"
         );
         let _ = fs::remove_dir_all(&root);
     }
