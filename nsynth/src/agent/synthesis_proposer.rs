@@ -1560,37 +1560,112 @@ pub fn try_model_repair_patch(
          and body, e.g. `pub fn ...`) that makes the failing test pass. Change nothing else."
     );
 
-    // Ask for RUST, not Mog: the repo-repair oracle is cargo test over real Rust, and small local
-    // models write Rust well but not the Mog DSL.
-    let program = crate::local_llm::propose_rust_fn(&request, None, 0.2)?;
-    // Apply the model's function(s) to whichever repo file DEFINES them, by name (handles the model
-    // localizing to a different function than we'd have guessed, and multi-file fixes).
-    if let Some(patch) = model_response_to_multifile_patch(context, &program) {
-        return Some(patch);
+    // Turn a model response (Rust source string) into a candidate patch, EXACTLY as before: prefer a
+    // multi-file swap (>= 2 fns the repo already defines), else a single-fn body-swap applied by the
+    // fn's OWN name to whatever file defines it (falling back to the pre-resolved repo_fn / picked
+    // target). Pure over the response + context, so it runs once per attempt with no cargo cost.
+    let build_patch = |program: &str| -> Option<RepairPatch> {
+        if let Some(patch) = model_response_to_multifile_patch(context, program) {
+            return Some(patch);
+        }
+        let model_fn = first_fn_name_in_source(program).unwrap_or_else(|| repo_fn.clone());
+        let (tgt, tgt_text) = context
+            .files
+            .iter()
+            .filter(|f| f.path.ends_with(".rs"))
+            .find_map(|f| {
+                let t = f.text.as_deref()?;
+                file_defines_function(t, &model_fn).then(|| (f.path.clone(), t.to_string()))
+            })
+            .unwrap_or_else(|| (target.clone(), old_text.clone()));
+        let new_text = model_body_to_new_text(&tgt_text, &model_fn, program)?;
+        Some(
+            RepairPatch::new()
+                .with_edit(RepairEdit::new(
+                    tgt,
+                    tgt_text,
+                    new_text,
+                    "gated model-repair proposer (untrusted; cargo-test gated)",
+                ))
+                .with_metadata("proposer", "model_repair"),
+        )
+    };
+
+    // A COMPILE-ERROR REPAIR LOOP over the model, mirroring try_mutation_repair_patch's
+    // write -> cargo-verify -> revert scheme: apply each candidate patch to the work copy, run the
+    // task's test command, and return the patch ONLY when cargo went green (the RepairLoop re-applies
+    // the winner). A failing candidate's stderr is fed BACK to the model as its prior attempt+error
+    // (propose_rust_fn's `prior` hook) so retries actually differ. This recovers the model's
+    // logically-correct-but-non-compiling Rust while preserving never-wrong: we ship nothing that did
+    // not make cargo pass on the work copy.
+    let verifier = RepairVerifier::new(&context.root, GuardrailPolicy::default());
+    // Apply every whole-file edit of `patch` to the work copy; return (abs_path, original_text) so the
+    // caller can revert. Skips edits that fail to write.
+    let apply = |patch: &RepairPatch| -> Vec<(std::path::PathBuf, String)> {
+        let mut undo = Vec::new();
+        for e in &patch.edits {
+            let abs = std::path::Path::new(&context.root).join(&e.path);
+            if std::fs::write(&abs, &e.new_text).is_ok() {
+                undo.push((abs, e.old_text.clone()));
+            }
+        }
+        undo
+    };
+    let revert = |undo: Vec<(std::path::PathBuf, String)>| {
+        for (abs, orig) in undo {
+            let _ = std::fs::write(&abs, &orig);
+        }
+    };
+
+    let mut prior_code: Option<String> = None;
+    let mut prior_err: Option<String> = None;
+    for _ in 0..3 {
+        let prior = match (&prior_code, &prior_err) {
+            (Some(c), Some(e)) => Some((c.as_str(), e.as_str())),
+            _ => None,
+        };
+        // Ask for RUST, not Mog: the repo-repair oracle is cargo test over real Rust, and small local
+        // models write Rust well but not the Mog DSL. Feed the prior attempt+error on retries.
+        let Some(program) = crate::local_llm::propose_rust_fn(&request, prior, 0.2) else {
+            break;
+        };
+        let Some(patch) = build_patch(&program) else {
+            // Couldn't localize this response to any repo file — retry with a nudge.
+            prior_code = Some(program);
+            prior_err = Some("your function did not match any function defined in the repo".to_string());
+            continue;
+        };
+        let undo = apply(&patch);
+        let fully_applied = undo.len() == patch.edits.len();
+        let v = verifier.verify(&task.test_command);
+        revert(undo); // ALWAYS revert; the outer RepairLoop re-applies the winner.
+        match v {
+            // Return ONLY a patch that FULLY applied AND made cargo pass — otherwise a partial-write
+            // patch could be verified against a subset yet returned whole (never-wrong guard).
+            Ok(ver) if ver.success && fully_applied => return Some(patch),
+            Ok(ver) => {
+                prior_code = Some(program);
+                // Feed BOTH stdout+stderr back: rustc COMPILE errors land on stderr, but cargo-test
+                // ASSERTION diffs (expected vs actual) land on STDOUT — the model needs both to fix
+                // its own logic, not just "test failed".
+                let mut err = ver.failure_output();
+                if err.trim().is_empty() {
+                    err = "the tests still fail".to_string();
+                }
+                if err.len() > 1500 {
+                    let end = (0..=1500).rev().find(|&i| err.is_char_boundary(i)).unwrap_or(0);
+                    err.truncate(end);
+                }
+                prior_err = Some(err);
+            }
+            Err(_) => {
+                prior_code = Some(program);
+                prior_err = Some("verification could not run".to_string());
+            }
+        }
     }
-    // Fallback: apply the returned function by ITS OWN name (the model localized) to the file that
-    // defines it; else the pre-resolved repo_fn / picked target (feature-add appends).
-    let model_fn = first_fn_name_in_source(&program).unwrap_or_else(|| repo_fn.clone());
-    let (tgt, tgt_text) = context
-        .files
-        .iter()
-        .filter(|f| f.path.ends_with(".rs"))
-        .find_map(|f| {
-            let t = f.text.as_deref()?;
-            file_defines_function(t, &model_fn).then(|| (f.path.clone(), t.to_string()))
-        })
-        .unwrap_or((target, old_text));
-    let new_text = model_body_to_new_text(&tgt_text, &model_fn, &program)?;
-    Some(
-        RepairPatch::new()
-            .with_edit(RepairEdit::new(
-                tgt,
-                tgt_text,
-                new_text,
-                "gated model-repair proposer (untrusted; cargo-test gated)",
-            ))
-            .with_metadata("proposer", "model_repair"),
-    )
+    // No candidate made cargo pass — refuse rather than ship unverified.
+    None
 }
 
 /// Coordinate a MULTI-FILE model patch: extract every `fn` from `response` and, for
@@ -1615,6 +1690,12 @@ fn model_response_to_multifile_patch(context: &RepairContext, response: &str) ->
         };
         let orig = file.text.clone().unwrap_or_default();
         let entry = per_file.entry(file.path.clone()).or_insert_with(|| (orig.clone(), orig));
+        // VERBATIM FIRST: a full `pub fn NAME` whose signature already matches the repo fn is
+        // applied byte-for-byte (correct Rust is never mangled/dropped by the reshape heuristics).
+        if let Some(next) = verbatim_repo_fn_replacement(&entry.1, name, src) {
+            entry.1 = next;
+            continue;
+        }
         let body = rust_code_for_repo_synthesis(src);
         if !is_plain_rust_body(&body) {
             continue;
@@ -1652,6 +1733,12 @@ fn model_response_to_multifile_patch(context: &RepairContext, response: &str) ->
 /// the proposal is not plain compilable Rust (IR wrappers / unlowered `:=`) or is a
 /// no-op — the same gate the verified synthesis path applies.
 fn model_body_to_new_text(old_text: &str, repo_fn: &str, program: &str) -> Option<String> {
+    // VERBATIM FIRST: a signature-matching full fn is applied as-is (never lost to reshape).
+    if let Some(next) = verbatim_repo_fn_replacement(old_text, repo_fn, program) {
+        if next != *old_text {
+            return Some(next);
+        }
+    }
     let body = rust_code_for_repo_synthesis(program);
     if !is_plain_rust_body(&body) {
         return None;
@@ -2887,6 +2974,41 @@ fn reshape_to_repo_signature(old_text: &str, repo_fn: &str, synthesized: &str) -
     replace_body_only(old_text, repo_fn, &body).ok()
 }
 
+/// VERBATIM repair: if the model returned a single full `pub fn NAME(...) -> RET { .. }`
+/// whose signature (params + return type) matches the repo fn EXACTLY, replace the whole
+/// repo fn definition with the model's text as-is — no body extraction, no param renaming,
+/// no `is_plain_rust_body` gate — so a byte-for-byte-correct fn is never lost to the reshape
+/// heuristics (which throw away the model text, extract only the body, positionally rename
+/// idents, and can decline entirely). cargo still gates the whole patch afterwards, so a bad
+/// verbatim swap fails exactly as reshape output would; strict signature matching keeps this
+/// firing only when the model fn truly slots in, else we fall through to reshape.
+fn verbatim_repo_fn_replacement(old_text: &str, repo_fn: &str, model_src: &str) -> Option<String> {
+    let fns = split_top_level_functions(model_src);
+    if fns.len() != 1 {
+        return None; // single-fn output only; multi-fn goes through the reshape branch
+    }
+    let (name, text) = &fns[0];
+    if name != repo_fn {
+        return None; // must target the repo fn by name
+    }
+    if !old_text.contains(&format!("fn {repo_fn}")) {
+        return None; // the repo must actually define it
+    }
+    // Exact signature match: whitespace-normalized params AND identical return type.
+    let norm = |s: Option<String>| s.map(|p| p.split_whitespace().collect::<String>());
+    let mp = norm(fn_header_params(model_src, repo_fn));
+    let rp = norm(fn_header_params(old_text, repo_fn));
+    if mp.is_none() || mp != rp {
+        return None;
+    }
+    if fn_return_type(model_src, repo_fn) != fn_return_type(old_text, repo_fn) {
+        return None;
+    }
+    // Apply the model's fn wholesale (ensure `pub` so an exported repo fn stays exported).
+    let verbatim = ensure_pub_fn(text.trim());
+    replace_function_body(old_text, repo_fn, &verbatim).ok()
+}
+
 /// Insert `block` (sibling top-level functions) immediately before the definition of `fn_name`.
 fn insert_before_fn_def(source: &str, fn_name: &str, block: &str) -> String {
     if block.is_empty() {
@@ -3977,7 +4099,7 @@ mod tests {
         let response = "fn alpha(n: i64) -> i64 {\n    return n + 1;\n}\nfn beta(n: i64) -> i64 {\n    return n * 2;\n}\n";
         let patch = model_response_to_multifile_patch(&ctx, response).expect("multi-file patch");
         assert!(
-            patch.metadata.iter().any(|(k, v)| k == "proposer" && v == "model_repair_multifile"),
+            patch.metadata.iter().any(|(k, v)| k == "proposer" && v == "model_repair_multifn"),
             "metadata: {:?}",
             patch.metadata
         );
