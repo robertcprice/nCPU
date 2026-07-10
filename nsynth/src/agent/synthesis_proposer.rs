@@ -1477,9 +1477,23 @@ fn generate_mutations(content: &str) -> Vec<String> {
             while i < cb.len() && cb[i].is_ascii_digit() {
                 i += 1;
             }
-            if let Ok(n) = code[s..i].parse::<i64>() {
-                for d in [n + 1, n - 1] {
-                    out.push(splice_mutation(code, tail, s, i - s, &d.to_string()));
+            // SOUNDNESS: never mutate a literal on the RHS of a `const`/`static` DECLARATION. Corrupting
+            // a named constant (`const KIB = 1024` -> `1023`) to satisfy a weak test is a wrong "fix"
+            // that silently breaks every other use of the constant — a real bug lives in a fn body, and
+            // the legitimate wrong-constant class mutates literals in EXPRESSIONS, not declarations.
+            let line_start = code[..s].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let lead = code[line_start..s].trim_start();
+            let in_const_decl = lead.starts_with("const ")
+                || lead.starts_with("static ")
+                || lead.starts_with("pub const ")
+                || lead.starts_with("pub static ")
+                || lead.starts_with("pub(crate) const ")
+                || lead.starts_with("pub(crate) static ");
+            if !in_const_decl {
+                if let Ok(n) = code[s..i].parse::<i64>() {
+                    for d in [n + 1, n - 1] {
+                        out.push(splice_mutation(code, tail, s, i - s, &d.to_string()));
+                    }
                 }
             }
         } else {
@@ -4948,6 +4962,25 @@ mod tests {
             "span version must prepend function-variants: {} vs {}",
             localized.len(),
             full_only.len()
+        );
+    }
+
+    #[test]
+    fn integer_literal_mutation_spares_const_declarations() {
+        // A `const`/`static` declaration's value must NOT be mutated (corrupting a named constant to
+        // pass a weak test is a wrong fix)...
+        let decl = "pub const KIB: u64 = 1024;\nstatic MAX: i64 = 60;\n";
+        let dm = generate_mutations(decl);
+        assert!(
+            !dm.iter().any(|m| m.contains("= 1023") || m.contains("= 1025") || m.contains("= 61") || m.contains("= 59")),
+            "mutated a const/static declaration value"
+        );
+        // ...but a literal in an EXPRESSION (the legitimate wrong-constant / off-by-one class) still is.
+        let expr = "pub fn kib(n: i64) -> i64 { n * 1000 }\n";
+        let em = generate_mutations(expr);
+        assert!(
+            em.iter().any(|m| m.contains("n * 1001") || m.contains("n * 999")),
+            "stopped mutating expression literals"
         );
     }
 
