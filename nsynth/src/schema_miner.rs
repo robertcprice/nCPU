@@ -561,8 +561,9 @@ pub fn count_const_holes(normalized: &str) -> usize {
 }
 
 /// Try to instantiate mined templates against a problem; return first code that
-/// reproduces every example. Templates come from `NSYNTH_MINED_TEMPLATES` or the
-/// provided slice. Bounded: at most `max_templates` × small const product.
+/// passes examples **and** [`crate::runtime::verify_problem_code_strict`]
+/// (holdouts / generated probes). Templates come from `NSYNTH_MINED_TEMPLATES`
+/// or the provided slice. Bounded: at most `max_templates` × small const product.
 pub fn try_instantiate_templates(
     problem: &crate::benchmark::Problem,
     templates: &[MinedTemplate],
@@ -599,19 +600,33 @@ pub fn try_instantiate_templates(
             // Older templates may have stored a statement-sequence key with ` | `;
             // restore newlines. Fresh templates keep real newlines from normalize.
             let code = code.replace(" | ", "\n");
-            if crate::runtime::code_reproduces_examples(&code, &problem.examples) {
+            if mined_template_accepts(problem, &code) {
                 return Some(code);
             }
         }
         // Also try the raw example_code with fn renamed (exact shape reuse).
         if !t.example_code.is_empty() {
             let renamed = rename_fn_roughly(&t.example_code, name);
-            if crate::runtime::code_reproduces_examples(&renamed, &problem.examples) {
+            if mined_template_accepts(problem, &renamed) {
                 return Some(renamed);
             }
         }
     }
     None
+}
+
+/// Never-wrong gate for a mined-template candidate: examples + declared holdouts
+/// must reproduce, then the shared strict oracle must accept.
+fn mined_template_accepts(problem: &crate::benchmark::Problem, code: &str) -> bool {
+    if !crate::runtime::code_reproduces_examples(code, &problem.examples) {
+        return false;
+    }
+    if !problem.holdouts.is_empty()
+        && !crate::runtime::code_reproduces_examples(code, &problem.holdouts)
+    {
+        return false;
+    }
+    crate::runtime::verify_problem_code_strict(problem, code).is_ok()
 }
 
 fn bounded_const_product(consts: &[i64], n: usize, cap: usize) -> Vec<Vec<i64>> {

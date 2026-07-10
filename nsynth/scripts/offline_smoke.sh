@@ -33,14 +33,21 @@ pub mod bench {
     #[derive(Clone, Debug)]
     pub struct Example { pub inputs: Vec<Value>, pub expected: Value }
     #[derive(Clone, Debug, Default)]
-    pub struct Problem { pub name: String, pub examples: Vec<Example> }
+    pub struct Problem {
+        pub name: String,
+        pub examples: Vec<Example>,
+        pub holdouts: Vec<Example>,
+    }
     impl Problem {
         pub fn function_name(&self) -> &str { if self.name.is_empty() { "f" } else { &self.name } }
     }
 }
 pub mod rt {
-    use super::bench::Example;
+    use super::bench::{Example, Problem};
     pub fn code_reproduces_examples(_code: &str, _examples: &[Example]) -> bool { false }
+    pub fn verify_problem_code_strict(_problem: &Problem, _code: &str) -> Result<(), String> {
+        Err("offline stub: no Mog oracle".into())
+    }
 }
 """
 )

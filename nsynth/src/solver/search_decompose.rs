@@ -41,7 +41,7 @@ pub fn try_decompose(problem: &Problem) -> Option<SolveResult> {
     }
     // WP6 wire: mined templates (NSYNTH_MINED_TEMPLATES) join the hypothesis list
     // before hand schemas. Const holes filled from example-mined candidates;
-    // acceptance is end-to-end `code_reproduces_examples` (never-wrong).
+    // acceptance is examples + holdouts + `verify_problem_code_strict` (never-wrong).
     if let Some(code) = try_mined_template_hypothesis(problem) {
         return Some(SolveResult {
             success: true,
