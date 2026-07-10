@@ -321,6 +321,25 @@ pub fn write_characterization_from_bench(
     write_characterization_crate(root, fn_name, &char_ex)
 }
 
+/// Unified fn-name inference for characterization / example-rust-lane.
+/// Prefer call-site / `function` markers in prose; else a snake token from `nl`;
+/// else `"f"`.
+pub fn infer_fn_name(prose: &str, nl: Option<&str>) -> String {
+    let from_prose = fn_name_from_prose(prose);
+    if from_prose != "f" {
+        return from_prose;
+    }
+    if let Some(nl) = nl.filter(|s| !s.is_empty()) {
+        if let Some(tok) = nl
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .find(|t| t.len() > 2 && t.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        {
+            return tok.to_string();
+        }
+    }
+    "f".into()
+}
+
 /// Extract a plausible fn name from prose (`fix f`, `function add`, `fn foo`, else `f`).
 pub fn fn_name_from_prose(prose: &str) -> String {
     let lower = prose.to_lowercase();

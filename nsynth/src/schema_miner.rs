@@ -41,7 +41,13 @@ impl HarvestRow {
 /// A mined template with occurrence count and example hole fillings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MinedTemplate {
+    /// Hole-normalized program body (`?vN` / `?cN`) — used by
+    /// [`try_instantiate_templates`] to fill consts and rename the entry fn.
     pub normalized: String,
+    /// Statement-sequence cluster key (whitespace-collapsed, ` | `-joined).
+    /// Kept separate from [`Self::normalized`] so instantiate does not run on the key.
+    #[serde(default)]
+    pub cluster_key: String,
     pub count: usize,
     pub example_task: String,
     pub example_code: String,
@@ -175,14 +181,22 @@ pub fn cluster_templates(rows: &[HarvestRow], top_k: usize) -> Vec<MinedTemplate
             .entry(key.clone())
             .and_modify(|t| t.count += 1)
             .or_insert(MinedTemplate {
-                normalized: key,
+                // Store the hole-normalized BODY (not the cluster key) so
+                // instantiate_template can fill ?cN / rename ?vN.
+                normalized: norm,
+                cluster_key: key,
                 count: 1,
                 example_task: row.task_text().to_string(),
                 example_code: code.to_string(),
             });
     }
     let mut v: Vec<_> = clusters.into_values().collect();
-    v.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.normalized.cmp(&b.normalized)));
+    v.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.cluster_key.cmp(&b.cluster_key))
+            .then_with(|| a.normalized.cmp(&b.normalized))
+    });
     if top_k == 0 {
         v
     } else {
@@ -250,18 +264,84 @@ pub fn load_templates_from_env() -> Option<Vec<MinedTemplate>> {
     None
 }
 
+/// Extract the first top-level `fn` / `pub fn` body from a Rust `lib.rs`,
+/// stripping `#[cfg(test)]` modules and module-level noise so harvest clusters
+/// on the verified implementation, not the oracle tests.
+pub fn extract_entry_fn_body(lib_rs: &str) -> String {
+    // Drop test modules (and anything after the first #[cfg(test)]).
+    let code = match lib_rs.find("#[cfg(test)]") {
+        Some(i) => &lib_rs[..i],
+        None => lib_rs,
+    };
+    let mut search = 0usize;
+    while search < code.len() {
+        let rest = &code[search..];
+        let rel = rest
+            .find("pub fn ")
+            .map(|i| (i, 7))
+            .or_else(|| rest.find("fn ").map(|i| (i, 3)));
+        let Some((rel, kw_len)) = rel else {
+            break;
+        };
+        let at = search + rel;
+        // Skip if this `fn` is inside a comment line.
+        let line_start = code[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        if code[line_start..at].trim_start().starts_with("//") {
+            search = at + kw_len;
+            continue;
+        }
+        // Find opening brace of the body.
+        let after_kw = at + kw_len;
+        let Some(brace_rel) = code[after_kw..].find('{') else {
+            search = after_kw;
+            continue;
+        };
+        let open = after_kw + brace_rel;
+        let mut depth = 0i32;
+        let mut end = None;
+        for (i, &c) in code.as_bytes().iter().enumerate().skip(open) {
+            match c {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(end) = end {
+            return code[at..end].trim().to_string();
+        }
+        search = open + 1;
+    }
+    // Fallback: return the pre-test slice trimmed.
+    code.trim().to_string()
+}
+
 /// Append one verified (task, code) row to `NSYNTH_HARVEST` JSONL (Phase-4 flywheel).
-/// Best-effort; never fails the caller. No-op when the env var is unset.
+/// Best-effort; never fails the caller. No-op when the env var is unset/empty.
+/// When `code` looks like a full `lib.rs`, only the entry fn body is stored.
 pub fn append_harvest_row(task: &str, code: &str) {
-    let Some(path) = std::env::var_os("NSYNTH_HARVEST") else {
+    let Ok(path) = std::env::var("NSYNTH_HARVEST") else {
         return;
     };
     if path.is_empty() || code.trim().is_empty() {
         return;
     }
+    let body = if code.contains("fn ") || code.contains("pub fn ") {
+        extract_entry_fn_body(code)
+    } else {
+        code.trim().to_string()
+    };
+    if body.is_empty() {
+        return;
+    }
     let row = serde_json::json!({
         "task": task,
-        "code": code,
+        "code": body,
     });
     let Ok(line) = serde_json::to_string(&row) else {
         return;
@@ -285,7 +365,10 @@ pub fn format_top_templates(templates: &[MinedTemplate]) -> String {
             i + 1,
             t.count,
             t.example_task.chars().take(80).collect::<String>(),
-            t.normalized.chars().take(200).collect::<String>(),
+            t.cluster_key
+                .chars()
+                .take(200)
+                .collect::<String>(),
             t.example_code
                 .lines()
                 .take(3)
@@ -432,7 +515,8 @@ pub fn try_instantiate_templates(
                 return None;
             }
             let code = instantiate_template(&t.normalized, name, &combo);
-            // Statement-sequence keys use ` | ` — restore newlines for Mog-ish bodies.
+            // Older templates may have stored a statement-sequence key with ` | `;
+            // restore newlines. Fresh templates keep real newlines from normalize.
             let code = code.replace(" | ", "\n");
             if crate::runtime::code_reproduces_examples(&code, &problem.examples) {
                 return Some(code);
@@ -533,6 +617,58 @@ mod tests {
         // double/triple share the unary *const shape after hole-norm
         let max = top.iter().map(|t| t.count).max().unwrap();
         assert!(max >= 2, "expected shared template, got {top:?}");
+        let shared = top.iter().find(|t| t.count >= 2).expect("shared");
+        assert!(
+            shared.normalized.contains("?c"),
+            "normalized must be hole-body not cluster key: {}",
+            shared.normalized
+        );
+        assert!(
+            !shared.cluster_key.is_empty(),
+            "cluster_key should be set"
+        );
+    }
+
+    #[test]
+    fn extract_entry_fn_strips_test_module() {
+        let lib = r#"
+pub fn double(a0: i64) -> i64 { a0 * 2 }
+
+#[cfg(test)]
+mod characterization {
+    use super::*;
+    #[test]
+    fn char_0() { assert_eq!(double(2), 4); }
+}
+"#;
+        let body = extract_entry_fn_body(lib);
+        assert!(body.contains("fn double"), "got {body}");
+        assert!(body.contains("a0 * 2"), "got {body}");
+        assert!(!body.contains("characterization"), "got {body}");
+        assert!(!body.contains("assert_eq"), "got {body}");
+    }
+
+    #[test]
+    fn cluster_then_instantiate_fills_const() {
+        let rows = vec![
+            HarvestRow {
+                task: Some("double".into()),
+                code: Some("fn double(x: i64) -> i64 { return x * 2; }".into()),
+                prompt: None,
+                program: None,
+            },
+            HarvestRow {
+                task: Some("triple".into()),
+                code: Some("fn triple(y: i64) -> i64 { return y * 3; }".into()),
+                prompt: None,
+                program: None,
+            },
+        ];
+        let top = cluster_templates(&rows, 5);
+        let shared = top.iter().find(|t| t.count >= 2).expect("shared");
+        let code = instantiate_template(&shared.normalized, "quadruple", &[4]);
+        assert!(code.contains("fn quadruple"), "got {code}");
+        assert!(code.contains("* 4"), "got {code}");
     }
 
     #[test]

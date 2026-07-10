@@ -32,6 +32,8 @@ pub struct ScaffoldedCrate {
     pub method: &'static str,
     pub summary: String,
     pub n_tests: usize,
+    /// Stable promote name: schema collection, characterization fn, etc.
+    pub component_name: String,
 }
 
 impl From<WrittenSchemaCrate> for ScaffoldedCrate {
@@ -46,6 +48,7 @@ impl From<WrittenSchemaCrate> for ScaffoldedCrate {
             method: w.method,
             summary,
             n_tests: w.n_tests,
+            component_name: w.collection,
         }
     }
 }
@@ -70,7 +73,7 @@ pub fn try_scaffold_characterization(out_dir: &Path, prose: &str) -> Option<Scaf
     if examples.len() < 2 {
         return None;
     }
-    let fn_name = characterization::fn_name_from_prose(prose);
+    let fn_name = characterization::infer_fn_name(prose, None);
     let written =
         characterization::write_characterization_crate(out_dir, &fn_name, &examples).ok()?;
     Some(ScaffoldedCrate {
@@ -82,6 +85,7 @@ pub fn try_scaffold_characterization(out_dir: &Path, prose: &str) -> Option<Scaf
             written.fn_name, written.n_tests
         ),
         n_tests: written.n_tests,
+        component_name: written.fn_name,
     })
 }
 
@@ -116,6 +120,7 @@ pub fn try_scaffold_from_spec(out_dir: &Path, prose: &str) -> Option<ScaffoldedC
         method: "whole-software:spec",
         summary: format!("model-written spec ({n_tests} tests){req_note}"),
         n_tests,
+        component_name: "spec_crate".into(),
     })
 }
 
@@ -166,6 +171,7 @@ pub fn try_decompose_project(root: &Path, prose: &str) -> Option<ScaffoldedCrate
         method: "whole-software:decompose",
         summary: format!("decomposed project ({n} verified components)"),
         n_tests: n,
+        component_name: "decompose_crate".into(),
     })
 }
 
@@ -216,6 +222,7 @@ pub fn write_spec_crate(out_dir: &Path, lib_rs: &str) -> Result<ScaffoldedCrate,
         method: "whole-software:spec",
         summary: format!("spec crate ({n_tests} tests)"),
         n_tests,
+        component_name: "spec_crate".into(),
     })
 }
 

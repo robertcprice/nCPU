@@ -29,7 +29,7 @@ use crate::linguigenesis_bridge::LinguigenesisBridge;
 use linguigenesis_core::entity_resolution::{edit_distance, morphological_variants};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// A raw-Rust glue module (struct + methods) whose bodies call the component's
 /// verified leaves. Written verbatim next to the transpiled leaves and wired into
@@ -241,7 +241,56 @@ pub fn promote_schema_component(
     }
     let json = serde_json::to_string_pretty(&existing).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("write {}: {e}", path.display()))?;
+    // Point this process at the store so a FRESH registry init would see it, and
+    // push into the live overlay so the already-initialized OnceLock still resolves
+    // the new component without a process restart.
+    std::env::set_var("NSYNTH_COMPONENTS", &path);
+    note_promoted(existing.iter().find(|e| e.name == name).cloned().unwrap_or_else(|| {
+        ComponentSpec {
+            name: name.to_string(),
+            surfaces: surfaces.to_vec(),
+            leaves: Vec::new(),
+            glue: Some(GlueSpec {
+                module: name.to_string(),
+                code: lib_rs_snippet.to_string(),
+                smoke: None,
+            }),
+        }
+    }));
     Ok(())
+}
+
+/// Process-local overlay of components promoted this run (leaked for `'static`
+/// resolve APIs). Closed the "promote then resolve in same process" gap.
+fn promoted_overlay() -> &'static Mutex<Vec<&'static ComponentSpec>> {
+    static EXTRA: OnceLock<Mutex<Vec<&'static ComponentSpec>>> = OnceLock::new();
+    EXTRA.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn note_promoted(spec: ComponentSpec) {
+    let leaked: &'static ComponentSpec = Box::leak(Box::new(spec));
+    if let Ok(mut g) = promoted_overlay().lock() {
+        if let Some(i) = g.iter().position(|c| c.name == leaked.name) {
+            g[i] = leaked;
+        } else {
+            g.push(leaked);
+        }
+    }
+}
+
+/// All components visible to resolvers: seed registry ∪ process-local promotes.
+fn all_components() -> Vec<&'static ComponentSpec> {
+    let mut out: Vec<&'static ComponentSpec> = registry().iter().collect();
+    if let Ok(g) = promoted_overlay().lock() {
+        for c in g.iter() {
+            if let Some(slot) = out.iter_mut().find(|x| x.name == c.name) {
+                *slot = *c;
+            } else {
+                out.push(*c);
+            }
+        }
+    }
+    out
 }
 
 /// The live component registry: seeds merged with DATA-defined components (merge by
@@ -905,11 +954,9 @@ pub fn resolve_components(text: &str) -> Vec<&'static ComponentSpec> {
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
         .collect();
-    registry()
-        .iter()
-        .filter(|comp| {
-            spec_match(comp, &tokens) > 0
-        })
+    all_components()
+        .into_iter()
+        .filter(|comp| spec_match(comp, &tokens) > 0)
         .collect()
 }
 
@@ -945,8 +992,8 @@ pub fn route_component_build(
     if !has_construction_cue(&tokens) {
         return Vec::new();
     }
-    registry()
-        .iter()
+    all_components()
+        .into_iter()
         .filter(|comp| {
             tokens.iter().any(|tok| {
                 comp.surfaces.iter().any(|s| surface_match(tok, s) > 0)

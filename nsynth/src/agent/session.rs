@@ -1803,21 +1803,10 @@ impl CodingAgentSession {
         if result.success {
             let lib_path = self.root.join("src/lib.rs");
             if let Ok(lib) = std::fs::read_to_string(&lib_path) {
-                let name = match scaffolded.kind {
-                    crate::whole_software::ScaffoldKind::Schema => {
-                        // Prefer collection name from summary, else generic.
-                        scaffolded
-                            .summary
-                            .split_whitespace()
-                            .nth(1)
-                            .unwrap_or("schema_component")
-                            .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                            .to_string()
-                    }
-                    crate::whole_software::ScaffoldKind::Characterization => {
-                        crate::characterization::fn_name_from_prose(query)
-                    }
-                    _ => "whole_software_component".into(),
+                let name = if !scaffolded.component_name.is_empty() {
+                    scaffolded.component_name.clone()
+                } else {
+                    "whole_software_component".into()
                 };
                 let surfaces = vec![name.clone(), query.chars().take(48).collect()];
                 let _ = crate::component::promote_schema_component(
@@ -1835,7 +1824,7 @@ impl CodingAgentSession {
     /// Example-bearing Rust lane (MBPP 13%→58% synergy): when the Mog never-wrong
     /// door refuses, scaffold a characterization crate from the parsed examples and
     /// run the repo-agent hole-filler. Cargo-gated; returns `None` if the examples
-    /// are not Rust-representable or the fill fails to start.
+    /// are not Rust-representable or the fill fails (so the caller can honest-refuse).
     fn try_example_bearing_rust_lane(
         &mut self,
         query: &str,
@@ -1845,22 +1834,10 @@ impl CodingAgentSession {
             return None;
         }
         let (nl, _) = crate::verified_nl_router::split_prompt_examples(query);
-        let fn_name = {
-            let from_prose = crate::characterization::fn_name_from_prose(if nl.is_empty() {
-                query
-            } else {
-                &nl
-            });
-            if from_prose == "f" && !nl.is_empty() {
-                // Prefer a snake token from the NL prompt when no call-site name.
-                let tok = nl
-                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                    .find(|t| t.len() > 2 && t.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
-                tok.unwrap_or("f").to_string()
-            } else {
-                from_prose
-            }
-        };
+        let fn_name = crate::characterization::infer_fn_name(
+            if nl.is_empty() { query } else { &nl },
+            if nl.is_empty() { None } else { Some(&nl) },
+        );
         let written = crate::characterization::write_characterization_from_bench(
             &self.root,
             &fn_name,
@@ -1876,6 +1853,7 @@ impl CodingAgentSession {
                 written.fn_name, written.n_tests
             ),
             n_tests: written.n_tests,
+            component_name: written.fn_name.clone(),
         };
         let mut plan = crate::whole_software::BuildPlan::new();
         crate::whole_software::run_bounded_loop(&mut plan, scaffolded.method);
@@ -1884,22 +1862,23 @@ impl CodingAgentSession {
             "example_rust_lane.phases".into(),
             plan.phases.join(" → "),
         ));
-        // Only claim the route when fill succeeded; on failure let caller refuse
-        // (or surface the failed fill as WholeSoftware so the user sees the attempt).
-        if result.success {
-            result.synthesis_method = Some("whole-software:example-rust-lane".into());
-            // Phase-4 flywheel: promote + harvest the verified Rust body.
-            let lib_path = self.root.join("src/lib.rs");
-            if let Ok(lib) = std::fs::read_to_string(&lib_path) {
-                let surfaces = vec![fn_name.clone(), query.chars().take(48).collect()];
-                let _ = crate::component::promote_schema_component(
-                    &self.root,
-                    &fn_name,
-                    &surfaces,
-                    &lib,
-                );
-                crate::schema_miner::append_harvest_row(query, &lib);
-            }
+        if !result.success {
+            // Fall through to honest verified-nl refuse rather than surface a
+            // WholeSoftware failure that blocks the clearer message.
+            return None;
+        }
+        result.synthesis_method = Some("whole-software:example-rust-lane".into());
+        // Phase-4 flywheel: promote + harvest the verified Rust body.
+        let lib_path = self.root.join("src/lib.rs");
+        if let Ok(lib) = std::fs::read_to_string(&lib_path) {
+            let surfaces = vec![fn_name.clone(), query.chars().take(48).collect()];
+            let _ = crate::component::promote_schema_component(
+                &self.root,
+                &fn_name,
+                &surfaces,
+                &lib,
+            );
+            crate::schema_miner::append_harvest_row(query, &lib);
         }
         Some(result)
     }

@@ -46,6 +46,37 @@ fn utbus_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// True when the Mog signature is a single `[i64]` input → `i64` output
+/// (parameter name may be `arr`, `xs`, `a`, …).
+fn signature_is_array_to_scalar(signature: &str) -> bool {
+    let sig = signature.trim();
+    // Must return i64.
+    let Some(ret) = sig.rsplit("->").next() else {
+        return false;
+    };
+    let ret = ret.split_whitespace().next().unwrap_or(ret).trim();
+    if !ret.starts_with("i64") {
+        return false;
+    }
+    // Params between ( and ): exactly one `[i64]`-typed arg.
+    let Some(open) = sig.find('(') else {
+        return false;
+    };
+    let Some(close) = sig[open..].find(')') else {
+        return false;
+    };
+    let params = sig[open + 1..open + close].trim();
+    if params.is_empty() {
+        return false;
+    }
+    // Single param: `name: [i64]` (optional whitespace).
+    let Some((_name, ty)) = params.split_once(':') else {
+        return false;
+    };
+    let ty = ty.trim();
+    (ty.starts_with("[i64]") || ty.starts_with("[i64")) && !params.contains(',')
+}
+
 /// The output types the typed core understands. Derived from a problem
 /// signature; this slice only *enumerates* over `ArrayInt`, but the full type
 /// lattice is modelled here so later phases can dispatch on it.
@@ -437,9 +468,9 @@ pub(super) fn synthesize_utbus(problem: &Problem) -> Option<SolveResult> {
     if fn_name.is_empty() {
         return None;
     }
-    // The reducer signature we emit is `fn name(arr: [i64]) -> i64`; only take
-    // problems whose declared signature matches so the emitted wrapper type-checks.
-    if !problem.signature.contains("arr: [i64]") {
+    // Emit uses `arr` as the parameter name; accept any single `[i64]` input
+    // signature (historically required the literal substring `arr: [i64]`).
+    if !signature_is_array_to_scalar(problem.signature) {
         return None;
     }
 
@@ -705,5 +736,27 @@ mod tests {
             Utype::from_return_signature("fn f(s: str) -> bool"),
             Some(Utype::Bool)
         );
+    }
+
+    #[test]
+    fn signature_accepts_any_array_param_name() {
+        assert!(signature_is_array_to_scalar("fn f(arr: [i64]) -> i64"));
+        assert!(signature_is_array_to_scalar("fn f(xs: [i64]) -> i64"));
+        assert!(signature_is_array_to_scalar("fn sum(a: [i64]) -> i64"));
+        assert!(!signature_is_array_to_scalar("fn f(arr: [i64]) -> [i64]"));
+        assert!(!signature_is_array_to_scalar("fn f(x: i64) -> i64"));
+        assert!(!signature_is_array_to_scalar("fn f(a: [i64], k: i64) -> i64"));
+    }
+
+    #[test]
+    fn utbus_solves_with_xs_param_name() {
+        let problem = array_problem(
+            "double_sum_xs",
+            "fn double_sum_xs(xs: [i64]) -> i64",
+            &[&[1, 2, 3], &[4], &[0, -1]],
+            &[&[5, 5], &[10]],
+            |arr| arr.iter().map(|x| x * 2).sum(),
+        );
+        assert_solves(&problem, "affine");
     }
 }
