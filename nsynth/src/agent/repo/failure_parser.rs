@@ -99,7 +99,7 @@ impl FailureParser {
         {
             (
                 FailureKind::TestFailure,
-                extract_line(output, "panicked at"),
+                extract_file_path(output, "panicked at"),
                 "test assertion or runtime expectation failed".to_string(),
                 "inspect failing test and adjust implementation or test hypothesis".to_string(),
             )
@@ -157,6 +157,25 @@ fn extract_line(output: &str, needle: &str) -> String {
         .unwrap_or(needle)
         .trim()
         .to_string()
+}
+
+/// The FILE PATH implicated by the needle line — `panicked at src/lib.rs:140:78` -> `src/lib.rs`.
+/// Falls back to the whole line when no `<path>.rs` token is present, so `.file` is a real path the
+/// repair proposers can prioritize (they treat `.file` as the failure-implicated file to mutate first).
+fn extract_file_path(output: &str, needle: &str) -> String {
+    let line = extract_line(output, needle);
+    for tok in line.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',') {
+        if let Some(idx) = tok.find(".rs") {
+            let raw = &tok[..idx + 3];
+            let path = raw.trim_start_matches(|c: char| {
+                !(c.is_ascii_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-')
+            });
+            if !path.is_empty() {
+                return path.to_string();
+            }
+        }
+    }
+    line
 }
 
 fn extract_file_and_line(output: &str) -> (Option<String>, Option<u32>) {
