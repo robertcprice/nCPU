@@ -1880,7 +1880,66 @@ impl CodingAgentSession {
             );
             crate::schema_miner::append_harvest_row(query, &lib);
         }
+        // Partial Mog distill: when the same examples are re-solvable by the
+        // Mog engine, record_proposed_op so future model-free runs absorb the
+        // skill. Novel Rust-only algorithms are skipped (Rust ≠ Mog).
+        self.maybe_distill_rust_lane_to_mog(&fn_name, examples, &mut result);
         Some(result)
+    }
+
+    /// Best-effort Mog re-synthesis + `record_proposed_op` after a Rust-lane win.
+    /// Inert without `NSYNTH_LEARNED_OPS_PATH`; disable with `NSYNTH_RUST_LANE_DISTILL=0`.
+    fn maybe_distill_rust_lane_to_mog(
+        &self,
+        fn_name: &str,
+        examples: &[crate::benchmark::Example],
+        result: &mut AgentQueryResult,
+    ) {
+        match std::env::var("NSYNTH_RUST_LANE_DISTILL") {
+            Ok(v)
+                if v == "0"
+                    || v.eq_ignore_ascii_case("false")
+                    || v.eq_ignore_ascii_case("off")
+                    || v.eq_ignore_ascii_case("no") =>
+            {
+                return;
+            }
+            _ => {}
+        }
+        if std::env::var_os("NSYNTH_LEARNED_OPS_PATH").is_none() {
+            return;
+        }
+        if examples.len() < 2 {
+            return;
+        }
+        let sig: &'static str = Box::leak(
+            crate::linguigenesis_bridge::infer_signature(fn_name, examples).into_boxed_str(),
+        );
+        let problem = crate::benchmark::Problem {
+            name: fn_name.to_string(),
+            signature: sig,
+            examples: examples.to_vec(),
+            ..Default::default()
+        };
+        let solved = crate::solver::solve_problem(&problem);
+        if !solved.success {
+            result.tool_trace.push((
+                "example_rust_lane.mog_distill".into(),
+                "skip:mog-unsolved".into(),
+            ));
+            return;
+        }
+        if crate::op_library::record_proposed_op(&problem, &solved.code) {
+            result.tool_trace.push((
+                "example_rust_lane.mog_distill".into(),
+                format!("recorded via {}", solved.method),
+            ));
+        } else {
+            result.tool_trace.push((
+                "example_rust_lane.mog_distill".into(),
+                "skip:not-recorded".into(),
+            ));
+        }
     }
 
     /// WP4: if the query carries a `property:` / `satisfies:` Mog predicate and a
