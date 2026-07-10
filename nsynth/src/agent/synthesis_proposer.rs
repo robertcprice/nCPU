@@ -177,6 +177,30 @@ pub fn try_real_synthesis_patch(
             .unwrap_or(&intent.function_name),
         Some(&old_text),
     );
+    // GATE against the FAILING TEST's own asserts. This stage grounds via the low-confidence
+    // prose bridge and solves the INTENT's canonical examples — which say nothing about THIS
+    // repo's failing test. A mis-grounding (count_positives -> reverse-digits, mode -> `last`,
+    // prefix-sums -> `array_sum`) otherwise returns a WRONG patch and, because this stage runs
+    // first in the ladder, short-circuits the example-verified stages (test-mined / library-
+    // behavior) that would solve correctly — losing the solve AND making the ladder flaky.
+    // Require the synthesized program to reproduce the mined I/O; if it can't (and there ARE
+    // asserts to check), decline so the proven stages run. No asserts -> keep prior behavior.
+    let mined: Vec<crate::benchmark::Example> = {
+        let mut rows = Vec::new();
+        for f in &context.files {
+            if let Some(t) = f.text.as_deref() {
+                rows.extend(mine_asserts(t, &repo_fn));
+            }
+        }
+        rows.sort();
+        rows.dedup();
+        rows.into_iter()
+            .map(|(inputs, expected)| crate::benchmark::Example { inputs, expected })
+            .collect()
+    };
+    if !mined.is_empty() && !crate::runtime::code_reproduces_examples(&result.code, &mined) {
+        return None;
+    }
     let synthesized = rust_code_for_repo_synthesis(&result.code);
     // The solver sometimes emits an abstract IR (Result-style `ok(..)`/`err(..)`
     // wrappers, unlowered `:=`) that is not plain Rust for the repo's concrete
@@ -3476,6 +3500,50 @@ mod tests {
         } else {
             eprintln!("REVERSE_ARRAY_OUTPUT: declined (array-output reshape still a gap; safe)");
         }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// LADDER PRE-EMPTION GUARD: `try_real_synthesis_patch` grounds via the low-confidence prose
+    /// bridge on the intent's OWN examples. When that grounding does not reproduce the failing
+    /// test's asserts (a scalar `double`-grounding against an array-fold task), it must now
+    /// DECLINE — so it can no longer return a wrong patch that pre-empts the example-verified
+    /// stages. Without the gate it returned a mis-grounded patch here.
+    #[test]
+    fn real_synthesis_declines_when_grounding_misses_the_failing_asserts() {
+        let _guard = NL_SYNTHESIS_TEST_LOCK.lock().unwrap();
+        std::env::remove_var("NSYNTH_LOCAL_LLM_URL");
+        let root = std::env::temp_dir().join(format!("nsynth_laddergate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"lg\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .expect("cargo.toml");
+        // Asserts encode an ARRAY FOLD (sum); the prose names a scalar `double` — a mis-grounding.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn total(xs: Vec<i64>) -> i64 {\n    0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::total;\n    #[test]\n    fn t() {\n        assert_eq!(total(vec![1, 2, 3]), 6);\n        assert_eq!(total(vec![10, 20]), 30);\n        assert_eq!(total(vec![5]), 5);\n    }\n}\n",
+        )
+        .expect("lib.rs");
+        let task = RepoTaskSpec {
+            id: "lg".into(),
+            repo: root.to_string_lossy().to_string(),
+            kind: RepoTaskKind::BugFix,
+            issue: "nl: double a number".into(),
+            test_command: "cargo test".into(),
+            allowed_files: vec!["src/**".into()],
+            max_iterations: 2,
+            hardness: HardnessProfile::for_expected_tier(HardnessTier::SingleFileBug),
+            signals: Vec::new(),
+        };
+        let context = RepairContext::build(&root, &GuardrailPolicy::default()).expect("ctx");
+        // The mis-grounded scalar-double program cannot reproduce total(vec![..]) == sum, so the
+        // gate declines (returns None) instead of pre-empting the proven stages.
+        assert!(
+            try_real_synthesis_patch(&task, &context, "double a number").is_none(),
+            "real-synthesis must decline a grounding that fails the failing test's asserts"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
