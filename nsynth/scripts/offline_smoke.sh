@@ -69,7 +69,7 @@ cat > "$TMP/utbus_reduce/src/lib.rs" <<'EOF'
 //! so Phase A expand stays checkable without linguigenesis-core.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Reduce { Sum, Max, Min, Count }
+enum Reduce { Sum, Max, Min, Count, Product }
 
 impl Reduce {
     fn apply(self, arr: &[i64]) -> i64 {
@@ -78,6 +78,7 @@ impl Reduce {
             Reduce::Max => arr.iter().copied().max().unwrap_or(0),
             Reduce::Min => arr.iter().copied().min().unwrap_or(0),
             Reduce::Count => arr.len() as i64,
+            Reduce::Product => arr.iter().copied().fold(1i64, i64::saturating_mul),
         }
     }
 }
@@ -105,6 +106,7 @@ fn synthesize(examples: &[(Vec<i64>, i64)]) -> Option<(Pred, Reduce)> {
         (Pred::All, Reduce::Count),
         (Pred::All, Reduce::Max),
         (Pred::All, Reduce::Min),
+        (Pred::All, Reduce::Product),
         (Pred::Positive, Reduce::Count),
         (Pred::Positive, Reduce::Sum),
     ];
@@ -166,10 +168,23 @@ mod tests {
     }
 
     #[test]
-    fn product_not_in_dsl() {
+    fn array_product() {
         let ex = vec![
             (vec![2, 3, 4], 24),
             (vec![5, 5], 25),
+            (vec![1, 2, 3, 4], 24),
+        ];
+        let (_, reduce) = synthesize(&ex).expect("product");
+        assert!(matches!(reduce, Reduce::Product));
+    }
+
+    #[test]
+    fn xor_fold_not_in_dsl() {
+        // Bitwise xor-reduce is outside the Reduce enum.
+        let ex = vec![
+            (vec![1, 2, 3], 0),
+            (vec![7, 1], 6),
+            (vec![4, 4, 1], 1),
         ];
         assert!(synthesize(&ex).is_none());
     }

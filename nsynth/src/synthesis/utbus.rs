@@ -279,6 +279,8 @@ enum Reduce {
     Max,
     Min,
     Count,
+    /// Product of elements (empty → 1).
+    Product,
 }
 
 impl Reduce {
@@ -288,6 +290,7 @@ impl Reduce {
             Reduce::Max => "max",
             Reduce::Min => "min",
             Reduce::Count => "count",
+            Reduce::Product => "product",
         }
     }
 
@@ -297,6 +300,7 @@ impl Reduce {
             Reduce::Max => arr.iter().copied().max().unwrap_or(0),
             Reduce::Min => arr.iter().copied().min().unwrap_or(0),
             Reduce::Count => arr.len() as i64,
+            Reduce::Product => arr.iter().copied().fold(1i64, i64::saturating_mul),
         }
     }
 }
@@ -375,6 +379,7 @@ impl ArrayProgram {
             Reduce::Sum => 0, // default / cheapest
             Reduce::Count => 1,
             Reduce::Max | Reduce::Min => 1,
+            Reduce::Product => 1,
         };
         pred_cost + map_cost + order_cost + prefix_cost + reduce_cost
     }
@@ -510,6 +515,13 @@ impl ArrayProgram {
                 body.push_str("    }\n");
                 body.push_str("    return best;\n");
             }
+            Reduce::Product => {
+                body.push_str("    total: i64 = 1;\n");
+                body.push_str("    for item in a {\n");
+                body.push_str("        total = total * item;\n");
+                body.push_str("    }\n");
+                body.push_str("    return total;\n");
+            }
         }
         body.push_str("}\n");
         body
@@ -555,7 +567,13 @@ fn enumerate_array_programs(include_k_preds: bool) -> Vec<ArrayProgram> {
         preds.extend_from_slice(&preds_k);
     }
     let orders = [Ordering::None, Ordering::Sort, Ordering::Reverse];
-    let reduces = [Reduce::Sum, Reduce::Count, Reduce::Max, Reduce::Min];
+    let reduces = [
+        Reduce::Sum,
+        Reduce::Count,
+        Reduce::Max,
+        Reduce::Min,
+        Reduce::Product,
+    ];
 
     let mut programs = Vec::new();
     for &pred in &preds {
@@ -1031,6 +1049,14 @@ mod tests {
             .eval_scalar(&xs, Some(0)),
             2
         );
+        assert_eq!(
+            ArrayProgram {
+                reduce: Reduce::Product,
+                ..base
+            }
+            .eval_scalar(&[2, 3, 4], None),
+            24
+        );
     }
 
     #[test]
@@ -1040,6 +1066,7 @@ mod tests {
         assert!(programs.iter().any(|p| p.reduce == Reduce::Max));
         assert!(programs.iter().any(|p| p.reduce == Reduce::Min));
         assert!(programs.iter().any(|p| p.reduce == Reduce::Count));
+        assert!(programs.iter().any(|p| p.reduce == Reduce::Product));
         assert!(programs.iter().all(|p| !p.pred.uses_k()));
         let with_k = enumerate_array_programs(true);
         assert!(with_k.iter().any(|p| p.pred == ElemPred::GtK));
@@ -1056,6 +1083,18 @@ mod tests {
             .expect("plain max");
         assert_eq!(plain_max.cost(), 1);
         assert_eq!(plain_max.label(), "max");
+    }
+
+    #[test]
+    fn utbus_solves_array_product() {
+        let problem = array_problem(
+            "array_product",
+            "fn array_product(arr: [i64]) -> i64",
+            &[&[2, 3, 4], &[5, 5], &[1, 2, 3, 4], &[-2, 3]],
+            &[&[2, 2, 2], &[7]],
+            |arr| arr.iter().copied().fold(1i64, i64::saturating_mul),
+        );
+        assert_solves(&problem, "product");
     }
 
     /// Array + scalar-k problem helper for threshold predicates.
