@@ -700,6 +700,10 @@ enum WordShape {
     FilterEvenLen,
     /// Keep words whose char-count is odd (order-preserving filter).
     FilterOddLen,
+    /// Uppercase every word in place.
+    UpperEachWord,
+    /// Lowercase every word in place.
+    LowerEachWord,
 }
 
 impl WordShape {
@@ -714,6 +718,8 @@ impl WordShape {
             WordShape::Initials => "initials",
             WordShape::FilterEvenLen => "filter_even_len",
             WordShape::FilterOddLen => "filter_odd_len",
+            WordShape::UpperEachWord => "upper_each_word",
+            WordShape::LowerEachWord => "lower_each_word",
         }
     }
 }
