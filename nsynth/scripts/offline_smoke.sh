@@ -76,17 +76,18 @@ impl Reduce {
 }
 
 #[derive(Clone, Copy)]
-enum Pred { All, Positive }
+enum Pred { All, Positive, GtK }
 
-fn transform(pred: Pred, input: &[i64]) -> Vec<i64> {
+fn transform(pred: Pred, input: &[i64], k: Option<i64>) -> Vec<i64> {
     input.iter().copied().filter(|&x| match pred {
         Pred::All => true,
         Pred::Positive => x > 0,
+        Pred::GtK => k.map(|k| x > k).unwrap_or(false),
     }).collect()
 }
 
-fn eval_scalar(pred: Pred, reduce: Reduce, input: &[i64]) -> i64 {
-    reduce.apply(&transform(pred, input))
+fn eval_scalar(pred: Pred, reduce: Reduce, input: &[i64], k: Option<i64>) -> i64 {
+    reduce.apply(&transform(pred, input, k))
 }
 
 /// Cheapest-first matching: try all example matches (Sum may agree with Count
@@ -101,7 +102,20 @@ fn synthesize(examples: &[(Vec<i64>, i64)]) -> Option<(Pred, Reduce)> {
         (Pred::Positive, Reduce::Sum),
     ];
     cands.into_iter().find(|&(pred, reduce)| {
-        examples.iter().all(|(xs, y)| eval_scalar(pred, reduce, xs) == *y)
+        examples.iter().all(|(xs, y)| eval_scalar(pred, reduce, xs, None) == *y)
+    })
+}
+
+fn synthesize_k(examples: &[(Vec<i64>, i64, i64)]) -> Option<(Pred, Reduce)> {
+    let cands = [
+        (Pred::GtK, Reduce::Count),
+        (Pred::GtK, Reduce::Sum),
+        (Pred::All, Reduce::Count),
+    ];
+    cands.into_iter().find(|&(pred, reduce)| {
+        examples
+            .iter()
+            .all(|(xs, k, y)| eval_scalar(pred, reduce, xs, Some(*k)) == *y)
     })
 }
 
@@ -151,6 +165,18 @@ mod tests {
             (vec![5, 5], 25),
         ];
         assert!(synthesize(&ex).is_none());
+    }
+
+    #[test]
+    fn count_greater_than_k() {
+        let ex = vec![
+            (vec![1, 5, 3, 0], 2, 2),
+            (vec![-1, 0, 1], 0, 1),
+            (vec![4, 4, 4], 4, 0),
+        ];
+        let (pred, reduce) = synthesize_k(&ex).expect("gt k");
+        assert!(matches!(pred, Pred::GtK));
+        assert!(matches!(reduce, Reduce::Count));
     }
 }
 EOF
