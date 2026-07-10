@@ -3825,7 +3825,12 @@ fn reshape_to_repo_signature_inner(old_text: &str, repo_fn: &str, synthesized: &
         .unwrap_or_default();
     let mut mut_shadows = String::new();
     for (name, ty) in repo_params.iter().zip(repo_types.iter()) {
-        if !ty.contains("&[") && crate::mog_transpile::param_is_mutated(&body, name) {
+        // `&[..]` and `&str` params already get a fresh owned binding via `adapters`; a plain
+        // owned param that the body mutates needs a `mut` shadow.
+        if !ty.contains("&[")
+            && !ty.contains("&str")
+            && crate::mog_transpile::param_is_mutated(&body, name)
+        {
             mut_shadows.push_str(&format!("let mut {name} = {name};\n"));
         }
     }
@@ -4221,6 +4226,12 @@ fn slice_param_adapters(old_text: &str, repo_fn: &str) -> String {
     for (name, ty) in idents.iter().zip(types.iter()) {
         if ty.contains("&[") {
             out.push_str(&format!("let {name} = {name}.to_vec();\n"));
+        } else if ty.contains("&str") {
+            // Bridge a repo `&str` param to the synthesizer's owned `String` body (Mog `string`
+            // lowers to `String`): shadow it as an owned `String`. Same shape as the slice
+            // adapter — needed for string-transform ops (snake_to_camel) whose repo fn takes
+            // `&str` while the op body operates on an owned string -> E0308 without this.
+            out.push_str(&format!("let {name} = {name}.to_string();\n"));
         }
     }
     out
@@ -5465,6 +5476,24 @@ mod tests {
             new.matches("fn array_sum(").count(),
             1,
             "the pre-existing array_sum must not be re-emitted: {new}"
+        );
+    }
+
+    /// A repo string-transform fn that takes `&str` (idiomatic) must bridge to the op's owned
+    /// `String` body via a `let s = s.to_string();` shadow — E0308 otherwise (observed: snake->camel
+    /// repo fns). The repo signature (`&str`) is preserved; the body operates on the owned copy.
+    #[test]
+    fn reshape_bridges_str_param_to_owned_string() {
+        let old = "pub fn snake_to_camel(s: &str) -> String {\n    String::new()\n}\n";
+        let synth = "pub fn snake_to_camel(s: String) -> String {\n    let mut out = String::new();\n    for ch in s.chars() {\n        out.push(ch);\n    }\n    return out;\n}\n";
+        let new = reshape_to_repo_signature(old, "snake_to_camel", synth).expect("reshape");
+        assert!(
+            new.contains("let s = s.to_string();"),
+            "&str param must be bridged to an owned String: {new}"
+        );
+        assert!(
+            new.contains("pub fn snake_to_camel(s: &str) -> String"),
+            "repo &str signature must be preserved: {new}"
         );
     }
 
