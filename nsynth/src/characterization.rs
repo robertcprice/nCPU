@@ -241,8 +241,9 @@ pub fn write_characterization_crate(
     }
     let sig = infer_rust_signature(fn_name, examples)
         .ok_or_else(|| "could not infer signature from examples".to_string())?;
+    let default = default_body_for_examples(examples);
     let tests = emit_characterization_tests(fn_name, examples);
-    let lib = format!("{sig} {{}}\n\n{tests}");
+    let lib = format!("{sig} {{ {default} }}\n\n{tests}");
     crate::schema_component::write_lib_crate(root, "char_crate", &lib)?;
     Ok(CharacterizationScaffold {
         fn_name: fn_name.to_string(),
@@ -390,8 +391,10 @@ mod tests {
         let s = write_characterization_crate(&root, "double", &ex).expect("write");
         assert_eq!(s.n_tests, 3);
         let lib = std::fs::read_to_string(root.join("src/lib.rs")).unwrap();
-        assert!(lib.contains("pub fn double(a0: i64) -> i64 {}"));
+        assert!(lib.contains("pub fn double(a0: i64) -> i64 { 0 }"));
         assert!(lib.contains("assert_eq!(double(2), 4)"));
+        // Empty `{}` would not compile for i64 return — default body is required.
+        assert!(!lib.contains("-> i64 {}"));
         let _ = std::fs::remove_dir_all(root);
     }
 
